@@ -5,15 +5,40 @@ import (
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/config"
 )
 
-func TestCapabilityReportForModelUsesObservedHTTPContextForCodexResponses(t *testing.T) {
+func TestCapabilityReportForModelUsesConfiguredTransportLimit(t *testing.T) {
+	model := adaptermodel.ResolvedAlias{
+		Alias:     "gpt-profiled",
+		Backend:   adaptermodel.BackendCodex,
+		WireModel: "gpt-profiled",
+		Context:   372000,
+		TransportLimits: map[config.AdapterModelTransport]int{
+			config.AdapterModelTransportCodexHTTP:      272000,
+			config.AdapterModelTransportCodexWebsocket: 350000,
+		},
+	}
+
+	httpReport := CapabilityReportForModel(model, CapabilityMode{WebsocketEnabled: false})
+	if httpReport.ObservedContextWindow != 272000 || httpReport.EffectiveSafeWindow != 272000 {
+		t.Fatalf("HTTP report = %+v, want configured limit 272000", httpReport)
+	}
+	websocketReport := CapabilityReportForModel(model, CapabilityMode{WebsocketEnabled: true})
+	if websocketReport.ObservedContextWindow != 350000 || websocketReport.EffectiveSafeWindow != 350000 {
+		t.Fatalf("websocket report = %+v, want configured limit 350000", websocketReport)
+	}
+}
+
+func TestCapabilityReportForModelUsesHTTPTransportLimit(t *testing.T) {
 	report := CapabilityReportForModel(adaptermodel.ResolvedAlias{
-		Alias:           "clyde-test-codex-1m-high",
-		Backend:         adaptermodel.BackendCodex,
-		WireModel:       "configured-codex-model",
-		Context:         1000000,
-		ObservedContext: 333000,
+		Alias:     "clyde-test-codex-1m-high",
+		Backend:   adaptermodel.BackendCodex,
+		WireModel: "configured-codex-model",
+		Context:   1000000,
+		TransportLimits: map[config.AdapterModelTransport]int{
+			config.AdapterModelTransportCodexHTTP: 333000,
+		},
 	}, CapabilityMode{WebsocketEnabled: false})
 
 	if report.AdvertisedContextWindow != 1000000 {
@@ -22,25 +47,24 @@ func TestCapabilityReportForModelUsesObservedHTTPContextForCodexResponses(t *tes
 	if report.ObservedContextWindow != 333000 {
 		t.Fatalf("observed=%d want 333000", report.ObservedContextWindow)
 	}
-	if report.EffectiveSafeWindow != 299700 {
-		t.Fatalf("effective=%d want 299700", report.EffectiveSafeWindow)
+	if report.EffectiveSafeWindow != 333000 {
+		t.Fatalf("effective=%d want 333000", report.EffectiveSafeWindow)
 	}
 }
 
 func TestCapabilityReportForModelPreservesAdvertisedContextWhenWebsocketEnabled(t *testing.T) {
 	report := CapabilityReportForModel(adaptermodel.ResolvedAlias{
-		Alias:           "clyde-test-codex-1m-high",
-		Backend:         adaptermodel.BackendCodex,
-		WireModel:       "configured-codex-model",
-		Context:         1000000,
-		ObservedContext: 333000,
+		Alias:     "clyde-test-codex-1m-high",
+		Backend:   adaptermodel.BackendCodex,
+		WireModel: "configured-codex-model",
+		Context:   1000000,
 	}, CapabilityMode{WebsocketEnabled: true})
 
 	if report.ObservedContextWindow != 1000000 {
 		t.Fatalf("observed=%d want 1000000", report.ObservedContextWindow)
 	}
-	if report.EffectiveSafeWindow != 900000 {
-		t.Fatalf("effective=%d want 900000", report.EffectiveSafeWindow)
+	if report.EffectiveSafeWindow != 1000000 {
+		t.Fatalf("effective=%d want 1000000", report.EffectiveSafeWindow)
 	}
 }
 

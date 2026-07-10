@@ -16,6 +16,7 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/gklog/trace"
 )
 
@@ -51,24 +52,24 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 	}
 
 	requestedModel := strings.TrimSpace(req.Model)
-	resolved, resolveOK := s.anthropicNativeResolvedRequest(ctx, requestedModel)
+	requestedEffort := ""
+	if req.OutputConfig != nil {
+		requestedEffort = req.OutputConfig.Effort
+	}
+	resolved, resolveErr := s.anthropicNativeResolvedRequest(ctx, requestedModel, requestedEffort)
 	switch {
-	case !resolveOK:
+	case resolveErr != nil:
+		var invalidRequestErr *adapterresolver.InvalidRequestError
+		if errors.As(resolveErr, &invalidRequestErr) {
+			return adapterErrInvalidRequest(invalidRequestErr.Error(), resolveErr)
+		}
 		return adapterErrModelNotFound("model " + requestedModel + " does not resolve to a known backend")
 	case resolved.Provider != BackendAnthropic:
 		return adapterErrInvalidRequest("model does not resolve to the anthropic backend", nil)
 	}
-	req.Model = anthropicbackend.StripContextSuffix(resolved.Model)
+	applyAnthropicNativeResolution(&req, &resolved)
 
-	attrs := []slog.Attr{
-		slog.String("request_id", reqID),
-		slog.String("path", r.URL.Path),
-		slog.String("model", req.Model),
-		slog.Bool("stream", req.Stream),
-		slog.Int("body_bytes", len(body)),
-	}
-	attrs = append(attrs, corr.Attrs()...)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.anthropic.ingress", append([]slog.Attr{slog.String("concern", "adapter.providers.anthropic.request")}, attrs...)...)
+	s.logAnthropicNativeIngress(ctx, corr, reqID, r.URL.Path, req, len(body))
 
 	prepared := anthropic.PreparedRequest{
 		Request:       req,
@@ -107,6 +108,70 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 	return nil
 }
 
+func applyAnthropicNativeResolution(req *anthropic.Request, resolved *adapterresolver.ResolvedRequest) {
+	if req == nil || resolved == nil {
+		return
+	}
+	req.Model = anthropicbackend.StripContextSuffix(resolved.Model)
+	if effort := resolved.ProviderEffort(); effort != "" {
+		if req.OutputConfig == nil {
+			req.OutputConfig = &anthropic.OutputConfig{Effort: ""}
+		}
+		req.OutputConfig.Effort = effort.String()
+	}
+	prependAnthropicNativeInstructions(req, resolved.Instructions)
+	anthropicbackend.ApplyThinkingConfig(req, resolved, req.Model)
+	if resolved.MaxOutputTokens > 0 && req.MaxTokens > resolved.MaxOutputTokens {
+		req.MaxTokens = resolved.MaxOutputTokens
+	}
+	req.FeatureVector = anthropic.WireFlavorFeatureVector{
+		ModelID:     req.Model,
+		WireProfile: resolved.WireProfile,
+	}
+}
+
+func prependAnthropicNativeInstructions(req *anthropic.Request, instructions string) {
+	if req == nil {
+		return
+	}
+	instructions = strings.TrimSpace(instructions)
+	if instructions == "" {
+		return
+	}
+	if len(req.SystemBlocks) > 0 {
+		blocks := make([]anthropic.SystemBlock, 0, len(req.SystemBlocks)+1)
+		blocks = append(blocks, anthropic.SystemBlock{Type: "text", Text: instructions, CacheControl: nil})
+		req.SystemBlocks = append(blocks, req.SystemBlocks...)
+		return
+	}
+	if req.System == "" {
+		req.System = instructions
+		return
+	}
+	req.System = instructions + "\n\n" + req.System
+}
+
+func (s *Server) logAnthropicNativeIngress(
+	ctx context.Context,
+	corr correlation.Context,
+	requestID string,
+	requestPath string,
+	req anthropic.Request,
+	bodyBytes int,
+) {
+	attrs := []slog.Attr{
+		slog.String("request_id", requestID),
+		slog.String("path", requestPath),
+		slog.String("model", req.Model),
+		slog.Bool("stream", req.Stream),
+		slog.Int("body_bytes", bodyBytes),
+	}
+	attrs = append(attrs, corr.Attrs()...)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.anthropic.ingress", append([]slog.Attr{
+		slog.String("concern", "adapter.providers.anthropic.request"),
+	}, attrs...)...)
+}
+
 func (s *Server) handleAnthropicCountTokens(_ context.Context, hctx *handlerCtx) error {
 	if hctx.Request.Method != http.MethodPost {
 		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
@@ -124,9 +189,14 @@ func (s *Server) handleAnthropicCountTokens(_ context.Context, hctx *handlerCtx)
 // through the same typed resolver and canonical projection used by the
 // OpenAI-shaped surfaces. This keeps every catalog field available to the
 // native provider path without a second manual projection to maintain.
-func (s *Server) anthropicNativeResolvedRequest(ctx context.Context, requestedModel string) (adapterresolver.ResolvedRequest, bool) {
+func (s *Server) anthropicNativeResolvedRequest(
+	ctx context.Context,
+	requestedModel string,
+	requestedEffort string,
+) (adapterresolver.ResolvedRequest, error) {
 	var request ChatRequest
 	request.Model = requestedModel
+	request.ReasoningEffort = requestedEffort
 	resolved, err := resolveCursorChatRequest(
 		adapterresolver.IngressAnthropic,
 		request,
@@ -135,9 +205,9 @@ func (s *Server) anthropicNativeResolvedRequest(ctx context.Context, requestedMo
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.anthropic.native_resolve_failed", "concern", "adapter.providers.anthropic.request", "model", requestedModel, "err", err)
 		var empty adapterresolver.ResolvedRequest
-		return empty, false
+		return empty, err
 	}
-	return resolved, true
+	return resolved, nil
 }
 
 func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *http.Request, err error) {

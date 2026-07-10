@@ -11,11 +11,12 @@ type WireHeader struct {
 	Classification string // "constant" | "enum" | "free"
 }
 
-// WireFlavorFeatureVector is the request feature vector observed for a
-// learned wire flavor. Flavor selection matches on model id alone, so the
-// vector carries only the model id.
+// WireFlavorFeatureVector is the request feature vector used to select a
+// learned wire flavor. A configured profile identity takes precedence over
+// model matching.
 type WireFlavorFeatureVector struct {
-	ModelID string
+	ModelID     string
+	WireProfile string
 }
 
 // WireFlavor is the captured wire shape for one caller flavor of an

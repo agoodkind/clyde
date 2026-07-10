@@ -62,19 +62,6 @@ const (
 	codexChatRoleFunction  codexChatRole = "function"
 )
 
-// reasoningEffort is the closed enum of accepted reasoning effort
-// levels on the OpenAI Responses API.
-type reasoningEffort string
-
-const (
-	reasoningEffortNone    reasoningEffort = "none"
-	reasoningEffortMinimal reasoningEffort = "minimal"
-	reasoningEffortLow     reasoningEffort = "low"
-	reasoningEffortMedium  reasoningEffort = "medium"
-	reasoningEffortHigh    reasoningEffort = "high"
-	reasoningEffortXHigh   reasoningEffort = "xhigh"
-)
-
 // reasoningSummary is the closed enum of accepted reasoning summary
 // modes on the OpenAI Responses API.
 type reasoningSummary string
@@ -518,6 +505,7 @@ func BuildRequestWithConfig(
 		PromptCache:         identity.PromptCacheKey,
 		ServiceTier:         ServiceTierFromRequest(req),
 		Reasoning:           reasoning,
+		MaxOutputTokens:     outputControls.MaxOutputTokens,
 		Text:                outputControls.Text,
 		Input:               input,
 		Tools:               tools,

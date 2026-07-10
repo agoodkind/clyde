@@ -18,10 +18,29 @@ func TestBuildOutputControlsPreservesResponsesText(t *testing.T) {
 	}
 }
 
+func TestBuildOutputControlsMapsChatMaxTokensToResponsesMaxOutputTokens(t *testing.T) {
+	maxTokens := 250000
+	controls := BuildOutputControls(adapteropenai.ChatRequest{MaxTokens: &maxTokens})
+	if controls.MaxOutputTokens == nil || *controls.MaxOutputTokens != maxTokens {
+		t.Fatalf("max_output_tokens=%v want %d", controls.MaxOutputTokens, maxTokens)
+	}
+}
+
+func TestBuildOutputControlsPrefersResponsesMaxOutputTokens(t *testing.T) {
+	maxTokens := 250000
+	maxOutputTokens := 125000
+	controls := BuildOutputControls(adapteropenai.ChatRequest{
+		MaxTokens:       &maxTokens,
+		MaxOutputTokens: &maxOutputTokens,
+	})
+	if controls.MaxOutputTokens == nil || *controls.MaxOutputTokens != maxOutputTokens {
+		t.Fatalf("max_output_tokens=%v want %d", controls.MaxOutputTokens, maxOutputTokens)
+	}
+}
+
 // TestBuildOutputControlsDropsNonCodexCLIBudgetHints pins that the inbound
-// max-token, truncation, and prompt-cache-retention hints are dropped:
-// codex-cli sends none of those wire fields, so OutputControls carries
-// only `text`. Output capping relies on the upstream server-side policy.
+// chat-only max_completion_tokens, truncation, and
+// prompt-cache-retention hints are dropped.
 func TestBuildOutputControlsDropsNonCodexCLIBudgetHints(t *testing.T) {
 	maxCompletion := 4096
 	controls := BuildOutputControls(adapteropenai.ChatRequest{

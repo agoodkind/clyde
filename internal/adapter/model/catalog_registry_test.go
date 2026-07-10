@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -38,6 +39,26 @@ func TestRegistryRoutesWildcardModelBeforeOpenAICompatFallback(t *testing.T) {
 	}
 	if effort != "ultra" {
 		t.Fatalf("effort = %q, want ultra", effort)
+	}
+}
+
+func TestRegistryAnthropicWildcardUsesConfiguredDefaultWireProfile(t *testing.T) {
+	cfg := exactCatalogConfig()
+	cfg.Anthropic.DefaultWireProfile = "claude-code-interactive-default"
+	cfg.ModelRoutes = []config.AdapterModelRoute{
+		catalogRoute("claude-*", config.AdapterModelProviderAnthropic, IngressAnthropic),
+	}
+
+	registry, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	resolved, _, err := registry.Resolve(IngressAnthropic, "claude-future", "future-tier")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.WireProfile != cfg.Anthropic.DefaultWireProfile {
+		t.Fatalf("WireProfile = %q, want %q", resolved.WireProfile, cfg.Anthropic.DefaultWireProfile)
 	}
 }
 
@@ -182,12 +203,14 @@ func TestRegistryExactEffortPolicy(t *testing.T) {
 		effort    string
 		want      string
 		wantError string
+		wantKind  ResolveErrorKind
 	}{
 		{name: "profile default", model: "gpt-exact", want: "medium"},
 		{name: "caller supported", model: "gpt-exact", effort: "low", want: "low"},
-		{name: "caller unsupported", model: "gpt-exact", effort: "ultra", wantError: "not supported"},
+		{name: "caller unsupported", model: "gpt-exact", effort: "ultra", wantError: "not supported", wantKind: ResolveErrorInvalidRequest},
+		{name: "caller whitespace unsupported", model: "gpt-exact", effort: " medium ", wantError: "not supported", wantKind: ResolveErrorInvalidRequest},
 		{name: "alias bound", model: "gpt-alias", want: "high"},
-		{name: "alias conflict", model: "gpt-alias", effort: "low", wantError: "conflicts"},
+		{name: "alias conflict", model: "gpt-alias", effort: "low", wantError: "conflicts", wantKind: ResolveErrorInvalidRequest},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -195,6 +218,10 @@ func TestRegistryExactEffortPolicy(t *testing.T) {
 			if test.wantError != "" {
 				if resolveErr == nil || !strings.Contains(resolveErr.Error(), test.wantError) {
 					t.Fatalf("error = %v, want substring %q", resolveErr, test.wantError)
+				}
+				var typedErr *ResolveError
+				if !errors.As(resolveErr, &typedErr) || typedErr.Kind != test.wantKind {
+					t.Fatalf("error = %T/%v, want ResolveError kind %q", resolveErr, resolveErr, test.wantKind)
 				}
 				return
 			}
@@ -245,6 +272,18 @@ func TestRegistryWildcardEffortKeepsIdentityWireValue(t *testing.T) {
 	}
 	if effort != "future-tier" || resolved.WireEffort != "future-tier" {
 		t.Fatalf("effort/wire = %q/%q, want future-tier identity", effort, resolved.WireEffort)
+	}
+}
+
+func TestRegistryUnknownModelUsesModelNotFoundKind(t *testing.T) {
+	registry, err := NewRegistry(exactCatalogConfig())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	_, _, err = registry.Resolve(IngressOpenAI, "definitely-unknown", "")
+	var typedErr *ResolveError
+	if !errors.As(err, &typedErr) || typedErr.Kind != ResolveErrorModelNotFound {
+		t.Fatalf("error = %T/%v, want ResolveError kind %q", err, err, ResolveErrorModelNotFound)
 	}
 }
 

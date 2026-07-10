@@ -212,7 +212,7 @@ func TestBuildCodexRequestUsesNativeModelAndRequestEffort(t *testing.T) {
 	}
 }
 
-func TestBuildCodexRequestFallsBackToRequestReasoningEffort(t *testing.T) {
+func TestBuildCodexRequestDoesNotUseUnresolvedTopLevelReasoningEffort(t *testing.T) {
 	req := ChatRequest{
 		ReasoningEffort: "high",
 		Messages: []ChatMessage{{
@@ -223,11 +223,8 @@ func TestBuildCodexRequestFallsBackToRequestReasoningEffort(t *testing.T) {
 	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
-	if out.Reasoning == nil || out.Reasoning.Effort != EffortHigh {
-		t.Fatalf("reasoning fallback failed: %+v", out.Reasoning)
-	}
-	if out.Reasoning.Summary != "auto" {
-		t.Fatalf("reasoning.summary=%q want auto", out.Reasoning.Summary)
+	if out.Reasoning != nil {
+		t.Fatalf("Reasoning = %+v, want nil without a resolver-approved effort", out.Reasoning)
 	}
 }
 
@@ -241,7 +238,7 @@ func TestBuildCodexRequestUsesConfiguredDefaultReasoningSummary(t *testing.T) {
 	}
 	resolved := codexResolvedForTest(ResolvedAlias{Alias: "gpt-5.4"})
 
-	out := BuildRequestWithConfig(req, resolved, "", RequestBuilderConfig{
+	out := BuildRequestWithConfig(req, resolved, EffortHigh, RequestBuilderConfig{
 		ReasoningSummary: "detailed",
 	})
 	if out.Reasoning == nil {
@@ -268,7 +265,7 @@ func TestBuildCodexRequestAcceptsFullCodexReasoningEnums(t *testing.T) {
 	}
 	model := ResolvedAlias{Alias: "gpt-5.4"}
 
-	out := BuildRequest(req, model, "")
+	out := BuildRequest(req, model, "minimal")
 	if out.Reasoning == nil {
 		t.Fatalf("expected reasoning stanza")
 	}
@@ -280,19 +277,37 @@ func TestBuildCodexRequestAcceptsFullCodexReasoningEnums(t *testing.T) {
 	}
 }
 
-func TestBuildCodexRequestSkipsInvalidReasoningEffort(t *testing.T) {
+func TestBuildCodexRequestPreservesProviderOwnedReasoningEffort(t *testing.T) {
+	for _, effort := range []string{"max", "ultra", "future-tier"} {
+		t.Run(effort, func(t *testing.T) {
+			req := ChatRequest{
+				ReasoningEffort: effort,
+				Messages: []ChatMessage{{
+					Role:    "user",
+					Content: json.RawMessage(`"hello"`),
+				}},
+			}
+			model := ResolvedAlias{Alias: "gpt-future"}
+
+			out := BuildRequest(req, model, effort)
+			if out.Reasoning == nil || out.Reasoning.Effort != effort {
+				t.Fatalf("reasoning = %+v, want effort %q", out.Reasoning, effort)
+			}
+		})
+	}
+}
+
+func TestBuildCodexRequestDoesNotUseUnresolvedNestedReasoningEffort(t *testing.T) {
 	req := ChatRequest{
-		ReasoningEffort: "max",
+		Reasoning: &adapteropenai.Reasoning{Effort: "unvalidated-tier"},
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedAlias{Alias: "gpt-5.4"}
-
-	out := BuildRequest(req, model, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-exact"}, "")
 	if out.Reasoning != nil {
-		t.Fatalf("expected no reasoning stanza for invalid effort, got %+v", out.Reasoning)
+		t.Fatalf("Reasoning = %+v, want nil without a resolver-approved effort", out.Reasoning)
 	}
 }
 
@@ -310,7 +325,7 @@ func TestBuildCodexRequestUsesResponsesReasoningFields(t *testing.T) {
 	}
 	model := ResolvedAlias{Alias: "gpt-5.4"}
 
-	out := BuildRequest(req, model, "")
+	out := BuildRequest(req, model, EffortMedium)
 	if out.Reasoning == nil {
 		t.Fatalf("expected reasoning stanza")
 	}
@@ -368,8 +383,7 @@ func TestBuildCodexRequestSerializesCodexCLIFaithfulEnvelope(t *testing.T) {
 	// reasoning must still be `null`, and the default round-trip lever
 	// still requests encrypted reasoning.
 	req := ChatRequest{
-		ReasoningEffort: "max", // invalid effort -> reasoning stays nil
-		Metadata:        mustRaw(`{"conversation_id":"thread-xyz"}`),
+		Metadata: mustRaw(`{"conversation_id":"thread-xyz"}`),
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`"hello"`),
@@ -377,7 +391,7 @@ func TestBuildCodexRequestSerializesCodexCLIFaithfulEnvelope(t *testing.T) {
 	}
 	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	if out.Reasoning != nil {
-		t.Fatalf("expected nil reasoning for invalid effort, got %+v", out.Reasoning)
+		t.Fatalf("expected nil reasoning without an effort, got %+v", out.Reasoning)
 	}
 	if out.WebsocketSessionKey == "" {
 		t.Fatalf("expected websocket session key populated for keyed conversation")

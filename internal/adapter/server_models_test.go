@@ -51,6 +51,52 @@ func TestHandleModelsIncludesLegacyAndOpenAIContextFields(t *testing.T) {
 	t.Fatalf("model %q not found", alias)
 }
 
+func TestHandleModelsUsesAnthropicTransportLimit(t *testing.T) {
+	cfg := nativeExactModelConfig()
+	declaration := cfg.Models["native-canonical"]
+	declaration.Advertise = true
+	cfg.Models["native-canonical"] = declaration
+	srv, err := New(
+		context.Background(),
+		cfg,
+		config.LoggingConfig{},
+		Deps{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var payload ModelsResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode models response: %v", err)
+	}
+	for _, entry := range payload.Data {
+		if entry.ID != "native-canonical" {
+			continue
+		}
+		for _, got := range []int{
+			entry.Context,
+			entry.ContextWindow,
+			entry.ContextLength,
+			entry.MaxModelLen,
+			entry.ContextTokenLimit,
+		} {
+			if got != 350000 {
+				t.Fatalf("Anthropic model context fields = %+v, want transport limit 350000", entry)
+			}
+		}
+		return
+	}
+	t.Fatal("native-canonical not advertised")
+}
+
 func TestModelEntryFromResolvedIsBackendNeutral(t *testing.T) {
 	entry := modelEntryFromResolved(adaptermodel.ResolvedAlias{
 		Alias:     "clyde-gpt-5.4-1m-high",
@@ -69,18 +115,19 @@ func TestModelEntryFromResolvedIsBackendNeutral(t *testing.T) {
 
 func TestCodexCapabilityOverlayAppliesTransportAwareContextTruth(t *testing.T) {
 	entry := modelEntryFromResolved(adaptermodel.ResolvedAlias{
-		Alias:           "clyde-configured-codex-1m-high",
-		Backend:         BackendCodex,
-		WireModel:       "configured-codex-model",
-		Context:         1_000_000,
-		ObservedContext: 333_000,
+		Alias:     "clyde-configured-codex-1m-high",
+		Backend:   BackendCodex,
+		WireModel: "configured-codex-model",
+		Context:   1_000_000,
 	})
 	entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(adaptermodel.ResolvedAlias{
-		Alias:           "clyde-configured-codex-1m-high",
-		Backend:         BackendCodex,
-		WireModel:       "configured-codex-model",
-		Context:         1_000_000,
-		ObservedContext: 333_000,
+		Alias:     "clyde-configured-codex-1m-high",
+		Backend:   BackendCodex,
+		WireModel: "configured-codex-model",
+		Context:   1_000_000,
+		TransportLimits: map[config.AdapterModelTransport]int{
+			config.AdapterModelTransportCodexHTTP: 333_000,
+		},
 	}, adaptercodex.CapabilityMode{WebsocketEnabled: false}))
 
 	for _, got := range []int{entry.Context, entry.ContextWindow, entry.ContextLength, entry.MaxModelLen} {
@@ -89,7 +136,7 @@ func TestCodexCapabilityOverlayAppliesTransportAwareContextTruth(t *testing.T) {
 		}
 	}
 	for _, got := range []int{entry.ContextTokenLimit, entry.ContextTokenLimitCamel, entry.ContextTokenLimitForMaxMode, entry.ContextTokenLimitForMaxModeCamel} {
-		if got != 299700 {
+		if got != 333000 {
 			t.Fatalf("effective safe fields = %+v", entry)
 		}
 	}
@@ -173,5 +220,83 @@ func TestModelCatalogFingerprintChangesWhenCatalogSemanticsChange(t *testing.T) 
 
 	if got, wantDifferent := modelCatalogFingerprint(changed), modelCatalogFingerprint(models); got == wantDifferent {
 		t.Fatalf("fingerprint did not change after catalog semantic changed: %s", got)
+	}
+}
+
+func TestModelCatalogFingerprintChangesWhenEffortWireValuesChange(t *testing.T) {
+	models := []adaptermodel.ResolvedAlias{
+		{
+			Alias:            "gpt-5.6-sol",
+			Backend:          BackendCodex,
+			WireModel:        "gpt-5.6-sol",
+			Efforts:          []string{"max", "ultra"},
+			EffortWireValues: map[string]string{"ultra": "max"},
+		},
+	}
+	changed := append([]adaptermodel.ResolvedAlias(nil), models...)
+	changed[0].EffortWireValues = map[string]string{"ultra": "xhigh"}
+
+	if got, wantDifferent := modelCatalogFingerprint(changed), modelCatalogFingerprint(models); got == wantDifferent {
+		t.Fatalf("fingerprint did not change after effort wire mapping changed: %s", got)
+	}
+}
+
+func TestModelCatalogFingerprintEffortWireValuesAreUnambiguous(t *testing.T) {
+	left := []adaptermodel.ResolvedAlias{{
+		Alias:            "gpt-test",
+		Backend:          BackendCodex,
+		WireModel:        "gpt-test",
+		EffortWireValues: map[string]string{"a": "b,c=d"},
+	}}
+	right := []adaptermodel.ResolvedAlias{{
+		Alias:            "gpt-test",
+		Backend:          BackendCodex,
+		WireModel:        "gpt-test",
+		EffortWireValues: map[string]string{"a": "b", "c": "d"},
+	}}
+
+	if got, wantDifferent := modelCatalogFingerprint(left), modelCatalogFingerprint(right); got == wantDifferent {
+		t.Fatalf("fingerprint collided for distinct effort wire maps: %s", got)
+	}
+}
+
+func TestModelCatalogFingerprintIncludesTransportLimitsDeterministically(t *testing.T) {
+	models := []adaptermodel.ResolvedAlias{{
+		Alias:     "gpt-transport-limits",
+		Backend:   BackendCodex,
+		WireModel: "gpt-transport-limits",
+		Context:   372_000,
+		TransportLimits: map[config.AdapterModelTransport]int{
+			config.AdapterModelTransportCodexHTTP:      272_000,
+			config.AdapterModelTransportCodexWebsocket: 372_000,
+		},
+	}}
+	equivalent := []adaptermodel.ResolvedAlias{{
+		Alias:     "gpt-transport-limits",
+		Backend:   BackendCodex,
+		WireModel: "gpt-transport-limits",
+		Context:   372_000,
+		TransportLimits: map[config.AdapterModelTransport]int{
+			config.AdapterModelTransportCodexWebsocket: 372_000,
+			config.AdapterModelTransportCodexHTTP:      272_000,
+		},
+	}}
+	changed := []adaptermodel.ResolvedAlias{{
+		Alias:     "gpt-transport-limits",
+		Backend:   BackendCodex,
+		WireModel: "gpt-transport-limits",
+		Context:   372_000,
+		TransportLimits: map[config.AdapterModelTransport]int{
+			config.AdapterModelTransportCodexHTTP:      271_000,
+			config.AdapterModelTransportCodexWebsocket: 372_000,
+		},
+	}}
+
+	want := modelCatalogFingerprint(models)
+	if got := modelCatalogFingerprint(equivalent); got != want {
+		t.Fatalf("fingerprint changed across equivalent transport map order: got %s want %s", got, want)
+	}
+	if got := modelCatalogFingerprint(changed); got == want {
+		t.Fatalf("fingerprint did not change after transport limit changed: %s", got)
 	}
 }

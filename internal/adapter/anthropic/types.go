@@ -370,9 +370,8 @@ func (r Request) MarshalJSON() ([]byte, error) {
 // per-request output knobs. Effort must nest under this object for
 // the server to accept it when the beta header allows effort.
 type OutputConfig struct {
-	// Effort is one of low/medium/high/max. The adapter only sets
-	// this when the registry says the family supports it; haiku-4-5
-	// returns `400 This model does not support the effort parameter`.
+	// Effort is a provider-owned tier validated by an exact model profile or
+	// passed through unchanged for wildcard models.
 	Effort string `json:"effort,omitempty"`
 }
 

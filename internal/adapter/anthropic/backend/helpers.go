@@ -35,9 +35,6 @@ func MaxTokens(req *int) int {
 	if req == nil || *req <= 0 {
 		return 4096
 	}
-	if *req > 128000 {
-		return 128000
-	}
 	return *req
 }
 
@@ -60,8 +57,10 @@ func ResolveMaxTokens(maxTokensReq *int, resolved *adapterresolver.ResolvedReque
 // ApplyThinkingConfig is part of Clyde's typed adapter surface.
 func ApplyThinkingConfig(req *anthropic.Request, resolved *adapterresolver.ResolvedRequest, strippedModel string) {
 	maxOutputTokens := 0
+	configuredBudgetTokens := 0
 	if resolved != nil {
 		maxOutputTokens = resolved.MaxOutputTokens
+		configuredBudgetTokens = resolved.ThinkingBudgetTokens
 	}
 	switch EffectiveThinkingMode(resolved, strippedModel) {
 	case adaptermodel.ThinkingAdaptive:
@@ -70,17 +69,23 @@ func ApplyThinkingConfig(req *anthropic.Request, resolved *adapterresolver.Resol
 			Display: "summarized", BudgetTokens: 0,
 		}
 	case adaptermodel.ThinkingEnabled:
-		tokenCap := maxOutputTokens
-		if tokenCap <= 0 {
-			tokenCap = req.MaxTokens
+		budgetTokens := configuredBudgetTokens
+		if budgetTokens <= 0 {
+			tokenCap := maxOutputTokens
+			if tokenCap <= 0 {
+				tokenCap = req.MaxTokens
+			}
+			if tokenCap < 1025 {
+				tokenCap = 1025
+			}
+			budgetTokens = tokenCap - 1
 		}
-		if tokenCap < 1025 {
-			tokenCap = 1025
+		if req.MaxTokens <= budgetTokens {
+			req.MaxTokens = budgetTokens + 1
 		}
-		req.MaxTokens = tokenCap
 		req.Thinking = &anthropic.Thinking{
 			Type:         "enabled",
-			BudgetTokens: tokenCap - 1,
+			BudgetTokens: budgetTokens,
 			Display:      "summarized",
 		}
 	case adaptermodel.ThinkingDisabled:

@@ -84,7 +84,6 @@ type ResolvedAlias struct {
 	Profile                 string
 	Instructions            string
 	Context                 int
-	ObservedContext         int
 	TransportLimits         map[config.AdapterModelTransport]int
 	Efforts                 []string
 	EffortWireValues        map[string]string
@@ -118,6 +117,7 @@ type routeRule struct {
 	surfaces        []IngressSurface
 	provider        BackendID
 	providerEnabled bool
+	wireProfile     string
 }
 
 // Registry owns the exact catalog, ordered routes, and fallback transport.
@@ -182,6 +182,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 			surfaces:        append([]IngressSurface(nil), configured.Surfaces...),
 			provider:        backendForProvider(configured.Provider),
 			providerEnabled: providerEnabled(cfg, configured.Provider),
+			wireProfile:     defaultWireProfile(cfg, configured.Provider),
 		})
 	}
 	modelCatalogLog.Logger().Info(
@@ -269,7 +270,6 @@ func resolvedFromDeclaration(
 		Profile:              declaration.Profile,
 		Instructions:         declaration.Instructions,
 		Context:              contextProfile.Tokens,
-		ObservedContext:      0,
 		TransportLimits:      transportLimits,
 		Efforts:              efforts,
 		EffortWireValues:     effortWireValues,
@@ -513,7 +513,7 @@ func (registry *Registry) Resolve(
 		if !route.providerEnabled {
 			return ResolvedAlias{}, "", fmt.Errorf("model %q selects disabled provider %q", requested, route.provider)
 		}
-		return wildcardResolved(requested, route.provider, requestedEffort), requestedEffort, nil
+		return wildcardResolved(requested, route.provider, route.wireProfile, requestedEffort), requestedEffort, nil
 	}
 	if registry.openAICompat.BaseURL != "" {
 		var resolved ResolvedAlias
@@ -525,17 +525,23 @@ func (registry *Registry) Resolve(
 		resolved.OpenAICompatPassthrough = registry.openAICompat
 		return resolved, requestedEffort, nil
 	}
-	return ResolvedAlias{}, "", fmt.Errorf("unknown model %q", requested)
+	return ResolvedAlias{}, "", newResolveError(
+		ResolveErrorModelNotFound,
+		fmt.Sprintf("unknown model %q", requested),
+	)
 }
 
 func resolveExact(record registryRecord, requested string, requestedEffort string) (ResolvedAlias, string, error) {
 	if !record.providerEnabled {
 		return ResolvedAlias{}, "", fmt.Errorf("model %q selects disabled provider %q", requested, record.resolved.Backend)
 	}
-	effort := strings.TrimSpace(requestedEffort)
+	effort := requestedEffort
 	bound := string(record.boundEffort)
 	if bound != "" && effort != "" && effort != bound {
-		return ResolvedAlias{}, "", fmt.Errorf("effort %q conflicts with effort-bound model %q", effort, requested)
+		return ResolvedAlias{}, "", newResolveError(
+			ResolveErrorInvalidRequest,
+			fmt.Sprintf("effort %q conflicts with effort-bound model %q", effort, requested),
+		)
 	}
 	if effort == "" {
 		effort = bound
@@ -544,11 +550,14 @@ func resolveExact(record registryRecord, requested string, requestedEffort strin
 		effort = defaultEffort(record.resolved)
 	}
 	if effort != "" && !slices.Contains(record.resolved.Efforts, effort) {
-		return ResolvedAlias{}, "", fmt.Errorf(
-			"effort %q not supported for %q (allowed: %s)",
-			effort,
-			requested,
-			strings.Join(record.resolved.Efforts, ", "),
+		return ResolvedAlias{}, "", newResolveError(
+			ResolveErrorInvalidRequest,
+			fmt.Sprintf(
+				"effort %q not supported for %q (allowed: %s)",
+				effort,
+				requested,
+				strings.Join(record.resolved.Efforts, ", "),
+			),
 		)
 	}
 	resolved := record.resolved
@@ -568,11 +577,12 @@ func defaultEffort(resolved ResolvedAlias) string {
 	return resolved.DefaultEffort
 }
 
-func wildcardResolved(requested string, provider BackendID, effort string) ResolvedAlias {
+func wildcardResolved(requested string, provider BackendID, wireProfile string, effort string) ResolvedAlias {
 	var resolved ResolvedAlias
 	resolved.Alias = requested
 	resolved.Backend = provider
 	resolved.WireModel = requested
+	resolved.WireProfile = strings.TrimSpace(wireProfile)
 	resolved.Effort = effort
 	resolved.WireEffort = effort
 	return resolved
@@ -671,6 +681,13 @@ func providerEnabled(cfg config.AdapterConfig, provider config.AdapterModelProvi
 	default:
 		return false
 	}
+}
+
+func defaultWireProfile(cfg config.AdapterConfig, provider config.AdapterModelProvider) string {
+	if provider != config.AdapterModelProviderAnthropic {
+		return ""
+	}
+	return strings.TrimSpace(cfg.Anthropic.DefaultWireProfile)
 }
 
 func modelKey(model string) string {

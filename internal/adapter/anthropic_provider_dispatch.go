@@ -193,7 +193,7 @@ func (s *Server) prepareAnthropicProviderRequest(
 ) (anthropic.PreparedRequest, error) {
 	alias := anthropicRequestAlias(req)
 	jsonSpec := ParseResponseFormat(req.OpenAI.ResponseFormat)
-	anthReq, err := s.buildAnthropicWire(ctx, req.OpenAI, &req, req.Effort.String(), jsonSpec, reqID)
+	anthReq, err := s.buildAnthropicWire(ctx, req.OpenAI, &req, req.ProviderEffort().String(), jsonSpec, reqID)
 	if err != nil {
 		return anthropic.PreparedRequest{}, &anthropic.ExecuteError{
 			Status:  http.StatusBadRequest,

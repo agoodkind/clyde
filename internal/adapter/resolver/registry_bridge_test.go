@@ -1,9 +1,13 @@
 package resolver
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -81,15 +85,85 @@ func TestModelRegistryAdapterPreservesWildcardUnknownCapabilities(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	got, err := NewModelRegistryAdapter(registry).Resolve(IngressCursor, "gpt-future", "ultra")
+	got, err := NewModelRegistryAdapter(registry).Resolve(IngressCursor, "gpt-future", " ultra ")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got.Model != "gpt-future" || got.Effort != Effort("ultra") {
+	if got.Model != "gpt-future" || got.Effort != Effort(" ultra ") {
 		t.Fatalf("model/effort = %q/%q", got.Model, got.Effort)
 	}
 	if got.ToolsCapability != nil || got.VisionCapability != nil {
 		t.Fatalf("wildcard capabilities = %v/%v, want unknown", got.ToolsCapability, got.VisionCapability)
+	}
+}
+
+func TestResolveExactCatalogValidatesEitherReasoningEffortShape(t *testing.T) {
+	registry, err := adaptermodel.NewRegistry(resolverCatalogConfig())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	bridge := NewModelRegistryAdapter(registry)
+	tests := []struct {
+		name            string
+		reasoningEffort string
+		nestedEffort    string
+		wantError       bool
+	}{
+		{name: "supported top level", reasoningEffort: "future-tier"},
+		{name: "supported nested", nestedEffort: "future-tier"},
+		{name: "unsupported top level", reasoningEffort: "invented-tier", wantError: true},
+		{name: "unsupported nested", nestedEffort: "invented-tier", wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := adapteropenai.ChatRequest{
+				Model:           "gpt-exact",
+				ReasoningEffort: test.reasoningEffort,
+			}
+			if test.nestedEffort != "" {
+				request.Reasoning = &adapteropenai.Reasoning{Effort: test.nestedEffort}
+			}
+			resolved, resolveErr := Resolve(
+				IngressOpenAI,
+				adaptercursor.Request{OpenAI: request},
+				bridge,
+			)
+			if test.wantError {
+				if resolveErr == nil || !strings.Contains(resolveErr.Error(), "not supported") {
+					t.Fatalf("error = %v, want unsupported effort", resolveErr)
+				}
+				var invalidRequestErr *InvalidRequestError
+				if !errors.As(resolveErr, &invalidRequestErr) {
+					t.Fatalf("error type = %T, want *InvalidRequestError", resolveErr)
+				}
+				return
+			}
+			if resolveErr != nil {
+				t.Fatalf("Resolve: %v", resolveErr)
+			}
+			if resolved.Effort != Effort("future-tier") {
+				t.Fatalf("Effort = %q, want future-tier", resolved.Effort)
+			}
+		})
+	}
+}
+
+func TestModelRegistryAdapterPreservesUnknownModelClassification(t *testing.T) {
+	registry, err := adaptermodel.NewRegistry(resolverCatalogConfig())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	_, err = Resolve(
+		IngressOpenAI,
+		adaptercursor.Request{OpenAI: adapteropenai.ChatRequest{Model: "definitely-unknown"}},
+		NewModelRegistryAdapter(registry),
+	)
+	if err == nil {
+		t.Fatal("Resolve returned nil error")
+	}
+	var invalidRequestErr *InvalidRequestError
+	if errors.As(err, &invalidRequestErr) {
+		t.Fatalf("unknown model error = %T/%v, must not be InvalidRequestError", err, err)
 	}
 }
 

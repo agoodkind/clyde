@@ -149,12 +149,20 @@ func TestNativeAnthropicExactModelPreservesCanonicalResolution(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	var captured adapterresolver.ResolvedRequest
+	var capturedFeatureVector anthropic.WireFlavorFeatureVector
+	var capturedOutputConfig *anthropic.OutputConfig
+	var capturedThinking *anthropic.Thinking
+	var capturedSystem string
 	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
 		ExecutePrepared: func(_ context.Context, prepared anthropic.PreparedRequest, writer adapterprovider.EventWriter) (adapterprovider.Result, error) {
 			if prepared.Resolved == nil {
 				t.Fatal("prepared resolved request is nil")
 			}
 			captured = *prepared.Resolved
+			capturedFeatureVector = prepared.Request.FeatureVector
+			capturedOutputConfig = prepared.Request.OutputConfig
+			capturedThinking = prepared.Request.Thinking
+			capturedSystem = prepared.Request.System
 			returnNativeAnthropicResponse(t, writer, prepared.Request.Model)
 			return adapterprovider.Result{}, nil
 		},
@@ -193,11 +201,172 @@ func TestNativeAnthropicExactModelPreservesCanonicalResolution(t *testing.T) {
 	if captured.TransportLimits[config.AdapterModelTransportAnthropic] != 350000 || captured.WireProfile != "learned-native" {
 		t.Fatalf("transport limits/wire profile = %v/%q", captured.TransportLimits, captured.WireProfile)
 	}
+	if capturedFeatureVector.WireProfile != "learned-native" {
+		t.Fatalf("native request wire profile = %q, want exact override", capturedFeatureVector.WireProfile)
+	}
+	if capturedOutputConfig == nil || capturedOutputConfig.Effort != "future-tier" {
+		t.Fatalf("native request output config = %+v, want resolved effort", capturedOutputConfig)
+	}
+	if capturedThinking == nil || capturedThinking.Type != "enabled" || capturedThinking.BudgetTokens != 7000 {
+		t.Fatalf("native request thinking = %+v, want configured enabled budget", capturedThinking)
+	}
+	if capturedSystem != "native exact instructions\n\nnative caller instructions" {
+		t.Fatalf("native request system = %q, want exact instructions prepended", capturedSystem)
+	}
 	if captured.Pricing.InputPerMTok != 3 || captured.Pricing.OutputPerMTok != 15 {
 		t.Fatalf("pricing = %+v", captured.Pricing)
 	}
 	if captured.OpenAI.Model != "native-exact" || captured.Cursor.OpenAI.Model != "native-exact" {
 		t.Fatalf("native request projection lost requested model: OpenAI=%q Cursor=%q", captured.OpenAI.Model, captured.Cursor.OpenAI.Model)
+	}
+}
+
+func TestNativeAnthropicWildcardPreservesEffortBytes(t *testing.T) {
+	cfg := baseConfig()
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var capturedResolvedEffort adapterresolver.Effort
+	var capturedOutputEffort string
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		ExecutePrepared: func(_ context.Context, prepared anthropic.PreparedRequest, writer adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			if prepared.Resolved == nil {
+				t.Fatal("prepared resolved request is nil")
+			}
+			capturedResolvedEffort = prepared.Resolved.Effort
+			if prepared.Request.OutputConfig != nil {
+				capturedOutputEffort = prepared.Request.OutputConfig.Effort
+			}
+			returnNativeAnthropicResponse(t, writer, prepared.Request.Model)
+			return adapterprovider.Result{}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-future","messages":[{"role":"user","content":"hello"}],"max_tokens":32,"output_config":{"effort":" future-tier "}}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if capturedResolvedEffort != adapterresolver.Effort(" future-tier ") {
+		t.Fatalf("resolved effort = %q, want literal whitespace", capturedResolvedEffort)
+	}
+	if capturedOutputEffort != " future-tier " {
+		t.Fatalf("output_config.effort = %q, want literal whitespace", capturedOutputEffort)
+	}
+}
+
+func TestNativeAnthropicExactModelFillsEmptyOutputConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "empty output config",
+			body: `{"model":"native-exact","messages":[{"role":"user","content":"hello"}],"max_tokens":8000,"output_config":{}}`,
+		},
+		{
+			name: "populated output config",
+			body: `{"model":"native-exact","messages":[{"role":"user","content":"hello"}],"max_tokens":8000,"output_config":{"effort":"future-tier"}}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := nativeExactModelConfig()
+			srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			var capturedOutputConfig *anthropic.OutputConfig
+			srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+				ExecutePrepared: func(_ context.Context, prepared anthropic.PreparedRequest, writer adapterprovider.EventWriter) (adapterprovider.Result, error) {
+					capturedOutputConfig = prepared.Request.OutputConfig
+					returnNativeAnthropicResponse(t, writer, prepared.Request.Model)
+					return adapterprovider.Result{}, nil
+				},
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(test.body))
+			rec := httptest.NewRecorder()
+			srv.mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			if capturedOutputConfig == nil || capturedOutputConfig.Effort != "future-tier" {
+				t.Fatalf("OutputConfig = %+v, want resolved future-tier", capturedOutputConfig)
+			}
+		})
+	}
+}
+
+func TestNativeAnthropicExactModelRejectsWhitespaceEffort(t *testing.T) {
+	cfg := nativeExactModelConfig()
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	providerCalls := 0
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		ExecutePrepared: func(_ context.Context, _ anthropic.PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			providerCalls++
+			return adapterprovider.Result{}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"native-canonical","messages":[{"role":"user","content":"hello"}],"max_tokens":32,"output_config":{"effort":" future-tier "}}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope anthropic.ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode Anthropic error envelope: %v; body=%s", err, rec.Body.String())
+	}
+	if envelope.Type != "error" || envelope.Error.Type != "invalid_request_error" {
+		t.Fatalf("error envelope = %+v, want Anthropic invalid request", envelope)
+	}
+	if !strings.Contains(envelope.Error.Message, `effort " future-tier " not supported`) {
+		t.Fatalf("error message = %q, want unsupported effort detail", envelope.Error.Message)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("provider calls = %d, want 0", providerCalls)
+	}
+}
+
+func TestNativeAnthropicUnknownModelUsesModelNotFoundPath(t *testing.T) {
+	cfg := baseConfig()
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	providerCalls := 0
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		ExecutePrepared: func(_ context.Context, _ anthropic.PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			providerCalls++
+			return adapterprovider.Result{}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"definitely-unknown","messages":[{"role":"user","content":"hello"}],"max_tokens":32}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope anthropic.ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode Anthropic error envelope: %v; body=%s", err, rec.Body.String())
+	}
+	if envelope.Type != "error" || envelope.Error.Type != "invalid_request_error" {
+		t.Fatalf("error envelope = %+v, want Anthropic model-not-found shape", envelope)
+	}
+	if envelope.Error.Message != `model definitely-unknown does not resolve to a known backend` {
+		t.Fatalf("error message = %q, want unknown model detail", envelope.Error.Message)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("provider calls = %d, want 0", providerCalls)
 	}
 }
 
@@ -306,6 +475,7 @@ func modelRouteForTest(pattern string, provider config.AdapterModelProvider, sur
 
 func nativeExactModelConfig() config.AdapterConfig {
 	cfg := baseConfig()
+	cfg.Anthropic.DefaultWireProfile = "learned-default"
 	tools := true
 	vision := false
 	cfg.ModelProfiles["native-profile"] = config.AdapterModelProfile{

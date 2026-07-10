@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/mitm"
@@ -97,6 +98,53 @@ func TestLoaderProjectsFeatureVectors(t *testing.T) {
 	}
 	if got := flavor.FeatureVectors[1].ModelID; got != "claude-haiku-3-5-20241022" {
 		t.Fatalf("FeatureVectors[1].ModelID = %q", got)
+	}
+}
+
+func TestSelectInteractiveFlavorUsesConfiguredWireProfile(t *testing.T) {
+	flavors := map[string]WireFlavor{
+		"claude-code-interactive-default": {
+			Slug: "claude-code-interactive-default",
+			FeatureVectors: []WireFlavorFeatureVector{{
+				ModelID: "claude-requested",
+			}},
+		},
+		"learned-exact": {
+			Slug: "learned-exact",
+		},
+	}
+
+	flavor, err := selectInteractiveFlavor(flavors, WireFlavorFeatureVector{
+		ModelID:     "claude-requested",
+		WireProfile: "learned-exact",
+	})
+	if err != nil {
+		t.Fatalf("selectInteractiveFlavor: %v", err)
+	}
+	if flavor.Slug != "learned-exact" {
+		t.Fatalf("flavor = %q, want exact configured profile", flavor.Slug)
+	}
+}
+
+func TestSelectInteractiveFlavorRejectsMissingConfiguredWireProfile(t *testing.T) {
+	flavors := map[string]WireFlavor{
+		"claude-code-interactive-default": {
+			Slug: "claude-code-interactive-default",
+			FeatureVectors: []WireFlavorFeatureVector{{
+				ModelID: "claude-requested",
+			}},
+		},
+	}
+
+	_, err := selectInteractiveFlavor(flavors, WireFlavorFeatureVector{
+		ModelID:     "claude-requested",
+		WireProfile: "learned-missing",
+	})
+	if !errors.Is(err, ErrFlavorUnseeded) {
+		t.Fatalf("error = %v, want ErrFlavorUnseeded", err)
+	}
+	if !strings.Contains(err.Error(), "learned-missing") {
+		t.Fatalf("error = %q, want missing wire profile", err)
 	}
 }
 

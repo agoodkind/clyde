@@ -141,6 +141,138 @@ func TestPassthroughOverridePreservesOpenAIErrorEnvelope(t *testing.T) {
 	}
 }
 
+func TestMutatePassthroughOverrideRequestBodyUsesResolvedWireEffort(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		wireEffort    string
+		wantTopLevel  string
+		wantNested    string
+		wantTopAbsent bool
+	}{
+		{name: "top level", body: `{"reasoning_effort":"ultra"}`, wireEffort: "max", wantTopLevel: "max"},
+		{name: "nested", body: `{"reasoning":{"effort":"ultra","summary":"auto"}}`, wireEffort: "max", wantNested: "max", wantTopAbsent: true},
+		{name: "nested null", body: `{"reasoning":null}`, wireEffort: "max", wantNested: "max", wantTopAbsent: true},
+		{name: "omitted", body: `{}`, wireEffort: "max", wantTopLevel: "max"},
+		{name: "both", body: `{"reasoning_effort":"ultra","reasoning":{"effort":"ultra"}}`, wireEffort: "max", wantTopLevel: "max", wantNested: "max"},
+		{name: "unset wire effort", body: `{"reasoning_effort":"ultra"}`, wireEffort: "", wantTopLevel: "ultra"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, rewritten, _ := mutatePassthroughOverrideRequestBody(
+				[]byte(test.body),
+				"",
+				test.wireEffort,
+				false,
+			)
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(rewritten, &fields); err != nil {
+				t.Fatalf("decode rewritten body: %v", err)
+			}
+			if test.wantTopAbsent {
+				if _, ok := fields["reasoning_effort"]; ok {
+					t.Fatalf("reasoning_effort unexpectedly added: %s", rewritten)
+				}
+			} else {
+				var topLevel string
+				if err := json.Unmarshal(fields["reasoning_effort"], &topLevel); err != nil {
+					t.Fatalf("decode reasoning_effort: %v", err)
+				}
+				if topLevel != test.wantTopLevel {
+					t.Fatalf("reasoning_effort = %q, want %q", topLevel, test.wantTopLevel)
+				}
+			}
+			if test.wantNested != "" {
+				var nested struct {
+					Effort string `json:"effort"`
+				}
+				if err := json.Unmarshal(fields["reasoning"], &nested); err != nil {
+					t.Fatalf("decode reasoning: %v", err)
+				}
+				if nested.Effort != test.wantNested {
+					t.Fatalf("reasoning.effort = %q, want %q", nested.Effort, test.wantNested)
+				}
+			}
+		})
+	}
+}
+
+func TestExactPassthroughOverrideForwardsConfiguredWireEffort(t *testing.T) {
+	var captured map[string]json.RawMessage
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read upstream request: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("decode upstream request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer upstream.Close()
+
+	tools := true
+	vision := false
+	cfg := baseConfig()
+	cfg.Enabled = true
+	if cfg.ModelProfiles == nil {
+		cfg.ModelProfiles = make(map[string]config.AdapterModelProfile)
+	}
+	if cfg.PassthroughOverrides == nil {
+		cfg.PassthroughOverrides = make(map[string]config.AdapterPassthroughOverride)
+	}
+	if cfg.Models == nil {
+		cfg.Models = make(map[string]config.AdapterModelDeclaration)
+	}
+	cfg.ModelProfiles["mapped-passthrough"] = config.AdapterModelProfile{
+		Contexts:         []config.AdapterModelProfileContext{{Name: "standard", Tokens: 100000}},
+		MaxOutputTokens:  16000,
+		ReasoningEfforts: []config.AdapterReasoningEffort{"max", "ultra"},
+		ReasoningEffortWireValues: map[config.AdapterReasoningEffort]config.AdapterReasoningEffort{
+			"ultra": "max",
+		},
+		DefaultEffort:  "max",
+		SupportsTools:  &tools,
+		SupportsVision: &vision,
+	}
+	cfg.PassthroughOverrides["mapped"] = config.AdapterPassthroughOverride{BaseURL: upstream.URL + "/v1"}
+	cfg.Models["gpt-mapped"] = config.AdapterModelDeclaration{
+		Provider:            config.AdapterModelProviderPassthroughOverride,
+		WireModel:           "gpt-upstream",
+		Profile:             "mapped-passthrough",
+		PassthroughOverride: "mapped",
+	}
+	srv, err := New(
+		context.Background(),
+		cfg,
+		config.LoggingConfig{},
+		Deps{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-mapped","reasoning_effort":"ultra","messages":[{"role":"user","content":"hello"}]}`),
+	)
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var effort string
+	if err := json.Unmarshal(captured["reasoning_effort"], &effort); err != nil {
+		t.Fatalf("decode captured reasoning effort: %v", err)
+	}
+	if effort != "max" {
+		t.Fatalf("upstream reasoning_effort = %q, want max", effort)
+	}
+}
+
 func newPassthroughOverrideTestServer(t *testing.T, baseURL string) *Server {
 	t.Helper()
 	cfg := baseConfig()

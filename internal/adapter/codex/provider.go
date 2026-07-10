@@ -18,8 +18,8 @@ import (
 	"goodkind.io/clyde/internal/mitm/capture"
 )
 
-// Provider implements adapterprovider.Provider for the Codex
-// websocket-only path. Construction binds the runtime dependencies
+// Provider implements adapterprovider.Provider for the Codex Responses path.
+// Construction binds the runtime dependencies
 // once at daemon startup; Execute is the per-request entry point that
 // stitches the websocket transport, the continuation ledger, and the
 // normalized event emission together.
@@ -180,7 +180,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 	directCfg := DirectConfig{
 		HTTPClient:                     p.httpClient,
 		BaseURL:                        codexBaseURL(p.cfg.BaseURL),
-		WebsocketEnabled:               true,
+		WebsocketEnabled:               p.cfg.WebsocketEnabled,
 		WebsocketURL:                   codexWebsocketURL(p.cfg.BaseURL),
 		Token:                          token,
 		AccountID:                      p.accountID,
@@ -222,7 +222,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		)
 	}
 
-	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, &req, req.Effort.String(), w.WriteEvent)
+	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, &req, req.ProviderEffort().String(), w.WriteEvent)
 	if runErr != nil {
 		return adapterprovider.Result{}, runErr
 	}

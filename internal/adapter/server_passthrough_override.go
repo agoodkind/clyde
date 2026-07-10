@@ -39,9 +39,9 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 	apiKeyEnv := req.OpenAICompatPassthrough.APIKeyEnv
 	modelOverride := req.OpenAICompatPassthrough.Model
 	upstreamLabel := "openai_compat_passthrough"
-	if baseURL == "" {
-		override, ok := s.modelRegistry().PassthroughOverride(req.PassthroughOverrideName)
-		if !ok || override.BaseURL == "" {
+	if req.PassthroughOverrideName != "" {
+		override := req.PassthroughOverride
+		if override.BaseURL == "" {
 			err := newAdapterError(adapterErrorUpstreamUnavailable,
 				"alias routes to passthrough override "+req.PassthroughOverrideName+" but no base URL is configured")
 			err.Provider = providerName(req, "")
@@ -60,7 +60,12 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 		apiKey = os.Getenv(apiKeyEnv)
 	}
 
-	rawReq, jsonSpec, body, streamRequested := mutatePassthroughOverrideRequestBody(body, modelOverride, streamRequested)
+	rawReq, jsonSpec, body, streamRequested := mutatePassthroughOverrideRequestBody(
+		body,
+		modelOverride,
+		req.ProviderEffort().String(),
+		streamRequested,
+	)
 	s.emitRequestStarted(ctx, req, "", reqID, alias, streamRequested)
 
 	respBody, status, hdr, err := passthroughOverrideCall(ctx, baseURL, apiKey, body)
@@ -109,7 +114,12 @@ type passthroughOverrideMessage struct {
 // stays under the funlen budget. Returns the parsed request (or
 // nil), the parsed json spec, the (possibly rewritten) request
 // bytes, and whether the request asked for a streaming response.
-func mutatePassthroughOverrideRequestBody(body []byte, modelOverride string, streamRequested bool) (passthroughOverrideRequest, JSONResponseSpec, []byte, bool) {
+func mutatePassthroughOverrideRequestBody(
+	body []byte,
+	modelOverride string,
+	wireEffort string,
+	streamRequested bool,
+) (passthroughOverrideRequest, JSONResponseSpec, []byte, bool) {
 	rawReq := passthroughOverrideRequest{}
 	jsonSpec := JSONResponseSpec{Mode: "", SchemaName: "", Schema: nil}
 	if err := json.Unmarshal(body, &rawReq); err != nil {
@@ -127,6 +137,7 @@ func mutatePassthroughOverrideRequestBody(body []byte, modelOverride string, str
 			rawReq["model"] = encoded
 		}
 	}
+	applyPassthroughWireEffort(rawReq, wireEffort)
 	if rf, ok := rawReq["response_format"]; ok {
 		jsonSpec = ParseResponseFormat(rf)
 	}
@@ -139,6 +150,49 @@ func mutatePassthroughOverrideRequestBody(body []byte, modelOverride string, str
 		return rawReq, jsonSpec, body, streamRequested
 	}
 	return rawReq, jsonSpec, rewritten, streamRequested
+}
+
+func applyPassthroughWireEffort(rawReq passthroughOverrideRequest, wireEffort string) {
+	if wireEffort == "" {
+		return
+	}
+	encodedEffort, err := json.Marshal(wireEffort)
+	if err != nil {
+		return
+	}
+	rewroteField := false
+	if _, ok := rawReq["reasoning_effort"]; ok {
+		rawReq["reasoning_effort"] = encodedEffort
+		rewroteField = true
+	}
+	if rawReasoning, ok := rawReq["reasoning"]; ok {
+		if encodedReasoning, ok := passthroughReasoningWithWireEffort(rawReasoning, encodedEffort); ok {
+			rawReq["reasoning"] = encodedReasoning
+			rewroteField = true
+		}
+	}
+	if !rewroteField {
+		rawReq["reasoning_effort"] = encodedEffort
+	}
+}
+
+func passthroughReasoningWithWireEffort(
+	rawReasoning json.RawMessage,
+	encodedEffort json.RawMessage,
+) (json.RawMessage, bool) {
+	var reasoning map[string]json.RawMessage
+	if err := json.Unmarshal(rawReasoning, &reasoning); err != nil {
+		return nil, false
+	}
+	if reasoning == nil {
+		reasoning = make(map[string]json.RawMessage)
+	}
+	reasoning["effort"] = encodedEffort
+	encodedReasoning, err := json.Marshal(reasoning)
+	if err != nil {
+		return nil, false
+	}
+	return encodedReasoning, true
 }
 
 // respondPassthroughOverrideTransportError handles the transport-level

@@ -3,10 +3,7 @@ package codex
 import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-)
-
-const (
-	defaultEffectiveContextPercent = 90
+	"goodkind.io/clyde/internal/config"
 )
 
 // CapabilityMode is part of Clyde's typed adapter surface.
@@ -24,20 +21,17 @@ type CapabilityReport struct {
 // CapabilityReportForModel is part of Clyde's typed adapter surface.
 func CapabilityReportForModel(model adaptermodel.ResolvedAlias, mode CapabilityMode) CapabilityReport {
 	advertised := model.Context
-	observed := advertised
-	if model.Backend == adaptermodel.BackendCodex && !mode.WebsocketEnabled && model.ObservedContext > 0 {
-		observed = model.ObservedContext
+	transport := config.AdapterModelTransportCodexHTTP
+	if mode.WebsocketEnabled {
+		transport = config.AdapterModelTransportCodexWebsocket
 	}
-	if observed <= 0 {
-		observed = advertised
-	}
-	effective := observed
-	if effective > 0 {
-		effective = (effective * defaultEffectiveContextPercent) / 100
+	effective := advertised
+	if limit := model.TransportLimits[transport]; limit > 0 {
+		effective = limit
 	}
 	return CapabilityReport{
 		AdvertisedContextWindow: advertised,
-		ObservedContextWindow:   observed,
+		ObservedContextWindow:   effective,
 		EffectiveSafeWindow:     effective,
 	}
 }
