@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"goodkind.io/clyde/internal/providerid"
+	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -23,6 +25,16 @@ const (
 	// under typical harness inline thresholds so a page is read in context rather
 	// than spilled to a file and grepped.
 	DefaultReorientPageBytes = 30000
+
+	repeatedRunCollapseThreshold = 3
+)
+
+var (
+	repeatedRunTimestampRe  = regexp.MustCompile(`[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?`)
+	repeatedRunClockRe      = regexp.MustCompile(`\b[0-9]{1,2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?\b`)
+	repeatedRunElapsedRe    = regexp.MustCompile(`(?i)\bfor[ \t]+[0-9]+([.][0-9]+)?(ms|s|m|h)([0-9]+([.][0-9]+)?(ms|s|m|h))*\b`)
+	repeatedRunCounterRe    = regexp.MustCompile(`(?i)\b(attempt|count|retry|tick)[ \t]*(#|=|:)?[ \t]*[0-9]+\b`)
+	repeatedRunWhitespaceRe = regexp.MustCompile(`[ \t]+`)
 )
 
 // ReorientConversationRef identifies one conversation in a reorient report.
@@ -70,6 +82,9 @@ type ReorientOptions struct {
 	// MaxLines caps the recovered transcript to its last N lines. Zero uses
 	// DefaultReorientMaxLines.
 	MaxLines int
+	// MaxBytes caps the recovered transcript to its last N bytes after the line
+	// cap. Zero leaves the line-capped body unchanged.
+	MaxBytes int
 	// IncludeToolOutputs renders full tool result bodies instead of the default
 	// tool-call commands.
 	IncludeToolOutputs bool
@@ -130,9 +145,11 @@ func (idx *Index) renderReorientSnapshot(current Record, options ReorientOptions
 	if err != nil {
 		return reorientSnapshot{}, err
 	}
+	messages, strippedPriorInjection := stripPriorReorientInjections(messages)
+	messages = collapseRepeatedRuns(messages)
 	selector := reorientSelector(messages, options.SyntheticPreCompact)
 	fingerprint := reorientFingerprint(messages)
-	body, err := idx.Export(current, ExportOptions{
+	body, err := exportMessages(current, messages, ExportOptions{
 		Format:       ExportFormatMarkdown,
 		HistoryStart: 0,
 		LastN:        0,
@@ -144,10 +161,21 @@ func (idx *Index) renderReorientSnapshot(current Record, options ReorientOptions
 	if err != nil {
 		return reorientSnapshot{}, err
 	}
-	capped, totalLines, truncated := capToLastLines(string(body), options.MaxLines)
+	bodyText := string(body)
+	if strippedPriorInjection {
+		bodyText, _ = stripPriorReorientInjectionSpans(bodyText)
+	}
+	capped, totalLines, truncated := capToLastLines(bodyText, options.MaxLines)
 	var warnings []string
 	if truncated {
 		warnings = append(warnings, fmt.Sprintf("recovered transcript truncated to the last %d lines; older detail was dropped", options.MaxLines))
+	}
+	if options.MaxBytes > 0 {
+		byteCapped, byteTruncated := capToLastBytes(capped, options.MaxBytes)
+		if byteTruncated {
+			warnings = append(warnings, fmt.Sprintf("recovered transcript truncated to the last %d bytes; older detail was dropped", options.MaxBytes))
+		}
+		capped = byteCapped
 	}
 	if fingerprint == "" {
 		warnings = append(warnings, "conversation has no compaction point yet; recovering the current conversation")
@@ -309,6 +337,218 @@ func (idx *Index) RenderReorientArtifact(path string, preferred providerid.Provi
 	return snapshot.Body, nil
 }
 
+func stripPriorReorientInjections(messages []transcript.Message) ([]transcript.Message, bool) {
+	out := make([]transcript.Message, len(messages))
+	copy(out, messages)
+	changed := false
+	for i, message := range out {
+		if message.Compaction == nil || message.Compaction.Kind != transcript.CompactionKindSummary {
+			continue
+		}
+		strippedText, textChanged := stripPriorReorientInjectionSpans(message.Text)
+		if textChanged {
+			message.Text = strippedText
+			changed = true
+		}
+		if metadata, metadataChanged := stripPriorReorientInjectionMetadata(message.Compaction); metadataChanged {
+			message.Compaction = metadata
+			changed = true
+		}
+		out[i] = message
+	}
+	if !changed {
+		return messages, false
+	}
+	return out, true
+}
+
+func stripPriorReorientInjectionMetadata(
+	metadata *transcript.CompactionMetadata,
+) (*transcript.CompactionMetadata, bool) {
+	if metadata == nil {
+		return nil, false
+	}
+	items := make([]transcript.CompactedContextItem, len(metadata.ContextItems))
+	copy(items, metadata.ContextItems)
+	changed := false
+	for i, item := range items {
+		if item.Message == nil {
+			continue
+		}
+		message := *item.Message
+		content := make([]transcript.CompactedMessageContentItem, len(message.Content))
+		copy(content, message.Content)
+		messageChanged := false
+		for j, contentItem := range content {
+			stripped, strippedContent := stripPriorReorientInjectionSpans(contentItem.Text)
+			if !strippedContent {
+				continue
+			}
+			contentItem.Text = stripped
+			contentItem.Raw = nil
+			content[j] = contentItem
+			messageChanged = true
+		}
+		if !messageChanged {
+			continue
+		}
+		message.Content = content
+		message.ContentRaw = nil
+		message.Raw = nil
+		item.Message = &message
+		items[i] = item
+		changed = true
+	}
+	if !changed {
+		return metadata, false
+	}
+	out := *metadata
+	out.ContextItems = items
+	return &out, true
+}
+
+func stripPriorReorientInjectionSpans(body string) (string, bool) {
+	openTag := reorienttag.PreCompactionTranscriptOpen
+	closeTag := reorienttag.PreCompactionTranscriptClose
+	if !strings.Contains(body, openTag) {
+		return body, false
+	}
+	var builder strings.Builder
+	remaining := body
+	changed := false
+	for {
+		start := strings.Index(remaining, openTag)
+		if start < 0 {
+			builder.WriteString(remaining)
+			break
+		}
+		// Find the balanced close for the open at start, tracking nested opens so
+		// a previously nested injection is removed as one outer span rather than
+		// stopping at the first close, which would leave an orphan close marker
+		// and re-export the outer suffix.
+		depth := 1
+		scan := start + len(openTag)
+		for depth > 0 {
+			nextOpen := strings.Index(remaining[scan:], openTag)
+			nextClose := strings.Index(remaining[scan:], closeTag)
+			if nextClose < 0 {
+				break
+			}
+			if nextOpen >= 0 && nextOpen < nextClose {
+				depth++
+				scan += nextOpen + len(openTag)
+			} else {
+				depth--
+				scan += nextClose + len(closeTag)
+			}
+		}
+		if depth != 0 {
+			// Unbalanced open with no matching close: keep the remainder verbatim.
+			builder.WriteString(remaining)
+			break
+		}
+		builder.WriteString(remaining[:start])
+		remaining = remaining[scan:]
+		changed = true
+	}
+	if !changed {
+		return body, false
+	}
+	return builder.String(), true
+}
+
+func collapseRepeatedRuns(messages []transcript.Message) []transcript.Message {
+	out := make([]transcript.Message, 0, len(messages))
+	for i := 0; i < len(messages); {
+		key := repeatedRunKey(messages[i])
+		if key == "" {
+			out = append(out, messages[i])
+			i++
+			continue
+		}
+		end := i + 1
+		for end < len(messages) && repeatedRunKey(messages[end]) == key {
+			end++
+		}
+		runLength := end - i
+		if runLength < repeatedRunCollapseThreshold {
+			out = append(out, messages[i:end]...)
+			i = end
+			continue
+		}
+		collapsed := messages[i]
+		collapsed.Text = strings.TrimRight(collapsed.Text, "\n")
+		if collapsed.Text != "" {
+			collapsed.Text += "\n"
+		}
+		collapsed.Text += fmt.Sprintf(
+			"[collapsed %d near-identical turns]",
+			runLength-1,
+		)
+		out = append(out, collapsed)
+		i = end
+	}
+	return out
+}
+
+func repeatedRunKey(message transcript.Message) string {
+	if message.Compaction != nil {
+		return ""
+	}
+	text := strings.TrimSpace(message.Text)
+	toolSignature := repeatedRunToolSignature(message)
+	if text == "" && toolSignature == "" {
+		return ""
+	}
+	return message.Role + "\x00" + normalizeRepeatedRunText(text) + "\x00" + toolSignature
+}
+
+// repeatedRunToolSignature is a stable per-message tool fingerprint so two turns
+// that differ only in their tool calls never collapse together, while the same
+// tool call repeated across a spin loop still shares one key. It keys on the
+// invocation (name, verbatim input, error flag), not the tool output, so a poll
+// loop whose output changes each tick still collapses.
+func repeatedRunToolSignature(message transcript.Message) string {
+	if !message.HasTools && len(message.Tools) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for _, tool := range message.Tools {
+		builder.WriteString(tool.Name)
+		builder.WriteByte('\x01')
+		builder.Write(tool.Input.Raw)
+		builder.WriteByte('\x01')
+		if tool.IsError {
+			builder.WriteString("err")
+		}
+		builder.WriteByte('\x02')
+	}
+	return builder.String()
+}
+
+func normalizeRepeatedRunText(text string) string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
+	normalizedLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "monitor") && strings.Contains(lower, "tick") {
+			normalizedLines = append(normalizedLines, "[monitor tick]")
+			continue
+		}
+		trimmed = repeatedRunTimestampRe.ReplaceAllString(trimmed, "<timestamp>")
+		trimmed = repeatedRunClockRe.ReplaceAllString(trimmed, "<time>")
+		trimmed = repeatedRunElapsedRe.ReplaceAllString(trimmed, "for <duration>")
+		trimmed = repeatedRunCounterRe.ReplaceAllString(trimmed, "$1 <count>")
+		trimmed = repeatedRunWhitespaceRe.ReplaceAllString(trimmed, " ")
+		if trimmed == "" {
+			continue
+		}
+		normalizedLines = append(normalizedLines, strings.ToLower(trimmed))
+	}
+	return strings.Join(normalizedLines, "\n")
+}
+
 // resolveArtifactRecord builds a Record for a concrete existing transcript path
 // through the provider parsers, without consulting the index. It scans the
 // preferred provider first when one is given, so a caller that knows the artifact
@@ -349,6 +589,22 @@ func (idx *Index) resolveArtifactRecord(path string, preferred providerid.Provid
 		}
 	}
 	return zero, false, nil
+}
+
+func capToLastBytes(body string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 || len(body) <= maxBytes {
+		return body, false
+	}
+	hardStart := len(body) - maxBytes
+	start := hardStart
+	if boundary := strings.IndexByte(body[start:], '\n'); boundary >= 0 && start+boundary+1 < len(body) {
+		start += boundary + 1
+		return body[start:], true
+	}
+	for start < len(body) && !utf8.RuneStart(body[start]) {
+		start++
+	}
+	return body[start:], true
 }
 
 // sliceReorientBody returns the slice of body starting at offset that fits

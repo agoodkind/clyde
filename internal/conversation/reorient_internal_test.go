@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/providerid"
+	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -37,6 +38,215 @@ func TestCapToLastLines(t *testing.T) {
 	empty, total, truncated := capToLastLines("", 3)
 	if empty != "" || total != 0 || truncated {
 		t.Fatalf("empty cap = %q total = %d truncated = %v", empty, total, truncated)
+	}
+}
+
+func TestCapToLastBytesKeepsTailOnLineBoundary(t *testing.T) {
+	t.Parallel()
+	text := "alpha line\nbravo line\ncharlie line\n"
+	want := "bravo line\ncharlie line\n"
+	maxBytes := len(want) + 3
+	capped, truncated := capToLastBytes(text, maxBytes)
+	if capped != want {
+		t.Fatalf("capped = %q, want %q", capped, want)
+	}
+	if !truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if len(capped) > maxBytes {
+		t.Fatalf("capped len = %d, want <= %d", len(capped), maxBytes)
+	}
+}
+
+func TestRenderReorientSnapshotHonorsMaxBytes(t *testing.T) {
+	t.Parallel()
+	fixture := newReorientFixture(t)
+	const maxBytes = 180
+	page, err := fixture.index.ReorientPage(
+		context.Background(),
+		ReorientOptions{ConversationID: fixture.child.ID, MaxBytes: maxBytes},
+		"",
+		10000,
+	)
+	if err != nil {
+		t.Fatalf("ReorientPage: %v", err)
+	}
+	if page.TotalBytes > maxBytes {
+		t.Fatalf("TotalBytes = %d, want <= %d", page.TotalBytes, maxBytes)
+	}
+	if len(page.Body) > maxBytes {
+		t.Fatalf("page body len = %d, want <= %d", len(page.Body), maxBytes)
+	}
+}
+
+func TestRenderReorientSnapshotStripsPriorInjection(t *testing.T) {
+	t.Parallel()
+	baseTime := time.Date(2026, 6, 27, 13, 0, 0, 0, time.UTC)
+	priorInjectedSummary := "summary before\n" +
+		reorienttag.PreCompactionTranscriptOpen + "\n" +
+		"OLD-NESTED-TRANSCRIPT\n" +
+		reorienttag.PreCompactionTranscriptClose + "\n" +
+		"summary after"
+	fixture := buildReorientFixture(t, []transcript.Message{
+		{
+			UUID:      "child-summary-with-prior-injection",
+			Role:      "user",
+			Timestamp: baseTime,
+			Text:      priorInjectedSummary,
+			Compaction: &transcript.CompactionMetadata{
+				Kind:    transcript.CompactionKindSummary,
+				Trigger: transcript.CompactionTriggerManual,
+				ContextItems: []transcript.CompactedContextItem{
+					{
+						Kind: transcript.CompactedContextItemKindMessage,
+						Message: &transcript.CompactedMessageItem{
+							Role:         "user",
+							MessageClass: transcript.CompactedMessageClassSummary,
+							Content: []transcript.CompactedMessageContentItem{
+								{Type: "text", Text: priorInjectedSummary},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	page, err := fixture.index.ReorientPage(
+		context.Background(),
+		ReorientOptions{
+			ConversationID:      fixture.child.ID,
+			SyntheticPreCompact: true,
+			IncludeToolOutputs:  true,
+			MaxBytes:            0,
+			MaxLines:            0,
+		},
+		"",
+		10000,
+	)
+	if err != nil {
+		t.Fatalf("ReorientPage: %v", err)
+	}
+	if strings.Contains(page.Body, "OLD-NESTED-TRANSCRIPT") {
+		t.Fatalf("prior injected transcript survived:\n%s", page.Body)
+	}
+	if strings.Contains(page.Body, reorienttag.PreCompactionTranscriptOpen) ||
+		strings.Contains(page.Body, reorienttag.PreCompactionTranscriptClose) {
+		t.Fatalf("prior injection markers survived:\n%s", page.Body)
+	}
+	for _, want := range []string{"summary before", "summary after"} {
+		if !strings.Contains(page.Body, want) {
+			t.Fatalf("recovered body missing stripped summary text %q:\n%s", want, page.Body)
+		}
+	}
+}
+
+func TestCollapseRepeatedRunsKeepsFirstAndDistinctTurns(t *testing.T) {
+	t.Parallel()
+	baseTime := time.Date(2026, 6, 27, 14, 0, 0, 0, time.UTC)
+	distinct := transcript.Message{
+		UUID:      "distinct",
+		Role:      "assistant",
+		Timestamp: baseTime.Add(4 * time.Minute),
+		Text:      "monitor finished with a new result",
+	}
+	messages := []transcript.Message{
+		{
+			UUID:      "poll-1",
+			Role:      "assistant",
+			Timestamp: baseTime,
+			Text:      "monitor tick 1 at 2026-06-27T14:00:01Z attempt 1 count 1 for 1s",
+		},
+		{
+			UUID:      "poll-2",
+			Role:      "assistant",
+			Timestamp: baseTime.Add(time.Minute),
+			Text:      "monitor tick 2 at 2026-06-27T14:01:02Z attempt 2 count 2 for 2s",
+		},
+		{
+			UUID:      "poll-3",
+			Role:      "assistant",
+			Timestamp: baseTime.Add(2 * time.Minute),
+			Text:      "monitor tick 3 at 2026-06-27T14:02:03Z attempt 3 count 3 for 3s",
+		},
+		distinct,
+	}
+	collapsed := collapseRepeatedRuns(messages)
+	if len(collapsed) != 2 {
+		t.Fatalf("collapsed len = %d, want 2", len(collapsed))
+	}
+	if collapsed[0].UUID != "poll-1" {
+		t.Fatalf("first collapsed message UUID = %q, want poll-1", collapsed[0].UUID)
+	}
+	if !strings.Contains(collapsed[0].Text, "[collapsed 2 near-identical turns]") {
+		t.Fatalf("collapsed marker missing from first message text: %q", collapsed[0].Text)
+	}
+	if collapsed[1].UUID != distinct.UUID ||
+		collapsed[1].Role != distinct.Role ||
+		collapsed[1].Text != distinct.Text {
+		t.Fatalf("distinct message changed: %#v", collapsed[1])
+	}
+}
+
+func TestStripPriorReorientInjectionSpansHandlesNesting(t *testing.T) {
+	t.Parallel()
+	openTag := reorienttag.PreCompactionTranscriptOpen
+	closeTag := reorienttag.PreCompactionTranscriptClose
+	body := "head " + openTag + "\nouter A\n" + openTag + "\ninner nested\n" +
+		closeTag + "\nouter B\n" + closeTag + " tail"
+	got, changed := stripPriorReorientInjectionSpans(body)
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got != "head  tail" {
+		t.Fatalf("got %q, want %q (whole outer span removed)", got, "head  tail")
+	}
+	if strings.Contains(got, openTag) || strings.Contains(got, closeTag) {
+		t.Fatalf("orphan injection marker survived: %q", got)
+	}
+	if strings.Contains(got, "inner nested") || strings.Contains(got, "outer") {
+		t.Fatalf("nested injection content survived: %q", got)
+	}
+}
+
+func TestCollapseRepeatedRunsKeepsDistinctToolCalls(t *testing.T) {
+	t.Parallel()
+	baseTime := time.Date(2026, 6, 27, 15, 0, 0, 0, time.UTC)
+	makeToolTurn := func(uuid string, command string, minute int) transcript.Message {
+		return transcript.Message{
+			UUID:      uuid,
+			Role:      "assistant",
+			Timestamp: baseTime.Add(time.Duration(minute) * time.Minute),
+			Text:      "running a shell command",
+			HasTools:  true,
+			Tools: []transcript.ToolCall{
+				{
+					Name:  "Bash",
+					Input: transcript.ToolInputJSON{Raw: []byte(`{"command":"` + command + `"}`)},
+				},
+			},
+		}
+	}
+	distinctTools := []transcript.Message{
+		makeToolTurn("tool-1", "ls", 0),
+		makeToolTurn("tool-2", "pwd", 1),
+		makeToolTurn("tool-3", "whoami", 2),
+	}
+	collapsedDistinct := collapseRepeatedRuns(distinctTools)
+	if len(collapsedDistinct) != 3 {
+		t.Fatalf("distinct tool calls collapsed to %d, want 3 (must not merge)", len(collapsedDistinct))
+	}
+
+	identicalTools := []transcript.Message{
+		makeToolTurn("same-1", "gh pr checks", 0),
+		makeToolTurn("same-2", "gh pr checks", 1),
+		makeToolTurn("same-3", "gh pr checks", 2),
+	}
+	collapsedSame := collapseRepeatedRuns(identicalTools)
+	if len(collapsedSame) != 1 {
+		t.Fatalf("identical tool calls collapsed to %d, want 1", len(collapsedSame))
+	}
+	if !strings.Contains(collapsedSame[0].Text, "[collapsed 2 near-identical turns]") {
+		t.Fatalf("collapse marker missing from identical tool run: %q", collapsedSame[0].Text)
 	}
 }
 

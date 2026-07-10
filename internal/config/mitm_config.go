@@ -21,6 +21,9 @@ type MITMConfig struct {
 	// persists it in the isCompactSummary message. Default false; enabling it
 	// makes the proxy read the local transcript and rewrite that one response.
 	ReorientSummaryInjection bool `json:"reorientSummaryInjection,omitempty" toml:"reorient_summary_injection,omitempty"`
+	// ReorientInjectMaxTokens caps the injected transcript before the hook also
+	// applies its fixed window fraction. Zero uses the hook default.
+	ReorientInjectMaxTokens int `json:"reorientInjectMaxTokens,omitempty" toml:"reorient_inject_max_tokens,omitempty"`
 	// App maps each desktop (Electron) client name to its MITM listen endpoint,
 	// declared as [mitm.app.<name>] (for example [mitm.app.cursor]). CLI maps
 	// each CLI client name, declared as [mitm.cli.<name>] (for example

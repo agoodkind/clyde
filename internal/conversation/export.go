@@ -16,6 +16,18 @@ import (
 // Export renders one raw conversation artifact. It collects every message
 // because the rendered document spans the whole conversation.
 func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
+	messages, err := idx.LoadMessagesWithOptions(record, LoadOptions{
+		IncludeSystemPrompts:  options.Content.Has(ContentKindSystemPrompts),
+		IncludeSystemMessages: true,
+		IncludeToolOutputs:    options.Content.Has(ContentKindToolOutputs),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return exportMessages(record, messages, options)
+}
+
+func exportMessages(record Record, messages []transcript.Message, options ExportOptions) ([]byte, error) {
 	compactionOptions, err := NormalizeCompactionExportOptions(
 		options.Compaction,
 		options.HistoryStart,
@@ -25,14 +37,6 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 		return nil, err
 	}
 	options.Compaction = compactionOptions
-	messages, err := idx.LoadMessagesWithOptions(record, LoadOptions{
-		IncludeSystemPrompts:  options.Content.Has(ContentKindSystemPrompts),
-		IncludeSystemMessages: true,
-		IncludeToolOutputs:    options.Content.Has(ContentKindToolOutputs),
-	})
-	if err != nil {
-		return nil, err
-	}
 	segments := CompactionSegments(messages)
 	selection, err := SelectCompactionSegments(
 		segments,

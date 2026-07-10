@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/reorienttag"
 )
 
 // compactRequestBody is a summarization request: its final user message carries
@@ -76,7 +77,7 @@ func (b staticHookBody) Bytes() ([]byte, error) {
 }
 
 func fixedContentProvider(content string) ContentProvider {
-	return func(context.Context, string) (string, error) {
+	return func(context.Context, string, int) (string, error) {
 		return content, nil
 	}
 }
@@ -94,7 +95,7 @@ func eventStreamResponse(body string) mitm.ResponseHookResponse {
 
 func TestHookMatchesCompactionSummaryRequest(t *testing.T) {
 	t.Parallel()
-	hook := New(fixedContentProvider("recovered"))
+	hook := New(fixedContentProvider("recovered"), 0)
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -119,6 +120,47 @@ func TestHookMatchesCompactionSummaryRequest(t *testing.T) {
 	}
 }
 
+func TestHookSetsWindowAwareMaxBytes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		beta string
+		want int
+	}{
+		{
+			name: "1m context uses default 500k token cap",
+			beta: "context-1m-2025-08-07",
+			want: 500_000 * 4,
+		},
+		{
+			name: "standard context uses half the 200k window",
+			beta: "",
+			want: 100_000 * 4,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hook := New(fixedContentProvider("recovered"), 0)
+			match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+				Method: http.MethodPost,
+				Path:   "/v1/messages",
+				Header: http.Header{"anthropic-beta": []string{tc.beta}},
+				Body:   staticHookBody{body: []byte(compactRequestBody)},
+			})
+			if err != nil {
+				t.Fatalf("MatchRequestResponse err = %v", err)
+			}
+			appender, ok := match.Transformer.(responseAppendTransformer)
+			if !ok {
+				t.Fatalf("transformer type = %T, want responseAppendTransformer", match.Transformer)
+			}
+			if appender.maxBytes != tc.want {
+				t.Fatalf("maxBytes = %d, want %d", appender.maxBytes, tc.want)
+			}
+		})
+	}
+}
+
 func TestHookDetectionTable(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -133,7 +175,7 @@ func TestHookDetectionTable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			hook := New(fixedContentProvider("recovered"))
+			hook := New(fixedContentProvider("recovered"), 0)
 			match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 				Method: http.MethodPost,
 				Path:   "/v1/messages",
@@ -155,7 +197,7 @@ func TestHookMatchesCompactionWithTrailingSystemMessage(t *testing.T) {
 	// Interactive Claude Code appends a system-reminder after the compaction
 	// prompt, so the final message is not the prompt. Detection must scan back to
 	// the last user message and still match.
-	hook := New(fixedContentProvider("recovered"))
+	hook := New(fixedContentProvider("recovered"), 0)
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -179,7 +221,7 @@ func TestHookMatchesCompactionWithTrailingSystemMessage(t *testing.T) {
 
 func TestHookIgnoresNormalTurn(t *testing.T) {
 	t.Parallel()
-	hook := New(fixedContentProvider("recovered"))
+	hook := New(fixedContentProvider("recovered"), 0)
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -202,7 +244,7 @@ func TestHookIgnoresCompactionWithoutSessionID(t *testing.T) {
 		`{"role":"user","content":"hi"},` +
 		`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
 		`]}`
-	hook := New(fixedContentProvider("recovered"))
+	hook := New(fixedContentProvider("recovered"), 0)
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -219,7 +261,7 @@ func TestHookIgnoresCompactionWithoutSessionID(t *testing.T) {
 
 func TestHookCheapRejectDoesNotReadBody(t *testing.T) {
 	t.Parallel()
-	hook := New(fixedContentProvider("recovered"))
+	hook := New(fixedContentProvider("recovered"), 0)
 	cases := []mitm.RequestResponseHookRequest{
 		{Method: http.MethodGet, Path: "/v1/messages", Header: http.Header{}, Body: staticHookBody{failIfRead: true, t: t}},
 		{Method: http.MethodPost, Path: "/v1/models", Header: http.Header{}, Body: staticHookBody{failIfRead: true, t: t}},
@@ -239,7 +281,7 @@ func TestHookMatchesQueryParameterizedPath(t *testing.T) {
 	t.Parallel()
 	// The seam strips the query, so Path is already query-free here; assert the
 	// suffix match still holds for the bare messages path.
-	hook := New(fixedContentProvider("recovered"))
+	hook := New(fixedContentProvider("recovered"), 0)
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -256,7 +298,7 @@ func TestHookMatchesQueryParameterizedPath(t *testing.T) {
 
 func transformSummary(t *testing.T, provider ContentProvider, resp mitm.ResponseHookResponse) mitm.ResponseHookResponse {
 	t.Helper()
-	transformer := responseAppendTransformer{provider: provider, sessionID: "sess-abc"}
+	transformer := responseAppendTransformer{provider: provider, sessionID: "sess-abc", maxBytes: 1234}
 	out, err := transformer.TransformResponse(context.Background(), resp)
 	if err != nil {
 		t.Fatalf("TransformResponse err = %v", err)
@@ -277,7 +319,7 @@ func TestTransformInjectsInsideSummarySpan(t *testing.T) {
 	t.Parallel()
 	out := transformSummary(t, fixedContentProvider("RECOVERED-TRANSCRIPT"), eventStreamResponse(summarySSEResponse))
 	body := readBody(t, out)
-	if !strings.Contains(body, preCompactionTranscriptOpen) || !strings.Contains(body, preCompactionTranscriptClose) {
+	if !strings.Contains(body, reorienttag.PreCompactionTranscriptOpen) || !strings.Contains(body, reorienttag.PreCompactionTranscriptClose) {
 		t.Fatal("transformed body missing the pre-compaction-transcript markers")
 	}
 	if !strings.Contains(body, "RECOVERED-TRANSCRIPT") {
@@ -326,7 +368,7 @@ func TestTransformFallsBackToAppendedBlockWhenNoSummaryTag(t *testing.T) {
 	t.Parallel()
 	out := transformSummary(t, fixedContentProvider("RECOVERED-TRANSCRIPT"), eventStreamResponse(malformedSummarySSEResponse))
 	body := readBody(t, out)
-	if !strings.Contains(body, "RECOVERED-TRANSCRIPT") || !strings.Contains(body, preCompactionTranscriptOpen) {
+	if !strings.Contains(body, "RECOVERED-TRANSCRIPT") || !strings.Contains(body, reorienttag.PreCompactionTranscriptOpen) {
 		t.Fatal("malformed-summary response must still receive the transcript via a trailing block")
 	}
 	if !strings.Contains(body, `"index":1`) {
@@ -349,7 +391,7 @@ func TestTransformPassesThroughEmptyContent(t *testing.T) {
 
 func TestTransformPassesThroughProviderError(t *testing.T) {
 	t.Parallel()
-	failing := func(context.Context, string) (string, error) {
+	failing := func(context.Context, string, int) (string, error) {
 		return "", context.DeadlineExceeded
 	}
 	out := transformSummary(t, failing, eventStreamResponse(summarySSEResponse))
@@ -383,6 +425,31 @@ func TestTransformFailsOpenOnBodyReadError(t *testing.T) {
 	}
 	if out.Body == nil {
 		t.Fatal("fail-open response must carry a non-nil body")
+	}
+}
+
+func TestTransformForwardsMaxBytesToProvider(t *testing.T) {
+	t.Parallel()
+	const wantMaxBytes = 4321
+	gotMaxBytes := 0
+	provider := func(_ context.Context, _ string, maxBytes int) (string, error) {
+		gotMaxBytes = maxBytes
+		return "RECOVERED", nil
+	}
+	transformer := responseAppendTransformer{
+		provider:  provider,
+		sessionID: "sess-abc",
+		maxBytes:  wantMaxBytes,
+	}
+	_, err := transformer.TransformResponse(
+		context.Background(),
+		eventStreamResponse(summarySSEResponse),
+	)
+	if err != nil {
+		t.Fatalf("TransformResponse err = %v", err)
+	}
+	if gotMaxBytes != wantMaxBytes {
+		t.Fatalf("provider maxBytes = %d, want %d", gotMaxBytes, wantMaxBytes)
 	}
 }
 
