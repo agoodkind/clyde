@@ -296,7 +296,7 @@ func (h *harness) writeAdapterConfig(t *testing.T, adapterPort int, passthroughU
 	}
 	extra := ""
 	for _, name := range extraModels {
-		extra += fmt.Sprintf("\n[adapter.models.%s]\nbackend = \"passthrough_override\"\npassthrough_override = \"local\"\ncontext = 8000\nefforts = [\"medium\"]\n", name)
+		extra += fmt.Sprintf("\n[adapter.models.%q]\nprovider = \"passthrough_override\"\nwire_model = %q\nprofile = \"local-test\"\npassthrough_override = \"local\"\nadvertise = true\n", name, name)
 	}
 	requireToken := ""
 	if h.requireToken != "" {
@@ -322,11 +322,20 @@ base_url = %q
 [adapter.passthrough_overrides.local]
 base_url = %q
 
-[adapter.models.local-test]
-backend = "passthrough_override"
+[adapter.model_profiles.local-test]
+contexts = [{ name = "standard", tokens = 8000 }]
+max_output_tokens = 8000
+reasoning_efforts = ["medium"]
+default_effort = "medium"
+supports_tools = true
+supports_vision = false
+
+[adapter.models."local-test"]
+provider = "passthrough_override"
+wire_model = "local-test"
+profile = "local-test"
 passthrough_override = "local"
-context = 8000
-efforts = ["medium"]
+advertise = true
 
 [adapter.client_identity]
 beta_header = "test-beta"
@@ -338,14 +347,6 @@ stainless_runtime_version = "v0.0.0"
 cc_version = "0.0.0"
 cc_entrypoint = "test"
 
-[adapter.families.testfam]
-model = "claude-test"
-supports_tools = true
-supports_vision = false
-efforts = ["medium"]
-thinking_modes = ["disabled"]
-max_output_tokens = 8000
-contexts = [{ tokens = 8000, alias_suffix = "", wire_suffix = "" }]
 %s
 [mitm]
 enabled_default = false

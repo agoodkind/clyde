@@ -63,7 +63,7 @@ type BuildRequestConfig struct {
 
 // BuildRequest is part of Clyde's typed adapter surface.
 func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *adapterresolver.ResolvedRequest, effort string, cfg BuildRequestConfig, reqID string) (anthropic.Request, error) {
-	maxTok := ResolveMaxTokens(req.MaxTokens, resolved)
+	maxTok := ResolveMaxTokens(requestedOutputTokens(req), resolved)
 	strategy := cfg.InboundThinkingMaterialization
 	if strategy == "" {
 		strategy = adapterrender.MaterializeNativeThinkingBlock
@@ -153,6 +153,16 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 		}
 	}
 	return out, nil
+}
+
+func requestedOutputTokens(req adapteropenai.ChatRequest) *int {
+	if req.MaxOutputTokens != nil {
+		return req.MaxOutputTokens
+	}
+	if req.MaxTokens != nil {
+		return req.MaxTokens
+	}
+	return req.MaxComplTokens
 }
 
 func resolvedRequestFeatureVector(req anthropic.Request, wireProfile string) anthropic.WireFlavorFeatureVector {
