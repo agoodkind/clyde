@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
@@ -33,17 +34,69 @@ func TestApplyConfigSwapsModelRegistry(t *testing.T) {
 	}
 
 	next := baseConfig()
-	next.Models[alias] = config.AdapterModelDeclaration{
-		Provider:  config.AdapterModelProviderAnthropic,
-		WireModel: "claude-haiku-4-5-20251001",
-		Profile:   "haiku",
+	tools := false
+	vision := true
+	next.ModelProfiles["applied"] = config.AdapterModelProfile{
+		Contexts:         []config.AdapterModelProfileContext{{Name: "large", Tokens: 777000}},
+		MaxOutputTokens:  33000,
+		ReasoningEfforts: []config.AdapterReasoningEffort{"future-tier"},
+		DefaultEffort:    "future-tier",
+		SupportsTools:    &tools,
+		SupportsVision:   &vision,
 	}
+	next.Models["claude-applied"] = config.AdapterModelDeclaration{
+		Provider:  config.AdapterModelProviderAnthropic,
+		WireModel: "claude-applied-wire",
+		Profile:   "applied",
+		Pricing:   config.AdapterModelPricing{InputPerMTok: 4, OutputPerMTok: 20},
+		Aliases:   []config.AdapterModelAlias{{ID: alias, Advertise: true}},
+	}
+	next.ModelRoutes = append(next.ModelRoutes, modelRouteForTest(
+		"future-*",
+		config.AdapterModelProviderAnthropic,
+		config.AdapterIngressOpenAI,
+	))
 
 	if err := srv.ApplyConfig(next); err != nil {
 		t.Fatalf("ApplyConfig: %v", err)
 	}
-	if _, ok := srv.modelRegistry().Models()[alias]; !ok {
-		t.Fatalf("alias %q absent after apply", alias)
+	appliedRegistry := srv.modelRegistry()
+	resolved, effort, err := appliedRegistry.Resolve(adaptermodel.IngressOpenAI, alias, "")
+	if err != nil {
+		t.Fatalf("resolve applied alias: %v", err)
+	}
+	if resolved.Profile != "applied" || resolved.Context != 777000 || resolved.MaxOutputTokens != 33000 ||
+		resolved.Pricing.InputPerMTok != 4 || effort != "future-tier" {
+		t.Fatalf("applied exact catalog = %+v effort=%q", resolved, effort)
+	}
+	if resolved.ToolsCapability == nil || *resolved.ToolsCapability || resolved.VisionCapability == nil || !*resolved.VisionCapability {
+		t.Fatalf("applied profile capabilities = tools:%v vision:%v", resolved.ToolsCapability, resolved.VisionCapability)
+	}
+	wildcard, wildcardEffort, err := appliedRegistry.Resolve(adaptermodel.IngressOpenAI, "future-model", "invented-tier")
+	if err != nil {
+		t.Fatalf("resolve applied route: %v", err)
+	}
+	if wildcard.Backend != adaptermodel.BackendAnthropic || wildcard.WireModel != "future-model" || wildcardEffort != "invented-tier" {
+		t.Fatalf("applied route = %+v effort=%q", wildcard, wildcardEffort)
+	}
+
+	invalid := next
+	invalid.Models = make(map[string]config.AdapterModelDeclaration, len(next.Models))
+	for modelID, declaration := range next.Models {
+		invalid.Models[modelID] = declaration
+	}
+	broken := invalid.Models["claude-applied"]
+	broken.Profile = "missing-profile"
+	invalid.Models["claude-applied"] = broken
+	if err := srv.ApplyConfig(invalid); err == nil {
+		t.Fatal("ApplyConfig invalid catalog returned nil error")
+	}
+	if srv.modelRegistry() != appliedRegistry {
+		t.Fatal("failed apply replaced the complete running registry")
+	}
+	stillResolved, stillEffort, err := srv.modelRegistry().Resolve(adaptermodel.IngressOpenAI, alias, "")
+	if err != nil || stillResolved.Pricing.InputPerMTok != 4 || stillEffort != "future-tier" {
+		t.Fatalf("catalog changed after failed apply: resolved=%+v effort=%q err=%v", stillResolved, stillEffort, err)
 	}
 }
 

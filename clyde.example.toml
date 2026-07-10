@@ -2,7 +2,8 @@
 #
 # Copy sections into your
 # config; the adapter refuses to start when required tables are
-# missing ([adapter.families], [adapter.client_identity], [adapter.anthropic.oauth]
+# missing ([adapter.model_profiles], [adapter.models], [adapter.client_identity],
+# [adapter.anthropic.oauth]
 # when direct_oauth = true).
 #
 # Bootstrap:
@@ -93,9 +94,8 @@ capture_ingress = false
 # this committed example; one use is dropping a provider's thinking-redaction
 # capability so Cursor receives plaintext reasoning.
 # strip_wire_flags = ["example-capability-flag-a", "example-capability-flag-b"]
-# The default points at a -thinking alias because fable-5 rejects an
-# explicit {"type":"disabled"} thinking block (400) and the non-thinking
-# aliases emit exactly that; see [adapter.families.fable-5].
+# The default is an exact configured alias. Exact aliases take precedence over
+# wildcard routes.
 default_model = "clyde-fable-5-high-thinking"
 # Optional second adapter listener for Cursor BYOK. When set, requests arriving
 # on this port are tagged ingress=cursor while the primary port (default 11434)
@@ -111,29 +111,59 @@ enabled = true
 
 [adapter.codex]
 enabled = true
-native_model_routing = "codex"
 
-# GPT/Codex model aliases are config-owned. `tokens` is the advertised
-# catalog window; `observed_tokens` is the Responses HTTP window Clyde
-# should expose when HTTP is the active Codex transport.
-[[adapter.codex.models]]
-alias_prefix = "gpt-5.4"
-model = "gpt-5.4"
+# Reusable exact-model capability profiles. Transport limits report the same
+# context budget used by the selected Codex transport.
+[adapter.model_profiles."codex-1m"]
+contexts = [{ name = "1m", tokens = 1000000, alias_suffix = "1m", transport_limits = [{ transport = "codex_http", tokens = 272000 }, { transport = "codex_websocket", tokens = 1000000 }] }]
+max_output_tokens = 128000
+reasoning_efforts = ["low", "medium", "high", "xhigh"]
+default_effort = "medium"
+supports_tools = true
+supports_vision = true
+
+[adapter.model_profiles."codex-272k"]
+contexts = [{ name = "standard", tokens = 272000, transport_limits = [{ transport = "codex_http", tokens = 272000 }, { transport = "codex_websocket", tokens = 272000 }] }]
+max_output_tokens = 128000
+reasoning_efforts = ["low", "medium", "high", "xhigh"]
+default_effort = "medium"
+supports_tools = true
+supports_vision = true
+
+[adapter.models."gpt-5.4"]
+provider = "codex"
+wire_model = "gpt-5.4"
+profile = "codex-1m"
+advertise = true
 # Optional: prepend a shared developer instruction file before any caller
 # system message. Paths resolve relative to this config.toml.
 # instructions_file = "prompts/gpt-5.4.md"
-efforts = ["low", "medium", "high", "xhigh"]
-max_output_tokens = 128000
-contexts = [
-  { tokens = 1000000, observed_tokens = 272000, alias_suffix = "1m", native_aliases = [{ id = "gpt-5.4", advertise = true }] },
-]
+generated_aliases = { prefix = "clyde-gpt-5.4", advertise = true, dimensions = ["context", "reasoning_effort"] }
 
-[[adapter.codex.models]]
-alias_prefix = "codex-5.5"
-model = "gpt-5.5"
-efforts = ["low", "medium", "high", "xhigh"]
-max_output_tokens = 128000
-contexts = [{ tokens = 272000, native_aliases = [{ id = "gpt-5.5" }, { id = "gpt-5.5-extra", effort = "xhigh" }] }]
+[adapter.models."gpt-5.5"]
+provider = "codex"
+wire_model = "gpt-5.5"
+profile = "codex-272k"
+advertise = true
+aliases = [{ id = "gpt-5.5-extra", advertise = true, reasoning_effort = "xhigh" }]
+generated_aliases = { prefix = "clyde-codex-5.5", advertise = true, dimensions = ["reasoning_effort"] }
+
+# Ordered full-string provider claims preserve undeclared future model IDs and
+# caller-supplied optional controls. Wildcard matches route but are not listed
+# by /v1/models.
+[[adapter.model_routes]]
+match = "gpt-*"
+surfaces = ["cursor", "openai"]
+provider = "codex"
+wire_model_policy = "preserve"
+capability_policy = "passthrough"
+
+[[adapter.model_routes]]
+match = "claude-*"
+surfaces = ["cursor", "openai", "anthropic"]
+provider = "anthropic"
+wire_model_policy = "preserve"
+capability_policy = "passthrough"
 
 # Optional: forward otherwise-unknown model aliases to one
 # OpenAI-compatible upstream. The caller's model value is preserved unless
@@ -145,7 +175,7 @@ api_key_env = ""
 model = ""
 
 # Optional: route specific model aliases to named passthrough overrides.
-# Use backend = "passthrough_override" when you want the model entry to
+# Use provider = "passthrough_override" when you want the model entry to
 # be explicit even if passthrough_override is present.
 # [adapter.passthrough_overrides.local]
 # base_url = "http://localhost:1234/v1"
@@ -153,40 +183,17 @@ model = ""
 # api_key_env = ""
 # model = "local-model"
 #
-# [adapter.models.gpt-local]
-# backend = "passthrough_override"
-# passthrough_override = "local"
-
-# Optional: per-model public list pricing in dollars-per-million-tokens.
-# The daemon prices recorded token counts at read time from this table,
-# matching the recorded model id by longest-prefix so one entry covers
-# context-suffixed and snapshot variants (e.g. "claude-opus-4-8" covers
-# "claude-opus-4-8[1m]"). Omit a sub-table to leave that model's
-# estimated cost at zero. Codex models price exactly the same way, which
-# is the only way codex spend is counted.
+# [adapter.model_profiles.local]
+# contexts = [{ name = "standard", tokens = 8192 }]
+# max_output_tokens = 4096
+# supports_tools = true
+# supports_vision = false
 #
-# Claude Fable 5 list pricing ($10/$50 per MTok in/out), verified against
-# the Claude API models overview 2026-06-09. Cache rates use Anthropic's
-# standard 5m-TTL multipliers: write = 1.25x input, read = 0.1x input.
-[adapter.pricing."claude-fable-5"]
-input_per_mtok = 10.0
-output_per_mtok = 50.0
-cache_write_per_mtok = 12.50
-cache_read_per_mtok = 1.00
-
-# Claude Opus 4.8 list pricing ($5/$25 per MTok in/out), verified against
-# the Claude API models overview 2026-05-28. Cache rates use Anthropic's
-# standard 5m-TTL multipliers: write = 1.25x input, read = 0.1x input.
-[adapter.pricing."claude-opus-4-8"]
-input_per_mtok = 5.0
-output_per_mtok = 25.0
-cache_write_per_mtok = 6.25
-cache_read_per_mtok = 0.50
-
-# [adapter.pricing."gpt-5"]
-# input_per_mtok = 1.25
-# output_per_mtok = 10
-# cache_read_per_mtok = 0.125
+# [adapter.models."gpt-local"]
+# provider = "passthrough_override"
+# wire_model = "local-model"
+# profile = "local"
+# passthrough_override = "local"
 
 [adapter.anthropic.oauth]
 token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
@@ -222,98 +229,159 @@ anthropic = "reject"
 # opus-4-6: adaptive/default/enabled/disabled thinking, low/medium/high/max
 # effort, 200k and 1M context. Claude Code upstream names this exact family
 # "claude-opus-4-6". Verified against bundled upstream docs 2026-04-24.
-# observed_tokens is a safe-window cap (~90% of nominal) Clyde surfaces to
-# OpenAI-SDK clients via /v1/models so other consumers see a truthful
-# capacity. Cursor does not consult these for its in-chat indicator.
-[adapter.families.opus-4-6]
-model = "claude-opus-4-6"
+# The anthropic transport limit is a safe-window cap Clyde surfaces to
+# OpenAI-compatible clients and uses during request preflight.
+[adapter.model_profiles."anthropic-opus-4-6"]
 supports_tools = true
 supports_vision = true
-efforts = ["low", "medium", "high", "max"]
-thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+reasoning_efforts = ["low", "medium", "high", "max"]
+default_effort = "high"
 max_output_tokens = 128000
 contexts = [
-  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
-  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
+  { name = "standard", tokens = 200000, alias_suffix = "standard", transport_limits = [{ transport = "anthropic", tokens = 180000 }] },
+  { name = "1m", tokens = 1000000, alias_suffix = "1m", wire_suffix = "[1m]", transport_limits = [{ transport = "anthropic", tokens = 900000 }] },
 ]
+
+[adapter.model_profiles."anthropic-opus-4-6".thinking_profiles.adaptive]
+mode = "adaptive"
+
+[adapter.model_profiles."anthropic-opus-4-6".thinking_profiles.enabled]
+mode = "enabled"
+budget_tokens = 127999
+
+[adapter.model_profiles."anthropic-opus-4-6".thinking_profiles.disabled]
+mode = "disabled"
+
+[adapter.models."claude-opus-4-6"]
+provider = "anthropic"
+wire_model = "claude-opus-4-6"
+profile = "anthropic-opus-4-6"
+advertise = true
+generated_aliases = { prefix = "clyde-opus-4-6", advertise = true, dimensions = ["context", "reasoning_effort"] }
 
 # opus-4-8: Claude Opus 4.8 (id "claude-opus-4-8"). 1M context, 128k max
 # output, $5/$25 per MTok in/out, adaptive thinking. low/medium/high/max
 # effort, all four thinking modes, 200k and 1M context. Verified against
 # the Claude API models overview 2026-05-28.
-# thinking_wire_mode = "adaptive" is required: the registry no longer
-# applies an implicit per-model remap, so the family must declare it.
-# Tip: for an evergreen Cursor id, set alias_prefix to a version-free stem
-# (e.g. alias_prefix = "opal") so aliases like clyde-opal-1m-high survive
-# model bumps; this example keeps the slug-derived clyde-opus-4-8-* aliases.
-[adapter.families.opus-4-8]
-model = "claude-opus-4-8"
+# The adaptive thinking profile is explicit because the registry does not
+# infer provider wire shapes from model names.
+[adapter.model_profiles."anthropic-opus-4-8"]
 # Optional: prepend a shared developer instruction file before any caller
 # system message. Paths resolve relative to this config.toml.
-# instructions_file = "prompts/opus-4-8.md"
 supports_tools = true
 supports_vision = true
-efforts = ["low", "medium", "high", "max"]
-thinking_modes = ["default", "adaptive", "enabled", "disabled"]
-thinking_wire_mode = "adaptive"
+reasoning_efforts = ["low", "medium", "high", "max"]
+default_effort = "high"
 max_output_tokens = 128000
 contexts = [
-  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
-  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
+  { name = "standard", tokens = 200000, alias_suffix = "standard", transport_limits = [{ transport = "anthropic", tokens = 180000 }] },
+  { name = "1m", tokens = 1000000, alias_suffix = "1m", wire_suffix = "[1m]", transport_limits = [{ transport = "anthropic", tokens = 900000 }] },
 ]
 
-# fable-5: Claude Fable 5 (id "claude-fable-5"), the current baseline /
-# latest model. 1M context, 128k max output, $10/$50 per MTok, adaptive
-# thinking always on. Verified 2026-06-09 against live wire probes and
-# the Claude API models overview (GA 2026-06-09). Probe results: efforts
-# low/medium/high/xhigh/max all 200; thinking {"type":"disabled"} 400s,
-# so thinking_wire_mode = "adaptive" is required and "disabled" is
-# intentionally absent from thinking_modes. The non-thinking aliases
-# emit an explicit disabled block and will 400 on this family, so
-# callers should use the -thinking aliases. The literal
-# "claude-fable-5[1m]" model id 404s upstream (unlike opus-4-8[1m]).
-# Clyde strips the wire_suffix at egress, so the [1m] context entry only
-# selects the feature-aware learned flavor and the pricing/recording key.
-[adapter.families.fable-5]
-model = "claude-fable-5"
+[adapter.model_profiles."anthropic-opus-4-8".thinking_profiles.adaptive]
+mode = "adaptive"
+
+[adapter.model_profiles."anthropic-opus-4-8".thinking_profiles.enabled]
+mode = "enabled"
+budget_tokens = 127999
+
+[adapter.model_profiles."anthropic-opus-4-8".thinking_profiles.disabled]
+mode = "disabled"
+
+[adapter.models."claude-opus-4-8"]
+provider = "anthropic"
+wire_model = "claude-opus-4-8"
+profile = "anthropic-opus-4-8"
+advertise = true
+# instructions_file = "prompts/opus-4-8.md"
+pricing = { input_per_mtok = 5.0, output_per_mtok = 25.0, cache_write_per_mtok = 6.25, cache_read_per_mtok = 0.50 }
+generated_aliases = { prefix = "clyde-opus-4-8", advertise = true, dimensions = ["context", "reasoning_effort"] }
+
+# fable-5 uses a named adaptive thinking profile because the provider rejects
+# disabled thinking. Its exact thinking alias binds that profile explicitly.
+# The 1m context also keeps the base wire model because the provider rejects a
+# bracketed model suffix.
+[adapter.model_profiles."anthropic-fable-5"]
 supports_tools = true
 supports_vision = true
-efforts = ["low", "medium", "high", "xhigh", "max"]
-thinking_modes = ["default", "adaptive", "enabled"]
-thinking_wire_mode = "adaptive"
+reasoning_efforts = ["low", "medium", "high", "xhigh", "max"]
+default_effort = "high"
 max_output_tokens = 128000
 contexts = [
-  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
-  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
+  { name = "standard", tokens = 200000, alias_suffix = "standard", transport_limits = [{ transport = "anthropic", tokens = 180000 }] },
+  { name = "1m", tokens = 1000000, alias_suffix = "1m", transport_limits = [{ transport = "anthropic", tokens = 900000 }] },
 ]
+
+[adapter.model_profiles."anthropic-fable-5".thinking_profiles.thinking]
+mode = "adaptive"
+
+[adapter.model_profiles."anthropic-fable-5".thinking_profiles.enabled]
+mode = "enabled"
+budget_tokens = 127999
+
+[adapter.models."claude-fable-5"]
+provider = "anthropic"
+wire_model = "claude-fable-5"
+profile = "anthropic-fable-5"
+advertise = true
+aliases = [{ id = "clyde-fable-5-high-thinking", advertise = true, reasoning_effort = "high", context = "standard", thinking_profile = "thinking" }]
+pricing = { input_per_mtok = 10.0, output_per_mtok = 50.0, cache_write_per_mtok = 12.50, cache_read_per_mtok = 1.00 }
+generated_aliases = { prefix = "clyde-fable-5", advertise = true, dimensions = ["context", "reasoning_effort"] }
 
 # sonnet-4-6: same effort + thinking matrix as opus-4-7, single
 # 200k context. Verified 2026-04-18.
-[adapter.families.sonnet-4-6]
-model = "claude-sonnet-4-6"
+[adapter.model_profiles."anthropic-sonnet-4-6"]
 supports_tools = true
 supports_vision = true
-efforts = ["low", "medium", "high", "max"]
-thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+reasoning_efforts = ["low", "medium", "high", "max"]
+default_effort = "high"
 max_output_tokens = 64000
 contexts = [
-  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+  { name = "standard", tokens = 200000, transport_limits = [{ transport = "anthropic", tokens = 180000 }] },
 ]
+
+[adapter.model_profiles."anthropic-sonnet-4-6".thinking_profiles.adaptive]
+mode = "adaptive"
+
+[adapter.model_profiles."anthropic-sonnet-4-6".thinking_profiles.enabled]
+mode = "enabled"
+budget_tokens = 63999
+
+[adapter.model_profiles."anthropic-sonnet-4-6".thinking_profiles.disabled]
+mode = "disabled"
+
+[adapter.models."claude-sonnet-4-6"]
+provider = "anthropic"
+wire_model = "claude-sonnet-4-6"
+profile = "anthropic-sonnet-4-6"
+advertise = true
+generated_aliases = { prefix = "clyde-sonnet-4-6", advertise = true, dimensions = ["reasoning_effort"] }
 
 # haiku-4-5: server rejects effort
 # (`400 This model does not support the effort parameter`) and
 # adaptive thinking. Enabled and disabled thinking work; default
 # omits the block. Verified 2026-04-18.
-[adapter.families.haiku-4-5]
-model = "claude-haiku-4-5-20251001"
+[adapter.model_profiles."anthropic-haiku-4-5"]
 supports_tools = true
 supports_vision = true
-efforts = []
-thinking_modes = ["default", "enabled", "disabled"]
 max_output_tokens = 16000
 contexts = [
-  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+  { name = "standard", tokens = 200000, transport_limits = [{ transport = "anthropic", tokens = 180000 }] },
 ]
+
+[adapter.model_profiles."anthropic-haiku-4-5".thinking_profiles.enabled]
+mode = "enabled"
+budget_tokens = 15999
+
+[adapter.model_profiles."anthropic-haiku-4-5".thinking_profiles.disabled]
+mode = "disabled"
+
+[adapter.models."claude-haiku-4-5-20251001"]
+provider = "anthropic"
+wire_model = "claude-haiku-4-5-20251001"
+profile = "anthropic-haiku-4-5"
+advertise = true
+aliases = [{ id = "claude-haiku-4-5", advertise = true }]
 
 [mitm]
 providers = ["claude", "codex", "conductor", "cursor"]
