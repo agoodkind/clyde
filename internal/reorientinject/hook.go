@@ -123,13 +123,38 @@ func (h *Hook) MatchRequestResponse(
 		// could never produce content (and would log a misleading "matched").
 		return unmatchedRequestResponseHookMatch(), nil
 	}
+	maxBytes := h.maxBytes(req.Header)
+	if promptIndex, ok := compactionPromptIndex(request); ok {
+		if recentStart, split := splitConversation(request.Messages, promptIndex, maxBytes); split {
+			recent := renderRecentMessages(request.Messages[recentStart:promptIndex])
+			if strings.TrimSpace(recent) != "" {
+				return mitm.RequestResponseHookMatch{
+					Matched: true,
+					Transformer: responseAppendTransformer{
+						provider:  nil,
+						sessionID: sessionID,
+						maxBytes:  maxBytes,
+						content:   recent,
+					},
+					RequestTransformer: messageTrimTransformer{
+						keep: trimKeepIndexes(recentStart, promptIndex, len(request.Messages)),
+					},
+				}, nil
+			}
+		}
+	}
+	// Fallback: no meaningful split (small conversation or nothing renderable), so
+	// keep the pre-R2 behavior: summarize the whole request and inject the bounded
+	// disk-recovered transcript, with no request trim.
 	return mitm.RequestResponseHookMatch{
 		Matched: true,
 		Transformer: responseAppendTransformer{
 			provider:  h.provider,
 			sessionID: sessionID,
-			maxBytes:  h.maxBytes(req.Header),
+			maxBytes:  maxBytes,
+			content:   "",
 		},
+		RequestTransformer: nil,
 	}, nil
 }
 
@@ -168,8 +193,9 @@ func anthropicBetaValues(header http.Header) []string {
 
 func unmatchedRequestResponseHookMatch() mitm.RequestResponseHookMatch {
 	return mitm.RequestResponseHookMatch{
-		Matched:     false,
-		Transformer: nil,
+		Matched:            false,
+		Transformer:        nil,
+		RequestTransformer: nil,
 	}
 }
 
@@ -183,13 +209,84 @@ func unmatchedRequestResponseHookMatch() mitm.RequestResponseHookMatch {
 // (whose last user message is the user's own input) from matching, because the
 // signature is Claude Code's own distinctive control string.
 func requestIsCompactionSummary(request anthropicSummaryRequest) bool {
-	for _, message := range slices.Backward(request.Messages) {
+	_, ok := compactionPromptIndex(request)
+	return ok
+}
+
+// compactionPromptIndex returns the index of the last user message and whether it
+// carries Claude Code's compaction prompt. The messages before that index are the
+// conversation being summarized; the prompt message and any trailing
+// system-reminder after it are the instruction region that must stay in the
+// request. Returns ok=false when the last user message is not the compaction
+// prompt (a normal turn).
+func compactionPromptIndex(request anthropicSummaryRequest) (int, bool) {
+	for index, message := range slices.Backward(request.Messages) {
 		if message.Role != "user" {
 			continue
 		}
-		return strings.Contains(message.text(), compactPromptSignature)
+		if strings.Contains(message.text(), compactPromptSignature) {
+			return index, true
+		}
+		return 0, false
 	}
-	return false
+	return 0, false
+}
+
+// reorientSplitMinConversation is the fewest conversation messages (messages
+// before the compaction prompt) that make a top/bottom split meaningful.
+const reorientSplitMinConversation = 2
+
+// splitConversation picks the boundary between the older half that stays in the
+// summarization request and the recent half that is removed and re-attached
+// verbatim. It walks back from the message just before the prompt, taking the
+// most recent messages up to half the conversation by count and up to maxBytes by
+// rendered size, whichever it reaches first. The returned recentStart is the first
+// index of the recent half: messages[recentStart:promptIndex] is removed and
+// injected; everything else stays. ok is false when the conversation is too small
+// to split, so the caller falls back to the pre-R2 behavior.
+func splitConversation(messages []anthropicMessage, promptIndex int, maxBytes int) (recentStart int, ok bool) {
+	conversationLen := promptIndex
+	if conversationLen < reorientSplitMinConversation {
+		return 0, false
+	}
+	half := conversationLen / 2
+	if half < 1 {
+		return 0, false
+	}
+	bytesUsed := 0
+	recentStart = promptIndex
+	taken := 0
+	for index := promptIndex - 1; index >= 0 && taken < half; index-- {
+		// Budget on the same rendering the injection emits (renderBlocks includes
+		// tool_use and tool_result), not text(), which drops tool blocks. Otherwise a
+		// tool-heavy message counts as near-zero here yet renders large, letting the
+		// injected recent half exceed maxBytes.
+		size := len(messages[index].renderBlocks())
+		if maxBytes > 0 && taken > 0 && bytesUsed+size > maxBytes {
+			break
+		}
+		bytesUsed += size
+		recentStart = index
+		taken++
+	}
+	if recentStart >= promptIndex {
+		return 0, false
+	}
+	return recentStart, true
+}
+
+// trimKeepIndexes lists the message indexes that stay in the request: the older
+// conversation half (before recentStart) plus the instruction region (the prompt
+// and anything after it, from promptIndex to the end).
+func trimKeepIndexes(recentStart int, promptIndex int, total int) []int {
+	keep := make([]int, 0, total-(promptIndex-recentStart))
+	for index := range recentStart {
+		keep = append(keep, index)
+	}
+	for index := promptIndex; index < total; index++ {
+		keep = append(keep, index)
+	}
+	return keep
 }
 
 // anthropicSummaryRequest is the minimal decode of the /v1/messages request the
@@ -265,10 +362,159 @@ func (r anthropicSummaryRequest) sessionID() string {
 	return strings.TrimSpace(uid.SessionID)
 }
 
+// anthropicBlockType enumerates the content block types the recent-half renderer
+// understands. Other types render empty.
+type anthropicBlockType string
+
+const (
+	anthropicBlockText       anthropicBlockType = "text"
+	anthropicBlockToolUse    anthropicBlockType = "tool_use"
+	anthropicBlockToolResult anthropicBlockType = "tool_result"
+)
+
+// anthropicContentBlock decodes one content block of a message so the recent half
+// can be rendered verbatim. It covers the block types that carry conversation
+// detail (text, tool_use, tool_result); other block types render empty.
+type anthropicContentBlock struct {
+	Type    anthropicBlockType `json:"type"`
+	Text    string             `json:"text"`
+	Name    string             `json:"name"`
+	Input   json.RawMessage    `json:"input"`
+	Content json.RawMessage    `json:"content"`
+}
+
+// renderBlocks renders a message's content to text, handling both the plain-string
+// content form and the array-of-blocks form, and preserving tool calls and tool
+// results (not just text) so the injected recent half stays faithful.
+func (m anthropicMessage) renderBlocks() string {
+	trimmed := strings.TrimSpace(string(m.Content))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var plain string
+		if err := json.Unmarshal(m.Content, &plain); err != nil {
+			return ""
+		}
+		return plain
+	}
+	var blocks []anthropicContentBlock
+	if err := json.Unmarshal(m.Content, &blocks); err != nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, block := range blocks {
+		part := renderContentBlock(block)
+		if part == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteByte('\n')
+		}
+		builder.WriteString(part)
+	}
+	return builder.String()
+}
+
+func renderContentBlock(block anthropicContentBlock) string {
+	switch block.Type {
+	case anthropicBlockText:
+		return block.Text
+	case anthropicBlockToolUse:
+		return "[tool_use " + block.Name + "] " + strings.TrimSpace(string(block.Input))
+	case anthropicBlockToolResult:
+		return "[tool_result] " + strings.TrimSpace(string(block.Content))
+	default:
+		return ""
+	}
+}
+
+// renderRecentMessages renders the removed recent half to a role-labeled verbatim
+// transcript. Every message is emitted (never skipped), so the injected block is
+// exactly complementary to the messages trimmed from the request.
+func renderRecentMessages(messages []anthropicMessage) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString("### ")
+		builder.WriteString(message.Role)
+		builder.WriteString("\n\n")
+		builder.WriteString(message.renderBlocks())
+	}
+	return builder.String()
+}
+
+// messageTrimTransformer rewrites the summarization request to keep only the
+// message indexes in keep (the older conversation half plus the instruction
+// region), dropping the recent half that is re-attached to the response verbatim.
+type messageTrimTransformer struct {
+	keep []int
+}
+
+func (t messageTrimTransformer) TransformRequest(ctx context.Context, body []byte) ([]byte, bool, error) {
+	trimmed, err := marshalTrimmedRequest(ctx, body, t.keep)
+	if err != nil {
+		// The proxy treats an error as fail-open: it forwards the original request
+		// body unchanged, so a decode or encode failure never breaks /compact.
+		return body, false, err
+	}
+	return trimmed, true, nil
+}
+
+// marshalTrimmedRequest returns body with its messages array reduced to the keep
+// indexes, in order. It preserves every other top-level field's value verbatim via
+// [json.RawMessage], so model, system, tools, metadata, and max_tokens are
+// unchanged. Any failure is logged once and returned wrapped; the proxy fail-opens
+// on it and forwards the original request unchanged.
+func marshalTrimmedRequest(ctx context.Context, body []byte, keep []int) (out []byte, err error) {
+	defer func() {
+		if err != nil {
+			slog.WarnContext(ctx, "mitm.reorient_inject.request_trim_failed",
+				"component", reorientInjectComponent, "concern", reorientInjectConcern, "err", err)
+		}
+	}()
+	var top map[string]json.RawMessage
+	if err = json.Unmarshal(body, &top); err != nil {
+		return nil, fmt.Errorf("decode request body: %w", err)
+	}
+	rawMessages, ok := top["messages"]
+	if !ok {
+		return nil, fmt.Errorf("request body has no messages field")
+	}
+	var messages []json.RawMessage
+	if err = json.Unmarshal(rawMessages, &messages); err != nil {
+		return nil, fmt.Errorf("decode request messages: %w", err)
+	}
+	kept := make([]json.RawMessage, 0, len(keep))
+	for _, index := range keep {
+		if index < 0 || index >= len(messages) {
+			return nil, fmt.Errorf("keep index %d out of range %d", index, len(messages))
+		}
+		kept = append(kept, messages[index])
+	}
+	encodedMessages, marshalErr := json.Marshal(kept)
+	if marshalErr != nil {
+		return nil, fmt.Errorf("encode trimmed messages: %w", marshalErr)
+	}
+	top["messages"] = encodedMessages
+	out, marshalErr = json.Marshal(top)
+	if marshalErr != nil {
+		return nil, fmt.Errorf("encode trimmed request: %w", marshalErr)
+	}
+	return out, nil
+}
+
 type responseAppendTransformer struct {
 	provider  ContentProvider
 	sessionID string
 	maxBytes  int
+	// content, when non-empty, is the pre-rendered injection text (the R2
+	// request-derived recent half that was trimmed from the summarization
+	// request). It takes precedence over the disk provider. The provider path
+	// remains the fail-open fallback used when no request split was computed.
+	content string
 }
 
 func (t responseAppendTransformer) TransformResponse(
@@ -286,16 +532,20 @@ func (t responseAppendTransformer) TransformResponse(
 		"component", reorientInjectComponent,
 		"concern", reorientInjectConcern,
 	)
-	content, err := t.provider(ctx, t.sessionID, t.maxBytes)
-	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"mitm.reorient_inject.content_provider_failed",
-			"component", reorientInjectComponent,
-			"concern", reorientInjectConcern,
-			"err", err,
-		)
-		return resp, nil
+	content := t.content
+	if content == "" {
+		provided, err := t.provider(ctx, t.sessionID, t.maxBytes)
+		if err != nil {
+			slog.WarnContext(
+				ctx,
+				"mitm.reorient_inject.content_provider_failed",
+				"component", reorientInjectComponent,
+				"concern", reorientInjectConcern,
+				"err", err,
+			)
+			return resp, nil
+		}
+		content = provided
 	}
 	if content == "" {
 		return resp, nil

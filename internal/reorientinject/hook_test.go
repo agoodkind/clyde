@@ -2,6 +2,7 @@ package reorientinject
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -158,6 +159,186 @@ func TestHookSetsWindowAwareMaxBytes(t *testing.T) {
 				t.Fatalf("maxBytes = %d, want %d", appender.maxBytes, tc.want)
 			}
 		})
+	}
+}
+
+// compactSplitBody is a summarization request whose conversation is four messages
+// (m1..m4) before the compaction prompt, large enough for a midpoint split.
+const compactSplitBody = `{"model":"claude-opus-4-8","system":"sys",` +
+	`"messages":[` +
+	`{"role":"user","content":"m1-oldest"},` +
+	`{"role":"assistant","content":"m2-old"},` +
+	`{"role":"user","content":"m3-recent"},` +
+	`{"role":"assistant","content":"m4-newest"},` +
+	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
+	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
+
+// compactTinyBody has a single conversation message before the prompt, too small
+// to split, so the hook falls back to the disk provider path.
+const compactTinyBody = `{"messages":[` +
+	`{"role":"user","content":"only"},` +
+	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
+	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
+
+func TestHookSplitsConversationAtMidpoint(t *testing.T) {
+	t.Parallel()
+	hook := New(nil, 0)
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
+		Body:   staticHookBody{body: []byte(compactSplitBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if !match.Matched {
+		t.Fatal("expected a match")
+	}
+	if match.RequestTransformer == nil {
+		t.Fatal("expected a request transformer on a splittable request")
+	}
+	appender, ok := match.Transformer.(responseAppendTransformer)
+	if !ok {
+		t.Fatalf("transformer type = %T", match.Transformer)
+	}
+	// Recent half (m3, m4) is injected verbatim; older half (m1, m2) is not.
+	if !strings.Contains(appender.content, "m3-recent") || !strings.Contains(appender.content, "m4-newest") {
+		t.Fatalf("injected content missing the recent half: %q", appender.content)
+	}
+	if strings.Contains(appender.content, "m1-oldest") || strings.Contains(appender.content, "m2-old") {
+		t.Fatalf("injected content leaked the older half: %q", appender.content)
+	}
+
+	trimmed, changed, err := match.RequestTransformer.TransformRequest(context.Background(), []byte(compactSplitBody))
+	if err != nil {
+		t.Fatalf("TransformRequest err = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected the request to change")
+	}
+	var got struct {
+		Model    string            `json:"model"`
+		System   string            `json:"system"`
+		Messages []json.RawMessage `json:"messages"`
+		Metadata json.RawMessage   `json:"metadata"`
+	}
+	if err := json.Unmarshal(trimmed, &got); err != nil {
+		t.Fatalf("decode trimmed body: %v", err)
+	}
+	if got.Model != "claude-opus-4-8" || got.System != "sys" {
+		t.Fatalf("non-message fields not preserved: model=%q system=%q", got.Model, got.System)
+	}
+	if len(got.Metadata) == 0 {
+		t.Fatal("metadata dropped from trimmed request")
+	}
+	if len(got.Messages) != 3 {
+		t.Fatalf("trimmed messages = %d, want 3 (m1, m2, prompt)", len(got.Messages))
+	}
+	trimmedStr := string(trimmed)
+	if strings.Contains(trimmedStr, "m3-recent") || strings.Contains(trimmedStr, "m4-newest") {
+		t.Fatalf("trimmed request still carries the recent half: %s", trimmedStr)
+	}
+	if !strings.Contains(trimmedStr, "m1-oldest") || !strings.Contains(trimmedStr, "m2-old") {
+		t.Fatalf("trimmed request dropped the older half: %s", trimmedStr)
+	}
+	if !strings.Contains(trimmedStr, "create a detailed summary") {
+		t.Fatalf("trimmed request dropped the compaction prompt: %s", trimmedStr)
+	}
+}
+
+func TestSplitRequestTransformerFailsOpen(t *testing.T) {
+	t.Parallel()
+	transformer := messageTrimTransformer{keep: []int{0, 1}}
+	body := []byte(`{not valid json`)
+	out, changed, err := transformer.TransformRequest(context.Background(), body)
+	if err == nil {
+		t.Fatal("expected an error on an undecodable body")
+	}
+	if changed {
+		t.Fatal("changed = true, want false on failure (fail-open)")
+	}
+	if string(out) != string(body) {
+		t.Fatalf("out = %q, want the original body unchanged", out)
+	}
+}
+
+func TestHookSplitClampedByCap(t *testing.T) {
+	t.Parallel()
+	// A 1-token config ceiling makes the byte cap tiny, so the walk takes only the
+	// newest message even though the count midpoint would take two.
+	hook := New(nil, 1)
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
+		Body:   staticHookBody{body: []byte(compactSplitBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	appender, ok := match.Transformer.(responseAppendTransformer)
+	if !ok {
+		t.Fatalf("transformer type = %T", match.Transformer)
+	}
+	if !strings.Contains(appender.content, "m4-newest") {
+		t.Fatalf("cap-clamped content missing the newest message: %q", appender.content)
+	}
+	if strings.Contains(appender.content, "m3-recent") {
+		t.Fatalf("cap-clamped content should stop before m3: %q", appender.content)
+	}
+}
+
+func TestHookSmallConversationFallsBackToProvider(t *testing.T) {
+	t.Parallel()
+	hook := New(fixedContentProvider("disk-recovered"), 0)
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{},
+		Body:   staticHookBody{body: []byte(compactTinyBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if !match.Matched {
+		t.Fatal("expected a match")
+	}
+	if match.RequestTransformer != nil {
+		t.Fatal("expected no request transformer on a too-small conversation")
+	}
+	appender, ok := match.Transformer.(responseAppendTransformer)
+	if !ok {
+		t.Fatalf("transformer type = %T", match.Transformer)
+	}
+	if appender.content != "" {
+		t.Fatalf("expected empty content on the provider fallback, got %q", appender.content)
+	}
+	if appender.provider == nil {
+		t.Fatal("expected the disk provider to be set on the fallback path")
+	}
+}
+
+func TestSplitConversationBudgetsToolBlocks(t *testing.T) {
+	t.Parallel()
+	bigInput := `{"command":"` + strings.Repeat("x", 300) + `"}`
+	messages := []anthropicMessage{
+		{Role: "user", Content: json.RawMessage(`"m1"`)},
+		{Role: "assistant", Content: json.RawMessage(`"m2"`)},
+		{Role: "assistant", Content: json.RawMessage(`[{"type":"tool_use","name":"Bash","input":` + bigInput + `}]`)},
+		{Role: "user", Content: json.RawMessage(`"m4"`)},
+		{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"Your task is to create a detailed summary"}]`)},
+	}
+	promptIndex := 4
+	// A 50-byte cap fits only the tiny newest message. The tool_use message renders
+	// to ~330 bytes via renderBlocks, so it must be excluded even though text() would
+	// count it as zero.
+	recentStart, ok := splitConversation(messages, promptIndex, 50)
+	if !ok {
+		t.Fatal("expected a split")
+	}
+	if recentStart != 3 {
+		t.Fatalf("recentStart = %d, want 3 (only the newest message fits; the tool_use message is budgeted by renderBlocks, not text)", recentStart)
 	}
 }
 
