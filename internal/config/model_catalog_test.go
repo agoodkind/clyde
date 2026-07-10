@@ -106,11 +106,9 @@ func TestLoadModelCatalogIgnoresUnknownAndLegacyFields(t *testing.T) {
 			body: "[adapter.models.old]\n" +
 				"backend = \"passthrough_override\"\n" +
 				"model = \"legacy-wire-model\"\n" +
-				"instructions_file = \"prompts/legacy.md\"\n" +
 				"context = 200000\n" +
 				"observed_context = 180000\n" +
-				"efforts = [\"low\", \"high\"]\n" +
-				"passthrough_override = \"legacy\"\n",
+				"efforts = [\"low\", \"high\"]\n",
 		},
 	}
 	for _, test := range tests {
@@ -123,6 +121,40 @@ func TestLoadModelCatalogIgnoresUnknownAndLegacyFields(t *testing.T) {
 			}
 			if len(cfg.Adapter.Models) != 0 {
 				t.Fatalf("ignored input created model declarations: %#v", cfg.Adapter.Models)
+			}
+		})
+	}
+}
+
+func TestLoadModelCatalogRejectsPartialCurrentModelDeclarations(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "alias", body: "aliases = [{ id = \"gpt-alias\" }]\n"},
+		{name: "advertise", body: "advertise = true\n"},
+		{name: "instructions file", body: "instructions_file = \"prompts/gpt.md\"\n"},
+		{name: "pricing", body: "pricing = { input_per_mtok = 1 }\n"},
+		{name: "generated aliases", body: "generated_aliases = { prefix = \"clyde-gpt\", dimensions = [\"context\"] }\n"},
+		{name: "passthrough override", body: "passthrough_override = \"legacy\"\n"},
+		{name: "wire profile", body: "wire_profile = \"claude-default\"\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if strings.Contains(test.body, "instructions_file") {
+				if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+					t.Fatalf("create prompts directory: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "prompts", "gpt.md"), []byte("prompt"), 0o644); err != nil {
+					t.Fatalf("write prompt: %v", err)
+				}
+			}
+			body := validProfileTOML() + "[adapter.models.partial]\n" + test.body
+			writeModelConfig(t, dir, body)
+			_, err := loadConfig(dir)
+			if err == nil || !strings.Contains(err.Error(), "adapter.models.partial.profile") {
+				t.Fatalf("error = %v, want partial model profile validation", err)
 			}
 		})
 	}
@@ -263,6 +295,12 @@ func TestLoadModelCatalogValidatesReferencesAndCollisions(t *testing.T) {
 				"[adapter.models.gpt]\nprovider = \"codex\"\nwire_model = \"gpt\"\nprofile = \"test\"\npricing = { input_per_mtok = -1 }\n",
 			wantSub: "pricing",
 		},
+		{
+			name: "advertised context aliases require default",
+			body: "[adapter.codex]\nenabled = true\n[adapter.model_profiles.test]\ncontexts = [{ name = \"standard\", tokens = 100 }]\nmax_output_tokens = 10\nsupports_tools = true\nsupports_vision = true\n" +
+				"[adapter.models.gpt]\nprovider = \"codex\"\nwire_model = \"gpt\"\nprofile = \"test\"\ngenerated_aliases = { prefix = \"clyde-gpt\", advertise = true, dimensions = [\"context\"] }\n",
+			wantSub: "default_effort",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -293,6 +331,7 @@ func TestLoadModelCatalogValidatesProvidersAndRoutes(t *testing.T) {
 		wantSub string
 	}{
 		{name: "advertised disabled provider model", body: validProfileTOML() + "[adapter.models.gpt]\nprovider = \"codex\"\nwire_model = \"gpt\"\nprofile = \"test\"\nadvertise = true\n", wantSub: "disabled provider"},
+		{name: "advertised generated alias on disabled provider", body: validProfileTOML() + "[adapter.models.gpt]\nprovider = \"codex\"\nwire_model = \"gpt\"\nprofile = \"test\"\ngenerated_aliases = { prefix = \"clyde-gpt\", advertise = true, dimensions = [\"context\"] }\n", wantSub: "disabled provider"},
 		{name: "default disabled provider model", body: "[adapter]\ndefault_model = \"gpt\"\n" + validProfileTOML() + "[adapter.models.gpt]\nprovider = \"codex\"\nwire_model = \"gpt\"\nprofile = \"test\"\nadvertise = false\n", wantSub: "default_model"},
 		{name: "invalid glob", body: routeTOML("gpt-[", "cursor", true), wantSub: "invalid glob"},
 		{name: "empty surfaces", body: "[adapter.codex]\nenabled = true\n[[adapter.model_routes]]\nmatch = \"gpt-*\"\nsurfaces = []\nprovider = \"codex\"\nwire_model_policy = \"preserve\"\ncapability_policy = \"passthrough\"\n", wantSub: "surfaces"},

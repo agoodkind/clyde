@@ -172,12 +172,25 @@ func pruneEmptyModelDeclarations(adapter *AdapterConfig) {
 		return
 	}
 	for canonicalID, model := range adapter.Models {
-		if strings.TrimSpace(string(model.Provider)) == "" &&
-			strings.TrimSpace(model.WireModel) == "" &&
-			strings.TrimSpace(model.Profile) == "" {
+		if isEmptyModelDeclaration(model) {
 			delete(adapter.Models, canonicalID)
 		}
 	}
+}
+
+func isEmptyModelDeclaration(model AdapterModelDeclaration) bool {
+	return strings.TrimSpace(string(model.Provider)) == "" &&
+		strings.TrimSpace(model.WireModel) == "" &&
+		strings.TrimSpace(model.Profile) == "" &&
+		strings.TrimSpace(model.InstructionsFile) == "" &&
+		isZeroAdapterModelPricing(model.Pricing) &&
+		len(model.Aliases) == 0 &&
+		!model.Advertise &&
+		strings.TrimSpace(model.GeneratedAliases.Prefix) == "" &&
+		!model.GeneratedAliases.Advertise &&
+		len(model.GeneratedAliases.Dimensions) == 0 &&
+		strings.TrimSpace(model.PassthroughOverride) == "" &&
+		strings.TrimSpace(model.WireProfile) == ""
 }
 
 func isZeroAdapterModelPricing(pricing AdapterModelPricing) bool {
@@ -402,6 +415,9 @@ func validateAdapterModelDeclaration(adapter AdapterConfig, canonicalID string, 
 	if !providerEnabled && model.Advertise {
 		return fmt.Errorf("%s advertises a disabled provider %q", modelPath, model.Provider)
 	}
+	if !providerEnabled && model.GeneratedAliases.Advertise {
+		return fmt.Errorf("%s.generated_aliases advertises a disabled provider %q", modelPath, model.Provider)
+	}
 	if model.Provider == AdapterModelProviderPassthroughOverride {
 		name := strings.TrimSpace(model.PassthroughOverride)
 		if name == "" {
@@ -462,11 +478,13 @@ func validateAdapterGeneratedAliases(modelPath string, generated AdapterModelGen
 	if strings.TrimSpace(generated.Prefix) == "" {
 		return fmt.Errorf("%s.generated_aliases.prefix must be set", modelPath)
 	}
+	hasEffortDimension := false
 	seen := make(map[AdapterGeneratedAliasDimension]bool, len(generated.Dimensions))
 	for _, dimension := range generated.Dimensions {
 		switch dimension {
 		case AdapterGeneratedAliasDimensionContext:
 		case AdapterGeneratedAliasDimensionReasoningEffort:
+			hasEffortDimension = true
 		case AdapterGeneratedAliasDimensionThinkingProfile:
 			if len(profile.ThinkingProfiles) == 0 {
 				return fmt.Errorf("%s.generated_aliases requires profile thinking_profiles", modelPath)
@@ -478,6 +496,9 @@ func validateAdapterGeneratedAliases(modelPath string, generated AdapterModelGen
 			return fmt.Errorf("%s.generated_aliases contains duplicate dimension %q", modelPath, dimension)
 		}
 		seen[dimension] = true
+	}
+	if generated.Advertise && !hasEffortDimension && profile.DefaultEffort == "" {
+		return fmt.Errorf("%s.generated_aliases requires profile default_effort for an advertised bare alias", modelPath)
 	}
 	return nil
 }
