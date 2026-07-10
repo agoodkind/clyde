@@ -447,12 +447,6 @@ goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e h1:rc0g9PskdABDDhsXsL9rlf
 goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e/go.mod h1:6QHBKQ4ylZgScAMpaQkDaPvHHh41UYlVUXPUDgxlQFU=
 goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910 h1:7OfAcfvwE+Pn0Ia82Q6zN01WqQc1gbblLN+z6r+gG+U=
 goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910/go.mod h1:HPxYSE2TKo9ORrGXkfLoOvaSd/r4OnWeUDlTKXR5Zns=
-goodkind.io/lm-semantic-search v0.0.0-20260707000322-208136995d16 h1:Q4QPcipfmnOY3NiKavhrUEFYUj0Kvvrz8JopwfsD1Es=
-goodkind.io/lm-semantic-search v0.0.0-20260707000322-208136995d16/go.mod h1:nL8842ibwWiLJk2UWAMhmqSsaE7O5Cmp0TPBD65mBA8=
-goodkind.io/lm-semantic-search v0.0.0-20260707224247-870e149eabf2 h1:22WUN6fMVQ2Wt+8DrK7yzpRuxCRWbBpaY3UUxup4Hj4=
-goodkind.io/lm-semantic-search v0.0.0-20260707224247-870e149eabf2/go.mod h1:nL8842ibwWiLJk2UWAMhmqSsaE7O5Cmp0TPBD65mBA8=
-goodkind.io/lm-semantic-search v0.0.0-20260708042756-5be6601dea22 h1:vpxCDQ8V7gA0E3b5wAPAWJxgYVJ1WUsB6e16PPRPvug=
-goodkind.io/lm-semantic-search v0.0.0-20260708042756-5be6601dea22/go.mod h1:nL8842ibwWiLJk2UWAMhmqSsaE7O5Cmp0TPBD65mBA8=
 goodkind.io/lm-semantic-search v0.0.0-20260708061941-e99bd59cf3f5 h1:0NlSSsifdiWC8wkgR0ZDEa9fwfqN+13Ef9kKHlhN/bE=
 goodkind.io/lm-semantic-search v0.0.0-20260708061941-e99bd59cf3f5/go.mod h1:nL8842ibwWiLJk2UWAMhmqSsaE7O5Cmp0TPBD65mBA8=
 google.golang.org/api v0.280.0 h1:F4OfEHZhZh6a7uTufJAXXVd/2TQ8EjM4vZH+jX/vFYk=
