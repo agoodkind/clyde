@@ -269,18 +269,7 @@ func RequestInclude(requested []string, includeEncryptedReasoning bool) []string
 
 // EffectiveReasoningWithDefaultSummary is part of Clyde's typed adapter surface.
 func EffectiveReasoningWithDefaultSummary(req adapteropenai.ChatRequest, effort, defaultSummary string) *Reasoning {
-	effort = strings.ToLower(strings.TrimSpace(effort))
-	if effort == "" {
-		effort = strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
-	}
-	if effort == "" && req.Reasoning != nil {
-		effort = strings.ToLower(strings.TrimSpace(req.Reasoning.Effort))
-	}
-	var out Reasoning
-	switch reasoningEffort(effort) {
-	case reasoningEffortNone, reasoningEffortMinimal, reasoningEffortLow, reasoningEffortMedium, reasoningEffortHigh, reasoningEffortXHigh:
-		out.Effort = effort
-	}
+	out := Reasoning{Effort: effort, Summary: ""}
 	if req.Reasoning != nil {
 		switch reasoningSummary(strings.ToLower(strings.TrimSpace(req.Reasoning.Summary))) {
 		case reasoningSummaryAuto, reasoningSummaryConcise, reasoningSummaryDetailed, reasoningSummaryNone:

@@ -131,11 +131,11 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	// Note: claude-cli does NOT send fine-grained-tool-streaming-2025-05-14
 	// (verified against the local Claude Code MITM baseline). The flavor's
 	// beta header is the canonical set; do not append it here.
-	if effort != "" && len(resolved.Efforts) > 0 {
+	if effort != "" {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
 	ApplyThinkingConfig(&out, resolved, strippedModel)
-	out.FeatureVector = resolvedRequestFeatureVector(out)
+	out.FeatureVector = resolvedRequestFeatureVector(out, resolved.WireProfile)
 	if userID := cfg.Identity.EncodeUserID(); userID != "" {
 		out.Metadata = &anthropic.RequestMetadata{UserID: userID}
 	}
@@ -155,8 +155,11 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	return out, nil
 }
 
-func resolvedRequestFeatureVector(req anthropic.Request) anthropic.WireFlavorFeatureVector {
-	return anthropic.WireFlavorFeatureVector{ModelID: strings.TrimSpace(req.Model)}
+func resolvedRequestFeatureVector(req anthropic.Request, wireProfile string) anthropic.WireFlavorFeatureVector {
+	return anthropic.WireFlavorFeatureVector{
+		ModelID:     strings.TrimSpace(req.Model),
+		WireProfile: strings.TrimSpace(wireProfile),
+	}
 }
 
 func stripSystemPrefix(system, prefix string) string {

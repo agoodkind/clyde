@@ -14,6 +14,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/gklog/correlation"
 )
 
 func TestHandleChatLogsNoPayloadInRequestLeg(t *testing.T) {
@@ -560,6 +561,103 @@ func TestHandleChatModelResolutionErrorUsesCursorNativeShape(t *testing.T) {
 	}
 	if evt["cursor_normalized_model"] != "gpt-5.4" {
 		t.Fatalf("cursor_normalized_model=%v", evt["cursor_normalized_model"])
+	}
+}
+
+func TestHandleChatConflictingEffortFieldsUseInvalidRequestEnvelope(t *testing.T) {
+	t.Parallel()
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
+
+	payload, err := json.Marshal(map[string]any{
+		"model":            "claude-future",
+		"reasoning_effort": "top-tier",
+		"reasoning": map[string]string{
+			"effort": "nested-tier",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "ping"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
+	}
+	var out adapteropenai.ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
+	}
+	if out.Error.Type != "invalid_request_error" || out.Error.Code != "invalid_request" {
+		t.Fatalf("error envelope = %+v, want typed invalid request", out.Error)
+	}
+	if out.Error.Param != "" {
+		t.Fatalf("error param = %q, want empty", out.Error.Param)
+	}
+	if !strings.Contains(out.Error.Message, "conflicting reasoning effort") {
+		t.Fatalf("error message = %q, want conflict detail", out.Error.Message)
+	}
+}
+
+func TestHandleChatExactUnsupportedEffortUsesInvalidRequestEnvelope(t *testing.T) {
+	t.Parallel()
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
+
+	payload, err := json.Marshal(map[string]any{
+		"model":            "clyde-haiku-4.5-medium",
+		"reasoning_effort": "ultra",
+		"messages":         []map[string]string{{"role": "user", "content": "ping"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
+	}
+	var out adapteropenai.ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
+	}
+	if out.Error.Type != "invalid_request_error" || out.Error.Code != "invalid_request" {
+		t.Fatalf("error envelope = %+v, want typed invalid request", out.Error)
+	}
+	if out.Error.Param != "" {
+		t.Fatalf("error param = %q, want empty", out.Error.Param)
+	}
+	if !strings.Contains(out.Error.Message, `effort "ultra" not supported`) {
+		t.Fatalf("error message = %q, want unsupported effort detail", out.Error.Message)
+	}
+}
+
+func TestPrepareChatRequestLeavesEffortCanonicalizationToResolver(t *testing.T) {
+	t.Parallel()
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
+	body := []byte(`{"model":"claude-future","reasoning":{"effort":" future-tier "},"messages":[{"role":"user","content":"ping"}]}`)
+
+	req, err := srv.prepareChatRequest(
+		context.Background(),
+		correlation.Context{},
+		"req-literal-effort",
+		body,
+		len(body),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("prepareChatRequest: %v", err)
+	}
+	if req.ReasoningEffort != "" {
+		t.Fatalf("reasoning_effort = %q, want caller field to remain omitted", req.ReasoningEffort)
+	}
+	if req.Reasoning == nil || req.Reasoning.Effort != " future-tier " {
+		t.Fatalf("reasoning.effort = %+v, want literal nested value", req.Reasoning)
 	}
 }
 

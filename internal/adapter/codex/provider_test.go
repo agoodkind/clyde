@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -78,6 +79,52 @@ func TestProviderExecuteAuthErrorSurfaces(t *testing.T) {
 	}
 }
 
+func TestProviderExecuteHonorsWebsocketDisabled(t *testing.T) {
+	var sawHTTP atomic.Bool
+	var sawWebsocket atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/wham/usage":
+			_, _ = w.Write([]byte(`{}`))
+		case "/backend-api/codex/responses":
+			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				sawWebsocket.Store(true)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			sawHTTP.Store(true)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(codexHTTPSSEBodyForTest(t)))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	deps := adapterprovider.Deps{
+		Auth:       fakeAuth{token: "token-123"},
+		HTTPClient: server.Client(),
+	}
+	deps.Config.Codex.BaseURL = server.URL + "/backend-api/codex/responses"
+	deps.Config.Codex.WebsocketEnabled = false
+	provider := NewProvider(deps, ProviderOptions{})
+	writer := &capturingWriter{}
+	_, err := provider.Execute(context.Background(), adapterresolver.ResolvedRequest{
+		Model: "gpt-future",
+		OpenAI: adapteropenai.ChatRequest{Messages: []adapteropenai.ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}}},
+	}, writer)
+	if err != nil {
+		t.Fatalf("Execute() err = %v", err)
+	}
+	if !sawHTTP.Load() || sawWebsocket.Load() {
+		t.Fatalf("transport calls: HTTP=%v websocket=%v", sawHTTP.Load(), sawWebsocket.Load())
+	}
+}
+
 func TestProbeUsageWarningsReturnsNormalizedWindows(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -119,6 +166,7 @@ func TestProbeUsageWarningsReturnsNormalizedWindows(t *testing.T) {
 		Now:        func() time.Time { return time.Unix(1735682400, 0).UTC() },
 	}
 	deps.Config.Codex.BaseURL = server.URL + "/backend-api/codex/responses"
+	deps.Config.Codex.WebsocketEnabled = true
 	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
 	w := &capturingWriter{}
 	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{
@@ -200,6 +248,7 @@ func TestProviderExecuteSkipsUsageWarningWhenConfiguredThresholdNotMet(t *testin
 	}
 	deps.Config.Notices.Usage.ThresholdsUsedPercent = []float64{90}
 	deps.Config.Codex.BaseURL = server.URL + "/backend-api/codex/responses"
+	deps.Config.Codex.WebsocketEnabled = true
 	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
 	w := &capturingWriter{}
 	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{
@@ -271,6 +320,7 @@ func TestProviderExecuteSkipsUsageWarningWhenFinishReasonIsNotStop(t *testing.T)
 		Now:        func() time.Time { return time.Unix(1735682400, 0).UTC() },
 	}
 	deps.Config.Codex.BaseURL = server.URL + "/backend-api/codex/responses"
+	deps.Config.Codex.WebsocketEnabled = true
 	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
 	w := &capturingWriter{}
 	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{

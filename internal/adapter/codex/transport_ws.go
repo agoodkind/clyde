@@ -40,6 +40,7 @@ type ResponseCreateWsRequest struct {
 	Include            []string                     `json:"include,omitempty"`
 	ServiceTier        string                       `json:"service_tier,omitempty"`
 	PromptCacheKey     string                       `json:"prompt_cache_key,omitempty"`
+	MaxOutputTokens    *int                         `json:"max_output_tokens,omitempty"`
 	Text               json.RawMessage              `json:"text,omitempty"`
 	ClientMetadata     ResponseCreateClientMetadata `json:"client_metadata,omitempty"`
 	PreviousResponseID string                       `json:"previous_response_id,omitempty"`
@@ -62,6 +63,7 @@ func ResponseCreateRequestFromHTTP(req HTTPTransportRequest) ResponseCreateWsReq
 		Include:           req.Include,
 		ServiceTier:       req.ServiceTier,
 		PromptCacheKey:    req.PromptCache,
+		MaxOutputTokens:   req.MaxOutputTokens,
 		Text:              req.Text,
 		ClientMetadata:    ResponseCreateClientMetadata(req.ClientMetadata.ToMap()),
 		// PreviousResponseID stays empty on the codex path: store=false

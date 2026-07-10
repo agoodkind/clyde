@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/correlation"
@@ -36,6 +38,9 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 			entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(m, adaptercodex.CapabilityMode{
 				WebsocketEnabled: s.codexWebsocketEnabled(),
 			}))
+		}
+		if m.Backend == BackendAnthropic {
+			entry = applyModelContextLimit(entry, m.TransportLimits[config.AdapterModelTransportAnthropic])
 		}
 		resp.Data = append(resp.Data, entry)
 	}
@@ -59,17 +64,7 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 }
 
 func modelEntryFromResolved(m adaptermodel.ResolvedAlias) ModelEntry {
-	// Prefer the empirically-observed context window over the nominal
-	// advertised value for capability reports. This matches what the
-	// Codex capability overlay already does for that backend and gives
-	// other OpenAI-SDK clients a truthful picture of what the upstream
-	// will actually accept. Cursor does not consult these fields for
-	// its in-chat indicator (proven empirically), so the practical
-	// impact is on non-Cursor consumers and Clyde's internal accounting.
 	advertised := m.Context
-	if m.ObservedContext > 0 {
-		advertised = m.ObservedContext
-	}
 	return ModelEntry{
 		ID:                               m.Alias,
 		Object:                           "model",
@@ -91,6 +86,26 @@ func modelEntryFromResolved(m adaptermodel.ResolvedAlias) ModelEntry {
 		Backend:                          m.Backend.String(),
 		ClaudeModel:                      m.WireModel,
 	}
+}
+
+func applyModelContextLimit(entry ModelEntry, limit int) ModelEntry {
+	if limit <= 0 {
+		return entry
+	}
+	entry.Context = limit
+	entry.ContextWindow = limit
+	entry.ContextLength = limit
+	entry.MaxContextLength = limit
+	entry.MaxContextTokens = limit
+	entry.MaxModelLen = limit
+	entry.MaxTokens = limit
+	entry.InputTokenLimit = limit
+	entry.MaxInputTokens = limit
+	entry.ContextTokenLimit = limit
+	entry.ContextTokenLimitCamel = limit
+	entry.ContextTokenLimitForMaxMode = limit
+	entry.ContextTokenLimitForMaxModeCamel = limit
+	return entry
 }
 
 func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
@@ -145,6 +160,10 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	if resolverErr != nil {
 		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, resolverErr)
 		recorder.EmitError(ctx, "model_resolve_failed", resolverErr.Error())
+		var invalidRequestErr *adapterresolver.InvalidRequestError
+		if errors.As(resolverErr, &invalidRequestErr) {
+			return adapterErrInvalidRequest(invalidRequestErr.Error(), resolverErr)
+		}
 		return adapterErrModelNotFound(resolverErr.Error())
 	}
 	resolvedReq.RequestID = reqID
@@ -235,9 +254,6 @@ func (s *Server) prepareChatRequest(ctx context.Context, corr correlation.Contex
 		s.logMessagesRequired(ctx, corr, reqID, req)
 		recorder.EmitError(ctx, "messages_required", "messages is required")
 		return ChatRequest{}, adapterErrInvalidRequest("messages is required", nil)
-	}
-	if req.ReasoningEffort == "" && req.Reasoning != nil {
-		req.ReasoningEffort = strings.TrimSpace(req.Reasoning.Effort)
 	}
 	return req, nil
 }

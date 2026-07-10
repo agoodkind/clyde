@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -20,16 +21,18 @@ import (
 // alias derivation reproduces the prior ResolvedAlias.Alias behavior.
 func resolvedForTest(model adaptermodel.ResolvedAlias) *adapterresolver.ResolvedRequest {
 	resolved := &adapterresolver.ResolvedRequest{
-		Provider:        adaptermodel.BackendAnthropic,
-		Family:          model.Profile,
-		Model:           model.WireModel,
-		Effort:          adapterresolver.Effort(model.Effort),
-		ContextBudget:   adapterresolver.ContextBudget{InputTokens: model.Context, OutputTokens: model.MaxOutputTokens, TotalTokens: model.Context},
-		Thinking:        model.Thinking,
-		Instructions:    model.Instructions,
-		Efforts:         model.Efforts,
-		Alias:           model.Alias,
-		MaxOutputTokens: model.MaxOutputTokens,
+		Provider:             adaptermodel.BackendAnthropic,
+		Family:               model.Profile,
+		Model:                model.WireModel,
+		Effort:               adapterresolver.Effort(model.Effort),
+		ContextBudget:        adapterresolver.ContextBudget{InputTokens: model.Context, OutputTokens: model.MaxOutputTokens, TotalTokens: model.Context},
+		Thinking:             model.Thinking,
+		ThinkingBudgetTokens: model.ThinkingBudgetTokens,
+		Instructions:         model.Instructions,
+		Efforts:              model.Efforts,
+		Alias:                model.Alias,
+		MaxOutputTokens:      model.MaxOutputTokens,
+		WireProfile:          model.WireProfile,
 	}
 	resolved.Cursor.NormalizedModel = model.Alias
 	resolved.OpenAI.Model = model.Alias
@@ -62,6 +65,106 @@ func requestBuilderChatRequest() adapteropenai.ChatRequest {
 			{Role: "user", Content: []byte(`"hello"`)},
 		},
 		MaxTokens: &maxTokens,
+	}
+}
+
+func TestBuildRequestPreservesWildcardReasoningEffort(t *testing.T) {
+	req := requestBuilderChatRequest()
+	model := adaptermodel.ResolvedAlias{
+		Alias:     "claude-future",
+		WireModel: "claude-future",
+		Effort:    "future-tier",
+	}
+
+	out, err := BuildRequest(
+		context.Background(),
+		req,
+		resolvedForTest(model),
+		"future-tier",
+		requestBuilderConfig(),
+		"req-future-effort",
+	)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.OutputConfig == nil || out.OutputConfig.Effort != "future-tier" {
+		t.Fatalf("OutputConfig = %+v, want future-tier", out.OutputConfig)
+	}
+}
+
+func TestBuildRequestForwardsConfiguredExactReasoningEffort(t *testing.T) {
+	req := requestBuilderChatRequest()
+	model := adaptermodel.ResolvedAlias{
+		Alias:     "claude-profiled",
+		WireModel: "claude-profiled",
+		Effort:    "future-tier",
+		Efforts:   []string{"future-tier"},
+	}
+
+	out, err := BuildRequest(
+		context.Background(),
+		req,
+		resolvedForTest(model),
+		"future-tier",
+		requestBuilderConfig(),
+		"req-exact-effort",
+	)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.OutputConfig == nil || out.OutputConfig.Effort != "future-tier" {
+		t.Fatalf("OutputConfig = %+v, want configured exact effort", out.OutputConfig)
+	}
+}
+
+func TestBuildRequestHonorsProfileOutputAboveLegacyCap(t *testing.T) {
+	requestedMax := 200000
+	req := requestBuilderChatRequest()
+	req.MaxTokens = &requestedMax
+	model := adaptermodel.ResolvedAlias{
+		Alias:           "claude-large-output",
+		WireModel:       "claude-large-output",
+		MaxOutputTokens: 250000,
+	}
+
+	out, err := BuildRequest(
+		context.Background(),
+		req,
+		resolvedForTest(model),
+		"",
+		requestBuilderConfig(),
+		"req-large-output",
+	)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.MaxTokens != requestedMax {
+		t.Fatalf("MaxTokens = %d, want %d", out.MaxTokens, requestedMax)
+	}
+}
+
+func TestBuildRequestCarriesResolvedWireProfile(t *testing.T) {
+	req := requestBuilderChatRequest()
+	model := adaptermodel.ResolvedAlias{
+		Alias:       "claude-profiled",
+		WireModel:   "claude-profiled",
+		WireProfile: "claude-code-interactive-profiled",
+	}
+
+	out, err := BuildRequest(
+		context.Background(),
+		req,
+		resolvedForTest(model),
+		"",
+		requestBuilderConfig(),
+		"req-profiled",
+	)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	field := reflect.ValueOf(out.FeatureVector).FieldByName("WireProfile")
+	if !field.IsValid() || field.Kind() != reflect.String || field.String() != model.WireProfile {
+		t.Fatalf("FeatureVector wire profile = %v, want %q", field, model.WireProfile)
 	}
 }
 
@@ -251,8 +354,30 @@ func TestBuildRequestPassesThinkingEnabledThrough(t *testing.T) {
 	if out.Thinking.Type != "enabled" {
 		t.Fatalf("Thinking.Type = %q want enabled", out.Thinking.Type)
 	}
-	if out.Thinking.BudgetTokens != 31999 {
-		t.Fatalf("Thinking.BudgetTokens = %d want 31999", out.Thinking.BudgetTokens)
+	if out.Thinking.BudgetTokens != 7000 {
+		t.Fatalf("Thinking.BudgetTokens = %d want configured budget 7000", out.Thinking.BudgetTokens)
+	}
+}
+
+func TestBuildRequestAllowsThinkingBudgetAtOutputBoundary(t *testing.T) {
+	req := requestBuilderChatRequest()
+	model := adaptermodel.ResolvedAlias{
+		Alias:                "clyde-boundary-thinking",
+		WireModel:            "claude-boundary",
+		MaxOutputTokens:      16000,
+		Thinking:             adaptermodel.ThinkingEnabled,
+		ThinkingBudgetTokens: 15999,
+	}
+
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-boundary")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.Thinking == nil || out.Thinking.BudgetTokens != 15999 {
+		t.Fatalf("Thinking = %+v, want budget 15999", out.Thinking)
+	}
+	if out.MaxTokens > model.MaxOutputTokens {
+		t.Fatalf("MaxTokens = %d, exceeds profile cap %d", out.MaxTokens, model.MaxOutputTokens)
 	}
 }
 

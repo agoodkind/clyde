@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
@@ -12,6 +13,18 @@ import (
 type stubRegistry struct {
 	view ResolvedModelView
 	err  error
+}
+
+type capturingRegistry struct {
+	view      ResolvedModelView
+	effort    string
+	callCount int
+}
+
+func (registry *capturingRegistry) Resolve(_ IngressSurface, _ string, effort string) (ResolvedModelView, error) {
+	registry.effort = effort
+	registry.callCount++
+	return registry.view, nil
 }
 
 func (s stubRegistry) Resolve(_ IngressSurface, _ string, _ string) (ResolvedModelView, error) {
@@ -33,6 +46,66 @@ func TestResolveSurfacesRegistryError(t *testing.T) {
 	_, err := Resolve(IngressCursor, adaptercursor.Request{}, stubRegistry{err: want})
 	if !errors.Is(err, want) {
 		t.Fatalf("expected error %v, got %v", want, err)
+	}
+}
+
+func TestResolveCanonicalizesReasoningEffortBeforeRegistryLookup(t *testing.T) {
+	tests := []struct {
+		name            string
+		reasoningEffort string
+		nestedEffort    string
+		wantEffort      string
+	}{
+		{name: "top level", reasoningEffort: "top-tier", wantEffort: "top-tier"},
+		{name: "nested", nestedEffort: "nested-tier", wantEffort: "nested-tier"},
+		{name: "matching fields", reasoningEffort: "same-tier", nestedEffort: "same-tier", wantEffort: "same-tier"},
+		{name: "literal whitespace", nestedEffort: " future-tier ", wantEffort: " future-tier "},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := adapteropenai.ChatRequest{
+				Model:           "gpt-future",
+				ReasoningEffort: test.reasoningEffort,
+			}
+			if test.nestedEffort != "" {
+				request.Reasoning = &adapteropenai.Reasoning{Effort: test.nestedEffort}
+			}
+			registry := &capturingRegistry{view: ResolvedModelView{
+				Provider: ProviderCodex,
+				Model:    "gpt-future",
+				Effort:   Effort(test.wantEffort),
+			}}
+			_, err := Resolve(IngressOpenAI, adaptercursor.Request{OpenAI: request}, registry)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if registry.effort != test.wantEffort || registry.callCount != 1 {
+				t.Fatalf("registry effort/calls = %q/%d, want %q/1", registry.effort, registry.callCount, test.wantEffort)
+			}
+		})
+	}
+}
+
+func TestResolveRejectsConflictingReasoningEffortFields(t *testing.T) {
+	registry := &capturingRegistry{view: ResolvedModelView{
+		Provider: ProviderCodex,
+		Model:    "gpt-future",
+	}}
+	request := adapteropenai.ChatRequest{
+		Model:           "gpt-future",
+		ReasoningEffort: "top-tier",
+		Reasoning:       &adapteropenai.Reasoning{Effort: "nested-tier"},
+	}
+	_, err := Resolve(IngressOpenAI, adaptercursor.Request{OpenAI: request}, registry)
+	if err == nil || !strings.Contains(err.Error(), "conflicting reasoning effort") {
+		t.Fatalf("error = %v, want conflicting reasoning effort", err)
+	}
+	var invalidRequestErr *InvalidRequestError
+	if !errors.As(err, &invalidRequestErr) {
+		t.Fatalf("error type = %T, want *InvalidRequestError", err)
+	}
+	if registry.callCount != 0 {
+		t.Fatalf("registry call count = %d, want 0", registry.callCount)
 	}
 }
 
@@ -61,7 +134,6 @@ func TestResolveBuildsTypedRequest(t *testing.T) {
 		Alias:           "gpt-5.3-codex",
 		SupportsTools:   true,
 		SupportsVision:  false,
-		ObservedContext: 272000,
 		ThinkingModes:   []string{"default", "enabled"},
 	}
 	got, err := Resolve(IngressCursor, cursorReq, stubRegistry{view: view})
@@ -104,9 +176,6 @@ func TestResolveBuildsTypedRequest(t *testing.T) {
 	if got.SupportsVision {
 		t.Errorf("SupportsVision = %v, want false", got.SupportsVision)
 	}
-	if got.ObservedContext != 272000 {
-		t.Errorf("ObservedContext = %d, want 272000", got.ObservedContext)
-	}
 	if got.MaxOutputTokens != 16384 {
 		t.Errorf("MaxOutputTokens = %d, want 16384", got.MaxOutputTokens)
 	}
@@ -128,7 +197,6 @@ func TestResolveBuildsAnthropicRequest(t *testing.T) {
 		Alias:           "clyde-opus-4.7",
 		SupportsTools:   true,
 		SupportsVision:  true,
-		ObservedContext: 0,
 		ThinkingModes:   []string{"default", "adaptive"},
 	}
 	got, err := Resolve(IngressCursor, cursorReq, stubRegistry{view: view})
@@ -143,9 +211,6 @@ func TestResolveBuildsAnthropicRequest(t *testing.T) {
 	}
 	if !got.SupportsTools || !got.SupportsVision {
 		t.Errorf("SupportsTools/SupportsVision = %v/%v, want true/true", got.SupportsTools, got.SupportsVision)
-	}
-	if got.ObservedContext != 0 {
-		t.Errorf("ObservedContext = %d, want 0", got.ObservedContext)
 	}
 	if got.MaxOutputTokens != 32000 {
 		t.Errorf("MaxOutputTokens = %d, want 32000", got.MaxOutputTokens)

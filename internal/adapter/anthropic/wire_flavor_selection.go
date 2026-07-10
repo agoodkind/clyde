@@ -33,16 +33,26 @@ func featureVectorForRequest(req Request) WireFlavorFeatureVector {
 	if strings.TrimSpace(req.FeatureVector.ModelID) != "" {
 		return req.FeatureVector
 	}
-	return WireFlavorFeatureVector{ModelID: strings.TrimSpace(req.Model)}
+	return WireFlavorFeatureVector{
+		ModelID:     strings.TrimSpace(req.Model),
+		WireProfile: "",
+	}
 }
 
-// selectInteractiveFlavor chooses a learned claude-cli interactive
-// flavor by model. The deterministic rule is: first consider only
-// interactive slugs, then require an observed feature vector with the
-// same model id. If more than one flavor matches, the lexicographically
-// smallest slug wins.
+// selectInteractiveFlavor chooses an explicitly configured learned profile
+// when present. Otherwise it considers only interactive slugs with an observed
+// feature vector for the same model, using the lexicographically smallest slug
+// when more than one matches.
 func selectInteractiveFlavor(flavors map[string]WireFlavor, featureVector WireFlavorFeatureVector) (WireFlavor, error) {
 	var zero WireFlavor
+	wireProfile := strings.TrimSpace(featureVector.WireProfile)
+	if wireProfile != "" {
+		flavor, ok := flavors[wireProfile]
+		if !ok {
+			return zero, missingWireProfileError(wireProfile)
+		}
+		return flavor, nil
+	}
 	model := strings.TrimSpace(featureVector.ModelID)
 	if model == "" {
 		return zero, newWireFlavorSelectionError(ErrBaselineInvalid, "anthropic wire baseline invalid: request feature vector has empty model id")
@@ -85,5 +95,13 @@ func featureVectorsMatch(learned WireFlavorFeatureVector, request WireFlavorFeat
 
 func unseededFlavorError(model string) error {
 	message := fmt.Sprintf("anthropic wire flavor unseeded: model %q has no learned claude-cli wire flavor; run claude-cli once with that model through the Clyde MITM proxy to seed it", model)
+	return newWireFlavorSelectionError(ErrFlavorUnseeded, message)
+}
+
+func missingWireProfileError(wireProfile string) error {
+	message := fmt.Sprintf(
+		"anthropic wire flavor unseeded: configured wire profile %q has no learned claude-cli baseline",
+		wireProfile,
+	)
 	return newWireFlavorSelectionError(ErrFlavorUnseeded, message)
 }

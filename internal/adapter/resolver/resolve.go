@@ -7,6 +7,7 @@ import (
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/gklog/correlation"
 )
@@ -44,6 +45,7 @@ type ResolvedModelView struct {
 	Family          string
 	Model           string
 	Effort          Effort
+	WireEffort      Effort
 	Context         int
 	MaxOutputTokens int
 	// Thinking is the resolved thinking mode for this alias as a typed
@@ -54,17 +56,15 @@ type ResolvedModelView struct {
 	// thinking field unset.
 	Thinking string
 	// ThinkingBudgetTokens is the explicit budget from the selected thinking
-	// profile. A zero value means the resolved mode does not use a budget.
+	// profile. It is zero for adaptive, disabled, unbound, and wildcard models.
 	ThinkingBudgetTokens int
 	// Instructions carries any provider-neutral model instructions the
 	// registry resolved for this alias. Empty means leave provider-native
 	// instruction fields unchanged unless the caller supplied its own
 	// system or developer content.
 	Instructions string
-	// Efforts is the list of allowed effort tiers the family declared.
-	// Per-provider request builders gate output_config on this being
-	// non-empty so they only send the effort field to families that
-	// accept it. Empty means leave output_config unset.
+	// Efforts is the list of allowed effort tiers an exact profile declared.
+	// Wildcard routes leave it empty because their capabilities are unknown.
 	Efforts []string
 	// Alias is the public alias the client sent, before normalization.
 	Alias string
@@ -76,9 +76,6 @@ type ResolvedModelView struct {
 	ToolsCapability *bool
 	// VisionCapability is nil when a wildcard route has no trustworthy claim.
 	VisionCapability *bool
-	// ObservedContext is the provider-specific context window the
-	// registry resolved for capability reports. Zero means use Context.
-	ObservedContext int
 	// ThinkingModes enumerates the allowed thinking values the family
 	// declared. Distinct from Thinking, which is the single bound mode.
 	ThinkingModes []string
@@ -86,7 +83,7 @@ type ResolvedModelView struct {
 	// override table. Set only for a named passthrough_override alias.
 	PassthroughOverrideName string
 	// PassthroughOverride is the immutable named override snapshot selected
-	// with the exact alias. Dispatch must not reload it from a newer registry.
+	// with the exact alias. Dispatch must not reload it from a hot-applied registry.
 	PassthroughOverride config.AdapterPassthroughOverride
 	// OpenAICompatPassthrough carries the inline configured upstream the
 	// registry resolved for an unnamed passthrough_override alias.
@@ -105,6 +102,30 @@ type ResolvedModelView struct {
 // request explicitly.
 var ErrUnresolvedProvider = errors.New("resolver: alias does not map to a known provider")
 
+// InvalidRequestError identifies request-shape failures discovered before
+// model lookup. Callers can map this class to their route-specific invalid
+// request envelope without reclassifying model registry errors.
+type InvalidRequestError struct {
+	message string
+	cause   error
+}
+
+// Unwrap returns the typed lower-level resolution failure when one exists.
+func (err *InvalidRequestError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.cause
+}
+
+// Error returns the request-shape failure message.
+func (err *InvalidRequestError) Error() string {
+	if err == nil {
+		return ""
+	}
+	return err.message
+}
+
 // Resolve consumes a typed cursor.Request and a ModelRegistry and
 // returns a ResolvedRequest. It is a pure function in the sense that
 // it does not perform IO; the registry is consulted in-memory.
@@ -116,7 +137,11 @@ func Resolve(surface IngressSurface, req adaptercursor.Request, registry ModelRe
 	if registry == nil {
 		return ResolvedRequest{}, errors.New("resolver: nil registry")
 	}
-	view, err := registry.Resolve(surface, req.OpenAI.Model, req.OpenAI.ReasoningEffort)
+	effort, err := effectiveReasoningEffort(req.OpenAI)
+	if err != nil {
+		return ResolvedRequest{}, err
+	}
+	view, err := registry.Resolve(surface, req.OpenAI.Model, effort)
 	if err != nil {
 		slog.Warn("adapter.resolver.resolve_failed", "concern", "adapter.models.resolve", "model", req.OpenAI.Model, "err", err)
 		return ResolvedRequest{}, fmt.Errorf("resolve request model %s: %w", req.OpenAI.Model, err)
@@ -125,10 +150,11 @@ func Resolve(surface IngressSurface, req adaptercursor.Request, registry ModelRe
 		return ResolvedRequest{}, ErrUnresolvedProvider
 	}
 	return ResolvedRequest{
-		Provider: view.Provider,
-		Family:   view.Family,
-		Model:    view.Model,
-		Effort:   view.Effort,
+		Provider:   view.Provider,
+		Family:     view.Family,
+		Model:      view.Model,
+		Effort:     view.Effort,
+		WireEffort: view.WireEffort,
 		ContextBudget: ContextBudget{
 			InputTokens:  view.Context,
 			OutputTokens: view.MaxOutputTokens,
@@ -143,7 +169,6 @@ func Resolve(surface IngressSurface, req adaptercursor.Request, registry ModelRe
 		SupportsVision:          view.SupportsVision,
 		ToolsCapability:         view.ToolsCapability,
 		VisionCapability:        view.VisionCapability,
-		ObservedContext:         view.ObservedContext,
 		ThinkingModes:           view.ThinkingModes,
 		MaxOutputTokens:         view.MaxOutputTokens,
 		PassthroughOverrideName: view.PassthroughOverrideName,
@@ -158,4 +183,26 @@ func Resolve(surface IngressSurface, req adaptercursor.Request, registry ModelRe
 		RequestID:               "",
 		Correlation:             correlation.Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	}, nil
+}
+
+func effectiveReasoningEffort(req adapteropenai.ChatRequest) (string, error) {
+	topLevel := req.ReasoningEffort
+	nested := ""
+	if req.Reasoning != nil {
+		nested = req.Reasoning.Effort
+	}
+	if topLevel != "" && nested != "" && topLevel != nested {
+		return "", &InvalidRequestError{
+			message: fmt.Sprintf(
+				"conflicting reasoning effort fields: reasoning_effort=%q reasoning.effort=%q",
+				topLevel,
+				nested,
+			),
+			cause: nil,
+		}
+	}
+	if topLevel != "" {
+		return topLevel, nil
+	}
+	return nested, nil
 }

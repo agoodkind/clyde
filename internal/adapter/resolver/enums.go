@@ -1,10 +1,6 @@
 package resolver
 
-import (
-	"strings"
-
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
-)
+import adaptermodel "goodkind.io/clyde/internal/adapter/model"
 
 // ProviderID is the typed enum naming the upstream provider that the
 // resolved request will be dispatched to. It is a type alias of the
@@ -55,17 +51,13 @@ func (e Effort) String() string {
 	return string(e)
 }
 
-// Valid reports whether the effort is empty or a trimmed nonempty string.
-// Exact model profiles validate membership before the resolver sees it;
-// wildcard routes intentionally preserve future provider tiers.
+// Valid reports true because effort is an opaque provider-owned string.
+// Exact model profiles validate membership before the resolver sees it.
 func (e Effort) Valid() bool {
-	return string(e) == strings.TrimSpace(string(e))
+	return true
 }
 
-// ParseEffort preserves a trimmed provider-owned effort string.
+// ParseEffort preserves a provider-owned effort string byte for byte.
 func ParseEffort(raw string) (Effort, bool) {
-	if raw != strings.TrimSpace(raw) {
-		return EffortUnset, false
-	}
 	return Effort(raw), true
 }

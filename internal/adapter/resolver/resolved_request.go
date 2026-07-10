@@ -40,6 +40,7 @@ type ResolvedRequest struct {
 	Family        string
 	Model         string
 	Effort        Effort
+	WireEffort    Effort
 	Verbosity     string
 	ContextBudget ContextBudget
 	RequestID     string
@@ -57,9 +58,8 @@ type ResolvedRequest struct {
 	// resolver lifted from the resolved model data. Providers map this
 	// into their native instruction or system field shapes.
 	Instructions string
-	// Efforts is the list of allowed effort tiers the family declared
-	// for this alias. Per-provider request builders gate output_config
-	// (and equivalents) on this being non-empty.
+	// Efforts is the list of allowed effort tiers an exact profile declared.
+	// Wildcard routes leave it empty because their capabilities are unknown.
 	Efforts []string
 	// Alias is the public alias the client sent, before normalization.
 	// Carried for capability reports and cross-layer logging that need
@@ -76,10 +76,6 @@ type ResolvedRequest struct {
 	ToolsCapability *bool
 	// VisionCapability is nil for wildcard models with unknown capabilities.
 	VisionCapability *bool
-	// ObservedContext is the provider-specific context window Clyde
-	// exposes for capability reports when it differs from the advertised
-	// budget. Zero means use the ContextBudget input tokens.
-	ObservedContext int
 	// ThinkingModes enumerates the allowed thinking values the family
 	// declared for this alias. Distinct from Thinking, which is the
 	// single bound mode for the request.
@@ -115,4 +111,14 @@ type ResolvedRequest struct {
 // providers do their own per-call validation.
 func (r ResolvedRequest) Valid() bool {
 	return r.Provider.Valid() && r.Effort.Valid() && r.Model != ""
+}
+
+// ProviderEffort returns the configured provider wire value. Requests built
+// directly in tests or internal callers retain identity behavior when no
+// separate wire value was resolved.
+func (r ResolvedRequest) ProviderEffort() Effort {
+	if r.WireEffort != EffortUnset {
+		return r.WireEffort
+	}
+	return r.Effort
 }

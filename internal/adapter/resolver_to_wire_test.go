@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"goodkind.io/clyde/codexwire"
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
@@ -22,6 +23,12 @@ import (
 // exercises both providers.
 func resolverToWireConfig() config.AdapterConfig {
 	cfg := modelMatrixConfig()
+	opusProfile := cfg.ModelProfiles["opus"]
+	opusProfile.ThinkingProfiles["enabled"] = config.AdapterModelThinkingProfile{
+		Mode:         config.AdapterThinkingModeEnabled,
+		BudgetTokens: 7000,
+	}
+	cfg.ModelProfiles["opus"] = opusProfile
 	opus := cfg.Models["clyde-opus-4.7-medium"]
 	opus.Instructions = "family base instructions"
 	cfg.Models["clyde-opus-4.7-medium"] = opus
@@ -61,8 +68,9 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 	server := newAnthropicWireServer(t)
 
 	cases := []struct {
-		alias        string
-		wantThinking string // anthropic.Thinking.Type
+		alias              string
+		wantThinking       string // anthropic.Thinking.Type
+		wantThinkingBudget int
 	}{
 		{
 			// modelMatrixConfig declares thinking_wire_mode = "adaptive"
@@ -78,8 +86,9 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 		{
 			// opus-4-6 declares no thinking_wire_mode, so the empty-default
 			// resolves to "enabled".
-			alias:        "clyde-opus-4.6-medium-thinking",
-			wantThinking: "enabled",
+			alias:              "clyde-opus-4.6-medium-thinking",
+			wantThinking:       "enabled",
+			wantThinkingBudget: 7000,
 		},
 	}
 
@@ -102,6 +111,9 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 			}
 			if prepared.Request.Thinking.Type != tc.wantThinking {
 				t.Fatalf("Thinking.Type = %q want %q (resolver or provider dropped the field)", prepared.Request.Thinking.Type, tc.wantThinking)
+			}
+			if prepared.Request.Thinking.BudgetTokens != tc.wantThinkingBudget {
+				t.Fatalf("Thinking.BudgetTokens = %d want %d (resolver or provider dropped the configured budget)", prepared.Request.Thinking.BudgetTokens, tc.wantThinkingBudget)
 			}
 		})
 	}
@@ -230,6 +242,222 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 				t.Fatalf("Instructions = %q want %q", built.Instructions, tc.wantInstructions)
 			}
 		})
+	}
+}
+
+func TestResolverToCodexWireUsesConfiguredEffortValue(t *testing.T) {
+	cfg := resolverToWireConfig()
+	profile := cfg.ModelProfiles["codex"]
+	profile.ReasoningEfforts = append(profile.ReasoningEfforts, config.AdapterReasoningEffort("ultra"))
+	profile.ReasoningEffortWireValues = map[config.AdapterReasoningEffort]config.AdapterReasoningEffort{
+		"ultra": "max",
+	}
+	cfg.ModelProfiles["codex"] = profile
+
+	registry, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	request := buildCursorRequest("gpt-5.4")
+	request.OpenAI.ReasoningEffort = "ultra"
+	resolved, err := adapterresolver.Resolve(
+		adapterresolver.IngressCursor,
+		request,
+		adapterresolver.NewModelRegistryAdapter(registry),
+	)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Effort != "ultra" || resolved.WireEffort != "max" {
+		t.Fatalf("resolved effort/wire = %q/%q, want ultra/max", resolved.Effort, resolved.WireEffort)
+	}
+	built := adaptercodex.BuildRequestWithConfig(
+		resolved.OpenAI,
+		&resolved,
+		resolved.WireEffort.String(),
+		adaptercodex.RequestBuilderConfig{},
+	)
+	if built.Reasoning == nil || built.Reasoning.Effort != "max" {
+		t.Fatalf("Reasoning = %+v, want wire effort max", built.Reasoning)
+	}
+}
+
+func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
+	registry, err := NewRegistry(wildcardResolverToWireConfig())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	request := wildcardProviderRequest("gpt-undeclared")
+	resolved, err := adapterresolver.Resolve(
+		adapterresolver.IngressCursor,
+		adaptercursor.TranslateRequest(request),
+		adapterresolver.NewModelRegistryAdapter(registry),
+	)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	assertWildcardCapabilitiesUnknown(t, resolved)
+	server := newAnthropicWireServer(t)
+	if preflightErr := server.preflightChat(
+		context.Background(),
+		&resolved.OpenAI,
+		&resolved,
+		"req-gpt-wildcard",
+	); preflightErr != nil {
+		t.Fatalf("preflightChat: %v", preflightErr)
+	}
+	if resolved.OpenAI.MaxTokens == nil || *resolved.OpenAI.MaxTokens != 250000 {
+		t.Fatalf("resolved max_tokens = %v, want 250000", resolved.OpenAI.MaxTokens)
+	}
+
+	built := adaptercodex.BuildRequestWithConfig(
+		resolved.OpenAI,
+		&resolved,
+		resolved.Effort.String(),
+		adaptercodex.RequestBuilderConfig{},
+	)
+	if built.Model != "gpt-undeclared" {
+		t.Fatalf("Model = %q, want gpt-undeclared", built.Model)
+	}
+	if built.Reasoning == nil || built.Reasoning.Effort != "invented-provider-tier" {
+		t.Fatalf("Reasoning = %+v, want invented-provider-tier", built.Reasoning)
+	}
+	if built.MaxOutputTokens == nil || *built.MaxOutputTokens != 250000 {
+		t.Fatalf("MaxOutputTokens = %v, want 250000", built.MaxOutputTokens)
+	}
+	if len(built.Tools) != 1 || built.Tools[0].Name != "inspect_image" {
+		t.Fatalf("Tools = %+v, want inspect_image", built.Tools)
+	}
+	if string(built.Text) != `{"verbosity":"high"}` {
+		t.Fatalf("Text = %s, want verbosity control", built.Text)
+	}
+	foundImage := false
+	for _, item := range built.Input {
+		for _, part := range item.Content {
+			if part.Type == codexwire.ContentItemInputImage && part.ImageURL == "https://example.invalid/image.png" {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("Codex input dropped image: %+v", built.Input)
+	}
+}
+
+func TestUndeclaredAnthropicWildcardReachesTypedProviderRequest(t *testing.T) {
+	registry, err := NewRegistry(wildcardResolverToWireConfig())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	request := wildcardProviderRequest("claude-undeclared")
+	resolved, err := adapterresolver.Resolve(
+		adapterresolver.IngressCursor,
+		adaptercursor.TranslateRequest(request),
+		adapterresolver.NewModelRegistryAdapter(registry),
+	)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	assertWildcardCapabilitiesUnknown(t, resolved)
+	server := newAnthropicWireServer(t)
+	if preflightErr := server.preflightChat(
+		context.Background(),
+		&resolved.OpenAI,
+		&resolved,
+		"req-anthropic-wildcard",
+	); preflightErr != nil {
+		t.Fatalf("preflightChat: %v", preflightErr)
+	}
+	prepared, err := server.prepareAnthropicProviderRequest(
+		context.Background(),
+		resolved,
+		"req-anthropic-wildcard",
+	)
+	if err != nil {
+		t.Fatalf("prepareAnthropicProviderRequest: %v", err)
+	}
+	out := prepared.Request
+	if out.Model != "claude-undeclared" || out.MaxTokens != 250000 {
+		t.Fatalf("model/max_tokens = %q/%d, want claude-undeclared/250000", out.Model, out.MaxTokens)
+	}
+	if out.OutputConfig == nil || out.OutputConfig.Effort != "invented-provider-tier" {
+		t.Fatalf("OutputConfig = %+v, want invented-provider-tier", out.OutputConfig)
+	}
+	if len(out.Tools) != 1 || out.Tools[0].Name != "inspect_image" {
+		t.Fatalf("Tools = %+v, want inspect_image", out.Tools)
+	}
+	foundImage := false
+	for _, message := range out.Messages {
+		for _, block := range message.Content {
+			if block.Type == "image" && block.Source != nil && block.Source.URL == "https://example.invalid/image.png" {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("Anthropic messages dropped image: %+v", out.Messages)
+	}
+	if out.FeatureVector.WireProfile != "learned-wildcard-default" {
+		t.Fatalf("WireProfile = %q, want learned-wildcard-default", out.FeatureVector.WireProfile)
+	}
+}
+
+func wildcardResolverToWireConfig() config.AdapterConfig {
+	cfg := resolverToWireConfig()
+	cfg.Anthropic.DefaultWireProfile = "learned-wildcard-default"
+	cfg.ModelRoutes = []config.AdapterModelRoute{
+		{
+			Match:            "gpt-*",
+			Surfaces:         []config.AdapterIngressSurface{config.AdapterIngressCursor},
+			Provider:         config.AdapterModelProviderCodex,
+			WireModelPolicy:  config.AdapterWireModelPolicyPreserve,
+			CapabilityPolicy: config.AdapterWildcardCapabilityPolicyPassthrough,
+		},
+		{
+			Match:            "claude-*",
+			Surfaces:         []config.AdapterIngressSurface{config.AdapterIngressCursor},
+			Provider:         config.AdapterModelProviderAnthropic,
+			WireModelPolicy:  config.AdapterWireModelPolicyPreserve,
+			CapabilityPolicy: config.AdapterWildcardCapabilityPolicyPassthrough,
+		},
+	}
+	return cfg
+}
+
+func wildcardProviderRequest(model string) adapteropenai.ChatRequest {
+	maxTokens := 250000
+	parallelTools := true
+	return adapteropenai.ChatRequest{
+		Model: model,
+		Messages: []adapteropenai.ChatMessage{{
+			Role: "user",
+			Content: json.RawMessage(`[
+				{"type":"text","text":"inspect this image"},
+				{"type":"image_url","image_url":{"url":"https://example.invalid/image.png"}}
+			]`),
+		}},
+		Reasoning: &adapteropenai.Reasoning{Effort: "invented-provider-tier"},
+		Tools: []adapteropenai.Tool{{
+			Type: "function",
+			Function: adapteropenai.ToolFunctionSchema{
+				Name:        "inspect_image",
+				Description: "Inspect an image.",
+				Parameters:  json.RawMessage(`{"type":"object"}`),
+			},
+		}},
+		MaxTokens:     &maxTokens,
+		ParallelTools: &parallelTools,
+		Text:          json.RawMessage(`{"verbosity":"high"}`),
+	}
+}
+
+func assertWildcardCapabilitiesUnknown(t *testing.T, resolved adapterresolver.ResolvedRequest) {
+	t.Helper()
+	if resolved.ToolsCapability != nil || resolved.VisionCapability != nil {
+		t.Fatalf("wildcard capabilities = tools:%v vision:%v, want unknown", resolved.ToolsCapability, resolved.VisionCapability)
+	}
+	if resolved.ContextBudget.InputTokens != 0 || resolved.MaxOutputTokens != 0 {
+		t.Fatalf("wildcard context/output = %d/%d, want unknown", resolved.ContextBudget.InputTokens, resolved.MaxOutputTokens)
 	}
 }
 
