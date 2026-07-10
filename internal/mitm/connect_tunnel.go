@@ -594,12 +594,23 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 		return p.handleProviderInterceptedWebsocket(ctx, client, reader, bufioSink.bufw, req, target, host, provider, parent)
 	}
 	bodyAccessor := newCachedRequestResponseHookBody(req)
-	transformer, err := p.matchRequestResponseHook(newRequestResponseHookRequest(provider.ID().String(), host, req, bodyAccessor))
+	transformer, reqTransformer, err := p.matchRequestResponseHook(newRequestResponseHookRequest(provider.ID().String(), host, req, bodyAccessor))
 	if err != nil {
 		// A hook is an optional enhancement, so a match failure must not abort the
 		// client request; forward it with no transformer. matchRequestResponseHook
 		// already logged the failure, so do not log it again here.
 		transformer = nil
+		reqTransformer = nil
+	}
+	// Apply any request-body rewrite before the capture wraps req.Body, so both the
+	// upstream send and the recorded capture reflect the forwarded (possibly trimmed)
+	// body. Fail-open: a body read error or transform error leaves the request as-is.
+	if reqTransformer != nil {
+		if originalBody, bodyErr := bodyAccessor.Bytes(); bodyErr == nil {
+			if newBody, changed := p.transformRequestBody(ctx, reqTransformer, originalBody); changed {
+				reseatRequestBody(req, newBody)
+			}
+		}
 	}
 	requestCapture := newProviderRequestCapture(req.Body, p.captureBodyCap(cfg), streamSession)
 	req.Body = requestCapture

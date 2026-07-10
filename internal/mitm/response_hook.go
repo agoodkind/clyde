@@ -39,10 +39,16 @@ type RequestResponseHookBody interface {
 	Bytes() ([]byte, error)
 }
 
-// RequestResponseHookMatch is the typed match result returned by a hook.
+// RequestResponseHookMatch is the typed match result returned by a hook. A
+// matched hook must carry at least one transformer. RequestTransformer, when
+// set, rewrites the request body before it is forwarded upstream; Transformer,
+// when set, rewrites the response stream returned to the client. A hook may set
+// both, as the reorient injection hook does (it trims the summarization request
+// and appends to the summary response from the same match).
 type RequestResponseHookMatch struct {
-	Matched     bool
-	Transformer ResponseTransformer
+	Matched            bool
+	Transformer        ResponseTransformer
+	RequestTransformer RequestTransformer
 }
 
 // ResponseTransformer rewrites the upstream response stream returned to the
@@ -50,6 +56,15 @@ type RequestResponseHookMatch struct {
 // or another streaming reader to append SSE bytes before the stream ends.
 type ResponseTransformer interface {
 	TransformResponse(context.Context, ResponseHookResponse) (ResponseHookResponse, error)
+}
+
+// RequestTransformer rewrites the request body before the proxy forwards it
+// upstream. It receives the fully buffered request body and returns the new
+// body plus a changed flag; changed=false leaves the request untouched. An
+// error is treated as fail-open by the proxy: the original request body is
+// forwarded unchanged so a transform bug can never break the client request.
+type RequestTransformer interface {
+	TransformRequest(ctx context.Context, body []byte) (newBody []byte, changed bool, err error)
 }
 
 // ResponseHookResponse is the client-visible response shape a transformer can
@@ -94,7 +109,7 @@ func (p *Proxy) requestResponseHookSnapshot() []RequestResponseHook {
 	return slices.Clone(p.requestResponseHooks)
 }
 
-func (p *Proxy) matchRequestResponseHook(request RequestResponseHookRequest) (ResponseTransformer, error) {
+func (p *Proxy) matchRequestResponseHook(request RequestResponseHookRequest) (ResponseTransformer, RequestTransformer, error) {
 	for _, hook := range p.requestResponseHookSnapshot() {
 		if hook == nil {
 			continue
@@ -102,17 +117,17 @@ func (p *Proxy) matchRequestResponseHook(request RequestResponseHookRequest) (Re
 		match, err := hook.MatchRequestResponse(request)
 		if err != nil {
 			slog.Warn("mitm.response_hook.match_failed", "concern", "providers.mitm.wire", "provider", request.Provider, "host", request.Host, "method", request.Method, "path", request.Path, "err", err)
-			return nil, fmt.Errorf("match request response hook: %w", err)
+			return nil, nil, fmt.Errorf("match request response hook: %w", err)
 		}
 		if !match.Matched {
 			continue
 		}
-		if match.Transformer == nil {
-			return nil, fmt.Errorf("matched request response hook returned nil transformer")
+		if match.Transformer == nil && match.RequestTransformer == nil {
+			return nil, nil, fmt.Errorf("matched request response hook returned no transformer")
 		}
-		return match.Transformer, nil
+		return match.Transformer, match.RequestTransformer, nil
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func newRequestResponseHookRequest(provider string, host string, req *http.Request, body RequestResponseHookBody) RequestResponseHookRequest {
@@ -182,16 +197,43 @@ func readAndRewindHookRequestBody(req *http.Request) ([]byte, error) {
 		slog.Warn("mitm.response_hook.request_body_read_failed", "concern", "providers.mitm.wire", "err", readErr)
 		return body, fmt.Errorf("read hook request body: %w", readErr)
 	}
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	req.ContentLength = int64(len(body))
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(body)), nil
-	}
+	reseatRequestBody(req, body)
 	if closeErr != nil {
 		slog.Warn("mitm.response_hook.request_body_close_failed", "concern", "providers.mitm.wire", "err", closeErr)
 		return body, fmt.Errorf("close hook request body: %w", closeErr)
 	}
 	return body, nil
+}
+
+// reseatRequestBody seats body as the request body behind a fresh reader,
+// recomputes ContentLength, and installs a GetBody that re-reads the same bytes.
+// It is used both to rewind the original body after hook matching and to install
+// a body that a RequestTransformer rewrote.
+func reseatRequestBody(req *http.Request, body []byte) {
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+}
+
+// transformRequestBody applies a RequestTransformer to body and returns the new
+// body plus whether it changed. It is fail-open: a nil transformer, a no-op
+// transform, or a transform error all return the original body with changed
+// false, so a request rewrite can never break the forwarded request.
+func (p *Proxy) transformRequestBody(ctx context.Context, transformer RequestTransformer, body []byte) ([]byte, bool) {
+	if transformer == nil {
+		return body, false
+	}
+	newBody, changed, err := transformer.TransformRequest(ctx, body)
+	if err != nil {
+		slog.WarnContext(ctx, "mitm.request_hook.transform_failed", "concern", "providers.mitm.wire", "err", err)
+		return body, false
+	}
+	if !changed {
+		return body, false
+	}
+	return newBody, true
 }
 
 // erroringBodyReader is a request body that surfaces a fixed error on every read,

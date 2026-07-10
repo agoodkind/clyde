@@ -480,14 +480,18 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
-	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
-	transformer, err := p.matchRequestResponseHook(newRequestResponseHookRequest(provider, r.Host, r, newStaticRequestResponseHookBody(body)))
+	transformer, reqTransformer, err := p.matchRequestResponseHook(newRequestResponseHookRequest(provider, r.Host, r, newStaticRequestResponseHookBody(body)))
 	if err != nil {
 		// A hook is an optional enhancement, so a match failure must not abort the
 		// client request; forward it with no transformer. matchRequestResponseHook
 		// already logged the failure, so do not log it again here.
 		transformer = nil
+		reqTransformer = nil
 	}
+	// Apply any request-body rewrite before indexing, dispatching, and capturing so
+	// all three see the forwarded (possibly trimmed) body. Fail-open leaves body as-is.
+	body, _ = p.transformRequestBody(upstreamCtx, reqTransformer, body)
+	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
 	resp, ok := p.dispatchUpstream(upstreamCtx, w, upstreamRequest{
 		method:   r.Method,
 		path:     r.URL.RequestURI(),
