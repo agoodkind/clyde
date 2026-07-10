@@ -17,6 +17,28 @@ Cursor's own servers call this endpoint across the internet rather than the app 
 
 This limitation can be worked around by using a Cloudflare tunnel to quickly stand up a public facing endpoint that dumps onto your local host.
 
+## Model routing
+
+Clyde resolves Cursor model requests through the declarative adapter catalog.
+An exact catalog ID or alias wins before any wildcard route.
+
+The reference configuration claims `gpt-*` for Codex and `claude-*` for
+Anthropic on the Cursor ingress surface. These claims come from ordered
+`[[adapter.model_routes]]` rules, not compiled prefix checks. A wildcard match
+preserves the requested model for the selected provider.
+
+Wildcard matches route immediately but never appear in `/v1/models`. Cursor
+sees only exact catalog IDs and aliases that the configuration advertises.
+
+Semantic validation rejects a route for a disabled provider before publishing
+the catalog. A published route match is final and does not fall through to
+another provider. A request also returns a model error when no exact entry,
+route, or configured fallback resolves it. The OpenAI-compatible error boundary
+renders these failures as an HTTP 400 `invalid_request_error` body.
+
+[Adapter model routing](adapter/overview.md) describes the shared resolution
+order and catalog validation rules.
+
 ## Combined request lifecycle
 
 When you send a message, Cursor routes it out through its proxy setting to the local MITM proxy, on to Cursor’s own backend, through Cloudflare, and then into Clyde’s public ingress.
