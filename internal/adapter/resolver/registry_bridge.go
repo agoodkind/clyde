@@ -3,6 +3,7 @@ package resolver
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 )
@@ -31,37 +32,44 @@ func NewModelRegistryAdapter(inner *adaptermodel.Registry) *ModelRegistryAdapter
 
 // Resolve satisfies the ModelRegistry interface. It calls
 // model.Registry.Resolve and projects the result.
-func (a *ModelRegistryAdapter) Resolve(alias, reqEffort string) (ResolvedModelView, error) {
+func (a *ModelRegistryAdapter) Resolve(surface IngressSurface, alias, reqEffort string) (ResolvedModelView, error) {
 	if a == nil || a.inner == nil {
 		return ResolvedModelView{}, ErrUnresolvedProvider
 	}
-	resolved, effort, err := a.inner.Resolve(alias, reqEffort)
+	resolved, effort, err := a.inner.Resolve(surface, alias, reqEffort)
 	if err != nil {
 		slog.Warn("adapter.resolver.bridge_resolve_failed", "concern", "adapter.models.resolve", "alias", alias, "err", err)
 		return ResolvedModelView{}, fmt.Errorf("resolve model alias %s: %w", alias, err)
 	}
 	provider := resolved.Backend
 	parsedEffort, _ := ParseEffort(effort)
-	family := resolved.FamilySlug
+	family := resolved.Profile
 	if family == "" {
-		family = resolved.ClaudeModel
+		family = resolved.WireModel
 	}
 	return ResolvedModelView{
 		Provider:                provider,
 		Family:                  family,
-		Model:                   resolved.ClaudeModel,
+		Model:                   resolved.WireModel,
 		Effort:                  parsedEffort,
 		Context:                 resolved.Context,
 		MaxOutputTokens:         resolved.MaxOutputTokens,
 		Thinking:                resolved.Thinking,
+		ThinkingBudgetTokens:    resolved.ThinkingBudgetTokens,
 		Instructions:            resolved.Instructions,
 		Efforts:                 resolved.Efforts,
 		Alias:                   resolved.Alias,
 		SupportsTools:           resolved.SupportsTools,
 		SupportsVision:          resolved.SupportsVision,
+		ToolsCapability:         resolved.ToolsCapability,
+		VisionCapability:        resolved.VisionCapability,
 		ObservedContext:         resolved.ObservedContext,
 		ThinkingModes:           resolved.ThinkingModes,
 		PassthroughOverrideName: resolved.PassthroughOverride,
+		PassthroughOverride:     resolved.PassthroughConfig,
 		OpenAICompatPassthrough: resolved.OpenAICompatPassthrough,
+		TransportLimits:         maps.Clone(resolved.TransportLimits),
+		WireProfile:             resolved.WireProfile,
+		Pricing:                 resolved.Pricing,
 	}, nil
 }

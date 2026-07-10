@@ -81,12 +81,6 @@ type AdapterConfig struct {
 	Models map[string]AdapterModelDeclaration `json:"models,omitempty" toml:"models,omitempty"`
 	// ModelRoutes declares ordered wildcard provider claims.
 	ModelRoutes []AdapterModelRoute `json:"modelRoutes,omitempty" toml:"model_routes,omitempty"`
-	// Families is a source-only bridge for the legacy registry. Its TOML and
-	// JSON tags exclude it; the declarative registry conversion removes it.
-	Families map[string]AdapterFamily `json:"-" toml:"-"`
-	// Pricing is a source-only bridge for the legacy cost reader. Model-local
-	// pricing replaces it, and the declarative registry conversion removes it.
-	Pricing map[string]AdapterModelPricing `json:"-" toml:"-"`
 	// PassthroughOverrides lets users forward specific aliases to an
 	// upstream OpenAI-compatible endpoint.
 	PassthroughOverrides map[string]AdapterPassthroughOverride `json:"passthroughOverrides,omitempty" toml:"passthrough_overrides,omitempty"`
@@ -210,18 +204,11 @@ type AdapterCodex struct {
 	WebsocketEnabled bool `json:"websocketEnabled,omitempty" toml:"websocket_enabled,omitempty"`
 	// AuthFile points at Codex auth state. Defaults to ~/.codex/auth.json.
 	AuthFile string `json:"authFile,omitempty" toml:"auth_file,omitempty"`
-	// NativeModelRouting is a source-only bridge for the legacy registry.
-	NativeModelRouting string `json:"-" toml:"-"`
-	// NativeModelPassthroughOverride is a source-only bridge for the legacy registry.
-	NativeModelPassthroughOverride string `json:"-" toml:"-"`
 	// ReasoningSummary is the default Codex Responses reasoning.summary
 	// value Clyde sends when a reasoning effort is active and the request
 	// did not explicitly set reasoning.summary. Valid values match Codex:
 	// auto, concise, detailed, none. Empty defaults to auto.
 	ReasoningSummary string `json:"reasoningSummary,omitempty" toml:"reasoning_summary,omitempty"`
-	// Models is a source-only bridge for the legacy registry. Its TOML and JSON
-	// tags exclude it; the declarative registry conversion removes it.
-	Models []AdapterCodexModel `json:"-" toml:"-"`
 	// Reasoning carries the per-provider reasoning round-trip levers for
 	// the Codex backend. Codex Responses carries TWO independent levers
 	// per codex-rs context_manager/history.rs:361-405: visible summary
@@ -333,47 +320,6 @@ func (r AdapterCodexReasoning) ResolvedRoundTripEncrypted() CodexRoundTripEncryp
 		return CodexRoundTripEncryptedRoundTrip
 	}
 	return r.RoundTripEncrypted
-}
-
-// AdapterCodexModel is part of Clyde's typed adapter surface.
-type AdapterCodexModel struct {
-	AliasPrefix string `json:"aliasPrefix,omitempty" toml:"alias_prefix,omitempty"`
-	Model       string `json:"model,omitempty" toml:"model,omitempty"`
-	// Backend names the routing backend for aliases generated from this
-	// codex model. It is one of the model.BackendID wire values
-	// (claude/anthropic/codex/passthrough_override); config cannot import
-	// internal/adapter/model without an import cycle, so the value is held
-	// as a string and converted to model.BackendID at registry build time.
-	// Empty defaults to the codex backend.
-	Backend          string                     `json:"backend,omitempty" toml:"backend,omitempty"`
-	InstructionsFile string                     `json:"instructionsFile,omitempty" toml:"instructions_file,omitempty"`
-	Instructions     string                     `json:"-" toml:"-"`
-	Efforts          []string                   `json:"efforts,omitempty" toml:"efforts,omitempty"`
-	MaxOutputTokens  int                        `json:"maxOutputTokens,omitempty" toml:"max_output_tokens,omitempty"`
-	Contexts         []AdapterCodexModelContext `json:"contexts,omitempty" toml:"contexts,omitempty"`
-}
-
-// AdapterCodexNativeAlias declares one foreign model id that resolves to
-// this context. Effort optionally binds the id to one effort tier; empty
-// means the request-supplied effort (or upstream default) applies.
-// Advertise includes the id in /v1/models, and only takes effect when
-// Codex is enabled and native_model_routing is "codex"; under "off" or
-// "passthrough_override" the id is never listed.
-type AdapterCodexNativeAlias struct {
-	ID        string `json:"id,omitempty" toml:"id,omitempty"`
-	Effort    string `json:"effort,omitempty" toml:"effort,omitempty"`
-	Advertise bool   `json:"advertise,omitempty" toml:"advertise,omitempty"`
-}
-
-// AdapterCodexModelContext is part of Clyde's typed adapter surface.
-type AdapterCodexModelContext struct {
-	Tokens int `json:"tokens,omitempty" toml:"tokens,omitempty"`
-	// ObservedTokens is the context window the Codex Responses HTTP
-	// transport has actually accepted for this advertised variant.
-	// When zero, Clyde treats the observed window as equal to Tokens.
-	ObservedTokens int                       `json:"observedTokens,omitempty" toml:"observed_tokens,omitempty"`
-	AliasSuffix    string                    `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
-	NativeAliases  []AdapterCodexNativeAlias `json:"nativeAliases,omitempty" toml:"native_aliases,omitempty"`
 }
 
 // AdapterLogprobs picks the per-backend behavior. Each value is
@@ -530,91 +476,6 @@ type AdapterClientIdentity struct {
 	// prompt-caching scope beta to be effective.
 	PromptCacheScope string `json:"promptCacheScope,omitempty" toml:"prompt_cache_scope,omitempty"`
 }
-
-// AdapterFamily describes one Claude model family and the cross
-// product of efforts, thinking state, and context windows the
-// registry expands into individual aliases. The registry generator
-// produces aliases of shape
-// `clyde-<alias_prefix>-<ctx>-<effort>[-thinking]`.
-type AdapterFamily struct {
-	// AliasPrefix is the public clyde-* model stem without the
-	// leading "clyde-". When empty, the family map key is used.
-	AliasPrefix string `json:"aliasPrefix,omitempty" toml:"alias_prefix,omitempty"`
-	// Model is the wire-level model id (e.g. a snapshot name). The
-	// Contexts entries may add a wire
-	// suffix (e.g. "[1m]") when calling /v1/messages.
-	Model string `json:"model,omitempty" toml:"model,omitempty"`
-	// Backend names the routing backend for aliases generated from this
-	// family. It is one of the model.BackendID wire values
-	// (claude/anthropic/codex/passthrough_override); config cannot import
-	// internal/adapter/model without an import cycle, so the value is held
-	// as a string and converted to model.BackendID at registry build time.
-	// Empty defaults to the claude backend (rewritten to anthropic when
-	// direct_oauth is on). Set "codex" to route a family at the Codex
-	// backend with a custom alias_prefix.
-	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
-	// InstructionsFile points at a markdown file whose verbatim contents
-	// are loaded once during config parsing and copied onto expanded
-	// registry aliases. Relative paths resolve from the declaring
-	// config.toml directory.
-	InstructionsFile string `json:"instructionsFile,omitempty" toml:"instructions_file,omitempty"`
-	// Instructions carries the loaded file contents for registry
-	// construction. It is not serialized back to disk.
-	Instructions string `json:"-" toml:"-"`
-	// Efforts enumerates effort tiers the wire API accepts for this
-	// family. Empty means the server rejects effort on this family
-	// (the registry will refuse caller-supplied effort with 400).
-	Efforts []string `json:"efforts,omitempty" toml:"efforts,omitempty"`
-	// ThinkingModes enumerates the thinking modes the wire API
-	// accepts. Always at least default+enabled+disabled for
-	// thinking-capable families; adaptive is gated server-side.
-	ThinkingModes []string `json:"thinkingModes,omitempty" toml:"thinking_modes,omitempty"`
-	// ThinkingWireMode controls the upstream thinking shape for
-	// aliases generated with thinking enabled. Valid values are
-	// "enabled" (default; sends a typed thinking block with
-	// budget_tokens) and "adaptive" (sends Anthropic's adaptive
-	// variant, no budget). Some families require adaptive at the
-	// upstream (claude-opus-4-7 historically rejected enabled). Set
-	// "adaptive" to override per family. Empty means "enabled".
-	ThinkingWireMode string `json:"thinkingWireMode,omitempty" toml:"thinking_wire_mode,omitempty"`
-	// MaxOutputTokens caps this family's output. Used to derive
-	// thinking.budget_tokens (budget = max - 1) per the CLI's
-	// invariant.
-	MaxOutputTokens int `json:"maxOutputTokens,omitempty" toml:"max_output_tokens,omitempty"`
-	// SupportsTools declares whether this family accepts the
-	// Anthropic tools/tool_choice request fields. There is no
-	// default: NewRegistry rejects a family with the field unset
-	// (nil pointer means "user did not say"). Set true for opus,
-	// sonnet, haiku-4-5; set false for legacy text-only snapshots.
-	SupportsTools *bool `json:"supportsTools,omitempty" toml:"supports_tools,omitempty"`
-	// SupportsVision declares whether this family accepts image
-	// content blocks on user messages. Same fail-loud contract as
-	// SupportsTools.
-	SupportsVision *bool `json:"supportsVision,omitempty" toml:"supports_vision,omitempty"`
-	// Contexts pairs an advertised context window (tokens) with an
-	// alias suffix and a wire suffix. At least one entry required.
-	Contexts []AdapterModelContext `json:"contexts,omitempty" toml:"contexts,omitempty"`
-}
-
-// AdapterModelContext binds one context-window variant for a family.
-// The alias suffix is appended to the public alias; the wire suffix
-// is appended to the model id sent to /v1/messages (e.g. "[1m]" for
-// the 1M-context Opus snapshot).
-type AdapterModelContext struct {
-	Tokens int `json:"tokens,omitempty" toml:"tokens,omitempty"`
-	// ObservedTokens is the context window Clyde should surface for
-	// capability reports when it differs from the nominal Tokens
-	// value. Mirrors the Codex family `observed_tokens` semantics so
-	// other OpenAI-SDK clients see a truthful capacity. Zero falls
-	// back to Tokens.
-	ObservedTokens int    `json:"observedTokens,omitempty" toml:"observed_tokens,omitempty"`
-	AliasSuffix    string `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
-	WireSuffix     string `json:"wireSuffix,omitempty" toml:"wire_suffix,omitempty"`
-}
-
-// AdapterModel temporarily aliases the declarative model type for legacy Go
-// registry callers. It is not a separate configuration schema.
-type AdapterModel = AdapterModelDeclaration
 
 // AdapterPassthroughOverride points to an upstream OpenAI-compatible endpoint.
 type AdapterPassthroughOverride struct {

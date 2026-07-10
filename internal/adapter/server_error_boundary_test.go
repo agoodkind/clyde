@@ -329,12 +329,12 @@ func TestAdapterInvalidJSONEnvelopeFollowsRouteFamily(t *testing.T) {
 func TestAnthropicMessagesModelErrorUsesNativeEnvelope(t *testing.T) {
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
-		cfg.Models = map[string]config.AdapterModel{
-			"local-codex": {
-				Backend: BackendCodex.String(),
-				Model:   "gpt-5.4",
-			},
+		cfg.Models["local-codex"] = config.AdapterModelDeclaration{
+			Provider:  config.AdapterModelProviderCodex,
+			WireModel: "gpt-5.4",
+			Profile:   "haiku",
 		}
+		cfg.Codex.Enabled = true
 	})
 	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{})
 

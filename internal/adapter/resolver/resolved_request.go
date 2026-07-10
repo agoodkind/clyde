@@ -50,6 +50,9 @@ type ResolvedRequest struct {
 	// populate the upstream wire request. Empty means leave thinking
 	// unset on the upstream call.
 	Thinking string
+	// ThinkingBudgetTokens is the explicit budget from the selected thinking
+	// profile. A zero value means the resolved mode does not use a budget.
+	ThinkingBudgetTokens int
 	// Instructions carries any provider-neutral model instructions the
 	// resolver lifted from the resolved model data. Providers map this
 	// into their native instruction or system field shapes.
@@ -69,6 +72,10 @@ type ResolvedRequest struct {
 	// Used by capability reports; per-provider dispatch does not gate on
 	// it.
 	SupportsVision bool
+	// ToolsCapability is nil for wildcard models with unknown capabilities.
+	ToolsCapability *bool
+	// VisionCapability is nil for wildcard models with unknown capabilities.
+	VisionCapability *bool
 	// ObservedContext is the provider-specific context window Clyde
 	// exposes for capability reports when it differs from the advertised
 	// budget. Zero means use the ContextBudget input tokens.
@@ -85,10 +92,19 @@ type ResolvedRequest struct {
 	// override table. Set only when the backend is passthrough_override
 	// and a named override applies.
 	PassthroughOverrideName string
+	// PassthroughOverride is the named override snapshot selected during
+	// resolution. It stays stable if a later hot apply replaces the registry.
+	PassthroughOverride config.AdapterPassthroughOverride
 	// OpenAICompatPassthrough carries the inline configured upstream used
 	// for passthrough_override when no named override applies. Empty
 	// fields mean no inline passthrough was configured.
 	OpenAICompatPassthrough config.AdapterOpenAICompatPassthrough
+	// TransportLimits carries profile-specific effective context limits.
+	TransportLimits map[config.AdapterModelTransport]int
+	// WireProfile identifies an exact learned Anthropic wire baseline.
+	WireProfile string
+	// Pricing carries the exact model's configured local rates.
+	Pricing config.AdapterModelPricing
 
 	Cursor adaptercursor.Request
 	OpenAI adapteropenai.ChatRequest

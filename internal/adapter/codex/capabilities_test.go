@@ -11,7 +11,7 @@ func TestCapabilityReportForModelUsesObservedHTTPContextForCodexResponses(t *tes
 	report := CapabilityReportForModel(adaptermodel.ResolvedAlias{
 		Alias:           "clyde-test-codex-1m-high",
 		Backend:         adaptermodel.BackendCodex,
-		ClaudeModel:     "configured-codex-model",
+		WireModel:       "configured-codex-model",
 		Context:         1000000,
 		ObservedContext: 333000,
 	}, CapabilityMode{WebsocketEnabled: false})
@@ -31,7 +31,7 @@ func TestCapabilityReportForModelPreservesAdvertisedContextWhenWebsocketEnabled(
 	report := CapabilityReportForModel(adaptermodel.ResolvedAlias{
 		Alias:           "clyde-test-codex-1m-high",
 		Backend:         adaptermodel.BackendCodex,
-		ClaudeModel:     "configured-codex-model",
+		WireModel:       "configured-codex-model",
 		Context:         1000000,
 		ObservedContext: 333000,
 	}, CapabilityMode{WebsocketEnabled: true})

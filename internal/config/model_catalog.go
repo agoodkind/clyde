@@ -133,13 +133,6 @@ type AdapterModelDeclaration struct {
 	GeneratedAliases    AdapterModelGeneratedAliases `json:"generatedAliases,omitzero" toml:"generated_aliases,omitempty"`
 	PassthroughOverride string                       `json:"passthroughOverride,omitempty" toml:"passthrough_override,omitempty"`
 	WireProfile         string                       `json:"wireProfile,omitempty" toml:"wire_profile,omitempty"`
-	// The fields below are source-only bridges for the legacy registry. Their
-	// TOML and JSON tags exclude them, and the registry conversion removes them.
-	Backend         string   `json:"-" toml:"-"`
-	Model           string   `json:"-" toml:"-"`
-	Context         int      `json:"-" toml:"-"`
-	ObservedContext int      `json:"-" toml:"-"`
-	Efforts         []string `json:"-" toml:"-"`
 }
 
 // AdapterModelAlias declares one exact alias and optional profile bindings.
@@ -165,6 +158,19 @@ type AdapterModelRoute struct {
 	Provider         AdapterModelProvider            `json:"provider,omitempty" toml:"provider,omitempty"`
 	WireModelPolicy  AdapterWireModelPolicy          `json:"wireModelPolicy,omitempty" toml:"wire_model_policy,omitempty"`
 	CapabilityPolicy AdapterWildcardCapabilityPolicy `json:"capabilityPolicy,omitempty" toml:"capability_policy,omitempty"`
+}
+
+// ModelPricing returns model-local rates keyed by configured wire model.
+func (adapter AdapterConfig) ModelPricing() map[string]AdapterModelPricing {
+	pricing := make(map[string]AdapterModelPricing, len(adapter.Models))
+	for _, declaration := range adapter.Models {
+		wireModel := strings.TrimSpace(declaration.WireModel)
+		if wireModel == "" || isZeroAdapterModelPricing(declaration.Pricing) {
+			continue
+		}
+		pricing[wireModel] = declaration.Pricing
+	}
+	return pricing
 }
 
 func pruneEmptyModelDeclarations(adapter *AdapterConfig) {
@@ -567,7 +573,7 @@ func adapterProviderEnabled(adapter AdapterConfig, provider AdapterModelProvider
 	case AdapterModelProviderCodex:
 		return adapter.Codex.Enabled
 	case AdapterModelProviderAnthropic:
-		return adapter.Anthropic.Enabled
+		return adapter.Anthropic.Enabled || adapter.DirectOAuth
 	case AdapterModelProviderPassthroughOverride:
 		return true
 	default:

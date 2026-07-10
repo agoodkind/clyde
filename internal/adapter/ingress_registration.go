@@ -47,9 +47,13 @@ func init() {
 // resolver.ResolvedRequest for an OpenAI-shaped chat request without
 // importing adaptercursor. Future ingress vendors fold their typed
 // resolver entry-point into this same registration root file.
-func resolveCursorChatRequest(req ChatRequest, registry adapterresolver.ModelRegistry) (adapterresolver.ResolvedRequest, error) {
+func resolveCursorChatRequest(
+	surface adapterresolver.IngressSurface,
+	req ChatRequest,
+	registry adapterresolver.ModelRegistry,
+) (adapterresolver.ResolvedRequest, error) {
 	cursorReq := adaptercursor.TranslateRequest(req)
-	resolved, err := adapterresolver.Resolve(cursorReq, registry)
+	resolved, err := adapterresolver.Resolve(surface, cursorReq, registry)
 	if err != nil {
 		slog.Warn("adapter: resolve cursor chat request failed",
 			slog.String("concern", "adapter.chat.preflight"),

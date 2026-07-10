@@ -62,8 +62,11 @@ func TestEffortValid(t *testing.T) {
 			t.Errorf("Effort(%q).Valid() = false, want true", e)
 		}
 	}
-	if Effort("nonsense").Valid() {
-		t.Errorf("Effort(\"nonsense\").Valid() = true, want false")
+	if !Effort("future-provider-tier").Valid() {
+		t.Errorf("future provider effort should be valid")
+	}
+	if Effort("invalid whitespace ").Valid() {
+		t.Errorf("effort with surrounding whitespace should be invalid")
 	}
 }
 
@@ -80,9 +83,9 @@ func TestParseEffort(t *testing.T) {
 		{"high", EffortHigh, true},
 		{"xhigh", EffortXHigh, true},
 		{"max", EffortMax, true},
-		{"NONE", EffortUnset, false},
+		{"NONE", Effort("NONE"), true},
 		{"medium ", EffortUnset, false},
-		{"unknown", EffortUnset, false},
+		{"unknown", Effort("unknown"), true},
 	}
 	for _, tc := range cases {
 		got, ok := ParseEffort(tc.raw)

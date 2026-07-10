@@ -14,7 +14,7 @@ type stubRegistry struct {
 	err  error
 }
 
-func (s stubRegistry) Resolve(alias, reqEffort string) (ResolvedModelView, error) {
+func (s stubRegistry) Resolve(_ IngressSurface, _ string, _ string) (ResolvedModelView, error) {
 	if s.err != nil {
 		return ResolvedModelView{}, s.err
 	}
@@ -22,7 +22,7 @@ func (s stubRegistry) Resolve(alias, reqEffort string) (ResolvedModelView, error
 }
 
 func TestResolveNilRegistry(t *testing.T) {
-	_, err := Resolve(adaptercursor.Request{}, nil)
+	_, err := Resolve(IngressCursor, adaptercursor.Request{}, nil)
 	if err == nil {
 		t.Fatal("expected error for nil registry, got nil")
 	}
@@ -30,14 +30,14 @@ func TestResolveNilRegistry(t *testing.T) {
 
 func TestResolveSurfacesRegistryError(t *testing.T) {
 	want := errors.New("registry boom")
-	_, err := Resolve(adaptercursor.Request{}, stubRegistry{err: want})
+	_, err := Resolve(IngressCursor, adaptercursor.Request{}, stubRegistry{err: want})
 	if !errors.Is(err, want) {
 		t.Fatalf("expected error %v, got %v", want, err)
 	}
 }
 
 func TestResolveRejectsUnsupportedProvider(t *testing.T) {
-	_, err := Resolve(adaptercursor.Request{}, stubRegistry{view: ResolvedModelView{
+	_, err := Resolve(IngressCursor, adaptercursor.Request{}, stubRegistry{view: ResolvedModelView{
 		Provider: ProviderUnknown,
 		Family:   "claude",
 		Model:    "claude-3-5-sonnet",
@@ -64,7 +64,7 @@ func TestResolveBuildsTypedRequest(t *testing.T) {
 		ObservedContext: 272000,
 		ThinkingModes:   []string{"default", "enabled"},
 	}
-	got, err := Resolve(cursorReq, stubRegistry{view: view})
+	got, err := Resolve(IngressCursor, cursorReq, stubRegistry{view: view})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestResolveBuildsAnthropicRequest(t *testing.T) {
 		ObservedContext: 0,
 		ThinkingModes:   []string{"default", "adaptive"},
 	}
-	got, err := Resolve(cursorReq, stubRegistry{view: view})
+	got, err := Resolve(IngressCursor, cursorReq, stubRegistry{view: view})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestResolveBuildsPassthroughRequest(t *testing.T) {
 		PassthroughOverrideName: "vendor-x",
 		OpenAICompatPassthrough: passthrough,
 	}
-	got, err := Resolve(cursorReq, stubRegistry{view: view})
+	got, err := Resolve(IngressCursor, cursorReq, stubRegistry{view: view})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

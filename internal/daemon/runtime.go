@@ -56,6 +56,10 @@ type runtimeServices struct {
 	// Quiesce drives reload and shutdown drains; AwaitQuiet backs the watcher's
 	// quiet-wait. Constructed in startRuntime before any subsystem.
 	group *livetrack.Group
+	// stats owns the in-process provider activity and pricing state. The hot
+	// apply path replaces its immutable pricing table after every fallible
+	// component apply succeeds.
+	stats *providerStatsRecorder
 	// currentConfig holds the config the running generation is serving. The
 	// in-process apply path compares against it to classify a change and
 	// advances it after a successful hot apply.
@@ -95,6 +99,7 @@ func startRuntime(
 		reloadDrain:           nil,
 		configWatcher:         nil,
 		group:                 newLifecycleGroup(log),
+		stats:                 stats,
 		currentConfig:         atomic.Pointer[config.Config]{},
 	}
 	runtime.currentConfig.Store(cfg)

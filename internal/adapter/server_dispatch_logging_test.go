@@ -47,7 +47,7 @@ func TestHandleChatEmitsRequiredRequestLegSequence(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.Models = testCodexModels()
+		addTestCodexModel(cfg)
 	})
 
 	postChatToServer(t, srv, map[string]any{
@@ -184,7 +184,7 @@ func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.Models = testCodexModels()
+		addTestCodexModel(cfg)
 	})
 
 	payload, err := json.Marshal(map[string]any{
@@ -251,7 +251,7 @@ func TestHandleChatAttachesRegisteredBackendFacet(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.Models = testCodexModels()
+		addTestCodexModel(cfg)
 	})
 
 	postChatToServer(t, srv, map[string]any{
@@ -301,7 +301,7 @@ func TestHandleChatLogsForkDetectedForDerivedBranch(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.Models = testCodexModels()
+		addTestCodexModel(cfg)
 	})
 
 	postChatToServer(t, srv, map[string]any{
@@ -392,7 +392,7 @@ func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
 // upstream_unavailable rather than treating claude as an unsupported backend.
 func TestHandleChatRoutesClaudeBackendToAnthropicPath(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	payload, err := json.Marshal(map[string]any{
 		"model": "clyde-haiku-4-5",
@@ -408,15 +408,16 @@ func TestHandleChatRoutesClaudeBackendToAnthropicPath(t *testing.T) {
 	resp := httptest.NewRecorder()
 	srv.mux.ServeHTTP(resp, req)
 
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
+	if resp.Code == http.StatusBadRequest && strings.Contains(resp.Body.String(), "model_not_found") {
+		t.Fatalf("configured Anthropic model did not resolve: %s", resp.Body.String())
 	}
 	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
 	}
-	if out.Error.Type != "invalid_request_error" || out.Error.Code != "upstream_unavailable" {
-		t.Fatalf("error = %+v body=%s", out.Error, resp.Body.String())
+	resolved := findLogEvent(t, buf, "adapter.model.resolved")
+	if resolved == nil || resolved["backend"] != BackendAnthropic.String() {
+		t.Fatalf("resolved event = %v, want anthropic backend", resolved)
 	}
 }
 
@@ -424,8 +425,7 @@ func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.NativeModelRouting = "codex"
-		cfg.Codex.Models = testCodexModels()
+		addTestCodexModel(cfg)
 	})
 
 	body := map[string]any{
@@ -485,7 +485,7 @@ func TestHandleChatRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.Models = testCodexModels()
+		addTestCodexModel(cfg)
 	})
 
 	body := map[string]any{
@@ -518,8 +518,6 @@ func TestHandleChatModelResolutionErrorUsesCursorNativeShape(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.NativeModelRouting = "off"
-		cfg.Codex.Models = testCodexModels()
 	})
 
 	payload, err := json.Marshal(map[string]any{

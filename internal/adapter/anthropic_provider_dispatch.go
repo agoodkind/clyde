@@ -425,7 +425,7 @@ func (s *Server) executeAnthropicPreparedCollectNative(
 		s.log.WarnContext(ctx, "adapter.anthropic.native_collect_read_failed", "concern", "adapter.providers.anthropic.request", "request_id", prepared.RequestID, "err", readErr)
 		return fmt.Errorf("read native anthropic collect response: %w", readErr)
 	}
-	return writer.capture(http.StatusOK, resp.Header.Clone(), body)
+	return writer.capture(resp.Header.Clone(), body)
 }
 
 func (s *Server) executeAnthropicPreparedStreamNative(

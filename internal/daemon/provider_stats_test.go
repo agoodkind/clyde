@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
@@ -101,5 +102,45 @@ func TestRecordUnknownModelYieldsZeroCost(t *testing.T) {
 	}
 	if snapshot[0].InputTokens != 1_000 {
 		t.Fatalf("tokens should still aggregate, got %d", snapshot[0].InputTokens)
+	}
+}
+
+func TestReplacePricingIsConcurrentWithTerminalCostReads(t *testing.T) {
+	low := adapterruntime.NewPricingTable(map[string]config.AdapterModelPricing{
+		"gpt-hot": {InputPerMTok: 1},
+	})
+	high := adapterruntime.NewPricingTable(map[string]config.AdapterModelPricing{
+		"gpt-hot": {InputPerMTok: 4},
+	})
+	recorder := newProviderStatsRecorder(low)
+	const eventCount = 1000
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(2)
+	go func() {
+		defer waitGroup.Done()
+		for i := range eventCount {
+			if i%2 == 0 {
+				recorder.replacePricing(high)
+				continue
+			}
+			recorder.replacePricing(low)
+		}
+	}()
+	go func() {
+		defer waitGroup.Done()
+		for range eventCount {
+			recorder.record(context.Background(), completedEvent("codex", "gpt-hot", 1, 0, 0, 0))
+		}
+	}()
+	waitGroup.Wait()
+
+	snapshot, _ := recorder.snapshot()
+	if len(snapshot) != 1 || snapshot[0].InputTokens != eventCount {
+		t.Fatalf("concurrent stats = %+v", snapshot)
+	}
+	minimumCost := int64(eventCount * 100)
+	maximumCost := int64(eventCount * 400)
+	if snapshot[0].EstimatedCostMicrocents < minimumCost || snapshot[0].EstimatedCostMicrocents > maximumCost {
+		t.Fatalf("concurrent cost = %d, want [%d, %d]", snapshot[0].EstimatedCostMicrocents, minimumCost, maximumCost)
 	}
 }

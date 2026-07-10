@@ -358,6 +358,13 @@ func TestLoadModelCatalogAllowsHiddenDisabledProviderModel(t *testing.T) {
 	}
 }
 
+func TestAdapterProviderEnabledTreatsDirectOAuthAsAnthropic(t *testing.T) {
+	adapter := AdapterConfig{DirectOAuth: true}
+	if !adapterProviderEnabled(adapter, AdapterModelProviderAnthropic) {
+		t.Fatal("direct_oauth should enable the anthropic provider")
+	}
+}
+
 func validProfileTOML() string {
 	return "[adapter.model_profiles.test]\ncontexts = [{ name = \"standard\", tokens = 100 }]\nmax_output_tokens = 10\nreasoning_efforts = [\"medium\"]\ndefault_effort = \"medium\"\nsupports_tools = true\nsupports_vision = true\n\n"
 }

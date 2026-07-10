@@ -43,6 +43,4 @@ var (
 	NewRegistry = adaptermodel.NewRegistry
 	// ClaudeEffortFlag is part of Clyde's typed adapter surface.
 	ClaudeEffortFlag = adaptermodel.ClaudeEffortFlag
-	// ResolveFromConfig is part of Clyde's typed adapter surface.
-	ResolveFromConfig = adaptermodel.ResolveFromConfig
 )

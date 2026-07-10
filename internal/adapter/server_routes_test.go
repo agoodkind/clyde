@@ -211,7 +211,7 @@ func TestAnthropicMessagesRouteUsesNativeIngress(t *testing.T) {
 				t.Fatalf("writer type = %T, want *nativeAnthropicJSONWriter", writer)
 			}
 			body := []byte(`{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-haiku-4-5-20251001","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`)
-			if err := nativeWriter.capture(http.StatusOK, http.Header{"Content-Type": {"application/json"}}, body); err != nil {
+			if err := nativeWriter.capture(http.Header{"Content-Type": {"application/json"}}, body); err != nil {
 				t.Fatalf("capture: %v", err)
 			}
 			return adapterprovider.Result{}, nil
@@ -262,7 +262,7 @@ func TestAnthropicMessagesRoutePreservesNativeClaudeModelID(t *testing.T) {
 				t.Fatalf("writer type = %T, want *nativeAnthropicJSONWriter", writer)
 			}
 			body := []byte(`{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-opus-4-7","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`)
-			if err := nativeWriter.capture(http.StatusOK, http.Header{"Content-Type": {"application/json"}}, body); err != nil {
+			if err := nativeWriter.capture(http.Header{"Content-Type": {"application/json"}}, body); err != nil {
 				t.Fatalf("capture: %v", err)
 			}
 			return adapterprovider.Result{}, nil
