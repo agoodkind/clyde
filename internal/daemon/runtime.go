@@ -242,7 +242,12 @@ func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
 	if !mitmCfg.ReorientSummaryInjection {
 		return nil
 	}
-	return []mitm.RequestResponseHook{reorientinject.New(newReorientInjectContentProvider())}
+	return []mitm.RequestResponseHook{
+		reorientinject.New(
+			newReorientInjectContentProvider(),
+			mitmCfg.ReorientInjectMaxTokens,
+		),
+	}
 }
 
 // newReorientInjectContentProvider builds the reorient content provider. It
@@ -256,7 +261,7 @@ func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
 // through unchanged.
 func newReorientInjectContentProvider() reorientinject.ContentProvider {
 	index := NewConversationIndex()
-	return func(ctx context.Context, sessionID string) (string, error) {
+	return func(ctx context.Context, sessionID string, maxBytes int) (string, error) {
 		if sessionID == "" {
 			return "", nil
 		}
@@ -276,6 +281,7 @@ func newReorientInjectContentProvider() reorientinject.ContentProvider {
 			ConversationID:      "",
 			WorkspaceRoot:       "",
 			MaxLines:            0,
+			MaxBytes:            maxBytes,
 			IncludeToolOutputs:  true,
 			SyntheticPreCompact: true,
 		})

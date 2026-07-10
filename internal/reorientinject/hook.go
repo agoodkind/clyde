@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/reorienttag"
 )
 
 const (
@@ -33,32 +34,44 @@ const (
 
 	eventStreamContentType = "text/event-stream"
 
-	preCompactionTranscriptOpen     = "<pre-compaction-transcript>"
-	preCompactionTranscriptClose    = "</pre-compaction-transcript>"
 	reorientInjectConcern           = "providers.mitm.wire"
 	reorientInjectComponent         = "mitm"
 	defaultMissingContentBlockIndex = -1
+
+	anthropicBetaHeader = "Anthropic-Beta"
+
+	defaultReorientInjectMaxTokens  = 500_000
+	reorientStandardContextWindow   = 200_000
+	reorientOneMillionContextWindow = 1_000_000
+	reorientContextWindowFraction   = 0.5
+	// reorientBytesPerToken is a documented approximation used to keep the hot
+	// path tokenizer-free.
+	reorientBytesPerToken = 4
 )
 
 // ContentProvider returns the recovered pre-compaction transcript for a Claude
 // session id, rendered off disk with clyde's reorient knobs. It returns an empty
 // string when the session cannot be resolved, which makes the transformer pass
 // the response through unchanged.
-type ContentProvider func(ctx context.Context, sessionID string) (string, error)
+type ContentProvider func(ctx context.Context, sessionID string, maxBytes int) (string, error)
 
 // Hook detects Claude compaction summarization requests and drives the summary
 // append. It implements [mitm.RequestResponseHook].
 type Hook struct {
-	provider ContentProvider
+	provider  ContentProvider
+	maxTokens int
 }
 
 // New constructs a reorient summary injection hook. A nil provider yields a hook
 // that always passes responses through unchanged.
-func New(provider ContentProvider) *Hook {
+func New(provider ContentProvider, maxTokens int) *Hook {
 	if provider == nil {
 		provider = emptyContentProvider
 	}
-	return &Hook{provider: provider}
+	return &Hook{
+		provider:  provider,
+		maxTokens: normalizeMaxTokens(maxTokens),
+	}
 }
 
 // MatchRequestResponse matches the compaction summarization request by the
@@ -115,8 +128,42 @@ func (h *Hook) MatchRequestResponse(
 		Transformer: responseAppendTransformer{
 			provider:  h.provider,
 			sessionID: sessionID,
+			maxBytes:  h.maxBytes(req.Header),
 		},
 	}, nil
+}
+
+func normalizeMaxTokens(maxTokens int) int {
+	if maxTokens <= 0 {
+		return defaultReorientInjectMaxTokens
+	}
+	return maxTokens
+}
+
+func (h *Hook) maxBytes(header http.Header) int {
+	contextWindow := reorientStandardContextWindow
+	for _, beta := range anthropicBetaValues(header) {
+		if strings.Contains(strings.ToLower(beta), "context-1m") {
+			contextWindow = reorientOneMillionContextWindow
+			break
+		}
+	}
+	windowTokens := int(float64(contextWindow) * reorientContextWindowFraction)
+	effectiveTokens := min(h.maxTokens, windowTokens)
+	return effectiveTokens * reorientBytesPerToken
+}
+
+func anthropicBetaValues(header http.Header) []string {
+	values := header.Values(anthropicBetaHeader)
+	for key, keyValues := range header {
+		if key == anthropicBetaHeader {
+			continue
+		}
+		if strings.EqualFold(key, anthropicBetaHeader) {
+			values = append(values, keyValues...)
+		}
+	}
+	return values
 }
 
 func unmatchedRequestResponseHookMatch() mitm.RequestResponseHookMatch {
@@ -221,6 +268,7 @@ func (r anthropicSummaryRequest) sessionID() string {
 type responseAppendTransformer struct {
 	provider  ContentProvider
 	sessionID string
+	maxBytes  int
 }
 
 func (t responseAppendTransformer) TransformResponse(
@@ -238,7 +286,7 @@ func (t responseAppendTransformer) TransformResponse(
 		"component", reorientInjectComponent,
 		"concern", reorientInjectConcern,
 	)
-	content, err := t.provider(ctx, t.sessionID)
+	content, err := t.provider(ctx, t.sessionID, t.maxBytes)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
@@ -540,16 +588,16 @@ func marshalSSEData[T ssePayload](payload T) (string, error) {
 func wrappedTranscriptContent(content string) string {
 	var builder strings.Builder
 	builder.WriteString("\n\n")
-	builder.WriteString(preCompactionTranscriptOpen)
+	builder.WriteString(reorienttag.PreCompactionTranscriptOpen)
 	builder.WriteByte('\n')
 	builder.WriteString(content)
 	builder.WriteByte('\n')
-	builder.WriteString(preCompactionTranscriptClose)
+	builder.WriteString(reorienttag.PreCompactionTranscriptClose)
 	builder.WriteByte('\n')
 	return builder.String()
 }
 
-func emptyContentProvider(context.Context, string) (string, error) {
+func emptyContentProvider(context.Context, string, int) (string, error) {
 	return "", nil
 }
 

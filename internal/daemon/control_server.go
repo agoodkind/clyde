@@ -187,6 +187,7 @@ func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.R
 		ConversationID:      req.GetConversationId(),
 		WorkspaceRoot:       req.GetWorkspace(),
 		MaxLines:            int(req.GetMaxLines()),
+		MaxBytes:            0,
 		IncludeToolOutputs:  req.GetIncludeToolOutputs(),
 		SyntheticPreCompact: req.GetSyntheticPrecompact(),
 	}, req.GetCursor(), int(req.GetPageBytes()))
