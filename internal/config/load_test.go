@@ -348,17 +348,12 @@ concern = "unknown"
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(filepath.Join(globalDir, "prompts"), 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "prompts", "family.md"), []byte("family prompt\n"), 0o644)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(globalDir, "prompts", "model.md"), []byte("model prompt"), 0o644)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "prompts", "codex.md"), []byte("codex prompt"), 0o644)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.models.custom]\nmodel = \"claude-sonnet\"\ninstructions_file = \"prompts/model.md\"\n\n[adapter.families.family]\nmodel = \"claude-family\"\nefforts = [\"medium\"]\nthinking_modes = [\"default\"]\nmax_output_tokens = 1024\nsupports_tools = true\nsupports_vision = false\ninstructions_file = \"prompts/family.md\"\ncontexts = [{ tokens = 200000 }]\n\n[adapter.codex]\nmodels = [\n  { alias_prefix = \"gpt-test\", model = \"gpt-test\", efforts = [\"medium\"], max_output_tokens = 1024, instructions_file = \"prompts/codex.md\", contexts = [{ tokens = 200000 }] }\n]\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.codex]\nenabled = true\n\n[adapter.model_profiles.standard]\ncontexts = [{ name = \"standard\", tokens = 200000 }]\nmax_output_tokens = 1024\nreasoning_efforts = [\"medium\"]\ndefault_effort = \"medium\"\nsupports_tools = true\nsupports_vision = false\n\n[adapter.models.custom]\nprovider = \"codex\"\nwire_model = \"gpt-test\"\nprofile = \"standard\"\ninstructions_file = \"prompts/model.md\"\n"), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.Adapter.Models["custom"].Instructions).To(Equal("model prompt"))
-		Expect(cfg.Adapter.Families["family"].Instructions).To(Equal("family prompt\n"))
-		Expect(cfg.Adapter.Codex.Models).To(HaveLen(1))
-		Expect(cfg.Adapter.Codex.Models[0].Instructions).To(Equal("codex prompt"))
 	})
 
 	It("rejects missing adapter instructions_file", func() {
@@ -367,7 +362,7 @@ concern = "unknown"
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.models.custom]\nmodel = \"claude-sonnet\"\ninstructions_file = \"missing.md\"\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.models.custom]\nprovider = \"codex\"\nwire_model = \"gpt-test\"\nprofile = \"standard\"\ninstructions_file = \"missing.md\"\n"), 0o644)).To(Succeed())
 
 		_, err := config.LoadGlobalOrDefault()
 		Expect(err).To(HaveOccurred())
@@ -382,7 +377,7 @@ concern = "unknown"
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(globalDir, "empty.md"), nil, 0o644)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.models.custom]\nmodel = \"claude-sonnet\"\ninstructions_file = \"empty.md\"\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.models.custom]\nprovider = \"codex\"\nwire_model = \"gpt-test\"\nprofile = \"standard\"\ninstructions_file = \"empty.md\"\n"), 0o644)).To(Succeed())
 
 		_, err := config.LoadGlobalOrDefault()
 		Expect(err).To(HaveOccurred())
@@ -396,7 +391,7 @@ concern = "unknown"
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.models.custom]\nmodel = \"claude-sonnet\"\ninstructions_file = \"   \"\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.codex]\nenabled = true\n\n[adapter.model_profiles.standard]\ncontexts = [{ name = \"standard\", tokens = 200000 }]\nmax_output_tokens = 1024\nsupports_tools = true\nsupports_vision = false\n\n[adapter.models.custom]\nprovider = \"codex\"\nwire_model = \"gpt-test\"\nprofile = \"standard\"\ninstructions_file = \"   \"\n"), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())

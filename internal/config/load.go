@@ -45,6 +45,7 @@ func loadConfig(dir string) (*Config, error) {
 		)
 		return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
 	}
+	pruneEmptyModelDeclarations(&cfg.Adapter)
 	warnRemovedLoggingConfig(data, tomlPath, log)
 	if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
 		log.Warn("config.load.instructions_failed", "concern", "config", "component", "config",
@@ -181,40 +182,6 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 		model.Instructions = contents
 		cfg.Adapter.Models[name] = model
 	}
-	for name, family := range cfg.Adapter.Families {
-		contents, err := loadInstructionFile(configDir, family.InstructionsFile)
-		if err != nil {
-			log.Warn("config.load.instructions_file_failed", "concern", "config", "component", "config",
-				"subcomponent", "load",
-				"scope", "adapter.families",
-				"name", name,
-				"path", family.InstructionsFile,
-				"err", err,
-			)
-			return fmt.Errorf("adapter.families.%s.instructions_file: %w", name, err)
-		}
-		family.Instructions = contents
-		cfg.Adapter.Families[name] = family
-	}
-	for i, model := range cfg.Adapter.Codex.Models {
-		contents, err := loadInstructionFile(configDir, model.InstructionsFile)
-		if err != nil {
-			aliasPrefix := strings.TrimSpace(model.AliasPrefix)
-			if aliasPrefix == "" {
-				aliasPrefix = fmt.Sprintf("#%d", i)
-			}
-			log.Warn("config.load.instructions_file_failed", "concern", "config", "component", "config",
-				"subcomponent", "load",
-				"scope", "adapter.codex.models",
-				"name", aliasPrefix,
-				"path", model.InstructionsFile,
-				"err", err,
-			)
-			return fmt.Errorf("adapter.codex.models.%s.instructions_file: %w", aliasPrefix, err)
-		}
-		model.Instructions = contents
-		cfg.Adapter.Codex.Models[i] = model
-	}
 	return nil
 }
 
@@ -326,7 +293,10 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 
-	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
+	if err := applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter); err != nil {
+		return err
+	}
+	return validateAdapterModelCatalog(&cfg.Adapter)
 }
 
 func applyLoggingCoreDefaults(logging *LoggingConfig) error {

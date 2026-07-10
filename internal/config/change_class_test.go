@@ -37,12 +37,15 @@ func TestClassifyConfigChange(t *testing.T) {
 		{"capture db path", func(c *Config) { c.MITM.CaptureStore.DBPath = "/tmp/x.db" }, RouteReload},
 		{"ca cert path", func(c *Config) { c.MITM.CA.CertPath = "/tmp/ca.crt" }, RouteReload},
 		{"model alias added", func(c *Config) {
-			c.Adapter.Models = map[string]AdapterModel{"x": {Backend: "claude"}}
+			c.Adapter.Models = map[string]AdapterModelDeclaration{"x": {Provider: AdapterModelProviderAnthropic}}
+		}, RouteHotApply},
+		{"model profile added", func(c *Config) {
+			c.Adapter.ModelProfiles = map[string]AdapterModelProfile{"x": {MaxOutputTokens: 1}}
+		}, RouteHotApply},
+		{"model route added", func(c *Config) {
+			c.Adapter.ModelRoutes = []AdapterModelRoute{{Match: "gpt-*"}}
 		}, RouteHotApply},
 		{"default model", func(c *Config) { c.Adapter.DefaultModel = "clyde-haiku" }, RouteHotApply},
-		{"pricing added", func(c *Config) {
-			c.Adapter.Pricing = map[string]AdapterModelPricing{"m": {InputPerMTok: 1}}
-		}, RouteHotApply},
 		{"mitm providers", func(c *Config) { c.MITM.Providers = []string{"anthropic"} }, RouteHotApply},
 		{"non-hot adapter field (require token)", func(c *Config) { c.Adapter.RequireToken = "secret" }, RouteReload},
 		{"non-hot adapter field (max concurrent)", func(c *Config) { c.Adapter.MaxConcurrent = 8 }, RouteReload},
