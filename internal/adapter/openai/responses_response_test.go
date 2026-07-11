@@ -255,6 +255,44 @@ func TestBuildResponsesResponseIncompleteCarriesReason(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesResponseIncompleteMarksDerivedItemsIncomplete(t *testing.T) {
+	t.Parallel()
+	resp := BuildResponsesResponse(ResponsesResponseParams{
+		ID:        "resp_partial",
+		Model:     "m",
+		CreatedAt: 1,
+		Status:    ResponsesStatusIncomplete,
+		Text:      "partial answer",
+		Reasoning: "partial reasoning",
+		ToolCalls: []ToolCall{{
+			Index: 0,
+			Type:  "function",
+			Function: ToolCallFunction{
+				Name:      "lookup",
+				Arguments: `{"query":`,
+			},
+		}},
+		ItemIDBase: "partial",
+	})
+
+	if len(resp.Output) != 3 {
+		t.Fatalf("output len=%d want 3", len(resp.Output))
+	}
+	for index, item := range resp.Output {
+		if item.Status != "incomplete" {
+			t.Errorf("output[%d] type=%q status=%q want incomplete", index, item.Type, item.Status)
+		}
+	}
+
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if !strings.Contains(string(raw), `"type":"reasoning","id":"rs_partial","status":"incomplete"`) {
+		t.Fatalf("reasoning wire omitted incomplete status: %s", raw)
+	}
+}
+
 func TestResponsesTerminalForFinishReason(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

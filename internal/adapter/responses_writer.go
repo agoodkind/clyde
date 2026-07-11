@@ -39,11 +39,13 @@ type responsesStreamWriter struct {
 	reasoningOpen        bool
 	reasoningItemID      string
 	reasoningOutputIndex int
+	reasoningStatus      adapteropenai.ResponsesOutputItemStatus
 	reasoningText        strings.Builder
 
 	messageOpen        bool
 	messageItemID      string
 	messageOutputIndex int
+	messageStatus      adapteropenai.ResponsesOutputItemStatus
 	messageParts       []responsesStreamContentState
 
 	toolStates map[int]*responsesStreamToolState
@@ -64,7 +66,7 @@ type responsesStreamToolState struct {
 	outputIndex int
 	index       int
 	args        strings.Builder
-	completed   bool
+	status      adapteropenai.ResponsesOutputItemStatus
 }
 
 // newResponsesStreamWriter builds a Responses streaming writer over the
@@ -95,10 +97,12 @@ func newResponsesStreamWriter(w http.ResponseWriter, responseID, model string, w
 		reasoningOpen:        false,
 		reasoningItemID:      "",
 		reasoningOutputIndex: 0,
+		reasoningStatus:      "",
 		reasoningText:        strings.Builder{},
 		messageOpen:          false,
 		messageItemID:        "",
 		messageOutputIndex:   0,
+		messageStatus:        "",
 		messageParts:         nil,
 		toolStates:           make(map[int]*responsesStreamToolState),
 		toolOrder:            nil,
@@ -162,7 +166,7 @@ func (p *responsesStreamWriter) WriteEvent(ev adapterrender.Event) error {
 	case adapterrender.ReasoningDelta:
 		return p.handleReasoningDelta(e.Text)
 	case adapterrender.ReasoningFinished:
-		return p.closeReasoning()
+		return p.closeReasoning(adapteropenai.ResponsesOutputItemStatusCompleted)
 	case adapterrender.TextDelta:
 		return p.handleText(e.Text)
 	case adapterrender.RefusalDelta:
@@ -187,16 +191,17 @@ func (p *responsesStreamWriter) finish(result adapterprovider.Result) error {
 	if err := p.begin(); err != nil {
 		return err
 	}
-	if err := p.closeReasoning(); err != nil {
-		return err
-	}
-	if err := p.closeMessage(); err != nil {
-		return err
-	}
-	if err := p.closeTools(); err != nil {
-		return err
-	}
 	status, incompleteDetails := adapteropenai.ResponsesTerminalForFinishReason(result.FinishReason)
+	itemStatus := responsesTerminalItemStatus(status)
+	if err := p.closeReasoning(itemStatus); err != nil {
+		return err
+	}
+	if err := p.closeMessage(itemStatus); err != nil {
+		return err
+	}
+	if err := p.closeTools(itemStatus); err != nil {
+		return err
+	}
 	usage := result.Usage
 	final := p.buildResponse(status, &usage)
 	final.IncompleteDetails = incompleteDetails
@@ -205,6 +210,13 @@ func (p *responsesStreamWriter) finish(result adapterprovider.Result) error {
 		eventName = adapteropenai.ResponsesEventIncomplete
 	}
 	return p.emitEnvelope(eventName, final)
+}
+
+func responsesTerminalItemStatus(status adapteropenai.ResponsesStatus) adapteropenai.ResponsesOutputItemStatus {
+	if status == adapteropenai.ResponsesStatusIncomplete {
+		return adapteropenai.ResponsesOutputItemStatusIncomplete
+	}
+	return adapteropenai.ResponsesOutputItemStatusCompleted
 }
 
 // fail emits response.failed with the mapped, client-safe error semantics.
@@ -248,19 +260,21 @@ func (p *responsesStreamWriter) openReasoning() error {
 	p.reasoningOpen = true
 	p.reasoningItemID = "rs_" + p.itemBase
 	p.reasoningOutputIndex = p.nextOutputIndex
+	p.reasoningStatus = adapteropenai.ResponsesOutputItemStatusInProgress
 	p.nextOutputIndex++
 	item := adapteropenai.ResponsesOutputItem{
-		Type: "reasoning", ID: p.reasoningItemID, Status: "", Role: "",
+		Type: "reasoning", ID: p.reasoningItemID, Status: p.reasoningStatus, Role: "",
 		Content: nil, Summary: []adapteropenai.ResponsesSummaryPart{}, CallID: "", Name: "", Arguments: "",
 	}
 	return p.emitOutputItem(adapteropenai.ResponsesEventOutputItemAdded, p.reasoningOutputIndex, item)
 }
 
-func (p *responsesStreamWriter) closeReasoning() error {
+func (p *responsesStreamWriter) closeReasoning(status adapteropenai.ResponsesOutputItemStatus) error {
 	if !p.reasoningOpen {
 		return nil
 	}
 	p.reasoningOpen = false
+	p.reasoningStatus = status
 	full := p.reasoningText.String()
 	done := adapteropenai.ResponsesReasoningSummaryDoneEvent{
 		Type:           adapteropenai.ResponsesEventReasoningSummaryDone,
@@ -274,7 +288,7 @@ func (p *responsesStreamWriter) closeReasoning() error {
 		return err
 	}
 	item := adapteropenai.ResponsesOutputItem{
-		Type: "reasoning", ID: p.reasoningItemID, Status: "", Role: "",
+		Type: "reasoning", ID: p.reasoningItemID, Status: p.reasoningStatus, Role: "",
 		Content: nil, Summary: []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: full}}, CallID: "", Name: "", Arguments: "",
 	}
 	return p.emitOutputItem(adapteropenai.ResponsesEventOutputItemDone, p.reasoningOutputIndex, item)
@@ -333,9 +347,10 @@ func (p *responsesStreamWriter) openMessage() error {
 	p.messageOpen = true
 	p.messageItemID = "msg_" + p.itemBase
 	p.messageOutputIndex = p.nextOutputIndex
+	p.messageStatus = adapteropenai.ResponsesOutputItemStatusInProgress
 	p.nextOutputIndex++
 	skeleton := adapteropenai.ResponsesOutputItem{
-		Type: "message", ID: p.messageItemID, Status: "in_progress", Role: "assistant",
+		Type: "message", ID: p.messageItemID, Status: adapteropenai.ResponsesOutputItemStatusInProgress, Role: "assistant",
 		Content: []adapteropenai.ResponsesContentPart{}, Summary: nil, CallID: "", Name: "", Arguments: "",
 	}
 	if err := p.emitOutputItem(adapteropenai.ResponsesEventOutputItemAdded, p.messageOutputIndex, skeleton); err != nil {
@@ -366,11 +381,12 @@ func (p *responsesStreamWriter) openMessageContentPart(kind string) (int, error)
 	return contentIndex, nil
 }
 
-func (p *responsesStreamWriter) closeMessage() error {
+func (p *responsesStreamWriter) closeMessage(status adapteropenai.ResponsesOutputItemStatus) error {
 	if !p.messageOpen {
 		return nil
 	}
 	p.messageOpen = false
+	p.messageStatus = status
 	content := make([]adapteropenai.ResponsesContentPart, 0, len(p.messageParts))
 	for contentIndex, state := range p.messageParts {
 		full := state.text.String()
@@ -402,7 +418,7 @@ func (p *responsesStreamWriter) closeMessage() error {
 		content = append(content, part)
 	}
 	item := adapteropenai.ResponsesOutputItem{
-		Type: "message", ID: p.messageItemID, Status: "completed", Role: "assistant",
+		Type: "message", ID: p.messageItemID, Status: p.messageStatus, Role: "assistant",
 		Content: content, Summary: nil, CallID: "", Name: "", Arguments: "",
 	}
 	return p.emitOutputItem(adapteropenai.ResponsesEventOutputItemDone, p.messageOutputIndex, item)
@@ -413,7 +429,7 @@ func (p *responsesStreamWriter) handleToolCalls(toolCalls []adapteropenai.ToolCa
 		state, isNew := p.getOrCreateTool(tc)
 		if isNew {
 			item := adapteropenai.ResponsesOutputItem{
-				Type: "function_call", ID: state.itemID, Status: "in_progress", Role: "",
+				Type: "function_call", ID: state.itemID, Status: adapteropenai.ResponsesOutputItemStatusInProgress, Role: "",
 				Content: nil, Summary: nil, CallID: state.callID, Name: state.name, Arguments: "",
 			}
 			if err := p.emitOutputItem(adapteropenai.ResponsesEventOutputItemAdded, state.outputIndex, item); err != nil {
@@ -453,7 +469,7 @@ func (p *responsesStreamWriter) getOrCreateTool(tc adapteropenai.ToolCall) (*res
 		outputIndex: p.nextOutputIndex,
 		index:       tc.Index,
 		args:        strings.Builder{},
-		completed:   false,
+		status:      adapteropenai.ResponsesOutputItemStatusInProgress,
 	}
 	p.nextOutputIndex++
 	p.toolStates[tc.Index] = state
@@ -465,7 +481,7 @@ func responsesStreamCallID(base string, tc adapteropenai.ToolCall) string {
 	return "call_" + base + "_" + strconv.Itoa(tc.Index)
 }
 
-func (p *responsesStreamWriter) closeTools() error {
+func (p *responsesStreamWriter) closeTools(status adapteropenai.ResponsesOutputItemStatus) error {
 	for _, idx := range p.toolOrder {
 		state := p.toolStates[idx]
 		args := state.args.String()
@@ -481,13 +497,13 @@ func (p *responsesStreamWriter) closeTools() error {
 			return err
 		}
 		item := adapteropenai.ResponsesOutputItem{
-			Type: "function_call", ID: state.itemID, Status: "completed", Role: "",
+			Type: "function_call", ID: state.itemID, Status: status, Role: "",
 			Content: nil, Summary: nil, CallID: state.callID, Name: state.name, Arguments: args,
 		}
 		if err := p.emitOutputItem(adapteropenai.ResponsesEventOutputItemDone, state.outputIndex, item); err != nil {
 			return err
 		}
-		state.completed = true
+		state.status = status
 	}
 	return nil
 }
@@ -546,39 +562,36 @@ func (p *responsesStreamWriter) orderedOutput() []adapteropenai.ResponsesOutputI
 		for _, state := range p.messageParts {
 			content = append(content, responsesContentPart(state.kind, state.text.String()))
 		}
-		status := "in_progress"
-		if !p.messageOpen {
-			status = "completed"
-		}
 		output[p.messageOutputIndex] = adapteropenai.ResponsesOutputItem{
-			Type: "message", ID: p.messageItemID, Status: status, Role: "assistant", Content: content,
+			Type: "message", ID: p.messageItemID, Status: p.messageStatus, Role: "assistant", Content: content,
 			Summary: nil, CallID: "", Name: "", Arguments: "",
 		}
 	}
 	if p.reasoningItemID != "" {
 		summary := []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: p.reasoningText.String()}}
 		output[p.reasoningOutputIndex] = adapteropenai.ResponsesOutputItem{
-			Type: "reasoning", ID: p.reasoningItemID, Status: "", Role: "", Content: nil,
+			Type: "reasoning", ID: p.reasoningItemID, Status: p.reasoningStatus, Role: "", Content: nil,
 			Summary: summary, CallID: "", Name: "", Arguments: "",
 		}
 	}
 	for _, index := range p.toolOrder {
 		state := p.toolStates[index]
-		status := "in_progress"
-		if state.completed {
-			status = "completed"
-		}
 		output[state.outputIndex] = adapteropenai.ResponsesOutputItem{
-			Type: "function_call", ID: state.itemID, Status: status, Role: "", Content: nil,
+			Type: "function_call", ID: state.itemID, Status: state.status, Role: "", Content: nil,
 			Summary: nil, CallID: state.callID, Name: state.name, Arguments: state.args.String(),
 		}
 	}
 	return output
 }
 
-func responsesOutputFromEvents(responseID string, events []adapterrender.Event) []adapteropenai.ResponsesOutputItem {
+func responsesOutputFromEvents(
+	responseID string,
+	events []adapterrender.Event,
+	status adapteropenai.ResponsesStatus,
+) []adapteropenai.ResponsesOutputItem {
 	output := make([]adapteropenai.ResponsesOutputItem, 0)
 	base := responsesItemBase(responseID)
+	itemStatus := responsesTerminalItemStatus(status)
 	messageIndex := -1
 	reasoningIndex := -1
 	toolIndexes := make(map[int]int)
@@ -586,9 +599,9 @@ func responsesOutputFromEvents(responseID string, events []adapterrender.Event) 
 	for _, event := range events {
 		switch typed := event.(type) {
 		case adapterrender.TextDelta:
-			output, messageIndex = appendCollectedMessagePart(output, messageIndex, base, "output_text", typed.Text)
+			output, messageIndex = appendCollectedMessagePart(output, messageIndex, base, itemStatus, "output_text", typed.Text)
 		case adapterrender.RefusalDelta:
-			output, messageIndex = appendCollectedMessagePart(output, messageIndex, base, "refusal", typed.Text)
+			output, messageIndex = appendCollectedMessagePart(output, messageIndex, base, itemStatus, "refusal", typed.Text)
 		case adapterrender.ReasoningDelta:
 			if typed.Text == "" {
 				continue
@@ -596,7 +609,7 @@ func responsesOutputFromEvents(responseID string, events []adapterrender.Event) 
 			if reasoningIndex < 0 {
 				reasoningIndex = len(output)
 				output = append(output, adapteropenai.ResponsesOutputItem{
-					Type: "reasoning", ID: "rs_" + base, Status: "", Role: "", Content: nil,
+					Type: "reasoning", ID: "rs_" + base, Status: itemStatus, Role: "", Content: nil,
 					Summary: []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: typed.Text}},
 					CallID:  "", Name: "", Arguments: "",
 				})
@@ -610,7 +623,7 @@ func responsesOutputFromEvents(responseID string, events []adapterrender.Event) 
 					outputIndex = len(output)
 					toolIndexes[toolCall.Index] = outputIndex
 					output = append(output, adapteropenai.ResponsesOutputItem{
-						Type: "function_call", ID: "fc_" + base + "_" + strconv.Itoa(toolCall.Index), Status: "completed", Role: "",
+						Type: "function_call", ID: "fc_" + base + "_" + strconv.Itoa(toolCall.Index), Status: itemStatus, Role: "",
 						Content: nil, Summary: nil, CallID: "call_" + base + "_" + strconv.Itoa(toolCall.Index),
 						Name: toolCall.Function.Name, Arguments: toolCall.Function.Arguments,
 					})
@@ -631,6 +644,7 @@ func appendCollectedMessagePart(
 	output []adapteropenai.ResponsesOutputItem,
 	messageIndex int,
 	base string,
+	status adapteropenai.ResponsesOutputItemStatus,
 	kind string,
 	text string,
 ) ([]adapteropenai.ResponsesOutputItem, int) {
@@ -640,7 +654,7 @@ func appendCollectedMessagePart(
 	if messageIndex < 0 {
 		messageIndex = len(output)
 		output = append(output, adapteropenai.ResponsesOutputItem{
-			Type: "message", ID: "msg_" + base, Status: "completed", Role: "assistant",
+			Type: "message", ID: "msg_" + base, Status: status, Role: "assistant",
 			Content: []adapteropenai.ResponsesContentPart{}, Summary: nil, CallID: "", Name: "", Arguments: "",
 		})
 	}

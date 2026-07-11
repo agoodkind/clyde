@@ -333,7 +333,7 @@ func (s *Server) dispatchResponsesCollect(
 		}
 	}
 	status, incompleteDetails := adapteropenai.ResponsesTerminalForFinishReason(result.FinishReason)
-	output := responsesOutputFromEvents(responseID, collector.events)
+	output := responsesOutputFromEvents(responseID, collector.events, status)
 	if result.FinalResponse != nil {
 		output = nil
 	}

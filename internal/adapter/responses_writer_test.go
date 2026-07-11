@@ -372,6 +372,96 @@ func TestResponsesStreamWriterUsesContentFilterIncompleteTerminal(t *testing.T) 
 	}
 }
 
+func TestResponsesStreamWriterMarksOpenItemsIncomplete(t *testing.T) {
+	t.Parallel()
+	for _, finishReason := range []string{"length", "content_filter"} {
+		t.Run(finishReason, func(t *testing.T) {
+			t.Parallel()
+			recorder := httptest.NewRecorder()
+			writer, err := newResponsesStreamWriter(recorder, "resp_partial_"+finishReason, "model", nil, slog.Default())
+			if err != nil {
+				t.Fatalf("new responses stream writer: %v", err)
+			}
+			if err := writer.WriteEvent(adapterrender.ReasoningDelta{Text: "partial reasoning", ReasoningKind: "summary"}); err != nil {
+				t.Fatalf("reasoning delta: %v", err)
+			}
+			if err := writer.WriteEvent(adapterrender.TextDelta{Text: "partial answer"}); err != nil {
+				t.Fatalf("text delta: %v", err)
+			}
+			if err := writer.WriteEvent(adapterrender.ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
+				Index: 0,
+				Type:  "function",
+				Function: adapteropenai.ToolCallFunction{
+					Name:      "lookup",
+					Arguments: `{"query":`,
+				},
+			}}}); err != nil {
+				t.Fatalf("tool delta: %v", err)
+			}
+			if err := writer.finish(adapterprovider.Result{FinishReason: finishReason}); err != nil {
+				t.Fatalf("finish: %v", err)
+			}
+
+			frames := parseResponsesStreamFrames(t, recorder.Body.String())
+			doneCount := 0
+			for _, frame := range frames {
+				if frame.Name != adapteropenai.ResponsesEventOutputItemDone {
+					continue
+				}
+				doneCount++
+				if frame.Item == nil || frame.Item.Status != "incomplete" {
+					t.Errorf("output_item.done item=%+v want incomplete", frame.Item)
+				}
+			}
+			if doneCount != 3 {
+				t.Fatalf("output_item.done count=%d want 3", doneCount)
+			}
+			terminal := frames[len(frames)-1]
+			if terminal.Response == nil || len(terminal.Response.Output) != 3 {
+				t.Fatalf("terminal response=%+v", terminal.Response)
+			}
+			for index, item := range terminal.Response.Output {
+				if item.Status != "incomplete" {
+					t.Errorf("terminal output[%d] type=%q status=%q want incomplete", index, item.Type, item.Status)
+				}
+			}
+		})
+	}
+}
+
+func TestResponsesStreamWriterKeepsExplicitlyClosedReasoningCompleted(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	writer, err := newResponsesStreamWriter(recorder, "resp_closed_reasoning", "model", nil, slog.Default())
+	if err != nil {
+		t.Fatalf("new responses stream writer: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ReasoningDelta{Text: "finished reasoning", ReasoningKind: "summary"}); err != nil {
+		t.Fatalf("reasoning delta: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ReasoningFinished{}); err != nil {
+		t.Fatalf("reasoning finished: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.TextDelta{Text: "partial answer"}); err != nil {
+		t.Fatalf("text delta: %v", err)
+	}
+	if err := writer.finish(adapterprovider.Result{FinishReason: "length"}); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	frames := parseResponsesStreamFrames(t, recorder.Body.String())
+	terminal := frames[len(frames)-1]
+	if terminal.Response == nil || len(terminal.Response.Output) != 2 {
+		t.Fatalf("terminal response=%+v", terminal.Response)
+	}
+	if terminal.Response.Output[0].Type != "reasoning" || terminal.Response.Output[0].Status != "completed" {
+		t.Fatalf("closed reasoning=%+v want completed", terminal.Response.Output[0])
+	}
+	if terminal.Response.Output[1].Type != "message" || terminal.Response.Output[1].Status != "incomplete" {
+		t.Fatalf("open message=%+v want incomplete", terminal.Response.Output[1])
+	}
+}
+
 func TestResponsesOutputFromEventsPreservesNormalizedOutputOrder(t *testing.T) {
 	t.Parallel()
 	output := responsesOutputFromEvents("resp_ordered", []adapterrender.Event{
@@ -381,7 +471,7 @@ func TestResponsesOutputFromEventsPreservesNormalizedOutputOrder(t *testing.T) {
 		adapterrender.ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
 			Index: 0, ID: "upstream-call", Type: "function", Function: adapteropenai.ToolCallFunction{Name: "lookup", Arguments: "{}"},
 		}}},
-	})
+	}, adapteropenai.ResponsesStatusCompleted)
 	if len(output) != 3 {
 		t.Fatalf("output len=%d want 3", len(output))
 	}
@@ -393,6 +483,57 @@ func TestResponsesOutputFromEventsPreservesNormalizedOutputOrder(t *testing.T) {
 	}
 	if output[2].CallID != "call_ordered_0" {
 		t.Fatalf("call id=%q", output[2].CallID)
+	}
+}
+
+func TestResponsesOutputFromEventsUsesTerminalItemStatus(t *testing.T) {
+	t.Parallel()
+	events := []adapterrender.Event{
+		adapterrender.ReasoningDelta{Text: "partial reasoning", ReasoningKind: "summary"},
+		adapterrender.TextDelta{Text: "partial answer"},
+		adapterrender.ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
+			Index: 0,
+			Type:  "function",
+			Function: adapteropenai.ToolCallFunction{
+				Name:      "lookup",
+				Arguments: `{"query":`,
+			},
+		}}},
+	}
+	for _, testCase := range []struct {
+		finishReason string
+		wantStatus   adapteropenai.ResponsesOutputItemStatus
+	}{
+		{finishReason: "stop", wantStatus: adapteropenai.ResponsesOutputItemStatusCompleted},
+		{finishReason: "length", wantStatus: adapteropenai.ResponsesOutputItemStatusIncomplete},
+		{finishReason: "content_filter", wantStatus: adapteropenai.ResponsesOutputItemStatusIncomplete},
+	} {
+		t.Run(testCase.finishReason, func(t *testing.T) {
+			t.Parallel()
+			status, _ := adapteropenai.ResponsesTerminalForFinishReason(testCase.finishReason)
+			response := adapteropenai.BuildResponsesResponse(adapteropenai.ResponsesResponseParams{
+				ID:         "resp_buffered_" + testCase.finishReason,
+				Model:      "model",
+				CreatedAt:  1,
+				Status:     status,
+				Text:       "",
+				Reasoning:  "",
+				Refusal:    "",
+				ToolCalls:  nil,
+				Output:     responsesOutputFromEvents("resp_buffered_"+testCase.finishReason, events, status),
+				Usage:      nil,
+				ItemIDBase: "buffered_" + testCase.finishReason,
+				Warnings:   nil,
+			})
+			if len(response.Output) != 3 {
+				t.Fatalf("output len=%d want 3", len(response.Output))
+			}
+			for index, item := range response.Output {
+				if item.Status != testCase.wantStatus {
+					t.Errorf("output[%d] type=%q status=%q want %q", index, item.Type, item.Status, testCase.wantStatus)
+				}
+			}
+		})
 	}
 }
 

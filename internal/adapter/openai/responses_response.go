@@ -26,6 +26,19 @@ const (
 	ResponsesStatusFailed ResponsesStatus = "failed"
 )
 
+// ResponsesOutputItemStatus enumerates the lifecycle states supported by
+// Responses message, reasoning, and function-call output items.
+type ResponsesOutputItemStatus string
+
+const (
+	// ResponsesOutputItemStatusInProgress marks an output item that is still open.
+	ResponsesOutputItemStatusInProgress ResponsesOutputItemStatus = "in_progress"
+	// ResponsesOutputItemStatusCompleted marks an output item that finished cleanly.
+	ResponsesOutputItemStatusCompleted ResponsesOutputItemStatus = "completed"
+	// ResponsesOutputItemStatusIncomplete marks an output item stopped before completion.
+	ResponsesOutputItemStatusIncomplete ResponsesOutputItemStatus = "incomplete"
+)
+
 // responsesObjectType is the constant `object` discriminator on the
 // Responses response object.
 const responsesObjectType = "response"
@@ -61,8 +74,8 @@ type ResponsesClyde struct {
 }
 
 // ResponsesIncompleteDetails carries the reason a turn was incomplete.
-// The adapter emits null today; the pointer field renders JSON null
-// when nil.
+// Completed responses render null through the nil pointer field. Incomplete
+// responses carry max_output_tokens or content_filter from the finish reason.
 type ResponsesIncompleteDetails struct {
 	Reason string `json:"reason"`
 }
@@ -80,45 +93,46 @@ type ResponsesError struct {
 // fields that belong to Type so each item matches the Responses wire
 // shape exactly.
 type ResponsesOutputItem struct {
-	Type      string                 `json:"type"`
-	ID        string                 `json:"id"`
-	Status    string                 `json:"status,omitempty"`
-	Role      string                 `json:"role,omitempty"`
-	Content   []ResponsesContentPart `json:"content,omitempty"`
-	Summary   []ResponsesSummaryPart `json:"summary,omitempty"`
-	CallID    string                 `json:"call_id,omitempty"`
-	Name      string                 `json:"name,omitempty"`
-	Arguments string                 `json:"arguments,omitempty"`
+	Type      string                    `json:"type"`
+	ID        string                    `json:"id"`
+	Status    ResponsesOutputItemStatus `json:"status,omitempty"`
+	Role      string                    `json:"role,omitempty"`
+	Content   []ResponsesContentPart    `json:"content,omitempty"`
+	Summary   []ResponsesSummaryPart    `json:"summary,omitempty"`
+	CallID    string                    `json:"call_id,omitempty"`
+	Name      string                    `json:"name,omitempty"`
+	Arguments string                    `json:"arguments,omitempty"`
 }
 
 // responsesMessageItemWire is the exact JSON shape of a message output
 // item. Content is never omitempty so an in-progress message renders
 // `"content":[]`.
 type responsesMessageItemWire struct {
-	Type    string                 `json:"type"`
-	ID      string                 `json:"id"`
-	Status  string                 `json:"status"`
-	Role    string                 `json:"role"`
-	Content []ResponsesContentPart `json:"content"`
+	Type    string                    `json:"type"`
+	ID      string                    `json:"id"`
+	Status  ResponsesOutputItemStatus `json:"status"`
+	Role    string                    `json:"role"`
+	Content []ResponsesContentPart    `json:"content"`
 }
 
 // responsesReasoningItemWire is the exact JSON shape of a reasoning
 // output item.
 type responsesReasoningItemWire struct {
-	Type    string                 `json:"type"`
-	ID      string                 `json:"id"`
-	Summary []ResponsesSummaryPart `json:"summary"`
+	Type    string                    `json:"type"`
+	ID      string                    `json:"id"`
+	Status  ResponsesOutputItemStatus `json:"status"`
+	Summary []ResponsesSummaryPart    `json:"summary"`
 }
 
 // responsesFunctionCallItemWire is the exact JSON shape of a
 // function_call output item.
 type responsesFunctionCallItemWire struct {
-	Type      string `json:"type"`
-	ID        string `json:"id"`
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-	Status    string `json:"status"`
+	Type      string                    `json:"type"`
+	ID        string                    `json:"id"`
+	CallID    string                    `json:"call_id"`
+	Name      string                    `json:"name"`
+	Arguments string                    `json:"arguments"`
+	Status    ResponsesOutputItemStatus `json:"status"`
 }
 
 // responsesOutputItemKind enumerates the Responses output item type
@@ -157,6 +171,7 @@ func (i ResponsesOutputItem) MarshalJSON() ([]byte, error) {
 		return marshalResponsesItemWire(i.Type, responsesReasoningItemWire{
 			Type:    "reasoning",
 			ID:      i.ID,
+			Status:  i.Status,
 			Summary: summary,
 		})
 	case responsesItemFunctionCall:
@@ -362,12 +377,13 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 
 func buildResponsesOutput(params ResponsesResponseParams) []ResponsesOutputItem {
 	output := make([]ResponsesOutputItem, 0, 2+len(params.ToolCalls))
+	itemStatus := responsesOutputItemStatus(params.Status)
 
 	if params.Reasoning != "" {
 		output = append(output, ResponsesOutputItem{
 			Type:      "reasoning",
 			ID:        responsesReasoningItemID(params.ItemIDBase),
-			Status:    "",
+			Status:    itemStatus,
 			Role:      "",
 			Content:   nil,
 			Summary:   []ResponsesSummaryPart{{Type: "summary_text", Text: params.Reasoning}},
@@ -398,7 +414,7 @@ func buildResponsesOutput(params ResponsesResponseParams) []ResponsesOutputItem 
 		output = append(output, ResponsesOutputItem{
 			Type:      "message",
 			ID:        responsesMessageItemID(params.ItemIDBase),
-			Status:    "completed",
+			Status:    itemStatus,
 			Role:      "assistant",
 			Content:   content,
 			Summary:   nil,
@@ -412,7 +428,7 @@ func buildResponsesOutput(params ResponsesResponseParams) []ResponsesOutputItem 
 		output = append(output, ResponsesOutputItem{
 			Type:      "function_call",
 			ID:        responsesFunctionCallItemID(params.ItemIDBase, tc.Index),
-			Status:    "completed",
+			Status:    itemStatus,
 			Role:      "",
 			Content:   nil,
 			Summary:   nil,
@@ -423,6 +439,16 @@ func buildResponsesOutput(params ResponsesResponseParams) []ResponsesOutputItem 
 	}
 
 	return output
+}
+
+func responsesOutputItemStatus(status ResponsesStatus) ResponsesOutputItemStatus {
+	if status == ResponsesStatusIncomplete {
+		return ResponsesOutputItemStatusIncomplete
+	}
+	if status == ResponsesStatusInProgress {
+		return ResponsesOutputItemStatusInProgress
+	}
+	return ResponsesOutputItemStatusCompleted
 }
 
 // ResponsesTerminalForFinishReason maps normalized provider finish reasons
