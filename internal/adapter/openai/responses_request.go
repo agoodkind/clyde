@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"strings"
 )
 
@@ -133,8 +134,20 @@ func responsesPresence(raw json.RawMessage) ResponsesFieldPresence {
 	case responsesPresenceTokenZero:
 		return ResponsesFieldZero
 	default:
+		if responsesNumericZero(raw) {
+			return ResponsesFieldZero
+		}
 		return ResponsesFieldPresent
 	}
+}
+
+func responsesNumericZero(raw json.RawMessage) bool {
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err != nil {
+		return false
+	}
+	value, ok := new(big.Rat).SetString(number.String())
+	return ok && value.Sign() == 0
 }
 
 // UnmarshalResponsesRequest decodes a POST /v1/responses body into the

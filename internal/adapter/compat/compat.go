@@ -45,10 +45,9 @@ const (
 	maxHeaderBytes = 8 * 1024
 )
 
-// ComputeWarningsFromPresence uses the decoded Responses presence set. The
-// callback returns the OpenAI field-presence enum as an int so compat stays
-// independent from the OpenAI request package.
-func ComputeWarningsFromPresence(presenceFor func(string) int, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
+// ComputeWarningsFromResponsesPresence keeps the decoded n value beside the
+// presence callback because n warns only when it asks for more than one result.
+func ComputeWarningsFromResponsesPresence(presenceFor func(string) int, n *int, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
 	if endpoint != EndpointResponses {
 		return WarningSet{warnings: nil}
 	}
@@ -58,6 +57,12 @@ func ComputeWarningsFromPresence(presenceFor func(string) int, provider adapterm
 	}
 	raw := make([]CompatibilityWarning, 0, len(responsesCatalog)+len(unsupportedTools))
 	for _, entry := range responsesCatalog {
+		if entry.param == "n" {
+			if n != nil && *n > 1 {
+				raw = append(raw, CompatibilityWarning{Code: warningCodeOmitted, Param: "n", Disposition: dispositionLabelOmitted, Message: "n is not supported by the " + backendLabel(column) + " backend and one result was returned"})
+			}
+			continue
+		}
 		if entry.dispositionFor(column) != dispositionOmitWarn && entry.dispositionFor(column) != dispositionOverrideWarn {
 			continue
 		}
@@ -71,22 +76,6 @@ func ComputeWarningsFromPresence(presenceFor func(string) int, provider adapterm
 		raw = append(raw, toolUnsupportedWarning(toolType))
 	}
 	return newWarningSet(raw)
-}
-
-// ComputeWarningsFromResponsesPresence keeps the decoded n value beside the
-// presence callback because n warns only when it asks for more than one result.
-func ComputeWarningsFromResponsesPresence(presenceFor func(string) int, n *int, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
-	set := ComputeWarningsFromPresence(presenceFor, provider, endpoint, unsupportedTools)
-	if endpoint != EndpointResponses || n == nil || *n <= 1 {
-		return set
-	}
-	column, known := providerColumnFor(provider)
-	if !known {
-		return set
-	}
-	warnings := append([]CompatibilityWarning{}, set.Slice()...)
-	warnings = append(warnings, CompatibilityWarning{Code: warningCodeOmitted, Param: "n", Disposition: dispositionLabelOmitted, Message: "n is not supported by the " + backendLabel(column) + " backend and one result was returned"})
-	return newWarningSet(warnings)
 }
 
 // RejectedParam returns the first OpenAI-owned reference field that Clyde

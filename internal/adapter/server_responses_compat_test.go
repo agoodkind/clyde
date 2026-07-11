@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 // postResponsesRaw posts one /v1/responses body and returns the full
@@ -185,5 +186,37 @@ func TestResponsesNoCompatFieldsStaysClydeFree(t *testing.T) {
 	}
 	if _, present := keys["clyde"]; present {
 		t.Fatalf("clyde key present in warning-free object: %s", body)
+	}
+}
+
+func TestResponsesProjectionPreservesAnthropicOutputCapSpellings(t *testing.T) {
+	request, err := adapteropenai.UnmarshalResponsesRequest([]byte(`{"model":"claude","input":"hello","max_output_tokens":300,"max_completion_tokens":200,"max_tokens":100}`))
+	if err != nil {
+		t.Fatalf("UnmarshalResponsesRequest: %v", err)
+	}
+	projected, _, projectionErr := responsesRequestToChatRequest(request)
+	if projectionErr != nil {
+		t.Fatalf("responsesRequestToChatRequest: %v", projectionErr)
+	}
+	if projected.MaxOutputTokens == nil || *projected.MaxOutputTokens != 300 {
+		t.Fatalf("max_output_tokens = %v, want 300", projected.MaxOutputTokens)
+	}
+	if projected.MaxComplTokens == nil || *projected.MaxComplTokens != 200 {
+		t.Fatalf("max_completion_tokens = %v, want 200", projected.MaxComplTokens)
+	}
+	if projected.MaxTokens == nil || *projected.MaxTokens != 100 {
+		t.Fatalf("max_tokens = %v, want 100", projected.MaxTokens)
+	}
+
+	omitted, err := adapteropenai.UnmarshalResponsesRequest([]byte(`{"model":"claude","input":"hello"}`))
+	if err != nil {
+		t.Fatalf("UnmarshalResponsesRequest omitted: %v", err)
+	}
+	omittedProjection, _, omittedErr := responsesRequestToChatRequest(omitted)
+	if omittedErr != nil {
+		t.Fatalf("responsesRequestToChatRequest omitted: %v", omittedErr)
+	}
+	if omittedProjection.MaxOutputTokens != nil || omittedProjection.MaxComplTokens != nil || omittedProjection.MaxTokens != nil {
+		t.Fatalf("omitted output caps = %+v", omittedProjection)
 	}
 }

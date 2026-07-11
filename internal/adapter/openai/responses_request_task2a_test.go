@@ -40,6 +40,33 @@ func TestResponsesFieldSetDistinguishesAllPresentForms(t *testing.T) {
 	}
 }
 
+func TestResponsesFieldSetRecognizesNumericZeroSpellings(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want ResponsesFieldPresence
+	}{
+		{name: "zero", raw: "0", want: ResponsesFieldZero},
+		{name: "decimal zero", raw: "0.0", want: ResponsesFieldZero},
+		{name: "negative decimal zero", raw: "-0.0", want: ResponsesFieldZero},
+		{name: "exponent zero", raw: "0e5", want: ResponsesFieldZero},
+		{name: "decimal exponent zero", raw: "0.00E-2", want: ResponsesFieldZero},
+		{name: "positive", raw: "0.1", want: ResponsesFieldPresent},
+		{name: "negative", raw: "-1", want: ResponsesFieldPresent},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := UnmarshalResponsesRequest([]byte(`{"model":"gpt","temperature":` + test.raw + `}`))
+			if err != nil {
+				t.Fatalf("UnmarshalResponsesRequest: %v", err)
+			}
+			if got := request.Fields.Presence("temperature"); got != test.want {
+				t.Fatalf("presence = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func responsesRequestJSONTags() []string {
 	typ := reflect.TypeOf(ResponsesRequest{})
 	got := make([]string, 0, typ.NumField())

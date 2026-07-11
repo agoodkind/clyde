@@ -57,3 +57,49 @@ func TestResponsesNWarnsOnlyAboveOne(t *testing.T) {
 		t.Fatalf("n=2 warnings=%v", set.Slice())
 	}
 }
+
+func TestResponsesNWarningFollowsCatalogOrder(t *testing.T) {
+	presence := func(param string) int {
+		switch param {
+		case "n", "stop":
+			return 5
+		default:
+			return 0
+		}
+	}
+	n := 2
+	set := ComputeWarningsFromResponsesPresence(presence, &n, adaptermodel.BackendCodex, EndpointResponses, nil)
+	got := warningParams(set.Slice())
+	want := []string{"n", "stop"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("warnings = %v, want %v", got, want)
+	}
+}
+
+func TestResponsesNDoesNotWarnWhenAbsentNullZeroOrOne(t *testing.T) {
+	cases := []struct {
+		name     string
+		presence int
+		n        *int
+	}{
+		{name: "absent", presence: 0, n: nil},
+		{name: "null", presence: 1, n: nil},
+		{name: "zero", presence: 5, n: new(int)},
+		{name: "one", presence: 5, n: intPointer(1)},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			presence := func(param string) int {
+				if param == "n" {
+					return test.presence
+				}
+				return 0
+			}
+			if got := ComputeWarningsFromResponsesPresence(presence, test.n, adaptermodel.BackendCodex, EndpointResponses, nil); !got.Empty() {
+				t.Fatalf("warnings = %v", got.Slice())
+			}
+		})
+	}
+}
+
+func intPointer(value int) *int { return &value }

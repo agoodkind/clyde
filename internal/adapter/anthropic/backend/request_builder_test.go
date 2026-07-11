@@ -143,6 +143,27 @@ func TestBuildRequestHonorsProfileOutputAboveLegacyCap(t *testing.T) {
 	}
 }
 
+func TestRequestedOutputTokensPreservesResponsesCapPrecedence(t *testing.T) {
+	maxOutputTokens := 300
+	maxCompletionTokens := 200
+	maxTokens := 100
+	request := requestBuilderChatRequest()
+	request.MaxOutputTokens = &maxOutputTokens
+	request.MaxComplTokens = &maxCompletionTokens
+	request.MaxTokens = &maxTokens
+	if got := requestedOutputTokens(request); got == nil || *got != maxOutputTokens {
+		t.Fatalf("max_output_tokens precedence = %v, want %d", got, maxOutputTokens)
+	}
+	request.MaxOutputTokens = nil
+	if got := requestedOutputTokens(request); got == nil || *got != maxTokens {
+		t.Fatalf("max_tokens precedence = %v, want %d", got, maxTokens)
+	}
+	request.MaxTokens = nil
+	if got := requestedOutputTokens(request); got == nil || *got != maxCompletionTokens {
+		t.Fatalf("max_completion_tokens fallback = %v, want %d", got, maxCompletionTokens)
+	}
+}
+
 func TestBuildRequestCarriesResolvedWireProfile(t *testing.T) {
 	req := requestBuilderChatRequest()
 	model := adaptermodel.ResolvedAlias{
