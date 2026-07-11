@@ -123,7 +123,7 @@ func (p *passthroughSSEUsageParser) consumeLineValueByte(current byte) {
 	}
 	switch p.lineKind {
 	case passthroughSSELineData:
-		p.json.WriteByte(current)
+		p.json.consumeByte(current)
 	case passthroughSSELineEvent:
 		p.consumeEventNameByte(current)
 	case passthroughSSELineUnknown:
@@ -150,7 +150,7 @@ func (p *passthroughSSEUsageParser) finishLine() {
 	}
 	switch p.lineKind {
 	case passthroughSSELineData:
-		p.json.WriteByte('\n')
+		p.json.consumeByte('\n')
 	case passthroughSSELineEvent:
 		if p.eventNameTooLong {
 			p.eventTerminal = passthroughTerminalEventNone
@@ -293,7 +293,7 @@ type passthroughUsageJSONParser struct {
 	contentSeen         bool
 }
 
-func (p *passthroughUsageJSONParser) WriteByte(current byte) {
+func (p *passthroughUsageJSONParser) consumeByte(current byte) {
 	p.contentSeen = true
 	switch p.mode {
 	case passthroughJSONNormal:

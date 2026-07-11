@@ -271,13 +271,52 @@ func TestResponsesPassthroughRedirectUsesOpenAIErrorBoundary(t *testing.T) {
 }
 
 func TestResponsesPassthroughSwitchingProtocolsUsesOpenAIErrorBoundary(t *testing.T) {
+	upgradeSent := make(chan struct{})
+	releaseUpgrade := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseUpgrade) })
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusSwitchingProtocols)
+		connection, readWriter, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack upgraded connection: %v", err)
+			return
+		}
+		defer func() { _ = connection.Close() }()
+		if _, err := readWriter.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n"); err != nil {
+			t.Errorf("write upgrade response: %v", err)
+			return
+		}
+		if err := readWriter.Flush(); err != nil {
+			t.Errorf("flush upgrade response: %v", err)
+			return
+		}
+		close(upgradeSent)
+		<-releaseUpgrade
 	}))
 	t.Cleanup(upstream.Close)
+	t.Cleanup(release)
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
-	recorder := httptest.NewRecorder()
-	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi"}`)))
+	responseDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi"}`)))
+		responseDone <- recorder
+	}()
+	select {
+	case <-upgradeSent:
+	case <-time.After(time.Second):
+		t.Fatal("upstream did not send protocol upgrade within 1s")
+	}
+
+	var recorder *httptest.ResponseRecorder
+	select {
+	case recorder = <-responseDone:
+	case <-time.After(500 * time.Millisecond):
+		release()
+		t.Fatal("passthrough handler blocked reading the upgraded connection")
+	}
 
 	var envelope adapteropenai.ErrorResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {

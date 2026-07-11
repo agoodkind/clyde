@@ -141,15 +141,14 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		respBody, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromRead(respBody, readErr), started)
-			s.respondPassthroughOverrideTransportError(w, r, ctx, req, options.requestID, started, options.streamRequested, readErr)
-			return
-		}
+	if resp.StatusCode < http.StatusOK {
+		respBody := []byte(nil)
 		s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromBody(respBody), started)
 		s.respondPassthroughOverrideError(w, r, ctx, req, options.requestID, resp.StatusCode, respBody, options.streamRequested, contentType, started)
+		return
+	}
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		s.respondPassthroughRejectedResponse(w, r, ctx, req, resp, options, started, contentType)
 		return
 	}
 	streamOpened := options.streamRequested || strings.Contains(contentType, "text/event-stream")
