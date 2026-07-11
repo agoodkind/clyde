@@ -21,6 +21,7 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/mitm/capture"
+	"goodkind.io/gklog/correlation"
 
 	_ "github.com/mattn/go-sqlite3"
 	"goodkind.io/clyde/internal/config"
@@ -379,15 +380,18 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 			t.Fatalf("%s capture leaked secret: %s", client, value)
 		}
 	}
-	if strings.Contains(responseHeaders["adapter.passthrough"], "response-secret") ||
-		!strings.Contains(responseHeaders["adapter.passthrough"], "X-Upstream-Marker") {
-		t.Fatalf("egress response headers = %q", responseHeaders["adapter.passthrough"])
+	for _, client := range []string{"adapter.ingress", "adapter.passthrough"} {
+		if strings.Contains(responseHeaders[client], "response-secret") ||
+			!strings.Contains(responseHeaders[client], "X-Upstream-Marker") {
+			t.Fatalf("%s response headers = %q", client, responseHeaders[client])
+		}
 	}
 }
 
 func TestPassthroughStreamCaptureRetainsTerminalUsagePastCap(t *testing.T) {
 	prefix := bytes.Repeat([]byte("x"), capture.DefaultMaxBodyBytes+1024)
-	terminal := []byte("\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n")
+	padding := strings.Repeat("p", 96*1024)
+	terminal := []byte("\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"padding\":\"" + padding + "\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n")
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -422,39 +426,21 @@ func (w *failingPassthroughWriter) Write(body []byte) (int, error) {
 
 func (w *failingPassthroughWriter) Flush() {}
 
-func TestResponsesPassthroughCopyFailureEmitsTerminalError(t *testing.T) {
-	response := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body: io.NopCloser(&chunkThenErrorReader{
-			chunk: []byte("data: {\"type\":\"response.created\"}\n\n"),
-			err:   errors.New("upstream stream failed"),
-		}),
-	}
+func TestResponsesPassthroughCopyFailureUsesTypedStreamBoundary(t *testing.T) {
 	writer := &failingPassthroughWriter{header: make(http.Header)}
 	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	_, err := srv.copyPassthroughResponse(context.Background(), writer, response, true)
-	if err == nil {
-		t.Fatal("copy response succeeded, want failure")
+	ctx := correlation.WithContext(context.Background(), correlation.Context{RequestID: "req-copy-123"})
+	resolved := &adapterresolver.ResolvedRequest{}
+	err := srv.respondPassthroughStreamCopyError(ctx, writer, resolved, "req-copy-123", time.Now(), errors.New("upstream stream failed"))
+	if err != nil {
+		t.Fatalf("respond stream copy error: %v", err)
 	}
-	writePassthroughStreamError(writer, err)
-	if !strings.Contains(writer.body.String(), `"type":"error"`) {
+	body := writer.body.String()
+	if !strings.Contains(body, `"code":"upstream_network_error"`) ||
+		!strings.Contains(body, "req-copy-123") || !strings.Contains(body, `"clyde"`) ||
+		!strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("stream body = %q", writer.body.String())
 	}
-}
-
-type chunkThenErrorReader struct {
-	chunk []byte
-	err   error
-}
-
-func (r *chunkThenErrorReader) Read(buffer []byte) (int, error) {
-	if len(r.chunk) == 0 {
-		return 0, r.err
-	}
-	count := copy(buffer, r.chunk)
-	r.chunk = r.chunk[count:]
-	return count, nil
 }
 
 func TestStructuredOutputRetryCapturesMatchingAttempts(t *testing.T) {
