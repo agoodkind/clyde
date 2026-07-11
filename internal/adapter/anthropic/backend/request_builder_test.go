@@ -791,6 +791,123 @@ func TestBuildRequestJSONPromptAppendsAfterCallerSystemBelowPrefix(t *testing.T)
 	}
 }
 
+// floatPtr returns a pointer to v for building optional sampling fields.
+func floatPtr(v float64) *float64 {
+	return &v
+}
+
+func samplingModel() adaptermodel.ResolvedAlias {
+	return adaptermodel.ResolvedAlias{
+		Alias:           "clyde-opus-4-7",
+		WireModel:       "claude-opus-4-7",
+		MaxOutputTokens: 32000,
+	}
+}
+
+func TestBuildRequestForwardsTemperature(t *testing.T) {
+	req := requestBuilderChatRequest()
+	req.Temperature = floatPtr(0.4)
+
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-temp")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.Temperature == nil || *out.Temperature != 0.4 {
+		t.Fatalf("Temperature = %v want 0.4", out.Temperature)
+	}
+}
+
+func TestBuildRequestClampsTemperatureAboveOne(t *testing.T) {
+	req := requestBuilderChatRequest()
+	req.Temperature = floatPtr(1.7)
+
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-temp-clamp")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.Temperature == nil || *out.Temperature != 1.0 {
+		t.Fatalf("Temperature = %v want clamped 1.0", out.Temperature)
+	}
+}
+
+func TestBuildRequestForwardsTopP(t *testing.T) {
+	req := requestBuilderChatRequest()
+	req.TopP = floatPtr(0.9)
+
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-topp")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.TopP == nil || *out.TopP != 0.9 {
+		t.Fatalf("TopP = %v want 0.9", out.TopP)
+	}
+}
+
+func TestBuildRequestParsesStopString(t *testing.T) {
+	req := requestBuilderChatRequest()
+	req.Stop = json.RawMessage(`"STOP"`)
+
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-stop-string")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if len(out.StopSequences) != 1 || out.StopSequences[0] != "STOP" {
+		t.Fatalf("StopSequences = %v want [STOP]", out.StopSequences)
+	}
+}
+
+func TestBuildRequestParsesStopArray(t *testing.T) {
+	req := requestBuilderChatRequest()
+	req.Stop = json.RawMessage(`["a","b"]`)
+
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-stop-array")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if len(out.StopSequences) != 2 || out.StopSequences[0] != "a" || out.StopSequences[1] != "b" {
+		t.Fatalf("StopSequences = %v want [a b]", out.StopSequences)
+	}
+}
+
+func TestBuildRequestIgnoresNullStop(t *testing.T) {
+	req := requestBuilderChatRequest()
+	req.Stop = json.RawMessage(`null`)
+
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-stop-null")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.StopSequences != nil {
+		t.Fatalf("StopSequences = %v want nil for null stop", out.StopSequences)
+	}
+}
+
+// TestBuildRequestOmitsSamplingWhenAbsent locks the additive,
+// present-only contract at the builder: with none of temperature,
+// top_p, or stop set, the marshaled request carries none of the three
+// keys, so the wire shape is byte-identical to today.
+func TestBuildRequestOmitsSamplingWhenAbsent(t *testing.T) {
+	req := requestBuilderChatRequest()
+
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-no-sampling")
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if out.Temperature != nil || out.TopP != nil || out.StopSequences != nil {
+		t.Fatalf("expected no sampling fields, got temp=%v topP=%v stop=%v", out.Temperature, out.TopP, out.StopSequences)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(encoded)
+	for _, key := range []string{"temperature", "top_p", "stop_sequences"} {
+		if strings.Contains(body, key) {
+			t.Fatalf("absent sampling field %q leaked into wire JSON: %q", key, body)
+		}
+	}
+}
+
 // encodeChatContent is a typed test helper that wraps a plain text
 // system prompt as the JSON-encoded ChatMessage.Content shape the
 // translator expects. Keeping this helper local avoids reaching for

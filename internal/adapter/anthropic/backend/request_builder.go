@@ -2,6 +2,7 @@ package anthropicbackend
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 
@@ -128,6 +129,8 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	}
 	out.SystemBlocks = sysBlocks
 
+	applySamplingAndStop(&out, req)
+
 	// Note: claude-cli does NOT send fine-grained-tool-streaming-2025-05-14
 	// (verified against the local Claude Code MITM baseline). The flavor's
 	// beta header is the canonical set; do not append it here.
@@ -153,6 +156,74 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 		}
 	}
 	return out, nil
+}
+
+// anthropicTemperatureMax is the upper bound Anthropic accepts for the
+// temperature sampling knob. OpenAI clients may send up to 2.0, so the
+// builder clamps to this value rather than forwarding a request the
+// Anthropic API would reject with a 400.
+const anthropicTemperatureMax = 1.0
+
+// anthropicTemperatureMin is the lower bound Anthropic accepts for
+// temperature. Clamping the low end guards against a malformed
+// out-of-range client value.
+const anthropicTemperatureMin = 0.0
+
+// applySamplingAndStop forwards the caller's temperature, top_p, and
+// stop knobs onto the Anthropic request. It is additive and present
+// only: each field is set only when the client sent the corresponding
+// OpenAI field, so an absent field leaves the wire shape unchanged.
+func applySamplingAndStop(out *anthropic.Request, req adapteropenai.ChatRequest) {
+	if req.Temperature != nil {
+		clamped := clampAnthropicTemperature(*req.Temperature)
+		out.Temperature = &clamped
+	}
+	if req.TopP != nil {
+		topP := *req.TopP
+		out.TopP = &topP
+	}
+	if stop := parseStopSequences(req.Stop); len(stop) > 0 {
+		out.StopSequences = stop
+	}
+}
+
+// clampAnthropicTemperature clamps an OpenAI temperature into the [0,1]
+// range Anthropic accepts. OpenAI allows up to 2.0, so an in-range
+// OpenAI value above 1.0 would otherwise 400 at Anthropic.
+func clampAnthropicTemperature(v float64) float64 {
+	if v > anthropicTemperatureMax {
+		return anthropicTemperatureMax
+	}
+	if v < anthropicTemperatureMin {
+		return anthropicTemperatureMin
+	}
+	return v
+}
+
+// parseStopSequences parses the OpenAI stop field, which is a single
+// string or an array of strings, into the []string shape Anthropic's
+// stop_sequences expects. A null, absent, or malformed value yields nil
+// so the caller omits stop_sequences entirely.
+func parseStopSequences(raw json.RawMessage) []string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var single string
+		if err := json.Unmarshal(raw, &single); err != nil {
+			return nil
+		}
+		return []string{single}
+	}
+	if trimmed[0] == '[' {
+		var many []string
+		if err := json.Unmarshal(raw, &many); err != nil {
+			return nil
+		}
+		return many
+	}
+	return nil
 }
 
 func requestedOutputTokens(req adapteropenai.ChatRequest) *int {

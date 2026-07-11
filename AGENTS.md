@@ -128,7 +128,7 @@ The adapter HTTP listener serves three route families. They share the listener, 
 
 | Route family | Paths | Status |
 | --- | --- | --- |
-| OpenAI-compatible | `/v1/chat/completions`, `/v1/models`, `/v1/completions` | Production. Cursor BYOK and any OpenAI-SDK-compatible client. |
+| OpenAI-compatible | `/v1/chat/completions`, `/v1/responses`, `/v1/models`, `/v1/completions` | Production. Cursor BYOK and any OpenAI-SDK-compatible client. |
 | Native Anthropic | `/v1/messages`, `/v1/messages/count_tokens` | Code shipped, untested in production. Proposed for cross-provider use. |
 | Health | `/healthz`, `/` | Ops only. |
 

@@ -75,3 +75,26 @@ here:
 - [Hot-apply change classification](../../internal/config/change_class_test.go)
 - [Atomic catalog hot apply](../../internal/adapter/apply_config_test.go)
 - [Model-local pricing hot apply](../../internal/daemon/config_apply_pricing_test.go)
+
+## Serve the Responses API
+
+The adapter serves the OpenAI Responses API at `POST /v1/responses` on the same
+OpenAI-compatible route family and bearer auth as `/v1/chat/completions`. The
+handler parses a typed `ResponsesRequest`, projects it into the shared
+ChatRequest, and runs the same resolver, preflight, and provider dispatch the
+chat path runs, so Responses and chat share one backend contract.
+
+A non-streaming request returns a Responses response object. A streaming request
+returns the Responses SSE event sequence with named lifecycle events, from
+`response.created` and `response.in_progress` through `response.completed` or
+`response.failed`, and it never emits `data: [DONE]`. One `resp_` id stays stable
+across the stream and the terminal object. The
+[`handleResponses`](../../internal/adapter/server_responses.go) handler and the
+[streaming writer tests](../../internal/adapter/responses_writer_test.go) hold
+the behavior, and the [event names](../../internal/adapter/openai/responses_events.go)
+list the full lifecycle set.
+
+The adapter also reports which request fields and tool types the resolved
+provider cannot honor. See [adapter compatibility warnings](compatibility.md)
+for the warning contract, the per-provider field dispositions, and the
+unsupported-tool behavior.

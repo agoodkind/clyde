@@ -59,3 +59,5 @@ The supported surfaces are `adapter_chat` and `mitm_ide_backend`. The supported 
 The supported phases are `started`, `completed`, and `failed`. The supported status values are `ok` and `error`.
 
 The request log carries the identity, path, outcome, sink, and facet fields above. Full request and response bodies live only in the SQLite capture store at `mitm/capture.db`.
+
+The `/v1/responses` route serves the OpenAI Responses API on the OpenAI-compatible route family. It traces its handler span as `adapter.openai.responses` and logs under the shared `adapter.chat.*` and `adapter.http.*` concerns. It does not emit the typed `logging.request.leg` request story today, so it does not populate the leg field or trigger `logging.request.incomplete`.

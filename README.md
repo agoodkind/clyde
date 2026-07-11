@@ -22,6 +22,8 @@ current source or generated help for details that can drift:
 - Runtime config: `clyde.example.toml` and `internal/config/`.
 - Adapter model routing and catalog behavior:
   [adapter model routing](docs/adapter/overview.md).
+- Adapter Responses API (`/v1/responses`) and per-provider compatibility
+  warnings: [adapter compatibility warnings](docs/adapter/compatibility.md).
 - Cursor ingress and error behavior: `docs/cursor.md`.
 - MITM listeners and capture behavior: `docs/wire-baseline.md`,
   `docs/cursor-mitm-setup.md`, and `internal/mitm/`.

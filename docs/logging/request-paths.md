@@ -59,3 +59,7 @@ MITM IDE backend required legs:
 Early request failures emit the `request_error` leg with phase `failed`. A request with that leg is closed as an early failure rather than reported as a vanished incomplete request.
 
 If a non-error request story completes without a required leg, `logevent.Recorder` emits `logging.request.incomplete` with the surface, route_family, expected legs, observed legs, missing legs, last phase, incomplete_policy, request identity, and duration.
+
+## Adapter Responses
+
+The `/v1/responses` handler shares the chat resolve, preflight, and provider dispatch, and it traces its span as `adapter.openai.responses`. It logs under the shared `adapter.chat.*` and `adapter.http.*` concerns. It does not emit the typed `logging.request.leg` story today, so the adapter chat leg diagram above covers `/v1/chat/completions` and not `/v1/responses`.
