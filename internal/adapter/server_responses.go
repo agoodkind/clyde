@@ -302,20 +302,31 @@ func (s *Server) dispatchResponsesCollect(
 		return
 	}
 	collected := adapterrender.CollectMessage(collector.events)
+	text, reasoning, refusal, toolCalls := collected.Text, collected.Reasoning, collected.Refusal, collected.ToolCalls
+	usage := result.Usage
+	// A provider that assembles the completion itself (the Anthropic
+	// non-streaming path) returns the ChatResponse in result.FinalResponse and
+	// writes no render events, so the collector is empty. Build the Responses
+	// object from the final response in that case.
+	if result.FinalResponse != nil {
+		text, reasoning, refusal, toolCalls = responsesFieldsFromChatResponse(result.FinalResponse)
+		if result.FinalResponse.Usage != nil {
+			usage = *result.FinalResponse.Usage
+		}
+	}
 	status := adapteropenai.ResponsesStatusCompleted
 	if result.FinishReason == "length" {
 		status = adapteropenai.ResponsesStatusIncomplete
 	}
-	usage := result.Usage
 	resp := adapteropenai.BuildResponsesResponse(adapteropenai.ResponsesResponseParams{
 		ID:         responseID,
 		Model:      alias,
 		CreatedAt:  clock.Now().Unix(),
 		Status:     status,
-		Text:       collected.Text,
-		Reasoning:  collected.Reasoning,
-		Refusal:    collected.Refusal,
-		ToolCalls:  collected.ToolCalls,
+		Text:       text,
+		Reasoning:  reasoning,
+		Refusal:    refusal,
+		ToolCalls:  toolCalls,
 		Usage:      &usage,
 		ItemIDBase: responsesItemBase(responseID),
 		Warnings:   warnings,
@@ -326,4 +337,53 @@ func (s *Server) dispatchResponsesCollect(
 		return
 	}
 	writeJSON(w, body)
+}
+
+// responsesFieldsFromChatResponse extracts the assistant text, reasoning,
+// refusal, and tool calls from a provider-assembled ChatResponse. Providers
+// that build the non-streaming completion themselves (the Anthropic path)
+// return it in Result.FinalResponse and write no render events, so the
+// Responses object is assembled from the final response instead of the
+// collected event stream.
+func responsesFieldsFromChatResponse(resp *adapteropenai.ChatResponse) (text, reasoning, refusal string, toolCalls []adapteropenai.ToolCall) {
+	if resp == nil || len(resp.Choices) == 0 {
+		return "", "", "", nil
+	}
+	message := resp.Choices[0].Message
+	reasoning = message.Reasoning
+	if reasoning == "" {
+		reasoning = message.ReasoningContent
+	}
+	return responsesChatMessageText(message.Content), reasoning, message.Refusal, message.ToolCalls
+}
+
+// responsesChatMessageText reads the assistant text out of a ChatMessage
+// content field, which is a JSON string for plain text or an array of typed
+// content parts. Non-text parts are skipped.
+func responsesChatMessageText(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(raw, &text); err == nil {
+			return text
+		}
+		return ""
+	}
+	if trimmed[0] == '[' {
+		var parts []adapteropenai.ContentPart
+		if err := json.Unmarshal(raw, &parts); err != nil {
+			return ""
+		}
+		var builder strings.Builder
+		for _, part := range parts {
+			if part.Type == "text" {
+				builder.WriteString(part.Text)
+			}
+		}
+		return builder.String()
+	}
+	return ""
 }
