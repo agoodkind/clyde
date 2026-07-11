@@ -322,8 +322,29 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 	if built.Reasoning == nil || built.Reasoning.Effort != "invented-provider-tier" {
 		t.Fatalf("Reasoning = %+v, want invented-provider-tier", built.Reasoning)
 	}
-	if built.MaxOutputTokens == nil || *built.MaxOutputTokens != 250000 {
-		t.Fatalf("MaxOutputTokens = %v, want 250000", built.MaxOutputTokens)
+	builtEncoded, err := json.Marshal(built)
+	if err != nil {
+		t.Fatalf("marshal Codex request: %v", err)
+	}
+	var builtFields struct {
+		MaxTokens           json.RawMessage `json:"max_tokens"`
+		MaxCompletionTokens json.RawMessage `json:"max_completion_tokens"`
+		MaxOutputTokens     json.RawMessage `json:"max_output_tokens"`
+	}
+	if err := json.Unmarshal(builtEncoded, &builtFields); err != nil {
+		t.Fatalf("unmarshal Codex request: %v", err)
+	}
+	for _, tokenCap := range []struct {
+		name  string
+		value json.RawMessage
+	}{
+		{"max_tokens", builtFields.MaxTokens},
+		{"max_completion_tokens", builtFields.MaxCompletionTokens},
+		{"max_output_tokens", builtFields.MaxOutputTokens},
+	} {
+		if len(tokenCap.value) != 0 {
+			t.Fatalf("Codex egress carried %s: %s", tokenCap.name, builtEncoded)
+		}
 	}
 	if len(built.Tools) != 1 || built.Tools[0].Name != "inspect_image" {
 		t.Fatalf("Tools = %+v, want inspect_image", built.Tools)

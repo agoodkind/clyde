@@ -88,7 +88,6 @@ func TestWebsocketMessageToSyntheticSSEPreservesGenericError(t *testing.T) {
 }
 
 func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
-	maxOutputTokens := 250000
 	req := HTTPTransportRequest{
 		Model:        "gpt-5.4",
 		Instructions: "base instructions",
@@ -106,7 +105,6 @@ func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 		Include:           []string{"reasoning.encrypted_content"},
 		ServiceTier:       "priority",
 		PromptCache:       "cursor:conv-123",
-		MaxOutputTokens:   &maxOutputTokens,
 		ClientMetadata:    &ClientMetadata{InstallationID: "acct-123"},
 		Store:             false,
 		Stream:            true,
@@ -125,9 +123,6 @@ func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	if !ws.Stream {
 		t.Fatalf("stream=%v want true", ws.Stream)
 	}
-	if ws.MaxOutputTokens == nil || *ws.MaxOutputTokens != maxOutputTokens {
-		t.Fatalf("max_output_tokens=%v want %d", ws.MaxOutputTokens, maxOutputTokens)
-	}
 
 	encoded, err := MarshalResponseCreateWsRequest(ws)
 	if err != nil {
@@ -143,8 +138,8 @@ func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	if got, _ := payload["service_tier"].(string); got != "priority" {
 		t.Fatalf("serialized service_tier=%q want priority", got)
 	}
-	if got, _ := payload["max_output_tokens"].(float64); int(got) != maxOutputTokens {
-		t.Fatalf("serialized max_output_tokens=%v want %d", payload["max_output_tokens"], maxOutputTokens)
+	if _, present := payload["max_output_tokens"]; present {
+		t.Fatalf("serialized frame carried max_output_tokens: %s", encoded)
 	}
 	if got, ok := payload["store"].(bool); !ok || got {
 		t.Fatalf("serialized store=%v want false", payload["store"])

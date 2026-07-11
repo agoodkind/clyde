@@ -284,8 +284,14 @@ func assertCodexWildcardRequest(t *testing.T, request adaptercodex.HTTPTransport
 	if request.Reasoning == nil || request.Reasoning.Effort != "future-tier" {
 		t.Fatalf("Codex reasoning = %+v, want future-tier", request.Reasoning)
 	}
-	if request.MaxOutputTokens == nil || *request.MaxOutputTokens != 73 {
-		t.Fatalf("Codex max output = %v, want 73", request.MaxOutputTokens)
+	encodedReq, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal Codex request: %v", err)
+	}
+	for _, key := range []string{"max_tokens", "max_completion_tokens", "max_output_tokens"} {
+		if bytes.Contains(encodedReq, []byte(`"`+key+`"`)) {
+			t.Fatalf("Codex egress carried %s: %s", key, encodedReq)
+		}
 	}
 	if len(request.Tools) != 1 || len(request.Input) != 1 {
 		t.Fatalf("Codex tools/input = %d/%d, want 1/1", len(request.Tools), len(request.Input))

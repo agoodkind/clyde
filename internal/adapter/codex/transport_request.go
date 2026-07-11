@@ -108,12 +108,11 @@ type HTTPTransportRequest struct {
 	// Include has no omitempty so an empty slice serializes as
 	// `"include":[]`, matching codex-rs Vec<String> with no
 	// skip_serializing_if.
-	Include         []string        `json:"include"`
-	ServiceTier     string          `json:"service_tier,omitempty"`
-	PromptCache     string          `json:"prompt_cache_key,omitempty"`
-	MaxOutputTokens *int            `json:"max_output_tokens,omitempty"`
-	Text            json.RawMessage `json:"text,omitempty"`
-	ClientMetadata  *ClientMetadata `json:"client_metadata,omitempty"`
+	Include        []string        `json:"include"`
+	ServiceTier    string          `json:"service_tier,omitempty"`
+	PromptCache    string          `json:"prompt_cache_key,omitempty"`
+	Text           json.RawMessage `json:"text,omitempty"`
+	ClientMetadata *ClientMetadata `json:"client_metadata,omitempty"`
 	// WebsocketSessionKey is deliberately excluded from the upstream
 	// request body. It is Clyde's local identity for websocket
 	// connection reuse and must only come from a strong Cursor/Codex
