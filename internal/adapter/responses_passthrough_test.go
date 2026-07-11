@@ -590,6 +590,28 @@ func TestPassthroughSSEUsageUsesLastEventField(t *testing.T) {
 	}
 }
 
+func TestPassthroughSSEUsageTreatsEmptyEventFieldAsFinalValue(t *testing.T) {
+	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`
+	tests := []struct {
+		name       string
+		eventLines []string
+		wantInput  int
+		wantOutput int
+		wantTotal  int
+	}{
+		{name: "completed then bare event", eventLines: []string{"event: response.completed", "event"}},
+		{name: "bare event then completed", eventLines: []string{"event", "event: response.completed"}, wantInput: 11, wantOutput: 7, wantTotal: 18},
+		{name: "completed then empty event", eventLines: []string{"event: response.completed", "event:"}},
+		{name: "empty event then completed", eventLines: []string{"event:", "event: response.completed"}, wantInput: 11, wantOutput: 7, wantTotal: 18},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			usage := passthroughSSEEventLinesUsage(t, test.eventLines, payload, "\n")
+			assertPassthroughUsage(t, usage, test.wantInput, test.wantOutput, test.wantTotal, 0)
+		})
+	}
+}
+
 func passthroughTerminalSSEUsage(t *testing.T, payload string, lineEnd string) Usage {
 	return passthroughSSEUsage(t, passthroughTerminalResponseEvent, payload, lineEnd)
 }
@@ -599,11 +621,18 @@ func passthroughSSEUsage(t *testing.T, eventType string, payload string, lineEnd
 }
 
 func passthroughSSEFieldsUsage(t *testing.T, eventFields []string, payload string, lineEnd string) Usage {
+	eventLines := make([]string, 0, len(eventFields))
+	for _, eventType := range eventFields {
+		eventLines = append(eventLines, "event: "+eventType)
+	}
+	return passthroughSSEEventLinesUsage(t, eventLines, payload, lineEnd)
+}
+
+func passthroughSSEEventLinesUsage(t *testing.T, eventLines []string, payload string, lineEnd string) Usage {
 	t.Helper()
 	var streamBuilder strings.Builder
-	for _, eventType := range eventFields {
-		streamBuilder.WriteString("event: ")
-		streamBuilder.WriteString(eventType)
+	for _, eventLine := range eventLines {
+		streamBuilder.WriteString(eventLine)
 		streamBuilder.WriteString(lineEnd)
 	}
 	streamBuilder.WriteString("data: ")

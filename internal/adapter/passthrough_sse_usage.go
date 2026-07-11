@@ -138,6 +138,9 @@ func (p *passthroughSSEUsageParser) finishLine() {
 		p.resetLine()
 		return
 	}
+	if !p.lineHeaderComplete {
+		p.lineKind = p.currentLineKind()
+	}
 	switch p.lineKind {
 	case passthroughSSELineData:
 		p.json.WriteByte('\n')
