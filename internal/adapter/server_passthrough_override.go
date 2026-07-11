@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -133,7 +134,7 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	alias := resolvedRequestAlias(req)
 	s.emitRequestStarted(ctx, req, "", options.requestID, alias, options.streamRequested)
 
-	resp, err := passthroughOverrideDo(ctx, options.baseURL, options.apiKey, options.body, options.endpointPath)
+	resp, err := s.openPassthroughResponse(ctx, options, started)
 	if err != nil {
 		s.respondPassthroughOverrideTransportError(w, r, ctx, req, options.requestID, started, options.streamRequested, err)
 		return
@@ -193,6 +194,19 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 	writePassthroughOverrideResponse(w, status, respBody, header)
 	s.logPassthroughOverrideTerminal(ctx, req, options.requestID, started, options.streamRequested, contentType, passthroughOverrideUsageFromBody(respBody))
+}
+
+func (s *Server) openPassthroughResponse(ctx context.Context, options passthroughForwardOptions, started time.Time) (*http.Response, error) {
+	request, err := newPassthroughOverrideRequest(ctx, options.baseURL, options.apiKey, options.body, options.endpointPath)
+	if err != nil {
+		return nil, err
+	}
+	response, err := passthroughOverrideDoRequest(request)
+	if err != nil {
+		s.recordPassthroughEgressAttempt(ctx, request, nil, options.body, passthroughCaptureResultFromBody(nil), started)
+		return nil, err
+	}
+	return response, nil
 }
 
 type passthroughCaptureResult struct {
@@ -713,22 +727,17 @@ func jsonEncodedString(s string) json.RawMessage {
 	return encoded
 }
 
-// passthroughOverrideDo is the shared transport for Chat Completions and
-// Responses passthrough requests. The caller owns and must close resp.Body.
-func passthroughOverrideDo(ctx context.Context, baseURL, apiKey string, body []byte, endpointPath string) (*http.Response, error) {
-	req, err := newPassthroughOverrideRequest(ctx, baseURL, apiKey, body, endpointPath)
-	if err != nil {
-		return nil, err
-	}
-	return passthroughOverrideDoRequest(req)
-}
-
 func newPassthroughOverrideRequest(ctx context.Context, baseURL, apiKey string, body []byte, endpointPath string) (*http.Request, error) {
-	target := strings.TrimRight(baseURL, "/") + endpointPath
+	target, targetErr := passthroughOverrideTarget(ctx, baseURL, endpointPath)
+	if targetErr != nil {
+		return nil, targetErr
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(body)))
 	if err != nil {
-		slog.WarnContext(ctx, "adapter.passthrough_override.create_request_failed", "concern", "adapter.providers.passthrough_override.request", "target", target, "err", err)
-		return nil, fmt.Errorf("create passthrough override request: %w", err)
+		safeTarget := sanitizedPassthroughTarget(target)
+		sanitizedErr := fmt.Errorf("create passthrough override request for %s failed", safeTarget)
+		slog.WarnContext(ctx, "adapter.passthrough_override.create_request_failed", "concern", "adapter.providers.passthrough_override.request", "target", safeTarget, "err", sanitizedErr)
+		return nil, sanitizedErr
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
@@ -745,10 +754,37 @@ func passthroughOverrideDoRequest(req *http.Request) (*http.Response, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		slog.WarnContext(req.Context(), "adapter.passthrough_override.post_request_failed", "concern", "adapter.providers.passthrough_override.request", "target", req.URL.String(), "err", err)
-		return nil, fmt.Errorf("post passthrough override request: %w", err)
+		safeTarget := sanitizedPassthroughTarget(req.URL.String())
+		sanitizedErr := fmt.Errorf("post passthrough override request to %s failed", safeTarget)
+		slog.WarnContext(req.Context(), "adapter.passthrough_override.post_request_failed", "concern", "adapter.providers.passthrough_override.request", "target", safeTarget, "err", sanitizedErr)
+		return nil, sanitizedErr
 	}
 	return resp, nil
+}
+
+func passthroughOverrideTarget(ctx context.Context, baseURL string, endpointPath string) (string, error) {
+	target, err := url.Parse(baseURL)
+	if err != nil {
+		safeTarget := sanitizedPassthroughTarget(baseURL)
+		sanitizedErr := fmt.Errorf("parse passthrough target %s failed", safeTarget)
+		slog.WarnContext(ctx, "adapter.passthrough_override.parse_target_failed", "concern", "adapter.providers.passthrough_override.request", "target", safeTarget, "err", sanitizedErr)
+		return "", sanitizedErr
+	}
+	target.Path = strings.TrimRight(target.Path, "/") + endpointPath
+	target.RawPath = ""
+	return target.String(), nil
+}
+
+func sanitizedPassthroughTarget(rawTarget string) string {
+	target, err := url.Parse(rawTarget)
+	if err != nil || target.Scheme == "" || target.Host == "" {
+		return "configured passthrough target"
+	}
+	target.User = nil
+	target.RawQuery = ""
+	target.ForceQuery = false
+	target.Fragment = ""
+	return target.Scheme + "://" + target.Host + target.EscapedPath()
 }
 
 func passthroughOverrideUpstreamErrorMessage(status int, body []byte) string {

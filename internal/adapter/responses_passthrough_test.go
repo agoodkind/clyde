@@ -354,6 +354,7 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Set-Cookie", "response-secret")
 		w.Header().Set("X-Upstream-Marker", "kept")
+		w.Header().Set("X-Request-Id", "resp-request-id")
 		_, _ = io.WriteString(w, `{"id":"captured","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
 	}))
 	t.Cleanup(upstream.Close)
@@ -392,29 +393,35 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 		t.Fatalf("open capture database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	rows, err := db.Query(`SELECT client, path, req_headers, resp_headers FROM requests ORDER BY id`)
+	rows, err := db.Query(`SELECT client, path, req_headers, resp_headers, upstream_request_id FROM requests ORDER BY id`)
 	if err != nil {
 		t.Fatalf("query captures: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
 	seen := make(map[string]string)
 	responseHeaders := make(map[string]string)
+	upstreamRequestIDs := make(map[string]string)
 	for rows.Next() {
 		var client string
 		var path string
 		var headers string
 		var responseHeader string
-		if err := rows.Scan(&client, &path, &headers, &responseHeader); err != nil {
+		var upstreamRequestID string
+		if err := rows.Scan(&client, &path, &headers, &responseHeader, &upstreamRequestID); err != nil {
 			t.Fatalf("scan capture: %v", err)
 		}
 		seen[client] = path + " " + headers
 		responseHeaders[client] = responseHeader
+		upstreamRequestIDs[client] = upstreamRequestID
 	}
 	if !strings.HasPrefix(seen["adapter.ingress"], "/v1/responses ") {
 		t.Fatalf("ingress capture = %q", seen["adapter.ingress"])
 	}
 	if !strings.HasPrefix(seen["adapter.passthrough"], "/responses ") {
 		t.Fatalf("egress capture = %q", seen["adapter.passthrough"])
+	}
+	if upstreamRequestIDs["adapter.passthrough"] != "resp-request-id" {
+		t.Fatalf("upstream request id = %q", upstreamRequestIDs["adapter.passthrough"])
 	}
 	for client, value := range seen {
 		if strings.Contains(value, "ingress-secret") || strings.Contains(value, "egress-secret") {
@@ -653,6 +660,40 @@ func TestPassthroughSSEUsageReplacesOrRejectsRepeatedCounters(t *testing.T) {
 				assertPassthroughUsage(t, result, test.want.InputTokens, test.want.OutputTokens, test.want.TotalTokens, test.want.CachedTokens())
 				return
 			}
+			assertPassthroughUsage(t, result, 0, 0, 0, 0)
+		})
+	}
+}
+
+func TestPassthroughSSEUsageClearsSupersededStructuralValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    Usage
+	}{
+		{name: "response null replaces response object", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}},"response":null}`},
+		{name: "response array replaces response object", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11}},"response":[]}`},
+		{name: "usage null replaces usage object", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11},"usage":null}}`},
+		{name: "details null replaces cached details", payload: `{"type":"response.completed","response":{"usage":{"input_tokens_details":{"cached_tokens":4},"input_tokens_details":null}}}`},
+		{name: "replacement response object drops prior counters", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"total_tokens":18}},"response":{"usage":{"output_tokens":7}}}`, want: usageWithValues(0, 7, 0, 0)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := passthroughTerminalSSEUsage(t, test.payload, "\n")
+			if test.want.OutputTokens != 0 {
+				assertPassthroughUsage(t, result, test.want.InputTokens, test.want.OutputTokens, test.want.TotalTokens, test.want.CachedTokens())
+				return
+			}
+			assertPassthroughUsage(t, result, 0, 0, 0, 0)
+		})
+	}
+}
+
+func TestPassthroughSSEUsageRejectsTerminalEventTrailingWhitespace(t *testing.T) {
+	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`
+	for _, eventLine := range []string{"event: response.completed ", "event: response.completed\t"} {
+		t.Run(eventLine, func(t *testing.T) {
+			result := passthroughSSEEventLinesUsage(t, []string{eventLine}, payload, "\r\n")
 			assertPassthroughUsage(t, result, 0, 0, 0, 0)
 		})
 	}
@@ -931,6 +972,89 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 		(retry.responseHeaders != "" && retry.responseHeaders != "{}") ||
 		!bytes.Contains(retry.body, []byte("respond with ONLY raw JSON")) || strings.Contains(retry.headers, "Bearer") {
 		t.Fatalf("retry capture = %+v", retry)
+	}
+}
+
+func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testing.T) {
+	requestCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("response writer does not support hijacking")
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatalf("hijack primary request: %v", err)
+		}
+		_ = connection.Close()
+	}))
+	t.Cleanup(upstream.Close)
+
+	dbPath := filepath.Join(t.TempDir(), "primary-transport-capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	storeClosed := false
+	t.Cleanup(func() {
+		if !storeClosed {
+			_ = store.Close(context.Background(), "test cleanup")
+		}
+	})
+	const userinfoMarker = "url-user-marker"
+	const queryMarker = "url-query-marker"
+	sensitiveBaseURL := strings.Replace(upstream.URL, "http://", "http://"+userinfoMarker+"@", 1) + "/v1?marker=" + queryMarker
+	var logs bytes.Buffer
+	stages := make([]adapterruntime.RequestEvent, 0, 2)
+	cfg := baseConfig()
+	cfg.Enabled = true
+	cfg.OpenAICompatPassthrough = config.AdapterOpenAICompatPassthrough{BaseURL: sensitiveBaseURL}
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
+		CaptureStore: store,
+		RequestEvents: func(_ context.Context, event adapterruntime.RequestEvent) {
+			stages = append(stages, event)
+		},
+	}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	body := `{"model":"local-model","input":"capture primary transport failure"}`
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)))
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	storeClosed = true
+
+	if recorder.Code != http.StatusBadRequest || len(stages) != 2 || stages[1].Stage != adapterruntime.RequestStageFailed {
+		t.Fatalf("status=%d stages=%v", recorder.Code, stages)
+	}
+	if strings.Contains(recorder.Body.String(), userinfoMarker) || strings.Contains(recorder.Body.String(), queryMarker) ||
+		strings.Contains(logs.String(), userinfoMarker) || strings.Contains(logs.String(), queryMarker) ||
+		strings.Contains(stages[1].Err, userinfoMarker) || strings.Contains(stages[1].Err, queryMarker) {
+		t.Fatalf("transport diagnostics leaked configured URL secret")
+	}
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open capture database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var status int
+	var host string
+	var path string
+	var requestHeaders string
+	var responseHeaders string
+	var requestBody []byte
+	row := db.QueryRow(`SELECT r.status, r.host, r.path, r.req_headers, r.resp_headers, b.data FROM requests r LEFT JOIN bodies b ON b.request_row_id=r.id AND b.which='request' WHERE r.client='adapter.passthrough'`)
+	if err := row.Scan(&status, &host, &path, &requestHeaders, &responseHeaders, &requestBody); err != nil {
+		t.Fatalf("scan primary capture: %v", err)
+	}
+	captureMetadata := host + path + requestHeaders + responseHeaders + string(requestBody)
+	if requestCount != 1 || status != 0 || path != "/v1/responses" || !bytes.Equal(requestBody, []byte(body)) ||
+		strings.Contains(captureMetadata, userinfoMarker) || strings.Contains(captureMetadata, queryMarker) {
+		t.Fatalf("primary capture status=%d host=%q path=%q metadata=%q", status, host, path, captureMetadata)
 	}
 }
 

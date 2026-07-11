@@ -53,5 +53,12 @@ func passthroughCaptureResponseMetadata(response *http.Response) (int, http.Head
 	if response == nil {
 		return 0, make(http.Header), "", ""
 	}
-	return response.StatusCode, sanitizedCaptureResponseHeaders(response.Header), response.Header.Get("Request-Id"), response.Header.Get("Content-Type")
+	return response.StatusCode, sanitizedCaptureResponseHeaders(response.Header), passthroughUpstreamRequestID(response.Header), response.Header.Get("Content-Type")
+}
+
+func passthroughUpstreamRequestID(headers http.Header) string {
+	if requestID := headers.Get("X-Request-Id"); requestID != "" {
+		return requestID
+	}
+	return headers.Get("Request-Id")
 }

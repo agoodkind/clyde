@@ -27,7 +27,6 @@ type passthroughSSEUsageParser struct {
 	lineValueStarted      bool
 	eventNameMatches      bool
 	eventNameLength       int
-	eventTrailingSpace    bool
 	eventTerminal         bool
 	skipFollowingLineFeed bool
 }
@@ -112,17 +111,7 @@ func (p *passthroughSSEUsageParser) consumeLineValueByte(current byte) {
 }
 
 func (p *passthroughSSEUsageParser) consumeEventNameByte(current byte) {
-	if p.eventTrailingSpace {
-		if current != ' ' && current != '\t' {
-			p.eventNameMatches = false
-		}
-		return
-	}
 	if p.eventNameLength >= len(passthroughTerminalResponseEvent) {
-		if current == ' ' || current == '\t' {
-			p.eventTrailingSpace = true
-			return
-		}
 		p.eventNameMatches = false
 		return
 	}
@@ -168,7 +157,6 @@ func (p *passthroughSSEUsageParser) resetLine() {
 	p.lineValueStarted = false
 	p.eventNameMatches = true
 	p.eventNameLength = 0
-	p.eventTrailingSpace = false
 }
 
 func (p *passthroughSSEUsageParser) Usage() Usage {
@@ -336,8 +324,11 @@ func (p *passthroughUsageJSONParser) beginString() {
 	p.stringEscape = false
 	p.stringUnicodeDigits = 0
 	p.stringIsKey = p.expectsObjectKey()
-	if !p.stringIsKey && !p.beginValue() {
-		p.invalid = true
+	if !p.stringIsKey {
+		p.clearSupersededStructuralUsage()
+		if !p.beginValue() {
+			p.invalid = true
+		}
 	}
 	p.mode = passthroughJSONString
 }
@@ -423,6 +414,7 @@ func (p *passthroughUsageJSONParser) beginNumber(current byte) {
 	if p.currentValueIsRootType() {
 		p.terminal = false
 	}
+	p.clearSupersededStructuralUsage()
 	if !p.beginValue() {
 		p.invalid = true
 	}
@@ -619,6 +611,7 @@ func (p *passthroughUsageJSONParser) beginLiteral(current byte) {
 	if p.currentValueIsRootType() {
 		p.terminal = false
 	}
+	p.clearSupersededStructuralUsage()
 	if !p.beginValue() {
 		p.invalid = true
 	}
@@ -665,6 +658,7 @@ func (p *passthroughUsageJSONParser) enterContainer(container passthroughJSONCon
 	if p.currentValueIsRootType() {
 		p.terminal = false
 	}
+	p.clearSupersededStructuralUsage()
 	if p.isRootUsageCounter() {
 		p.invalid = true
 	}
@@ -846,6 +840,50 @@ func (p *passthroughUsageJSONParser) currentValueIsRootType() bool {
 	}
 	frame := p.frames[0]
 	return frame.container == passthroughJSONObject && frame.currentKey == passthroughUsageKeyType
+}
+
+func (p *passthroughUsageJSONParser) clearSupersededStructuralUsage() {
+	if p.currentRootResponseValue() || p.currentRootUsageValue() {
+		var usage Usage
+		p.usage = usage
+		return
+	}
+	if p.currentRootUsageDetailsValue() {
+		p.usage.PromptTokensDetails = nil
+	}
+}
+
+func (p *passthroughUsageJSONParser) currentRootResponseValue() bool {
+	if p.depth != 1 || p.overflowDepth > 0 {
+		return false
+	}
+	root := p.frames[0]
+	return root.container == passthroughJSONObject && root.pathKey == passthroughUsageKeyNone &&
+		root.currentKey == passthroughUsageKeyResponse
+}
+
+func (p *passthroughUsageJSONParser) currentRootUsageValue() bool {
+	if p.depth != 2 || p.overflowDepth > 0 {
+		return false
+	}
+	root := p.frames[0]
+	response := p.frames[1]
+	return root.container == passthroughJSONObject && root.pathKey == passthroughUsageKeyNone &&
+		response.container == passthroughJSONObject && response.pathKey == passthroughUsageKeyResponse &&
+		response.currentKey == passthroughUsageKeyUsage
+}
+
+func (p *passthroughUsageJSONParser) currentRootUsageDetailsValue() bool {
+	if p.depth != 3 || p.overflowDepth > 0 {
+		return false
+	}
+	root := p.frames[0]
+	response := p.frames[1]
+	usage := p.frames[2]
+	return root.container == passthroughJSONObject && root.pathKey == passthroughUsageKeyNone &&
+		response.container == passthroughJSONObject && response.pathKey == passthroughUsageKeyResponse &&
+		usage.container == passthroughJSONObject && usage.pathKey == passthroughUsageKeyUsage &&
+		usage.currentKey == passthroughUsageKeyInputTokensDetails
 }
 
 func (p *passthroughUsageJSONParser) recordUsageNumber(value int) {
