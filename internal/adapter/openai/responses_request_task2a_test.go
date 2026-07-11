@@ -40,27 +40,37 @@ func TestResponsesFieldSetDistinguishesAllPresentForms(t *testing.T) {
 	}
 }
 
-func TestResponsesFieldSetRecognizesNumericZeroSpellings(t *testing.T) {
+func TestResponsesFieldSetClassifiesRawJSONTokens(t *testing.T) {
 	cases := []struct {
-		name string
-		raw  string
-		want ResponsesFieldPresence
+		name  string
+		body  string
+		field string
+		want  ResponsesFieldPresence
 	}{
-		{name: "zero", raw: "0", want: ResponsesFieldZero},
-		{name: "decimal zero", raw: "0.0", want: ResponsesFieldZero},
-		{name: "negative decimal zero", raw: "-0.0", want: ResponsesFieldZero},
-		{name: "exponent zero", raw: "0e5", want: ResponsesFieldZero},
-		{name: "decimal exponent zero", raw: "0.00E-2", want: ResponsesFieldZero},
-		{name: "positive", raw: "0.1", want: ResponsesFieldPresent},
-		{name: "negative", raw: "-1", want: ResponsesFieldPresent},
+		{name: "zero", body: `{"model":"gpt","temperature":0}`, field: "temperature", want: ResponsesFieldZero},
+		{name: "decimal zero", body: `{"model":"gpt","temperature":0.0}`, field: "temperature", want: ResponsesFieldZero},
+		{name: "negative decimal zero", body: `{"model":"gpt","temperature":-0.0}`, field: "temperature", want: ResponsesFieldZero},
+		{name: "exponent zero", body: `{"model":"gpt","temperature":0e5}`, field: "temperature", want: ResponsesFieldZero},
+		{name: "decimal exponent zero", body: `{"model":"gpt","temperature":0.00E-2}`, field: "temperature", want: ResponsesFieldZero},
+		{name: "quoted zero", body: `{"model":"gpt","input":"0"}`, field: "input", want: ResponsesFieldPresent},
+		{name: "quoted decimal zero", body: `{"model":"gpt","input":"0.0"}`, field: "input", want: ResponsesFieldPresent},
+		{name: "quoted exponent zero", body: `{"model":"gpt","input":"-0e5"}`, field: "input", want: ResponsesFieldPresent},
+		{name: "empty string", body: `{"model":"gpt","input":""}`, field: "input", want: ResponsesFieldEmpty},
+		{name: "nonzero decimal", body: `{"model":"gpt","temperature":0.1}`, field: "temperature", want: ResponsesFieldPresent},
+		{name: "negative", body: `{"model":"gpt","temperature":-1}`, field: "temperature", want: ResponsesFieldPresent},
+		{name: "null", body: `{"model":"gpt","input":null}`, field: "input", want: ResponsesFieldNull},
+		{name: "false", body: `{"model":"gpt","store":false}`, field: "store", want: ResponsesFieldFalse},
+		{name: "empty array", body: `{"model":"gpt","input":[]}`, field: "input", want: ResponsesFieldEmpty},
+		{name: "empty object", body: `{"model":"gpt","input":{}}`, field: "input", want: ResponsesFieldEmpty},
+		{name: "absent", body: `{"model":"gpt"}`, field: "input", want: ResponsesFieldAbsent},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			request, err := UnmarshalResponsesRequest([]byte(`{"model":"gpt","temperature":` + test.raw + `}`))
+			request, err := UnmarshalResponsesRequest([]byte(test.body))
 			if err != nil {
 				t.Fatalf("UnmarshalResponsesRequest: %v", err)
 			}
-			if got := request.Fields.Presence("temperature"); got != test.want {
+			if got := request.Fields.Presence(test.field); got != test.want {
 				t.Fatalf("presence = %v, want %v", got, test.want)
 			}
 		})

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -142,12 +143,20 @@ func responsesPresence(raw json.RawMessage) ResponsesFieldPresence {
 }
 
 func responsesNumericZero(raw json.RawMessage) bool {
+	token := bytes.TrimSpace(raw)
+	if len(token) == 0 || !responsesJSONNumberStart(token[0]) {
+		return false
+	}
 	var number json.Number
-	if err := json.Unmarshal(raw, &number); err != nil {
+	if err := json.Unmarshal(token, &number); err != nil {
 		return false
 	}
 	value, ok := new(big.Rat).SetString(number.String())
 	return ok && value.Sign() == 0
+}
+
+func responsesJSONNumberStart(first byte) bool {
+	return first == '-' || (first >= '0' && first <= '9')
 }
 
 // UnmarshalResponsesRequest decodes a POST /v1/responses body into the
