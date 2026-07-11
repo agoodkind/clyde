@@ -745,6 +745,7 @@ func passthroughOverrideDoRequest(req *http.Request) (*http.Response, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		slog.WarnContext(req.Context(), "adapter.passthrough_override.post_request_failed", "concern", "adapter.providers.passthrough_override.request", "target", req.URL.String(), "err", err)
 		return nil, fmt.Errorf("post passthrough override request: %w", err)
 	}
 	return resp, nil
