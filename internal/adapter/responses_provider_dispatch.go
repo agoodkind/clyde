@@ -87,15 +87,14 @@ func (p preparedResponsesProvider) Execute(ctx context.Context, w adapterprovide
 }
 
 func (s *Server) responsesProviderError(ctx context.Context, stage string, providerID adapterresolver.ProviderID, err error) error {
-	wrapped := fmt.Errorf("%s %s Responses request: %w", stage, providerID, err)
 	if s.log != nil {
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.provider_failed", slog.String("concern", "adapter.providers.responses"),
 			slog.String("stage", stage),
 			slog.String("provider", providerID.String()),
-			slog.Any("err", wrapped),
+			slog.String("error_type", fmt.Sprintf("%T", err)),
 		)
 	}
-	return wrapped
+	return err
 }
 
 func responsesPreparedProviderError(

@@ -125,6 +125,93 @@ func TestPrepareAnthropicProviderRequestPreservesOpenAIStreamIntent(t *testing.T
 	}
 }
 
+func TestPrepareAnthropicProviderRequestPreservesResponsesControls(t *testing.T) {
+	t.Parallel()
+
+	promptCaching := true
+	server := &Server{
+		cfg: config.AdapterConfig{ClientIdentity: config.AdapterClientIdentity{
+			PromptCachingEnabled: &promptCaching,
+			PromptCacheTTL:       "1h",
+			PromptCacheScope:     "organization",
+		}},
+		anthr: anthropic.New(nil, nil, anthropic.Config{
+			UserAgent:          "claude-cli/2.1.123",
+			SystemPromptPrefix: "You are Claude Code.",
+			CCVersion:          "2.1.123",
+			CCEntrypoint:       "sdk-cli",
+		}),
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	maxOutputTokens := 300
+	maxCompletionTokens := 200
+	maxTokens := 100
+	temperature := 0.7
+	topP := 0.4
+	resolved := adapterresolver.ResolvedRequest{
+		Provider:             adapterresolver.ProviderAnthropic,
+		Model:                "claude-sonnet-4-6",
+		Effort:               adapterresolver.EffortMedium,
+		MaxOutputTokens:      300,
+		Thinking:             "enabled",
+		ThinkingBudgetTokens: 128,
+		OpenAI: adapteropenai.ChatRequest{
+			Model:           "claude-future",
+			Stream:          true,
+			MaxOutputTokens: &maxOutputTokens,
+			MaxComplTokens:  &maxCompletionTokens,
+			MaxTokens:       &maxTokens,
+			Temperature:     &temperature,
+			TopP:            &topP,
+			Stop:            json.RawMessage(`["END"]`),
+			ResponseFormat:  json.RawMessage(`{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object"}}}`),
+			Tools: []adapteropenai.Tool{{
+				Type: "function",
+				Function: adapteropenai.ToolFunctionSchema{
+					Name:       "lookup",
+					Parameters: json.RawMessage(`{"type":"object"}`),
+				},
+			}},
+			Messages: []adapteropenai.ChatMessage{{
+				Role:    "user",
+				Content: json.RawMessage(`"Say ok."`),
+			}},
+		},
+	}
+
+	prepared, err := server.prepareAnthropicProviderRequest(context.Background(), resolved, "req-controls")
+	if err != nil {
+		t.Fatalf("prepareAnthropicProviderRequest() error = %v", err)
+	}
+	if prepared.Request.MaxTokens != maxOutputTokens {
+		t.Fatalf("max tokens = %d, want max_output_tokens %d", prepared.Request.MaxTokens, maxOutputTokens)
+	}
+	if prepared.Request.Temperature == nil || *prepared.Request.Temperature != temperature {
+		t.Fatalf("temperature = %v, want %v", prepared.Request.Temperature, temperature)
+	}
+	if prepared.Request.TopP == nil || *prepared.Request.TopP != topP {
+		t.Fatalf("top_p = %v, want %v", prepared.Request.TopP, topP)
+	}
+	if len(prepared.Request.StopSequences) != 1 || prepared.Request.StopSequences[0] != "END" {
+		t.Fatalf("stop sequences = %v, want [END]", prepared.Request.StopSequences)
+	}
+	if prepared.Request.Thinking == nil || prepared.Request.Thinking.Type != "enabled" || prepared.Request.Thinking.BudgetTokens != 128 {
+		t.Fatalf("thinking = %+v, want enabled budget 128", prepared.Request.Thinking)
+	}
+	if len(prepared.Request.Tools) != 1 || prepared.Request.Tools[0].Name != "lookup" {
+		t.Fatalf("tools = %+v, want lookup", prepared.Request.Tools)
+	}
+	if len(prepared.Request.SystemBlocks) == 0 || prepared.Request.SystemBlocks[len(prepared.Request.SystemBlocks)-1].CacheControl == nil {
+		t.Fatalf("system cache controls = %+v, want final cache breakpoint", prepared.Request.SystemBlocks)
+	}
+	if prepared.JSONCoercion.Coerce == nil || prepared.JSONCoercion.Validate == nil {
+		t.Fatalf("structured output coercion = %+v, want configured hooks", prepared.JSONCoercion)
+	}
+	if !prepared.Stream || prepared.Request.Stream {
+		t.Fatalf("stream intent = prepared:%v request:%v, want true:false", prepared.Stream, prepared.Request.Stream)
+	}
+}
+
 func TestAnthropicProviderErrorResponseMapsUpstreamRateLimitToCursorSafeInvalidRequest(t *testing.T) {
 	t.Parallel()
 
