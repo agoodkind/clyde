@@ -142,9 +142,7 @@ func (p *passthroughSSEUsageParser) finishLine() {
 	case passthroughSSELineData:
 		p.json.WriteByte('\n')
 	case passthroughSSELineEvent:
-		if p.eventNameMatches && p.eventNameLength == len(passthroughTerminalResponseEvent) {
-			p.eventTerminal = true
-		}
+		p.eventTerminal = p.eventNameMatches && p.eventNameLength == len(passthroughTerminalResponseEvent)
 	case passthroughSSELineUnknown:
 	}
 	p.resetLine()

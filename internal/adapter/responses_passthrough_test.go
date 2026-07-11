@@ -570,13 +570,47 @@ func TestPassthroughSSEUsageRequiresMatchingTerminalMarkers(t *testing.T) {
 	}
 }
 
+func TestPassthroughSSEUsageUsesLastEventField(t *testing.T) {
+	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`
+	tests := []struct {
+		name        string
+		eventFields []string
+		wantInput   int
+		wantOutput  int
+		wantTotal   int
+	}{
+		{name: "completed then created", eventFields: []string{"response.completed", "response.created"}},
+		{name: "created then completed", eventFields: []string{"response.created", "response.completed"}, wantInput: 11, wantOutput: 7, wantTotal: 18},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			usage := passthroughSSEFieldsUsage(t, test.eventFields, payload, "\r\n")
+			assertPassthroughUsage(t, usage, test.wantInput, test.wantOutput, test.wantTotal, 0)
+		})
+	}
+}
+
 func passthroughTerminalSSEUsage(t *testing.T, payload string, lineEnd string) Usage {
 	return passthroughSSEUsage(t, passthroughTerminalResponseEvent, payload, lineEnd)
 }
 
 func passthroughSSEUsage(t *testing.T, eventType string, payload string, lineEnd string) Usage {
+	return passthroughSSEFieldsUsage(t, []string{eventType}, payload, lineEnd)
+}
+
+func passthroughSSEFieldsUsage(t *testing.T, eventFields []string, payload string, lineEnd string) Usage {
 	t.Helper()
-	stream := []byte("event: " + eventType + lineEnd + "data: " + payload + lineEnd + lineEnd)
+	var streamBuilder strings.Builder
+	for _, eventType := range eventFields {
+		streamBuilder.WriteString("event: ")
+		streamBuilder.WriteString(eventType)
+		streamBuilder.WriteString(lineEnd)
+	}
+	streamBuilder.WriteString("data: ")
+	streamBuilder.WriteString(payload)
+	streamBuilder.WriteString(lineEnd)
+	streamBuilder.WriteString(lineEnd)
+	stream := []byte(streamBuilder.String())
 	parser := newPassthroughSSEUsageParser()
 	for offset := 0; offset < len(stream); {
 		chunkSize := (offset % 13) + 1
