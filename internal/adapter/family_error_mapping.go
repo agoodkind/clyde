@@ -184,6 +184,7 @@ func adapterErrorFromMapping(_ adapterRouteFamily, provider string, upstreamStat
 		UpstreamStatus:    upstreamStatus,
 		Cause:             nil,
 		SafeForClient:     true,
+		Warnings:          nil,
 	}
 }
 

@@ -203,6 +203,13 @@ type ResponsesContentPart struct {
 	Annotations []ResponsesAnnotation `json:"annotations"`
 }
 
+type responsesContentPartKind string
+
+const (
+	responsesContentPartOutputText responsesContentPartKind = "output_text"
+	responsesContentPartRefusal    responsesContentPartKind = "refusal"
+)
+
 type responsesOutputTextPartWire struct {
 	Type        string                `json:"type"`
 	Text        string                `json:"text"`
@@ -214,24 +221,40 @@ type responsesRefusalPartWire struct {
 	Refusal string `json:"refusal"`
 }
 
+type responsesContentPartWire interface {
+	isResponsesContentPartWire()
+}
+
+func (responsesOutputTextPartWire) isResponsesContentPartWire() {}
+func (responsesRefusalPartWire) isResponsesContentPartWire()    {}
+
 // MarshalJSON emits the closed content-part union shape selected by Type.
 func (p ResponsesContentPart) MarshalJSON() ([]byte, error) {
-	switch p.Type {
-	case "output_text":
+	switch responsesContentPartKind(p.Type) {
+	case responsesContentPartOutputText:
 		annotations := p.Annotations
 		if annotations == nil {
 			annotations = []ResponsesAnnotation{}
 		}
-		return json.Marshal(responsesOutputTextPartWire{
+		return marshalResponsesContentPartWire(p.Type, responsesOutputTextPartWire{
 			Type:        "output_text",
 			Text:        p.Text,
 			Annotations: annotations,
 		})
-	case "refusal":
-		return json.Marshal(responsesRefusalPartWire{Type: "refusal", Refusal: p.Refusal})
+	case responsesContentPartRefusal:
+		return marshalResponsesContentPartWire(p.Type, responsesRefusalPartWire{Type: "refusal", Refusal: p.Refusal})
 	default:
 		return nil, fmt.Errorf("unsupported responses content part type %q", p.Type)
 	}
+}
+
+func marshalResponsesContentPartWire(partType string, wire responsesContentPartWire) ([]byte, error) {
+	b, err := json.Marshal(wire)
+	if err != nil {
+		slog.Warn("adapter.openai.responses_content_part_marshal_failed", "concern", "adapter.chat.render", "part_type", partType, "err", err)
+		return nil, fmt.Errorf("marshal responses %s content part: %w", partType, err)
+	}
+	return b, nil
 }
 
 // ResponsesAnnotation is a placeholder for output_text annotations.

@@ -214,21 +214,6 @@ func responsesResponseID(reqID string) string {
 	return "resp_" + core
 }
 
-// dispatchResolvedResponses prepares a concrete provider request before it
-// writes warning headers or begins the Responses stream. Chat remains on the
-// generic provider registry; this boundary is Responses-specific.
-func (s *Server) dispatchResolvedResponses(
-	w http.ResponseWriter,
-	r *http.Request,
-	req ChatRequest,
-	reqID string,
-	body []byte,
-	resolvedReq adapterresolver.ResolvedRequest,
-	warnings adaptercompat.WarningSet,
-) {
-	s.dispatchResolvedResponsesWithID(w, r, req, reqID, responsesResponseID(reqID), body, resolvedReq, warnings)
-}
-
 func (s *Server) dispatchResolvedResponsesWithID(
 	w http.ResponseWriter,
 	r *http.Request,

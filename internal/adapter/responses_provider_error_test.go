@@ -125,7 +125,16 @@ func TestResponsesProviderExecutionPreservesClientErrorAndLogsContext(t *testing
 				Model:    "claude-future",
 				OpenAI:   adapteropenai.ChatRequest{Model: "claude-future", Stream: stream},
 			}
-			srv.dispatchResolvedResponses(response, request, resolved.OpenAI, "req-provider-error", nil, resolved, adaptercompat.WarningSet{})
+			srv.dispatchResolvedResponsesWithID(
+				response,
+				request,
+				resolved.OpenAI,
+				"req-provider-error",
+				responsesResponseID("req-provider-error"),
+				nil,
+				resolved,
+				adaptercompat.WarningSet{},
+			)
 			body := response.Body.Bytes()
 
 			if stream {

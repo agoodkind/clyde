@@ -418,7 +418,8 @@ func (p *responsesStreamWriter) handleToolCalls(toolCalls []adapteropenai.ToolCa
 			if err := p.emitOutputItem(adapteropenai.ResponsesEventOutputItemAdded, state.outputIndex, item); err != nil {
 				return err
 			}
-		} else {
+		}
+		if !isNew {
 			if tc.Function.Name != "" {
 				state.name = tc.Function.Name
 			}
@@ -545,11 +546,17 @@ func (p *responsesStreamWriter) orderedOutput() []adapteropenai.ResponsesOutputI
 		if !p.messageOpen {
 			status = "completed"
 		}
-		output[p.messageOutputIndex] = adapteropenai.ResponsesOutputItem{Type: "message", ID: p.messageItemID, Status: status, Role: "assistant", Content: content}
+		output[p.messageOutputIndex] = adapteropenai.ResponsesOutputItem{
+			Type: "message", ID: p.messageItemID, Status: status, Role: "assistant", Content: content,
+			Summary: nil, CallID: "", Name: "", Arguments: "",
+		}
 	}
 	if p.reasoningItemID != "" {
 		summary := []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: p.reasoningText.String()}}
-		output[p.reasoningOutputIndex] = adapteropenai.ResponsesOutputItem{Type: "reasoning", ID: p.reasoningItemID, Summary: summary}
+		output[p.reasoningOutputIndex] = adapteropenai.ResponsesOutputItem{
+			Type: "reasoning", ID: p.reasoningItemID, Status: "", Role: "", Content: nil,
+			Summary: summary, CallID: "", Name: "", Arguments: "",
+		}
 	}
 	for _, index := range p.toolOrder {
 		state := p.toolStates[index]
@@ -557,7 +564,10 @@ func (p *responsesStreamWriter) orderedOutput() []adapteropenai.ResponsesOutputI
 		if !p.messageOpen {
 			status = "completed"
 		}
-		output[state.outputIndex] = adapteropenai.ResponsesOutputItem{Type: "function_call", ID: state.itemID, Status: status, CallID: state.callID, Name: state.name, Arguments: state.args.String()}
+		output[state.outputIndex] = adapteropenai.ResponsesOutputItem{
+			Type: "function_call", ID: state.itemID, Status: status, Role: "", Content: nil,
+			Summary: nil, CallID: state.callID, Name: state.name, Arguments: state.args.String(),
+		}
 	}
 	return output
 }
