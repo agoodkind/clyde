@@ -16,39 +16,70 @@ import (
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/correlation"
 )
 
 const structuredOutputPassthroughOverrideParseFailedEvent = "passthrough_override structured-output parse failed; retrying"
 
+type passthroughForwardOptions struct {
+	requestID           string
+	endpointPath        string
+	baseURL             string
+	apiKey              string
+	upstreamLabel       string
+	body                []byte
+	streamRequested     bool
+	streamIncrementally bool
+	preserveCorrelation bool
+	rawChatRequest      passthroughOverrideRequest
+	jsonSpec            JSONResponseSpec
+}
+
 func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Request, req *adapterresolver.ResolvedRequest, body []byte) {
-	started := clock.Now()
 	reqID := newRequestID()
-	corr := correlation.FromContext(r.Context()).Child().WithRequestID(reqID)
-	if corr.TraceID == "" {
-		corr = clydeingress.FromHTTPHeader(r.Header, reqID)
-	}
-	clydeingress.SetHTTPHeaders(corr, w.Header())
-	ctx := correlation.WithContext(r.Context(), corr)
-	r = r.WithContext(ctx)
-	alias := resolvedRequestAlias(req)
 	streamRequested := false
-	baseURL := strings.TrimSpace(req.OpenAICompatPassthrough.BaseURL)
-	apiKey := req.OpenAICompatPassthrough.APIKey
+	baseURL, apiKey, modelOverride, upstreamLabel, targetErr := passthroughUpstreamTarget(req)
+	if targetErr != nil {
+		s.respondAdapterError(w, r, targetErr)
+		return
+	}
+
+	rawReq, jsonSpec, body, streamRequested := mutatePassthroughOverrideRequestBody(
+		body,
+		modelOverride,
+		req.ProviderEffort().String(),
+		streamRequested,
+	)
+	s.forwardPassthroughHTTP(w, r, req, passthroughForwardOptions{
+		requestID: reqID, endpointPath: "/chat/completions", baseURL: baseURL, apiKey: apiKey,
+		upstreamLabel: upstreamLabel, body: body, streamRequested: streamRequested,
+		streamIncrementally: false, preserveCorrelation: false, rawChatRequest: rawReq, jsonSpec: jsonSpec,
+	})
+}
+
+// passthroughUpstreamTarget resolves the effective upstream base URL, API key,
+// model override, and telemetry label for a passthrough-override resolved
+// request. A named override snapshot wins over the inline OpenAI-compat
+// passthrough config. It returns a typed adapter error when a named override
+// has no base URL configured. Both the chat and responses forwards share it so
+// the config resolution lives in one place.
+func passthroughUpstreamTarget(req *adapterresolver.ResolvedRequest) (baseURL, apiKey, modelOverride, upstreamLabel string, aerr *adapterError) {
+	baseURL = strings.TrimSpace(req.OpenAICompatPassthrough.BaseURL)
+	apiKey = req.OpenAICompatPassthrough.APIKey
 	apiKeyEnv := req.OpenAICompatPassthrough.APIKeyEnv
-	modelOverride := req.OpenAICompatPassthrough.Model
-	upstreamLabel := "openai_compat_passthrough"
+	modelOverride = req.OpenAICompatPassthrough.Model
+	upstreamLabel = "openai_compat_passthrough"
 	if req.PassthroughOverrideName != "" {
 		override := req.PassthroughOverride
 		if override.BaseURL == "" {
-			err := newAdapterError(adapterErrorUpstreamUnavailable,
+			e := newAdapterError(adapterErrorUpstreamUnavailable,
 				"alias routes to passthrough override "+req.PassthroughOverrideName+" but no base URL is configured")
-			err.Provider = providerName(req, "")
-			err.Backend = req.Provider.String()
-			err.ModelAlias = alias
-			s.respondAdapterError(w, r, err)
-			return
+			e.Provider = providerName(req, "")
+			e.Backend = req.Provider.String()
+			e.ModelAlias = resolvedRequestAlias(req)
+			return "", "", "", "", e
 		}
 		baseURL = override.BaseURL
 		apiKey = override.APIKey
@@ -59,39 +90,217 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 	if apiKey == "" && apiKeyEnv != "" {
 		apiKey = os.Getenv(apiKeyEnv)
 	}
+	return baseURL, apiKey, modelOverride, upstreamLabel, nil
+}
 
-	rawReq, jsonSpec, body, streamRequested := mutatePassthroughOverrideRequestBody(
-		body,
-		modelOverride,
-		req.ProviderEffort().String(),
-		streamRequested,
-	)
-	s.emitRequestStarted(ctx, req, "", reqID, alias, streamRequested)
-
-	respBody, status, hdr, err := passthroughOverrideCall(ctx, baseURL, apiKey, body)
-	if err != nil {
-		s.respondPassthroughOverrideTransportError(w, r, ctx, req, reqID, started, streamRequested, err)
+// forwardPassthroughResponses forwards a POST /v1/responses request to the
+// passthrough-override upstream's /responses endpoint. Passthrough is a raw
+// HTTP forward: the raw Responses body goes to the matching endpoint and the
+// upstream response is written back verbatim, so an OpenAI-compatible upstream
+// that implements the Responses API serves it directly. The chat-specific body
+// mutation and JSON coercion do not apply to a Responses body, so only the
+// model override is rewritten.
+func (s *Server) forwardPassthroughResponses(w http.ResponseWriter, r *http.Request, reqID string, req *adapterresolver.ResolvedRequest, body []byte) {
+	baseURL, apiKey, modelOverride, upstreamLabel, targetErr := passthroughUpstreamTarget(req)
+	if targetErr != nil {
+		s.respondAdapterError(w, r, targetErr)
 		return
 	}
-	contentType := strings.ToLower(strings.TrimSpace(hdr.Get("Content-Type")))
-	if streamRequested || strings.Contains(contentType, "text/event-stream") {
-		s.emitRequestStreamOpened(ctx, req, "", reqID, alias, true)
-	}
+	body = passthroughResponsesBodyWithModel(body, modelOverride)
+	streamRequested := passthroughBodyStreamRequested(body)
+	s.forwardPassthroughHTTP(w, r, req, passthroughForwardOptions{
+		requestID: reqID, endpointPath: "/responses", baseURL: baseURL, apiKey: apiKey,
+		upstreamLabel: upstreamLabel, body: body, streamRequested: streamRequested,
+		streamIncrementally: true, preserveCorrelation: true, rawChatRequest: nil,
+		jsonSpec: JSONResponseSpec{Mode: "", SchemaName: "", Schema: nil},
+	})
+}
 
-	if jsonSpec.Mode != "" && status == http.StatusOK {
-		respBody, status, hdr = s.coerceOrRetryPassthroughOverrideJSON(
-			ctx, corr, req, upstreamLabel, baseURL, apiKey, rawReq, jsonSpec, respBody, status, hdr,
+func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, req *adapterresolver.ResolvedRequest, options passthroughForwardOptions) {
+	started := clock.Now()
+	corr := correlation.FromContext(r.Context())
+	if !options.preserveCorrelation {
+		corr = corr.Child()
+	}
+	corr = corr.WithRequestID(options.requestID)
+	if corr.TraceID == "" {
+		corr = clydeingress.FromHTTPHeader(r.Header, options.requestID)
+	}
+	clydeingress.SetHTTPHeaders(corr, w.Header())
+	ctx := correlation.WithContext(r.Context(), corr)
+	r = r.WithContext(ctx)
+	alias := resolvedRequestAlias(req)
+	s.emitRequestStarted(ctx, req, "", options.requestID, alias, options.streamRequested)
+
+	resp, err := passthroughOverrideDo(ctx, options.baseURL, options.apiKey, options.body, options.endpointPath)
+	if err != nil {
+		s.respondPassthroughOverrideTransportError(w, r, ctx, req, options.requestID, started, options.streamRequested, err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+	streamOpened := options.streamRequested || strings.Contains(contentType, "text/event-stream")
+	if streamOpened {
+		s.emitRequestStreamOpened(ctx, req, "", options.requestID, alias)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			s.respondPassthroughOverrideTransportError(w, r, ctx, req, options.requestID, started, options.streamRequested, readErr)
+			return
+		}
+		s.recordPassthroughEgress(ctx, resp, options.body, respBody, started)
+		s.respondPassthroughOverrideError(w, r, ctx, req, options.requestID, resp.StatusCode, respBody, options.streamRequested, contentType, started)
+		return
+	}
+	if options.streamIncrementally && streamOpened {
+		respBody, copyErr := s.copyPassthroughResponse(ctx, w, resp, true)
+		s.recordPassthroughEgress(ctx, resp, options.body, respBody, started)
+		if copyErr != nil {
+			s.log.WarnContext(ctx, "adapter.passthrough_override.copy_response_failed", "concern", "adapter.providers.passthrough_override.response", "err", copyErr)
+			return
+		}
+		s.logPassthroughOverrideTerminal(ctx, req, options.requestID, started, options.streamRequested, contentType, passthroughOverrideUsageFromBody(respBody))
+		return
+	}
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		s.respondPassthroughOverrideTransportError(w, r, ctx, req, options.requestID, started, options.streamRequested, readErr)
+		return
+	}
+	status := resp.StatusCode
+	header := resp.Header
+	if options.jsonSpec.Mode != "" && status == http.StatusOK {
+		respBody, status, header = s.coerceOrRetryPassthroughOverrideJSON(
+			ctx, corr, req, options.upstreamLabel, options.baseURL, options.apiKey,
+			options.rawChatRequest, options.jsonSpec, respBody, status, header,
 		)
 	}
-	if status >= http.StatusBadRequest {
-		s.respondPassthroughOverrideError(w, r, ctx, req, reqID, status, respBody, streamRequested, contentType, started)
+	s.recordPassthroughEgress(ctx, resp, options.body, respBody, started)
+	writePassthroughOverrideResponse(w, status, respBody, header)
+	s.logPassthroughOverrideTerminal(ctx, req, options.requestID, started, options.streamRequested, contentType, passthroughOverrideUsageFromBody(respBody))
+}
+
+func (s *Server) copyPassthroughResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, flush bool) ([]byte, error) {
+	copyPassthroughHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	captured := capture.NewCappedBuffer(capture.DefaultMaxBodyBytes)
+	buffer := make([]byte, 32*1024)
+	for {
+		count, readErr := resp.Body.Read(buffer)
+		if count > 0 {
+			chunk := buffer[:count]
+			_, _ = captured.Write(chunk)
+			if _, writeErr := w.Write(chunk); writeErr != nil {
+				s.log.WarnContext(ctx, "adapter.passthrough_override.write_response_failed", "concern", "adapter.providers.passthrough_override.response", "err", writeErr)
+				return captured.Bytes(), fmt.Errorf("write passthrough response: %w", writeErr)
+			}
+			if flush {
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return captured.Bytes(), nil
+			}
+			s.log.WarnContext(ctx, "adapter.passthrough_override.read_response_failed", "concern", "adapter.providers.passthrough_override.response", "err", readErr)
+			return captured.Bytes(), fmt.Errorf("read passthrough response: %w", readErr)
+		}
+	}
+}
+
+func copyPassthroughHeaders(dst, src http.Header) {
+	for key, values := range src {
+		switch passthroughFramingHeader(http.CanonicalHeaderKey(key)) {
+		case passthroughHeaderConnection, passthroughHeaderKeepAlive, passthroughHeaderProxyAuthenticate,
+			passthroughHeaderProxyAuthorization, passthroughHeaderTE, passthroughHeaderTrailer,
+			passthroughHeaderTransferEncoding, passthroughHeaderUpgrade, passthroughHeaderContentLength:
+			continue
+		default:
+		}
+		dst[key] = values
+	}
+}
+
+type passthroughFramingHeader string
+
+const (
+	passthroughHeaderConnection         passthroughFramingHeader = "Connection"
+	passthroughHeaderKeepAlive          passthroughFramingHeader = "Keep-Alive"
+	passthroughHeaderProxyAuthenticate  passthroughFramingHeader = "Proxy-Authenticate"
+	passthroughHeaderProxyAuthorization passthroughFramingHeader = "Proxy-" + "Authorization"
+	passthroughHeaderTE                 passthroughFramingHeader = "Te"
+	passthroughHeaderTrailer            passthroughFramingHeader = "Trailer"
+	passthroughHeaderTransferEncoding   passthroughFramingHeader = "Transfer-" + "Encoding"
+	passthroughHeaderUpgrade            passthroughFramingHeader = "Upgrade"
+	passthroughHeaderContentLength      passthroughFramingHeader = "Content-Length"
+)
+
+func (s *Server) recordPassthroughEgress(ctx context.Context, resp *http.Response, requestBody, responseBody []byte, started time.Time) {
+	if s.deps.CaptureStore == nil || resp == nil || resp.Request == nil || resp.Request.URL == nil {
 		return
 	}
+	requestHeaders := resp.Request.Header.Clone()
+	for name := range requestHeaders {
+		if redactedHeader(strings.ToLower(name)) {
+			requestHeaders.Del(name)
+		}
+	}
+	s.deps.CaptureStore.RecordExchange(correlation.FromContext(ctx), capture.Exchange{
+		Client:            "adapter.passthrough",
+		Provider:          "openai-compatible",
+		Concern:           "adapter.passthrough.egress",
+		Host:              resp.Request.URL.Host,
+		Method:            resp.Request.Method,
+		Path:              resp.Request.URL.Path,
+		Status:            resp.StatusCode,
+		UpstreamRequestID: resp.Header.Get("Request-Id"),
+		SessionID:         "",
+		RequestHeaders:    requestHeaders,
+		ResponseHeaders:   resp.Header.Clone(),
+		RequestBody:       requestBody,
+		ResponseBody:      responseBody,
+		RequestType:       resp.Request.Header.Get("Content-Type"),
+		ResponseType:      resp.Header.Get("Content-Type"),
+		Started:           started,
+	})
+}
 
-	writePassthroughOverrideResponse(w, status, respBody, hdr)
+// passthroughResponsesBodyWithModel rewrites the "model" field of a Responses
+// request body to the configured wire model when an override is set, leaving
+// every other field untouched. A non-object or unparseable body is forwarded
+// unchanged.
+func passthroughResponsesBodyWithModel(body []byte, modelOverride string) []byte {
+	if modelOverride == "" {
+		return body
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return body
+	}
+	encoded, err := json.Marshal(modelOverride)
+	if err != nil {
+		return body
+	}
+	fields["model"] = encoded
+	rewritten, err := json.Marshal(fields)
+	if err != nil {
+		return body
+	}
+	return rewritten
+}
 
-	usage := passthroughOverrideUsageFromBody(respBody)
-	s.logPassthroughOverrideTerminal(ctx, req, reqID, started, streamRequested, contentType, usage)
+// passthroughBodyStreamRequested reports whether a request body set stream:true.
+func passthroughBodyStreamRequested(body []byte) bool {
+	var fields struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return false
+	}
+	return fields.Stream
 }
 
 // passthroughOverrideRequest carries the inbound OpenAI Chat
@@ -316,7 +525,7 @@ func (s *Server) coerceOrRetryPassthroughOverrideJSON(
 	if err != nil {
 		return respBody, status, hdr
 	}
-	rb2, st2, h2, err2 := passthroughOverrideCall(ctx, baseURL, apiKey, body2)
+	rb2, st2, h2, err2 := readPassthroughOverrideResponse(ctx, baseURL, apiKey, body2, "/chat/completions")
 	if err2 != nil || st2 != http.StatusOK {
 		return respBody, status, hdr
 	}
@@ -429,14 +638,31 @@ func jsonEncodedString(s string) json.RawMessage {
 	return encoded
 }
 
-// passthroughOverrideCall posts body to the upstream chat/completions endpoint and
-// returns body+status+headers.
-func passthroughOverrideCall(ctx context.Context, baseURL, apiKey string, body []byte) ([]byte, int, http.Header, error) {
-	target := strings.TrimRight(baseURL, "/") + "/chat/completions"
+// readPassthroughOverrideResponse posts body to the upstream endpoint path
+// (for example "/chat/completions" or "/responses") and returns
+// body+status+headers.
+func readPassthroughOverrideResponse(ctx context.Context, baseURL, apiKey string, body []byte, endpointPath string) ([]byte, int, http.Header, error) {
+	resp, err := passthroughOverrideDo(ctx, baseURL, apiKey, body, endpointPath)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	rb, err := io.ReadAll(resp.Body)
+	if err != nil {
+		slog.WarnContext(ctx, "adapter.passthrough_override.read_response_failed", "concern", "adapter.providers.passthrough_override.response", "err", err)
+		return nil, resp.StatusCode, resp.Header, fmt.Errorf("read passthrough override response: %w", err)
+	}
+	return rb, resp.StatusCode, resp.Header, nil
+}
+
+// passthroughOverrideDo is the shared transport for Chat Completions and
+// Responses passthrough requests. The caller owns and must close resp.Body.
+func passthroughOverrideDo(ctx context.Context, baseURL, apiKey string, body []byte, endpointPath string) (*http.Response, error) {
+	target := strings.TrimRight(baseURL, "/") + endpointPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(body)))
 	if err != nil {
 		slog.WarnContext(ctx, "adapter.passthrough_override.create_request_failed", "concern", "adapter.providers.passthrough_override.request", "target", target, "err", err)
-		return nil, 0, nil, fmt.Errorf("create passthrough override request: %w", err)
+		return nil, fmt.Errorf("create passthrough override request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
@@ -444,14 +670,9 @@ func passthroughOverrideCall(ctx context.Context, baseURL, apiKey string, body [
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, 0, nil, fmt.Errorf("post passthrough override request: %w", err)
+		return nil, fmt.Errorf("post passthrough override request: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	rb, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, resp.Header, fmt.Errorf("read passthrough override response: %w", err)
-	}
-	return rb, resp.StatusCode, resp.Header, nil
+	return resp, nil
 }
 
 func passthroughOverrideUpstreamErrorMessage(status int, body []byte) string {
@@ -594,26 +815,61 @@ func redactedHeader(name string) bool {
 }
 
 func passthroughOverrideUsageFromBody(body []byte) Usage {
-	var payload struct {
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-			PromptDetails    struct {
-				CachedTokens int `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-		} `json:"usage"`
+	type wireUsage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		InputTokens      int `json:"input_tokens"`
+		OutputTokens     int `json:"output_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+		PromptDetails    struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		InputDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
 	}
+	type responsesEnvelope struct {
+		Usage    wireUsage `json:"usage"`
+		Response struct {
+			Usage wireUsage `json:"usage"`
+		} `json:"response"`
+	}
+	var payload responsesEnvelope
 	if err := json.Unmarshal(body, &payload); err != nil {
+		for line := range strings.SplitSeq(string(body), "\n") {
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			candidate := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if json.Unmarshal([]byte(candidate), &payload) == nil && (payload.Response.Usage.TotalTokens > 0 || payload.Response.Usage.InputTokens > 0) {
+				payload.Usage = payload.Response.Usage
+			}
+		}
+	}
+	wire := payload.Usage
+	if wire.TotalTokens == 0 && (payload.Response.Usage.TotalTokens > 0 || payload.Response.Usage.InputTokens > 0) {
+		wire = payload.Response.Usage
+	}
+	if wire.InputTokens > 0 {
+		wire.PromptTokens = wire.InputTokens
+	}
+	if wire.OutputTokens > 0 {
+		wire.CompletionTokens = wire.OutputTokens
+	}
+	if wire.PromptTokens == 0 && wire.CompletionTokens == 0 && wire.TotalTokens == 0 {
 		return Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0}
 	}
 	usage := Usage{
-		PromptTokens:     payload.Usage.PromptTokens,
-		CompletionTokens: payload.Usage.CompletionTokens,
-		TotalTokens:      payload.Usage.TotalTokens, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+		PromptTokens:     wire.PromptTokens,
+		CompletionTokens: wire.CompletionTokens,
+		TotalTokens:      wire.TotalTokens, PromptTokensDetails: nil, InputTokens: wire.InputTokens, OutputTokens: wire.OutputTokens, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
 	}
-	if payload.Usage.PromptDetails.CachedTokens > 0 {
-		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: payload.Usage.PromptDetails.CachedTokens}
+	cachedTokens := wire.PromptDetails.CachedTokens
+	if wire.InputDetails.CachedTokens > 0 {
+		cachedTokens = wire.InputDetails.CachedTokens
+	}
+	if cachedTokens > 0 {
+		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: cachedTokens}
 	}
 	return usage
 }

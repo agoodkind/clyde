@@ -141,7 +141,7 @@ func (s *Server) dispatchCodexProviderStream(
 		return
 	}
 
-	s.emitRequestStreamOpened(ctx, &resolvedReq, "direct", reqID, alias, true)
+	s.emitRequestStreamOpened(ctx, &resolvedReq, "direct", reqID, alias)
 
 	// Register the overall Codex egress call and inject the per-attempt
 	// hook before dispatching to the provider.

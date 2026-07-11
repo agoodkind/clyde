@@ -30,6 +30,7 @@ import (
 // flow through the existing OpenAI error boundary.
 func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err error) {
 	defer trace.Op(ctx, "adapter.openai.responses")(&err)
+	started := clock.Now()
 	w := hctx.Writer
 	r := hctx.Request
 	if r.Method != http.MethodPost {
@@ -42,6 +43,12 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
 	if readErr != nil {
 		return adapterErrInvalidRequest("failed to read body", readErr)
+	}
+	if capW := s.beginIngressCapture(hctx); capW != nil {
+		w = hctx.Writer
+		defer func() {
+			s.finishIngressCapture(capW, hctx.Correlation, r, body, started, err)
+		}()
 	}
 	rr, parseErr := adapteropenai.UnmarshalResponsesRequest(body)
 	if parseErr != nil {
@@ -86,7 +93,7 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 		}
 	}
 
-	s.dispatchResolvedResponses(w, r, req, reqID, resolvedReq, warnings)
+	s.dispatchResolvedResponses(w, r, req, reqID, body, resolvedReq, warnings)
 	return nil
 }
 
@@ -202,25 +209,25 @@ func responsesResponseID(reqID string) string {
 // dispatchResolvedResponses looks up the resolved provider and runs it
 // with a Responses writer. It mirrors dispatchResolvedChat's provider
 // lookup so responses and chat share the same backend contract, but the
-// output writer differs. Passthrough resolves as an unknown provider
-// family here, so it surfaces the unsupported-backend error rather than
-// a raw forward.
+// output writer differs. Passthrough is a raw HTTP forward, handled
+// before the registry lookup, and targets the upstream's /responses
+// endpoint with the raw body.
 func (s *Server) dispatchResolvedResponses(
 	w http.ResponseWriter,
 	r *http.Request,
 	req ChatRequest,
 	reqID string,
+	body []byte,
 	resolvedReq adapterresolver.ResolvedRequest,
 	warnings adaptercompat.WarningSet,
 ) {
-	lookupID, known := canonicalProviderID(resolvedReq.Provider)
-	if !known {
-		s.respondAdapterError(w, r, unsupportedBackendError(&resolvedReq, req.Model))
+	if resolvedReq.Provider == adapterresolver.ProviderPassthrough {
+		s.forwardPassthroughResponses(w, r, reqID, &resolvedReq, body)
 		return
 	}
-	provider, lookupErr := s.providerRegistry.Lookup(lookupID)
-	if lookupErr != nil || provider == nil {
-		s.respondAdapterError(w, r, upstreamUnavailableForProvider(lookupID, &resolvedReq, req.Model))
+	provider, lookupAdapterErr := s.lookupResolvedProvider(&resolvedReq, req.Model)
+	if lookupAdapterErr != nil {
+		s.respondAdapterError(w, r, lookupAdapterErr)
 		return
 	}
 	responseID := responsesResponseID(reqID)
@@ -357,33 +364,29 @@ func responsesFieldsFromChatResponse(resp *adapteropenai.ChatResponse) (text, re
 	return responsesChatMessageText(message.Content), reasoning, message.Refusal, message.ToolCalls
 }
 
-// responsesChatMessageText reads the assistant text out of a ChatMessage
-// content field, which is a JSON string for plain text or an array of typed
-// content parts. Non-text parts are skipped.
+// responsesChatMessageText extracts only literal text from a string or typed
+// content-part array. Non-text parts never become synthetic output markers.
 func responsesChatMessageText(raw json.RawMessage) string {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "null" {
 		return ""
 	}
-	if trimmed[0] == '"' {
+	if strings.HasPrefix(trimmed, `"`) {
 		var text string
 		if err := json.Unmarshal(raw, &text); err == nil {
 			return text
 		}
 		return ""
 	}
-	if trimmed[0] == '[' {
-		var parts []adapteropenai.ContentPart
-		if err := json.Unmarshal(raw, &parts); err != nil {
-			return ""
-		}
-		var builder strings.Builder
-		for _, part := range parts {
-			if part.Type == "text" {
-				builder.WriteString(part.Text)
-			}
-		}
-		return builder.String()
+	var parts []adapteropenai.ContentPart
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
 	}
-	return ""
+	var builder strings.Builder
+	for _, part := range parts {
+		if part.Type == "text" {
+			builder.WriteString(part.Text)
+		}
+	}
+	return builder.String()
 }

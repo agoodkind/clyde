@@ -7,6 +7,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/gklog/correlation"
 )
@@ -84,18 +85,9 @@ func (s *Server) dispatchResolvedChat(
 	// and anthropic backends (the model registry rewrites claude to
 	// anthropic only under direct_oauth), so a BackendClaude resolution
 	// without that rewrite must still resolve to the anthropic provider.
-	lookupID, known := canonicalProviderID(resolvedReq.Provider)
-	if !known {
-		// The resolved backend is not a known provider family at all.
-		s.respondAdapterError(w, r, unsupportedBackendError(&resolvedReq, req.Model))
-		return
-	}
-
-	provider, lookupErr := s.providerRegistry.Lookup(lookupID)
-	if lookupErr != nil || provider == nil {
-		// A known provider family with no registered (or a nil) provider
-		// means the upstream is not enabled in config.
-		s.respondAdapterError(w, r, upstreamUnavailableForProvider(lookupID, &resolvedReq, req.Model))
+	provider, lookupAdapterErr := s.lookupResolvedProvider(&resolvedReq, req.Model)
+	if lookupAdapterErr != nil {
+		s.respondAdapterError(w, r, lookupAdapterErr)
 		return
 	}
 
@@ -118,6 +110,18 @@ func (s *Server) dispatchResolvedChat(
 	default:
 		s.respondAdapterError(w, r, unsupportedBackendError(&resolvedReq, req.Model))
 	}
+}
+
+func (s *Server) lookupResolvedProvider(resolved *adapterresolver.ResolvedRequest, alias string) (adapterprovider.Provider, *adapterError) {
+	lookupID, known := canonicalProviderID(resolved.Provider)
+	if !known {
+		return nil, unsupportedBackendError(resolved, alias)
+	}
+	provider, lookupErr := s.providerRegistry.Lookup(lookupID)
+	if lookupErr != nil || provider == nil {
+		return nil, upstreamUnavailableForProvider(lookupID, resolved, alias)
+	}
+	return provider, nil
 }
 
 // canonicalProviderID maps a resolved backend identity to the provider

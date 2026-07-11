@@ -85,7 +85,7 @@ func (s *Server) dispatchAnthropicProviderStream(
 	if err != nil {
 		return adapterErrInternal(err.Error(), err)
 	}
-	s.emitRequestStreamOpened(ctx, &resolvedReq, "oauth", reqID, resolvedReq.Model, true)
+	s.emitRequestStreamOpened(ctx, &resolvedReq, "oauth", reqID, resolvedReq.Model)
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
 	includeUsage := resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage
 	// Anthropic streams sometimes end with a non-nil runErr after the
