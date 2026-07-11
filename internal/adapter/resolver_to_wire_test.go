@@ -326,13 +326,24 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal Codex request: %v", err)
 	}
-	var builtFields map[string]json.RawMessage
+	var builtFields struct {
+		MaxTokens           json.RawMessage `json:"max_tokens"`
+		MaxCompletionTokens json.RawMessage `json:"max_completion_tokens"`
+		MaxOutputTokens     json.RawMessage `json:"max_output_tokens"`
+	}
 	if err := json.Unmarshal(builtEncoded, &builtFields); err != nil {
 		t.Fatalf("unmarshal Codex request: %v", err)
 	}
-	for _, key := range []string{"max_tokens", "max_completion_tokens", "max_output_tokens"} {
-		if _, present := builtFields[key]; present {
-			t.Fatalf("Codex egress carried %s: %s", key, builtEncoded)
+	for _, tokenCap := range []struct {
+		name  string
+		value json.RawMessage
+	}{
+		{"max_tokens", builtFields.MaxTokens},
+		{"max_completion_tokens", builtFields.MaxCompletionTokens},
+		{"max_output_tokens", builtFields.MaxOutputTokens},
+	} {
+		if len(tokenCap.value) != 0 {
+			t.Fatalf("Codex egress carried %s: %s", tokenCap.name, builtEncoded)
 		}
 	}
 	if len(built.Tools) != 1 || built.Tools[0].Name != "inspect_image" {
