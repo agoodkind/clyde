@@ -202,11 +202,12 @@ func TestHookSplitsConversationAtMidpoint(t *testing.T) {
 	if !ok {
 		t.Fatalf("transformer type = %T", match.Transformer)
 	}
-	// Recent half (m3, m4) is injected verbatim; older half (m1, m2) is not.
+	// The older half ends on a user message, so with this alternating fixture the
+	// older half is m1 and the recent (injected) half is m2, m3, m4.
 	if !strings.Contains(appender.content, "m3-recent") || !strings.Contains(appender.content, "m4-newest") {
 		t.Fatalf("injected content missing the recent half: %q", appender.content)
 	}
-	if strings.Contains(appender.content, "m1-oldest") || strings.Contains(appender.content, "m2-old") {
+	if strings.Contains(appender.content, "m1-oldest") {
 		t.Fatalf("injected content leaked the older half: %q", appender.content)
 	}
 
@@ -232,14 +233,14 @@ func TestHookSplitsConversationAtMidpoint(t *testing.T) {
 	if len(got.Metadata) == 0 {
 		t.Fatal("metadata dropped from trimmed request")
 	}
-	if len(got.Messages) != 3 {
-		t.Fatalf("trimmed messages = %d, want 3 (m1, m2, prompt)", len(got.Messages))
+	if len(got.Messages) != 2 {
+		t.Fatalf("trimmed messages = %d, want 2 (m1, prompt)", len(got.Messages))
 	}
 	trimmedStr := string(trimmed)
-	if strings.Contains(trimmedStr, "m3-recent") || strings.Contains(trimmedStr, "m4-newest") {
+	if strings.Contains(trimmedStr, "m2-old") || strings.Contains(trimmedStr, "m3-recent") || strings.Contains(trimmedStr, "m4-newest") {
 		t.Fatalf("trimmed request still carries the recent half: %s", trimmedStr)
 	}
-	if !strings.Contains(trimmedStr, "m1-oldest") || !strings.Contains(trimmedStr, "m2-old") {
+	if !strings.Contains(trimmedStr, "m1-oldest") {
 		t.Fatalf("trimmed request dropped the older half: %s", trimmedStr)
 	}
 	if !strings.Contains(trimmedStr, "create a detailed summary") {
@@ -263,25 +264,152 @@ func TestSplitRequestTransformerFailsOpen(t *testing.T) {
 	}
 }
 
-func TestSplitConversationClampedByCap(t *testing.T) {
+func TestPlanSplitClampedByCap(t *testing.T) {
 	t.Parallel()
 	assistant := anthropicMessage{Role: "assistant", Content: json.RawMessage(`"` + strings.Repeat("x", 100) + `"`)}
 	user := anthropicMessage{Role: "user", Content: json.RawMessage(`"u"`)}
 	// Eight conversation messages alternating user/assistant, each assistant ~100
-	// bytes, then the prompt at index 8. A 150-byte cap fits far fewer than the
-	// count midpoint (4), so the recent half is clamped, and after the boundary snap
-	// the older half still ends on an assistant.
+	// bytes, then the prompt at index 8. A 150-byte cap fits far fewer than the count
+	// midpoint (4), so the recent half is clamped, and after the boundary snap the
+	// older half ends on a user.
 	messages := []anthropicMessage{user, assistant, user, assistant, user, assistant, user, assistant, user}
 	promptIndex := 8
-	recentStart, ok := splitConversation(messages, promptIndex, 150)
+	plan, ok := planSplit(messages, promptIndex, 150)
 	if !ok {
 		t.Fatal("expected a split")
 	}
-	if messages[recentStart-1].Role != "assistant" {
-		t.Fatalf("older half ends on %q, want an assistant", messages[recentStart-1].Role)
+	if messages[plan.recentStart-1].Role != "user" {
+		t.Fatalf("older half ends on %q, want a user", messages[plan.recentStart-1].Role)
 	}
-	if recentStart <= 4 {
-		t.Fatalf("recentStart = %d, want > 4 (the cap clamped the recent half below the midpoint)", recentStart)
+	if plan.recentStart <= 4 {
+		t.Fatalf("recentStart = %d, want > 4 (the cap clamped the recent half below the midpoint)", plan.recentStart)
+	}
+}
+
+// compactWithToolPairsBody reproduces the real Claude Code /compact shape: repeating
+// (assistant tool_use, user tool_result, system) exchanges, with the compact prompt
+// glued onto the last tool_result user message. The tool_use for that final
+// tool_result sits in the assistant right before the prompt, so a naive keep of only
+// [prompt:end] would orphan it.
+const compactWithToolPairsBody = `{"model":"m","messages":[` +
+	`{"role":"user","content":[{"type":"text","text":"start"}]},` +
+	`{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{}}]},` +
+	`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"r1"}]},` +
+	`{"role":"system","content":"reminder"},` +
+	`{"role":"assistant","content":[{"type":"tool_use","id":"tu2","name":"Bash","input":{}}]},` +
+	`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2","content":"r2"}]},` +
+	`{"role":"system","content":"reminder"},` +
+	`{"role":"assistant","content":[{"type":"tool_use","id":"tu3","name":"Bash","input":{}}]},` +
+	`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu3","content":"r3"}]},` +
+	`{"role":"system","content":"reminder"},` +
+	`{"role":"assistant","content":[{"type":"tool_use","id":"tu4","name":"Bash","input":{}}]},` +
+	`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu4","content":"r4"},{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
+	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
+
+func TestPlanSplitKeepsToolPairsAndValidates(t *testing.T) {
+	t.Parallel()
+	hook := New(nil, 0)
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
+		Body:   staticHookBody{body: []byte(compactWithToolPairsBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if match.RequestTransformer == nil {
+		t.Fatal("expected a request transformer on the tool-pairing fixture")
+	}
+	trimmed, changed, err := match.RequestTransformer.TransformRequest(context.Background(), []byte(compactWithToolPairsBody))
+	if err != nil || !changed {
+		t.Fatalf("TransformRequest changed=%v err=%v", changed, err)
+	}
+	var got struct {
+		Messages []anthropicMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(trimmed, &got); err != nil {
+		t.Fatalf("decode trimmed: %v", err)
+	}
+	// The trimmed request must be Anthropic-valid: tool-closed, no unanswered
+	// tool_use, system-safe. This is the exact invariant the live 400s violated.
+	if !validateTrim(got.Messages) {
+		t.Fatalf("trimmed request is not valid; messages=%d body=%s", len(got.Messages), trimmed)
+	}
+	// The compact prompt and its paired tool_use (tu4) must both survive.
+	trimmedStr := string(trimmed)
+	if !strings.Contains(trimmedStr, "create a detailed summary") {
+		t.Fatal("trimmed request dropped the compaction prompt")
+	}
+	if !strings.Contains(trimmedStr, "tu4") {
+		t.Fatal("trimmed request dropped the compact prompt's paired tool_use tu4")
+	}
+}
+
+func TestValidateTrimRejectsOrphans(t *testing.T) {
+	t.Parallel()
+	msg := func(role string, content string) anthropicMessage {
+		return anthropicMessage{Role: role, Content: json.RawMessage(content)}
+	}
+	orphanResult := []anthropicMessage{
+		msg("user", `[{"type":"tool_result","tool_use_id":"missing","content":"r"}]`),
+	}
+	if validateTrim(orphanResult) {
+		t.Fatal("expected an orphaned tool_result to be invalid")
+	}
+	unansweredUse := []anthropicMessage{
+		msg("assistant", `[{"type":"tool_use","id":"tu","name":"B","input":{}}]`),
+	}
+	if validateTrim(unansweredUse) {
+		t.Fatal("expected an unanswered tool_use to be invalid")
+	}
+	danglingSystem := []anthropicMessage{
+		msg("system", `"reminder"`), msg("user", `"hi"`),
+	}
+	if validateTrim(danglingSystem) {
+		t.Fatal("expected a system followed by a non-assistant to be invalid")
+	}
+	valid := []anthropicMessage{
+		msg("assistant", `[{"type":"tool_use","id":"tu","name":"B","input":{}}]`),
+		msg("user", `[{"type":"tool_result","tool_use_id":"tu","content":"r"}]`),
+	}
+	if !validateTrim(valid) {
+		t.Fatal("expected a closed tool pair to be valid")
+	}
+}
+
+// compactWithGhostToolResultBody has the compact prompt glued to a tool_result whose
+// tool_use is absent entirely, so no valid trim exists and the hook must fall back to
+// no trim rather than forward an orphaned tool_result.
+const compactWithGhostToolResultBody = `{"messages":[` +
+	`{"role":"user","content":[{"type":"text","text":"start"}]},` +
+	`{"role":"assistant","content":[{"type":"text","text":"ok"}]},` +
+	`{"role":"user","content":[{"type":"text","text":"more"}]},` +
+	`{"role":"assistant","content":[{"type":"text","text":"sure"}]},` +
+	`{"role":"user","content":[{"type":"tool_result","tool_use_id":"ghost","content":"r"},{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
+	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
+
+func TestHookFallsBackWhenTrimWouldBeInvalid(t *testing.T) {
+	t.Parallel()
+	hook := New(fixedContentProvider("disk-recovered"), 0)
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{},
+		Body:   staticHookBody{body: []byte(compactWithGhostToolResultBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if !match.Matched {
+		t.Fatal("expected a match")
+	}
+	if match.RequestTransformer != nil {
+		t.Fatal("expected no request transformer when the trim would be invalid (fall back to no trim)")
+	}
+	appender, ok := match.Transformer.(responseAppendTransformer)
+	if !ok || appender.provider == nil {
+		t.Fatal("expected the disk provider fallback when the trim is invalid")
 	}
 }
 
@@ -315,71 +443,42 @@ func TestHookSmallConversationFallsBackToProvider(t *testing.T) {
 	}
 }
 
-func TestSplitConversationBudgetsToolBlocks(t *testing.T) {
-	t.Parallel()
-	bigInput := `{"command":"` + strings.Repeat("x", 300) + `"}`
-	messages := []anthropicMessage{
-		{Role: "user", Content: json.RawMessage(`"m1"`)},
-		{Role: "assistant", Content: json.RawMessage(`"m2"`)},
-		{Role: "assistant", Content: json.RawMessage(`[{"type":"tool_use","name":"Bash","input":` + bigInput + `}]`)},
-		{Role: "user", Content: json.RawMessage(`"m4"`)},
-		{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"Your task is to create a detailed summary"}]`)},
-	}
-	promptIndex := 4
-	// A 50-byte cap fits only the tiny newest message. The tool_use message renders
-	// to ~330 bytes via renderBlocks, so it must be excluded even though text() would
-	// count it as zero.
-	recentStart, ok := splitConversation(messages, promptIndex, 50)
-	if !ok {
-		t.Fatal("expected a split")
-	}
-	if recentStart != 3 {
-		t.Fatalf("recentStart = %d, want 3 (only the newest message fits; the tool_use message is budgeted by renderBlocks, not text)", recentStart)
-	}
-}
-
-func TestSplitConversationEndsOlderHalfOnAssistant(t *testing.T) {
+func TestPlanSplitEndsOlderHalfOnUser(t *testing.T) {
 	t.Parallel()
 	msg := func(role string) anthropicMessage {
 		return anthropicMessage{Role: role, Content: json.RawMessage(`"x"`)}
 	}
-	// The count boundary would land right after the system at index 2, leaving the
-	// older half ending on a Claude Code system-reminder, which Anthropic rejects
-	// (a system message must precede an assistant or end the array). The split must
-	// snap back so the older half ends on the assistant at index 1.
+	// The count boundary would land right after the system at index 5, leaving the
+	// older half ending on a Claude Code system-reminder. The split must snap back so
+	// the older half ends on a user message.
 	messages := []anthropicMessage{
-		msg("user"), msg("assistant"), msg("system"),
-		msg("assistant"), msg("user"), msg("system"),
-		msg("user"),
+		msg("user"), msg("assistant"), msg("user"), msg("system"),
+		msg("assistant"), msg("system"), msg("user"),
 	}
 	promptIndex := 6
-	recentStart, ok := splitConversation(messages, promptIndex, 0)
+	plan, ok := planSplit(messages, promptIndex, 0)
 	if !ok {
 		t.Fatal("expected a split")
 	}
-	if messages[recentStart-1].Role != "assistant" {
-		t.Fatalf("older half ends on %q at index %d, want it to end on an assistant so no orphaned system reminder is left", messages[recentStart-1].Role, recentStart-1)
-	}
-	if recentStart != 2 {
-		t.Fatalf("recentStart = %d, want 2 (snapped back past the system at index 2)", recentStart)
+	if messages[plan.recentStart-1].Role != "user" {
+		t.Fatalf("older half ends on %q at index %d, want a user so no system reminder is orphaned", messages[plan.recentStart-1].Role, plan.recentStart-1)
 	}
 }
 
-func TestSplitConversationFallsBackWithoutAssistantBoundary(t *testing.T) {
+func TestPlanSplitFallsBackWithoutUserBoundary(t *testing.T) {
 	t.Parallel()
 	msg := func(role string) anthropicMessage {
 		return anthropicMessage{Role: role, Content: json.RawMessage(`"x"`)}
 	}
-	// A leading run with no assistant to end the older half on: the split cannot
-	// form a valid older half, so it must fall back to no split rather than emit an
-	// invalid message sequence.
+	// A leading run with no user to end the older half on: no valid split exists, so
+	// planSplit must report no split rather than emit an invalid sequence.
 	messages := []anthropicMessage{
-		msg("user"), msg("system"), msg("user"), msg("system"),
+		msg("assistant"), msg("system"), msg("assistant"), msg("system"),
 		msg("user"),
 	}
 	promptIndex := 4
-	if _, ok := splitConversation(messages, promptIndex, 0); ok {
-		t.Fatal("expected no split when the older half cannot end on an assistant")
+	if _, ok := planSplit(messages, promptIndex, 0); ok {
+		t.Fatal("expected no split when the older half cannot end on a user")
 	}
 }
 
