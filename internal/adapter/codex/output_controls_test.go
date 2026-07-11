@@ -18,33 +18,20 @@ func TestBuildOutputControlsPreservesResponsesText(t *testing.T) {
 	}
 }
 
-func TestBuildOutputControlsMapsChatMaxTokensToResponsesMaxOutputTokens(t *testing.T) {
-	maxTokens := 250000
-	controls := BuildOutputControls(adapteropenai.ChatRequest{MaxTokens: &maxTokens})
-	if controls.MaxOutputTokens == nil || *controls.MaxOutputTokens != maxTokens {
-		t.Fatalf("max_output_tokens=%v want %d", controls.MaxOutputTokens, maxTokens)
-	}
-}
-
-func TestBuildOutputControlsPrefersResponsesMaxOutputTokens(t *testing.T) {
-	maxTokens := 250000
-	maxOutputTokens := 125000
-	controls := BuildOutputControls(adapteropenai.ChatRequest{
-		MaxTokens:       &maxTokens,
-		MaxOutputTokens: &maxOutputTokens,
-	})
-	if controls.MaxOutputTokens == nil || *controls.MaxOutputTokens != maxOutputTokens {
-		t.Fatalf("max_output_tokens=%v want %d", controls.MaxOutputTokens, maxOutputTokens)
-	}
-}
-
 // TestBuildOutputControlsDropsNonCodexCLIBudgetHints pins that the inbound
-// chat-only max_completion_tokens, truncation, and
-// prompt-cache-retention hints are dropped.
+// token caps (max_tokens, max_completion_tokens, max_output_tokens),
+// truncation, and prompt-cache-retention hints are dropped because
+// codex-cli never sends those wire fields. OutputControls carries only
+// `text`, so a dropped hint leaves the controls text-empty here and the
+// caps absent from egress (see TestCodexEgressOmitsAllOutputTokenCaps).
 func TestBuildOutputControlsDropsNonCodexCLIBudgetHints(t *testing.T) {
+	maxTokens := 250000
 	maxCompletion := 4096
+	maxOutput := 64000
 	controls := BuildOutputControls(adapteropenai.ChatRequest{
+		MaxTokens:            &maxTokens,
 		MaxComplTokens:       &maxCompletion,
+		MaxOutputTokens:      &maxOutput,
 		Truncation:           "auto",
 		PromptCacheRetention: "24h",
 	})

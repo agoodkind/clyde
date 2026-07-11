@@ -505,7 +505,6 @@ func BuildRequestWithConfig(
 		PromptCache:         identity.PromptCacheKey,
 		ServiceTier:         ServiceTierFromRequest(req),
 		Reasoning:           reasoning,
-		MaxOutputTokens:     outputControls.MaxOutputTokens,
 		Text:                outputControls.Text,
 		Input:               input,
 		Tools:               tools,

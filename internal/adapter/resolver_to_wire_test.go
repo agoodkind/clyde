@@ -322,8 +322,18 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 	if built.Reasoning == nil || built.Reasoning.Effort != "invented-provider-tier" {
 		t.Fatalf("Reasoning = %+v, want invented-provider-tier", built.Reasoning)
 	}
-	if built.MaxOutputTokens == nil || *built.MaxOutputTokens != 250000 {
-		t.Fatalf("MaxOutputTokens = %v, want 250000", built.MaxOutputTokens)
+	builtEncoded, err := json.Marshal(built)
+	if err != nil {
+		t.Fatalf("marshal Codex request: %v", err)
+	}
+	var builtFields map[string]json.RawMessage
+	if err := json.Unmarshal(builtEncoded, &builtFields); err != nil {
+		t.Fatalf("unmarshal Codex request: %v", err)
+	}
+	for _, key := range []string{"max_tokens", "max_completion_tokens", "max_output_tokens"} {
+		if _, present := builtFields[key]; present {
+			t.Fatalf("Codex egress carried %s: %s", key, builtEncoded)
+		}
 	}
 	if len(built.Tools) != 1 || built.Tools[0].Name != "inspect_image" {
 		t.Fatalf("Tools = %+v, want inspect_image", built.Tools)

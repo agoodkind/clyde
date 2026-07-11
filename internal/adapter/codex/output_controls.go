@@ -7,25 +7,27 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
-// OutputControls carries the Responses output-shaping fields Clyde
-// forwards to Codex. OpenAI-compatible max_tokens is translated to the
-// Responses max_output_tokens field. The chat-only max_completion_tokens,
-// truncation, and prompt_cache_retention fields are not forwarded.
+// OutputControls carries the codex-cli output-shaping fields Clyde
+// forwards on the Responses request. codex-cli sends `text` (verbosity
+// and JSON-schema output formatting); it does not send any output token
+// cap (max_tokens, max_completion_tokens, or max_output_tokens),
+// truncation, or prompt_cache_retention field, so those are not modeled
+// here. Output capping relies on the upstream server-side policy,
+// exactly as codex-cli relies on it. The ChatGPT Max Codex backend
+// rejects an explicit max_output_tokens, so forwarding a cap breaks the
+// request; TestCodexEgressOmitsAllOutputTokenCaps pins this absence.
 type OutputControls struct {
-	MaxOutputTokens *int            `json:"max_output_tokens,omitempty"`
-	Text            json.RawMessage `json:"text,omitempty"`
+	Text json.RawMessage `json:"text,omitempty"`
 }
 
-// BuildOutputControls extracts Responses-compatible output controls from
-// an inbound ChatRequest.
+// BuildOutputControls extracts the codex-cli-faithful output controls
+// from an inbound ChatRequest. Only `text` survives; the inbound token
+// caps (max_tokens, max_completion_tokens, max_output_tokens),
+// truncation, and prompt-cache-retention hints are dropped because
+// codex-cli never sends those wire fields.
 func BuildOutputControls(req adapteropenai.ChatRequest) OutputControls {
-	maxOutputTokens := req.MaxOutputTokens
-	if maxOutputTokens == nil {
-		maxOutputTokens = req.MaxTokens
-	}
 	return OutputControls{
-		MaxOutputTokens: maxOutputTokens,
-		Text:            validJSONObject(req.Text),
+		Text: validJSONObject(req.Text),
 	}
 }
 
