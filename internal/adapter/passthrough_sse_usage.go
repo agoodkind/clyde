@@ -152,7 +152,7 @@ func (p *passthroughSSEUsageParser) finishLine() {
 
 func (p *passthroughSSEUsageParser) finishEvent() {
 	p.json.Finish()
-	if p.eventTerminal || p.json.terminal {
+	if (p.eventTerminal || p.json.terminal) && p.json.Valid() {
 		p.terminalUsage = p.json.usage
 	}
 	p.json.Reset()
@@ -196,6 +196,44 @@ const (
 	passthroughJSONArray
 )
 
+type passthroughJSONObjectState uint8
+
+const (
+	passthroughJSONObjectKeyOrEnd passthroughJSONObjectState = iota
+	passthroughJSONObjectKey
+	passthroughJSONObjectColon
+	passthroughJSONObjectValue
+	passthroughJSONObjectCommaOrEnd
+)
+
+type passthroughJSONArrayState uint8
+
+const (
+	passthroughJSONArrayValueOrEnd passthroughJSONArrayState = iota
+	passthroughJSONArrayValue
+	passthroughJSONArrayCommaOrEnd
+)
+
+type passthroughJSONRootState uint8
+
+const (
+	passthroughJSONRootValue passthroughJSONRootState = iota
+	passthroughJSONRootComplete
+)
+
+type passthroughJSONNumberState uint8
+
+const (
+	passthroughJSONNumberMinus passthroughJSONNumberState = iota
+	passthroughJSONNumberZero
+	passthroughJSONNumberInteger
+	passthroughJSONNumberFractionStart
+	passthroughJSONNumberFraction
+	passthroughJSONNumberExponentStart
+	passthroughJSONNumberExponentSign
+	passthroughJSONNumberExponent
+)
+
 type passthroughUsageKey uint8
 
 const (
@@ -211,28 +249,35 @@ const (
 )
 
 type passthroughJSONFrame struct {
-	container    passthroughJSONContainer
-	pathKey      passthroughUsageKey
-	currentKey   passthroughUsageKey
-	expectingKey bool
+	container   passthroughJSONContainer
+	pathKey     passthroughUsageKey
+	currentKey  passthroughUsageKey
+	objectState passthroughJSONObjectState
+	arrayState  passthroughJSONArrayState
 }
 
 type passthroughUsageJSONParser struct {
-	frames        [passthroughMaxJSONDepth]passthroughJSONFrame
-	depth         int
-	overflowDepth int
-	mode          passthroughJSONMode
-	stringBuffer  [passthroughMaxJSONStringBytes]byte
-	stringLength  int
-	stringTooLong bool
-	stringEscaped bool
-	stringEscape  bool
-	number        int
-	numberDigits  bool
-	numberValid   bool
-	terminal      bool
-	usage         Usage
-	contentSeen   bool
+	frames              [passthroughMaxJSONDepth]passthroughJSONFrame
+	depth               int
+	overflowDepth       int
+	mode                passthroughJSONMode
+	rootState           passthroughJSONRootState
+	numberState         passthroughJSONNumberState
+	number              int
+	numberFits          bool
+	stringBuffer        [passthroughMaxJSONStringBytes]byte
+	stringLength        int
+	stringTooLong       bool
+	stringEscaped       bool
+	stringEscape        bool
+	stringUnicodeDigits int
+	stringIsKey         bool
+	literalBuffer       [5]byte
+	literalLength       int
+	invalid             bool
+	terminal            bool
+	usage               Usage
+	contentSeen         bool
 }
 
 func (p *passthroughUsageJSONParser) WriteByte(current byte) {
@@ -250,40 +295,69 @@ func (p *passthroughUsageJSONParser) WriteByte(current byte) {
 }
 
 func (p *passthroughUsageJSONParser) consumeNormalByte(current byte) {
-	switch current {
-	case ' ', '\t', '\n', '\r', ':':
+	if isPassthroughJSONWhitespace(current) {
 		return
+	}
+	switch current {
 	case '{':
 		p.enterContainer(passthroughJSONObject)
 	case '[':
 		p.enterContainer(passthroughJSONArray)
 	case '}', ']':
-		p.leaveContainer()
+		p.leaveContainer(current)
 	case ',':
-		p.completeMember()
+		p.consumeComma()
+	case ':':
+		p.consumeColon()
 	case '"':
-		p.mode = passthroughJSONString
-		p.stringLength = 0
-		p.stringTooLong = false
-		p.stringEscaped = false
-		p.stringEscape = false
+		p.beginString()
 	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		p.mode = passthroughJSONNumber
-		p.number = 0
-		p.numberDigits = false
-		p.numberValid = current != '-'
-		if current >= '0' && current <= '9' {
-			p.appendNumberDigit(current)
-		}
+		p.beginNumber(current)
 	default:
-		p.mode = passthroughJSONLiteral
+		p.beginLiteral(current)
 	}
 }
 
+func isPassthroughJSONWhitespace(current byte) bool {
+	switch current {
+	case ' ', '\t', '\n', '\r':
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *passthroughUsageJSONParser) beginString() {
+	p.stringLength = 0
+	p.stringTooLong = false
+	p.stringEscaped = false
+	p.stringEscape = false
+	p.stringUnicodeDigits = 0
+	p.stringIsKey = p.expectsObjectKey()
+	if !p.stringIsKey && !p.beginValue() {
+		p.invalid = true
+	}
+	p.mode = passthroughJSONString
+}
+
 func (p *passthroughUsageJSONParser) consumeStringByte(current byte) {
+	if p.stringUnicodeDigits > 0 {
+		if !isPassthroughJSONHex(current) {
+			p.invalid = true
+		}
+		p.stringUnicodeDigits--
+		return
+	}
 	if p.stringEscape {
 		p.stringEscape = false
 		p.stringEscaped = true
+		if current == 'u' {
+			p.stringUnicodeDigits = 4
+			return
+		}
+		if !isPassthroughJSONEscape(current) {
+			p.invalid = true
+		}
 		return
 	}
 	if current == '\\' {
@@ -292,10 +366,31 @@ func (p *passthroughUsageJSONParser) consumeStringByte(current byte) {
 		return
 	}
 	if current == '"' {
-		p.consumeStringToken()
+		p.finishString()
 		p.mode = passthroughJSONNormal
 		return
 	}
+	if current < 0x20 {
+		p.invalid = true
+		return
+	}
+	p.appendStringByte(current)
+}
+
+func isPassthroughJSONHex(current byte) bool {
+	return (current >= '0' && current <= '9') || (current >= 'a' && current <= 'f') || (current >= 'A' && current <= 'F')
+}
+
+func isPassthroughJSONEscape(current byte) bool {
+	switch current {
+	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *passthroughUsageJSONParser) appendStringByte(current byte) {
 	if p.stringLength < len(p.stringBuffer) {
 		p.stringBuffer[p.stringLength] = current
 	} else {
@@ -304,21 +399,333 @@ func (p *passthroughUsageJSONParser) consumeStringByte(current byte) {
 	p.stringLength++
 }
 
-func (p *passthroughUsageJSONParser) consumeStringToken() {
-	if p.depth == 0 || p.overflowDepth > 0 {
-		return
+func (p *passthroughUsageJSONParser) finishString() {
+	if p.stringEscape || p.stringUnicodeDigits != 0 {
+		p.invalid = true
 	}
-	frame := &p.frames[p.depth-1]
-	if frame.container == passthroughJSONObject && frame.expectingKey {
-		frame.currentKey = p.currentStringKey()
-		frame.expectingKey = false
+	if p.stringIsKey {
+		p.setObjectKey()
 		return
 	}
 	if p.currentValueIsRootType() && !p.stringEscaped && !p.stringTooLong &&
 		bytes.Equal(p.stringBuffer[:p.stringLength], []byte(passthroughTerminalResponseEvent)) {
 		p.terminal = true
 	}
-	p.completeValue()
+	p.completeScalar()
+}
+
+func (p *passthroughUsageJSONParser) beginNumber(current byte) {
+	if !p.beginValue() {
+		p.invalid = true
+	}
+	p.number = 0
+	p.numberFits = true
+	switch current {
+	case '-':
+		p.numberState = passthroughJSONNumberMinus
+	case '0':
+		p.numberState = passthroughJSONNumberZero
+		p.appendNumberDigit(current)
+	default:
+		p.numberState = passthroughJSONNumberInteger
+		p.appendNumberDigit(current)
+	}
+	p.mode = passthroughJSONNumber
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberByte(current byte) {
+	if isPassthroughJSONValueDelimiter(current) {
+		p.finishNumber()
+		p.mode = passthroughJSONNormal
+		p.consumeNormalByte(current)
+		return
+	}
+	switch p.numberState {
+	case passthroughJSONNumberMinus:
+		p.consumeNumberAfterMinus(current)
+	case passthroughJSONNumberZero:
+		p.consumeNumberAfterZero(current)
+	case passthroughJSONNumberInteger:
+		p.consumeNumberAfterInteger(current)
+	case passthroughJSONNumberFractionStart:
+		p.consumeNumberAfterFractionStart(current)
+	case passthroughJSONNumberFraction:
+		p.consumeNumberAfterFraction(current)
+	case passthroughJSONNumberExponentStart:
+		p.consumeNumberAfterExponentStart(current)
+	case passthroughJSONNumberExponentSign:
+		p.consumeNumberAfterExponentSign(current)
+	case passthroughJSONNumberExponent:
+		p.consumeNumberAfterExponent(current)
+	}
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberAfterMinus(current byte) {
+	switch {
+	case current == '0':
+		p.numberState = passthroughJSONNumberZero
+		p.appendNumberDigit(current)
+	case current >= '1' && current <= '9':
+		p.numberState = passthroughJSONNumberInteger
+		p.appendNumberDigit(current)
+	default:
+		p.invalid = true
+	}
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberAfterZero(current byte) {
+	switch current {
+	case '.':
+		p.numberState = passthroughJSONNumberFractionStart
+	case 'e', 'E':
+		p.numberState = passthroughJSONNumberExponentStart
+	default:
+		p.invalid = true
+	}
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberAfterInteger(current byte) {
+	switch {
+	case current >= '0' && current <= '9':
+		p.appendNumberDigit(current)
+	case current == '.':
+		p.numberState = passthroughJSONNumberFractionStart
+	case current == 'e' || current == 'E':
+		p.numberState = passthroughJSONNumberExponentStart
+	default:
+		p.invalid = true
+	}
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberAfterFractionStart(current byte) {
+	if current >= '0' && current <= '9' {
+		p.numberState = passthroughJSONNumberFraction
+		return
+	}
+	p.invalid = true
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberAfterFraction(current byte) {
+	switch {
+	case current >= '0' && current <= '9':
+	case current == 'e' || current == 'E':
+		p.numberState = passthroughJSONNumberExponentStart
+	default:
+		p.invalid = true
+	}
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberAfterExponentStart(current byte) {
+	switch {
+	case current == '+' || current == '-':
+		p.numberState = passthroughJSONNumberExponentSign
+	case current >= '0' && current <= '9':
+		p.numberState = passthroughJSONNumberExponent
+	default:
+		p.invalid = true
+	}
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberAfterExponentSign(current byte) {
+	if current >= '0' && current <= '9' {
+		p.numberState = passthroughJSONNumberExponent
+		return
+	}
+	p.invalid = true
+}
+
+func (p *passthroughUsageJSONParser) consumeNumberAfterExponent(current byte) {
+	if current < '0' || current > '9' {
+		p.invalid = true
+	}
+}
+
+func isPassthroughJSONValueDelimiter(current byte) bool {
+	return isPassthroughJSONWhitespace(current) || current == ',' || current == '}' || current == ']'
+}
+
+func (p *passthroughUsageJSONParser) appendNumberDigit(current byte) {
+	digit := int(current - '0')
+	maxInt := int(^uint(0) >> 1)
+	if p.number > (maxInt-digit)/10 {
+		p.numberFits = false
+		return
+	}
+	p.number = p.number*10 + digit
+}
+
+func (p *passthroughUsageJSONParser) finishNumber() {
+	if !p.numberIsComplete() {
+		p.invalid = true
+	}
+	if p.numberIsInteger() && p.numberFits {
+		p.recordUsageNumber(p.number)
+	}
+	p.completeScalar()
+}
+
+func (p *passthroughUsageJSONParser) numberIsComplete() bool {
+	switch p.numberState {
+	case passthroughJSONNumberZero, passthroughJSONNumberInteger, passthroughJSONNumberFraction, passthroughJSONNumberExponent:
+		return true
+	case passthroughJSONNumberMinus, passthroughJSONNumberFractionStart, passthroughJSONNumberExponentStart, passthroughJSONNumberExponentSign:
+		return false
+	default:
+		return false
+	}
+}
+
+func (p *passthroughUsageJSONParser) numberIsInteger() bool {
+	return p.numberState == passthroughJSONNumberZero || p.numberState == passthroughJSONNumberInteger
+}
+
+func (p *passthroughUsageJSONParser) beginLiteral(current byte) {
+	if !p.beginValue() {
+		p.invalid = true
+	}
+	p.literalLength = 0
+	p.appendLiteralByte(current)
+	p.mode = passthroughJSONLiteral
+}
+
+func (p *passthroughUsageJSONParser) consumeLiteralByte(current byte) {
+	if isPassthroughJSONValueDelimiter(current) {
+		p.finishLiteral()
+		p.mode = passthroughJSONNormal
+		p.consumeNormalByte(current)
+		return
+	}
+	p.appendLiteralByte(current)
+}
+
+func (p *passthroughUsageJSONParser) appendLiteralByte(current byte) {
+	if p.literalLength < len(p.literalBuffer) {
+		p.literalBuffer[p.literalLength] = current
+	} else {
+		p.invalid = true
+	}
+	p.literalLength++
+}
+
+func (p *passthroughUsageJSONParser) finishLiteral() {
+	if p.literalLength > len(p.literalBuffer) {
+		p.invalid = true
+	} else {
+		literal := p.literalBuffer[:p.literalLength]
+		if !bytes.Equal(literal, []byte("true")) && !bytes.Equal(literal, []byte("false")) && !bytes.Equal(literal, []byte("null")) {
+			p.invalid = true
+		}
+	}
+	p.completeScalar()
+}
+
+func (p *passthroughUsageJSONParser) enterContainer(container passthroughJSONContainer) {
+	if !p.beginValue() {
+		p.invalid = true
+	}
+	if p.overflowDepth > 0 {
+		p.overflowDepth++
+		return
+	}
+	var pathKey passthroughUsageKey
+	if p.depth > 0 {
+		parent := &p.frames[p.depth-1]
+		if parent.container == passthroughJSONObject {
+			pathKey = parent.currentKey
+			parent.currentKey = passthroughUsageKeyNone
+		}
+	}
+	if p.depth == len(p.frames) {
+		p.invalid = true
+		p.overflowDepth = 1
+		return
+	}
+	p.frames[p.depth] = passthroughJSONFrame{
+		container: container, pathKey: pathKey, currentKey: passthroughUsageKeyNone,
+		objectState: passthroughJSONObjectKeyOrEnd, arrayState: passthroughJSONArrayValueOrEnd,
+	}
+	p.depth++
+}
+
+func (p *passthroughUsageJSONParser) leaveContainer(current byte) {
+	if p.overflowDepth > 0 {
+		p.overflowDepth--
+		return
+	}
+	if p.depth == 0 {
+		p.invalid = true
+		return
+	}
+	frame := p.frames[p.depth-1]
+	if (current == '}' && frame.container != passthroughJSONObject) || (current == ']' && frame.container != passthroughJSONArray) {
+		p.invalid = true
+		return
+	}
+	if !frame.canClose() {
+		p.invalid = true
+		return
+	}
+	p.depth--
+}
+
+func (f passthroughJSONFrame) canClose() bool {
+	if f.container == passthroughJSONObject {
+		return f.objectState == passthroughJSONObjectKeyOrEnd || f.objectState == passthroughJSONObjectCommaOrEnd
+	}
+	return f.arrayState == passthroughJSONArrayValueOrEnd || f.arrayState == passthroughJSONArrayCommaOrEnd
+}
+
+func (p *passthroughUsageJSONParser) consumeComma() {
+	if p.depth == 0 || p.overflowDepth > 0 {
+		p.invalid = true
+		return
+	}
+	frame := &p.frames[p.depth-1]
+	if frame.container == passthroughJSONObject {
+		if frame.objectState != passthroughJSONObjectCommaOrEnd {
+			p.invalid = true
+			return
+		}
+		frame.objectState = passthroughJSONObjectKey
+		return
+	}
+	if frame.arrayState != passthroughJSONArrayCommaOrEnd {
+		p.invalid = true
+		return
+	}
+	frame.arrayState = passthroughJSONArrayValue
+}
+
+func (p *passthroughUsageJSONParser) consumeColon() {
+	if p.depth == 0 || p.overflowDepth > 0 {
+		p.invalid = true
+		return
+	}
+	frame := &p.frames[p.depth-1]
+	if frame.container != passthroughJSONObject || frame.objectState != passthroughJSONObjectColon {
+		p.invalid = true
+		return
+	}
+	frame.objectState = passthroughJSONObjectValue
+}
+
+func (p *passthroughUsageJSONParser) expectsObjectKey() bool {
+	if p.depth == 0 || p.overflowDepth > 0 {
+		return false
+	}
+	frame := p.frames[p.depth-1]
+	return frame.container == passthroughJSONObject &&
+		(frame.objectState == passthroughJSONObjectKeyOrEnd || frame.objectState == passthroughJSONObjectKey)
+}
+
+func (p *passthroughUsageJSONParser) setObjectKey() {
+	if !p.expectsObjectKey() {
+		p.invalid = true
+		return
+	}
+	frame := &p.frames[p.depth-1]
+	frame.currentKey = p.currentStringKey()
+	frame.objectState = passthroughJSONObjectColon
 }
 
 func (p *passthroughUsageJSONParser) currentStringKey() passthroughUsageKey {
@@ -351,108 +758,31 @@ func passthroughUsageKeyFor(value []byte) passthroughUsageKey {
 	}
 }
 
-func (p *passthroughUsageJSONParser) consumeNumberByte(current byte) {
-	if current >= '0' && current <= '9' {
-		p.appendNumberDigit(current)
-		return
-	}
-	if current == '.' || current == 'e' || current == 'E' || current == '+' || current == '-' {
-		p.numberValid = false
-		return
-	}
-	if isPassthroughJSONDelimiter(current) {
-		p.consumeNumberToken()
-		p.mode = passthroughJSONNormal
-		p.consumeNormalByte(current)
-		return
-	}
-	p.numberValid = false
-}
-
-func (p *passthroughUsageJSONParser) appendNumberDigit(current byte) {
-	digit := int(current - '0')
-	maxInt := int(^uint(0) >> 1)
-	if p.number > (maxInt-digit)/10 {
-		p.numberValid = false
-		return
-	}
-	p.number = p.number*10 + digit
-	p.numberDigits = true
-}
-
-func (p *passthroughUsageJSONParser) consumeNumberToken() {
-	if p.numberValid && p.numberDigits {
-		p.recordUsageNumber(p.number)
-	}
-	p.completeValue()
-}
-
-func (p *passthroughUsageJSONParser) consumeLiteralByte(current byte) {
-	if !isPassthroughJSONDelimiter(current) {
-		return
-	}
-	p.mode = passthroughJSONNormal
-	p.completeValue()
-	p.consumeNormalByte(current)
-}
-
-func isPassthroughJSONDelimiter(current byte) bool {
-	switch current {
-	case ' ', '\t', '\n', '\r', ',', '}', ']':
-		return true
-	default:
-		return false
-	}
-}
-
-func (p *passthroughUsageJSONParser) enterContainer(container passthroughJSONContainer) {
-	if p.overflowDepth > 0 {
-		p.overflowDepth++
-		return
-	}
-	var pathKey passthroughUsageKey
-	if p.depth > 0 {
-		frame := &p.frames[p.depth-1]
-		if frame.container == passthroughJSONObject {
-			pathKey = frame.currentKey
-			frame.currentKey = passthroughUsageKeyNone
-		}
-	}
-	if p.depth == len(p.frames) {
-		p.overflowDepth = 1
-		return
-	}
-	p.frames[p.depth] = passthroughJSONFrame{
-		container: container, pathKey: pathKey, currentKey: passthroughUsageKeyNone,
-		expectingKey: container == passthroughJSONObject,
-	}
-	p.depth++
-}
-
-func (p *passthroughUsageJSONParser) leaveContainer() {
-	if p.overflowDepth > 0 {
-		p.overflowDepth--
-		return
-	}
+func (p *passthroughUsageJSONParser) beginValue() bool {
 	if p.depth == 0 {
-		return
+		if p.rootState != passthroughJSONRootValue {
+			return false
+		}
+		p.rootState = passthroughJSONRootComplete
+		return true
 	}
-	p.depth--
-	p.completeValue()
-}
-
-func (p *passthroughUsageJSONParser) completeMember() {
-	if p.depth == 0 || p.overflowDepth > 0 {
-		return
+	if p.overflowDepth > 0 {
+		return true
 	}
 	frame := &p.frames[p.depth-1]
-	if frame.container == passthroughJSONObject {
-		frame.currentKey = passthroughUsageKeyNone
-		frame.expectingKey = true
+	if frame.container == passthroughJSONObject && frame.objectState == passthroughJSONObjectValue {
+		frame.objectState = passthroughJSONObjectCommaOrEnd
+		return true
 	}
+	if frame.container == passthroughJSONArray &&
+		(frame.arrayState == passthroughJSONArrayValueOrEnd || frame.arrayState == passthroughJSONArrayValue) {
+		frame.arrayState = passthroughJSONArrayCommaOrEnd
+		return true
+	}
+	return false
 }
 
-func (p *passthroughUsageJSONParser) completeValue() {
+func (p *passthroughUsageJSONParser) completeScalar() {
 	if p.depth == 0 || p.overflowDepth > 0 {
 		return
 	}
@@ -471,58 +801,58 @@ func (p *passthroughUsageJSONParser) currentValueIsRootType() bool {
 }
 
 func (p *passthroughUsageJSONParser) recordUsageNumber(value int) {
-	if p.depth == 0 || p.overflowDepth > 0 {
-		return
+	if p.depth == 3 && p.overflowDepth == 0 {
+		root := p.frames[0]
+		response := p.frames[1]
+		usage := p.frames[2]
+		if root.container == passthroughJSONObject && root.pathKey == passthroughUsageKeyNone &&
+			response.container == passthroughJSONObject && response.pathKey == passthroughUsageKeyResponse &&
+			usage.container == passthroughJSONObject && usage.pathKey == passthroughUsageKeyUsage {
+			switch usage.currentKey {
+			case passthroughUsageKeyInputTokens:
+				p.usage.InputTokens = value
+				p.usage.PromptTokens = value
+			case passthroughUsageKeyOutputTokens:
+				p.usage.OutputTokens = value
+				p.usage.CompletionTokens = value
+			case passthroughUsageKeyTotalTokens:
+				p.usage.TotalTokens = value
+			case passthroughUsageKeyNone, passthroughUsageKeyResponse, passthroughUsageKeyUsage,
+				passthroughUsageKeyInputTokensDetails, passthroughUsageKeyCachedTokens, passthroughUsageKeyType:
+			default:
+			}
+		}
 	}
-	frame := p.frames[p.depth-1]
-	if frame.container != passthroughJSONObject {
-		return
+	if p.depth == 4 && p.overflowDepth == 0 {
+		root := p.frames[0]
+		response := p.frames[1]
+		usage := p.frames[2]
+		details := p.frames[3]
+		if root.container == passthroughJSONObject && root.pathKey == passthroughUsageKeyNone &&
+			response.container == passthroughJSONObject && response.pathKey == passthroughUsageKeyResponse &&
+			usage.container == passthroughJSONObject && usage.pathKey == passthroughUsageKeyUsage &&
+			details.container == passthroughJSONObject && details.pathKey == passthroughUsageKeyInputTokensDetails &&
+			details.currentKey == passthroughUsageKeyCachedTokens {
+			p.usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: value}
+		}
 	}
-	switch {
-	case p.matchesUsageField(passthroughUsageKeyInputTokens):
-		p.usage.InputTokens = value
-		p.usage.PromptTokens = value
-	case p.matchesUsageField(passthroughUsageKeyOutputTokens):
-		p.usage.OutputTokens = value
-		p.usage.CompletionTokens = value
-	case p.matchesUsageField(passthroughUsageKeyTotalTokens):
-		p.usage.TotalTokens = value
-	case p.matchesCachedTokensField():
-		p.usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: value}
-	}
-}
-
-func (p *passthroughUsageJSONParser) matchesUsageField(field passthroughUsageKey) bool {
-	if p.depth < 3 {
-		return false
-	}
-	frame := p.frames[p.depth-1]
-	parent := p.frames[p.depth-2]
-	return frame.currentKey == field && frame.pathKey == passthroughUsageKeyUsage &&
-		parent.pathKey == passthroughUsageKeyResponse
-}
-
-func (p *passthroughUsageJSONParser) matchesCachedTokensField() bool {
-	if p.depth < 4 {
-		return false
-	}
-	frame := p.frames[p.depth-1]
-	parent := p.frames[p.depth-2]
-	grandparent := p.frames[p.depth-3]
-	return frame.currentKey == passthroughUsageKeyCachedTokens &&
-		frame.pathKey == passthroughUsageKeyInputTokensDetails &&
-		parent.pathKey == passthroughUsageKeyUsage && grandparent.pathKey == passthroughUsageKeyResponse
 }
 
 func (p *passthroughUsageJSONParser) Finish() {
 	switch p.mode {
+	case passthroughJSONString:
+		p.invalid = true
 	case passthroughJSONNumber:
-		p.consumeNumberToken()
+		p.finishNumber()
 	case passthroughJSONLiteral:
-		p.completeValue()
-	case passthroughJSONNormal, passthroughJSONString:
+		p.finishLiteral()
+	case passthroughJSONNormal:
 	}
 	p.mode = passthroughJSONNormal
+}
+
+func (p *passthroughUsageJSONParser) Valid() bool {
+	return !p.invalid && p.overflowDepth == 0 && p.depth == 0 && p.rootState == passthroughJSONRootComplete
 }
 
 func (p *passthroughUsageJSONParser) Reset() {
@@ -532,13 +862,18 @@ func (p *passthroughUsageJSONParser) Reset() {
 	p.depth = 0
 	p.overflowDepth = 0
 	p.mode = passthroughJSONNormal
+	p.rootState = passthroughJSONRootValue
+	p.numberState = passthroughJSONNumberMinus
+	p.number = 0
+	p.numberFits = false
 	p.stringLength = 0
 	p.stringTooLong = false
 	p.stringEscaped = false
 	p.stringEscape = false
-	p.number = 0
-	p.numberDigits = false
-	p.numberValid = false
+	p.stringUnicodeDigits = 0
+	p.stringIsKey = false
+	p.literalLength = 0
+	p.invalid = false
 	p.terminal = false
 	p.usage = usage
 	p.contentSeen = false

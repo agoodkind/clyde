@@ -301,37 +301,6 @@ const (
 	passthroughHeaderContentLength      passthroughFramingHeader = "Content-Length"
 )
 
-func (s *Server) recordPassthroughEgress(ctx context.Context, resp *http.Response, requestBody []byte, result passthroughCaptureResult, started time.Time) {
-	if s.deps.CaptureStore == nil || resp == nil || resp.Request == nil || resp.Request.URL == nil {
-		return
-	}
-	requestHeaders := resp.Request.Header.Clone()
-	for name := range requestHeaders {
-		if redactedHeader(strings.ToLower(name)) {
-			requestHeaders.Del(name)
-		}
-	}
-	responseHeaders := sanitizedCaptureResponseHeaders(resp.Header)
-	s.deps.CaptureStore.RecordCappedExchange(correlation.FromContext(ctx), capture.Exchange{
-		Client:            "adapter.passthrough",
-		Provider:          "openai-compatible",
-		Concern:           "adapter.passthrough.egress",
-		Host:              resp.Request.URL.Host,
-		Method:            resp.Request.Method,
-		Path:              resp.Request.URL.Path,
-		Status:            resp.StatusCode,
-		UpstreamRequestID: resp.Header.Get("Request-Id"),
-		SessionID:         "",
-		RequestHeaders:    requestHeaders,
-		ResponseHeaders:   responseHeaders,
-		RequestBody:       requestBody,
-		ResponseBody:      result.body,
-		RequestType:       resp.Request.Header.Get("Content-Type"),
-		ResponseType:      resp.Header.Get("Content-Type"),
-		Started:           started,
-	}, result.totalBytes, result.truncated)
-}
-
 // passthroughResponsesBodyWithModel rewrites the "model" field of a Responses
 // request body to the configured wire model when an override is set, leaving
 // every other field untouched. A non-object or unparseable body is forwarded
@@ -615,8 +584,13 @@ func (s *Server) coerceOrRetryPassthroughOverrideJSON(
 	}
 	s.recordPassthroughEgress(ctx, firstResponse, firstRequestBody, passthroughCaptureResultFromBody(respBody), started)
 	secondStarted := clock.Now()
-	secondResponse, err2 := passthroughOverrideDo(ctx, baseURL, apiKey, body2, "/chat/completions")
+	secondRequest, requestErr := newPassthroughOverrideRequest(ctx, baseURL, apiKey, body2, "/chat/completions")
+	if requestErr != nil {
+		return respBody, status, hdr, true, newPassthroughRetryFailure(0, nil, "", requestErr)
+	}
+	secondResponse, err2 := passthroughOverrideDoRequest(secondRequest)
 	if err2 != nil {
+		s.recordPassthroughEgressAttempt(ctx, secondRequest, nil, body2, passthroughCaptureResultFromBody(nil), secondStarted)
 		return respBody, status, hdr, true, newPassthroughRetryFailure(0, nil, "", err2)
 	}
 	defer func() { _ = secondResponse.Body.Close() }()
@@ -742,6 +716,14 @@ func jsonEncodedString(s string) json.RawMessage {
 // passthroughOverrideDo is the shared transport for Chat Completions and
 // Responses passthrough requests. The caller owns and must close resp.Body.
 func passthroughOverrideDo(ctx context.Context, baseURL, apiKey string, body []byte, endpointPath string) (*http.Response, error) {
+	req, err := newPassthroughOverrideRequest(ctx, baseURL, apiKey, body, endpointPath)
+	if err != nil {
+		return nil, err
+	}
+	return passthroughOverrideDoRequest(req)
+}
+
+func newPassthroughOverrideRequest(ctx context.Context, baseURL, apiKey string, body []byte, endpointPath string) (*http.Request, error) {
 	target := strings.TrimRight(baseURL, "/") + endpointPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(body)))
 	if err != nil {
@@ -752,6 +734,10 @@ func passthroughOverrideDo(ctx context.Context, baseURL, apiKey string, body []b
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	return req, nil
+}
+
+func passthroughOverrideDoRequest(req *http.Request) (*http.Response, error) {
 	client := &http.Client{
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
