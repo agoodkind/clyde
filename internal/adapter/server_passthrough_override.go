@@ -140,10 +140,6 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
-	streamOpened := options.streamRequested || strings.Contains(contentType, "text/event-stream")
-	if streamOpened {
-		s.emitRequestStreamOpened(ctx, req, "", options.requestID, alias)
-	}
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
@@ -153,6 +149,10 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 		s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromBody(respBody), started)
 		s.respondPassthroughOverrideError(w, r, ctx, req, options.requestID, resp.StatusCode, respBody, options.streamRequested, contentType, started)
 		return
+	}
+	streamOpened := options.streamRequested || strings.Contains(contentType, "text/event-stream")
+	if streamOpened {
+		s.emitRequestStreamOpened(ctx, req, "", options.requestID, alias)
 	}
 	if options.streamIncrementally && streamOpened {
 		copyResult, copyErr := s.copyPassthroughResponse(ctx, w, resp, true)
@@ -176,10 +176,15 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	header := resp.Header
 	if options.jsonSpec.Mode != "" && status == http.StatusOK {
 		var captureRecorded bool
-		respBody, status, header, captureRecorded = s.coerceOrRetryPassthroughOverrideJSON(
+		var retryFailure *passthroughRetryFailure
+		respBody, status, header, captureRecorded, retryFailure = s.coerceOrRetryPassthroughOverrideJSON(
 			ctx, corr, req, options.upstreamLabel, options.baseURL, options.apiKey,
 			options.rawChatRequest, options.jsonSpec, resp, options.body, respBody, status, header, started,
 		)
+		if retryFailure != nil {
+			s.respondPassthroughRetryFailure(w, r, ctx, req, options.requestID, started, options.streamRequested, retryFailure)
+			return
+		}
 		if !captureRecorded {
 			s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromBody(respBody), started)
 		}
@@ -248,7 +253,11 @@ func passthroughStreamCaptureResult(captured *capture.CappedBuffer, usageParser 
 }
 
 func copyPassthroughHeaders(dst, src http.Header) {
+	connectionHeaders := passthroughConnectionHeaders(src)
 	for key, values := range src {
+		if connectionHeaders[strings.ToLower(key)] {
+			continue
+		}
 		switch passthroughFramingHeader(http.CanonicalHeaderKey(key)) {
 		case passthroughHeaderConnection, passthroughHeaderKeepAlive, passthroughHeaderProxyAuthenticate,
 			passthroughHeaderProxyAuthorization, passthroughHeaderTE, passthroughHeaderTrailer,
@@ -258,6 +267,24 @@ func copyPassthroughHeaders(dst, src http.Header) {
 		}
 		dst[key] = values
 	}
+}
+
+func passthroughConnectionHeaders(headers http.Header) map[string]bool {
+	nominated := make(map[string]bool)
+	for key, values := range headers {
+		if !strings.EqualFold(key, string(passthroughHeaderConnection)) {
+			continue
+		}
+		for _, value := range values {
+			for name := range strings.SplitSeq(value, ",") {
+				trimmed := strings.TrimSpace(name)
+				if trimmed != "" {
+					nominated[strings.ToLower(trimmed)] = true
+				}
+			}
+		}
+	}
+	return nominated
 }
 
 type passthroughFramingHeader string
@@ -569,10 +596,10 @@ func (s *Server) coerceOrRetryPassthroughOverrideJSON(
 	status int,
 	hdr http.Header,
 	started time.Time,
-) ([]byte, int, http.Header, bool) {
+) ([]byte, int, http.Header, bool, *passthroughRetryFailure) {
 	coerced, ok := coercePassthroughOverrideJSON(respBody)
 	if ok {
-		return coerced, status, hdr, false
+		return coerced, status, hdr, false, nil
 	}
 	attrs := []slog.Attr{
 		slog.String("model", resolvedRequestAlias(req)),
@@ -584,29 +611,29 @@ func (s *Server) coerceOrRetryPassthroughOverrideJSON(
 	injectJSONSystemMessage(rawReq, jsonSpec.SystemPrompt(true))
 	body2, err := json.Marshal(rawReq)
 	if err != nil {
-		return respBody, status, hdr, false
+		return respBody, status, hdr, false, nil
 	}
 	s.recordPassthroughEgress(ctx, firstResponse, firstRequestBody, passthroughCaptureResultFromBody(respBody), started)
 	secondStarted := clock.Now()
 	secondResponse, err2 := passthroughOverrideDo(ctx, baseURL, apiKey, body2, "/chat/completions")
 	if err2 != nil {
-		return respBody, status, hdr, true
+		return respBody, status, hdr, true, newPassthroughRetryFailure(0, nil, "", err2)
 	}
 	defer func() { _ = secondResponse.Body.Close() }()
 	rb2, readErr := io.ReadAll(secondResponse.Body)
-	if readErr != nil {
-		return respBody, status, hdr, true
-	}
 	s.recordPassthroughEgress(ctx, secondResponse, body2, passthroughCaptureResultFromBody(rb2), secondStarted)
+	if readErr != nil {
+		return respBody, status, hdr, true, newPassthroughRetryFailure(secondResponse.StatusCode, rb2, secondResponse.Header.Get("Content-Type"), readErr)
+	}
 	st2 := secondResponse.StatusCode
 	h2 := secondResponse.Header
 	if st2 != http.StatusOK {
-		return respBody, status, hdr, true
+		return rb2, st2, h2, true, newPassthroughRetryFailure(st2, rb2, h2.Get("Content-Type"), nil)
 	}
 	if c2, ok2 := coercePassthroughOverrideJSON(rb2); ok2 {
-		return c2, st2, h2, true
+		return c2, st2, h2, true, nil
 	}
-	return rb2, st2, h2, true
+	return rb2, st2, h2, true, nil
 }
 
 // respondPassthroughOverrideError writes a Cursor-safe envelope for a
