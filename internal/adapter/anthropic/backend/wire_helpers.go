@@ -55,6 +55,10 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 		Tools:      tools,
 		ToolChoice: tc, SystemBlocks: nil,
 
+		// Sampling and stop knobs are set later by BuildRequest's
+		// applySamplingAndStop, present only when the caller sent them.
+		Temperature: nil, TopP: nil, StopSequences: nil,
+
 		// anthContentBlockToWire converts one typed AnthContentBlock variant to the
 		// anthropic.ContentBlock wire shape. Returns nil to signal that this block
 		// should be omitted (e.g. an empty unsigned thinking block).

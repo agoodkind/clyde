@@ -267,7 +267,18 @@ type Request struct {
 	Messages     []Message     `json:"messages"`
 	MaxTokens    int           `json:"max_tokens"`
 	Stream       bool          `json:"stream"`
-	OutputConfig *OutputConfig `json:"output_config,omitempty"`
+	// Temperature, TopP, and StopSequences carry the caller's sampling
+	// and stop-sequence knobs. They are additive and present-only: the
+	// builder sets them only when the client sent the corresponding
+	// OpenAI field, so an absent field emits no wire key and the request
+	// stays byte-identical to a request that never set sampling.
+	// Temperature is clamped to Anthropic's accepted [0,1] range by the
+	// builder; TopP shares the [0,1] range on both sides and passes
+	// through as-is.
+	Temperature   *float64      `json:"temperature,omitempty"`
+	TopP          *float64      `json:"top_p,omitempty"`
+	StopSequences []string      `json:"stop_sequences,omitempty"`
+	OutputConfig  *OutputConfig `json:"output_config,omitempty"`
 	// Thinking selects extended thinking. Three shapes are accepted
 	// by the API: {type:"adaptive"} (no budget), {type:"enabled",
 	// budget_tokens:N}, and {type:"disabled"}. Adaptive thinking is
@@ -297,6 +308,9 @@ func (r *Request) UnmarshalJSON(raw []byte) error {
 		Messages          []Message          `json:"messages"`
 		MaxTokens         int                `json:"max_tokens"`
 		Stream            bool               `json:"stream"`
+		Temperature       *float64           `json:"temperature,omitempty"`
+		TopP              *float64           `json:"top_p,omitempty"`
+		StopSequences     []string           `json:"stop_sequences,omitempty"`
 		OutputConfig      *OutputConfig      `json:"output_config,omitempty"`
 		Thinking          *Thinking          `json:"thinking,omitempty"`
 		Tools             []Tool             `json:"tools,omitempty"`
@@ -318,6 +332,9 @@ func (r *Request) UnmarshalJSON(raw []byte) error {
 	r.Messages = wire.Messages
 	r.MaxTokens = wire.MaxTokens
 	r.Stream = wire.Stream
+	r.Temperature = wire.Temperature
+	r.TopP = wire.TopP
+	r.StopSequences = wire.StopSequences
 	r.OutputConfig = wire.OutputConfig
 	r.Thinking = wire.Thinking
 	r.Tools = wire.Tools
