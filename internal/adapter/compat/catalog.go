@@ -31,9 +31,25 @@ const (
 const (
 	warningCodeOmitted         = "field_omitted"
 	warningCodeOverridden      = "field_overridden"
+	warningCodeToolUnsupported = "tool_unsupported"
 	dispositionLabelOmitted    = "omitted"
 	dispositionLabelOverridden = "overridden"
 )
+
+// toolUnsupportedWarning builds the warning for one dropped Responses tool
+// type. The type label is a bounded tool-kind discriminator that the
+// openai classifier assigns (function tools are kept; built-in and custom
+// tools are dropped by their type), so it is safe to include in the
+// message. The projection performs the drop; this boundary only describes
+// it.
+func toolUnsupportedWarning(toolType string) CompatibilityWarning {
+	return CompatibilityWarning{
+		Code:        warningCodeToolUnsupported,
+		Param:       "tools",
+		Disposition: dispositionLabelOmitted,
+		Message:     "tool type " + toolType + " is not supported and was omitted",
+	}
+}
 
 // catalogEntry is one field's per-provider disposition.
 type catalogEntry struct {

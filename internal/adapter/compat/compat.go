@@ -47,10 +47,14 @@ const (
 
 // ComputeWarnings returns the warning set for one request body under the
 // resolved provider and route dialect. It parses the body once for
-// top-level key presence, walks the fixed catalog in canonical order, and
-// returns an empty set for the chat dialect, the passthrough provider, or
-// an unknown provider.
-func ComputeWarnings(body []byte, provider adaptermodel.BackendID, endpoint Endpoint) WarningSet {
+// top-level key presence, walks the fixed catalog in canonical order,
+// appends one tool_unsupported warning per dropped tool type after the
+// field warnings, and returns an empty set for the chat dialect, the
+// passthrough provider, or an unknown provider. unsupportedTools carries
+// the tool `type` labels the Responses projection dropped; the caller
+// classifies tools in the openai package so this leaf package never
+// imports the adapter tool type.
+func ComputeWarnings(body []byte, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
 	switch endpoint {
 	case EndpointChat:
 		return WarningSet{warnings: nil}
@@ -64,7 +68,7 @@ func ComputeWarnings(body []byte, provider adaptermodel.BackendID, endpoint Endp
 		return WarningSet{warnings: nil}
 	}
 	fields := parseTopLevelKeys(body)
-	raw := make([]CompatibilityWarning, 0, len(responsesCatalog))
+	raw := make([]CompatibilityWarning, 0, len(responsesCatalog)+len(unsupportedTools))
 	for _, entry := range responsesCatalog {
 		if entry.dispositionFor(column) == dispositionTranslate {
 			continue
@@ -73,6 +77,9 @@ func ComputeWarnings(body []byte, provider adaptermodel.BackendID, endpoint Endp
 			continue
 		}
 		raw = append(raw, warningFor(entry, column))
+	}
+	for _, toolType := range unsupportedTools {
+		raw = append(raw, toolUnsupportedWarning(toolType))
 	}
 	return newWarningSet(raw)
 }
@@ -108,14 +115,29 @@ func newWarningSet(raw []CompatibilityWarning) WarningSet {
 	return WarningSet{warnings: capWarnings(dedupWarnings(raw))}
 }
 
-// warningKey identifies a warning for dedup by its code and param.
+// warningKey identifies a warning for dedup by its code, param, and a
+// discriminator. Field warnings dedup by (code, param) alone; tool
+// warnings all share the tools param, so the discriminator carries the
+// dropped tool type (via the message) to keep distinct types distinct
+// while collapsing repeated identical types.
 type warningKey struct {
 	code  string
 	param string
+	disc  string
 }
 
-// dedupWarnings keeps the first warning for each (Code, Param) pair in
-// input order.
+// dedupKey builds the dedup key for one warning. The discriminator stays
+// empty for field warnings so their behavior is unchanged, and carries the
+// type-bearing message for tool warnings so distinct tool types survive.
+func dedupKey(warning CompatibilityWarning) warningKey {
+	disc := ""
+	if warning.Code == warningCodeToolUnsupported {
+		disc = warning.Message
+	}
+	return warningKey{code: warning.Code, param: warning.Param, disc: disc}
+}
+
+// dedupWarnings keeps the first warning for each dedup key in input order.
 func dedupWarnings(in []CompatibilityWarning) []CompatibilityWarning {
 	if len(in) == 0 {
 		return nil
@@ -123,7 +145,7 @@ func dedupWarnings(in []CompatibilityWarning) []CompatibilityWarning {
 	seen := make(map[warningKey]bool, len(in))
 	out := make([]CompatibilityWarning, 0, len(in))
 	for _, warning := range in {
-		key := warningKey{code: warning.Code, param: warning.Param}
+		key := dedupKey(warning)
 		if seen[key] {
 			continue
 		}

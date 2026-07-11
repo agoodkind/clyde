@@ -49,7 +49,7 @@ func TestComputeWarningsCodexOmittedFieldsInCanonicalOrder(t *testing.T) {
 	// prompt_cache_retention is placed first in the body so raw key order
 	// cannot leak into the warning order; the catalog order must win.
 	body := []byte(`{"prompt_cache_retention":"24h","stop":["x"],"top_p":0.9,"temperature":0.5,"max_output_tokens":10,"model":"gpt"}`)
-	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil)
 	if set.Empty() {
 		t.Fatalf("expected warnings, got none")
 	}
@@ -72,7 +72,7 @@ func TestComputeWarningsAnthropicOmittedFields(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"claude","include":["reasoning.encrypted_content"],"service_tier":"flex"}`)
 	for _, provider := range []adaptermodel.BackendID{adaptermodel.BackendAnthropic, adaptermodel.BackendClaude} {
-		set := ComputeWarnings(body, provider, EndpointResponses)
+		set := ComputeWarnings(body, provider, EndpointResponses, nil)
 		got := warningParams(set.Slice())
 		want := []string{"include", "service_tier"}
 		if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -89,7 +89,7 @@ func TestComputeWarningsAnthropicOmittedFields(t *testing.T) {
 func TestComputeWarningsStoreOverrideForCodex(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"gpt","store":true}`)
-	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil)
 	slice := set.Slice()
 	if len(slice) != 1 {
 		t.Fatalf("warnings = %v, want one store override", slice)
@@ -103,7 +103,7 @@ func TestComputeWarningsStoreOverrideForCodex(t *testing.T) {
 func TestComputeWarningsStoreOmittedForAnthropic(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"claude","store":true}`)
-	set := ComputeWarnings(body, adaptermodel.BackendAnthropic, EndpointResponses)
+	set := ComputeWarnings(body, adaptermodel.BackendAnthropic, EndpointResponses, nil)
 	slice := set.Slice()
 	if len(slice) != 1 || slice[0].Param != "store" || slice[0].Code != "field_omitted" {
 		t.Fatalf("store warning = %+v, want field_omitted", slice)
@@ -113,7 +113,7 @@ func TestComputeWarningsStoreOmittedForAnthropic(t *testing.T) {
 func TestComputeWarningsNullTreatedAsAbsent(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"gpt","temperature":null}`)
-	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil)
 	if !set.Empty() {
 		t.Fatalf("null temperature warned: %v", set.Slice())
 	}
@@ -122,7 +122,7 @@ func TestComputeWarningsNullTreatedAsAbsent(t *testing.T) {
 func TestComputeWarningsZeroTemperatureWarns(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"gpt","temperature":0}`)
-	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil)
 	slice := set.Slice()
 	if len(slice) != 1 || slice[0].Param != "temperature" {
 		t.Fatalf("zero temperature warnings = %v, want temperature", slice)
@@ -132,7 +132,7 @@ func TestComputeWarningsZeroTemperatureWarns(t *testing.T) {
 func TestComputeWarningsPassthroughYieldsNone(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"x","temperature":0.5,"store":true,"include":["a"]}`)
-	set := ComputeWarnings(body, adaptermodel.BackendPassthroughOverride, EndpointResponses)
+	set := ComputeWarnings(body, adaptermodel.BackendPassthroughOverride, EndpointResponses, nil)
 	if !set.Empty() {
 		t.Fatalf("passthrough warned: %v", set.Slice())
 	}
@@ -141,7 +141,7 @@ func TestComputeWarningsPassthroughYieldsNone(t *testing.T) {
 func TestComputeWarningsChatEndpointYieldsNone(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"gpt","temperature":0.5}`)
-	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointChat)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointChat, nil)
 	if !set.Empty() {
 		t.Fatalf("chat endpoint warned: %v", set.Slice())
 	}
@@ -150,16 +150,55 @@ func TestComputeWarningsChatEndpointYieldsNone(t *testing.T) {
 func TestComputeWarningsTranslateFieldsNeverWarn(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"gpt","input":"hi","instructions":"be terse","tools":[],"metadata":{},"parallel_tool_calls":true}`)
-	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil)
 	if !set.Empty() {
 		t.Fatalf("translate-only body warned: %v", set.Slice())
+	}
+}
+
+func TestComputeWarningsToolUnsupportedAfterFieldWarnings(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"gpt","temperature":0.5}`)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, []string{"web_search"})
+	slice := set.Slice()
+	if len(slice) != 2 {
+		t.Fatalf("warnings = %+v, want temperature then tool_unsupported", slice)
+	}
+	if slice[0].Param != "temperature" || slice[0].Code != "field_omitted" {
+		t.Fatalf("first warning = %+v, want field warning first", slice[0])
+	}
+	tool := slice[1]
+	if tool.Code != "tool_unsupported" || tool.Param != "tools" || tool.Disposition != "omitted" {
+		t.Fatalf("tool warning = %+v, want tool_unsupported/tools/omitted", tool)
+	}
+	if !strings.Contains(tool.Message, "web_search") {
+		t.Fatalf("tool message = %q, want the dropped type", tool.Message)
+	}
+}
+
+func TestComputeWarningsDedupsRepeatedToolTypes(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"gpt"}`)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, []string{"web_search", "web_search"})
+	slice := set.Slice()
+	if len(slice) != 1 || slice[0].Code != "tool_unsupported" {
+		t.Fatalf("warnings = %+v, want one deduped tool_unsupported", slice)
+	}
+}
+
+func TestComputeWarningsToolUnsupportedIgnoredForChatEndpoint(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"gpt"}`)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointChat, []string{"web_search"})
+	if !set.Empty() {
+		t.Fatalf("chat endpoint warned on tools: %v", set.Slice())
 	}
 }
 
 func TestHeadersAreCompactJSONPerWarning(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"gpt","temperature":0.5,"top_p":0.9}`)
-	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses)
+	set := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil)
 	headers := set.Headers()
 	if len(headers) != 2 {
 		t.Fatalf("headers = %v, want two", headers)
@@ -180,7 +219,7 @@ func TestHeadersAreCompactJSONPerWarning(t *testing.T) {
 
 func TestEmptySetHasNoHeaders(t *testing.T) {
 	t.Parallel()
-	set := ComputeWarnings([]byte(`{"model":"gpt"}`), adaptermodel.BackendCodex, EndpointResponses)
+	set := ComputeWarnings([]byte(`{"model":"gpt"}`), adaptermodel.BackendCodex, EndpointResponses, nil)
 	if !set.Empty() {
 		t.Fatalf("unexpected warnings: %v", set.Slice())
 	}

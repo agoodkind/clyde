@@ -130,6 +130,40 @@ func TestResponsesStreamingCodexTemperatureWarnsInFirstEvent(t *testing.T) {
 	}
 }
 
+func TestResponsesUnsupportedToolOmittedAndWarned(t *testing.T) {
+	fakes := newRoutingFakeEndpoints(t)
+	srv := newRoutingIntegrationServer(t, fakes)
+	openAIURL, _ := startRoutingListeners(t, srv)
+
+	body := `{"model":"gpt-future","input":"hello","tools":[` +
+		`{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}},` +
+		`{"type":"web_search"}` +
+		`]}`
+	response, respBody := postResponsesRaw(t, openAIURL+"/v1/responses", body)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.StatusCode, respBody)
+	}
+
+	codexRequest := <-fakes.codexReqs
+	if len(codexRequest.Tools) != 1 {
+		t.Fatalf("Codex egress tools = %d, want only the function tool", len(codexRequest.Tools))
+	}
+
+	headers := response.Header.Values("X-Clyde-Warning")
+	if !strings.Contains(strings.Join(headers, "|"), `"code":"tool_unsupported"`) {
+		t.Fatalf("X-Clyde-Warning missing tool_unsupported: %v", headers)
+	}
+
+	warnings := responsesClydeWarnings(t, respBody)
+	warning, ok := warningForParam(warnings, "tools")
+	if !ok {
+		t.Fatalf("clyde.warnings missing tools warning: %v", warnings)
+	}
+	if warning.Code != "tool_unsupported" || warning.Disposition != "omitted" {
+		t.Fatalf("tool warning = %+v, want tool_unsupported/omitted", warning)
+	}
+}
+
 func TestResponsesNoCompatFieldsStaysClydeFree(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)

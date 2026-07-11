@@ -47,7 +47,7 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	if parseErr != nil {
 		return adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
 	}
-	req, projectionErr := responsesRequestToChatRequest(rr)
+	req, droppedTools, projectionErr := responsesRequestToChatRequest(rr)
 	if projectionErr != nil {
 		return projectionErr
 	}
@@ -76,9 +76,10 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	}
 
 	// The compatibility boundary describes which request fields the resolved
-	// provider omits or overrides. It reads the raw body for top-level field
-	// presence and never performs the omission itself.
-	warnings := adaptercompat.ComputeWarnings(body, resolvedReq.Provider, adaptercompat.EndpointResponses)
+	// provider omits or overrides, plus the built-in / custom tool types the
+	// projection dropped. It reads the raw body for top-level field presence
+	// and never performs the omission itself.
+	warnings := adaptercompat.ComputeWarnings(body, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
 	if !warnings.Empty() {
 		for _, header := range warnings.Headers() {
 			w.Header().Add("X-Clyde-Warning", header)
@@ -91,13 +92,17 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 
 // responsesRequestToChatRequest projects a typed Responses request into
 // the ChatRequest the shared resolve pipeline consumes. It carries the
-// model, streaming flag, tools, reasoning, sampling, and Responses input
-// fields through unchanged, folds `input` into messages, and prepends
-// `instructions` as a system message.
-func responsesRequestToChatRequest(rr adapteropenai.ResponsesRequest) (ChatRequest, *adapterError) {
+// model, streaming flag, reasoning, sampling, and Responses input fields
+// through unchanged, folds `input` into messages, and prepends
+// `instructions` as a system message. It splits the raw Responses tools
+// array leniently, keeping client function tools and returning the type
+// labels of any built-in or custom tools it dropped so the caller can
+// warn about them.
+func responsesRequestToChatRequest(rr adapteropenai.ResponsesRequest) (ChatRequest, []string, *adapterError) {
 	if strings.TrimSpace(rr.Model) == "" {
-		return ChatRequest{}, adapterErrInvalidRequest("model is required", nil)
+		return ChatRequest{}, nil, adapterErrInvalidRequest("model is required", nil)
 	}
+	functionTools, droppedTools := adapteropenai.SplitResponsesTools(rr.Tools)
 	req := ChatRequest{
 		Model:                rr.Model,
 		Messages:             nil,
@@ -106,7 +111,7 @@ func responsesRequestToChatRequest(rr adapteropenai.ResponsesRequest) (ChatReque
 		StreamOptions:        nil,
 		ReasoningEffort:      "",
 		Reasoning:            rr.Reasoning,
-		Tools:                rr.Tools,
+		Tools:                functionTools,
 		ToolChoice:           rr.ToolChoice,
 		Functions:            nil,
 		FunctionCall:         nil,
@@ -149,18 +154,18 @@ func responsesRequestToChatRequest(rr adapteropenai.ResponsesRequest) (ChatReque
 	if normErr := normalizeRequestMessages(&req); normErr != nil {
 		var aerr *adapterError
 		if errors.As(normErr, &aerr) {
-			return ChatRequest{}, aerr
+			return ChatRequest{}, nil, aerr
 		}
-		return ChatRequest{}, adapterErrInvalidRequest(normErr.Error(), normErr)
+		return ChatRequest{}, nil, adapterErrInvalidRequest(normErr.Error(), normErr)
 	}
 
 	if strings.TrimSpace(rr.Instructions) != "" {
 		req.Messages = append([]ChatMessage{responsesSystemMessage(rr.Instructions)}, req.Messages...)
 	}
 	if len(req.Messages) == 0 {
-		return ChatRequest{}, adapterErrInvalidRequest("input is required", nil)
+		return ChatRequest{}, nil, adapterErrInvalidRequest("input is required", nil)
 	}
-	return req, nil
+	return req, droppedTools, nil
 }
 
 // responsesSystemMessage builds the system ChatMessage the projection

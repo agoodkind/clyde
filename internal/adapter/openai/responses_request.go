@@ -14,11 +14,17 @@ import (
 // a comment, because their full shape is an external contract the
 // adapter forwards rather than models.
 type ResponsesRequest struct {
-	Model                string          `json:"model"`
-	Instructions         string          `json:"instructions,omitempty"`
-	Input                json.RawMessage `json:"input,omitempty"`
-	Stream               bool            `json:"stream,omitempty"`
-	Tools                []Tool          `json:"tools,omitempty"`
+	Model        string          `json:"model"`
+	Instructions string          `json:"instructions,omitempty"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	Stream       bool            `json:"stream,omitempty"`
+	// Tools stays raw at this edge because the Responses tools array mixes
+	// client-owned function tools with OpenAI built-ins (web_search,
+	// file_search, computer_use, mcp) and public custom tools whose full
+	// shape is an external contract. The strict per-element Tool unmarshal
+	// rejects built-ins, so the projection splits this raw array leniently
+	// with SplitResponsesTools instead of decoding it into typed Tools here.
+	Tools                json.RawMessage `json:"tools,omitempty"`
 	ToolChoice           json.RawMessage `json:"tool_choice,omitempty"`
 	Reasoning            *Reasoning      `json:"reasoning,omitempty"`
 	MaxOutputTokens      *int            `json:"max_output_tokens,omitempty"`
