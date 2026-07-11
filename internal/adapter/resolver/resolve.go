@@ -182,6 +182,8 @@ func Resolve(surface IngressSurface, req adaptercursor.Request, registry ModelRe
 		Verbosity:               "",
 		RequestID:               "",
 		Correlation:             correlation.Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
+		Responses:               nil,
+		ResponsesFields:         adapteropenai.ResponsesFieldSet{},
 	}, nil
 }
 

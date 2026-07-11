@@ -45,6 +45,14 @@ type Request struct {
 	MCPToolNames []string
 }
 
+// NewUntranslatedRequest wraps a generic OpenAI request without applying
+// Cursor metadata, model, tool, identity, or mode normalization.
+func NewUntranslatedRequest(req adapteropenai.ChatRequest) Request {
+	var out Request
+	out.OpenAI = req
+	return out
+}
+
 // TranslateRequest derives Cursor-specific metadata from an OpenAI-compatible
 // request without changing the underlying request payload.
 func TranslateRequest(req adapteropenai.ChatRequest) Request {

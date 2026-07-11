@@ -54,13 +54,16 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	if parseErr != nil {
 		return adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
 	}
+	if rejected := adaptercompat.RejectedParam(func(param string) int { return int(rr.Fields.Presence(param)) }); rejected != "" {
+		return adapterErrInvalidRequest(rejected+" is not supported by Clyde", nil)
+	}
 	req, droppedTools, projectionErr := responsesRequestToChatRequest(rr)
 	if projectionErr != nil {
 		return projectionErr
 	}
 	forceStreamUsageOptIn(&req)
 
-	resolvedReq, resolverErr := resolveCursorChatRequest(
+	resolvedReq, resolverErr := resolveResponsesRequest(
 		openAIIngressSurface(ctx),
 		req,
 		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
@@ -74,6 +77,8 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	}
 	resolvedReq.RequestID = reqID
 	resolvedReq.Correlation = corr
+	resolvedReq.Responses = &rr
+	resolvedReq.ResponsesFields = rr.Fields
 
 	if overrideErr := s.applyBackendOverride(r, req, &resolvedReq, reqID); overrideErr != nil {
 		return overrideErr
@@ -86,7 +91,7 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	// provider omits or overrides, plus the built-in / custom tool types the
 	// projection dropped. It reads the raw body for top-level field presence
 	// and never performs the omission itself.
-	warnings := adaptercompat.ComputeWarnings(body, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
+	warnings := adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, rr.N, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
 	if !warnings.Empty() {
 		for _, header := range warnings.Headers() {
 			w.Header().Add("X-Clyde-Warning", header)
@@ -114,7 +119,7 @@ func responsesRequestToChatRequest(rr adapteropenai.ResponsesRequest) (ChatReque
 		Model:                rr.Model,
 		Messages:             nil,
 		Input:                rr.Input,
-		Stream:               rr.Stream,
+		Stream:               rr.Stream != nil && *rr.Stream,
 		StreamOptions:        nil,
 		ReasoningEffort:      "",
 		Reasoning:            rr.Reasoning,
@@ -143,10 +148,10 @@ func responsesRequestToChatRequest(rr adapteropenai.ResponsesRequest) (ChatReque
 		Store:                rr.Store,
 		Metadata:             rr.Metadata,
 		Include:              rr.Include,
-		ServiceTier:          rr.ServiceTier,
+		ServiceTier:          responsesString(rr.ServiceTier),
 		Text:                 rr.Text,
-		Truncation:           rr.Truncation,
-		PromptCacheRetention: rr.PromptCacheRetention,
+		Truncation:           responsesString(rr.Truncation),
+		PromptCacheRetention: responsesString(rr.PromptCacheRetention),
 	}
 
 	// The Responses input may be a bare JSON string (a single user turn)
@@ -166,13 +171,20 @@ func responsesRequestToChatRequest(rr adapteropenai.ResponsesRequest) (ChatReque
 		return ChatRequest{}, nil, adapterErrInvalidRequest(normErr.Error(), normErr)
 	}
 
-	if strings.TrimSpace(rr.Instructions) != "" {
-		req.Messages = append([]ChatMessage{responsesSystemMessage(rr.Instructions)}, req.Messages...)
+	if instructions := responsesString(rr.Instructions); strings.TrimSpace(instructions) != "" {
+		req.Messages = append([]ChatMessage{responsesSystemMessage(instructions)}, req.Messages...)
 	}
 	if len(req.Messages) == 0 {
 		return ChatRequest{}, nil, adapterErrInvalidRequest("input is required", nil)
 	}
 	return req, droppedTools, nil
+}
+
+func responsesString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // responsesSystemMessage builds the system ChatMessage the projection

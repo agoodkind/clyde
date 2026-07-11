@@ -8,6 +8,39 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 )
 
+type fieldPresence int
+
+const (
+	presenceAbsent fieldPresence = iota
+	presenceNull
+	presenceEmpty
+	presenceZero
+	presencePresent
+)
+
+func presence(raw json.RawMessage) fieldPresence {
+	switch strings.TrimSpace(string(raw)) {
+	case "":
+		return presenceAbsent
+	case "null":
+		return presenceNull
+	case `""`, "[]", "{}":
+		return presenceEmpty
+	case "0":
+		return presenceZero
+	default:
+		return presencePresent
+	}
+}
+
+func ComputeWarnings(body []byte, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return WarningSet{warnings: nil}
+	}
+	return ComputeWarningsFromResponsesPresence(func(param string) int { return int(presence(fields[param])) }, nil, provider, endpoint, unsupportedTools)
+}
+
 func TestPresenceDistinguishesAllClasses(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -54,7 +87,7 @@ func TestComputeWarningsCodexOmittedFieldsInCanonicalOrder(t *testing.T) {
 		t.Fatalf("expected warnings, got none")
 	}
 	got := warningParams(set.Slice())
-	want := []string{"max_output_tokens", "temperature", "top_p", "stop", "prompt_cache_retention"}
+	want := []string{"temperature", "top_p", "prompt_cache_retention", "max_output_tokens", "stop"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("params = %v, want %v", got, want)
 	}
@@ -74,7 +107,7 @@ func TestComputeWarningsAnthropicOmittedFields(t *testing.T) {
 	for _, provider := range []adaptermodel.BackendID{adaptermodel.BackendAnthropic, adaptermodel.BackendClaude} {
 		set := ComputeWarnings(body, provider, EndpointResponses, nil)
 		got := warningParams(set.Slice())
-		want := []string{"include", "service_tier"}
+		want := []string{"service_tier", "include"}
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Fatalf("provider %s params = %v, want %v", provider, got, want)
 		}

@@ -45,35 +45,24 @@ const (
 	maxHeaderBytes = 8 * 1024
 )
 
-// ComputeWarnings returns the warning set for one request body under the
-// resolved provider and route dialect. It parses the body once for
-// top-level key presence, walks the fixed catalog in canonical order,
-// appends one tool_unsupported warning per dropped tool type after the
-// field warnings, and returns an empty set for the chat dialect, the
-// passthrough provider, or an unknown provider. unsupportedTools carries
-// the tool `type` labels the Responses projection dropped; the caller
-// classifies tools in the openai package so this leaf package never
-// imports the adapter tool type.
-func ComputeWarnings(body []byte, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
-	switch endpoint {
-	case EndpointChat:
-		return WarningSet{warnings: nil}
-	case EndpointResponses:
-		// Responses is the only dialect with a warning catalog today.
-	default:
+// ComputeWarningsFromPresence uses the decoded Responses presence set. The
+// callback returns the OpenAI field-presence enum as an int so compat stays
+// independent from the OpenAI request package.
+func ComputeWarningsFromPresence(presenceFor func(string) int, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
+	if endpoint != EndpointResponses {
 		return WarningSet{warnings: nil}
 	}
 	column, known := providerColumnFor(provider)
 	if !known {
 		return WarningSet{warnings: nil}
 	}
-	fields := parseTopLevelKeys(body)
 	raw := make([]CompatibilityWarning, 0, len(responsesCatalog)+len(unsupportedTools))
 	for _, entry := range responsesCatalog {
-		if entry.dispositionFor(column) == dispositionTranslate {
+		if entry.dispositionFor(column) != dispositionOmitWarn && entry.dispositionFor(column) != dispositionOverrideWarn {
 			continue
 		}
-		if !presenceWarns(presence(fields[entry.param])) {
+		presence := presenceFor(entry.param)
+		if presence == 0 || presence == 1 {
 			continue
 		}
 		raw = append(raw, warningFor(entry, column))
@@ -82,6 +71,37 @@ func ComputeWarnings(body []byte, provider adaptermodel.BackendID, endpoint Endp
 		raw = append(raw, toolUnsupportedWarning(toolType))
 	}
 	return newWarningSet(raw)
+}
+
+// ComputeWarningsFromResponsesPresence keeps the decoded n value beside the
+// presence callback because n warns only when it asks for more than one result.
+func ComputeWarningsFromResponsesPresence(presenceFor func(string) int, n *int, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
+	set := ComputeWarningsFromPresence(presenceFor, provider, endpoint, unsupportedTools)
+	if endpoint != EndpointResponses || n == nil || *n <= 1 {
+		return set
+	}
+	column, known := providerColumnFor(provider)
+	if !known {
+		return set
+	}
+	warnings := append([]CompatibilityWarning{}, set.Slice()...)
+	warnings = append(warnings, CompatibilityWarning{Code: warningCodeOmitted, Param: "n", Disposition: dispositionLabelOmitted, Message: "n is not supported by the " + backendLabel(column) + " backend and one result was returned"})
+	return newWarningSet(warnings)
+}
+
+// RejectedParam returns the first OpenAI-owned reference field that Clyde
+// cannot resolve. It uses catalog order so the selected error is stable.
+func RejectedParam(presenceFor func(string) int) string {
+	for _, entry := range responsesCatalog {
+		if entry.codex != dispositionReject {
+			continue
+		}
+		presence := presenceFor(entry.param)
+		if presence != 0 && presence != 1 {
+			return entry.param
+		}
+	}
+	return ""
 }
 
 // Empty reports whether the set carries no warnings.
