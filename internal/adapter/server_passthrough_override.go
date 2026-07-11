@@ -141,7 +141,7 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
-	if resp.StatusCode >= http.StatusMultipleChoices {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromRead(respBody, readErr), started)

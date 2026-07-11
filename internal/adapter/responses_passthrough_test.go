@@ -270,6 +270,24 @@ func TestResponsesPassthroughRedirectUsesOpenAIErrorBoundary(t *testing.T) {
 	}
 }
 
+func TestResponsesPassthroughSwitchingProtocolsUsesOpenAIErrorBoundary(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	t.Cleanup(upstream.Close)
+	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi"}`)))
+
+	var envelope adapteropenai.ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode error envelope: %v body=%s", err, recorder.Body.String())
+	}
+	if recorder.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" {
+		t.Fatalf("status=%d envelope=%+v", recorder.Code, envelope)
+	}
+}
+
 func TestResponsesPassthroughRejectsFailedStreamBeforeStreamOpened(t *testing.T) {
 	statuses := []int{http.StatusTemporaryRedirect, http.StatusTooManyRequests}
 	for _, status := range statuses {
@@ -692,6 +710,60 @@ func TestPassthroughSSEUsageRequiresMatchingTerminalMarkers(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			usage := passthroughSSEUsage(t, test.eventType, test.payload, "\n")
+			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+		})
+	}
+}
+
+func TestPassthroughSSEUsageAcceptsMatchingCompletedAndIncompleteEvents(t *testing.T) {
+	tests := []struct {
+		name        string
+		eventFields []string
+		payload     string
+		lineEnd     string
+		wantUsage   bool
+	}{
+		{
+			name:        "completed with LF",
+			eventFields: []string{"response.completed"},
+			payload:     `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`,
+			lineEnd:     "\n",
+			wantUsage:   true,
+		},
+		{
+			name:        "incomplete with CRLF",
+			eventFields: []string{"response.incomplete"},
+			payload:     `{"type":"response.incomplete","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`,
+			lineEnd:     "\r\n",
+			wantUsage:   true,
+		},
+		{
+			name:        "last repeated event and JSON type match incomplete",
+			eventFields: []string{"response.completed", "response.incomplete"},
+			payload:     `{"type":"response.completed","type":"response.incomplete","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`,
+			lineEnd:     "\n",
+			wantUsage:   true,
+		},
+		{
+			name:        "incomplete event rejects completed JSON type",
+			eventFields: []string{"response.incomplete"},
+			payload:     `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`,
+			lineEnd:     "\r\n",
+		},
+		{
+			name:        "completed event rejects incomplete JSON type",
+			eventFields: []string{"response.completed"},
+			payload:     `{"type":"response.incomplete","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`,
+			lineEnd:     "\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			usage := passthroughSSEFieldsUsage(t, test.eventFields, test.payload, test.lineEnd)
+			if test.wantUsage {
+				assertPassthroughUsage(t, usage, 11, 7, 18, 0)
+				return
+			}
 			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
 		})
 	}
@@ -1123,7 +1195,9 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 
 func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testing.T) {
 	requestCount := 0
+	requestHandled := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(requestHandled)
 		requestCount++
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
@@ -1168,6 +1242,11 @@ func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testi
 	body := `{"model":"local-model","input":"capture primary transport failure"}`
 	recorder := httptest.NewRecorder()
 	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)))
+	select {
+	case <-requestHandled:
+	case <-time.After(time.Second):
+		t.Fatal("upstream handler did not complete within 1s")
+	}
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}

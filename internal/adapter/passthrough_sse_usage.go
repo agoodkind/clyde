@@ -3,17 +3,8 @@ package adapter
 import "bytes"
 
 const (
-	passthroughTerminalResponseEvent = "response.completed"
-	passthroughMaxJSONDepth          = 64
-	passthroughMaxJSONStringBytes    = 64
-)
-
-type passthroughSSELineKind uint8
-
-const (
-	passthroughSSELineUnknown passthroughSSELineKind = iota
-	passthroughSSELineData
-	passthroughSSELineEvent
+	passthroughMaxJSONDepth       = 64
+	passthroughMaxJSONStringBytes = 64
 )
 
 type passthroughSSEUsageParser struct {
@@ -28,9 +19,10 @@ type passthroughSSEUsageParser struct {
 	lineNameTooLong       bool
 	lineHeaderComplete    bool
 	lineValueStarted      bool
-	eventNameMatches      bool
+	eventName             [len(passthroughIncompleteResponseEvent)]byte
 	eventNameLength       int
-	eventTerminal         bool
+	eventNameTooLong      bool
+	eventTerminal         passthroughTerminalEvent
 	skipFollowingLineFeed bool
 }
 
@@ -139,12 +131,10 @@ func (p *passthroughSSEUsageParser) consumeLineValueByte(current byte) {
 }
 
 func (p *passthroughSSEUsageParser) consumeEventNameByte(current byte) {
-	if p.eventNameLength >= len(passthroughTerminalResponseEvent) {
-		p.eventNameMatches = false
-		return
-	}
-	if current != passthroughTerminalResponseEvent[p.eventNameLength] {
-		p.eventNameMatches = false
+	if p.eventNameLength < len(p.eventName) {
+		p.eventName[p.eventNameLength] = current
+	} else {
+		p.eventNameTooLong = true
 	}
 	p.eventNameLength++
 }
@@ -162,7 +152,11 @@ func (p *passthroughSSEUsageParser) finishLine() {
 	case passthroughSSELineData:
 		p.json.WriteByte('\n')
 	case passthroughSSELineEvent:
-		p.eventTerminal = p.eventNameMatches && p.eventNameLength == len(passthroughTerminalResponseEvent)
+		if p.eventNameTooLong {
+			p.eventTerminal = passthroughTerminalEventNone
+		} else {
+			p.eventTerminal = passthroughTerminalEventForName(p.eventName[:p.eventNameLength])
+		}
 	case passthroughSSELineUnknown:
 	}
 	p.resetLine()
@@ -170,11 +164,11 @@ func (p *passthroughSSEUsageParser) finishLine() {
 
 func (p *passthroughSSEUsageParser) finishEvent() {
 	p.json.Finish()
-	if p.eventTerminal && p.json.terminal && p.json.Valid() {
+	if p.eventTerminal != passthroughTerminalEventNone && p.json.terminal == p.eventTerminal && p.json.Valid() {
 		p.terminalUsage = p.json.usage
 	}
 	p.json.Reset()
-	p.eventTerminal = false
+	p.eventTerminal = passthroughTerminalEventNone
 }
 
 func (p *passthroughSSEUsageParser) resetLine() {
@@ -183,8 +177,8 @@ func (p *passthroughSSEUsageParser) resetLine() {
 	p.lineNameTooLong = false
 	p.lineHeaderComplete = false
 	p.lineValueStarted = false
-	p.eventNameMatches = true
 	p.eventNameLength = 0
+	p.eventNameTooLong = false
 }
 
 func (p *passthroughSSEUsageParser) Usage() Usage {
@@ -192,7 +186,7 @@ func (p *passthroughSSEUsageParser) Usage() Usage {
 	if p.lineHeaderComplete || p.lineNameLength > 0 {
 		p.finishLine()
 	}
-	if p.eventTerminal || p.json.hasContent() {
+	if p.eventTerminal != passthroughTerminalEventNone || p.json.hasContent() {
 		p.finishEvent()
 	}
 	return p.terminalUsage
@@ -294,7 +288,7 @@ type passthroughUsageJSONParser struct {
 	literalBuffer       [5]byte
 	literalLength       int
 	invalid             bool
-	terminal            bool
+	terminal            passthroughTerminalEvent
 	usage               Usage
 	contentSeen         bool
 }
@@ -430,8 +424,10 @@ func (p *passthroughUsageJSONParser) finishString() {
 		return
 	}
 	if p.currentValueIsRootType() {
-		p.terminal = !p.stringEscaped && !p.stringTooLong &&
-			bytes.Equal(p.stringBuffer[:p.stringLength], []byte(passthroughTerminalResponseEvent))
+		p.terminal = passthroughTerminalEventNone
+		if !p.stringEscaped && !p.stringTooLong {
+			p.terminal = passthroughTerminalEventForName(p.stringBuffer[:p.stringLength])
+		}
 	}
 	if p.isRootUsageCounter() {
 		p.invalid = true
@@ -441,7 +437,7 @@ func (p *passthroughUsageJSONParser) finishString() {
 
 func (p *passthroughUsageJSONParser) beginNumber(current byte) {
 	if p.currentValueIsRootType() {
-		p.terminal = false
+		p.terminal = passthroughTerminalEventNone
 	}
 	p.clearSupersededStructuralUsage()
 	if !p.beginValue() {
@@ -638,7 +634,7 @@ func (p *passthroughUsageJSONParser) numberIsInteger() bool {
 
 func (p *passthroughUsageJSONParser) beginLiteral(current byte) {
 	if p.currentValueIsRootType() {
-		p.terminal = false
+		p.terminal = passthroughTerminalEventNone
 	}
 	p.clearSupersededStructuralUsage()
 	if !p.beginValue() {
@@ -685,7 +681,7 @@ func (p *passthroughUsageJSONParser) finishLiteral() {
 
 func (p *passthroughUsageJSONParser) enterContainer(container passthroughJSONContainer) {
 	if p.currentValueIsRootType() {
-		p.terminal = false
+		p.terminal = passthroughTerminalEventNone
 	}
 	p.clearSupersededStructuralUsage()
 	if p.isRootUsageCounter() {
@@ -990,7 +986,7 @@ func (p *passthroughUsageJSONParser) Reset() {
 	p.stringIsKey = false
 	p.literalLength = 0
 	p.invalid = false
-	p.terminal = false
+	p.terminal = passthroughTerminalEventNone
 	p.usage = usage
 	p.contentSeen = false
 }
