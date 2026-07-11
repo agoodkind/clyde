@@ -61,15 +61,17 @@ type harness struct {
 }
 
 const (
-	fakeMITMPort       = 58723
-	fakeAdapterPort    = 21434
-	fakeCursorPort     = 21435
-	fakeTopologyPort   = 21436
-	daemonReadyMarker  = "daemon.worker.ready"
-	hotApplyMarker     = "daemon.config.applied_in_process"
-	reloadTriggeredKey = "daemon.config_watch.reload_triggered"
-	classifiedMarker   = "daemon.config_watch.classified"
-	workerStartedKey   = "daemon.supervisor.worker_started"
+	fakeMITMPort                   = 58723
+	fakeAdapterPort                = 21434
+	fakeCursorPort                 = 21435
+	fakeTopologyPort               = 21436
+	daemonReadyMarker              = "daemon.worker.ready"
+	hotApplyMarker                 = "daemon.config.applied_in_process"
+	reloadTriggeredKey             = "daemon.config_watch.reload_triggered"
+	classifiedMarker               = "daemon.config_watch.classified"
+	workerStartedKey               = "daemon.supervisor.worker_started"
+	responsesRequestTimeout        = 30 * time.Second
+	responsesResponseHeaderTimeout = 10 * time.Second
 )
 
 // resolveFakePorts reads each throwaway port from its CLYDE_TEST_*_PORT env var,
@@ -926,17 +928,31 @@ func (u *responsesUpstream) releaseStreams() {
 
 type responsesHTTPResponse struct {
 	statusCode int
+	requestID  string
 	body       string
+}
+
+func newResponsesNonStreamingClient() *http.Client {
+	return &http.Client{Timeout: responsesRequestTimeout}
+}
+
+func newResponsesStreamingClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = true
+	transport.ResponseHeaderTimeout = responsesResponseHeaderTimeout
+	return &http.Client{Transport: transport}
 }
 
 func (h *harness) postResponses(t *testing.T, adapterPort int, body string) responsesHTTPResponse {
 	t.Helper()
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, fmt.Sprintf("http://[::1]:%d/v1/responses", adapterPort), strings.NewReader(body))
+	requestContext, cancelRequest := context.WithTimeout(context.Background(), responsesRequestTimeout)
+	defer cancelRequest()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, fmt.Sprintf("http://[::1]:%d/v1/responses", adapterPort), strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("create Responses request: %v", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
+	response, err := newResponsesNonStreamingClient().Do(request)
 	if err != nil {
 		t.Fatalf("post Responses request: %v", err)
 	}
@@ -945,12 +961,17 @@ func (h *harness) postResponses(t *testing.T, adapterPort int, body string) resp
 	if err != nil {
 		t.Fatalf("read Responses response: %v", err)
 	}
-	return responsesHTTPResponse{statusCode: response.StatusCode, body: string(responseBody)}
+	return responsesHTTPResponse{
+		statusCode: response.StatusCode,
+		requestID:  response.Header.Get("X-Request-Id"),
+		body:       string(responseBody),
+	}
 }
 
 type responsesStream struct {
-	first chan string
-	done  chan string
+	requestID string
+	first     chan string
+	done      chan string
 }
 
 func (h *harness) startResponsesStream(t *testing.T, adapterPort int, body string) *responsesStream {
@@ -960,29 +981,38 @@ func (h *harness) startResponsesStream(t *testing.T, adapterPort int, body strin
 		t.Fatalf("create streaming Responses request: %v", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
+	response, err := newResponsesStreamingClient().Do(request)
 	if err != nil {
 		t.Fatalf("post streaming Responses request: %v", err)
 	}
 	if response.StatusCode != http.StatusOK {
 		defer func() { _ = response.Body.Close() }()
 		responseBody, _ := io.ReadAll(response.Body)
-		t.Fatalf("streaming Responses status = %d, body = %s", response.StatusCode, responseBody)
+		t.Fatalf("streaming Responses status = %d, response length = %d", response.StatusCode, len(responseBody))
 	}
-	stream := &responsesStream{first: make(chan string, 1), done: make(chan string, 1)}
+	stream := startResponsesBodyStream(response.Body)
+	stream.requestID = response.Header.Get("X-Request-Id")
+	return stream
+}
+
+func startResponsesBodyStream(body io.ReadCloser) *responsesStream {
+	stream := &responsesStream{requestID: "", first: make(chan string, 1), done: make(chan string, 1)}
 	go func() {
-		defer func() { _ = response.Body.Close() }()
+		defer func() { _ = body.Close() }()
 		var all bytes.Buffer
-		buffer := make([]byte, 32*1024)
+		var frame bytes.Buffer
+		reader := bufio.NewReader(body)
 		firstSent := false
 		for {
-			count, readErr := response.Body.Read(buffer)
-			if count > 0 {
-				chunk := string(buffer[:count])
-				_, _ = all.Write(buffer[:count])
+			line, readErr := reader.ReadString('\n')
+			if line != "" {
+				_, _ = all.WriteString(line)
 				if !firstSent {
-					stream.first <- chunk
-					firstSent = true
+					_, _ = frame.WriteString(line)
+					if line == "\n" || line == "\r\n" {
+						stream.first <- frame.String()
+						firstSent = true
+					}
 				}
 			}
 			if readErr != nil {
@@ -1034,12 +1064,38 @@ func (h *harness) waitForResponsesCaptures(t *testing.T, probeID string, timeout
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		captures, err := readResponsesCaptures(databasePath, probeID)
-		if err == nil && len(captures) == 2 {
+		if err == nil && validateResponsesCaptureBoundaries(captures) == nil {
 			return captures
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("capture store did not record ingress and passthrough rows for %q within %s", probeID, timeout)
+	return nil
+}
+
+func validateResponsesCaptureBoundaries(captures []responsesCapture) error {
+	counts := map[string]int{
+		"adapter.ingress":     0,
+		"adapter.passthrough": 0,
+	}
+	for _, capture := range captures {
+		if _, ok := counts[capture.client]; !ok {
+			return fmt.Errorf("unexpected capture client %q", capture.client)
+		}
+		counts[capture.client]++
+		if capture.requestBody == "" {
+			return fmt.Errorf("capture client %q has no request body", capture.client)
+		}
+		if capture.responseBody == "" {
+			return fmt.Errorf("capture client %q has no response body", capture.client)
+		}
+		if capture.responseHeaders == "" {
+			return fmt.Errorf("capture client %q has no response headers", capture.client)
+		}
+	}
+	if counts["adapter.ingress"] != 1 || counts["adapter.passthrough"] != 1 {
+		return fmt.Errorf("capture counts ingress=%d passthrough=%d, want one each", counts["adapter.ingress"], counts["adapter.passthrough"])
+	}
 	return nil
 }
 
