@@ -125,9 +125,12 @@ func (h *Hook) MatchRequestResponse(
 	}
 	maxBytes := h.maxBytes(req.Header)
 	if promptIndex, ok := compactionPromptIndex(request); ok {
-		if recentStart, split := splitConversation(request.Messages, promptIndex, maxBytes); split {
-			recent := renderRecentMessages(request.Messages[recentStart:promptIndex])
-			if strings.TrimSpace(recent) != "" {
+		if plan, split := planSplit(request.Messages, promptIndex, maxBytes); split {
+			keep := trimKeepIndexes(plan.recentStart, plan.instructionStart, len(request.Messages))
+			recent := renderRecentMessages(request.Messages[plan.recentStart:plan.instructionStart])
+			// Hard gate: only trim when the kept messages are Anthropic-valid, so a
+			// boundary edge case can never forward a request that 400s /compact.
+			if validateTrim(selectMessages(request.Messages, keep)) && strings.TrimSpace(recent) != "" {
 				return mitm.RequestResponseHookMatch{
 					Matched: true,
 					Transformer: responseAppendTransformer{
@@ -136,16 +139,14 @@ func (h *Hook) MatchRequestResponse(
 						maxBytes:  maxBytes,
 						content:   recent,
 					},
-					RequestTransformer: messageTrimTransformer{
-						keep: trimKeepIndexes(recentStart, promptIndex, len(request.Messages)),
-					},
+					RequestTransformer: messageTrimTransformer{keep: keep},
 				}, nil
 			}
 		}
 	}
-	// Fallback: no meaningful split (small conversation or nothing renderable), so
-	// keep the pre-R2 behavior: summarize the whole request and inject the bounded
-	// disk-recovered transcript, with no request trim.
+	// Fallback: no valid split (small conversation, nothing renderable, or the trim
+	// would be invalid), so keep the pre-R2 behavior: summarize the whole request and
+	// inject the bounded disk-recovered transcript, with no request trim.
 	return mitm.RequestResponseHookMatch{
 		Matched: true,
 		Transformer: responseAppendTransformer{
@@ -230,78 +231,6 @@ func compactionPromptIndex(request anthropicSummaryRequest) (int, bool) {
 		return 0, false
 	}
 	return 0, false
-}
-
-// reorientSplitMinConversation is the fewest conversation messages (messages
-// before the compaction prompt) that make a top/bottom split meaningful.
-const reorientSplitMinConversation = 2
-
-// splitConversation picks the boundary between the older half that stays in the
-// summarization request and the recent half that is removed and re-attached
-// verbatim. It walks back from the message just before the prompt, taking the
-// most recent messages up to half the conversation by count and up to maxBytes by
-// rendered size, whichever it reaches first. The returned recentStart is the first
-// index of the recent half: messages[recentStart:promptIndex] is removed and
-// injected; everything else stays. ok is false when the conversation is too small
-// to split, so the caller falls back to the pre-R2 behavior.
-func splitConversation(messages []anthropicMessage, promptIndex int, maxBytes int) (recentStart int, ok bool) {
-	conversationLen := promptIndex
-	if conversationLen < reorientSplitMinConversation {
-		return 0, false
-	}
-	half := conversationLen / 2
-	if half < 1 {
-		return 0, false
-	}
-	bytesUsed := 0
-	recentStart = promptIndex
-	taken := 0
-	for index := promptIndex - 1; index >= 0 && taken < half; index-- {
-		// Budget on the same rendering the injection emits (renderBlocks includes
-		// tool_use and tool_result), not text(), which drops tool blocks. Otherwise a
-		// tool-heavy message counts as near-zero here yet renders large, letting the
-		// injected recent half exceed maxBytes.
-		size := len(messages[index].renderBlocks())
-		if maxBytes > 0 && taken > 0 && bytesUsed+size > maxBytes {
-			break
-		}
-		bytesUsed += size
-		recentStart = index
-		taken++
-	}
-	if recentStart >= promptIndex {
-		return 0, false
-	}
-	// Snap the boundary earlier until the older half ends on an assistant turn. The
-	// trimmed request is older[:recentStart] followed by the instruction region (a
-	// user prompt). Anthropic rejects a system message that is not followed by an
-	// assistant, so the older half must not end on a Claude Code system-reminder,
-	// which a count or byte cut can land right after. Ending on an assistant keeps
-	// the assistant-to-user join valid. The skipped messages move into the recent
-	// half, which is injected verbatim, so nothing is lost.
-	for recentStart > 0 && messages[recentStart-1].Role != "assistant" {
-		recentStart--
-	}
-	if recentStart == 0 {
-		// No assistant boundary precedes the cut (an unusual leading run), so a valid
-		// older half cannot be formed; fall back to no split.
-		return 0, false
-	}
-	return recentStart, true
-}
-
-// trimKeepIndexes lists the message indexes that stay in the request: the older
-// conversation half (before recentStart) plus the instruction region (the prompt
-// and anything after it, from promptIndex to the end).
-func trimKeepIndexes(recentStart int, promptIndex int, total int) []int {
-	keep := make([]int, 0, total-(promptIndex-recentStart))
-	for index := range recentStart {
-		keep = append(keep, index)
-	}
-	for index := promptIndex; index < total; index++ {
-		keep = append(keep, index)
-	}
-	return keep
 }
 
 // anthropicSummaryRequest is the minimal decode of the /v1/messages request the
@@ -391,11 +320,44 @@ const (
 // can be rendered verbatim. It covers the block types that carry conversation
 // detail (text, tool_use, tool_result); other block types render empty.
 type anthropicContentBlock struct {
-	Type    anthropicBlockType `json:"type"`
-	Text    string             `json:"text"`
-	Name    string             `json:"name"`
-	Input   json.RawMessage    `json:"input"`
-	Content json.RawMessage    `json:"content"`
+	Type anthropicBlockType `json:"type"`
+	Text string             `json:"text"`
+	Name string             `json:"name"`
+	// ID is the tool_use block's id; ToolUseID is the tool_result block's reference
+	// back to the tool_use it answers. Both drive the tool-pairing split so a trim
+	// never separates a tool_use from its tool_result.
+	ID        string          `json:"id"`
+	ToolUseID string          `json:"tool_use_id"`
+	Input     json.RawMessage `json:"input"`
+	Content   json.RawMessage `json:"content"`
+}
+
+// toolIDs returns the tool_use ids this message declares (from tool_use blocks) and
+// the tool_use ids its tool_result blocks answer. Used to pair tool calls across
+// wire messages so the split never orphans one side.
+func (m anthropicMessage) toolIDs() (uses []string, results []string) {
+	trimmed := strings.TrimSpace(string(m.Content))
+	if trimmed == "" || trimmed[0] != '[' {
+		return nil, nil
+	}
+	var blocks []anthropicContentBlock
+	if err := json.Unmarshal(m.Content, &blocks); err != nil {
+		return nil, nil
+	}
+	for _, block := range blocks {
+		switch block.Type {
+		case anthropicBlockToolUse:
+			if block.ID != "" {
+				uses = append(uses, block.ID)
+			}
+		case anthropicBlockToolResult:
+			if block.ToolUseID != "" {
+				results = append(results, block.ToolUseID)
+			}
+		case anthropicBlockText:
+		}
+	}
+	return uses, results
 }
 
 // renderBlocks renders a message's content to text, handling both the plain-string
