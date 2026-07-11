@@ -80,6 +80,21 @@ func (sw *SSEWriter) WriteStreamEvent(payload []byte) error {
 	return nil
 }
 
+// WriteNamedEvent writes one named SSE frame as `event: <name>\ndata:
+// <payload>\n\n` and flushes it. The OpenAI Responses stream uses named
+// events, unlike the chat-completions stream that carries only unnamed
+// data frames. The Responses path never calls WriteStreamDone, so no
+// `[DONE]` terminator follows these frames.
+func (sw *SSEWriter) WriteNamedEvent(name string, payload []byte) error {
+	sw.WriteSSEHeaders()
+	if _, err := fmt.Fprintf(sw.w, "event: %s\ndata: %s\n\n", name, payload); err != nil {
+		slog.Warn("adapter.openai_sse.write_named_event_failed", "concern", "adapter.chat.render", "event", name, "err", err)
+		return fmt.Errorf("write OpenAI named event %q: %w", name, err)
+	}
+	sw.f.Flush()
+	return nil
+}
+
 // WriteStreamDone is part of Clyde's typed adapter surface.
 func (sw *SSEWriter) WriteStreamDone() error {
 	if _, err := io.WriteString(sw.w, "data: [DONE]\n\n"); err != nil {
