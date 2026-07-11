@@ -25,16 +25,16 @@ const responsesToolLabelUnsupported = "unsupported"
 // provider. Only these stable discriminators are safe to report verbatim in
 // a dropped-tool warning label; any other type clamps to "unsupported".
 var knownDroppableToolTypes = map[string]bool{
-	"web_search":             true,
-	"web_search_preview":     true,
-	"file_search":            true,
-	"computer_use":           true,
-	"computer_use_preview":   true,
-	"code_interpreter":       true,
-	"image_generation":       true,
-	"local_shell":            true,
-	"mcp":                    true,
-	"custom":                 true,
+	"web_search":           true,
+	"web_search_preview":   true,
+	"file_search":          true,
+	"computer_use":         true,
+	"computer_use_preview": true,
+	"code_interpreter":     true,
+	"image_generation":     true,
+	"local_shell":          true,
+	"mcp":                  true,
+	"custom":               true,
 }
 
 // responsesToolEnvelope is the lenient view of one Responses `tools`
