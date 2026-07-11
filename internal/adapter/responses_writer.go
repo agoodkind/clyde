@@ -64,6 +64,7 @@ type responsesStreamToolState struct {
 	outputIndex int
 	index       int
 	args        strings.Builder
+	completed   bool
 }
 
 // newResponsesStreamWriter builds a Responses streaming writer over the
@@ -452,6 +453,7 @@ func (p *responsesStreamWriter) getOrCreateTool(tc adapteropenai.ToolCall) (*res
 		outputIndex: p.nextOutputIndex,
 		index:       tc.Index,
 		args:        strings.Builder{},
+		completed:   false,
 	}
 	p.nextOutputIndex++
 	p.toolStates[tc.Index] = state
@@ -471,6 +473,7 @@ func (p *responsesStreamWriter) closeTools() error {
 			Type:           adapteropenai.ResponsesEventFunctionArgsDone,
 			ItemID:         state.itemID,
 			OutputIndex:    state.outputIndex,
+			Name:           state.name,
 			Arguments:      args,
 			SequenceNumber: p.nextSeq(),
 		}
@@ -484,6 +487,7 @@ func (p *responsesStreamWriter) closeTools() error {
 		if err := p.emitOutputItem(adapteropenai.ResponsesEventOutputItemDone, state.outputIndex, item); err != nil {
 			return err
 		}
+		state.completed = true
 	}
 	return nil
 }
@@ -561,7 +565,7 @@ func (p *responsesStreamWriter) orderedOutput() []adapteropenai.ResponsesOutputI
 	for _, index := range p.toolOrder {
 		state := p.toolStates[index]
 		status := "in_progress"
-		if !p.messageOpen {
+		if state.completed {
 			status = "completed"
 		}
 		output[state.outputIndex] = adapteropenai.ResponsesOutputItem{

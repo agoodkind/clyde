@@ -138,6 +138,7 @@ type ResponsesFunctionArgsDoneEvent struct {
 	Type           string `json:"type"`
 	ItemID         string `json:"item_id"`
 	OutputIndex    int    `json:"output_index"`
+	Name           string `json:"name"`
 	Arguments      string `json:"arguments"`
 	SequenceNumber int    `json:"sequence_number"`
 }

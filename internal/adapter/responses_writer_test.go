@@ -181,6 +181,7 @@ type responsesStreamFrame struct {
 	Delta          string                              `json:"delta"`
 	Text           string                              `json:"text"`
 	Refusal        string                              `json:"refusal"`
+	FunctionName   string                              `json:"name"`
 	Arguments      string                              `json:"arguments"`
 }
 
@@ -392,5 +393,114 @@ func TestResponsesOutputFromEventsPreservesNormalizedOutputOrder(t *testing.T) {
 	}
 	if output[2].CallID != "call_ordered_0" {
 		t.Fatalf("call id=%q", output[2].CallID)
+	}
+}
+
+func TestResponsesStreamWriterFunctionArgsDoneCarriesFinalNameAndArguments(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	writer, err := newResponsesStreamWriter(rec, "resp_tool_done", "model", nil, slog.Default())
+	if err != nil {
+		t.Fatalf("new responses stream writer: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
+		Index: 0, Type: "function", Function: adapteropenai.ToolCallFunction{Name: "draft_name", Arguments: `{"city":`},
+	}}}); err != nil {
+		t.Fatalf("tool delta 1: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
+		Index: 0, Type: "function", Function: adapteropenai.ToolCallFunction{Name: "get_weather", Arguments: `"Paris"}`},
+	}}}); err != nil {
+		t.Fatalf("tool delta 2: %v", err)
+	}
+	if err := writer.finish(adapterprovider.Result{}); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	frames := parseResponsesStreamFrames(t, rec.Body.String())
+	for _, frame := range frames {
+		if frame.Name != adapteropenai.ResponsesEventFunctionArgsDone {
+			continue
+		}
+		if frame.ItemID != "fc_tool_done_0" || frame.OutputIndex != 0 {
+			t.Fatalf("function done identity=%+v", frame)
+		}
+		if frame.FunctionName != "get_weather" || frame.Arguments != `{"city":"Paris"}` {
+			t.Fatalf("function done payload=%+v", frame)
+		}
+		return
+	}
+	t.Fatalf("missing function_call_arguments.done: %s", rec.Body.String())
+}
+
+func TestResponsesStreamWriterToolOnlyFailureKeepsUnfinishedItemInProgress(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	writer, err := newResponsesStreamWriter(rec, "resp_tool_failure", "model", nil, slog.Default())
+	if err != nil {
+		t.Fatalf("new responses stream writer: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
+		Index: 0, Type: "function", Function: adapteropenai.ToolCallFunction{Name: "lookup", Arguments: `{"q":"x"}`},
+	}}}); err != nil {
+		t.Fatalf("tool delta: %v", err)
+	}
+	if err := writer.fail(adapterErrUpstreamFailed("codex", "provider failed", nil)); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+
+	body := rec.Body.String()
+	if strings.Contains(body, "[DONE]") {
+		t.Fatalf("failure stream emitted [DONE]: %s", body)
+	}
+	frames := parseResponsesStreamFrames(t, body)
+	for _, frame := range frames {
+		if frame.Name == adapteropenai.ResponsesEventFunctionArgsDone || frame.Name == adapteropenai.ResponsesEventOutputItemDone {
+			t.Fatalf("failure stream emitted tool completion frame %q: %s", frame.Name, body)
+		}
+	}
+	terminal := frames[len(frames)-1]
+	if terminal.Name != adapteropenai.ResponsesEventFailed || terminal.Response == nil {
+		t.Fatalf("terminal=%+v", terminal)
+	}
+	if len(terminal.Response.Output) != 1 || terminal.Response.Output[0].Type != "function_call" || terminal.Response.Output[0].Status != "in_progress" {
+		t.Fatalf("failed output=%+v", terminal.Response.Output)
+	}
+}
+
+func TestResponsesStreamWriterSuccessfulToolCompletionClosesItem(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	writer, err := newResponsesStreamWriter(rec, "resp_tool_success", "model", nil, slog.Default())
+	if err != nil {
+		t.Fatalf("new responses stream writer: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
+		Index: 0, Type: "function", Function: adapteropenai.ToolCallFunction{Name: "lookup", Arguments: "{}"},
+	}}}); err != nil {
+		t.Fatalf("tool delta: %v", err)
+	}
+	if err := writer.finish(adapterprovider.Result{}); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	body := rec.Body.String()
+	frames := parseResponsesStreamFrames(t, body)
+	functionDone := false
+	itemDone := false
+	for _, frame := range frames {
+		if frame.Name == adapteropenai.ResponsesEventFunctionArgsDone {
+			functionDone = true
+		}
+		if frame.Name == adapteropenai.ResponsesEventOutputItemDone {
+			itemDone = true
+		}
+	}
+	if !functionDone || !itemDone {
+		t.Fatalf("successful tool stream omitted completion frames: %s", body)
+	}
+	terminal := frames[len(frames)-1]
+	if terminal.Name != adapteropenai.ResponsesEventCompleted || terminal.Response == nil || len(terminal.Response.Output) != 1 || terminal.Response.Output[0].Status != "completed" {
+		t.Fatalf("successful terminal=%+v", terminal)
 	}
 }
