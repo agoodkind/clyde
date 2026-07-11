@@ -1086,6 +1086,7 @@ func TestStructuredOutputRetryFailureCapturesMatchingAttemptsAndUsesBoundary(t *
 
 func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.T) {
 	requestCount := 0
+	retryRequestHandled := make(chan struct{})
 	var retryRequestBody []byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
@@ -1094,6 +1095,7 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
 			return
 		}
+		defer close(retryRequestHandled)
 		retryRequestBody, _ = io.ReadAll(r.Body)
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
@@ -1131,6 +1133,11 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 	body := []byte(`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`)
 	recorder := httptest.NewRecorder()
 	srv.forwardPassthroughOverride(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), &resolved, body)
+	select {
+	case <-retryRequestHandled:
+	case <-time.After(time.Second):
+		t.Fatal("retry upstream handler did not complete within 1s")
+	}
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
