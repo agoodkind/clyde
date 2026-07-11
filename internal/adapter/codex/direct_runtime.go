@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
@@ -115,13 +114,14 @@ const (
 	RoundTripSummaryPlainText RoundTripSummary = "plain_text_concat"
 )
 
-// RunDirect is part of Clyde's typed adapter surface.
-func RunDirect(
+// runPrepared executes a transport payload built by the provider-owned
+// preparation path. It may attach execution-local metadata to its value copy,
+// but it never invokes the request builder.
+func runPrepared(
 	ctx context.Context,
 	cfg DirectConfig,
-	req adapteropenai.ChatRequest,
+	transportPayload HTTPTransportRequest,
 	resolved *adapterresolver.ResolvedRequest,
-	effort string,
 	emit func(adapterrender.Event) error,
 ) (RunResult, error) {
 	if cfg.HTTPClient == nil {
@@ -129,12 +129,6 @@ func RunDirect(
 	}
 	ConfigureCodexFileLogger(cfg.FileLog)
 
-	transportPayload := BuildRequestWithConfig(req, resolved, effort, RequestBuilderConfig{
-		ReasoningSummary:               cfg.ReasoningSummary,
-		InboundThinkingMaterialization: cfg.InboundThinkingMaterialization,
-		RoundTripSummary:               cfg.RoundTripSummary,
-		RoundTripEncrypted:             cfg.RoundTripEncrypted,
-	})
 	cfg.NativePatchRepresentation = nativePatchRepresentationForCursorRoute(resolved)
 	// WARNING: this is the websocket session identity, not the
 	// prompt_cache_key. Codex uses prompt_cache_key for upstream cache
