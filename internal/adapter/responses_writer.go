@@ -592,8 +592,9 @@ func responsesOutputFromEvents(responseID string, events []adapterrender.Event) 
 			if reasoningIndex < 0 {
 				reasoningIndex = len(output)
 				output = append(output, adapteropenai.ResponsesOutputItem{
-					Type: "reasoning", ID: "rs_" + base,
+					Type: "reasoning", ID: "rs_" + base, Status: "", Role: "", Content: nil,
 					Summary: []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: typed.Text}},
+					CallID:  "", Name: "", Arguments: "",
 				})
 				continue
 			}
@@ -605,9 +606,9 @@ func responsesOutputFromEvents(responseID string, events []adapterrender.Event) 
 					outputIndex = len(output)
 					toolIndexes[toolCall.Index] = outputIndex
 					output = append(output, adapteropenai.ResponsesOutputItem{
-						Type: "function_call", ID: "fc_" + base + "_" + strconv.Itoa(toolCall.Index), Status: "completed",
-						CallID: "call_" + base + "_" + strconv.Itoa(toolCall.Index), Name: toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
+						Type: "function_call", ID: "fc_" + base + "_" + strconv.Itoa(toolCall.Index), Status: "completed", Role: "",
+						Content: nil, Summary: nil, CallID: "call_" + base + "_" + strconv.Itoa(toolCall.Index),
+						Name: toolCall.Function.Name, Arguments: toolCall.Function.Arguments,
 					})
 					continue
 				}
@@ -636,7 +637,7 @@ func appendCollectedMessagePart(
 		messageIndex = len(output)
 		output = append(output, adapteropenai.ResponsesOutputItem{
 			Type: "message", ID: "msg_" + base, Status: "completed", Role: "assistant",
-			Content: []adapteropenai.ResponsesContentPart{},
+			Content: []adapteropenai.ResponsesContentPart{}, Summary: nil, CallID: "", Name: "", Arguments: "",
 		})
 	}
 	item := &output[messageIndex]

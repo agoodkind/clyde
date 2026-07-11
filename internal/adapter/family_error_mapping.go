@@ -207,6 +207,7 @@ func upstreamCatchAllAdapterError(provider string, upstreamStatus int, upstreamC
 		UpstreamStatus:    upstreamStatus,
 		Cause:             nil,
 		SafeForClient:     true,
+		Warnings:          nil,
 	}
 }
 
