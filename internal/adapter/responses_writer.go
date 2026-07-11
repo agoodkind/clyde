@@ -615,7 +615,12 @@ func responsesOutputFromEvents(
 				})
 				continue
 			}
+			output[reasoningIndex].Status = itemStatus
 			output[reasoningIndex].Summary[0].Text += typed.Text
+		case adapterrender.ReasoningFinished:
+			if reasoningIndex >= 0 {
+				output[reasoningIndex].Status = adapteropenai.ResponsesOutputItemStatusCompleted
+			}
 		case adapterrender.ToolCallDelta:
 			for _, toolCall := range typed.ToolCalls {
 				outputIndex, found := toolIndexes[toolCall.Index]

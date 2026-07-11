@@ -537,6 +537,31 @@ func TestResponsesOutputFromEventsUsesTerminalItemStatus(t *testing.T) {
 	}
 }
 
+func TestResponsesOutputFromEventsPreservesFinishedReasoningStatus(t *testing.T) {
+	t.Parallel()
+	events := []adapterrender.Event{
+		adapterrender.ReasoningDelta{Text: "finished reasoning", ReasoningKind: "summary"},
+		adapterrender.ReasoningFinished{ReasoningKind: "summary"},
+		adapterrender.TextDelta{Text: "partial answer"},
+	}
+	for _, finishReason := range []string{"length", "content_filter"} {
+		t.Run(finishReason, func(t *testing.T) {
+			t.Parallel()
+			status, _ := adapteropenai.ResponsesTerminalForFinishReason(finishReason)
+			output := responsesOutputFromEvents("resp_buffered_finished_"+finishReason, events, status)
+			if len(output) != 2 {
+				t.Fatalf("output len=%d want 2", len(output))
+			}
+			if output[0].Type != "reasoning" || output[0].Status != adapteropenai.ResponsesOutputItemStatusCompleted {
+				t.Fatalf("finished reasoning=%+v want completed", output[0])
+			}
+			if output[1].Type != "message" || output[1].Status != adapteropenai.ResponsesOutputItemStatusIncomplete {
+				t.Fatalf("unfinished message=%+v want incomplete", output[1])
+			}
+		})
+	}
+}
+
 func TestResponsesStreamWriterFunctionArgsDoneCarriesFinalNameAndArguments(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
