@@ -160,15 +160,18 @@ func TestSelectBackfillDocumentRecordsPrefersFreshestDuplicate(t *testing.T) {
 	fresh.Record.UpdatedAt = time.Unix(200, 0)
 	other := testDocumentStampedRecord("claude:other", 30)
 
-	selected, err := selectBackfillDocumentRecords([]conversation.StampedRecord{
+	selected, nextCursor, err := selectBackfillDocumentRecords([]conversation.StampedRecord{
 		stale,
 		other,
 		fresh,
-	}, 0, "")
+	}, 0, "", "")
 	if err != nil {
 		t.Fatalf("select document records: %v", err)
 	}
 
+	if nextCursor != "" {
+		t.Fatalf("next cursor = %q, want empty for an unbounded selection", nextCursor)
+	}
 	if len(selected) != 2 {
 		t.Fatalf("selected records = %d, want 2", len(selected))
 	}
@@ -180,6 +183,127 @@ func TestSelectBackfillDocumentRecordsPrefersFreshestDuplicate(t *testing.T) {
 	}
 	if selected[1].Record.ID != other.Record.ID {
 		t.Fatalf("second selected record = %q, want %q", selected[1].Record.ID, other.Record.ID)
+	}
+}
+
+func TestSelectBackfillDocumentRecordsFirstBatchLimitUnchanged(t *testing.T) {
+	t.Parallel()
+	records := []conversation.StampedRecord{
+		testDocumentStampedRecord("claude:one", 10),
+		testDocumentStampedRecord("claude:two", 20),
+		testDocumentStampedRecord("claude:three", 30),
+		testDocumentStampedRecord("claude:four", 40),
+	}
+
+	selected, nextCursor, err := selectBackfillDocumentRecords(records, 2, "", "")
+	if err != nil {
+		t.Fatalf("select document records: %v", err)
+	}
+
+	if len(selected) != 2 {
+		t.Fatalf("selected records = %d, want 2", len(selected))
+	}
+	if selected[0].Record.ID != "claude:one" || selected[1].Record.ID != "claude:two" {
+		t.Fatalf("selected ids = [%q %q], want [claude:one claude:two] (first batch in caller order)", selected[0].Record.ID, selected[1].Record.ID)
+	}
+	if nextCursor != "claude:two" {
+		t.Fatalf("next cursor = %q, want claude:two (last id of first batch)", nextCursor)
+	}
+}
+
+func TestSelectBackfillDocumentRecordsCursorAdvancesPastID(t *testing.T) {
+	t.Parallel()
+	records := []conversation.StampedRecord{
+		testDocumentStampedRecord("claude:one", 10),
+		testDocumentStampedRecord("claude:two", 20),
+		testDocumentStampedRecord("claude:three", 30),
+		testDocumentStampedRecord("claude:four", 40),
+	}
+
+	// Resume after the first batch's last id: selection must continue with the next
+	// records in order, not re-select the first batch.
+	selected, nextCursor, err := selectBackfillDocumentRecords(records, 2, "", "claude:two")
+	if err != nil {
+		t.Fatalf("select document records: %v", err)
+	}
+
+	if len(selected) != 2 {
+		t.Fatalf("selected records = %d, want 2", len(selected))
+	}
+	if selected[0].Record.ID != "claude:three" || selected[1].Record.ID != "claude:four" {
+		t.Fatalf("selected ids = [%q %q], want [claude:three claude:four]", selected[0].Record.ID, selected[1].Record.ID)
+	}
+	if nextCursor != "" {
+		t.Fatalf("next cursor = %q, want empty at end of corpus", nextCursor)
+	}
+}
+
+func TestSelectBackfillDocumentRecordsCursorChainCoversCorpusWithoutOverlap(t *testing.T) {
+	t.Parallel()
+	records := []conversation.StampedRecord{
+		testDocumentStampedRecord("claude:one", 10),
+		testDocumentStampedRecord("claude:two", 20),
+		testDocumentStampedRecord("claude:three", 30),
+		testDocumentStampedRecord("claude:four", 40),
+		testDocumentStampedRecord("claude:five", 50),
+	}
+
+	seen := make([]string, 0, len(records))
+	cursor := ""
+	for range make([]struct{}, len(records)+1) {
+		selected, nextCursor, err := selectBackfillDocumentRecords(records, 2, "", cursor)
+		if err != nil {
+			t.Fatalf("select document records: %v", err)
+		}
+		for _, record := range selected {
+			seen = append(seen, record.Record.ID)
+		}
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+
+	want := []string{"claude:one", "claude:two", "claude:three", "claude:four", "claude:five"}
+	if strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("chained selection = %v, want %v (no gaps, no overlap)", seen, want)
+	}
+}
+
+func TestSelectBackfillDocumentRecordsUnknownCursorErrors(t *testing.T) {
+	t.Parallel()
+	records := []conversation.StampedRecord{
+		testDocumentStampedRecord("claude:one", 10),
+		testDocumentStampedRecord("claude:two", 20),
+	}
+
+	_, _, err := selectBackfillDocumentRecords(records, 2, "", "claude:missing")
+	if err == nil {
+		t.Fatal("expected an error for an unknown cursor id")
+	}
+	if !strings.Contains(err.Error(), "cursor conversation") {
+		t.Fatalf("error = %v, want a cursor-not-found error", err)
+	}
+}
+
+func TestSelectBackfillDocumentRecordsConversationUnchanged(t *testing.T) {
+	t.Parallel()
+	records := []conversation.StampedRecord{
+		testDocumentStampedRecord("claude:one", 10),
+		testDocumentStampedRecord("codex:target", 20),
+		testDocumentStampedRecord("claude:three", 30),
+	}
+
+	selected, nextCursor, err := selectBackfillDocumentRecords(records, 0, "codex:target", "")
+	if err != nil {
+		t.Fatalf("select document records: %v", err)
+	}
+
+	if len(selected) != 1 || selected[0].Record.ID != "codex:target" {
+		t.Fatalf("selected = %+v, want exactly codex:target", selected)
+	}
+	if nextCursor != "" {
+		t.Fatalf("next cursor = %q, want empty for a single --conversation selection", nextCursor)
 	}
 }
 
@@ -398,6 +522,217 @@ func TestBackfillConversationDocumentsExecuteReexamines(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Sent conversation documents from 1 conversation") {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+// TestBackfillConversationDocumentsUncappedExecuteRefusedWithoutFlag proves the
+// guard against a blind full reexamine: a bare --execute with no --conversation
+// and no --limit is refused, and the command never touches the index or dials the
+// engine.
+func TestBackfillConversationDocumentsUncappedExecuteRefusedWithoutFlag(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one": {{Role: "user", Text: "one"}},
+		},
+	}
+	dialCalled := false
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: false, Limit: 0, ConversationID: "", Cursor: "", AllowFullReexamine: false},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			dialCalled = true
+			return nil, errors.New("unexpected dial")
+		},
+	)
+	if err == nil {
+		t.Fatal("expected an error refusing the uncapped --execute reexamine")
+	}
+	if !strings.Contains(err.Error(), "--all") {
+		t.Fatalf("error = %v, want guidance to pass --all", err)
+	}
+	if index.refreshCount != 0 {
+		t.Fatalf("refresh count = %d, want 0 (guard fails before touching the index)", index.refreshCount)
+	}
+	if dialCalled {
+		t.Fatal("refused run dialed the semantic client")
+	}
+}
+
+// TestBackfillConversationDocumentsUncappedExecuteAllowedWithFlag proves the
+// explicit full-run opt-in still works: --all lets a bare --execute reexamine the
+// whole corpus.
+func TestBackfillConversationDocumentsUncappedExecuteAllowedWithFlag(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+			testDocumentStampedRecord("claude:two", 20),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one": {{Role: "user", Text: "one"}},
+			"claude:two": {{Role: "assistant", Text: "two"}},
+		},
+	}
+	client := &fakeReexamineBackfillClient{}
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: false, Limit: 0, ConversationID: "", Cursor: "", AllowFullReexamine: true},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			return client, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("run backfill conversation documents: %v", err)
+	}
+	if client.reexamineCalls != 1 {
+		t.Fatalf("ReexamineConversationDocuments calls = %d, want 1", client.reexamineCalls)
+	}
+	if client.deliveredDocs != 2 {
+		t.Fatalf("delivered documents = %d, want 2 (whole corpus)", client.deliveredDocs)
+	}
+	if !strings.Contains(output.String(), "Sent conversation documents from 2 conversations") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+// TestBackfillConversationDocumentsCursorRunPrintsNextCursor proves a bounded run
+// resumes after the cursor and prints the next cursor so the operator can chain.
+func TestBackfillConversationDocumentsCursorRunPrintsNextCursor(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+			testDocumentStampedRecord("claude:two", 20),
+			testDocumentStampedRecord("claude:three", 30),
+			testDocumentStampedRecord("claude:four", 40),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one":   {{Role: "user", Text: "one"}},
+			"claude:two":   {{Role: "assistant", Text: "two"}},
+			"claude:three": {{Role: "user", Text: "three"}},
+			"claude:four":  {{Role: "assistant", Text: "four"}},
+		},
+	}
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: true, Limit: 2, ConversationID: "", Cursor: "claude:one"},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			return nil, errors.New("unexpected dial")
+		},
+	)
+	if err != nil {
+		t.Fatalf("run backfill conversation documents: %v", err)
+	}
+
+	if strings.Join(index.loadedIDs, ",") != "claude:two,claude:three" {
+		t.Fatalf("loaded ids = %v, want records after the cursor", index.loadedIDs)
+	}
+	if !strings.Contains(output.String(), "Next cursor: claude:three.") {
+		t.Fatalf("output = %q, want a printed next cursor", output.String())
+	}
+}
+
+// TestBackfillConversationDocumentsCursorWithoutLimitRefused proves a cursor is
+// only for bounded pagination: an --execute --after run with no --limit and no
+// --all is refused before the index is touched or the engine dialed, so it can
+// never reexamine the whole suffix after the cursor uncapped.
+func TestBackfillConversationDocumentsCursorWithoutLimitRefused(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+			testDocumentStampedRecord("claude:two", 20),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one": {{Role: "user", Text: "one"}},
+			"claude:two": {{Role: "assistant", Text: "two"}},
+		},
+	}
+	dialCalled := false
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: false, Limit: 0, ConversationID: "", Cursor: "claude:one", AllowFullReexamine: false},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			dialCalled = true
+			return nil, errors.New("unexpected dial")
+		},
+	)
+	if err == nil {
+		t.Fatal("expected an error refusing an uncapped cursor run without --limit")
+	}
+	if !strings.Contains(err.Error(), "--after requires --limit") {
+		t.Fatalf("error = %v, want guidance that --after requires --limit", err)
+	}
+	if index.refreshCount != 0 {
+		t.Fatalf("refresh count = %d, want 0 (guard fails before touching the index)", index.refreshCount)
+	}
+	if dialCalled {
+		t.Fatal("refused run dialed the semantic client")
+	}
+}
+
+// TestBackfillConversationDocumentsCursorSuppressedWhenSkipped proves a bounded
+// cursor batch that skips a conversation (a load or build failure) emits no next
+// cursor, so following the cursor cannot permanently omit the skipped record on
+// the next run.
+func TestBackfillConversationDocumentsCursorSuppressedWhenSkipped(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	// claude:two is absent from messagesByID, so it fails to load and is skipped.
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+			testDocumentStampedRecord("claude:two", 20),
+			testDocumentStampedRecord("claude:three", 30),
+			testDocumentStampedRecord("claude:four", 40),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one":   {{Role: "user", Text: "one"}},
+			"claude:three": {{Role: "user", Text: "three"}},
+			"claude:four":  {{Role: "assistant", Text: "four"}},
+		},
+	}
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: true, Limit: 2, ConversationID: "", Cursor: "claude:one"},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			return nil, errors.New("unexpected dial")
+		},
+	)
+	if err != nil {
+		t.Fatalf("run backfill conversation documents: %v", err)
+	}
+
+	// The batch after the cursor is claude:two, claude:three; both are attempted,
+	// claude:two is skipped, and the run would otherwise advance to claude:three.
+	if strings.Join(index.loadedIDs, ",") != "claude:two,claude:three" {
+		t.Fatalf("loaded ids = %v, want the two records after the cursor", index.loadedIDs)
+	}
+	if strings.Contains(output.String(), "Next cursor:") {
+		t.Fatalf("output = %q, want no next cursor when a conversation was skipped", output.String())
 	}
 }
 
