@@ -67,7 +67,13 @@ func (p preparedResponsesProvider) Execute(ctx context.Context, w adapterprovide
 		if p.codex == nil || s.codexProvider == nil {
 			return adapterprovider.Result{}, fmt.Errorf("execute prepared Codex Responses request: provider is not configured")
 		}
-		result, err := s.codexProvider.ExecutePrepared(ctx, *p.codex, w)
+		egressCtx, releaseEgress := s.codexEgressContext(
+			ctx,
+			p.codex.Resolved.RequestID,
+			adaptercodex.WebsocketURL(""),
+		)
+		defer releaseEgress("codex.responses.done")
+		result, err := s.codexProvider.ExecutePrepared(egressCtx, *p.codex, w)
 		if err != nil {
 			return adapterprovider.Result{}, s.responsesProviderError(ctx, "execute", p.provider, err)
 		}
@@ -106,7 +112,12 @@ func responsesPreparedProviderError(
 	if providerID == adapterresolver.ProviderAnthropic {
 		return anthropicProviderAdapterError(err)
 	}
-	aerr := mapUpstreamForFamily(adapterRouteOpenAI, providerID.String(), 0, upstreamClassServerError, "", err.Error())
+	var aerr *adapterError
+	if providerID == adapterresolver.ProviderCodex {
+		aerr = codexProviderAdapterError(err)
+	} else {
+		aerr = mapUpstreamForFamily(adapterRouteOpenAI, providerID.String(), 0, upstreamClassServerError, "", err.Error())
+	}
 	aerr.Backend = resolved.Provider.String()
 	aerr.ModelAlias = alias
 	aerr.ResolvedModelName = resolved.Model

@@ -13,11 +13,91 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
+
+func TestResponsesPreparedCodexErrorPreservesProviderClassification(t *testing.T) {
+	t.Parallel()
+
+	const contextMessage = "This model's maximum context length was exceeded. Please reduce the length of the messages."
+	cases := []struct {
+		name        string
+		err         error
+		wantClass   adapterErrorClass
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:        "context overflow",
+			err:         &adaptercodex.ContextWindowError{Message: "context_length_exceeded"},
+			wantClass:   adapterErrorContextLengthExceeded,
+			wantCode:    "context_length_exceeded",
+			wantMessage: contextMessage,
+		},
+		{
+			name:        "unsupported model",
+			err:         &adaptercodex.UnsupportedModelError{Message: "requested model is not supported"},
+			wantClass:   adapterErrorModelNotSupported,
+			wantCode:    "model_not_supported",
+			wantMessage: "requested model is not supported",
+		},
+		{
+			name:        "schema violation",
+			err:         errors.New("[ObjectParam] [input[2]] [missing_required_parameter]"),
+			wantClass:   adapterErrorUpstreamSchemaViolation,
+			wantCode:    "upstream_malformed_request",
+			wantMessage: "[ObjectParam] [input[2]] [missing_required_parameter]",
+		},
+		{
+			name: "typed upstream body",
+			err: &adaptercodex.UpstreamStatusError{
+				Status:  http.StatusBadGateway,
+				Snippet: "typed upstream response body",
+			},
+			wantClass:   adapterErrorUpstreamFailed,
+			wantCode:    "upstream_failed",
+			wantMessage: "codex http transport: upstream status 502: typed upstream response body",
+		},
+		{
+			name:        "generic error",
+			err:         errors.New("codex websocket read failed"),
+			wantClass:   adapterErrorUpstreamFailed,
+			wantCode:    "upstream_failed",
+			wantMessage: "codex websocket read failed",
+		},
+	}
+	resolved := adapterresolver.ResolvedRequest{
+		Provider: adapterresolver.ProviderCodex,
+		Model:    "gpt-5.4-wire",
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			aerr := responsesPreparedProviderError(
+				adapterresolver.ProviderCodex,
+				"clyde-codex-5.4",
+				resolved,
+				testCase.err,
+			)
+			if aerr.Class != testCase.wantClass || aerr.Code != testCase.wantCode {
+				t.Fatalf("classification = %s/%s, want %s/%s", aerr.Class, aerr.Code, testCase.wantClass, testCase.wantCode)
+			}
+			if aerr.Message != testCase.wantMessage {
+				t.Fatalf("message = %q, want %q", aerr.Message, testCase.wantMessage)
+			}
+			if aerr.Backend != "codex" || aerr.ModelAlias != "clyde-codex-5.4" || aerr.ResolvedModelName != "gpt-5.4-wire" {
+				t.Fatalf("request context = backend %q alias %q resolved %q", aerr.Backend, aerr.ModelAlias, aerr.ResolvedModelName)
+			}
+			if !errors.Is(aerr.Cause, testCase.err) {
+				t.Fatalf("cause = %v, want original error %v", aerr.Cause, testCase.err)
+			}
+		})
+	}
+}
 
 func TestResponsesProviderExecutionPreservesClientErrorAndLogsContext(t *testing.T) {
 	for _, stream := range []bool{false, true} {
