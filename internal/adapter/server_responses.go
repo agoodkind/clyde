@@ -37,6 +37,7 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	}
 	corr := hctx.Correlation
 	reqID := corr.RequestID
+	responseID := responsesResponseID(reqID)
 	clydeingress.SetHTTPHeaders(corr, w.Header())
 
 	body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
@@ -93,7 +94,7 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	warningValues := adaptercompat.ResponsesWarningValues{N: rr.N, ToolChoice: rr.ToolChoice}
 	warnings := adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, warningValues, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
 
-	s.dispatchResolvedResponses(w, r, req, reqID, body, resolvedReq, warnings)
+	s.dispatchResolvedResponsesWithID(w, r, req, reqID, responseID, body, resolvedReq, warnings)
 	return nil
 }
 
@@ -225,23 +226,37 @@ func (s *Server) dispatchResolvedResponses(
 	resolvedReq adapterresolver.ResolvedRequest,
 	warnings adaptercompat.WarningSet,
 ) {
+	s.dispatchResolvedResponsesWithID(w, r, req, reqID, responsesResponseID(reqID), body, resolvedReq, warnings)
+}
+
+func (s *Server) dispatchResolvedResponsesWithID(
+	w http.ResponseWriter,
+	r *http.Request,
+	req ChatRequest,
+	reqID string,
+	responseID string,
+	body []byte,
+	resolvedReq adapterresolver.ResolvedRequest,
+	warnings adaptercompat.WarningSet,
+) {
 	if resolvedReq.Provider == adapterresolver.ProviderPassthrough {
 		s.forwardPassthroughResponses(w, r, reqID, &resolvedReq, body)
 		return
 	}
 	alias := resolvedRequestAlias(&resolvedReq)
-	providerContext := responsesProviderContext(r.Context(), resolvedReq)
-	prepared, prepareErr := s.prepareResponsesProvider(providerContext, resolvedReq)
-	if prepareErr != nil {
-		s.respondAdapterError(w, r, responsesPreparedProviderError(resolvedReq.Provider, alias, resolvedReq, prepareErr))
-		return
-	}
 	if !warnings.Empty() {
 		for _, header := range warnings.Headers() {
 			w.Header().Add("X-Clyde-Warning", header)
 		}
 	}
-	responseID := responsesResponseID(reqID)
+	providerContext := responsesProviderContext(r.Context(), resolvedReq)
+	prepared, prepareErr := s.prepareResponsesProvider(providerContext, resolvedReq)
+	if prepareErr != nil {
+		mappedErr := responsesPreparedProviderError(resolvedReq.Provider, alias, resolvedReq, prepareErr)
+		mappedErr.Warnings = warnings.Slice()
+		s.respondAdapterError(w, r, mappedErr)
+		return
+	}
 	warningSlice := warnings.Slice()
 	if req.Stream {
 		s.dispatchResponsesStream(w, r, responseID, alias, resolvedReq, prepared, warningSlice)
@@ -278,7 +293,8 @@ func (s *Server) dispatchResponsesStream(
 	}
 	result, runErr := prepared.Execute(ctx, writer, s)
 	if runErr != nil {
-		if failErr := writer.fail(runErr); failErr != nil {
+		mappedErr := responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr)
+		if failErr := writer.fail(mappedErr); failErr != nil {
 			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.fail_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
 				slog.String("model", alias),
 				slog.Any("err", failErr),
@@ -310,7 +326,9 @@ func (s *Server) dispatchResponsesCollect(
 	collector := newProviderCollectorWriter()
 	result, runErr := prepared.Execute(ctx, collector, s)
 	if runErr != nil {
-		s.respondAdapterError(w, r, responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr))
+		mappedErr := responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr)
+		mappedErr.Warnings = warnings
+		s.respondAdapterError(w, r, mappedErr)
 		return
 	}
 	collected := adapterrender.CollectMessageWithNativePatchRepresentation(
@@ -329,9 +347,10 @@ func (s *Server) dispatchResponsesCollect(
 			usage = *result.FinalResponse.Usage
 		}
 	}
-	status := adapteropenai.ResponsesStatusCompleted
-	if result.FinishReason == "length" {
-		status = adapteropenai.ResponsesStatusIncomplete
+	status, incompleteDetails := adapteropenai.ResponsesTerminalForFinishReason(result.FinishReason)
+	output := responsesOutputFromEvents(responseID, collector.events)
+	if result.FinalResponse != nil {
+		output = nil
 	}
 	resp := adapteropenai.BuildResponsesResponse(adapteropenai.ResponsesResponseParams{
 		ID:         responseID,
@@ -342,10 +361,12 @@ func (s *Server) dispatchResponsesCollect(
 		Reasoning:  reasoning,
 		Refusal:    refusal,
 		ToolCalls:  toolCalls,
+		Output:     output,
 		Usage:      &usage,
 		ItemIDBase: responsesItemBase(responseID),
 		Warnings:   warnings,
 	})
+	resp.IncompleteDetails = incompleteDetails
 	body, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
 		s.respondAdapterError(w, r, adapterErrInternal("marshal responses object", marshalErr))

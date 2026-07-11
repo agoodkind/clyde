@@ -18,10 +18,10 @@ import (
 // responsesStreamWriter implements provider.EventWriter for the OpenAI
 // Responses streaming path. It consumes the same normalized render
 // events the chat writer consumes, but translates them into the
-// Responses named-event SSE sequence (reasoning item, then message
-// item, then function_call items) instead of chat completion chunks.
+// Responses named-event SSE sequence in normalized event order instead of
+// chat completion chunks.
 // It never emits a `data: [DONE]` terminator; the terminal frame is
-// response.completed (or response.failed).
+// response.completed, response.incomplete, or response.failed.
 type responsesStreamWriter struct {
 	sse        *adapteropenai.SSEWriter
 	flusher    http.Flusher
@@ -44,10 +44,15 @@ type responsesStreamWriter struct {
 	messageOpen        bool
 	messageItemID      string
 	messageOutputIndex int
-	messageText        strings.Builder
+	messageParts       []responsesStreamContentState
 
 	toolStates map[int]*responsesStreamToolState
 	toolOrder  []int
+}
+
+type responsesStreamContentState struct {
+	kind string
+	text strings.Builder
 }
 
 // responsesStreamToolState tracks one streamed function_call output
@@ -93,7 +98,7 @@ func newResponsesStreamWriter(w http.ResponseWriter, responseID, model string, w
 		messageOpen:          false,
 		messageItemID:        "",
 		messageOutputIndex:   0,
-		messageText:          strings.Builder{},
+		messageParts:         nil,
 		toolStates:           make(map[int]*responsesStreamToolState),
 		toolOrder:            nil,
 	}, nil
@@ -130,15 +135,15 @@ func (p *responsesStreamWriter) begin() error {
 	}
 	p.began = true
 	inProgress := p.buildResponse(adapteropenai.ResponsesStatusInProgress, nil)
-	// Warnings ride only on the first snapshot (response.created and the
-	// paired response.in_progress) so a streaming client sees them in the
-	// first frame; the terminal object stays warning-free.
+	// Warnings appear only on response.created. Every later event avoids
+	// repeating the same compatibility metadata.
 	if len(p.warnings) > 0 {
 		inProgress.Clyde = &adapteropenai.ResponsesClyde{Warnings: p.warnings}
 	}
 	if err := p.emitEnvelope(adapteropenai.ResponsesEventCreated, inProgress); err != nil {
 		return err
 	}
+	inProgress.Clyde = nil
 	return p.emitEnvelope(adapteropenai.ResponsesEventInProgress, inProgress)
 }
 
@@ -160,9 +165,7 @@ func (p *responsesStreamWriter) WriteEvent(ev adapterrender.Event) error {
 	case adapterrender.TextDelta:
 		return p.handleText(e.Text)
 	case adapterrender.RefusalDelta:
-		// Task A folds refusal text into the assistant output_text; a
-		// dedicated refusal part is a later task.
-		return p.handleText(e.Text)
+		return p.handleRefusal(e.Text)
 	case adapterrender.ToolCallDelta:
 		return p.handleToolCalls(e.ToolCalls)
 	}
@@ -177,8 +180,8 @@ func (p *responsesStreamWriter) Flush() error {
 	return nil
 }
 
-// finish closes any open reasoning, message, and function_call items,
-// then emits response.completed carrying the terminal object and usage.
+// finish closes any open reasoning, message, and function-call items, then
+// emits the terminal response.completed or response.incomplete event.
 func (p *responsesStreamWriter) finish(result adapterprovider.Result) error {
 	if err := p.begin(); err != nil {
 		return err
@@ -192,23 +195,29 @@ func (p *responsesStreamWriter) finish(result adapterprovider.Result) error {
 	if err := p.closeTools(); err != nil {
 		return err
 	}
-	status := adapteropenai.ResponsesStatusCompleted
-	if result.FinishReason == "length" {
-		status = adapteropenai.ResponsesStatusIncomplete
-	}
+	status, incompleteDetails := adapteropenai.ResponsesTerminalForFinishReason(result.FinishReason)
 	usage := result.Usage
 	final := p.buildResponse(status, &usage)
-	return p.emitEnvelope(adapteropenai.ResponsesEventCompleted, final)
+	final.IncompleteDetails = incompleteDetails
+	eventName := adapteropenai.ResponsesEventCompleted
+	if status == adapteropenai.ResponsesStatusIncomplete {
+		eventName = adapteropenai.ResponsesEventIncomplete
+	}
+	return p.emitEnvelope(eventName, final)
 }
 
-// fail emits response.failed carrying a failed response object and the
-// error message. The full Responses error dialect is a later task.
+// fail emits response.failed with the mapped, client-safe error semantics.
 func (p *responsesStreamWriter) fail(err error) error {
 	if beginErr := p.begin(); beginErr != nil {
 		return beginErr
 	}
+	aerr := adapterErrorFrom(err)
 	resp := p.buildResponse(adapteropenai.ResponsesStatusFailed, nil)
-	resp.Error = &adapteropenai.ResponsesError{Code: "upstream_error", Message: err.Error()}
+	message := aerr.Message
+	if !aerr.SafeForClient {
+		message = "adapter internal error"
+	}
+	resp.Error = &adapteropenai.ResponsesError{Code: aerr.Code, Message: message}
 	return p.emitEnvelope(adapteropenai.ResponsesEventFailed, resp)
 }
 
@@ -277,24 +286,48 @@ func (p *responsesStreamWriter) handleText(text string) error {
 	if err := p.openMessage(); err != nil {
 		return err
 	}
-	p.messageText.WriteString(text)
+	contentIndex, err := p.openMessageContentPart("output_text")
+	if err != nil {
+		return err
+	}
+	p.messageParts[contentIndex].text.WriteString(text)
 	evt := adapteropenai.ResponsesOutputTextDeltaEvent{
 		Type:           adapteropenai.ResponsesEventOutputTextDelta,
 		ItemID:         p.messageItemID,
 		OutputIndex:    p.messageOutputIndex,
-		ContentIndex:   0,
+		ContentIndex:   contentIndex,
 		Delta:          text,
 		SequenceNumber: p.nextSeq(),
 	}
 	return p.marshalSend(adapteropenai.ResponsesEventOutputTextDelta, evt)
 }
 
+func (p *responsesStreamWriter) handleRefusal(text string) error {
+	if text == "" {
+		return nil
+	}
+	if err := p.openMessage(); err != nil {
+		return err
+	}
+	contentIndex, err := p.openMessageContentPart("refusal")
+	if err != nil {
+		return err
+	}
+	p.messageParts[contentIndex].text.WriteString(text)
+	evt := adapteropenai.ResponsesRefusalDeltaEvent{
+		Type:           adapteropenai.ResponsesEventRefusalDelta,
+		ItemID:         p.messageItemID,
+		OutputIndex:    p.messageOutputIndex,
+		ContentIndex:   contentIndex,
+		Delta:          text,
+		SequenceNumber: p.nextSeq(),
+	}
+	return p.marshalSend(adapteropenai.ResponsesEventRefusalDelta, evt)
+}
+
 func (p *responsesStreamWriter) openMessage() error {
 	if p.messageOpen {
 		return nil
-	}
-	if err := p.closeReasoning(); err != nil {
-		return err
 	}
 	p.messageOpen = true
 	p.messageItemID = "msg_" + p.itemBase
@@ -307,16 +340,29 @@ func (p *responsesStreamWriter) openMessage() error {
 	if err := p.emitOutputItem(adapteropenai.ResponsesEventOutputItemAdded, p.messageOutputIndex, skeleton); err != nil {
 		return err
 	}
-	part := adapteropenai.ResponsesContentPart{Type: "output_text", Text: "", Annotations: []adapteropenai.ResponsesAnnotation{}}
+	return nil
+}
+
+func (p *responsesStreamWriter) openMessageContentPart(kind string) (int, error) {
+	count := len(p.messageParts)
+	if count > 0 && p.messageParts[count-1].kind == kind {
+		return count - 1, nil
+	}
+	p.messageParts = append(p.messageParts, responsesStreamContentState{kind: kind, text: strings.Builder{}})
+	contentIndex := len(p.messageParts) - 1
+	part := responsesContentPart(kind, "")
 	evt := adapteropenai.ResponsesContentPartEvent{
 		Type:           adapteropenai.ResponsesEventContentPartAdded,
 		ItemID:         p.messageItemID,
 		OutputIndex:    p.messageOutputIndex,
-		ContentIndex:   0,
+		ContentIndex:   contentIndex,
 		Part:           part,
 		SequenceNumber: p.nextSeq(),
 	}
-	return p.marshalSend(adapteropenai.ResponsesEventContentPartAdded, evt)
+	if err := p.marshalSend(adapteropenai.ResponsesEventContentPartAdded, evt); err != nil {
+		return 0, err
+	}
+	return contentIndex, nil
 }
 
 func (p *responsesStreamWriter) closeMessage() error {
@@ -324,44 +370,44 @@ func (p *responsesStreamWriter) closeMessage() error {
 		return nil
 	}
 	p.messageOpen = false
-	full := p.messageText.String()
-	textDone := adapteropenai.ResponsesOutputTextDoneEvent{
-		Type:           adapteropenai.ResponsesEventOutputTextDone,
-		ItemID:         p.messageItemID,
-		OutputIndex:    p.messageOutputIndex,
-		ContentIndex:   0,
-		Text:           full,
-		SequenceNumber: p.nextSeq(),
-	}
-	if err := p.marshalSend(adapteropenai.ResponsesEventOutputTextDone, textDone); err != nil {
-		return err
-	}
-	part := adapteropenai.ResponsesContentPart{Type: "output_text", Text: full, Annotations: []adapteropenai.ResponsesAnnotation{}}
-	partDone := adapteropenai.ResponsesContentPartEvent{
-		Type:           adapteropenai.ResponsesEventContentPartDone,
-		ItemID:         p.messageItemID,
-		OutputIndex:    p.messageOutputIndex,
-		ContentIndex:   0,
-		Part:           part,
-		SequenceNumber: p.nextSeq(),
-	}
-	if err := p.marshalSend(adapteropenai.ResponsesEventContentPartDone, partDone); err != nil {
-		return err
+	content := make([]adapteropenai.ResponsesContentPart, 0, len(p.messageParts))
+	for contentIndex, state := range p.messageParts {
+		full := state.text.String()
+		part := responsesContentPart(state.kind, full)
+		if state.kind == "output_text" {
+			textDone := adapteropenai.ResponsesOutputTextDoneEvent{
+				Type: adapteropenai.ResponsesEventOutputTextDone, ItemID: p.messageItemID,
+				OutputIndex: p.messageOutputIndex, ContentIndex: contentIndex, Text: full, SequenceNumber: p.nextSeq(),
+			}
+			if err := p.marshalSend(adapteropenai.ResponsesEventOutputTextDone, textDone); err != nil {
+				return err
+			}
+		} else {
+			refusalDone := adapteropenai.ResponsesRefusalDoneEvent{
+				Type: adapteropenai.ResponsesEventRefusalDone, ItemID: p.messageItemID,
+				OutputIndex: p.messageOutputIndex, ContentIndex: contentIndex, Refusal: full, SequenceNumber: p.nextSeq(),
+			}
+			if err := p.marshalSend(adapteropenai.ResponsesEventRefusalDone, refusalDone); err != nil {
+				return err
+			}
+		}
+		partDone := adapteropenai.ResponsesContentPartEvent{
+			Type: adapteropenai.ResponsesEventContentPartDone, ItemID: p.messageItemID,
+			OutputIndex: p.messageOutputIndex, ContentIndex: contentIndex, Part: part, SequenceNumber: p.nextSeq(),
+		}
+		if err := p.marshalSend(adapteropenai.ResponsesEventContentPartDone, partDone); err != nil {
+			return err
+		}
+		content = append(content, part)
 	}
 	item := adapteropenai.ResponsesOutputItem{
 		Type: "message", ID: p.messageItemID, Status: "completed", Role: "assistant",
-		Content: []adapteropenai.ResponsesContentPart{part}, Summary: nil, CallID: "", Name: "", Arguments: "",
+		Content: content, Summary: nil, CallID: "", Name: "", Arguments: "",
 	}
 	return p.emitOutputItem(adapteropenai.ResponsesEventOutputItemDone, p.messageOutputIndex, item)
 }
 
 func (p *responsesStreamWriter) handleToolCalls(toolCalls []adapteropenai.ToolCall) error {
-	if err := p.closeReasoning(); err != nil {
-		return err
-	}
-	if err := p.closeMessage(); err != nil {
-		return err
-	}
 	for _, tc := range toolCalls {
 		state, isNew := p.getOrCreateTool(tc)
 		if isNew {
@@ -375,9 +421,6 @@ func (p *responsesStreamWriter) handleToolCalls(toolCalls []adapteropenai.ToolCa
 		} else {
 			if tc.Function.Name != "" {
 				state.name = tc.Function.Name
-			}
-			if tc.ID != "" {
-				state.callID = tc.ID
 			}
 		}
 		if tc.Function.Arguments != "" {
@@ -416,9 +459,6 @@ func (p *responsesStreamWriter) getOrCreateTool(tc adapteropenai.ToolCall) (*res
 }
 
 func responsesStreamCallID(base string, tc adapteropenai.ToolCall) string {
-	if tc.ID != "" {
-		return tc.ID
-	}
 	return "call_" + base + "_" + strconv.Itoa(tc.Index)
 }
 
@@ -470,10 +510,11 @@ func (p *responsesStreamWriter) buildResponse(status adapteropenai.ResponsesStat
 		Model:      p.model,
 		CreatedAt:  p.createdAt,
 		Status:     status,
-		Text:       p.messageText.String(),
-		Reasoning:  p.reasoningText.String(),
+		Text:       "",
+		Reasoning:  "",
 		Refusal:    "",
 		ToolCalls:  p.collectedToolCalls(),
+		Output:     p.orderedOutput(),
 		Usage:      usage,
 		ItemIDBase: p.itemBase,
 		// Warnings ride on the response object only through begin(), which
@@ -481,6 +522,125 @@ func (p *responsesStreamWriter) buildResponse(status adapteropenai.ResponsesStat
 		// terminal frames stay warning-free.
 		Warnings: nil,
 	})
+}
+
+func responsesContentPart(kind, text string) adapteropenai.ResponsesContentPart {
+	if kind == "refusal" {
+		return adapteropenai.ResponsesContentPart{Type: "refusal", Text: "", Refusal: text, Annotations: nil}
+	}
+	return adapteropenai.ResponsesContentPart{Type: "output_text", Text: text, Refusal: "", Annotations: []adapteropenai.ResponsesAnnotation{}}
+}
+
+func (p *responsesStreamWriter) orderedOutput() []adapteropenai.ResponsesOutputItem {
+	if p.nextOutputIndex == 0 {
+		return []adapteropenai.ResponsesOutputItem{}
+	}
+	output := make([]adapteropenai.ResponsesOutputItem, p.nextOutputIndex)
+	if p.messageItemID != "" {
+		content := make([]adapteropenai.ResponsesContentPart, 0, len(p.messageParts))
+		for _, state := range p.messageParts {
+			content = append(content, responsesContentPart(state.kind, state.text.String()))
+		}
+		status := "in_progress"
+		if !p.messageOpen {
+			status = "completed"
+		}
+		output[p.messageOutputIndex] = adapteropenai.ResponsesOutputItem{Type: "message", ID: p.messageItemID, Status: status, Role: "assistant", Content: content}
+	}
+	if p.reasoningItemID != "" {
+		summary := []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: p.reasoningText.String()}}
+		output[p.reasoningOutputIndex] = adapteropenai.ResponsesOutputItem{Type: "reasoning", ID: p.reasoningItemID, Summary: summary}
+	}
+	for _, index := range p.toolOrder {
+		state := p.toolStates[index]
+		status := "in_progress"
+		if !p.messageOpen {
+			status = "completed"
+		}
+		output[state.outputIndex] = adapteropenai.ResponsesOutputItem{Type: "function_call", ID: state.itemID, Status: status, CallID: state.callID, Name: state.name, Arguments: state.args.String()}
+	}
+	return output
+}
+
+func responsesOutputFromEvents(responseID string, events []adapterrender.Event) []adapteropenai.ResponsesOutputItem {
+	output := make([]adapteropenai.ResponsesOutputItem, 0)
+	base := responsesItemBase(responseID)
+	messageIndex := -1
+	reasoningIndex := -1
+	toolIndexes := make(map[int]int)
+
+	for _, event := range events {
+		switch typed := event.(type) {
+		case adapterrender.TextDelta:
+			output, messageIndex = appendCollectedMessagePart(output, messageIndex, base, "output_text", typed.Text)
+		case adapterrender.RefusalDelta:
+			output, messageIndex = appendCollectedMessagePart(output, messageIndex, base, "refusal", typed.Text)
+		case adapterrender.ReasoningDelta:
+			if typed.Text == "" {
+				continue
+			}
+			if reasoningIndex < 0 {
+				reasoningIndex = len(output)
+				output = append(output, adapteropenai.ResponsesOutputItem{
+					Type: "reasoning", ID: "rs_" + base,
+					Summary: []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: typed.Text}},
+				})
+				continue
+			}
+			output[reasoningIndex].Summary[0].Text += typed.Text
+		case adapterrender.ToolCallDelta:
+			for _, toolCall := range typed.ToolCalls {
+				outputIndex, found := toolIndexes[toolCall.Index]
+				if !found {
+					outputIndex = len(output)
+					toolIndexes[toolCall.Index] = outputIndex
+					output = append(output, adapteropenai.ResponsesOutputItem{
+						Type: "function_call", ID: "fc_" + base + "_" + strconv.Itoa(toolCall.Index), Status: "completed",
+						CallID: "call_" + base + "_" + strconv.Itoa(toolCall.Index), Name: toolCall.Function.Name,
+						Arguments: toolCall.Function.Arguments,
+					})
+					continue
+				}
+				item := &output[outputIndex]
+				if toolCall.Function.Name != "" {
+					item.Name = toolCall.Function.Name
+				}
+				item.Arguments += toolCall.Function.Arguments
+			}
+		}
+	}
+	return output
+}
+
+func appendCollectedMessagePart(
+	output []adapteropenai.ResponsesOutputItem,
+	messageIndex int,
+	base string,
+	kind string,
+	text string,
+) ([]adapteropenai.ResponsesOutputItem, int) {
+	if text == "" {
+		return output, messageIndex
+	}
+	if messageIndex < 0 {
+		messageIndex = len(output)
+		output = append(output, adapteropenai.ResponsesOutputItem{
+			Type: "message", ID: "msg_" + base, Status: "completed", Role: "assistant",
+			Content: []adapteropenai.ResponsesContentPart{},
+		})
+	}
+	item := &output[messageIndex]
+	contentCount := len(item.Content)
+	if contentCount > 0 && item.Content[contentCount-1].Type == kind {
+		if kind == "refusal" {
+			item.Content[contentCount-1].Refusal += text
+		} else {
+			item.Content[contentCount-1].Text += text
+		}
+		return output, messageIndex
+	}
+	item.Content = append(item.Content, responsesContentPart(kind, text))
+	return output, messageIndex
 }
 
 func (p *responsesStreamWriter) emitEnvelope(name string, resp adapteropenai.ResponsesResponse) error {

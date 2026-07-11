@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 )
@@ -19,7 +20,7 @@ const (
 	ResponsesStatusInProgress ResponsesStatus = "in_progress"
 	// ResponsesStatusCompleted marks a clean turn completion.
 	ResponsesStatusCompleted ResponsesStatus = "completed"
-	// ResponsesStatusIncomplete marks a turn truncated by a length limit.
+	// ResponsesStatusIncomplete marks a turn stopped by a length limit or filter.
 	ResponsesStatusIncomplete ResponsesStatus = "incomplete"
 	// ResponsesStatusFailed marks a turn that ended in an upstream error.
 	ResponsesStatusFailed ResponsesStatus = "failed"
@@ -59,7 +60,7 @@ type ResponsesClyde struct {
 	Warnings []adaptercompat.CompatibilityWarning `json:"warnings,omitempty"`
 }
 
-// ResponsesIncompleteDetails carries the reason a turn was truncated.
+// ResponsesIncompleteDetails carries the reason a turn was incomplete.
 // The adapter emits null today; the pointer field renders JSON null
 // when nil.
 type ResponsesIncompleteDetails struct {
@@ -193,12 +194,44 @@ func (responsesMessageItemWire) isResponsesOutputItemWire()      {}
 func (responsesReasoningItemWire) isResponsesOutputItemWire()    {}
 func (responsesFunctionCallItemWire) isResponsesOutputItemWire() {}
 
-// ResponsesContentPart is one content part inside a message output
-// item. Task A only emits output_text parts.
+// ResponsesContentPart is one content part inside a message output item.
+// Its marshal implementation permits only output_text and refusal parts.
 type ResponsesContentPart struct {
 	Type        string                `json:"type"`
 	Text        string                `json:"text"`
+	Refusal     string                `json:"refusal"`
 	Annotations []ResponsesAnnotation `json:"annotations"`
+}
+
+type responsesOutputTextPartWire struct {
+	Type        string                `json:"type"`
+	Text        string                `json:"text"`
+	Annotations []ResponsesAnnotation `json:"annotations"`
+}
+
+type responsesRefusalPartWire struct {
+	Type    string `json:"type"`
+	Refusal string `json:"refusal"`
+}
+
+// MarshalJSON emits the closed content-part union shape selected by Type.
+func (p ResponsesContentPart) MarshalJSON() ([]byte, error) {
+	switch p.Type {
+	case "output_text":
+		annotations := p.Annotations
+		if annotations == nil {
+			annotations = []ResponsesAnnotation{}
+		}
+		return json.Marshal(responsesOutputTextPartWire{
+			Type:        "output_text",
+			Text:        p.Text,
+			Annotations: annotations,
+		})
+	case "refusal":
+		return json.Marshal(responsesRefusalPartWire{Type: "refusal", Refusal: p.Refusal})
+	default:
+		return nil, fmt.Errorf("unsupported responses content part type %q", p.Type)
+	}
 }
 
 // ResponsesAnnotation is a placeholder for output_text annotations.
@@ -251,9 +284,8 @@ func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
 }
 
 // ResponsesResponseParams carries the assembled turn content the
-// builder projects into a Responses response object. Text, Reasoning,
-// Refusal, and ToolCalls come from render.CollectMessage on the
-// non-streaming path or from the streaming writer's accumulated state.
+// builder projects into a Responses response object. Output preserves the
+// normalized event order when it is supplied by a renderer.
 type ResponsesResponseParams struct {
 	ID         string
 	Model      string
@@ -263,19 +295,49 @@ type ResponsesResponseParams struct {
 	Reasoning  string
 	Refusal    string
 	ToolCalls  []ToolCall
+	Output     []ResponsesOutputItem
 	Usage      *Usage
 	ItemIDBase string
 	Warnings   []adaptercompat.CompatibilityWarning
 }
 
 // BuildResponsesResponse assembles a Responses response object from the
-// collected turn content. It emits a reasoning item only when reasoning
-// text was produced, a message item only when there is assistant text
-// (refusal folded into text for Task A), and one function_call item per
-// tool call. Output item ids derive from ItemIDBase and the tool call
-// index so the streamed lifecycle events and the terminal object share
-// stable ids.
+// collected turn content. When Output is nil, it derives typed reasoning,
+// message, refusal, and function-call items from the collected fields.
 func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
+	output := params.Output
+	if output == nil {
+		output = buildResponsesOutput(params)
+	}
+
+	var usage *ResponsesUsage
+	if params.Usage != nil {
+		mapped := ResponsesUsageFromChat(*params.Usage)
+		usage = &mapped
+	}
+
+	var clyde *ResponsesClyde
+	if len(params.Warnings) > 0 {
+		clyde = &ResponsesClyde{Warnings: params.Warnings}
+	}
+
+	incompleteDetails := responsesIncompleteDetails(params.Status, "")
+	return ResponsesResponse{
+		ID:                params.ID,
+		Object:            responsesObjectType,
+		CreatedAt:         params.CreatedAt,
+		Status:            params.Status,
+		Model:             params.Model,
+		Output:            output,
+		Usage:             usage,
+		IncompleteDetails: incompleteDetails,
+		Error:             nil,
+		Metadata:          responsesMetadataEmpty,
+		Clyde:             clyde,
+	}
+}
+
+func buildResponsesOutput(params ResponsesResponseParams) []ResponsesOutputItem {
 	output := make([]ResponsesOutputItem, 0, 2+len(params.ToolCalls))
 
 	if params.Reasoning != "" {
@@ -292,21 +354,30 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 		})
 	}
 
-	// TODO(responses-refusal): a later task renders refusals as a
-	// dedicated refusal content part; Task A folds refusal text into the
-	// assistant output_text so no content is lost.
-	messageText := params.Text + params.Refusal
-	if messageText != "" {
-		output = append(output, ResponsesOutputItem{
-			Type:   "message",
-			ID:     responsesMessageItemID(params.ItemIDBase),
-			Status: "completed",
-			Role:   "assistant",
-			Content: []ResponsesContentPart{{
+	if params.Text != "" || params.Refusal != "" {
+		content := make([]ResponsesContentPart, 0, 2)
+		if params.Text != "" {
+			content = append(content, ResponsesContentPart{
 				Type:        "output_text",
-				Text:        messageText,
+				Text:        params.Text,
+				Refusal:     "",
 				Annotations: []ResponsesAnnotation{},
-			}},
+			})
+		}
+		if params.Refusal != "" {
+			content = append(content, ResponsesContentPart{
+				Type:        "refusal",
+				Text:        "",
+				Refusal:     params.Refusal,
+				Annotations: nil,
+			})
+		}
+		output = append(output, ResponsesOutputItem{
+			Type:      "message",
+			ID:        responsesMessageItemID(params.ItemIDBase),
+			Status:    "completed",
+			Role:      "assistant",
+			Content:   content,
 			Summary:   nil,
 			CallID:    "",
 			Name:      "",
@@ -328,30 +399,28 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 		})
 	}
 
-	var usage *ResponsesUsage
-	if params.Usage != nil {
-		mapped := ResponsesUsageFromChat(*params.Usage)
-		usage = &mapped
-	}
+	return output
+}
 
-	var clyde *ResponsesClyde
-	if len(params.Warnings) > 0 {
-		clyde = &ResponsesClyde{Warnings: params.Warnings}
+// ResponsesTerminalForFinishReason maps normalized provider finish reasons
+// to the Responses terminal status and incomplete details.
+func ResponsesTerminalForFinishReason(finishReason string) (ResponsesStatus, *ResponsesIncompleteDetails) {
+	trimmed := strings.TrimSpace(finishReason)
+	if trimmed == "length" || trimmed == "content_filter" {
+		return ResponsesStatusIncomplete, responsesIncompleteDetails(ResponsesStatusIncomplete, trimmed)
 	}
+	return ResponsesStatusCompleted, nil
+}
 
-	return ResponsesResponse{
-		ID:                params.ID,
-		Object:            responsesObjectType,
-		CreatedAt:         params.CreatedAt,
-		Status:            params.Status,
-		Model:             params.Model,
-		Output:            output,
-		Usage:             usage,
-		IncompleteDetails: nil,
-		Error:             nil,
-		Metadata:          responsesMetadataEmpty,
-		Clyde:             clyde,
+func responsesIncompleteDetails(status ResponsesStatus, finishReason string) *ResponsesIncompleteDetails {
+	if status != ResponsesStatusIncomplete && finishReason != "length" && finishReason != "content_filter" {
+		return nil
 	}
+	reason := "max_output_tokens"
+	if strings.TrimSpace(finishReason) == "content_filter" {
+		reason = "content_filter"
+	}
+	return &ResponsesIncompleteDetails{Reason: reason}
 }
 
 // responsesReasoningItemID derives the reasoning item id from the base.
@@ -370,11 +439,8 @@ func responsesFunctionCallItemID(base string, index int) string {
 	return "fc_" + base + "_" + strconv.Itoa(index)
 }
 
-// responsesCallID returns the upstream tool call id when present, or a
-// stable synthesized call id derived from the base and index.
+// responsesCallID derives the public call id from Clyde's response base and
+// the provider tool-call index.
 func responsesCallID(base string, tc ToolCall) string {
-	if tc.ID != "" {
-		return tc.ID
-	}
 	return "call_" + base + "_" + strconv.Itoa(tc.Index)
 }

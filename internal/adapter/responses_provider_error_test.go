@@ -162,6 +162,44 @@ func TestResponsesProviderExecutionPreservesClientErrorAndLogsContext(t *testing
 	}
 }
 
+func TestResponsesNonStreamingProviderErrorCarriesCanonicalWarnings(t *testing.T) {
+	fakes := newRoutingFakeEndpoints(t)
+	srv := newRoutingIntegrationServer(t, fakes)
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, requestID string) (anthropic.PreparedRequest, error) {
+			resolved := req
+			return anthropic.PreparedRequest{RequestID: requestID, Resolved: &resolved}, nil
+		},
+		ExecutePrepared: func(_ context.Context, _ anthropic.PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			return adapterprovider.Result{}, errors.New("provider-visible failure")
+		},
+	})
+	openAIURL, _ := startRoutingListeners(t, srv)
+	response, body := postResponsesRaw(t, openAIURL+"/v1/responses", `{"model":"claude-future","input":"hello","background":true}`)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400; body=%s", response.StatusCode, body)
+	}
+	if len(response.Header.Values("X-Clyde-Warning")) == 0 {
+		t.Fatalf("missing warning header: %v", response.Header)
+	}
+	var envelope struct {
+		Error struct {
+			Clyde *struct {
+				Warnings []adaptercompat.CompatibilityWarning `json:"warnings"`
+			} `json:"clyde"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("unmarshal error: %v; body=%s", err, body)
+	}
+	if envelope.Error.Clyde == nil || len(envelope.Error.Clyde.Warnings) != 1 {
+		t.Fatalf("error warnings=%+v want one canonical warning", envelope.Error.Clyde)
+	}
+	if envelope.Error.Clyde.Warnings[0].Param != "background" {
+		t.Fatalf("error warning=%+v", envelope.Error.Clyde.Warnings[0])
+	}
+}
+
 func responsesFailedMessage(t *testing.T, body []byte) string {
 	t.Helper()
 	for _, frame := range strings.Split(string(body), "\n\n") {
