@@ -152,7 +152,7 @@ func (p *passthroughSSEUsageParser) finishLine() {
 
 func (p *passthroughSSEUsageParser) finishEvent() {
 	p.json.Finish()
-	if (p.eventTerminal || p.json.terminal) && p.json.Valid() {
+	if p.eventTerminal && p.json.terminal && p.json.Valid() {
 		p.terminalUsage = p.json.usage
 	}
 	p.json.Reset()
@@ -265,6 +265,7 @@ type passthroughUsageJSONParser struct {
 	numberState         passthroughJSONNumberState
 	number              int
 	numberFits          bool
+	numberNegative      bool
 	stringBuffer        [passthroughMaxJSONStringBytes]byte
 	stringLength        int
 	stringTooLong       bool
@@ -420,6 +421,7 @@ func (p *passthroughUsageJSONParser) beginNumber(current byte) {
 	}
 	p.number = 0
 	p.numberFits = true
+	p.numberNegative = current == '-'
 	switch current {
 	case '-':
 		p.numberState = passthroughJSONNumberMinus
@@ -558,10 +560,37 @@ func (p *passthroughUsageJSONParser) finishNumber() {
 	if !p.numberIsComplete() {
 		p.invalid = true
 	}
-	if p.numberIsInteger() && p.numberFits {
+	if p.numberNegative && p.isRootUsageCounter() {
+		p.invalid = true
+	}
+	if p.numberIsInteger() && p.numberFits && !p.numberNegative {
 		p.recordUsageNumber(p.number)
 	}
 	p.completeScalar()
+}
+
+func (p *passthroughUsageJSONParser) isRootUsageCounter() bool {
+	if p.depth == 3 && p.overflowDepth == 0 {
+		root := p.frames[0]
+		response := p.frames[1]
+		usage := p.frames[2]
+		return root.container == passthroughJSONObject && root.pathKey == passthroughUsageKeyNone &&
+			response.container == passthroughJSONObject && response.pathKey == passthroughUsageKeyResponse &&
+			usage.container == passthroughJSONObject && usage.pathKey == passthroughUsageKeyUsage &&
+			(usage.currentKey == passthroughUsageKeyInputTokens || usage.currentKey == passthroughUsageKeyOutputTokens || usage.currentKey == passthroughUsageKeyTotalTokens)
+	}
+	if p.depth == 4 && p.overflowDepth == 0 {
+		root := p.frames[0]
+		response := p.frames[1]
+		usage := p.frames[2]
+		details := p.frames[3]
+		return root.container == passthroughJSONObject && root.pathKey == passthroughUsageKeyNone &&
+			response.container == passthroughJSONObject && response.pathKey == passthroughUsageKeyResponse &&
+			usage.container == passthroughJSONObject && usage.pathKey == passthroughUsageKeyUsage &&
+			details.container == passthroughJSONObject && details.pathKey == passthroughUsageKeyInputTokensDetails &&
+			details.currentKey == passthroughUsageKeyCachedTokens
+	}
+	return false
 }
 
 func (p *passthroughUsageJSONParser) numberIsComplete() bool {
@@ -866,6 +895,7 @@ func (p *passthroughUsageJSONParser) Reset() {
 	p.numberState = passthroughJSONNumberMinus
 	p.number = 0
 	p.numberFits = false
+	p.numberNegative = false
 	p.stringLength = 0
 	p.stringTooLong = false
 	p.stringEscaped = false

@@ -534,9 +534,49 @@ func TestPassthroughSSEUsageRejectsMalformedTerminalJSON(t *testing.T) {
 	}
 }
 
+func TestPassthroughSSEUsageRejectsNegativeCounters(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "input tokens", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":-11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}}`},
+		{name: "output tokens", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":-7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}}`},
+		{name: "total tokens", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":-18,"input_tokens_details":{"cached_tokens":4}}}}`},
+		{name: "cached tokens", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":-4}}}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			usage := passthroughTerminalSSEUsage(t, test.payload, "\r\n")
+			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+		})
+	}
+}
+
+func TestPassthroughSSEUsageRequiresMatchingTerminalMarkers(t *testing.T) {
+	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}}`
+	tests := []struct {
+		name      string
+		eventType string
+		payload   string
+	}{
+		{name: "created event with completed JSON type", eventType: "response.created", payload: payload},
+		{name: "completed event with created JSON type", eventType: "response.completed", payload: strings.Replace(payload, "response.completed", "response.created", 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			usage := passthroughSSEUsage(t, test.eventType, test.payload, "\n")
+			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+		})
+	}
+}
+
 func passthroughTerminalSSEUsage(t *testing.T, payload string, lineEnd string) Usage {
+	return passthroughSSEUsage(t, passthroughTerminalResponseEvent, payload, lineEnd)
+}
+
+func passthroughSSEUsage(t *testing.T, eventType string, payload string, lineEnd string) Usage {
 	t.Helper()
-	stream := []byte("event: response.completed" + lineEnd + "data: " + payload + lineEnd + lineEnd)
+	stream := []byte("event: " + eventType + lineEnd + "data: " + payload + lineEnd + lineEnd)
 	parser := newPassthroughSSEUsageParser()
 	for offset := 0; offset < len(stream); {
 		chunkSize := (offset % 13) + 1
