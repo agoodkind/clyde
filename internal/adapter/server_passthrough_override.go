@@ -234,15 +234,15 @@ func (s *Server) copyPassthroughResponse(ctx context.Context, w http.ResponseWri
 		if count > 0 {
 			writeErr := s.writePassthroughChunk(ctx, w, buffer[:count], captured, usageParser, flush)
 			if writeErr != nil {
-				return passthroughStreamCaptureResult(captured, usageParser), writeErr
+				return passthroughStreamCaptureResult(captured, usageParser, true), writeErr
 			}
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
-				return passthroughStreamCaptureResult(captured, usageParser), nil
+				return passthroughStreamCaptureResult(captured, usageParser, false), nil
 			}
 			s.log.WarnContext(ctx, "adapter.passthrough_override.read_response_failed", "concern", "adapter.providers.passthrough_override.response", "err", readErr)
-			return passthroughStreamCaptureResult(captured, usageParser), fmt.Errorf("read passthrough response: %w", readErr)
+			return passthroughStreamCaptureResult(captured, usageParser, true), fmt.Errorf("read passthrough response: %w", readErr)
 		}
 	}
 }
@@ -262,9 +262,9 @@ func (s *Server) writePassthroughChunk(ctx context.Context, w http.ResponseWrite
 	return nil
 }
 
-func passthroughStreamCaptureResult(captured *capture.CappedBuffer, usageParser *passthroughSSEUsageParser) passthroughCaptureResult {
+func passthroughStreamCaptureResult(captured *capture.CappedBuffer, usageParser *passthroughSSEUsageParser, interrupted bool) passthroughCaptureResult {
 	return passthroughCaptureResult{
-		body: captured.Bytes(), totalBytes: captured.TotalRead(), truncated: captured.Truncated(),
+		body: captured.Bytes(), totalBytes: captured.TotalRead(), truncated: captured.Truncated() || interrupted,
 		usage: usageParser.Usage(),
 	}
 }

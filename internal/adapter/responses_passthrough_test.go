@@ -473,6 +473,112 @@ func TestPassthroughStreamCaptureRetainsTerminalUsagePastCap(t *testing.T) {
 	}
 }
 
+func TestPassthroughStreamCaptureMarksReaderFailureTruncated(t *testing.T) {
+	const partialStream = "data: partial\n\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: &passthroughTestReadCloser{steps: []passthroughStreamReadStep{
+			{body: []byte(partialStream), err: io.ErrUnexpectedEOF},
+		}},
+	}
+	recorder := httptest.NewRecorder()
+	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	result, err := srv.copyPassthroughResponse(context.Background(), recorder, response, true)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("copy error = %v, want unexpected EOF", err)
+	}
+	if !bytes.Equal(result.body, []byte(partialStream)) || result.totalBytes != len(partialStream) || !result.truncated {
+		t.Fatalf("capture result = body:%q total:%d truncated:%t", result.body, result.totalBytes, result.truncated)
+	}
+}
+
+func TestPassthroughStreamCaptureMarksDownstreamWriteFailureTruncated(t *testing.T) {
+	const firstChunk = "data: first\n\n"
+	const secondChunk = "data: second\n\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: &passthroughTestReadCloser{steps: []passthroughStreamReadStep{
+			{body: []byte(firstChunk)},
+			{body: []byte(secondChunk), err: io.EOF},
+		}},
+	}
+	writer := &passthroughPartialWriter{header: make(http.Header), failAfter: 1}
+	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	result, err := srv.copyPassthroughResponse(context.Background(), writer, response, false)
+	if !errors.Is(err, errPassthroughDownstreamWrite) {
+		t.Fatalf("copy error = %v, want downstream write error", err)
+	}
+	wantCaptured := []byte(firstChunk + secondChunk)
+	if !bytes.Equal(result.body, wantCaptured) || result.totalBytes != len(wantCaptured) || !result.truncated {
+		t.Fatalf("capture result = body:%q total:%d truncated:%t", result.body, result.totalBytes, result.truncated)
+	}
+	if got := writer.body.String(); got != firstChunk {
+		t.Fatalf("downstream body = %q, want %q", got, firstChunk)
+	}
+}
+
+func TestPassthroughStreamCaptureLeavesSuccessfulBelowCapStreamComplete(t *testing.T) {
+	const stream = "data: complete\n\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(stream)),
+	}
+	recorder := httptest.NewRecorder()
+	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	result, err := srv.copyPassthroughResponse(context.Background(), recorder, response, true)
+	if err != nil {
+		t.Fatalf("copy response: %v", err)
+	}
+	if !bytes.Equal(result.body, []byte(stream)) || result.totalBytes != len(stream) || result.truncated {
+		t.Fatalf("capture result = body:%q total:%d truncated:%t", result.body, result.totalBytes, result.truncated)
+	}
+}
+
+var errPassthroughDownstreamWrite = errors.New("downstream write failed")
+
+type passthroughStreamReadStep struct {
+	body []byte
+	err  error
+}
+
+type passthroughTestReadCloser struct {
+	steps []passthroughStreamReadStep
+	index int
+}
+
+func (r *passthroughTestReadCloser) Read(destination []byte) (int, error) {
+	if r.index >= len(r.steps) {
+		return 0, io.EOF
+	}
+	step := r.steps[r.index]
+	r.index++
+	return copy(destination, step.body), step.err
+}
+
+func (r *passthroughTestReadCloser) Close() error { return nil }
+
+type passthroughPartialWriter struct {
+	header    http.Header
+	body      bytes.Buffer
+	failAfter int
+	writes    int
+}
+
+func (w *passthroughPartialWriter) Header() http.Header { return w.header }
+
+func (w *passthroughPartialWriter) WriteHeader(_ int) {}
+
+func (w *passthroughPartialWriter) Write(body []byte) (int, error) {
+	if w.writes == w.failAfter {
+		return 0, errPassthroughDownstreamWrite
+	}
+	w.writes++
+	return w.body.Write(body)
+}
+
 func TestPassthroughSSEUsageReadsOnlyTerminalResponseUsage(t *testing.T) {
 	padding := strings.Repeat("p", 96*1024)
 	payload := []byte("event: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":4}},\"metadata\":{\"input_tokens\":101},\"output\":[{\"content\":{\"output_tokens\":102},\"tool\":{\"total_tokens\":103}}]},\"metadata\":{\"cached_tokens\":104},\"padding\":\"" + padding + "\"}\r\n\r\n")
