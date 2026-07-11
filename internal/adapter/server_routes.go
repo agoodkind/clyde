@@ -193,6 +193,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/healthz", s.handle(adapterRouteHealth, s.handleHealth))
 	mux.HandleFunc("/v1/models", s.handle(adapterRouteOpenAI, s.auth(s.handleModels)))
 	mux.HandleFunc("/v1/chat/completions", s.handle(adapterRouteOpenAI, s.auth(s.handleChat)))
+	mux.HandleFunc("/v1/responses", s.handle(adapterRouteOpenAI, s.auth(s.handleResponses)))
 	mux.HandleFunc("/v1/completions", s.handle(adapterRouteOpenAI, s.auth(s.handleLegacy)))
 	mux.HandleFunc("/v1/messages", s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicMessages)))
 	mux.HandleFunc("/v1/messages/count_tokens", s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicCountTokens)))
@@ -215,7 +216,7 @@ type healthStatus struct {
 func (s *Server) handleRoot(ctx context.Context, hctx *handlerCtx) error {
 	body, err := json.Marshal(rootRouteIndex{
 		Service: "clyde-adapter",
-		Paths:   []string{"/v1/models", "/v1/chat/completions", "/v1/completions", "/v1/messages", "/v1/messages/count_tokens", "/healthz"},
+		Paths:   []string{"/v1/models", "/v1/chat/completions", "/v1/responses", "/v1/completions", "/v1/messages", "/v1/messages/count_tokens", "/healthz"},
 	})
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.root.marshal_failed", "concern", "adapter.http.errors", "err", err)
