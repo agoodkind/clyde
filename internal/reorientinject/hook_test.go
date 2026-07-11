@@ -263,29 +263,25 @@ func TestSplitRequestTransformerFailsOpen(t *testing.T) {
 	}
 }
 
-func TestHookSplitClampedByCap(t *testing.T) {
+func TestSplitConversationClampedByCap(t *testing.T) {
 	t.Parallel()
-	// A 1-token config ceiling makes the byte cap tiny, so the walk takes only the
-	// newest message even though the count midpoint would take two.
-	hook := New(nil, 1)
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
-		Body:   staticHookBody{body: []byte(compactSplitBody)},
-	})
-	if err != nil {
-		t.Fatalf("MatchRequestResponse err = %v", err)
-	}
-	appender, ok := match.Transformer.(responseAppendTransformer)
+	assistant := anthropicMessage{Role: "assistant", Content: json.RawMessage(`"` + strings.Repeat("x", 100) + `"`)}
+	user := anthropicMessage{Role: "user", Content: json.RawMessage(`"u"`)}
+	// Eight conversation messages alternating user/assistant, each assistant ~100
+	// bytes, then the prompt at index 8. A 150-byte cap fits far fewer than the
+	// count midpoint (4), so the recent half is clamped, and after the boundary snap
+	// the older half still ends on an assistant.
+	messages := []anthropicMessage{user, assistant, user, assistant, user, assistant, user, assistant, user}
+	promptIndex := 8
+	recentStart, ok := splitConversation(messages, promptIndex, 150)
 	if !ok {
-		t.Fatalf("transformer type = %T", match.Transformer)
+		t.Fatal("expected a split")
 	}
-	if !strings.Contains(appender.content, "m4-newest") {
-		t.Fatalf("cap-clamped content missing the newest message: %q", appender.content)
+	if messages[recentStart-1].Role != "assistant" {
+		t.Fatalf("older half ends on %q, want an assistant", messages[recentStart-1].Role)
 	}
-	if strings.Contains(appender.content, "m3-recent") {
-		t.Fatalf("cap-clamped content should stop before m3: %q", appender.content)
+	if recentStart <= 4 {
+		t.Fatalf("recentStart = %d, want > 4 (the cap clamped the recent half below the midpoint)", recentStart)
 	}
 }
 
@@ -339,6 +335,51 @@ func TestSplitConversationBudgetsToolBlocks(t *testing.T) {
 	}
 	if recentStart != 3 {
 		t.Fatalf("recentStart = %d, want 3 (only the newest message fits; the tool_use message is budgeted by renderBlocks, not text)", recentStart)
+	}
+}
+
+func TestSplitConversationEndsOlderHalfOnAssistant(t *testing.T) {
+	t.Parallel()
+	msg := func(role string) anthropicMessage {
+		return anthropicMessage{Role: role, Content: json.RawMessage(`"x"`)}
+	}
+	// The count boundary would land right after the system at index 2, leaving the
+	// older half ending on a Claude Code system-reminder, which Anthropic rejects
+	// (a system message must precede an assistant or end the array). The split must
+	// snap back so the older half ends on the assistant at index 1.
+	messages := []anthropicMessage{
+		msg("user"), msg("assistant"), msg("system"),
+		msg("assistant"), msg("user"), msg("system"),
+		msg("user"),
+	}
+	promptIndex := 6
+	recentStart, ok := splitConversation(messages, promptIndex, 0)
+	if !ok {
+		t.Fatal("expected a split")
+	}
+	if messages[recentStart-1].Role != "assistant" {
+		t.Fatalf("older half ends on %q at index %d, want it to end on an assistant so no orphaned system reminder is left", messages[recentStart-1].Role, recentStart-1)
+	}
+	if recentStart != 2 {
+		t.Fatalf("recentStart = %d, want 2 (snapped back past the system at index 2)", recentStart)
+	}
+}
+
+func TestSplitConversationFallsBackWithoutAssistantBoundary(t *testing.T) {
+	t.Parallel()
+	msg := func(role string) anthropicMessage {
+		return anthropicMessage{Role: role, Content: json.RawMessage(`"x"`)}
+	}
+	// A leading run with no assistant to end the older half on: the split cannot
+	// form a valid older half, so it must fall back to no split rather than emit an
+	// invalid message sequence.
+	messages := []anthropicMessage{
+		msg("user"), msg("system"), msg("user"), msg("system"),
+		msg("user"),
+	}
+	promptIndex := 4
+	if _, ok := splitConversation(messages, promptIndex, 0); ok {
+		t.Fatal("expected no split when the older half cannot end on an assistant")
 	}
 }
 
