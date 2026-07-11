@@ -612,6 +612,52 @@ func TestPassthroughSSEUsageTreatsEmptyEventFieldAsFinalValue(t *testing.T) {
 	}
 }
 
+func TestPassthroughSSEUsageUsesLastRootTypeValue(t *testing.T) {
+	usage := `"response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}`
+	tests := []struct {
+		name    string
+		payload string
+		want    bool
+	}{
+		{name: "completed then created", payload: `{"type":"response.completed","type":"response.created",` + usage + `}`},
+		{name: "created then completed", payload: `{"type":"response.created","type":"response.completed",` + usage + `}`, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := passthroughTerminalSSEUsage(t, test.payload, "\n")
+			if test.want {
+				assertPassthroughUsage(t, result, 11, 7, 18, 0)
+				return
+			}
+			assertPassthroughUsage(t, result, 0, 0, 0, 0)
+		})
+	}
+}
+
+func TestPassthroughSSEUsageReplacesOrRejectsRepeatedCounters(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    Usage
+	}{
+		{name: "later integers replace earlier values", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":1,"input_tokens":11,"output_tokens":2,"output_tokens":7,"total_tokens":3,"total_tokens":18,"input_tokens_details":{"cached_tokens":1},"input_tokens_details":{"cached_tokens":4}}}}`, want: usageWithValues(11, 7, 18, 4)},
+		{name: "later decimal input invalidates event", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"input_tokens":1.5}}}`},
+		{name: "later overflow output invalidates event", payload: `{"type":"response.completed","response":{"usage":{"output_tokens":7,"output_tokens":999999999999999999999999999999}}}`},
+		{name: "later string total invalidates event", payload: `{"type":"response.completed","response":{"usage":{"total_tokens":18,"total_tokens":"invalid"}}}`},
+		{name: "later negative cached invalidates event", payload: `{"type":"response.completed","response":{"usage":{"input_tokens_details":{"cached_tokens":4},"input_tokens_details":{"cached_tokens":-5}}}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := passthroughTerminalSSEUsage(t, test.payload, "\r\n")
+			if test.want.TotalTokens != 0 {
+				assertPassthroughUsage(t, result, test.want.InputTokens, test.want.OutputTokens, test.want.TotalTokens, test.want.CachedTokens())
+				return
+			}
+			assertPassthroughUsage(t, result, 0, 0, 0, 0)
+		})
+	}
+}
+
 func passthroughTerminalSSEUsage(t *testing.T, payload string, lineEnd string) Usage {
 	return passthroughSSEUsage(t, passthroughTerminalResponseEvent, payload, lineEnd)
 }

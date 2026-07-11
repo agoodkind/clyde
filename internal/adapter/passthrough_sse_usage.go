@@ -409,14 +409,20 @@ func (p *passthroughUsageJSONParser) finishString() {
 		p.setObjectKey()
 		return
 	}
-	if p.currentValueIsRootType() && !p.stringEscaped && !p.stringTooLong &&
-		bytes.Equal(p.stringBuffer[:p.stringLength], []byte(passthroughTerminalResponseEvent)) {
-		p.terminal = true
+	if p.currentValueIsRootType() {
+		p.terminal = !p.stringEscaped && !p.stringTooLong &&
+			bytes.Equal(p.stringBuffer[:p.stringLength], []byte(passthroughTerminalResponseEvent))
+	}
+	if p.isRootUsageCounter() {
+		p.invalid = true
 	}
 	p.completeScalar()
 }
 
 func (p *passthroughUsageJSONParser) beginNumber(current byte) {
+	if p.currentValueIsRootType() {
+		p.terminal = false
+	}
 	if !p.beginValue() {
 		p.invalid = true
 	}
@@ -561,7 +567,7 @@ func (p *passthroughUsageJSONParser) finishNumber() {
 	if !p.numberIsComplete() {
 		p.invalid = true
 	}
-	if p.numberNegative && p.isRootUsageCounter() {
+	if p.isRootUsageCounter() && (!p.numberIsInteger() || !p.numberFits || p.numberNegative) {
 		p.invalid = true
 	}
 	if p.numberIsInteger() && p.numberFits && !p.numberNegative {
@@ -610,6 +616,9 @@ func (p *passthroughUsageJSONParser) numberIsInteger() bool {
 }
 
 func (p *passthroughUsageJSONParser) beginLiteral(current byte) {
+	if p.currentValueIsRootType() {
+		p.terminal = false
+	}
 	if !p.beginValue() {
 		p.invalid = true
 	}
@@ -646,10 +655,19 @@ func (p *passthroughUsageJSONParser) finishLiteral() {
 			p.invalid = true
 		}
 	}
+	if p.isRootUsageCounter() {
+		p.invalid = true
+	}
 	p.completeScalar()
 }
 
 func (p *passthroughUsageJSONParser) enterContainer(container passthroughJSONContainer) {
+	if p.currentValueIsRootType() {
+		p.terminal = false
+	}
+	if p.isRootUsageCounter() {
+		p.invalid = true
+	}
 	if !p.beginValue() {
 		p.invalid = true
 	}
