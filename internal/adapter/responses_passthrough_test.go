@@ -101,6 +101,11 @@ func TestResponsesPassthroughPreservesStatusHeadersAndRequestIdentity(t *testing
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Upstream-Marker", "kept")
 		w.Header().Set("Connection", "close")
+		w.Header().Set(clydeingress.HeaderRequestID, "upstream-request")
+		w.Header().Set(clydeingress.HeaderTraceID, "upstream-trace")
+		w.Header().Set(clydeingress.HeaderSpanID, "upstream-span")
+		w.Header().Set(clydeingress.HeaderParentSpanID, "upstream-parent")
+		w.Header().Set(clydeingress.HeaderTraceparent, "upstream-traceparent")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, `{"id":"resp_created"}`)
 	}))
@@ -111,6 +116,8 @@ func TestResponsesPassthroughPreservesStatusHeadersAndRequestIdentity(t *testing
 	req.Header.Set(clydeingress.HeaderRequestID, "req-stable")
 	const traceID = "0123456789abcdef0123456789abcdef"
 	req.Header.Set(clydeingress.HeaderTraceID, traceID)
+	req.Header.Set(clydeingress.HeaderSpanID, "0123456789abcdef")
+	req.Header.Set(clydeingress.HeaderParentSpanID, "fedcba9876543210")
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 
@@ -126,21 +133,28 @@ func TestResponsesPassthroughPreservesStatusHeadersAndRequestIdentity(t *testing
 	if got := rec.Header().Get(clydeingress.HeaderTraceID); got != traceID {
 		t.Fatalf("trace id = %q, want %s", got, traceID)
 	}
+	if got := rec.Header().Get(clydeingress.HeaderSpanID); got == "" || got == "upstream-span" ||
+		rec.Header().Get(clydeingress.HeaderParentSpanID) != "fedcba9876543210" ||
+		rec.Header().Get(clydeingress.HeaderTraceparent) == "" ||
+		rec.Header().Get(clydeingress.HeaderTraceparent) == "upstream-traceparent" {
+		t.Fatalf("correlation headers = %v", rec.Header())
+	}
 }
 
 func TestBufferedPassthroughUsesStreamingFramingHeaderFilter(t *testing.T) {
 	header := http.Header{
 		"Connection":        []string{"close, X-Internal", "X-Extra"},
 		"Content-Length":    []string{"999"},
+		"Proxy-Connection":  []string{"keep-alive"},
 		"Transfer-Encoding": []string{"chunked"},
 		"X-Extra":           []string{"also-secret"},
 		"X-Internal":        []string{"secret"},
 		"X-Upstream-Marker": []string{"kept"},
 	}
 	recorder := httptest.NewRecorder()
-	writePassthroughOverrideResponse(recorder, http.StatusCreated, []byte("body"), header)
+	writePassthroughOverrideResponse(correlation.Context{}, recorder, http.StatusCreated, []byte("body"), header)
 
-	if recorder.Header().Get("Connection") != "" || recorder.Header().Get("Transfer-Encoding") != "" ||
+	if recorder.Header().Get("Connection") != "" || recorder.Header().Get("Transfer-Encoding") != "" || recorder.Header().Get("Proxy-Connection") != "" ||
 		recorder.Header().Get("X-Internal") != "" || recorder.Header().Get("X-Extra") != "" {
 		t.Fatalf("framing headers = %v", recorder.Header())
 	}
@@ -154,7 +168,7 @@ func TestBufferedPassthroughUsesStreamingFramingHeaderFilter(t *testing.T) {
 	if _, err := srv.copyPassthroughResponse(context.Background(), streamRecorder, response, true); err != nil {
 		t.Fatalf("copy streaming response: %v", err)
 	}
-	if streamRecorder.Header().Get("X-Internal") != "" || streamRecorder.Header().Get("X-Extra") != "" ||
+	if streamRecorder.Header().Get("X-Internal") != "" || streamRecorder.Header().Get("X-Extra") != "" || streamRecorder.Header().Get("Proxy-Connection") != "" ||
 		streamRecorder.Header().Get("X-Upstream-Marker") != "kept" {
 		t.Fatalf("stream response headers = %v", streamRecorder.Header())
 	}
@@ -699,6 +713,32 @@ func TestPassthroughSSEUsageRejectsTerminalEventTrailingWhitespace(t *testing.T)
 	}
 }
 
+func TestPassthroughSSEUsageAcceptsOnlyLeadingBOM(t *testing.T) {
+	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`
+	for _, test := range []struct {
+		name   string
+		stream []byte
+		want   Usage
+	}{
+		{name: "without BOM", stream: []byte("event: response.completed\ndata: " + payload + "\n\n"), want: usageWithValues(11, 7, 18, 0)},
+		{name: "leading BOM", stream: append([]byte{0xef, 0xbb, 0xbf}, []byte("event: response.completed\ndata: "+payload+"\n\n")...), want: usageWithValues(11, 7, 18, 0)},
+		{name: "middle BOM", stream: []byte("event: response.completed\n\xef\xbb\xbfdata: " + payload + "\n\n")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parser := newPassthroughSSEUsageParser()
+			for offset := 0; offset < len(test.stream); offset++ {
+				parser.Write(test.stream[offset : offset+1])
+			}
+			usage := parser.Usage()
+			if test.want.TotalTokens != 0 {
+				assertPassthroughUsage(t, usage, test.want.InputTokens, test.want.OutputTokens, test.want.TotalTokens, test.want.CachedTokens())
+				return
+			}
+			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+		})
+	}
+}
+
 func passthroughTerminalSSEUsage(t *testing.T, payload string, lineEnd string) Usage {
 	return passthroughSSEUsage(t, passthroughTerminalResponseEvent, payload, lineEnd)
 }
@@ -1055,6 +1095,117 @@ func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testi
 	if requestCount != 1 || status != 0 || path != "/v1/responses" || !bytes.Equal(requestBody, []byte(body)) ||
 		strings.Contains(captureMetadata, userinfoMarker) || strings.Contains(captureMetadata, queryMarker) {
 		t.Fatalf("primary capture status=%d host=%q path=%q metadata=%q", status, host, path, captureMetadata)
+	}
+}
+
+func TestResponsesPassthroughBodyReadFailureCapturesPartialResponse(t *testing.T) {
+	const partialBody = `{"id":"partial"}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "128")
+		_, _ = io.WriteString(w, partialBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	dbPath := filepath.Join(t.TempDir(), "primary-read-capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	storeClosed := false
+	t.Cleanup(func() {
+		if !storeClosed {
+			_ = store.Close(context.Background(), "test cleanup")
+		}
+	})
+	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
+	srv.deps.CaptureStore = store
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"read failure"}`)))
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	storeClosed = true
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open capture database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var status int
+	var responseBytes int
+	var truncated int
+	var capturedBody []byte
+	row := db.QueryRow(`SELECT r.status, r.resp_bytes, b.truncated, b.data FROM requests r JOIN bodies b ON b.request_row_id=r.id AND b.which='response' WHERE r.client='adapter.passthrough'`)
+	if err := row.Scan(&status, &responseBytes, &truncated, &capturedBody); err != nil {
+		t.Fatalf("scan partial capture: %v", err)
+	}
+	if status != http.StatusOK || responseBytes != len(partialBody) || truncated != 1 || !bytes.Equal(capturedBody, []byte(partialBody)) {
+		t.Fatalf("partial capture status=%d bytes=%d truncated=%d body=%q", status, responseBytes, truncated, capturedBody)
+	}
+}
+
+func TestStructuredOutputRetryBodyReadFailureCapturesPartialResponse(t *testing.T) {
+	const partialBody = `{"choices":[`
+	requestCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		if requestCount == 1 {
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
+			return
+		}
+		w.Header().Set("Content-Length", "128")
+		_, _ = io.WriteString(w, partialBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	dbPath := filepath.Join(t.TempDir(), "retry-read-capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	storeClosed := false
+	t.Cleanup(func() {
+		if !storeClosed {
+			_ = store.Close(context.Background(), "test cleanup")
+		}
+	})
+	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
+	srv.deps.CaptureStore = store
+	resolved, err := adapterresolver.Resolve(adapterresolver.IngressOpenAI, responsesCursorRequest("local-model"), adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()))
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	body := []byte(`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`)
+	srv.forwardPassthroughOverride(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), &resolved, body)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	storeClosed = true
+	if recorder.Code != http.StatusBadRequest || requestCount != 2 {
+		t.Fatalf("status=%d requests=%d body=%s", recorder.Code, requestCount, recorder.Body.String())
+	}
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open capture database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var status int
+	var responseBytes int
+	var truncated int
+	var capturedBody []byte
+	row := db.QueryRow(`SELECT r.status, r.resp_bytes, b.truncated, b.data FROM requests r JOIN bodies b ON b.request_row_id=r.id AND b.which='response' WHERE r.client='adapter.passthrough' ORDER BY r.id DESC LIMIT 1`)
+	if err := row.Scan(&status, &responseBytes, &truncated, &capturedBody); err != nil {
+		t.Fatalf("scan retry partial capture: %v", err)
+	}
+	if status != http.StatusOK || responseBytes != len(partialBody) || truncated != 1 || !bytes.Equal(capturedBody, []byte(partialBody)) {
+		t.Fatalf("retry partial capture status=%d bytes=%d truncated=%d body=%q", status, responseBytes, truncated, capturedBody)
 	}
 }
 

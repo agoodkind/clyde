@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
@@ -61,4 +62,18 @@ func passthroughUpstreamRequestID(headers http.Header) string {
 		return requestID
 	}
 	return headers.Get("Request-Id")
+}
+
+func passthroughCaptureResultFromRead(body []byte, readErr error) passthroughCaptureResult {
+	result := passthroughCaptureResultFromBody(body)
+	result.truncated = readErr != nil
+	return result
+}
+
+func passthroughClydeCorrelationHeader(key string) bool {
+	return strings.EqualFold(key, clydeingress.HeaderRequestID) ||
+		strings.EqualFold(key, clydeingress.HeaderTraceID) ||
+		strings.EqualFold(key, clydeingress.HeaderSpanID) ||
+		strings.EqualFold(key, clydeingress.HeaderParentSpanID) ||
+		strings.EqualFold(key, clydeingress.HeaderTraceparent)
 }

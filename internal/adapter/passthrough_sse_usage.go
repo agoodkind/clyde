@@ -19,6 +19,9 @@ const (
 type passthroughSSEUsageParser struct {
 	json                  passthroughUsageJSONParser
 	terminalUsage         Usage
+	streamPrefix          [3]byte
+	streamPrefixLength    int
+	streamPrefixResolved  bool
 	lineKind              passthroughSSELineKind
 	lineName              [5]byte
 	lineNameLength        int
@@ -39,7 +42,32 @@ func newPassthroughSSEUsageParser() *passthroughSSEUsageParser {
 
 func (p *passthroughSSEUsageParser) Write(chunk []byte) {
 	for _, current := range chunk {
+		p.consumeStreamByte(current)
+	}
+}
+
+func (p *passthroughSSEUsageParser) consumeStreamByte(current byte) {
+	if p.streamPrefixResolved {
 		p.consumeByte(current)
+		return
+	}
+	p.streamPrefix[p.streamPrefixLength] = current
+	p.streamPrefixLength++
+	if p.streamPrefixLength == len(p.streamPrefix) {
+		p.resolveStreamPrefix()
+	}
+}
+
+func (p *passthroughSSEUsageParser) resolveStreamPrefix() {
+	if p.streamPrefixResolved {
+		return
+	}
+	p.streamPrefixResolved = true
+	if p.streamPrefixLength == len(p.streamPrefix) && p.streamPrefix == [3]byte{0xef, 0xbb, 0xbf} {
+		return
+	}
+	for i := range p.streamPrefixLength {
+		p.consumeByte(p.streamPrefix[i])
 	}
 }
 
@@ -160,6 +188,7 @@ func (p *passthroughSSEUsageParser) resetLine() {
 }
 
 func (p *passthroughSSEUsageParser) Usage() Usage {
+	p.resolveStreamPrefix()
 	if p.lineHeaderComplete || p.lineNameLength > 0 {
 		p.finishLine()
 	}

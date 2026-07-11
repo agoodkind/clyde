@@ -144,6 +144,7 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
+			s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromRead(respBody, readErr), started)
 			s.respondPassthroughOverrideTransportError(w, r, ctx, req, options.requestID, started, options.streamRequested, readErr)
 			return
 		}
@@ -170,6 +171,7 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
+		s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromRead(respBody, readErr), started)
 		s.respondPassthroughOverrideTransportError(w, r, ctx, req, options.requestID, started, options.streamRequested, readErr)
 		return
 	}
@@ -192,7 +194,7 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	} else {
 		s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromBody(respBody), started)
 	}
-	writePassthroughOverrideResponse(w, status, respBody, header)
+	writePassthroughOverrideResponse(corr, w, status, respBody, header)
 	s.logPassthroughOverrideTerminal(ctx, req, options.requestID, started, options.streamRequested, contentType, passthroughOverrideUsageFromBody(respBody))
 }
 
@@ -222,6 +224,7 @@ func passthroughCaptureResultFromBody(body []byte) passthroughCaptureResult {
 
 func (s *Server) copyPassthroughResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, flush bool) (passthroughCaptureResult, error) {
 	copyPassthroughHeaders(w.Header(), resp.Header)
+	clydeingress.SetHTTPHeaders(correlation.FromContext(ctx), w.Header())
 	w.WriteHeader(resp.StatusCode)
 	captured := capture.NewCappedBuffer(capture.DefaultMaxBodyBytes)
 	usageParser := newPassthroughSSEUsageParser()
@@ -275,9 +278,13 @@ func copyPassthroughHeaders(dst, src http.Header) {
 		switch passthroughFramingHeader(http.CanonicalHeaderKey(key)) {
 		case passthroughHeaderConnection, passthroughHeaderKeepAlive, passthroughHeaderProxyAuthenticate,
 			passthroughHeaderProxyAuthorization, passthroughHeaderTE, passthroughHeaderTrailer,
-			passthroughHeaderTransferEncoding, passthroughHeaderUpgrade, passthroughHeaderContentLength:
+			passthroughHeaderTransferEncoding, passthroughHeaderUpgrade, passthroughHeaderContentLength,
+			passthroughHeaderProxyConnection:
 			continue
 		default:
+		}
+		if passthroughClydeCorrelationHeader(key) {
+			continue
 		}
 		dst[key] = values
 	}
@@ -313,6 +320,7 @@ const (
 	passthroughHeaderTransferEncoding   passthroughFramingHeader = "Transfer-" + "Encoding"
 	passthroughHeaderUpgrade            passthroughFramingHeader = "Upgrade"
 	passthroughHeaderContentLength      passthroughFramingHeader = "Content-Length"
+	passthroughHeaderProxyConnection    passthroughFramingHeader = "Proxy-" + "Connection"
 )
 
 // passthroughResponsesBodyWithModel rewrites the "model" field of a Responses
@@ -491,8 +499,9 @@ func (s *Server) respondPassthroughOverrideTransportError(
 // caller verbatim. The caller flow has already early-returned on
 // non-2xx so this writer only ever sees a status that is already in
 // the OpenAI compat success window.
-func writePassthroughOverrideResponse(w http.ResponseWriter, status int, respBody []byte, hdr http.Header) {
+func writePassthroughOverrideResponse(corr correlation.Context, w http.ResponseWriter, status int, respBody []byte, hdr http.Header) {
 	copyPassthroughHeaders(w.Header(), hdr)
+	clydeingress.SetHTTPHeaders(corr, w.Header())
 	w.Header().Set("Content-Length", strconv.Itoa(len(respBody)))
 	w.WriteHeader(status)
 	_, _ = w.Write(respBody)
@@ -609,7 +618,7 @@ func (s *Server) coerceOrRetryPassthroughOverrideJSON(
 	}
 	defer func() { _ = secondResponse.Body.Close() }()
 	rb2, readErr := io.ReadAll(secondResponse.Body)
-	s.recordPassthroughEgress(ctx, secondResponse, body2, passthroughCaptureResultFromBody(rb2), secondStarted)
+	s.recordPassthroughEgress(ctx, secondResponse, body2, passthroughCaptureResultFromRead(rb2, readErr), secondStarted)
 	if readErr != nil {
 		return respBody, status, hdr, true, newPassthroughRetryFailure(secondResponse.StatusCode, rb2, secondResponse.Header.Get("Content-Type"), readErr)
 	}
