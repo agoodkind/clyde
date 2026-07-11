@@ -76,6 +76,23 @@ func TestSplitResponsesToolsMalformedEntry(t *testing.T) {
 	}
 }
 
+func TestSplitResponsesToolsClampsUnknownDroppedType(t *testing.T) {
+	t.Parallel()
+
+	// An arbitrary client-supplied tool type must never be reflected into a
+	// dropped label, because the label flows into a compatibility warning and
+	// warnings must not carry request values. Unknown kinds clamp to a fixed
+	// "unsupported" label; recognized kinds keep their stable discriminator.
+	raw := json.RawMessage(`[{"type":"totally-made-up-xyz"},{"type":"file_search"}]`)
+	functionTools, droppedTypes := SplitResponsesTools(raw)
+	if len(functionTools) != 0 {
+		t.Fatalf("function tools = %+v, want none", functionTools)
+	}
+	if strings.Join(droppedTypes, ",") != "unsupported,file_search" {
+		t.Fatalf("dropped types = %v, want [unsupported file_search]", droppedTypes)
+	}
+}
+
 func TestSplitResponsesToolsUnnamedEntry(t *testing.T) {
 	t.Parallel()
 

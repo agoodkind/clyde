@@ -13,6 +13,30 @@ const responsesToolLabelUnnamed = "unnamed"
 // be decoded as a tool object.
 const responsesToolLabelMalformed = "malformed"
 
+// responsesToolLabelUnsupported labels a dropped entry whose type is not a
+// recognized OpenAI built-in or custom tool kind. Clamping unrecognized
+// types to this fixed label keeps an arbitrary client-supplied type string
+// out of the compatibility warning, because warnings must not carry request
+// values.
+const responsesToolLabelUnsupported = "unsupported"
+
+// knownDroppableToolTypes is the set of recognized OpenAI Responses built-in
+// and custom tool kinds Clyde drops when projecting to a chat-completions
+// provider. Only these stable discriminators are safe to report verbatim in
+// a dropped-tool warning label; any other type clamps to "unsupported".
+var knownDroppableToolTypes = map[string]bool{
+	"web_search":             true,
+	"web_search_preview":     true,
+	"file_search":            true,
+	"computer_use":           true,
+	"computer_use_preview":   true,
+	"code_interpreter":       true,
+	"image_generation":       true,
+	"local_shell":            true,
+	"mcp":                    true,
+	"custom":                 true,
+}
+
 // responsesToolEnvelope is the lenient view of one Responses `tools`
 // entry. It mirrors the fields Tool.UnmarshalJSON reads, but it is decoded
 // per element without the strict type rejection so built-in and custom
@@ -105,12 +129,18 @@ func toolFromEnvelope(env responsesToolEnvelope) Tool {
 	}
 }
 
-// droppedToolLabel returns the reported label for a dropped entry. It is
-// the entry's type value when present (e.g. "web_search", "custom"), or
-// "unnamed" when the entry has no usable type discriminator.
+// droppedToolLabel returns the reported label for a dropped entry. It is the
+// entry's type value only when that value is a recognized tool kind (e.g.
+// "web_search", "custom"), "unsupported" when the type is present but not
+// recognized, or "unnamed" when the entry has no usable type discriminator.
+// Unrecognized types clamp to the fixed label so a compatibility warning
+// never carries an arbitrary client-supplied string.
 func droppedToolLabel(env responsesToolEnvelope) string {
-	if env.Type != string(openAIToolWireTypeEmpty) {
+	if env.Type == string(openAIToolWireTypeEmpty) {
+		return responsesToolLabelUnnamed
+	}
+	if knownDroppableToolTypes[env.Type] {
 		return env.Type
 	}
-	return responsesToolLabelUnnamed
+	return responsesToolLabelUnsupported
 }
