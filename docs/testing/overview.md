@@ -56,3 +56,15 @@ touched a daemon it should not have.
 The harness refuses to boot when a port it needs is already in use, when two of its
 ports match, or when a sandbox directory sits outside a temp root. Refusing early stops
 a run before it collides with another listener or hides a misconfiguration.
+
+## Responses endpoint tests
+
+The adapter HTTP listener the harness drives also serves `/v1/responses`. Unit
+coverage for the Responses handler and its compatibility warnings lives in the
+adapter and compat packages, so an ordinary `make test` run exercises it without
+the live harness. The
+[streaming writer tests](../../internal/adapter/responses_writer_test.go), the
+[response object tests](../../internal/adapter/openai/responses_response_test.go),
+the [compat warning surfaces test](../../internal/adapter/server_responses_compat_test.go),
+and the [compat catalog tests](../../internal/adapter/compat/compat_test.go) hold
+the behavior.
