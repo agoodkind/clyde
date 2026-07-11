@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -125,9 +126,32 @@ func TestResponsesPassthroughPreservesStatusHeadersAndRequestIdentity(t *testing
 	}
 }
 
+func TestBufferedPassthroughUsesStreamingFramingHeaderFilter(t *testing.T) {
+	header := http.Header{
+		"Connection":        []string{"close"},
+		"Content-Length":    []string{"999"},
+		"Transfer-Encoding": []string{"chunked"},
+		"X-Upstream-Marker": []string{"kept"},
+	}
+	recorder := httptest.NewRecorder()
+	writePassthroughOverrideResponse(recorder, http.StatusCreated, []byte("body"), header)
+
+	if recorder.Header().Get("Connection") != "" || recorder.Header().Get("Transfer-Encoding") != "" {
+		t.Fatalf("framing headers = %v", recorder.Header())
+	}
+	if recorder.Header().Get("Content-Length") != "4" || recorder.Header().Get("X-Upstream-Marker") != "kept" {
+		t.Fatalf("response headers = %v", recorder.Header())
+	}
+}
+
 func TestResponsesPassthroughStreamsBeforeUpstreamCompletion(t *testing.T) {
 	firstWritten := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseUpstream := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	t.Cleanup(releaseUpstream)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\"}\n\n")
@@ -167,10 +191,10 @@ func TestResponsesPassthroughStreamsBeforeUpstreamCompletion(t *testing.T) {
 			t.Fatalf("first downstream bytes = %q", first)
 		}
 	case <-time.After(500 * time.Millisecond):
-		close(release)
+		releaseUpstream()
 		t.Fatal("first downstream bytes waited for upstream completion")
 	}
-	close(release)
+	releaseUpstream()
 }
 
 func TestResponsesPassthroughNon2xxUsesOpenAIErrorBoundary(t *testing.T) {
@@ -189,6 +213,30 @@ func TestResponsesPassthroughNon2xxUsesOpenAIErrorBoundary(t *testing.T) {
 	}
 	if rec.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" || !strings.Contains(envelope.Error.Message, "backend unavailable") {
 		t.Fatalf("status=%d envelope=%+v", rec.Code, envelope)
+	}
+}
+
+func TestResponsesPassthroughRedirectUsesOpenAIErrorBoundary(t *testing.T) {
+	redirectTargetReached := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirected" {
+			redirectTargetReached = true
+			_, _ = io.WriteString(w, `{"id":"must-not-follow"}`)
+			return
+		}
+		http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(upstream.Close)
+	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi"}`)))
+
+	var envelope adapteropenai.ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode error envelope: %v body=%s", err, recorder.Body.String())
+	}
+	if redirectTargetReached || recorder.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" {
+		t.Fatalf("target_reached=%t status=%d envelope=%+v", redirectTargetReached, recorder.Code, envelope)
 	}
 }
 
@@ -262,6 +310,8 @@ func TestResponsesPassthroughResolvedSnapshotSurvivesHotApply(t *testing.T) {
 func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Set-Cookie", "response-secret")
+		w.Header().Set("X-Upstream-Marker", "kept")
 		_, _ = io.WriteString(w, `{"id":"captured","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
 	}))
 	t.Cleanup(upstream.Close)
@@ -271,6 +321,12 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+	storeClosed := false
+	t.Cleanup(func() {
+		if !storeClosed {
+			_ = store.Close(context.Background(), "test cleanup")
+		}
+	})
 	cfg := passthroughSnapshotConfig(upstream.URL)
 	cfg.CaptureIngress = true
 	override := cfg.PassthroughOverrides["snapshot"]
@@ -287,26 +343,30 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+	storeClosed = true
 
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open capture database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	rows, err := db.Query(`SELECT client, path, req_headers FROM requests ORDER BY id`)
+	rows, err := db.Query(`SELECT client, path, req_headers, resp_headers FROM requests ORDER BY id`)
 	if err != nil {
 		t.Fatalf("query captures: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
 	seen := make(map[string]string)
+	responseHeaders := make(map[string]string)
 	for rows.Next() {
 		var client string
 		var path string
 		var headers string
-		if err := rows.Scan(&client, &path, &headers); err != nil {
+		var responseHeader string
+		if err := rows.Scan(&client, &path, &headers, &responseHeader); err != nil {
 			t.Fatalf("scan capture: %v", err)
 		}
 		seen[client] = path + " " + headers
+		responseHeaders[client] = responseHeader
 	}
 	if !strings.HasPrefix(seen["adapter.ingress"], "/v1/responses ") {
 		t.Fatalf("ingress capture = %q", seen["adapter.ingress"])
@@ -318,6 +378,133 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 		if strings.Contains(value, "ingress-secret") || strings.Contains(value, "egress-secret") {
 			t.Fatalf("%s capture leaked secret: %s", client, value)
 		}
+	}
+	if strings.Contains(responseHeaders["adapter.passthrough"], "response-secret") ||
+		!strings.Contains(responseHeaders["adapter.passthrough"], "X-Upstream-Marker") {
+		t.Fatalf("egress response headers = %q", responseHeaders["adapter.passthrough"])
+	}
+}
+
+func TestPassthroughStreamCaptureRetainsTerminalUsagePastCap(t *testing.T) {
+	prefix := bytes.Repeat([]byte("x"), capture.DefaultMaxBodyBytes+1024)
+	terminal := []byte("\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n")
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(terminal))),
+	}
+	recorder := httptest.NewRecorder()
+	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	result, err := srv.copyPassthroughResponse(context.Background(), recorder, response, true)
+	if err != nil {
+		t.Fatalf("copy response: %v", err)
+	}
+	if len(result.body) != capture.DefaultMaxBodyBytes || result.totalBytes != len(prefix)+len(terminal) || !result.truncated {
+		t.Fatalf("capture result = body:%d total:%d truncated:%t", len(result.body), result.totalBytes, result.truncated)
+	}
+	if result.usage.InputTokens != 11 || result.usage.OutputTokens != 7 || result.usage.TotalTokens != 18 {
+		t.Fatalf("terminal usage = %+v", result.usage)
+	}
+}
+
+type failingPassthroughWriter struct {
+	header http.Header
+	body   bytes.Buffer
+}
+
+func (w *failingPassthroughWriter) Header() http.Header { return w.header }
+
+func (w *failingPassthroughWriter) WriteHeader(_ int) {}
+
+func (w *failingPassthroughWriter) Write(body []byte) (int, error) {
+	return w.body.Write(body)
+}
+
+func (w *failingPassthroughWriter) Flush() {}
+
+func TestResponsesPassthroughCopyFailureEmitsTerminalError(t *testing.T) {
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(&chunkThenErrorReader{
+			chunk: []byte("data: {\"type\":\"response.created\"}\n\n"),
+			err:   errors.New("upstream stream failed"),
+		}),
+	}
+	writer := &failingPassthroughWriter{header: make(http.Header)}
+	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	_, err := srv.copyPassthroughResponse(context.Background(), writer, response, true)
+	if err == nil {
+		t.Fatal("copy response succeeded, want failure")
+	}
+	writePassthroughStreamError(writer, err)
+	if !strings.Contains(writer.body.String(), `"type":"error"`) {
+		t.Fatalf("stream body = %q", writer.body.String())
+	}
+}
+
+type chunkThenErrorReader struct {
+	chunk []byte
+	err   error
+}
+
+func (r *chunkThenErrorReader) Read(buffer []byte) (int, error) {
+	if len(r.chunk) == 0 {
+		return 0, r.err
+	}
+	count := copy(buffer, r.chunk)
+	r.chunk = r.chunk[count:]
+	return count, nil
+}
+
+func TestStructuredOutputRetryCapturesMatchingAttempts(t *testing.T) {
+	requestCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		if requestCount == 1 {
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\\\"ok\\\":true}"}}]}`)
+	}))
+	t.Cleanup(upstream.Close)
+	dbPath := filepath.Join(t.TempDir(), "retry-capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	storeClosed := false
+	t.Cleanup(func() {
+		if !storeClosed {
+			_ = store.Close(context.Background(), "test cleanup")
+		}
+	})
+	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
+	srv.deps.CaptureStore = store
+	resolved, err := adapterresolver.Resolve(adapterresolver.IngressOpenAI, responsesCursorRequest("local-model"), adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()))
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	body := []byte(`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`)
+	recorder := httptest.NewRecorder()
+	srv.forwardPassthroughOverride(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), &resolved, body)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	storeClosed = true
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open capture database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var exchangeCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM requests WHERE client = 'adapter.passthrough'`).Scan(&exchangeCount); err != nil {
+		t.Fatalf("count captures: %v", err)
+	}
+	if requestCount != 2 || exchangeCount != 2 {
+		t.Fatalf("requests=%d captures=%d", requestCount, exchangeCount)
 	}
 }
 
