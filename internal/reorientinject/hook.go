@@ -272,6 +272,21 @@ func splitConversation(messages []anthropicMessage, promptIndex int, maxBytes in
 	if recentStart >= promptIndex {
 		return 0, false
 	}
+	// Snap the boundary earlier until the older half ends on an assistant turn. The
+	// trimmed request is older[:recentStart] followed by the instruction region (a
+	// user prompt). Anthropic rejects a system message that is not followed by an
+	// assistant, so the older half must not end on a Claude Code system-reminder,
+	// which a count or byte cut can land right after. Ending on an assistant keeps
+	// the assistant-to-user join valid. The skipped messages move into the recent
+	// half, which is injected verbatim, so nothing is lost.
+	for recentStart > 0 && messages[recentStart-1].Role != "assistant" {
+		recentStart--
+	}
+	if recentStart == 0 {
+		// No assistant boundary precedes the cut (an unusual leading run), so a valid
+		// older half cannot be formed; fall back to no split.
+		return 0, false
+	}
 	return recentStart, true
 }
 
