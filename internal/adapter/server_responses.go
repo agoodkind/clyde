@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
@@ -74,7 +75,17 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 		return preErr
 	}
 
-	s.dispatchResolvedResponses(w, r, req, reqID, resolvedReq)
+	// The compatibility boundary describes which request fields the resolved
+	// provider omits or overrides. It reads the raw body for top-level field
+	// presence and never performs the omission itself.
+	warnings := adaptercompat.ComputeWarnings(body, resolvedReq.Provider, adaptercompat.EndpointResponses)
+	if !warnings.Empty() {
+		for _, header := range warnings.Headers() {
+			w.Header().Add("X-Clyde-Warning", header)
+		}
+	}
+
+	s.dispatchResolvedResponses(w, r, req, reqID, resolvedReq, warnings)
 	return nil
 }
 
@@ -195,6 +206,7 @@ func (s *Server) dispatchResolvedResponses(
 	req ChatRequest,
 	reqID string,
 	resolvedReq adapterresolver.ResolvedRequest,
+	warnings adaptercompat.WarningSet,
 ) {
 	lookupID, known := canonicalProviderID(resolvedReq.Provider)
 	if !known {
@@ -208,11 +220,12 @@ func (s *Server) dispatchResolvedResponses(
 	}
 	responseID := responsesResponseID(reqID)
 	alias := resolvedRequestAlias(&resolvedReq)
+	warningSlice := warnings.Slice()
 	if req.Stream {
-		s.dispatchResponsesStream(w, r, responseID, alias, resolvedReq, provider)
+		s.dispatchResponsesStream(w, r, responseID, alias, resolvedReq, provider, warningSlice)
 		return
 	}
-	s.dispatchResponsesCollect(w, r, responseID, alias, resolvedReq, provider)
+	s.dispatchResponsesCollect(w, r, responseID, alias, resolvedReq, provider, warningSlice)
 }
 
 // dispatchResponsesStream runs the provider with the streaming Responses
@@ -226,9 +239,10 @@ func (s *Server) dispatchResponsesStream(
 	alias string,
 	resolvedReq adapterresolver.ResolvedRequest,
 	provider adapterprovider.Provider,
+	warnings []adaptercompat.CompatibilityWarning,
 ) {
 	ctx := r.Context()
-	writer, err := newResponsesStreamWriter(w, responseID, alias, s.log)
+	writer, err := newResponsesStreamWriter(w, responseID, alias, warnings, s.log)
 	if err != nil {
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
@@ -268,6 +282,7 @@ func (s *Server) dispatchResponsesCollect(
 	alias string,
 	resolvedReq adapterresolver.ResolvedRequest,
 	provider adapterprovider.Provider,
+	warnings []adaptercompat.CompatibilityWarning,
 ) {
 	ctx := r.Context()
 	collector := newProviderCollectorWriter()
@@ -298,6 +313,7 @@ func (s *Server) dispatchResponsesCollect(
 		ToolCalls:  collected.ToolCalls,
 		Usage:      &usage,
 		ItemIDBase: responsesItemBase(responseID),
+		Warnings:   warnings,
 	})
 	body, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {

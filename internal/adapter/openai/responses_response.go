@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+
+	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 )
 
 // ResponsesStatus enumerates the OpenAI Responses API response status
@@ -47,6 +49,14 @@ type ResponsesResponse struct {
 	IncompleteDetails *ResponsesIncompleteDetails `json:"incomplete_details"`
 	Error             *ResponsesError             `json:"error"`
 	Metadata          json.RawMessage             `json:"metadata"`
+	Clyde             *ResponsesClyde             `json:"clyde,omitempty"`
+}
+
+// ResponsesClyde carries Clyde-specific extension data on the Responses
+// response object. It is omitted entirely when there are no warnings, so a
+// warning-free response stays byte-identical to the base OpenAI contract.
+type ResponsesClyde struct {
+	Warnings []adaptercompat.CompatibilityWarning `json:"warnings,omitempty"`
 }
 
 // ResponsesIncompleteDetails carries the reason a turn was truncated.
@@ -255,6 +265,7 @@ type ResponsesResponseParams struct {
 	ToolCalls  []ToolCall
 	Usage      *Usage
 	ItemIDBase string
+	Warnings   []adaptercompat.CompatibilityWarning
 }
 
 // BuildResponsesResponse assembles a Responses response object from the
@@ -323,6 +334,11 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 		usage = &mapped
 	}
 
+	var clyde *ResponsesClyde
+	if len(params.Warnings) > 0 {
+		clyde = &ResponsesClyde{Warnings: params.Warnings}
+	}
+
 	return ResponsesResponse{
 		ID:                params.ID,
 		Object:            responsesObjectType,
@@ -334,6 +350,7 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 		IncompleteDetails: nil,
 		Error:             nil,
 		Metadata:          responsesMetadataEmpty,
+		Clyde:             clyde,
 	}
 }
 

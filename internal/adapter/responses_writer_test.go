@@ -51,7 +51,7 @@ func firstSSEDataObject(t *testing.T, body string) map[string]json.RawMessage {
 func TestResponsesStreamWriterEventOrder(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
-	writer, err := newResponsesStreamWriter(rec, "resp_test123", "clyde-codex-5.4-medium", slog.Default())
+	writer, err := newResponsesStreamWriter(rec, "resp_test123", "clyde-codex-5.4-medium", nil, slog.Default())
 	if err != nil {
 		t.Fatalf("new responses stream writer: %v", err)
 	}

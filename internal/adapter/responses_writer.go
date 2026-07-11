@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
@@ -29,6 +30,7 @@ type responsesStreamWriter struct {
 	model      string
 	itemBase   string
 	createdAt  int64
+	warnings   []adaptercompat.CompatibilityWarning
 
 	began           bool
 	seq             int
@@ -63,7 +65,7 @@ type responsesStreamToolState struct {
 // response writer. The responseID is the stable resp_ id allocated at
 // handler entry; item ids derive from it so the streamed events and the
 // terminal object share ids.
-func newResponsesStreamWriter(w http.ResponseWriter, responseID, model string, log *slog.Logger) (*responsesStreamWriter, error) {
+func newResponsesStreamWriter(w http.ResponseWriter, responseID, model string, warnings []adaptercompat.CompatibilityWarning, log *slog.Logger) (*responsesStreamWriter, error) {
 	sse, err := adapteropenai.NewSSEWriter(w)
 	if err != nil {
 		if log != nil {
@@ -80,6 +82,7 @@ func newResponsesStreamWriter(w http.ResponseWriter, responseID, model string, l
 		model:                model,
 		itemBase:             responsesItemBase(responseID),
 		createdAt:            clock.Now().Unix(),
+		warnings:             warnings,
 		began:                false,
 		seq:                  0,
 		nextOutputIndex:      0,
@@ -127,6 +130,12 @@ func (p *responsesStreamWriter) begin() error {
 	}
 	p.began = true
 	inProgress := p.buildResponse(adapteropenai.ResponsesStatusInProgress, nil)
+	// Warnings ride only on the first snapshot (response.created and the
+	// paired response.in_progress) so a streaming client sees them in the
+	// first frame; the terminal object stays warning-free.
+	if len(p.warnings) > 0 {
+		inProgress.Clyde = &adapteropenai.ResponsesClyde{Warnings: p.warnings}
+	}
 	if err := p.emitEnvelope(adapteropenai.ResponsesEventCreated, inProgress); err != nil {
 		return err
 	}
@@ -467,6 +476,10 @@ func (p *responsesStreamWriter) buildResponse(status adapteropenai.ResponsesStat
 		ToolCalls:  p.collectedToolCalls(),
 		Usage:      usage,
 		ItemIDBase: p.itemBase,
+		// Warnings ride on the response object only through begin(), which
+		// sets Clyde on the first snapshot; buildResponse leaves it unset so
+		// terminal frames stay warning-free.
+		Warnings: nil,
 	})
 }
 
