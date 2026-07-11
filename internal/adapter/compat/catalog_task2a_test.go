@@ -47,12 +47,14 @@ func TestResponsesNWarnsOnlyAboveOne(t *testing.T) {
 		return 0
 	}
 	for _, n := range []*int{nil, new(int)} {
-		if got := ComputeWarningsFromResponsesPresence(presence, n, adaptermodel.BackendCodex, EndpointResponses, nil); !got.Empty() {
+		values := ResponsesWarningValues{N: n, ToolChoice: nil}
+		if got := ComputeWarningsFromResponsesPresence(presence, values, adaptermodel.BackendCodex, EndpointResponses, nil); !got.Empty() {
 			t.Fatalf("n=%v warnings=%v", n, got.Slice())
 		}
 	}
 	n := 2
-	set := ComputeWarningsFromResponsesPresence(presence, &n, adaptermodel.BackendCodex, EndpointResponses, nil)
+	values := ResponsesWarningValues{N: &n, ToolChoice: nil}
+	set := ComputeWarningsFromResponsesPresence(presence, values, adaptermodel.BackendCodex, EndpointResponses, nil)
 	if len(set.Slice()) != 1 || set.Slice()[0].Param != "n" {
 		t.Fatalf("n=2 warnings=%v", set.Slice())
 	}
@@ -68,7 +70,8 @@ func TestResponsesNWarningFollowsCatalogOrder(t *testing.T) {
 		}
 	}
 	n := 2
-	set := ComputeWarningsFromResponsesPresence(presence, &n, adaptermodel.BackendCodex, EndpointResponses, nil)
+	values := ResponsesWarningValues{N: &n, ToolChoice: nil}
+	set := ComputeWarningsFromResponsesPresence(presence, values, adaptermodel.BackendCodex, EndpointResponses, nil)
 	got := warningParams(set.Slice())
 	want := []string{"n", "stop"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -95,7 +98,8 @@ func TestResponsesNDoesNotWarnWhenAbsentNullZeroOrOne(t *testing.T) {
 				}
 				return 0
 			}
-			if got := ComputeWarningsFromResponsesPresence(presence, test.n, adaptermodel.BackendCodex, EndpointResponses, nil); !got.Empty() {
+			values := ResponsesWarningValues{N: test.n, ToolChoice: nil}
+			if got := ComputeWarningsFromResponsesPresence(presence, values, adaptermodel.BackendCodex, EndpointResponses, nil); !got.Empty() {
 				t.Fatalf("warnings = %v", got.Slice())
 			}
 		})

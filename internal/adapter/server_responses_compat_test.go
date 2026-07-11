@@ -131,6 +131,70 @@ func TestResponsesStreamingCodexTemperatureWarnsInFirstEvent(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamingCodexUnsupportedToolChoiceWarnsBeforeHeaders(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		toolChoice string
+	}{
+		{name: "none", toolChoice: `"none"`},
+		{name: "required", toolChoice: `"required"`},
+		{name: "required function", toolChoice: `{"type":"function","name":"secret-tool-choice"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fakes := newRoutingFakeEndpoints(t)
+			srv := newRoutingIntegrationServer(t, fakes)
+			openAIURL, _ := startRoutingListeners(t, srv)
+			requestBody := `{"model":"gpt-future","input":"hello","stream":true,` +
+				`"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],` +
+				`"tool_choice":` + test.toolChoice + `}`
+
+			response, body := postResponsesRaw(t, openAIURL+"/v1/responses", requestBody)
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d; body=%s", response.StatusCode, body)
+			}
+			codexRequest := <-fakes.codexReqs
+			if codexRequest.ToolChoice != "auto" {
+				t.Fatalf("Codex tool_choice=%q want auto", codexRequest.ToolChoice)
+			}
+
+			headers := strings.Join(response.Header.Values("X-Clyde-Warning"), "|")
+			if !strings.Contains(headers, `"param":"tool_choice"`) || !strings.Contains(headers, `"disposition":"overridden"`) {
+				t.Fatalf("tool_choice warning was not committed with headers: %v", response.Header)
+			}
+			if strings.Contains(headers, "secret-tool-choice") {
+				t.Fatalf("tool_choice warning header leaked request data: %s", headers)
+			}
+
+			firstObject := firstStreamResponseObject(t, body)
+			warnings := responsesClydeWarnings(t, firstObject)
+			warning, ok := warningForParam(warnings, "tool_choice")
+			if !ok {
+				t.Fatalf("first stream event missing tool_choice warning: %s", firstObject)
+			}
+			if warning.Code != "field_overridden" || warning.Disposition != "overridden" || warning.Message != "tool_choice is not supported by the codex backend and was replaced with auto" {
+				t.Fatalf("tool_choice warning = %+v", warning)
+			}
+		})
+	}
+}
+
+func TestResponsesCodexAutoToolChoiceDoesNotWarn(t *testing.T) {
+	fakes := newRoutingFakeEndpoints(t)
+	srv := newRoutingIntegrationServer(t, fakes)
+	openAIURL, _ := startRoutingListeners(t, srv)
+
+	response, body := postResponsesRaw(t, openAIURL+"/v1/responses", `{"model":"gpt-future","input":"hello","tool_choice":"auto"}`)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.StatusCode, body)
+	}
+	if headers := response.Header.Values("X-Clyde-Warning"); len(headers) != 0 {
+		t.Fatalf("supported tool_choice emitted warning headers: %v", headers)
+	}
+	if warnings := responsesClydeWarnings(t, body); len(warnings) != 0 {
+		t.Fatalf("supported tool_choice emitted response warnings: %v", warnings)
+	}
+}
+
 func TestResponsesUnsupportedToolOmittedAndWarned(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)

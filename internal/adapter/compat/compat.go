@@ -32,6 +32,13 @@ type CompatibilityWarning struct {
 	Message     string `json:"message"`     // sanitized, no request values
 }
 
+// ResponsesWarningValues carries the decoded values needed to classify
+// request fields whose provider disposition depends on their value.
+type ResponsesWarningValues struct {
+	N          *int
+	ToolChoice json.RawMessage
+}
+
 // WarningSet is the ordered, de-duplicated, bounded set of warnings for
 // one request. The zero value is a valid empty set.
 type WarningSet struct {
@@ -45,9 +52,9 @@ const (
 	maxHeaderBytes = 8 * 1024
 )
 
-// ComputeWarningsFromResponsesPresence keeps the decoded n value beside the
-// presence callback because n warns only when it asks for more than one result.
-func ComputeWarningsFromResponsesPresence(presenceFor func(string) int, n *int, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
+// ComputeWarningsFromResponsesPresence keeps value-sensitive controls beside
+// the presence callback so partial dispositions can warn when behavior changes.
+func ComputeWarningsFromResponsesPresence(presenceFor func(string) int, values ResponsesWarningValues, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
 	if endpoint != EndpointResponses {
 		return WarningSet{warnings: nil}
 	}
@@ -58,24 +65,46 @@ func ComputeWarningsFromResponsesPresence(presenceFor func(string) int, n *int, 
 	raw := make([]CompatibilityWarning, 0, len(responsesCatalog)+len(unsupportedTools))
 	for _, entry := range responsesCatalog {
 		if entry.param == "n" {
-			if n != nil && *n > 1 {
+			if values.N != nil && *values.N > 1 {
 				raw = append(raw, CompatibilityWarning{Code: warningCodeOmitted, Param: "n", Disposition: dispositionLabelOmitted, Message: "n is not supported by the " + backendLabel(column) + " backend and one result was returned"})
 			}
-			continue
-		}
-		if entry.dispositionFor(column) != dispositionOmitWarn && entry.dispositionFor(column) != dispositionOverrideWarn {
 			continue
 		}
 		presence := presenceFor(entry.param)
 		if presence == 0 || presence == 1 {
 			continue
 		}
-		raw = append(raw, warningFor(entry, column))
+		switch entry.dispositionFor(column) {
+		case dispositionOmitWarn, dispositionOverrideWarn:
+			raw = append(raw, warningFor(entry, column))
+		case dispositionPartial:
+			if warning, ok := partialWarningFor(entry, column, values); ok {
+				raw = append(raw, warning)
+			}
+		case dispositionTranslate, dispositionReject:
+			continue
+		}
 	}
 	for _, toolType := range unsupportedTools {
 		raw = append(raw, toolUnsupportedWarning(toolType))
 	}
 	return newWarningSet(raw)
+}
+
+func partialWarningFor(entry catalogEntry, column providerColumn, values ResponsesWarningValues) (CompatibilityWarning, bool) {
+	if column != columnCodex || entry.param != "tool_choice" {
+		return CompatibilityWarning{Code: "", Param: "", Disposition: "", Message: ""}, false
+	}
+	var choice string
+	if err := json.Unmarshal(values.ToolChoice, &choice); err == nil && choice == "auto" {
+		return CompatibilityWarning{Code: "", Param: "", Disposition: "", Message: ""}, false
+	}
+	return CompatibilityWarning{
+		Code:        warningCodeOverridden,
+		Param:       "tool_choice",
+		Disposition: dispositionLabelOverridden,
+		Message:     "tool_choice is not supported by the codex backend and was replaced with auto",
+	}, true
 }
 
 // RejectedParam returns the first OpenAI-owned reference field that Clyde

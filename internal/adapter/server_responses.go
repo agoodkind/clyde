@@ -91,7 +91,8 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	// provider omits or overrides, plus the built-in / custom tool types the
 	// projection dropped. It reads the raw body for top-level field presence
 	// and never performs the omission itself.
-	warnings := adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, rr.N, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
+	warningValues := adaptercompat.ResponsesWarningValues{N: rr.N, ToolChoice: rr.ToolChoice}
+	warnings := adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, warningValues, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
 	if !warnings.Empty() {
 		for _, header := range warnings.Headers() {
 			w.Header().Add("X-Clyde-Warning", header)

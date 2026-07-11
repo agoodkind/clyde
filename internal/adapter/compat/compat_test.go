@@ -38,7 +38,13 @@ func ComputeWarnings(body []byte, provider adaptermodel.BackendID, endpoint Endp
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return WarningSet{warnings: nil}
 	}
-	return ComputeWarningsFromResponsesPresence(func(param string) int { return int(presence(fields[param])) }, nil, provider, endpoint, unsupportedTools)
+	return ComputeWarningsFromResponsesPresence(
+		func(param string) int { return int(presence(fields[param])) },
+		ResponsesWarningValues{N: nil, ToolChoice: fields["tool_choice"]},
+		provider,
+		endpoint,
+		unsupportedTools,
+	)
 }
 
 func TestPresenceDistinguishesAllClasses(t *testing.T) {
@@ -130,6 +136,66 @@ func TestComputeWarningsStoreOverrideForCodex(t *testing.T) {
 	warning := slice[0]
 	if warning.Param != "store" || warning.Code != "field_overridden" || warning.Disposition != "overridden" {
 		t.Fatalf("store warning = %+v", warning)
+	}
+}
+
+func TestComputeWarningsCodexToolChoiceOverridesUnsupportedValues(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		toolChoice string
+	}{
+		{name: "none", toolChoice: `"none"`},
+		{name: "required", toolChoice: `"required"`},
+		{name: "required function", toolChoice: `{"type":"function","name":"secret-tool-choice"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"model":"gpt","tool_choice":` + test.toolChoice + `}`)
+			warnings := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil).Slice()
+			if len(warnings) != 1 {
+				t.Fatalf("warnings = %v, want one tool_choice override", warnings)
+			}
+			warning := warnings[0]
+			if warning.Param != "tool_choice" || warning.Code != "field_overridden" || warning.Disposition != "overridden" {
+				t.Fatalf("tool_choice warning = %+v", warning)
+			}
+			if warning.Message != "tool_choice is not supported by the codex backend and was replaced with auto" {
+				t.Fatalf("tool_choice message = %q", warning.Message)
+			}
+			if strings.Contains(warning.Message, "secret-tool-choice") {
+				t.Fatalf("tool_choice warning leaked request data: %q", warning.Message)
+			}
+		})
+	}
+}
+
+func TestComputeWarningsCodexToolChoiceAutoAndAbsentDoNotWarn(t *testing.T) {
+	t.Parallel()
+	for _, body := range [][]byte{
+		[]byte(`{"model":"gpt"}`),
+		[]byte(`{"model":"gpt","tool_choice":null}`),
+		[]byte(`{"model":"gpt","tool_choice":"auto"}`),
+	} {
+		if warnings := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil); !warnings.Empty() {
+			t.Fatalf("body=%s warnings=%v", body, warnings.Slice())
+		}
+	}
+}
+
+func TestComputeWarningsPromptCacheKeyUsesClydeIdentityMessage(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"gpt","prompt_cache_key":"secret-cache-key"}`)
+	warnings := ComputeWarnings(body, adaptermodel.BackendCodex, EndpointResponses, nil).Slice()
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one prompt_cache_key override", warnings)
+	}
+	warning := warnings[0]
+	if warning.Message != "prompt_cache_key is replaced with Clyde-owned cache identity for the codex backend" {
+		t.Fatalf("prompt_cache_key message = %q", warning.Message)
+	}
+	if strings.Contains(warning.Message, "secret-cache-key") {
+		t.Fatalf("prompt_cache_key warning leaked request data: %q", warning.Message)
 	}
 }
 

@@ -142,11 +142,15 @@ func warningFor(entry catalogEntry, column providerColumn) CompatibilityWarning 
 			Message:     entry.param + " is not supported by the " + backend + " backend and was omitted",
 		}
 	case dispositionOverrideWarn:
+		message := entry.param + " is not supported by the " + backend + " backend and is forced to false"
+		if column == columnCodex && entry.param == "prompt_cache_key" {
+			message = "prompt_cache_key is replaced with Clyde-owned cache identity for the codex backend"
+		}
 		return CompatibilityWarning{
 			Code:        warningCodeOverridden,
 			Param:       entry.param,
 			Disposition: dispositionLabelOverridden,
-			Message:     entry.param + " is not supported by the " + backend + " backend and is forced to false",
+			Message:     message,
 		}
 	case dispositionTranslate:
 		return CompatibilityWarning{Code: "", Param: "", Disposition: "", Message: ""}
