@@ -422,6 +422,13 @@ message ExportTranscriptRequest {
   // max_lines keeps only the last N rendered lines after whitespace compression.
   // Zero leaves the output uncapped.
   int64 max_lines = 16;
+  // max_tokens caps the rendered body to a token budget, keeping the tail. It is
+  // a human-friendly size string (for example "200k") parsed by the daemon. Empty
+  // leaves the output uncapped.
+  string max_tokens = 17;
+  // token_model overrides the model whose tokenizer counts max_tokens. Empty
+  // derives the tokenizer from the conversation's provider and model.
+  string token_model = 18;
 }
 
 message ConversationLineage {

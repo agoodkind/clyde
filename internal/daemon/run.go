@@ -316,6 +316,7 @@ func newControlServer(
 		literalFallback:      cfg.Conversation.Semantic.LiteralFallback,
 		captureStore:         runtime.captureStore,
 		freshness:            freshness,
+		exportTokens:         newExportTokenConfig(cfg),
 	}
 }
 

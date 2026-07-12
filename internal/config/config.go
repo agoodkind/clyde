@@ -26,6 +26,8 @@ type Config struct {
 	// Debug configures opt-in daemon diagnostics such as the loopback
 	// pprof endpoint. It is empty by default, so no debug surface is exposed.
 	Debug DebugConfig `json:"debug" toml:"debug"`
+	// Export configures the --max-tokens conversation export cap.
+	Export ExportConfig `json:"export" toml:"export"`
 }
 
 // DaemonConfig holds daemon control-plane settings.
@@ -43,6 +45,22 @@ type DebugConfig struct {
 	// is not started. The CLYDE_DEBUG_PPROF_ADDR environment variable
 	// overrides this when set.
 	PProfAddr string `json:"pprof_addr" toml:"pprof_addr"`
+}
+
+// ExportConfig configures the --max-tokens conversation export cap. All fields
+// are optional; zero or nil values fall back to the documented defaults. Changes
+// are picked up on the next daemon reload, so no rebuild is required.
+type ExportConfig struct {
+	// TokenSafetyFactor pads the local Claude token estimate, because current
+	// Claude models tokenize heavier than the o200k proxy. Zero uses the default.
+	TokenSafetyFactor float64 `json:"token_safety_factor" toml:"token_safety_factor"`
+	// HeuristicCharsPerToken is the bytes-per-token ratio for the heuristic
+	// fallback estimator. Zero uses the default.
+	HeuristicCharsPerToken float64 `json:"heuristic_chars_per_token" toml:"heuristic_chars_per_token"`
+	// ExactTokenCount enables the exact provider count APIs when an API key is
+	// present. Nil (unset) defaults to enabled; set false to force the local
+	// estimator even when a key is configured.
+	ExactTokenCount *bool `json:"exact_token_count" toml:"exact_token_count"`
 }
 
 // AdapterConfig configures the OpenAI compatible HTTP server folded
