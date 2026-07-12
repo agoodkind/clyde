@@ -325,23 +325,63 @@ func TestAnthropicMessagesRoutePreservesSSEFramesWithClaudeBetaQuery(t *testing.
 	}
 }
 
-func TestAnthropicCountTokensRouteReturnsTypedStub(t *testing.T) {
+func TestAnthropicCountTokensRouteReturnsRealCount(t *testing.T) {
+	var gotKey, gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("x-api-key")
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"input_tokens":123}`))
+	}))
+	defer upstream.Close()
+
+	cfg := baseConfig()
+	cfg.Enabled = true
+	cfg.Anthropic.OAuth.MessagesURL = upstream.URL + "/v1/messages"
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	t.Setenv("CLYDE_ANTHROPIC_API_KEY", "test-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hello"}]}`))
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"input_tokens":123`) {
+		t.Fatalf("body = %s, want input_tokens 123", rec.Body.String())
+	}
+	if gotKey != "test-key" {
+		t.Errorf("upstream x-api-key = %q, want %q", gotKey, "test-key")
+	}
+	if gotAuth != "" {
+		t.Errorf("upstream Authorization = %q, want empty (OAuth must not be used)", gotAuth)
+	}
+}
+
+func TestAnthropicCountTokensRouteRequiresKey(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Enabled = true
 	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	t.Setenv("CLYDE_ANTHROPIC_API_KEY", "")
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"clyde-haiku-4-5"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}`))
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", rec.Code)
+	if rec.Code == http.StatusNotImplemented {
+		t.Fatalf("status = 501, want a typed key-required error, not the old stub")
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, `"not_supported_error"`) {
-		t.Fatalf("body = %s, want anthropic not_supported_error", body)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("status = 200, want an error when no API key is configured")
+	}
+	if !strings.Contains(rec.Body.String(), "CLYDE_ANTHROPIC_API_KEY") {
+		t.Fatalf("body = %s, want a message naming the required key env var", rec.Body.String())
 	}
 }

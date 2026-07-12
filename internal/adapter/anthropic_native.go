@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
@@ -172,17 +175,97 @@ func (s *Server) logAnthropicNativeIngress(
 	}, attrs...)...)
 }
 
-func (s *Server) handleAnthropicCountTokens(_ context.Context, hctx *handlerCtx) error {
-	if hctx.Request.Method != http.MethodPost {
+// anthropicCountEnvVar names the environment variable holding the dedicated
+// Anthropic API key used for count_tokens. This path is isolated from the
+// subscription OAuth token, which does not authorize count_tokens.
+const anthropicCountEnvVar = "CLYDE_ANTHROPIC_API_KEY"
+
+// countTokensPathSuffix is appended to the configured messages URL to reach the
+// sibling count_tokens endpoint.
+const countTokensPathSuffix = "/count_tokens"
+
+// handleAnthropicCountTokens answers /v1/messages/count_tokens by forwarding the
+// request to Anthropic's count_tokens endpoint with x-api-key auth and returning
+// the exact input_tokens. It requires a dedicated API key in the environment; the
+// subscription OAuth token is never used here. Without a key it returns a typed
+// error rather than a local estimate, since callers expect exact counts.
+func (s *Server) handleAnthropicCountTokens(ctx context.Context, hctx *handlerCtx) (err error) {
+	defer trace.Op(ctx, "adapter.anthropic.count_tokens")(&err)
+	w := hctx.Writer
+	r := hctx.Request
+	if r.Method != http.MethodPost {
 		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
-	err := newAdapterError(adapterErrorModelNotSupported, "/v1/messages/count_tokens is not implemented yet on the adapter Anthropic ingress")
-	err.HTTPStatus = http.StatusNotImplemented
-	// The neutral Code carries the not_supported_error reason; the
-	// Anthropic renderer derives the spec-correct envelope type from it,
-	// so the generic adapter never names the wire type.
-	err.Code = "not_supported_error"
-	return err
+	apiKey := strings.TrimSpace(os.Getenv(anthropicCountEnvVar))
+	if apiKey == "" {
+		aerr := newAdapterError(adapterErrorUpstreamUnavailable, "count_tokens requires an Anthropic API key in "+anthropicCountEnvVar)
+		aerr.Provider = "anthropic"
+		return aerr
+	}
+	messagesURL := s.cfg.Anthropic.OAuth.MessagesURL
+	if messagesURL == "" {
+		aerr := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic messages endpoint is not configured")
+		aerr.Provider = "anthropic"
+		return aerr
+	}
+	body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAnthropicMessagesBodyBytes))
+	if readErr != nil {
+		return adapterErrInvalidRequest("failed to read body", readErr)
+	}
+	var req anthropic.Request
+	if unmarshalErr := json.Unmarshal(body, &req); unmarshalErr != nil {
+		return adapterErrInvalidJSON("invalid JSON: "+unmarshalErr.Error(), unmarshalErr)
+	}
+	if len(req.Messages) == 0 {
+		return adapterErrInvalidRequest("messages is required", nil)
+	}
+
+	inputTokens, status, countErr := s.forwardAnthropicCount(ctx, messagesURL+countTokensPathSuffix, apiKey, body)
+	if countErr != nil {
+		s.log.WarnContext(ctx, "adapter.anthropic.count_tokens_failed", "concern", "adapter.providers.anthropic.request", "status", status, "err", countErr)
+		codeClass := anthropicCodeClassForStatus(status)
+		aerr := mapUpstreamForFamily(adapterRouteAnthropic, "anthropic", status, codeClass, "", "count_tokens upstream failed")
+		s.respondAdapterError(w, r, aerr)
+		return nil
+	}
+	clydeingress.SetHTTPHeaders(hctx.Correlation, w.Header())
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if encodeErr := json.NewEncoder(w).Encode(anthropic.CountTokensResponse{InputTokens: inputTokens}); encodeErr != nil {
+		s.log.WarnContext(ctx, "adapter.anthropic.count_tokens_encode_failed", "concern", "adapter.providers.anthropic.request", "err", encodeErr)
+	}
+	return nil
+}
+
+// forwardAnthropicCount POSTs body to the Anthropic count_tokens endpoint with
+// x-api-key auth and returns the decoded input_tokens, the upstream status, and
+// an error. The status is returned separately so the caller can map it through
+// the error boundary.
+func (s *Server) forwardAnthropicCount(ctx context.Context, url, apiKey string, body []byte) (int, int, error) {
+	client := s.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if reqErr != nil {
+		return 0, 0, errors.New("count_tokens: build request failed")
+	}
+	httpReq.Header.Set("X-Api-Key", apiKey)
+	httpReq.Header.Set("Anthropic-Version", s.cfg.Anthropic.OAuth.AnthropicVersion)
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, doErr := client.Do(httpReq)
+	if doErr != nil {
+		return 0, http.StatusBadGateway, errors.New("count_tokens: request failed")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 0, resp.StatusCode, fmt.Errorf("count_tokens: status %d", resp.StatusCode)
+	}
+	var decoded anthropic.CountTokensResponse
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&decoded); decodeErr != nil {
+		return 0, resp.StatusCode, errors.New("count_tokens: decode response failed")
+	}
+	return decoded.InputTokens, resp.StatusCode, nil
 }
 
 // anthropicNativeResolvedRequest resolves a native `/v1/messages` model
