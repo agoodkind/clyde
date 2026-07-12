@@ -1200,8 +1200,8 @@ func TestParseSSENativePatchReturnsTypedErrorAtEOFFromBufferedMalformedInput(t *
 	if !errors.As(err, &patchErr) {
 		t.Fatalf("error=%v want NativePatchInputError", err)
 	}
-	if patchErr.Input != "not a patch" {
-		t.Fatalf("error input=%q want %q", patchErr.Input, "not a patch")
+	if patchErr.InputLength != len("not a patch") {
+		t.Fatalf("input length=%d want %d", patchErr.InputLength, len("not a patch"))
 	}
 	if patchErr.ItemID != "ct_1" {
 		t.Fatalf("item id=%q want %q", patchErr.ItemID, "ct_1")
@@ -1222,8 +1222,8 @@ func TestParseSSERejectsMalformedNativePatchWithoutReplacingCapturedInput(t *tes
 	if !errors.As(err, &patchErr) {
 		t.Fatalf("error=%v want NativePatchInputError", err)
 	}
-	if patchErr.Input != malformed {
-		t.Fatalf("error input=%q want %q", patchErr.Input, malformed)
+	if patchErr.InputLength != len(malformed) {
+		t.Fatalf("input length=%d want %d", patchErr.InputLength, len(malformed))
 	}
 	if len(result.OutputItems) != 1 || result.OutputItems[0].Input != malformed {
 		t.Fatalf("output items=%#v want original malformed input", result.OutputItems)

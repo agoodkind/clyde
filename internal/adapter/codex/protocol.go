@@ -65,12 +65,12 @@ func (e *UnsupportedModelError) Error() string {
 	return e.Message
 }
 
-// NativePatchInputError reports a malformed freeform apply_patch payload. Its
-// Input keeps the original upstream bytes available to callers that persist
-// the response capture; Error deliberately omits those bytes from diagnostics.
+// NativePatchInputError reports a malformed freeform apply_patch payload.
+// It exposes only sanitized metadata on the typed adapter surface; callers
+// that need the raw bytes must use the internal output-item capture path.
 type NativePatchInputError struct {
-	ItemID string
-	Input  string
+	ItemID      string
+	InputLength int
 }
 
 // Error is part of Clyde's typed adapter surface.
@@ -78,7 +78,7 @@ func (e *NativePatchInputError) Error() string {
 	if e == nil || e.ItemID == "" {
 		return "codex native apply_patch input is malformed"
 	}
-	return "codex native apply_patch input is malformed for item " + e.ItemID
+	return fmt.Sprintf("codex native apply_patch input is malformed for item %s (%d bytes)", e.ItemID, e.InputLength)
 }
 
 // NewRunResult is part of Clyde's typed adapter surface.
@@ -795,7 +795,7 @@ func (p *sseEventParser) emitNativePatchInput(ctx context.Context, eventName str
 			return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 		}
 		if !validNativePatchInput(input) {
-			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: &NativePatchInputError{ItemID: state.ItemID, Input: input}}
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: &NativePatchInputError{ItemID: state.ItemID, InputLength: len(input)}}
 		}
 	}
 	p.logNativeToolParsed(ctx, eventName, itemType, state, state.Name)
