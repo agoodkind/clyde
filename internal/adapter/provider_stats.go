@@ -68,7 +68,7 @@ func (s *Server) emitRequestStarted(ctx context.Context, req *adapterresolver.Re
 	})
 }
 
-func (s *Server) emitRequestStreamOpened(ctx context.Context, req *adapterresolver.ResolvedRequest, path, reqID, modelID string, stream bool) {
+func (s *Server) emitRequestStreamOpened(ctx context.Context, req *adapterresolver.ResolvedRequest, path, reqID, modelID string) {
 	backend := ""
 	if req != nil {
 		backend = req.Provider.String()
@@ -80,7 +80,7 @@ func (s *Server) emitRequestStreamOpened(ctx context.Context, req *adapterresolv
 		Alias:     resolvedRequestAlias(req),
 		ModelID:   modelID,
 		Ingress:   ingressLabelFromContext(ctx),
-		Stream:    stream, Correlation: correlation.
+		Stream:    true, Correlation: correlation.
 				Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
 }

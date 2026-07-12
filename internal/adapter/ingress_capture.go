@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"goodkind.io/clyde/internal/mitm/capture"
@@ -117,13 +118,23 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 		UpstreamRequestID: "",
 		SessionID:         "",
 		RequestHeaders:    redactedIngressHeaders(r.Header),
-		ResponseHeaders:   capW.Header().Clone(),
+		ResponseHeaders:   sanitizedCaptureResponseHeaders(capW.Header()),
 		RequestBody:       body,
 		ResponseBody:      capW.body.Bytes(),
 		RequestType:       r.Header.Get("Content-Type"),
 		ResponseType:      capW.Header().Get("Content-Type"),
 		Started:           started,
 	})
+}
+
+func sanitizedCaptureResponseHeaders(headers http.Header) http.Header {
+	sanitized := headers.Clone()
+	for name := range sanitized {
+		if redactedHeader(strings.ToLower(name)) {
+			sanitized.Del(name)
+		}
+	}
+	return sanitized
 }
 
 // redactedIngressHeaders clones the request headers with secret-bearing names

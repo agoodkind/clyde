@@ -128,7 +128,7 @@ type Store struct {
 	log     *slog.Logger
 	db      *sql.DB
 	rdb     *sql.DB
-	records chan Record
+	records chan queuedRecord
 	shapes  chan DriftShape
 	checks  chan DriftCheck
 	done    chan struct{}
@@ -187,7 +187,7 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 		log:     log,
 		db:      db,
 		rdb:     rdb,
-		records: make(chan Record, cfg.QueueDepth),
+		records: make(chan queuedRecord, cfg.QueueDepth),
 		shapes:  make(chan DriftShape, cfg.QueueDepth),
 		checks:  make(chan DriftCheck, cfg.QueueDepth),
 		done:    make(chan struct{}),
@@ -225,11 +225,24 @@ var schemaSQL string
 // warning, since capture is best-effort diagnostics and must not stall the
 // proxy.
 func (s *Store) Record(rec Record) {
+	s.recordWithMetadata(rec, len(rec.RequestBody), len(rec.ResponseBody), false, false)
+}
+
+type queuedRecord struct {
+	record            Record
+	requestBytes      int
+	responseBytes     int
+	requestTruncated  bool
+	responseTruncated bool
+}
+
+func (s *Store) recordWithMetadata(rec Record, requestBytes, responseBytes int, requestTruncated, responseTruncated bool) {
 	if s == nil || s.closed.Load() {
 		return
 	}
+	queued := queuedRecord{record: rec, requestBytes: requestBytes, responseBytes: responseBytes, requestTruncated: requestTruncated, responseTruncated: responseTruncated}
 	select {
-	case s.records <- rec:
+	case s.records <- queued:
 	default:
 		s.log.Warn("mitm.capture.dropped", "reason", "queue_full", "host", rec.Host, "path", rec.Path)
 	}
@@ -270,7 +283,8 @@ func (s *Store) drain(ctx context.Context) {
 // insert writes one record and its bodies in a single transaction on ctx. It is
 // the store's sole write error boundary: every failure is logged here and the
 // transaction rolled back, so the writer goroutine never propagates an error.
-func (s *Store) insert(ctx context.Context, rec Record) {
+func (s *Store) insert(ctx context.Context, queued queuedRecord) {
+	rec := queued.record
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.tx_begin_failed", "err", err)
@@ -284,7 +298,7 @@ func (s *Store) insert(ctx context.Context, rec Record) {
 		Values(rec.Timestamp.UnixNano(), rec.Client, rec.Provider, rec.Concern, rec.Host, rec.Method, rec.Path, rec.Status,
 			rec.RequestID, rec.UpstreamRequestID, rec.SessionID, rec.TraceID,
 			encodeHeaders(rec.RequestHeaders), encodeHeaders(rec.ResponseHeaders), rec.RequestType, rec.ResponseType,
-			len(rec.RequestBody), len(rec.ResponseBody), rec.Duration.Milliseconds()).
+			queued.requestBytes, queued.responseBytes, rec.Duration.Milliseconds()).
 		ToSql()
 	if err != nil {
 		_ = tx.Rollback()
@@ -303,11 +317,11 @@ func (s *Store) insert(ctx context.Context, rec Record) {
 		s.log.WarnContext(ctx, "mitm.capture.last_insert_id_failed", "host", rec.Host, "path", rec.Path, "err", err)
 		return
 	}
-	if !s.insertBody(ctx, tx, rowID, BodyRequest, rec.RequestType, rec.RequestBody) {
+	if !s.insertBody(ctx, tx, rowID, BodyRequest, rec.RequestType, rec.RequestBody, queued.requestTruncated) {
 		_ = tx.Rollback()
 		return
 	}
-	if !s.insertBody(ctx, tx, rowID, BodyResponse, rec.ResponseType, rec.ResponseBody) {
+	if !s.insertBody(ctx, tx, rowID, BodyResponse, rec.ResponseType, rec.ResponseBody, queued.responseTruncated) {
 		_ = tx.Rollback()
 		return
 	}
@@ -318,11 +332,12 @@ func (s *Store) insert(ctx context.Context, rec Record) {
 
 // insertBody writes one body row, returning false (after logging) on failure so
 // the caller can roll back. An empty body is a no-op success.
-func (s *Store) insertBody(ctx context.Context, tx *sql.Tx, rowID int64, which BodySide, contentType string, body []byte) bool {
+func (s *Store) insertBody(ctx context.Context, tx *sql.Tx, rowID int64, which BodySide, contentType string, body []byte, alreadyTruncated bool) bool {
 	if len(body) == 0 {
 		return true
 	}
 	stored, truncated := s.capBody(body)
+	truncated = truncated || alreadyTruncated
 	isText := utf8.Valid(stored)
 	bodySQL, bodyArgs, err := sq.Insert("bodies").
 		Columns("request_row_id", "which", "content_type", "is_text", "truncated", "data").

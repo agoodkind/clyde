@@ -103,3 +103,24 @@ func (s *Store) RecordExchange(corr correlation.Context, ex Exchange) {
 		Duration:          clock.Since(ex.Started),
 	})
 }
+
+// RecordCappedExchange records an exchange whose response body was bounded by
+// the caller while it streamed. responseBytes is the full byte count observed.
+func (s *Store) RecordCappedExchange(corr correlation.Context, ex Exchange, responseBytes int, responseTruncated bool) {
+	if s == nil {
+		return
+	}
+	record := exchangeRecord(corr, ex)
+	s.recordWithMetadata(record, len(ex.RequestBody), responseBytes, false, responseTruncated)
+}
+
+func exchangeRecord(corr correlation.Context, ex Exchange) Record {
+	return Record{
+		Timestamp: clock.Now(), Client: ex.Client, Provider: ex.Provider, Concern: ex.Concern,
+		Host: ex.Host, Method: ex.Method, Path: ex.Path, Status: ex.Status, RequestID: corr.RequestID,
+		UpstreamRequestID: ex.UpstreamRequestID, SessionID: ex.SessionID, TraceID: string(corr.TraceID),
+		RequestHeaders: ex.RequestHeaders, ResponseHeaders: ex.ResponseHeaders, RequestBody: ex.RequestBody,
+		ResponseBody: ex.ResponseBody, RequestType: ex.RequestType, ResponseType: ex.ResponseType,
+		Duration: clock.Since(ex.Started),
+	}
+}
