@@ -66,9 +66,9 @@ func (c anthropicExactCounter) Count(ctx context.Context, text, model string) (i
 	if err != nil {
 		return 0, errors.New("anthropic count: build request failed")
 	}
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", c.version)
-	req.Header.Set("content-type", "application/json")
+	req.Header.Set("X-Api-Key", c.apiKey)
+	req.Header.Set("Anthropic-Version", c.version)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return 0, errors.New("anthropic count: request failed")
@@ -119,8 +119,8 @@ func (c openAIExactCounter) Count(ctx context.Context, text, model string) (int,
 	if err != nil {
 		return 0, errors.New("openai count: build request failed")
 	}
-	req.Header.Set("authorization", "Bearer "+c.apiKey)
-	req.Header.Set("content-type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return 0, errors.New("openai count: request failed")

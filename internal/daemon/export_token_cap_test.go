@@ -5,10 +5,44 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/tokencount"
 )
+
+func TestNewExportTokenConfigDefaults(t *testing.T) {
+	t.Parallel()
+	got := newExportTokenConfig(config.NewConfigWithDefaults())
+	if !got.exactEnabled {
+		t.Errorf("exactEnabled = false, want true by default")
+	}
+	if got.settings.SafetyFactor != 1.3 {
+		t.Errorf("SafetyFactor = %v, want 1.3", got.settings.SafetyFactor)
+	}
+	if got.settings.CharsPerToken != 3.5 {
+		t.Errorf("CharsPerToken = %v, want 3.5", got.settings.CharsPerToken)
+	}
+}
+
+func TestNewExportTokenConfigReadsKnobs(t *testing.T) {
+	t.Parallel()
+	cfg := config.NewConfigWithDefaults()
+	cfg.Export.TokenSafetyFactor = 2.0
+	cfg.Export.HeuristicCharsPerToken = 5.0
+	disabled := false
+	cfg.Export.ExactTokenCount = &disabled
+	got := newExportTokenConfig(cfg)
+	if got.exactEnabled {
+		t.Errorf("exactEnabled = true, want false when exact_token_count=false")
+	}
+	if got.settings.SafetyFactor != 2.0 {
+		t.Errorf("SafetyFactor = %v, want 2.0", got.settings.SafetyFactor)
+	}
+	if got.settings.CharsPerToken != 5.0 {
+		t.Errorf("CharsPerToken = %v, want 5.0", got.settings.CharsPerToken)
+	}
+}
 
 func testTokenConfig() exportTokenConfig {
 	return exportTokenConfig{

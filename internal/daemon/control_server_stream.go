@@ -154,15 +154,27 @@ func newExportTokenConfig(cfg *config.Config) exportTokenConfig {
 	if messagesURL := cfg.Adapter.Anthropic.OAuth.MessagesURL; messagesURL != "" {
 		anthropicURL = messagesURL + "/count_tokens"
 	}
+	exactEnabled := true
+	if cfg.Export.ExactTokenCount != nil {
+		exactEnabled = *cfg.Export.ExactTokenCount
+	}
+	safety := cfg.Export.TokenSafetyFactor
+	if safety <= 0 {
+		safety = tokencount.DefaultSafetyFactor
+	}
+	charsPerToken := cfg.Export.HeuristicCharsPerToken
+	if charsPerToken <= 0 {
+		charsPerToken = tokencount.DefaultCharsPerToken
+	}
 	return exportTokenConfig{
 		httpClient:       &http.Client{Timeout: exactCountTimeout},
 		anthropicURL:     anthropicURL,
 		anthropicVersion: cfg.Adapter.Anthropic.OAuth.AnthropicVersion,
 		openAIURL:        openAICountURL,
-		exactEnabled:     true,
+		exactEnabled:     exactEnabled,
 		settings: tokencount.Settings{
-			SafetyFactor:  tokencount.DefaultSafetyFactor,
-			CharsPerToken: tokencount.DefaultCharsPerToken,
+			SafetyFactor:  safety,
+			CharsPerToken: charsPerToken,
 		},
 	}
 }
