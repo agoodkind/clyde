@@ -9,8 +9,12 @@ package live
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +26,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // fakePorts holds the throwaway ports the live daemon binds. Every value differs
@@ -55,15 +61,17 @@ type harness struct {
 }
 
 const (
-	fakeMITMPort       = 58723
-	fakeAdapterPort    = 21434
-	fakeCursorPort     = 21435
-	fakeTopologyPort   = 21436
-	daemonReadyMarker  = "daemon.worker.ready"
-	hotApplyMarker     = "daemon.config.applied_in_process"
-	reloadTriggeredKey = "daemon.config_watch.reload_triggered"
-	classifiedMarker   = "daemon.config_watch.classified"
-	workerStartedKey   = "daemon.supervisor.worker_started"
+	fakeMITMPort                   = 58723
+	fakeAdapterPort                = 21434
+	fakeCursorPort                 = 21435
+	fakeTopologyPort               = 21436
+	daemonReadyMarker              = "daemon.worker.ready"
+	hotApplyMarker                 = "daemon.config.applied_in_process"
+	reloadTriggeredKey             = "daemon.config_watch.reload_triggered"
+	classifiedMarker               = "daemon.config_watch.classified"
+	workerStartedKey               = "daemon.supervisor.worker_started"
+	responsesRequestTimeout        = 30 * time.Second
+	responsesResponseHeaderTimeout = 10 * time.Second
 )
 
 // resolveFakePorts reads each throwaway port from its CLYDE_TEST_*_PORT env var,
@@ -287,6 +295,18 @@ func (h *harness) env() []string {
 // hot apply can add a model and assert it serves.
 func (h *harness) writeAdapterConfig(t *testing.T, adapterPort int, passthroughURL string, extraModels []string) {
 	t.Helper()
+	h.writeAdapterConfigWithCapture(t, adapterPort, passthroughURL, extraModels, false)
+}
+
+// writeCombinedAdapterMITMConfig enables adapter ingress capture and the MITM
+// listener against the same isolated capture store used by the daemon.
+func (h *harness) writeCombinedAdapterMITMConfig(t *testing.T, adapterPort int, passthroughURL string) {
+	t.Helper()
+	h.writeAdapterConfigWithCapture(t, adapterPort, passthroughURL, nil, true)
+}
+
+func (h *harness) writeAdapterConfigWithCapture(t *testing.T, adapterPort int, passthroughURL string, extraModels []string, combinedCapture bool) {
+	t.Helper()
 	caDir := filepath.Join(h.stateRoot, "ca")
 	captureDir := filepath.Join(h.stateRoot, "mitm")
 	for _, dir := range []string{caDir, captureDir} {
@@ -302,6 +322,27 @@ func (h *harness) writeAdapterConfig(t *testing.T, adapterPort int, passthroughU
 	if h.requireToken != "" {
 		requireToken = fmt.Sprintf("\nrequire_token = %q", h.requireToken)
 	}
+	captureIngress := ""
+	mitmConfig := "[mitm]\nenabled_default = false\n"
+	if combinedCapture {
+		captureIngress = "\ncapture_ingress = true"
+		mitmConfig = fmt.Sprintf(`[mitm]
+enabled_default = true
+capture_dir = %q
+providers = ["anthropic"]
+
+[mitm.ca]
+cert_path = %q
+key_path = %q
+
+[mitm.capture_store]
+db_path = %q
+
+[mitm.cli.claude-code]
+host = "localhost"
+port = %d
+`, captureDir, filepath.Join(caDir, "ca.crt"), filepath.Join(caDir, "ca.key"), filepath.Join(captureDir, "capture.db"), h.cfg.MITMPort)
+	}
 	content := fmt.Sprintf(`[logging]
 level = "debug"
 
@@ -314,7 +355,7 @@ direct_oauth = false
 host = "[::1]"
 port = %d
 cursor_ingress_port = %d
-default_model = "local-test"%s
+default_model = "local-test"%s%s
 
 [adapter.openai_compat_passthrough]
 base_url = %q
@@ -348,9 +389,7 @@ cc_version = "0.0.0"
 cc_entrypoint = "test"
 
 %s
-[mitm]
-enabled_default = false
-`, adapterPort, h.cfg.CursorPort, requireToken, passthroughURL, passthroughURL, extra)
+%s`, adapterPort, h.cfg.CursorPort, requireToken, captureIngress, passthroughURL, passthroughURL, extra, mitmConfig)
 	if err := os.WriteFile(h.configPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("write fake adapter config: %v", err)
 	}
@@ -363,6 +402,14 @@ func (h *harness) writeReloadEdit(t *testing.T, passthroughURL string) {
 	t.Helper()
 	h.requireToken = "live-reload-token"
 	h.writeAdapterConfig(t, h.cfg.AdapterPort, passthroughURL, nil)
+}
+
+// writeCombinedReloadEdit preserves combined capture while changing the
+// reload-routed adapter token field.
+func (h *harness) writeCombinedReloadEdit(t *testing.T, passthroughURL string) {
+	t.Helper()
+	h.requireToken = "live-reload-token"
+	h.writeCombinedAdapterMITMConfig(t, h.cfg.AdapterPort, passthroughURL)
 }
 
 // latestWorkerPid parses the most recent daemon.supervisor.worker_started pid
@@ -788,4 +835,305 @@ func (h *harness) postChat(t *testing.T, adapterPort int) <-chan string {
 	return done
 }
 
-var _ = context.Background
+type responsesUpstreamRequest struct {
+	path string
+	body string
+}
+
+type responsesRequestEnvelope struct {
+	Input         string                      `json:"input"`
+	Stream        bool                        `json:"stream"`
+	CompatUnknown responsesCompatibilityProbe `json:"compat_unknown"`
+}
+
+type responsesCompatibilityProbe struct {
+	Probe string `json:"probe"`
+}
+
+type responsesUpstream struct {
+	server        *httptest.Server
+	requests      chan responsesUpstreamRequest
+	streamRelease chan struct{}
+}
+
+func startResponsesUpstream(t *testing.T) *responsesUpstream {
+	t.Helper()
+	upstream := &responsesUpstream{
+		server:        nil,
+		requests:      make(chan responsesUpstreamRequest, 8),
+		streamRelease: make(chan struct{}),
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			http.Error(w, "read request", http.StatusBadRequest)
+			return
+		}
+		var envelope responsesRequestEnvelope
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			http.Error(w, "decode request", http.StatusBadRequest)
+			return
+		}
+		upstream.requests <- responsesUpstreamRequest{path: request.URL.Path, body: string(body)}
+		probeID := envelope.CompatUnknown.Probe
+		w.Header().Set("X-Upstream-Marker", "responses-live")
+		w.Header().Set("X-Request-Id", "upstream-"+probeID)
+		if !envelope.Stream {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"id":"resp-%s","object":"response","status":"completed","model":"local-test","output":[{"type":"message","id":"msg-%s","status":"completed","role":"assistant","content":[{"type":"output_text","text":"probe %s"}]}]}`, probeID, probeID, probeID)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-%s\",\"status\":\"in_progress\"}}\n\n", probeID)
+		_, _ = fmt.Fprintf(w, "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg-%s\",\"type\":\"message\"}}\n\n", probeID)
+		_, _ = fmt.Fprintf(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"probe %s %s\"}\n\n", probeID, strings.Repeat("x", 16*1024))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-upstream.streamRelease
+		_, _ = fmt.Fprintf(w, "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg-%s\",\"type\":\"message\",\"status\":\"completed\"}}\n\n", probeID)
+		_, _ = fmt.Fprintf(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-%s\",\"status\":\"completed\",\"output_text\":\"probe %s\"}}\n\n", probeID, probeID)
+	})
+	upstream.server = httptest.NewServer(handler)
+	t.Cleanup(func() {
+		upstream.releaseStreams()
+		upstream.server.Close()
+	})
+	return upstream
+}
+
+func (u *responsesUpstream) baseURL() string {
+	return u.server.URL + "/v1"
+}
+
+func (u *responsesUpstream) waitForRequest(t *testing.T, timeout time.Duration) responsesUpstreamRequest {
+	t.Helper()
+	select {
+	case request := <-u.requests:
+		return request
+	case <-time.After(timeout):
+		t.Fatalf("Responses upstream received no request within %s", timeout)
+		return responsesUpstreamRequest{}
+	}
+}
+
+func (u *responsesUpstream) releaseStreams() {
+	select {
+	case <-u.streamRelease:
+	default:
+		close(u.streamRelease)
+	}
+}
+
+type responsesHTTPResponse struct {
+	statusCode int
+	requestID  string
+	body       string
+}
+
+func newResponsesNonStreamingClient() *http.Client {
+	return &http.Client{Timeout: responsesRequestTimeout}
+}
+
+func newResponsesStreamingClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = true
+	transport.ResponseHeaderTimeout = responsesResponseHeaderTimeout
+	return &http.Client{Transport: transport}
+}
+
+func (h *harness) postResponses(t *testing.T, adapterPort int, body string) responsesHTTPResponse {
+	t.Helper()
+	requestContext, cancelRequest := context.WithTimeout(context.Background(), responsesRequestTimeout)
+	defer cancelRequest()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, fmt.Sprintf("http://[::1]:%d/v1/responses", adapterPort), strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("create Responses request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := newResponsesNonStreamingClient().Do(request)
+	if err != nil {
+		t.Fatalf("post Responses request: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read Responses response: %v", err)
+	}
+	return responsesHTTPResponse{
+		statusCode: response.StatusCode,
+		requestID:  response.Header.Get("X-Request-Id"),
+		body:       string(responseBody),
+	}
+}
+
+type responsesStream struct {
+	requestID string
+	first     chan string
+	done      chan string
+}
+
+func (h *harness) startResponsesStream(t *testing.T, adapterPort int, body string) *responsesStream {
+	t.Helper()
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, fmt.Sprintf("http://[::1]:%d/v1/responses", adapterPort), strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("create streaming Responses request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := newResponsesStreamingClient().Do(request)
+	if err != nil {
+		t.Fatalf("post streaming Responses request: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		defer func() { _ = response.Body.Close() }()
+		responseBody, _ := io.ReadAll(response.Body)
+		t.Fatalf("streaming Responses status = %d, response length = %d", response.StatusCode, len(responseBody))
+	}
+	stream := startResponsesBodyStream(response.Body)
+	stream.requestID = response.Header.Get("X-Request-Id")
+	return stream
+}
+
+func startResponsesBodyStream(body io.ReadCloser) *responsesStream {
+	stream := &responsesStream{requestID: "", first: make(chan string, 1), done: make(chan string, 1)}
+	go func() {
+		defer func() { _ = body.Close() }()
+		var all bytes.Buffer
+		var frame bytes.Buffer
+		reader := bufio.NewReader(body)
+		firstSent := false
+		for {
+			line, readErr := reader.ReadString('\n')
+			if line != "" {
+				_, _ = all.WriteString(line)
+				if !firstSent {
+					_, _ = frame.WriteString(line)
+					if line == "\n" || line == "\r\n" {
+						stream.first <- frame.String()
+						firstSent = true
+					}
+				}
+			}
+			if readErr != nil {
+				if !firstSent {
+					stream.first <- "read-error: " + readErr.Error()
+				}
+				stream.done <- all.String()
+				return
+			}
+		}
+	}()
+	return stream
+}
+
+func (s *responsesStream) waitForFirstFrame(t *testing.T, timeout time.Duration) string {
+	t.Helper()
+	select {
+	case first := <-s.first:
+		return first
+	case <-time.After(timeout):
+		t.Fatalf("Responses stream did not deliver an incremental frame within %s", timeout)
+		return ""
+	}
+}
+
+func (s *responsesStream) waitForCompletion(t *testing.T, timeout time.Duration) string {
+	t.Helper()
+	select {
+	case body := <-s.done:
+		return body
+	case <-time.After(timeout):
+		t.Fatalf("Responses stream did not complete within %s", timeout)
+		return ""
+	}
+}
+
+type responsesCapture struct {
+	client          string
+	path            string
+	status          int
+	responseHeaders string
+	requestBody     string
+	responseBody    string
+}
+
+func (h *harness) waitForResponsesCaptures(t *testing.T, probeID string, timeout time.Duration) []responsesCapture {
+	t.Helper()
+	databasePath := filepath.Join(h.stateRoot, "mitm", "capture.db")
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		captures, err := readResponsesCaptures(databasePath, probeID)
+		if err == nil && validateResponsesCaptureBoundaries(captures) == nil {
+			return captures
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("capture store did not record ingress and passthrough rows for %q within %s", probeID, timeout)
+	return nil
+}
+
+func validateResponsesCaptureBoundaries(captures []responsesCapture) error {
+	counts := map[string]int{
+		"adapter.ingress":     0,
+		"adapter.passthrough": 0,
+	}
+	for _, capture := range captures {
+		if _, ok := counts[capture.client]; !ok {
+			return fmt.Errorf("unexpected capture client %q", capture.client)
+		}
+		counts[capture.client]++
+		if capture.requestBody == "" {
+			return fmt.Errorf("capture client %q has no request body", capture.client)
+		}
+		if capture.responseBody == "" {
+			return fmt.Errorf("capture client %q has no response body", capture.client)
+		}
+		if capture.responseHeaders == "" {
+			return fmt.Errorf("capture client %q has no response headers", capture.client)
+		}
+	}
+	if counts["adapter.ingress"] != 1 || counts["adapter.passthrough"] != 1 {
+		return fmt.Errorf("capture counts ingress=%d passthrough=%d, want one each", counts["adapter.ingress"], counts["adapter.passthrough"])
+	}
+	return nil
+}
+
+func readResponsesCaptures(databasePath string, probeID string) ([]responsesCapture, error) {
+	database, err := sql.Open("sqlite3", "file:"+databasePath+"?_busy_timeout=5000")
+	if err != nil {
+		return nil, fmt.Errorf("open capture database: %w", err)
+	}
+	defer func() { _ = database.Close() }()
+	pattern := "%" + probeID + "%"
+	rows, err := database.Query(`SELECT r.client, r.path, r.status, r.resp_headers,
+COALESCE(CAST(request_body.data AS TEXT), ''), COALESCE(CAST(response_body.data AS TEXT), '')
+FROM requests r
+LEFT JOIN bodies request_body ON request_body.request_row_id = r.id AND request_body.which = 'request'
+LEFT JOIN bodies response_body ON response_body.request_row_id = r.id AND response_body.which = 'response'
+WHERE r.client IN ('adapter.ingress', 'adapter.passthrough')
+AND (CAST(request_body.data AS TEXT) LIKE ? OR CAST(response_body.data AS TEXT) LIKE ?)
+ORDER BY r.id`, pattern, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("query capture database: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	captures := make([]responsesCapture, 0, 2)
+	for rows.Next() {
+		var capture responsesCapture
+		if err := rows.Scan(&capture.client, &capture.path, &capture.status, &capture.responseHeaders, &capture.requestBody, &capture.responseBody); err != nil {
+			return nil, fmt.Errorf("scan capture database: %w", err)
+		}
+		captures = append(captures, capture)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read capture database: %w", err)
+	}
+	return captures, nil
+}
+
+func uniqueProbeID(t *testing.T, scenario string) string {
+	t.Helper()
+	testName := strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
+	return fmt.Sprintf("%s-%s-%d", testName, scenario, time.Now().UnixNano())
+}

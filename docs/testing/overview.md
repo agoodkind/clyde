@@ -59,12 +59,19 @@ a run before it collides with another listener or hides a misconfiguration.
 
 ## Responses endpoint tests
 
-The adapter HTTP listener the harness drives also serves `/v1/responses`. Unit
-coverage for the Responses handler and its compatibility warnings lives in the
-adapter and compat packages, so an ordinary `make test` run exercises it without
-the live harness. The
-[streaming writer tests](../../internal/adapter/responses_writer_test.go), the
+The live harness runs the adapter and MITM capture store together. It sends
+non-streaming and streaming `/v1/responses` requests through the real daemon to a
+local passthrough upstream, then polls the isolated capture database for matching
+adapter ingress and passthrough egress rows.
+
+The [live Responses tests](../../test/live/responses_live_test.go) verify transparent
+request fields, response bodies and headers, incremental lifecycle frames, and the
+absence of the Chat `[DONE]` sentinel. They also keep a Responses stream active while
+a reload-routed config edit waits for quiet, then confirm the reload proceeds after
+the stream completes.
+
+Ordinary test runs still cover the handler and compatibility contracts through the
+[streaming writer tests](../../internal/adapter/responses_writer_test.go),
 [response object tests](../../internal/adapter/openai/responses_response_test.go),
-the [compat warning surfaces test](../../internal/adapter/server_responses_compat_test.go),
-and the [compat catalog tests](../../internal/adapter/compat/compat_test.go) hold
-the behavior.
+[compat warning surfaces test](../../internal/adapter/server_responses_compat_test.go),
+and [compat catalog tests](../../internal/adapter/compat/compat_test.go).
