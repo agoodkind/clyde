@@ -48,12 +48,12 @@ func TestSendUpsertStreamDeclaresRetainReconcileMode(t *testing.T) {
 	if got := header.GetReconcileMode(); got != lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN {
 		t.Fatalf("upsert header reconcile mode = %v, want CONVERSATION_RECONCILE_MODE_RETAIN", got)
 	}
-	if header.GetReexamineDelivered() {
-		t.Fatal("upsert header reexamine_delivered = true, want false for a normal upsert")
+	if header.GetBackfillDelivered() {
+		t.Fatal("upsert header backfill_delivered = true, want false for a normal upsert")
 	}
 }
 
-func TestSendUpsertStreamSetsReexamineDeliveredWhenRequested(t *testing.T) {
+func TestSendUpsertStreamSetsBackfillDeliveredWhenRequested(t *testing.T) {
 	t.Parallel()
 
 	stream := &fakeUpsertStreamClient{ClientStreamingClient: nil, sent: nil}
@@ -71,10 +71,10 @@ func TestSendUpsertStreamSetsReexamineDeliveredWhenRequested(t *testing.T) {
 	if header == nil {
 		t.Fatal("sendUpsertStream sent no header chunk")
 	}
-	if !header.GetReexamineDelivered() {
-		t.Fatal("upsert header reexamine_delivered = false, want true when reexamine requested")
+	if !header.GetBackfillDelivered() {
+		t.Fatal("upsert header backfill_delivered = false, want true when backfill requested")
 	}
-	// Re-examination must not change the retain semantics: a delivered conversation
+	// Backfill must not change the retain semantics: a delivered conversation
 	// set still keeps every conversation the manifest omits.
 	if got := header.GetReconcileMode(); got != lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN {
 		t.Fatalf("upsert header reconcile mode = %v, want CONVERSATION_RECONCILE_MODE_RETAIN", got)

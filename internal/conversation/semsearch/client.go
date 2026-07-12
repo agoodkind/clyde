@@ -349,10 +349,11 @@ func sendUpsertStream(
 				// manifest is kept, never deleted. Only an explicit delete removes one,
 				// so a transient short manifest cannot drop conversations from the index.
 				ReconcileMode: lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
-				// reexamine is set only by the operator-run backfill, so the engine
-				// re-examines delivered conversations whose fingerprint is unchanged.
-				// The normal sync leaves it false.
-				ReexamineDelivered: reexamine,
+				// backfill is set only by the operator-run backfill, so the engine
+				// fills derived rows that are absent for a delivered conversation whose
+				// fingerprint is unchanged and skips ones already present (presence-based,
+				// not a force rebuild). The normal sync leaves it false.
+				BackfillDelivered: reexamine,
 			},
 		},
 	}
