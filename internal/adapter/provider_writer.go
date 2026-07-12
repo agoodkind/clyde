@@ -43,15 +43,25 @@ func newProviderStreamWriter(
 	modelAlias string,
 	backend string,
 ) (*providerStreamWriter, error) {
+	return newProviderStreamWriterWithOptions(ctx, s, w, reqID, modelAlias, backend, adapterrender.EventRendererOptions{ReasoningRenderMode: "", NativePatchRepresentation: ""})
+}
+
+func newProviderStreamWriterWithOptions(
+	ctx context.Context,
+	s *Server,
+	w http.ResponseWriter,
+	reqID string,
+	modelAlias string,
+	backend string,
+	renderOptions adapterrender.EventRendererOptions,
+) (*providerStreamWriter, error) {
 	sse, err := adapteropenai.NewSSEWriter(w)
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.provider_writer.new_sse_failed", "concern", "adapter.chat.render", "request_id", reqID, "model", modelAlias, "err", err)
 		return nil, fmt.Errorf("create provider SSE writer: %w", err)
 	}
 	flusher, _ := w.(http.Flusher)
-	renderOptions := adapterrender.EventRendererOptions{
-		ReasoningRenderMode: streamReasoningRenderMode(ctx),
-	}
+	renderOptions.ReasoningRenderMode = streamReasoningRenderMode(ctx)
 	return &providerStreamWriter{
 		sse:               sse,
 		systemFingerprint: systemFingerprint,

@@ -24,21 +24,22 @@ import (
 // RunDirect populates it when the websocket upgrade asks for the HTTP
 // fallback (HTTP 426) or when the websocket transport is disabled.
 type HTTPTransportConfig struct {
-	URL                string
-	HTTPClient         *http.Client
-	Token              string
-	RequestID          string
-	CursorRequestID    string
-	Correlation        correlation.Context
-	Alias              string
-	ConversationID     string
-	InstallationID     string
-	WindowID           string
-	TurnMetadata       string
-	Log                *slog.Logger
-	RoundTripEncrypted RoundTripEncrypted
-	RetryPolicies      []adapterretry.Policy
-	BeforeAttempt      func(ctx context.Context, attemptNo int) (context.Context, func(string))
+	URL                       string
+	HTTPClient                *http.Client
+	Token                     string
+	RequestID                 string
+	CursorRequestID           string
+	Correlation               correlation.Context
+	Alias                     string
+	ConversationID            string
+	InstallationID            string
+	WindowID                  string
+	TurnMetadata              string
+	Log                       *slog.Logger
+	RoundTripEncrypted        RoundTripEncrypted
+	NativePatchRepresentation adapterrender.NativePatchRepresentation
+	RetryPolicies             []adapterretry.Policy
+	BeforeAttempt             func(ctx context.Context, attemptNo int) (context.Context, func(string))
 	// AuthRefresh, when non-nil, is called when the HTTP request
 	// returns 401 or 403. It returns a refreshed access token (or an
 	// error if the refresh itself failed) so the transport can retry
@@ -241,7 +242,7 @@ func runHTTPTransportEventsOnce(
 		PreviousResponseID: "",
 		Warmup:             false,
 	}
-	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools}
+	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools, NativePatchRepresentation: cfg.NativePatchRepresentation}
 	responseStarted := false
 	sink := capture.NewCappedBuffer(codexCaptureBodyCap)
 	var bodyReader io.Reader = resp.Body

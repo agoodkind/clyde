@@ -321,7 +321,10 @@ func (s *Server) dispatchResponsesCollect(
 		s.respondAdapterError(w, r, aerr)
 		return
 	}
-	collected := adapterrender.CollectMessage(collector.events)
+	collected := adapterrender.CollectMessageWithNativePatchRepresentation(
+		collector.events,
+		nativePatchRepresentationForResolvedCursorRoute(resolvedReq),
+	)
 	text, reasoning, refusal, toolCalls := collected.Text, collected.Reasoning, collected.Refusal, collected.ToolCalls
 	usage := result.Usage
 	// A provider that assembles the completion itself (the Anthropic

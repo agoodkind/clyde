@@ -1088,6 +1088,177 @@ func TestCanonicalContinuationDoesNotEquateMappedToolNames(t *testing.T) {
 	}
 }
 
+func TestParseSSENativePatchCarriesRawInputSeparately(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":""}}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_patch","delta":"*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"}`,
+		"",
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":""}}`,
+		"",
+		"event: response.completed",
+		`data: {"response":{"status":"completed"}}`,
+		"",
+	}, "\n") + "\n")
+	var events []adapterrender.Event
+	result, err := ParseSSEEventsWithOptions(context.Background(), stream, func(event adapterrender.Event) error {
+		events = append(events, event)
+		return nil
+	}, sseInstrumentationContext{}, SSEParseOptions{DeclaredTools: []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")}, NativePatchRepresentation: adapterrender.NativePatchRepresentationRaw})
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if len(result.OutputItems) != 1 || result.OutputItems[0].Input != patch {
+		t.Fatalf("output items=%#v want original patch input", result.OutputItems)
+	}
+	toolEvents := make([]adapterrender.ToolCallDelta, 0, 2)
+	for _, event := range events {
+		if toolEvent, ok := event.(adapterrender.ToolCallDelta); ok {
+			toolEvents = append(toolEvents, toolEvent)
+		}
+	}
+	if len(toolEvents) != 2 {
+		t.Fatalf("tool events=%d want identity and native patch", len(toolEvents))
+	}
+	patchEvent := toolEvents[1]
+	if patchEvent.NativePatchInput == nil {
+		t.Fatalf("event=%+v want native patch delta", patchEvent)
+	}
+	if patchEvent.NativePatchInput.Input != patch {
+		t.Fatalf("native patch=%q want %q", patchEvent.NativePatchInput.Input, patch)
+	}
+	if patchEvent.ToolCalls[0].Function.Arguments != "" {
+		t.Fatalf("ordinary arguments=%q want empty", patchEvent.ToolCalls[0].Function.Arguments)
+	}
+}
+
+func TestParseSSERejectsMalformedNativePatchWithoutReplacingCapturedInput(t *testing.T) {
+	malformed := "{\"input\":\"not a patch\"}"
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":"{\"input\":\"not a patch\"}"}}`,
+		"",
+	}, "\n") + "\n")
+	result, err := ParseSSEEventsWithOptions(context.Background(), stream, func(adapterrender.Event) error {
+		return nil
+	}, sseInstrumentationContext{}, SSEParseOptions{DeclaredTools: []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")}, NativePatchRepresentation: adapterrender.NativePatchRepresentationRaw})
+	var patchErr *NativePatchInputError
+	if !errors.As(err, &patchErr) {
+		t.Fatalf("error=%v want NativePatchInputError", err)
+	}
+	if patchErr.Input != malformed {
+		t.Fatalf("error input=%q want %q", patchErr.Input, malformed)
+	}
+	if len(result.OutputItems) != 1 || result.OutputItems[0].Input != malformed {
+		t.Fatalf("output items=%#v want original malformed input", result.OutputItems)
+	}
+}
+
+func TestParseSSEPreservesNativePatchWithoutTerminalNewline(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch"
+	encodedPatch, err := json.Marshal(patch)
+	if err != nil {
+		t.Fatalf("marshal patch: %v", err)
+	}
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":` + string(encodedPatch) + `}}`,
+		"",
+	}, "\n") + "\n")
+	var events []adapterrender.Event
+	_, err = ParseSSEEventsWithOptions(context.Background(), stream, func(event adapterrender.Event) error {
+		events = append(events, event)
+		return nil
+	}, sseInstrumentationContext{}, SSEParseOptions{
+		DeclaredTools:             []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")},
+		NativePatchRepresentation: adapterrender.NativePatchRepresentationRaw,
+	})
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events=%d want identity and native patch", len(events))
+	}
+	patchEvent, ok := events[1].(adapterrender.ToolCallDelta)
+	if !ok || patchEvent.NativePatchInput == nil {
+		t.Fatalf("event=%#v want native patch", events[1])
+	}
+	if got := patchEvent.NativePatchInput.Input; got != patch {
+		t.Fatalf("patch=%q want %q", got, patch)
+	}
+}
+
+func TestParseSSEStreamsLegacyPatchOnceInsideJSONWrapper(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":""}}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_patch","delta":"*** Begin Patch\n"}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_patch","delta":"*** Add File: out.md\n+ok\n*** End Patch\n"}`,
+		"",
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":""}}`,
+		"",
+	}, "\n") + "\n")
+	renderer := adapterrender.NewEventRendererWithOptions("req", "clyde-codex-5.5-high", "codex", nil, adapterrender.EventRendererOptions{ReasoningRenderMode: "", NativePatchRepresentation: adapterrender.NativePatchRepresentationJSON})
+	var arguments strings.Builder
+	_, err := ParseSSEEventsWithOptions(context.Background(), stream, func(event adapterrender.Event) error {
+		for _, chunk := range renderer.HandleEvent(event) {
+			for _, call := range collectToolCallsLocal([]adapteropenai.StreamChunk{chunk}) {
+				arguments.WriteString(call.Function.Arguments)
+			}
+		}
+		return nil
+	}, sseInstrumentationContext{}, SSEParseOptions{DeclaredTools: []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")}, NativePatchRepresentation: adapterrender.NativePatchRepresentationJSON})
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	want := `{"input":"*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"}`
+	if arguments.String() != want {
+		t.Fatalf("arguments=%q want %q", arguments.String(), want)
+	}
+	if strings.Count(arguments.String(), "*** Begin Patch") != 1 {
+		t.Fatalf("patch stream=%q", arguments.String())
+	}
+}
+
+func TestParseSSEStreamsDoneOnlyLegacyPatchInsideJSONWrapper(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"
+	encodedPatch, err := json.Marshal(patch)
+	if err != nil {
+		t.Fatalf("encode patch: %v", err)
+	}
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":` + string(encodedPatch) + `}}`,
+		"",
+	}, "\n") + "\n")
+	renderer := adapterrender.NewEventRendererWithOptions("req", "clyde-codex-5.5-high", "codex", nil, adapterrender.EventRendererOptions{ReasoningRenderMode: "", NativePatchRepresentation: adapterrender.NativePatchRepresentationJSON})
+	var arguments strings.Builder
+	_, err = ParseSSEEventsWithOptions(context.Background(), stream, func(event adapterrender.Event) error {
+		for _, chunk := range renderer.HandleEvent(event) {
+			for _, call := range collectToolCallsLocal([]adapteropenai.StreamChunk{chunk}) {
+				arguments.WriteString(call.Function.Arguments)
+			}
+		}
+		return nil
+	}, sseInstrumentationContext{}, SSEParseOptions{DeclaredTools: []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")}, NativePatchRepresentation: adapterrender.NativePatchRepresentationJSON})
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	want := `{"input":"*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"}`
+	if arguments.String() != want {
+		t.Fatalf("arguments=%q want %q", arguments.String(), want)
+	}
+}
+
 func collectSSE(stream *strings.Reader) (string, RunResult, error) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got strings.Builder

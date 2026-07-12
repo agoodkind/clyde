@@ -13,6 +13,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/clock"
@@ -20,6 +21,13 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/gklog/correlation"
 )
+
+func nativePatchRepresentationForResolvedCursorRoute(resolved adapterresolver.ResolvedRequest) adapterrender.NativePatchRepresentation {
+	if strings.HasPrefix(strings.TrimSpace(resolved.Cursor.NormalizedModel), "clyde-codex-") {
+		return adapterrender.NativePatchRepresentationJSON
+	}
+	return adapterrender.NativePatchRepresentationRaw
+}
 
 // codexEgressContext builds a derived context for a Codex provider
 // Execute call. It:
@@ -135,7 +143,10 @@ func (s *Server) dispatchCodexProviderStream(
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
 	alias := resolvedRequestAlias(&resolvedReq)
-	writer, err := newProviderStreamWriter(ctx, s, w, reqID, alias, "codex")
+	writer, err := newProviderStreamWriterWithOptions(ctx, s, w, reqID, alias, "codex", adapterrender.EventRendererOptions{
+		ReasoningRenderMode:       "",
+		NativePatchRepresentation: nativePatchRepresentationForResolvedCursorRoute(resolvedReq),
+	})
 	if err != nil {
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
@@ -280,7 +291,14 @@ func (s *Server) dispatchCodexProviderCollect(
 		ResponseID: "", OutputItems: nil,
 	}
 	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(ctx, collector.events, notices)
-	merged := adaptercodex.MergeEvents(reqID, alias, systemFingerprint, mergedEvents, runResult)
+	merged := adaptercodex.MergeEventsWithNativePatchRepresentation(
+		reqID,
+		alias,
+		systemFingerprint,
+		mergedEvents,
+		runResult,
+		nativePatchRepresentationForResolvedCursorRoute(resolvedReq),
+	)
 	usage := result.Usage
 	if resolvedReq.ContextBudget.InputTokens > 0 {
 		usage.MaxTokens = resolvedReq.ContextBudget.InputTokens
