@@ -39,6 +39,23 @@ func TestExportTranscriptRequestCarriesMaxLines(t *testing.T) {
 	}
 }
 
+func TestExportTranscriptRequestCarriesMaxTokens(t *testing.T) {
+	t.Parallel()
+	req := exportTranscriptRequest("claude:probe", conversation.ExportOptions{
+		Format:     conversation.ExportFormatMarkdown,
+		Whitespace: conversation.WhitespacePreserve,
+		Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
+		MaxTokens:  "200k",
+		TokenModel: "gpt-4o",
+	})
+	if req.GetMaxTokens() != "200k" {
+		t.Fatalf("MaxTokens = %q, want %q", req.GetMaxTokens(), "200k")
+	}
+	if req.GetTokenModel() != "gpt-4o" {
+		t.Fatalf("TokenModel = %q, want %q", req.GetTokenModel(), "gpt-4o")
+	}
+}
+
 func TestContentKindSetFromExportRequestIncludesToolSummaries(t *testing.T) {
 	t.Parallel()
 	set := contentKindSetFromExportRequest(&clydev1.ExportTranscriptRequest{

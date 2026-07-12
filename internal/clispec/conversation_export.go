@@ -121,6 +121,10 @@ func exportParams() []Param[exportInput] {
 			func(in *exportInput, v int) { in.Options.LastN = v }),
 		IntParam("max_lines", "Keep only the last N rendered lines after whitespace compression. Zero leaves the output uncapped.", 0,
 			func(in *exportInput, v int) { in.Options.MaxLines = v }),
+		StringParam("max_tokens", "Cap the rendered body to a token budget, keeping the tail. Accepts human sizes like 200000, 200,000, 200k, or 1m. Empty leaves the output uncapped.", "", false,
+			func(in *exportInput, v string) { in.Options.MaxTokens = v }),
+		StringParam("token_model", "Override the model whose tokenizer counts --max-tokens (for example gpt-4o). Empty derives it from the conversation's provider and model.", "", false,
+			func(in *exportInput, v string) { in.Options.TokenModel = v }),
 		onlyParam,
 		shortcut("chat", "chat", "Include conversation chat text."),
 		shortcut("thinking", "thinking", "Include assistant thinking blocks."),
@@ -211,6 +215,8 @@ func newExportInput() exportInput {
 			HistoryStart: 0,
 			LastN:        0,
 			MaxLines:     0,
+			MaxTokens:    "",
+			TokenModel:   "",
 			Whitespace:   conv.WhitespacePreserve,
 			Content:      conv.NewContentKindSet(),
 			Compaction: conv.CompactionExportOptions{
@@ -300,6 +306,8 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 					HistoryStart: 0,
 					LastN:        in.LastN,
 					MaxLines:     0,
+					MaxTokens:    "",
+					TokenModel:   "",
 					Whitespace:   conv.WhitespaceDense,
 					Content:      conv.NewContentKindSet(conv.ContentKindChat, conv.ContentKindToolSummaries),
 					Compaction: conv.CompactionExportOptions{

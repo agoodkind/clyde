@@ -161,7 +161,14 @@ type ExportOptions struct {
 	// MaxLines keeps only the last N rendered lines. Zero leaves the output
 	// uncapped. It runs after whitespace compression so the cap counts real
 	// content lines.
-	MaxLines   int
+	MaxLines int
+	// MaxTokens is a human-friendly size string (for example "200k") that caps
+	// the rendered body to a token budget. Empty leaves the output uncapped. The
+	// daemon parses and applies it after render, so Export itself ignores it.
+	MaxTokens string
+	// TokenModel overrides the model whose tokenizer counts MaxTokens. Empty
+	// derives the tokenizer from the conversation's provider and model.
+	TokenModel string
 	Whitespace WhitespaceMode
 	Content    ContentKindSet
 	Compaction CompactionExportOptions
