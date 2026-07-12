@@ -10,10 +10,23 @@ import (
 	"goodkind.io/clyde/internal/tokencount"
 )
 
+func testTokenConfig() exportTokenConfig {
+	return exportTokenConfig{
+		httpClient:       nil,
+		anthropicURL:     "",
+		anthropicVersion: "",
+		openAIURL:        "",
+		exactEnabled:     false,
+		settings:         tokencount.Settings{SafetyFactor: 1.3, CharsPerToken: 3.5},
+	}
+}
+
+func noExact(tokencount.Family) tokencount.ExactCounter { return nil }
+
 func TestCapExportBodyTokensEmptyLeavesBodyUnchanged(t *testing.T) {
 	t.Parallel()
 	body := []byte("line1\nline2\nline3\n")
-	got, err := capExportBodyTokens(context.Background(), body, "", "", conversation.Record{})
+	got, err := capExportBodyTokens(context.Background(), body, "", "", conversation.Record{}, testTokenConfig(), noExact)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -24,7 +37,7 @@ func TestCapExportBodyTokensEmptyLeavesBodyUnchanged(t *testing.T) {
 
 func TestCapExportBodyTokensRejectsBadValue(t *testing.T) {
 	t.Parallel()
-	_, err := capExportBodyTokens(context.Background(), []byte("hi\n"), "bogus", "", conversation.Record{})
+	_, err := capExportBodyTokens(context.Background(), []byte("hi\n"), "bogus", "", conversation.Record{}, testTokenConfig(), noExact)
 	if err == nil {
 		t.Fatal("expected error for unparseable max_tokens")
 	}
@@ -32,15 +45,12 @@ func TestCapExportBodyTokensRejectsBadValue(t *testing.T) {
 
 func TestCapExportBodyTokensTruncatesToTail(t *testing.T) {
 	t.Parallel()
-	// A large line count with a small budget should drop leading lines and keep
-	// the tail. The heuristic default is ~3.5 chars/token, so a 5-token budget
-	// keeps only a small suffix.
 	var builder strings.Builder
 	for i := 0; i < 200; i++ {
 		builder.WriteString("this is a line of transcript text\n")
 	}
 	record := conversation.Record{Provider: providerid.ProviderClaude, Model: "claude-opus-4-8"}
-	got, err := capExportBodyTokens(context.Background(), []byte(builder.String()), "5", "", record)
+	got, err := capExportBodyTokens(context.Background(), []byte(builder.String()), "5", "", record, testTokenConfig(), noExact)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

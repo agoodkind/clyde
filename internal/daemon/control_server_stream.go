@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"os"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -11,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/tokencount"
 	"goodkind.io/clyde/internal/util"
@@ -114,19 +118,69 @@ func (s *controlServer) StreamExportTranscript(req *clydev1.ExportTranscriptRequ
 		)
 		return status.Errorf(codes.Internal, "export transcript: %v", err)
 	}
-	body, err = capExportBodyTokens(ctx, body, req.GetMaxTokens(), req.GetTokenModel(), record)
+	body, err = capExportBodyTokens(ctx, body, req.GetMaxTokens(), req.GetTokenModel(), record, s.exportTokens, s.buildExactCounter)
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "max tokens: %v", err)
 	}
 	return streamExportChunks(stream, body)
 }
 
+// Names of the environment variables holding the provider count-API keys, plus
+// endpoints. The values are read at request time and never stored in the daemon.
+const (
+	envAnthropic      = "CLYDE_ANTHROPIC_API_KEY"
+	envOpenAI         = "CLYDE_OPENAI_API_KEY"
+	openAICountURL    = "https://api.openai.com/v1/responses/input_tokens"
+	exactCountTimeout = 30 * time.Second
+)
+
+// exportTokenConfig holds the resolved configuration for the --max-tokens cap:
+// local estimator tuning, the Anthropic count endpoint derived from the adapter
+// config, and whether the exact provider APIs may be called.
+type exportTokenConfig struct {
+	httpClient       *http.Client
+	anthropicURL     string
+	anthropicVersion string
+	openAIURL        string
+	exactEnabled     bool
+	settings         tokencount.Settings
+}
+
+// newExportTokenConfig derives the export token-cap configuration from the
+// daemon config. The Anthropic count endpoint is the sibling of the adapter's
+// messages URL.
+func newExportTokenConfig(cfg *config.Config) exportTokenConfig {
+	anthropicURL := ""
+	if messagesURL := cfg.Adapter.Anthropic.OAuth.MessagesURL; messagesURL != "" {
+		anthropicURL = messagesURL + "/count_tokens"
+	}
+	return exportTokenConfig{
+		httpClient:       &http.Client{Timeout: exactCountTimeout},
+		anthropicURL:     anthropicURL,
+		anthropicVersion: cfg.Adapter.Anthropic.OAuth.AnthropicVersion,
+		openAIURL:        openAICountURL,
+		exactEnabled:     true,
+		settings: tokencount.Settings{
+			SafetyFactor:  tokencount.DefaultSafetyFactor,
+			CharsPerToken: tokencount.DefaultCharsPerToken,
+		},
+	}
+}
+
 // capExportBodyTokens caps a rendered export body to the max_tokens budget,
 // keeping the tail. The tokenizer family and model come from the conversation
-// record; a non-empty tokenModel overrides the model. An empty maxTokens or a
-// zero budget leaves the body unchanged. It returns an error only when the
-// max_tokens string cannot be parsed.
-func capExportBodyTokens(ctx context.Context, body []byte, maxTokens, tokenModel string, record conversation.Record) ([]byte, error) {
+// record; a non-empty tokenModel overrides the model. When a provider API key is
+// present, the exact count API refines the cap, otherwise the local estimator
+// applies. An empty maxTokens or a zero budget leaves the body unchanged. It
+// returns an error only when the max_tokens string cannot be parsed.
+func capExportBodyTokens(
+	ctx context.Context,
+	body []byte,
+	maxTokens, tokenModel string,
+	record conversation.Record,
+	cfg exportTokenConfig,
+	buildExact func(tokencount.Family) tokencount.ExactCounter,
+) ([]byte, error) {
 	if maxTokens == "" {
 		return body, nil
 	}
@@ -148,21 +202,57 @@ func capExportBodyTokens(ctx context.Context, body []byte, maxTokens, tokenModel
 		family = tokencount.FamilyUnknown
 		model = tokenModel
 	}
-	settings := tokencount.Settings{
-		SafetyFactor:  tokencount.DefaultSafetyFactor,
-		CharsPerToken: tokencount.DefaultCharsPerToken,
+	effectiveFamily := family
+	if effectiveFamily == tokencount.FamilyUnknown {
+		effectiveFamily = tokencount.FamilyFromModel(model)
 	}
-	counter := tokencount.LocalCounter(family, model, settings)
-	capped, tokens, truncated := tokencount.CapToLastTokens(string(body), budget, counter)
+	local := tokencount.LocalCounter(family, model, cfg.settings)
+	exact := buildExact(effectiveFamily)
+
+	var capped string
+	var truncated bool
+	if exact != nil {
+		capped, truncated = tokencount.CapToLastTokensExact(ctx, string(body), budget, local, exact, model)
+	} else {
+		capped, _, truncated = tokencount.CapToLastTokens(string(body), budget, local)
+	}
 	slog.DebugContext(ctx, "daemon.stream_export.token_cap", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"conversation_id", record.ID,
 		"budget", budget,
-		"family", int(family),
+		"family", int(effectiveFamily),
 		"model", model,
-		"tokens", tokens,
+		"exact", exact != nil,
 		"truncated", truncated,
 	)
 	return []byte(capped), nil
+}
+
+// buildExactCounter returns the authoritative count client for a tokenizer
+// family, or nil when exact counting is disabled or no API key is set. Keys come
+// from the environment and are never persisted; the Anthropic path uses x-api-key
+// auth isolated from the subscription OAuth token.
+func (s *controlServer) buildExactCounter(family tokencount.Family) tokencount.ExactCounter {
+	if !s.exportTokens.exactEnabled {
+		return nil
+	}
+	switch family {
+	case tokencount.FamilyClaude:
+		key := os.Getenv(envAnthropic)
+		if key == "" || s.exportTokens.anthropicURL == "" {
+			return nil
+		}
+		return tokencount.NewAnthropicExactCounter(s.exportTokens.httpClient, key, s.exportTokens.anthropicURL, s.exportTokens.anthropicVersion)
+	case tokencount.FamilyGPT:
+		key := os.Getenv(envOpenAI)
+		if key == "" {
+			return nil
+		}
+		return tokencount.NewOpenAIExactCounter(s.exportTokens.httpClient, key, s.exportTokens.openAIURL)
+	case tokencount.FamilyUnknown:
+		return nil
+	default:
+		return nil
+	}
 }
 
 // tokenFamilyForProvider maps a conversation provider to the tokenizer family
