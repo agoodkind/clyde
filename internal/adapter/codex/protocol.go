@@ -429,7 +429,7 @@ func (p *sseEventParser) parse(ctx context.Context, body io.Reader) (RunResult, 
 		result := p.processPayload(ctx, eventNameLocal, payload)
 		switch result.Action {
 		case ssePayloadBreak:
-			return p.finishEOF(ctx), nil
+			return p.finishEOF(ctx)
 		case ssePayloadReturn:
 			return result.Result, result.Err
 		case ssePayloadContinue:
@@ -441,14 +441,17 @@ func (p *sseEventParser) parse(ctx context.Context, body io.Reader) (RunResult, 
 		slog.WarnContext(ctx, "adapter.codex.protocol.parse_scanner_error", "concern", "adapter.providers.codex.request", "request_id", p.logCtx.RequestID, "err", err)
 		return p.out, fmt.Errorf("scan codex SSE events: %w", err)
 	}
-	return p.finishEOF(ctx), nil
+	return p.finishEOF(ctx)
 }
 
-func (p *sseEventParser) finishEOF(ctx context.Context) RunResult {
+func (p *sseEventParser) finishEOF(ctx context.Context) (RunResult, error) {
+	if err := p.finalizePendingRawPatchInputs(ctx); err != nil {
+		return p.out, err
+	}
 	p.out.ReasoningSignaled = p.reasoningSignaled
 	p.out.ReasoningVisible = p.reasoningVisible
 	p.logAggregate(ctx, p.out.ResponseID, "eof", nil)
-	return p.out
+	return p.out, nil
 }
 
 func (p *sseEventParser) processPayload(ctx context.Context, eventName, payload string) ssePayloadResult {

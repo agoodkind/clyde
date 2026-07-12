@@ -1136,6 +1136,78 @@ func TestParseSSENativePatchCarriesRawInputSeparately(t *testing.T) {
 	}
 }
 
+func TestParseSSENativePatchEmitsBufferedRawInputAtEOF(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":""}}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_patch","delta":"*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"}`,
+		"",
+	}, "\n") + "\n")
+	var events []adapterrender.Event
+	result, err := ParseSSEEventsWithOptions(context.Background(), stream, func(event adapterrender.Event) error {
+		events = append(events, event)
+		return nil
+	}, sseInstrumentationContext{}, SSEParseOptions{
+		DeclaredTools:             []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")},
+		NativePatchRepresentation: adapterrender.NativePatchRepresentationRaw,
+	})
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if len(result.OutputItems) != 0 {
+		t.Fatalf("output items=%#v want no completed item at EOF-only raw stream", result.OutputItems)
+	}
+	toolEvents := make([]adapterrender.ToolCallDelta, 0, 2)
+	for _, event := range events {
+		if toolEvent, ok := event.(adapterrender.ToolCallDelta); ok {
+			toolEvents = append(toolEvents, toolEvent)
+		}
+	}
+	if len(toolEvents) != 2 {
+		t.Fatalf("tool events=%d want identity and final native patch", len(toolEvents))
+	}
+	patchEvent := toolEvents[1]
+	if patchEvent.NativePatchInput == nil {
+		t.Fatalf("event=%+v want native patch delta", patchEvent)
+	}
+	if patchEvent.NativePatchInput.Input != patch {
+		t.Fatalf("native patch=%q want %q", patchEvent.NativePatchInput.Input, patch)
+	}
+	if !patchEvent.NativePatchInput.Final {
+		t.Fatalf("final=%v want true", patchEvent.NativePatchInput.Final)
+	}
+}
+
+func TestParseSSENativePatchReturnsTypedErrorAtEOFFromBufferedMalformedInput(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":""}}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_patch","delta":"not a patch"}`,
+		"",
+	}, "\n") + "\n")
+	_, err := ParseSSEEventsWithOptions(context.Background(), stream, func(adapterrender.Event) error {
+		return nil
+	}, sseInstrumentationContext{}, SSEParseOptions{
+		DeclaredTools:             []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")},
+		NativePatchRepresentation: adapterrender.NativePatchRepresentationRaw,
+	})
+	var patchErr *NativePatchInputError
+	if !errors.As(err, &patchErr) {
+		t.Fatalf("error=%v want NativePatchInputError", err)
+	}
+	if patchErr.Input != "not a patch" {
+		t.Fatalf("error input=%q want %q", patchErr.Input, "not a patch")
+	}
+	if patchErr.ItemID != "ct_1" {
+		t.Fatalf("item id=%q want %q", patchErr.ItemID, "ct_1")
+	}
+}
+
 func TestParseSSERejectsMalformedNativePatchWithoutReplacingCapturedInput(t *testing.T) {
 	malformed := "{\"input\":\"not a patch\"}"
 	stream := strings.NewReader(strings.Join([]string{
