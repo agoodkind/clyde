@@ -65,6 +65,22 @@ func (e *UnsupportedModelError) Error() string {
 	return e.Message
 }
 
+// NativePatchInputError reports a malformed freeform apply_patch payload.
+// It exposes only sanitized metadata on the typed adapter surface; callers
+// that need the raw bytes must use the internal output-item capture path.
+type NativePatchInputError struct {
+	ItemID      string
+	InputLength int
+}
+
+// Error is part of Clyde's typed adapter surface.
+func (e *NativePatchInputError) Error() string {
+	if e == nil || e.ItemID == "" {
+		return "codex native apply_patch input is malformed"
+	}
+	return fmt.Sprintf("codex native apply_patch input is malformed for item %s (%d bytes)", e.ItemID, e.InputLength)
+}
+
 // NewRunResult is part of Clyde's typed adapter surface.
 func NewRunResult(finishReason string) RunResult {
 	return RunResult{
@@ -308,6 +324,9 @@ type SSEParseOptions struct {
 	// SHAPE using these specs, so the client receives a tool name it
 	// recognizes. It is never used to match by hardcoded client names.
 	DeclaredTools []codexwire.ToolSpec
+	// NativePatchRepresentation selects the Cursor-route patch contract. The
+	// zero value preserves the pre-route parser behavior for direct callers.
+	NativePatchRepresentation adapterrender.NativePatchRepresentation
 }
 
 // ParseSSEEventsWithOptions is the option-aware codex SSE parser entry
@@ -317,6 +336,7 @@ func ParseSSEEventsWithOptions(ctx context.Context, body io.Reader, emit func(ad
 	parser := newSSEEventParser(ctx, emit, logCtx)
 	parser.dropEncryptedContent = opts.DropEncryptedContent
 	parser.tools = newToolHandlers(newDeclaredToolResolver(opts.DeclaredTools))
+	parser.nativePatchRepresentation = opts.NativePatchRepresentation
 	return parser.parse(ctx, body)
 }
 
@@ -356,6 +376,10 @@ type sseEventParser struct {
 	// chooser that maps codex native tool item types back to the
 	// client-declared tool name and field names by parameter shape.
 	tools toolHandlers
+	// nativePatchRepresentation is the resolved Cursor-route contract for a
+	// Codex custom_tool_call. It stays unset for parser-only callers that need
+	// the historic direct function-argument behavior.
+	nativePatchRepresentation adapterrender.NativePatchRepresentation
 }
 
 func newSSEEventParser(ctx context.Context, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext) *sseEventParser {
@@ -366,7 +390,7 @@ func newSSEEventParser(ctx context.Context, emit func(adapterrender.Event) error
 		out:                  NewRunResult("stop"),
 		toolCallsByItemID:    make(map[string]*toolCallState),
 		tools:                newToolHandlers(newDeclaredToolResolver(nil)),
-		dropEncryptedContent: false, reasoningSignaled: false, reasoningVisible: false, reasoningTextDeltaSeen: false, reasoningSummaryDeltaSeen: false, nextToolIndex: 0, aggregate: sseAggregateCollector{Assistant: assistantTextDeltaAggregate{DeltaCount: 0, CharCount: 0, FirstPreview: "", LastPreview: "", NormalizedText: strings.
+		dropEncryptedContent: false, nativePatchRepresentation: "", reasoningSignaled: false, reasoningVisible: false, reasoningTextDeltaSeen: false, reasoningSummaryDeltaSeen: false, nextToolIndex: 0, aggregate: sseAggregateCollector{Assistant: assistantTextDeltaAggregate{DeltaCount: 0, CharCount: 0, FirstPreview: "", LastPreview: "", NormalizedText: strings.
 					Builder{}, PendingWhitespace: false}, Items: outputItemAggregate{Added: outputItemCounts{Total: 0, ToolTotal: 0, TypeCounts: nil}, Done: outputItemCounts{Total: 0, ToolTotal: 0, TypeCounts: nil}}, Tools: toolDeltaAggregate{FunctionArgumentDeltaCount: 0, FunctionArgumentDeltaChars: 0, CustomToolInputDeltaCount: 0, CustomToolInputDeltaChars: 0}, Reasoning: reasoningAggregate{DeltaCount: 0, DeltaChars: 0, TextDeltaCount: 0, TextDeltaChars: 0, SummaryDeltaCount: 0, SummaryDeltaChars: 0}},
 
 		upstreamEventSeq: 0,
@@ -405,7 +429,7 @@ func (p *sseEventParser) parse(ctx context.Context, body io.Reader) (RunResult, 
 		result := p.processPayload(ctx, eventNameLocal, payload)
 		switch result.Action {
 		case ssePayloadBreak:
-			return p.finishEOF(ctx), nil
+			return p.finishEOF(ctx)
 		case ssePayloadReturn:
 			return result.Result, result.Err
 		case ssePayloadContinue:
@@ -417,14 +441,17 @@ func (p *sseEventParser) parse(ctx context.Context, body io.Reader) (RunResult, 
 		slog.WarnContext(ctx, "adapter.codex.protocol.parse_scanner_error", "concern", "adapter.providers.codex.request", "request_id", p.logCtx.RequestID, "err", err)
 		return p.out, fmt.Errorf("scan codex SSE events: %w", err)
 	}
-	return p.finishEOF(ctx), nil
+	return p.finishEOF(ctx)
 }
 
-func (p *sseEventParser) finishEOF(ctx context.Context) RunResult {
+func (p *sseEventParser) finishEOF(ctx context.Context) (RunResult, error) {
+	if err := p.finalizePendingRawPatchInputs(ctx); err != nil {
+		return p.out, err
+	}
 	p.out.ReasoningSignaled = p.reasoningSignaled
 	p.out.ReasoningVisible = p.reasoningVisible
 	p.logAggregate(ctx, p.out.ResponseID, "eof", nil)
-	return p.out
+	return p.out, nil
 }
 
 func (p *sseEventParser) processPayload(ctx context.Context, eventName, payload string) ssePayloadResult {
@@ -449,7 +476,7 @@ func (p *sseEventParser) handleEvent(ctx context.Context, eventName, payload str
 	case eventName == "response.function_call_arguments.delta":
 		return p.handleFunctionCallArgumentsDelta(raw)
 	case eventName == "response.custom_tool_call_input.delta":
-		return p.handleCustomToolCallInputDelta(raw)
+		return p.handleCustomToolCallInputDelta(ctx, raw)
 	case strings.Contains(eventName, "reasoning") && strings.HasSuffix(eventName, ".delta"):
 		return p.handleReasoningDelta(eventName, raw)
 	case eventName == "response.reasoning_summary_part.added":
@@ -645,9 +672,6 @@ func (p *sseEventParser) handleLocalShellOutputItem(ctx context.Context, eventNa
 }
 
 func (p *sseEventParser) handleCustomToolOutputItem(ctx context.Context, eventName string, item transportItem, itemType string) ssePayloadResult {
-	if eventName == "response.output_item.done" && item != nil {
-		p.out.OutputItems = append(p.out.OutputItems, item.toInputItem())
-	}
 	itemID := strings.TrimSpace(item.string("id"))
 	callID := strings.TrimSpace(item.string("call_id"))
 	name := strings.TrimSpace(item.string("name"))
@@ -670,6 +694,18 @@ func (p *sseEventParser) handleCustomToolOutputItem(ctx context.Context, eventNa
 	input := item.string("input")
 	if input == "" {
 		input = state.Input.String()
+	}
+	if eventName == "response.output_item.done" && item != nil {
+		completed := item.toInputItem()
+		completed.Input = input
+		p.out.OutputItems = append(p.out.OutputItems, completed)
+	}
+	if p.nativePatchRepresentation != "" && eventName == "response.output_item.done" {
+		finalInput := input
+		if p.nativePatchRepresentation == adapterrender.NativePatchRepresentationJSON && state.ArgumentDeltaSeen {
+			finalInput = ""
+		}
+		return p.emitNativePatchInput(ctx, eventName, itemType, state, finalInput, true)
 	}
 	// The patch handler unwraps the JSON wrapper and repairs the
 	// freeform body so it satisfies the vendored apply_patch grammar.
@@ -717,7 +753,7 @@ func (p *sseEventParser) handleFunctionCallArgumentsDelta(raw transportStreamEve
 	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleCustomToolCallInputDelta(raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleCustomToolCallInputDelta(ctx context.Context, raw transportStreamEvent) ssePayloadResult {
 	itemID := strings.TrimSpace(raw.ItemID)
 	callID := strings.TrimSpace(raw.CallID)
 	delta := raw.Delta
@@ -737,11 +773,51 @@ func (p *sseEventParser) handleCustomToolCallInputDelta(raw transportStreamEvent
 	state.Input.WriteString(delta)
 	state.ArgumentDeltaSeen = true
 	p.out.SetFinishReason("tool_calls")
+	if p.nativePatchRepresentation != "" {
+		if p.nativePatchRepresentation == adapterrender.NativePatchRepresentationRaw {
+			return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
+		}
+		return p.emitNativePatchInput(ctx, "response.custom_tool_call_input.delta", "custom_tool_call", state, delta, false)
+	}
 	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta, Name: ""}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	state.ArgumentsEmitted = true
 	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
+}
+
+func (p *sseEventParser) emitNativePatchInput(ctx context.Context, eventName string, itemType string, state *toolCallState, input string, final bool) ssePayloadResult {
+	if state == nil {
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
+	}
+	if p.nativePatchRepresentation == adapterrender.NativePatchRepresentationRaw {
+		if !final {
+			return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
+		}
+		if !validNativePatchInput(input) {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: &NativePatchInputError{ItemID: state.ItemID, InputLength: len(input)}}
+		}
+	}
+	p.logNativeToolParsed(ctx, eventName, itemType, state, state.Name)
+	patch := adapterrender.NativePatchInput{Input: input, Final: final}
+	if err := p.emitNormalized(adapterrender.ToolCallDelta{
+		ToolCalls: []adapteropenai.ToolCall{{
+			Index: state.Index, ID: "", Type: "", Function: adapteropenai.ToolCallFunction{Name: "", Arguments: ""},
+		}},
+		NativePatchInput: &patch,
+	}); err != nil {
+		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+	}
+	state.ArgumentsEmitted = final
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
+}
+
+func validNativePatchInput(input string) bool {
+	hasPatchTerminator := strings.HasSuffix(input, "*** End Patch") || strings.HasSuffix(input, "*** End Patch\n")
+	return strings.HasPrefix(input, "*** Begin Patch\n") && hasPatchTerminator &&
+		(strings.Contains(input, "*** Add File: ") ||
+			strings.Contains(input, "*** Update File: ") ||
+			strings.Contains(input, "*** Delete File: "))
 }
 
 func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
@@ -890,7 +966,7 @@ func (p *sseEventParser) emitToolCall(state *toolCallState, fn adapteropenai.Too
 		state.IdentityEmitted = true
 	}
 	return p.emitNormalized(adapterrender.ToolCallDelta{
-		ToolCalls: []adapteropenai.ToolCall{tc},
+		ToolCalls: []adapteropenai.ToolCall{tc}, NativePatchInput: nil,
 	})
 }
 

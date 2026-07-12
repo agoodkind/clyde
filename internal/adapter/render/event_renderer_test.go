@@ -296,6 +296,96 @@ func TestEventRendererClosesSyntheticThinkingBeforeToolCalls(t *testing.T) {
 	}
 }
 
+func TestEventRendererEncodesNativePatchInputForLegacyCursorRoute(t *testing.T) {
+	r := NewEventRendererWithOptions(
+		"req-patch-legacy",
+		"clyde-codex-5.5-high",
+		"codex",
+		nil,
+		EventRendererOptions{NativePatchRepresentation: NativePatchRepresentationJSON},
+	)
+	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"
+	chunks := r.HandleEvent(ToolCallDelta{
+		ToolCalls:        []adapteropenai.ToolCall{{Index: 0, Function: adapteropenai.ToolCallFunction{}}},
+		NativePatchInput: &NativePatchInput{Input: patch, Final: true},
+	})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks=%d want 1", len(chunks))
+	}
+	if got := chunks[0].Choices[0].Delta.ToolCalls[0].Function.Arguments; got != `{"input":"*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"}` {
+		t.Fatalf("arguments=%q", got)
+	}
+}
+
+func TestEventRendererPreservesNativePatchInputForGPTCursorRoute(t *testing.T) {
+	r := NewEventRendererWithOptions(
+		"req-patch-native",
+		"gpt-5.6-sol",
+		"codex",
+		nil,
+		EventRendererOptions{NativePatchRepresentation: NativePatchRepresentationRaw},
+	)
+	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"
+	chunks := r.HandleEvent(ToolCallDelta{
+		ToolCalls:        []adapteropenai.ToolCall{{Index: 0, Function: adapteropenai.ToolCallFunction{}}},
+		NativePatchInput: &NativePatchInput{Input: patch, Final: true},
+	})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks=%d want 1", len(chunks))
+	}
+	if got := chunks[0].Choices[0].Delta.ToolCalls[0].Function.Arguments; got != patch {
+		t.Fatalf("arguments=%q want raw %q", got, patch)
+	}
+}
+
+func TestEventRendererStreamsEscapedLegacyPatchWrapperBoundaries(t *testing.T) {
+	r := NewEventRendererWithOptions(
+		"req-patch-stream",
+		"clyde-codex-5.5-high",
+		"codex",
+		nil,
+		EventRendererOptions{NativePatchRepresentation: NativePatchRepresentationJSON},
+	)
+	first := r.HandleEvent(ToolCallDelta{
+		ToolCalls:        []adapteropenai.ToolCall{{Index: 0, Function: adapteropenai.ToolCallFunction{}}},
+		NativePatchInput: &NativePatchInput{Input: "*** Begin Patch\n"},
+	})
+	second := r.HandleEvent(ToolCallDelta{
+		ToolCalls:        []adapteropenai.ToolCall{{Index: 0, Function: adapteropenai.ToolCallFunction{}}},
+		NativePatchInput: &NativePatchInput{Input: `+"quoted"+`},
+	})
+	final := r.HandleEvent(ToolCallDelta{
+		ToolCalls:        []adapteropenai.ToolCall{{Index: 0, Function: adapteropenai.ToolCallFunction{}}},
+		NativePatchInput: &NativePatchInput{Final: true},
+	})
+	got := first[0].Choices[0].Delta.ToolCalls[0].Function.Arguments +
+		second[0].Choices[0].Delta.ToolCalls[0].Function.Arguments +
+		final[0].Choices[0].Delta.ToolCalls[0].Function.Arguments
+	if got != `{"input":"*** Begin Patch\n+\"quoted\"+"}` {
+		t.Fatalf("arguments=%q", got)
+	}
+}
+
+func TestEventRendererLeavesOrdinaryFunctionArgumentsUnchanged(t *testing.T) {
+	r := NewEventRendererWithOptions(
+		"req-function",
+		"gpt-5.6-sol",
+		"codex",
+		nil,
+		EventRendererOptions{NativePatchRepresentation: NativePatchRepresentationRaw},
+	)
+	arguments := `{ "path":"out.md", "mode":"write" }`
+	chunks := r.HandleEvent(ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
+		Index: 0, Function: adapteropenai.ToolCallFunction{Arguments: arguments},
+	}}})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks=%d want 1", len(chunks))
+	}
+	if got := chunks[0].Choices[0].Delta.ToolCalls[0].Function.Arguments; got != arguments {
+		t.Fatalf("arguments=%q want %q", got, arguments)
+	}
+}
+
 func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
 	r := NewEventRenderer("req-thinking-placeholder", "alias", "codex", nil)
 	chunks := r.HandleEvent(ReasoningDelta{Text: "Thinking...", ReasoningKind: "summary", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})

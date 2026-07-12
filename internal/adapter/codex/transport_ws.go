@@ -119,7 +119,8 @@ type WebsocketTransportConfig struct {
 	// codex-rs default) keeps the blob; RoundTripEncryptedDrop strips
 	// it so the synthetic-thinking close marker stays bare. Empty
 	// resolves to RoundTripEncryptedRoundTrip.
-	RoundTripEncrypted RoundTripEncrypted
+	RoundTripEncrypted        RoundTripEncrypted
+	NativePatchRepresentation adapterrender.NativePatchRepresentation
 	// RetryPolicies are generic adapter retry rules compiled at daemon startup.
 	RetryPolicies []adapterretry.Policy
 	// WireIdentity carries the baseline-driven outbound wire identity
@@ -286,7 +287,7 @@ func writeAndParseWebsocketRequest(
 		}
 	}
 	synthetic := streamWebsocketAsSyntheticSSE(conn, capCfg)
-	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools}
+	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools, NativePatchRepresentation: cfg.NativePatchRepresentation}
 	responseStarted := false
 	result, err := ParseSSEEventsWithOptions(ctx, synthetic, func(event adapterrender.Event) error {
 		if codexRenderEventStartsClientResponse(event) {

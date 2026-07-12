@@ -50,3 +50,47 @@ func TestCollectMessageAssemblesAssistantFields(t *testing.T) {
 		t.Fatalf("tool_call=%+v", got.ToolCalls[0])
 	}
 }
+
+func TestCollectMessageUsesRouteSelectedNativePatchRepresentation(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch"
+	events := []Event{
+		ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
+			Index:    0,
+			ID:       "call_patch",
+			Type:     "function",
+			Function: adapteropenai.ToolCallFunction{Name: "ApplyPatch", Arguments: ""},
+		}}},
+		ToolCallDelta{
+			ToolCalls:        []adapteropenai.ToolCall{{Index: 0, Function: adapteropenai.ToolCallFunction{}}},
+			NativePatchInput: &NativePatchInput{Input: patch, Final: true},
+		},
+	}
+
+	tests := []struct {
+		name           string
+		representation NativePatchRepresentation
+		want           string
+	}{
+		{
+			name:           "legacy JSON",
+			representation: NativePatchRepresentationJSON,
+			want:           `{"input":"*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch"}`,
+		},
+		{
+			name:           "native raw",
+			representation: NativePatchRepresentationRaw,
+			want:           patch,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			collected := CollectMessageWithNativePatchRepresentation(events, test.representation)
+			if len(collected.ToolCalls) != 1 {
+				t.Fatalf("tool calls=%d", len(collected.ToolCalls))
+			}
+			if got := collected.ToolCalls[0].Function.Arguments; got != test.want {
+				t.Fatalf("arguments=%q want %q", got, test.want)
+			}
+		})
+	}
+}

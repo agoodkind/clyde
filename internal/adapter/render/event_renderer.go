@@ -2,6 +2,7 @@ package render
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 
@@ -139,7 +140,16 @@ func (ReasoningFinished) eventKind() EventKind { return EventReasoningFinished }
 
 // ToolCallDelta carries an OpenAI-compatible tool call delta.
 type ToolCallDelta struct {
-	ToolCalls []adapteropenai.ToolCall
+	ToolCalls        []adapteropenai.ToolCall
+	NativePatchInput *NativePatchInput
+}
+
+// NativePatchInput keeps a native Codex freeform patch separate from ordinary
+// OpenAI function arguments until the Cursor response encoder selects its
+// model-route representation.
+type NativePatchInput struct {
+	Input string
+	Final bool
 }
 
 func (ToolCallDelta) isEvent()             {}
@@ -155,23 +165,25 @@ type RendererState struct {
 // EventRenderer converts normalized adapter events into OpenAI-compatible stream
 // chunks while preserving synthetic reasoning state when enabled.
 type EventRenderer struct {
-	createdUnix           int64
-	modelAlias            string
-	reqID                 string
-	backend               string
-	reasoningRenderMode   ReasoningRenderMode
-	contextFunc           func() context.Context
-	log                   *slog.Logger
-	suppressed            map[EventKind]*deltaSummary
-	seenRole              bool
-	reasoningOpen         bool
-	lastReasoningKind     string
-	lastSummaryIdx        int
-	haveSummaryIdx        bool
-	pendingReasoningBreak bool
-	reasoningSignaled     bool
-	reasoningVisible      bool
-	reasoningBodyEmitted  bool
+	createdUnix               int64
+	modelAlias                string
+	reqID                     string
+	backend                   string
+	reasoningRenderMode       ReasoningRenderMode
+	nativePatchRepresentation NativePatchRepresentation
+	nativePatchJSONOpen       map[int]bool
+	contextFunc               func() context.Context
+	log                       *slog.Logger
+	suppressed                map[EventKind]*deltaSummary
+	seenRole                  bool
+	reasoningOpen             bool
+	lastReasoningKind         string
+	lastSummaryIdx            int
+	haveSummaryIdx            bool
+	pendingReasoningBreak     bool
+	reasoningSignaled         bool
+	reasoningVisible          bool
+	reasoningBodyEmitted      bool
 	// lastReasoningItemID is the most recent upstream reasoning item id
 	// captured from ReasoningSignaled or ReasoningDelta. Used as
 	// the data-ref attribute on the synthetic-thinking open marker so a
@@ -219,7 +231,7 @@ func NewEventRenderer(reqID, modelAlias, backend string, log *slog.Logger) *Even
 		modelAlias,
 		backend,
 		log,
-		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface},
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface, NativePatchRepresentation: ""},
 	)
 }
 
@@ -238,7 +250,7 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 		modelAlias,
 		backend,
 		log,
-		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface},
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface, NativePatchRepresentation: ""},
 	)
 }
 
@@ -256,6 +268,8 @@ func NewEventRendererWithContextAndOptions(ctx context.Context, reqID, modelAlia
 		reqID:                     reqID,
 		backend:                   backend,
 		reasoningRenderMode:       normalizeReasoningRenderMode(options.ReasoningRenderMode),
+		nativePatchRepresentation: normalizeNativePatchRepresentation(options.NativePatchRepresentation),
+		nativePatchJSONOpen:       nil,
 		contextFunc:               func() context.Context { return ctx },
 		log:                       log,
 		suppressed:                nil,
@@ -456,7 +470,47 @@ func (r *EventRenderer) handleAssistantRefusalDelta(ev RefusalDelta) []adapterop
 // handleToolCallDelta closes any open reasoning block and emits the tool call
 // chunk.
 func (r *EventRenderer) handleToolCallDelta(ev ToolCallDelta) []adapteropenai.StreamChunk {
-	return r.appendReasoningCloseAnd(r.renderToolCalls(ev.ToolCalls))
+	toolCalls := ev.ToolCalls
+	if ev.NativePatchInput != nil {
+		toolCalls = r.renderNativePatchToolCalls(toolCalls, *ev.NativePatchInput)
+	}
+	return r.appendReasoningCloseAnd(r.renderToolCalls(toolCalls))
+}
+
+func (r *EventRenderer) renderNativePatchToolCalls(toolCalls []adapteropenai.ToolCall, patch NativePatchInput) []adapteropenai.ToolCall {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	out := append([]adapteropenai.ToolCall(nil), toolCalls...)
+	arguments := patch.Input
+	if r.nativePatchRepresentation == NativePatchRepresentationJSON {
+		arguments = r.renderJSONPatchFragment(out[0].Index, patch)
+	}
+	out[0].Function.Arguments = arguments
+	return out
+}
+
+func (r *EventRenderer) renderJSONPatchFragment(index int, patch NativePatchInput) string {
+	if r.nativePatchJSONOpen == nil {
+		r.nativePatchJSONOpen = make(map[int]bool)
+	}
+	arguments := ""
+	if !r.nativePatchJSONOpen[index] {
+		arguments = `{"input":"`
+		r.nativePatchJSONOpen[index] = true
+	}
+	if patch.Input != "" {
+		encoded, err := json.Marshal(patch.Input)
+		if err != nil {
+			return arguments
+		}
+		arguments += string(encoded[1 : len(encoded)-1])
+	}
+	if patch.Final {
+		arguments += `"}`
+		delete(r.nativePatchJSONOpen, index)
+	}
+	return arguments
 }
 
 // appendReasoningCloseAnd prepends a reasoning-close chunk (when one is

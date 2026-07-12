@@ -483,5 +483,5 @@ func reasoningFinishedEvent(reasoningKind string) Event {
 
 // toolCallDeltaEvent builds a ToolCallDelta render.Event.
 func toolCallDeltaEvent(toolCalls []adapteropenai.ToolCall) Event {
-	return adapterrender.ToolCallDelta{ToolCalls: toolCalls}
+	return adapterrender.ToolCallDelta{ToolCalls: toolCalls, NativePatchInput: nil}
 }

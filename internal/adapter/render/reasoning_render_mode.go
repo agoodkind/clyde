@@ -17,7 +17,26 @@ const (
 
 // EventRendererOptions configures optional renderer behavior.
 type EventRendererOptions struct {
-	ReasoningRenderMode ReasoningRenderMode
+	ReasoningRenderMode       ReasoningRenderMode
+	NativePatchRepresentation NativePatchRepresentation
+}
+
+// NativePatchRepresentation selects how a native Codex freeform patch reaches
+// a Cursor model route. Ordinary OpenAI function arguments do not use it.
+type NativePatchRepresentation string
+
+const (
+	// NativePatchRepresentationJSON preserves the clyde-codex Cursor contract.
+	NativePatchRepresentationJSON NativePatchRepresentation = "json"
+	// NativePatchRepresentationRaw preserves native GPT freeform patch bytes.
+	NativePatchRepresentationRaw NativePatchRepresentation = "raw"
+)
+
+func normalizeNativePatchRepresentation(value NativePatchRepresentation) NativePatchRepresentation {
+	if value == NativePatchRepresentationRaw {
+		return NativePatchRepresentationRaw
+	}
+	return NativePatchRepresentationJSON
 }
 
 func normalizeReasoningRenderMode(mode ReasoningRenderMode) ReasoningRenderMode {

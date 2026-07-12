@@ -178,6 +178,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 	}
 
 	directCfg := DirectConfig{
+		NativePatchRepresentation:      "",
 		HTTPClient:                     p.httpClient,
 		BaseURL:                        codexBaseURL(p.cfg.BaseURL),
 		WebsocketEnabled:               p.cfg.WebsocketEnabled,

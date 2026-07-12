@@ -60,7 +60,10 @@ type DirectConfig struct {
 	// synthetic thinking envelopes on the next outbound request. Empty
 	// resolves to RoundTripSummaryNative per codex-rs.
 	RoundTripSummary RoundTripSummary
-	RetryPolicies    []adapterretry.Policy
+	// NativePatchRepresentation is selected from the resolved Cursor model
+	// route and carried unchanged to the Codex SSE parser.
+	NativePatchRepresentation adapterrender.NativePatchRepresentation
+	RetryPolicies             []adapterretry.Policy
 	// BeforeAttempt, when non-nil, is forwarded to
 	// WebsocketTransportConfig so the outer caller (adapter.Server)
 	// can register each retry attempt as a nested livetrack session
@@ -132,6 +135,7 @@ func RunDirect(
 		RoundTripSummary:               cfg.RoundTripSummary,
 		RoundTripEncrypted:             cfg.RoundTripEncrypted,
 	})
+	cfg.NativePatchRepresentation = nativePatchRepresentationForCursorRoute(resolved)
 	// WARNING: this is the websocket session identity, not the
 	// prompt_cache_key. Codex uses prompt_cache_key for upstream cache
 	// partitioning, but websocket previous_response_id reuse is only safe
@@ -157,25 +161,26 @@ func RunDirect(
 	}
 
 	httpCfg := HTTPTransportConfig{
-		URL:                cfg.BaseURL,
-		HTTPClient:         cfg.HTTPClient,
-		Token:              cfg.Token,
-		RequestID:          cfg.RequestID,
-		CursorRequestID:    cfg.CursorRequestID,
-		Correlation:        cfg.Correlation,
-		Alias:              codexResolvedModelName(resolved),
-		ConversationID:     conversationID,
-		InstallationID:     installationID,
-		WindowID:           WindowID(conversationID),
-		TurnMetadata:       transportPayload.ClientMetadata.TurnMetadataValue(),
-		Log:                cfg.Log,
-		RoundTripEncrypted: cfg.RoundTripEncrypted,
-		RetryPolicies:      cfg.RetryPolicies,
-		BeforeAttempt:      cfg.BeforeAttempt,
-		AuthRefresh:        cfg.AuthRefresh,
-		WireIdentity:       cfg.WireIdentity,
-		CaptureStore:       cfg.CaptureStore,
-		StripWireFlags:     cfg.StripWireFlags,
+		URL:                       cfg.BaseURL,
+		HTTPClient:                cfg.HTTPClient,
+		Token:                     cfg.Token,
+		RequestID:                 cfg.RequestID,
+		CursorRequestID:           cfg.CursorRequestID,
+		Correlation:               cfg.Correlation,
+		Alias:                     codexResolvedModelName(resolved),
+		ConversationID:            conversationID,
+		InstallationID:            installationID,
+		WindowID:                  WindowID(conversationID),
+		TurnMetadata:              transportPayload.ClientMetadata.TurnMetadataValue(),
+		Log:                       cfg.Log,
+		RoundTripEncrypted:        cfg.RoundTripEncrypted,
+		NativePatchRepresentation: cfg.NativePatchRepresentation,
+		RetryPolicies:             cfg.RetryPolicies,
+		BeforeAttempt:             cfg.BeforeAttempt,
+		AuthRefresh:               cfg.AuthRefresh,
+		WireIdentity:              cfg.WireIdentity,
+		CaptureStore:              cfg.CaptureStore,
+		StripWireFlags:            cfg.StripWireFlags,
 	}
 
 	// Websocket transport disabled by config: use the HTTP/SSE transport
@@ -186,27 +191,28 @@ func RunDirect(
 
 	wsReq := ResponseCreateRequestFromHTTP(transportPayload)
 	wsCfg := WebsocketTransportConfig{
-		URL:                cfg.WebsocketURL,
-		Token:              cfg.Token,
-		AccountID:          cfg.AccountID,
-		RequestID:          cfg.RequestID,
-		CursorRequestID:    cfg.CursorRequestID,
-		Correlation:        cfg.Correlation,
-		Alias:              codexResolvedModelName(resolved),
-		ConversationID:     conversationID,
-		TurnState:          NewTurnState(),
-		TurnMetadata:       transportPayload.ClientMetadata.TurnMetadataValue(),
-		Prewarm:            false,
-		PrewarmTimeout:     0,
-		SessionCache:       cfg.SessionCache,
-		Log:                cfg.Log,
-		RoundTripEncrypted: cfg.RoundTripEncrypted,
-		RetryPolicies:      cfg.RetryPolicies,
-		BeforeAttempt:      cfg.BeforeAttempt,
-		AuthRefresh:        cfg.AuthRefresh,
-		WireIdentity:       cfg.WireIdentity,
-		CaptureStore:       cfg.CaptureStore,
-		StripWireFlags:     cfg.StripWireFlags,
+		URL:                       cfg.WebsocketURL,
+		Token:                     cfg.Token,
+		AccountID:                 cfg.AccountID,
+		RequestID:                 cfg.RequestID,
+		CursorRequestID:           cfg.CursorRequestID,
+		Correlation:               cfg.Correlation,
+		Alias:                     codexResolvedModelName(resolved),
+		ConversationID:            conversationID,
+		TurnState:                 NewTurnState(),
+		TurnMetadata:              transportPayload.ClientMetadata.TurnMetadataValue(),
+		Prewarm:                   false,
+		PrewarmTimeout:            0,
+		SessionCache:              cfg.SessionCache,
+		Log:                       cfg.Log,
+		RoundTripEncrypted:        cfg.RoundTripEncrypted,
+		NativePatchRepresentation: cfg.NativePatchRepresentation,
+		RetryPolicies:             cfg.RetryPolicies,
+		BeforeAttempt:             cfg.BeforeAttempt,
+		AuthRefresh:               cfg.AuthRefresh,
+		WireIdentity:              cfg.WireIdentity,
+		CaptureStore:              cfg.CaptureStore,
+		StripWireFlags:            cfg.StripWireFlags,
 	}
 	result, err := RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 	if errors.Is(err, ErrWebsocketFallbackToHTTP) {
@@ -215,4 +221,15 @@ func RunDirect(
 		return runHTTPTransportEvents(ctx, httpCfg, transportPayload, emit)
 	}
 	return result, err
+}
+
+func nativePatchRepresentationForCursorRoute(resolved *adapterresolver.ResolvedRequest) adapterrender.NativePatchRepresentation {
+	if resolved == nil {
+		return adapterrender.NativePatchRepresentationRaw
+	}
+	route := strings.TrimSpace(resolved.Cursor.NormalizedModel)
+	if strings.HasPrefix(route, "clyde-codex-") {
+		return adapterrender.NativePatchRepresentationJSON
+	}
+	return adapterrender.NativePatchRepresentationRaw
 }

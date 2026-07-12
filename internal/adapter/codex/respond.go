@@ -9,9 +9,10 @@ import (
 	"goodkind.io/clyde/internal/clock"
 )
 
-// MergeEvents is part of Clyde's typed adapter surface.
-func MergeEvents(reqID, modelAlias, systemFingerprint string, events []adapterrender.Event, res RunResult) adapteropenai.ChatResponse {
-	collected := adapterrender.CollectMessage(events)
+// MergeEventsWithNativePatchRepresentation collects a non-streaming chat
+// completion with the resolved Cursor route's native patch contract.
+func MergeEventsWithNativePatchRepresentation(reqID, modelAlias, systemFingerprint string, events []adapterrender.Event, res RunResult, representation adapterrender.NativePatchRepresentation) adapteropenai.ChatResponse {
+	collected := adapterrender.CollectMessageWithNativePatchRepresentation(events, representation)
 	msg := adapteropenai.ChatMessage{
 		Role:    "assistant",
 		Content: json.RawMessage(strconv.Quote(collected.Text)), Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
