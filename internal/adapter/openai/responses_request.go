@@ -1,9 +1,56 @@
 package openai
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
+	"strings"
+)
+
+// ResponsesFieldPresence records a top-level field's decoded wire presence.
+type ResponsesFieldPresence int
+
+const (
+	// ResponsesFieldAbsent means the key was not sent.
+	ResponsesFieldAbsent ResponsesFieldPresence = iota
+	// ResponsesFieldNull means the key was explicitly null.
+	ResponsesFieldNull
+	// ResponsesFieldEmpty means the key was an empty string, array, or object.
+	ResponsesFieldEmpty
+	// ResponsesFieldFalse means the key was explicitly false.
+	ResponsesFieldFalse
+	// ResponsesFieldZero means the key was explicitly numeric zero.
+	ResponsesFieldZero
+	// ResponsesFieldPresent means the key had any other JSON value.
+	ResponsesFieldPresent
+)
+
+// ResponsesFieldSet records each top-level CreateResponse field's presence.
+// It is populated while decoding, so later compatibility work does not need
+// to parse the untrusted request body again.
+type ResponsesFieldSet struct{ fields responsesRawFields }
+
+// Presence returns the exact wire-presence classification for a known field.
+func (s ResponsesFieldSet) Presence(name string) ResponsesFieldPresence {
+	return responsesPresence(s.fields[name])
+}
+
+// responsesRawFields is the one deliberately opaque edge used solely to
+// retain CreateResponse top-level presence during typed JSON decoding.
+type responsesRawFields map[string]json.RawMessage
+
+type responsesPresenceToken string
+
+const (
+	responsesPresenceTokenAbsent      responsesPresenceToken = ""
+	responsesPresenceTokenNull        responsesPresenceToken = "null"
+	responsesPresenceTokenEmptyString responsesPresenceToken = `""`
+	responsesPresenceTokenEmptyArray  responsesPresenceToken = "[]"
+	responsesPresenceTokenEmptyObject responsesPresenceToken = "{}"
+	responsesPresenceTokenFalse       responsesPresenceToken = "false"
+	responsesPresenceTokenZero        responsesPresenceToken = "0"
 )
 
 // ResponsesRequest is the typed subset of the OpenAI Responses API
@@ -14,31 +61,102 @@ import (
 // a comment, because their full shape is an external contract the
 // adapter forwards rather than models.
 type ResponsesRequest struct {
-	Model        string          `json:"model"`
-	Instructions string          `json:"instructions,omitempty"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	Stream       bool            `json:"stream,omitempty"`
+	PreviousResponseID   *string           `json:"previous_response_id,omitempty"`
+	Model                string            `json:"model"`
+	Background           *bool             `json:"background,omitempty"`
+	MaxToolCalls         *int              `json:"max_tool_calls,omitempty"`
+	Text                 json.RawMessage   `json:"text,omitempty"`
+	Tools                json.RawMessage   `json:"tools,omitempty"`
+	ToolChoice           json.RawMessage   `json:"tool_choice,omitempty"`
+	Prompt               json.RawMessage   `json:"prompt,omitempty"`
+	PromptCacheOptions   json.RawMessage   `json:"prompt_cache_options,omitempty"`
+	TopLogprobs          *int              `json:"top_logprobs,omitempty"`
+	Metadata             json.RawMessage   `json:"metadata,omitempty"`
+	Temperature          *float64          `json:"temperature,omitempty"`
+	TopP                 *float64          `json:"top_p,omitempty"`
+	User                 *string           `json:"user,omitempty"`
+	SafetyIdentifier     *string           `json:"safety_identifier,omitempty"`
+	PromptCacheKey       *string           `json:"prompt_cache_key,omitempty"`
+	ServiceTier          *string           `json:"service_tier,omitempty"`
+	PromptCacheRetention *string           `json:"prompt_cache_retention,omitempty"`
+	Truncation           *string           `json:"truncation,omitempty"`
+	Reasoning            *Reasoning        `json:"reasoning,omitempty"`
+	Input                json.RawMessage   `json:"input,omitempty"`
+	Include              []string          `json:"include,omitempty"`
+	ParallelTools        *bool             `json:"parallel_tool_calls,omitempty"`
+	Store                *bool             `json:"store,omitempty"`
+	Instructions         *string           `json:"instructions,omitempty"`
+	Moderation           json.RawMessage   `json:"moderation,omitempty"`
+	Stream               *bool             `json:"stream,omitempty"`
+	StreamOptions        json.RawMessage   `json:"stream_options,omitempty"`
+	Conversation         json.RawMessage   `json:"conversation,omitempty"`
+	ContextManagement    json.RawMessage   `json:"context_management,omitempty"`
+	MaxOutputTokens      *int              `json:"max_output_tokens,omitempty"`
+	MaxTokens            *int              `json:"max_tokens,omitempty"`
+	MaxCompletionTokens  *int              `json:"max_completion_tokens,omitempty"`
+	N                    *int              `json:"n,omitempty"`
+	Stop                 json.RawMessage   `json:"stop,omitempty"`
+	Fields               ResponsesFieldSet `json:"-"`
 	// Tools stays raw at this edge because the Responses tools array mixes
 	// client-owned function tools with OpenAI built-ins (web_search,
 	// file_search, computer_use, mcp) and public custom tools whose full
 	// shape is an external contract. The strict per-element Tool unmarshal
 	// rejects built-ins, so the projection splits this raw array leniently
 	// with SplitResponsesTools instead of decoding it into typed Tools here.
-	Tools                json.RawMessage `json:"tools,omitempty"`
-	ToolChoice           json.RawMessage `json:"tool_choice,omitempty"`
-	Reasoning            *Reasoning      `json:"reasoning,omitempty"`
-	MaxOutputTokens      *int            `json:"max_output_tokens,omitempty"`
-	Temperature          *float64        `json:"temperature,omitempty"`
-	TopP                 *float64        `json:"top_p,omitempty"`
-	Stop                 json.RawMessage `json:"stop,omitempty"`
-	ParallelTools        *bool           `json:"parallel_tool_calls,omitempty"`
-	Store                *bool           `json:"store,omitempty"`
-	Metadata             json.RawMessage `json:"metadata,omitempty"`
-	Include              []string        `json:"include,omitempty"`
-	ServiceTier          string          `json:"service_tier,omitempty"`
-	Text                 json.RawMessage `json:"text,omitempty"`
-	Truncation           string          `json:"truncation,omitempty"`
-	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"`
+}
+
+// UnmarshalJSON decodes the request and records top-level wire presence.
+func (r *ResponsesRequest) UnmarshalJSON(data []byte) error {
+	type wire ResponsesRequest
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return fmt.Errorf("decode typed Responses request: %w", err)
+	}
+	fields := responsesRawFields{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("decode Responses field presence: %w", err)
+	}
+	*r = ResponsesRequest(decoded)
+	r.Fields = ResponsesFieldSet{fields: fields}
+	return nil
+}
+
+func responsesPresence(raw json.RawMessage) ResponsesFieldPresence {
+	value := responsesPresenceToken(strings.TrimSpace(string(raw)))
+	switch value {
+	case responsesPresenceTokenAbsent:
+		return ResponsesFieldAbsent
+	case responsesPresenceTokenNull:
+		return ResponsesFieldNull
+	case responsesPresenceTokenEmptyString, responsesPresenceTokenEmptyArray, responsesPresenceTokenEmptyObject:
+		return ResponsesFieldEmpty
+	case responsesPresenceTokenFalse:
+		return ResponsesFieldFalse
+	case responsesPresenceTokenZero:
+		return ResponsesFieldZero
+	default:
+		if responsesNumericZero(raw) {
+			return ResponsesFieldZero
+		}
+		return ResponsesFieldPresent
+	}
+}
+
+func responsesNumericZero(raw json.RawMessage) bool {
+	token := bytes.TrimSpace(raw)
+	if len(token) == 0 || !responsesJSONNumberStart(token[0]) {
+		return false
+	}
+	var number json.Number
+	if err := json.Unmarshal(token, &number); err != nil {
+		return false
+	}
+	value, ok := new(big.Rat).SetString(number.String())
+	return ok && value.Sign() == 0
+}
+
+func responsesJSONNumberStart(first byte) bool {
+	return first == '-' || (first >= '0' && first <= '9')
 }
 
 // UnmarshalResponsesRequest decodes a POST /v1/responses body into the

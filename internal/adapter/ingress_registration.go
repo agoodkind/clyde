@@ -65,3 +65,22 @@ func resolveCursorChatRequest(
 	}
 	return resolved, nil
 }
+
+// resolveResponsesRequest leaves generic OpenAI Responses requests untouched.
+// Cursor translation is applied only when the listener explicitly selected
+// Cursor ingress; generic OpenAI metadata must not mutate model identity.
+func resolveResponsesRequest(surface adapterresolver.IngressSurface, req ChatRequest, registry adapterresolver.ModelRegistry) (adapterresolver.ResolvedRequest, error) {
+	if surface == adapterresolver.IngressCursor {
+		return resolveCursorChatRequest(surface, req, registry)
+	}
+	resolved, err := adapterresolver.Resolve(surface, adaptercursor.NewUntranslatedRequest(req), registry)
+	if err != nil {
+		slog.Warn("adapter: resolve generic OpenAI Responses request failed",
+			slog.String("concern", "adapter.chat.preflight"),
+			slog.String("model", req.Model),
+			slog.String("err", err.Error()),
+		)
+		return adapterresolver.ResolvedRequest{}, fmt.Errorf("resolve generic OpenAI Responses request: %w", err)
+	}
+	return resolved, nil
+}

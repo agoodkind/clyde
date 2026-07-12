@@ -104,6 +104,10 @@ type ResolvedRequest struct {
 
 	Cursor adaptercursor.Request
 	OpenAI adapteropenai.ChatRequest
+	// Responses preserves the original typed CreateResponse request for the
+	// provider preparation boundary introduced in Task 2B.
+	Responses       *adapteropenai.ResponsesRequest
+	ResponsesFields adapteropenai.ResponsesFieldSet
 }
 
 // Valid reports whether the ResolvedRequest is well-formed enough for

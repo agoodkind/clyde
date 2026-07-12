@@ -1,11 +1,6 @@
 package compat
 
-import (
-	"encoding/json"
-	"strings"
-
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
-)
+import adaptermodel "goodkind.io/clyde/internal/adapter/model"
 
 // disposition is what the resolved provider does with a request field.
 // Translate carries the field through; OmitWarn drops it and warns;
@@ -16,6 +11,8 @@ const (
 	dispositionTranslate disposition = iota
 	dispositionOmitWarn
 	dispositionOverrideWarn
+	dispositionReject
+	dispositionPartial
 )
 
 // providerColumn selects which catalog column a resolved provider reads.
@@ -71,15 +68,41 @@ func (e catalogEntry) dispositionFor(column providerColumn) disposition {
 // is not stable, so this fixed order is the canonical warning order. Fields
 // that Translate for both providers never warn and are omitted here.
 var responsesCatalog = []catalogEntry{
-	{param: "max_output_tokens", codex: dispositionOmitWarn, anthropic: dispositionTranslate},
+	{param: "previous_response_id", codex: dispositionReject, anthropic: dispositionReject},
+	{param: "model", codex: dispositionTranslate, anthropic: dispositionTranslate},
+	{param: "background", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "max_tool_calls", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "text", codex: dispositionPartial, anthropic: dispositionOmitWarn},
+	{param: "tools", codex: dispositionPartial, anthropic: dispositionPartial},
+	{param: "tool_choice", codex: dispositionPartial, anthropic: dispositionPartial},
+	{param: "prompt", codex: dispositionReject, anthropic: dispositionReject},
+	{param: "prompt_cache_options", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "top_logprobs", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "metadata", codex: dispositionPartial, anthropic: dispositionOmitWarn},
 	{param: "temperature", codex: dispositionOmitWarn, anthropic: dispositionTranslate},
 	{param: "top_p", codex: dispositionOmitWarn, anthropic: dispositionTranslate},
-	{param: "stop", codex: dispositionOmitWarn, anthropic: dispositionTranslate},
-	{param: "store", codex: dispositionOverrideWarn, anthropic: dispositionOmitWarn},
-	{param: "include", codex: dispositionTranslate, anthropic: dispositionOmitWarn},
+	{param: "user", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "safety_identifier", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "prompt_cache_key", codex: dispositionOverrideWarn, anthropic: dispositionOmitWarn},
 	{param: "service_tier", codex: dispositionTranslate, anthropic: dispositionOmitWarn},
-	{param: "truncation", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
 	{param: "prompt_cache_retention", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "truncation", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "reasoning", codex: dispositionTranslate, anthropic: dispositionPartial},
+	{param: "input", codex: dispositionTranslate, anthropic: dispositionPartial},
+	{param: "include", codex: dispositionPartial, anthropic: dispositionOmitWarn},
+	{param: "parallel_tool_calls", codex: dispositionTranslate, anthropic: dispositionOmitWarn},
+	{param: "store", codex: dispositionOverrideWarn, anthropic: dispositionOmitWarn},
+	{param: "instructions", codex: dispositionTranslate, anthropic: dispositionTranslate},
+	{param: "moderation", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "stream", codex: dispositionTranslate, anthropic: dispositionTranslate},
+	{param: "stream_options", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "conversation", codex: dispositionReject, anthropic: dispositionReject},
+	{param: "context_management", codex: dispositionOmitWarn, anthropic: dispositionOmitWarn},
+	{param: "max_output_tokens", codex: dispositionOmitWarn, anthropic: dispositionTranslate},
+	{param: "max_tokens", codex: dispositionOmitWarn, anthropic: dispositionTranslate},
+	{param: "max_completion_tokens", codex: dispositionOmitWarn, anthropic: dispositionTranslate},
+	{param: "n", codex: dispositionPartial, anthropic: dispositionPartial},
+	{param: "stop", codex: dispositionOmitWarn, anthropic: dispositionTranslate},
 }
 
 // providerColumnFor maps a resolved backend to its catalog column. Codex
@@ -119,72 +142,21 @@ func warningFor(entry catalogEntry, column providerColumn) CompatibilityWarning 
 			Message:     entry.param + " is not supported by the " + backend + " backend and was omitted",
 		}
 	case dispositionOverrideWarn:
+		message := entry.param + " is not supported by the " + backend + " backend and is forced to false"
+		if column == columnCodex && entry.param == "prompt_cache_key" {
+			message = "prompt_cache_key is replaced with Clyde-owned cache identity for the codex backend"
+		}
 		return CompatibilityWarning{
 			Code:        warningCodeOverridden,
 			Param:       entry.param,
 			Disposition: dispositionLabelOverridden,
-			Message:     entry.param + " is not supported by the " + backend + " backend and is forced to false",
+			Message:     message,
 		}
 	case dispositionTranslate:
+		return CompatibilityWarning{Code: "", Param: "", Disposition: "", Message: ""}
+	case dispositionReject, dispositionPartial:
 		return CompatibilityWarning{Code: "", Param: "", Disposition: "", Message: ""}
 	default:
 		return CompatibilityWarning{Code: "", Param: "", Disposition: "", Message: ""}
 	}
-}
-
-// fieldPresence classifies how a top-level request field appears in the
-// raw body. Absent and Null suppress warnings; Empty, Zero, and Present
-// all count as present enough for the catalog to apply.
-type fieldPresence int
-
-const (
-	presenceAbsent fieldPresence = iota
-	presenceNull
-	presenceEmpty
-	presenceZero
-	presencePresent
-)
-
-// presence classifies one raw field value. A missing key is passed as an
-// empty raw value and classifies as Absent. A literal null classifies as
-// Null and is treated as Absent for warnings, because a client that sends
-// null explicitly cleared the field.
-func presence(raw json.RawMessage) fieldPresence {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" {
-		return presenceAbsent
-	}
-	if trimmed == "null" {
-		return presenceNull
-	}
-	if trimmed == `""` || trimmed == "[]" || trimmed == "{}" {
-		return presenceEmpty
-	}
-	if trimmed == "0" {
-		return presenceZero
-	}
-	return presencePresent
-}
-
-// presenceWarns reports whether a presence class should trigger a warning.
-// Every class except Absent and Null counts as present, so a zero, false,
-// or empty value still warns.
-func presenceWarns(class fieldPresence) bool {
-	return class != presenceAbsent && class != presenceNull
-}
-
-// parseTopLevelKeys decodes only the top-level object keys of the request
-// body into raw values. This map is the single documented opaque edge in
-// the package: [json.RawMessage] values let the boundary classify field
-// presence without modeling every Responses field. A malformed body yields
-// an empty map, so no warnings are produced.
-func parseTopLevelKeys(body []byte) map[string]json.RawMessage {
-	fields := map[string]json.RawMessage{}
-	if len(body) == 0 {
-		return fields
-	}
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return map[string]json.RawMessage{}
-	}
-	return fields
 }
