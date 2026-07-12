@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/providerid"
 )
 
@@ -104,6 +105,31 @@ type ExchangeDiagnostic struct {
 // implement it.
 type ExchangeDiagnostician interface {
 	DiagnoseExchange(ctx context.Context, log *slog.Logger, exchange ExchangeDiagnostic)
+}
+
+// CaptureDecoder is an optional provider extension that creates a durable
+// decoded representation for a raw request body captured by the shared store.
+// It must return false for requests outside its supported wire contract.
+type CaptureDecoder interface {
+	DecodeCaptureRequest(exchange ExchangeDiagnostic) (capture.DecodedBody, bool)
+}
+
+func captureDecoderFor(providerName string, host string) (CaptureDecoder, bool) {
+	for _, provider := range defaultRegistry.snapshot() {
+		decoder, ok := provider.(CaptureDecoder)
+		if !ok || provider.ID().String() != providerName {
+			continue
+		}
+		return decoder, true
+	}
+	for _, provider := range defaultRegistry.snapshot() {
+		decoder, ok := provider.(CaptureDecoder)
+		if !ok || !provider.ClassifyConnect(normalizeConnectHost(host)).Claimed {
+			continue
+		}
+		return decoder, true
+	}
+	return nil, false
 }
 
 // Provider is the MITM-package facing contract for a single provider

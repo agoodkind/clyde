@@ -139,6 +139,143 @@ func TestTruncation(t *testing.T) {
 	}
 }
 
+func TestRecordPersistsLinkedDecodedRequestAndToolEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.db")
+	store := openTestStore(t, Config{DBPath: path})
+	raw := []byte{0x0a, 0x03, 'r', 'a', 'w'}
+	store.Record(Record{
+		Timestamp:   time.Now(),
+		Host:        "api2.cursor.sh",
+		Path:        "/aiserver.v1.AiService/BidiAppend",
+		RequestID:   "decoded-request",
+		RequestBody: raw,
+		RequestType: "application/protobuf",
+		DecodedRequest: &DecodedBody{
+			Format:             "cursor.bidi_append.protobuf_hex",
+			Status:             DecodeStatusSuccess,
+			RepresentationJSON: []byte(`{"fields":[{"field_number":1,"wire_type":"bytes","data_base64":"cmF3"}]}`),
+			ToolEvents: []ToolEvent{
+				{Ordering: 7, CallID: "call-7", ToolName: "edit_file", InputRepresentation: `{"patch":"hello"}`, InputEncoding: ToolInputEncodingJSON},
+			},
+		},
+	})
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db := openVerifier(t, path)
+	var storedRaw []byte
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id='decoded-request') AND which='request'`).Scan(&storedRaw); err != nil {
+		t.Fatalf("raw body: %v", err)
+	}
+	if string(storedRaw) != string(raw) {
+		t.Fatalf("raw body = %x want %x", storedRaw, raw)
+	}
+	var format, status, representation string
+	if err := db.QueryRow(`SELECT format, status, representation_json FROM decoded_bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id='decoded-request') AND which='request'`).Scan(&format, &status, &representation); err != nil {
+		t.Fatalf("decoded body: %v", err)
+	}
+	if format != "cursor.bidi_append.protobuf_hex" {
+		t.Fatalf("format = %q", format)
+	}
+	if status != string(DecodeStatusSuccess) {
+		t.Fatalf("status = %q", status)
+	}
+	if representation == "" {
+		t.Fatal("representation is empty")
+	}
+	var ordering int
+	var callID, toolName, input, inputEncoding string
+	if err := db.QueryRow(`SELECT ordering, call_id, tool_name, input_representation, input_encoding FROM decoded_tool_events WHERE decoded_body_id=(SELECT id FROM decoded_bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id='decoded-request') AND which='request')`).Scan(&ordering, &callID, &toolName, &input, &inputEncoding); err != nil {
+		t.Fatalf("tool event: %v", err)
+	}
+	if ordering != 7 || callID != "call-7" || toolName != "edit_file" || input != `{"patch":"hello"}` || inputEncoding != string(ToolInputEncodingJSON) {
+		t.Fatalf("tool event = (%d, %q, %q, %q, %q)", ordering, callID, toolName, input, inputEncoding)
+	}
+}
+
+func TestOpenAddsDecodedTablesToExistingCaptureDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.db")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, client TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '', concern TEXT NOT NULL DEFAULT '', host TEXT NOT NULL DEFAULT '', method TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', status INTEGER NOT NULL DEFAULT 0, request_id TEXT NOT NULL DEFAULT '', upstream_request_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '', trace_id TEXT NOT NULL DEFAULT '', req_headers TEXT NOT NULL DEFAULT '', resp_headers TEXT NOT NULL DEFAULT '', req_content_type TEXT NOT NULL DEFAULT '', resp_content_type TEXT NOT NULL DEFAULT '', req_bytes INTEGER NOT NULL DEFAULT 0, resp_bytes INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE bodies (request_row_id INTEGER NOT NULL, which TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '', is_text INTEGER NOT NULL DEFAULT 0, truncated INTEGER NOT NULL DEFAULT 0, data BLOB, PRIMARY KEY (request_row_id, which));
+		INSERT INTO requests (ts, request_id) VALUES (1, 'legacy-request');
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store := openTestStore(t, Config{DBPath: path})
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	verifier := openVerifier(t, path)
+	var tableCount int
+	if err := verifier.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('decoded_bodies', 'decoded_tool_events')`).Scan(&tableCount); err != nil {
+		t.Fatalf("query decoded tables: %v", err)
+	}
+	if tableCount != 2 {
+		t.Fatalf("decoded table count = %d, want 2", tableCount)
+	}
+	var requestID string
+	if err := verifier.QueryRow(`SELECT request_id FROM requests`).Scan(&requestID); err != nil {
+		t.Fatalf("read legacy request: %v", err)
+	}
+	if requestID != "legacy-request" {
+		t.Fatalf("legacy request id = %q", requestID)
+	}
+}
+
+func TestOpenAddsInputEncodingToExistingDecodedToolEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.db")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE decoded_tool_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			decoded_body_id INTEGER NOT NULL,
+			ordering INTEGER NOT NULL DEFAULT 0,
+			call_id TEXT NOT NULL DEFAULT '',
+			tool_name TEXT NOT NULL DEFAULT '',
+			input_representation TEXT NOT NULL DEFAULT ''
+		);
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("create legacy decoded tool events: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store := openTestStore(t, Config{DBPath: path})
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	verifier := openVerifier(t, path)
+	var columnCount int
+	if err := verifier.QueryRow(`SELECT count(*) FROM pragma_table_info('decoded_tool_events') WHERE name='input_encoding'`).Scan(&columnCount); err != nil {
+		t.Fatalf("query input encoding column: %v", err)
+	}
+	if columnCount != 1 {
+		t.Fatalf("input encoding columns=%d want 1", columnCount)
+	}
+}
+
 func TestRetentionByAge(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capture.db")
 	store := openTestStore(t, Config{DBPath: path, RetentionMaxAge: time.Hour})

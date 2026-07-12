@@ -21,7 +21,6 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
-	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/trace"
 )
 
@@ -740,36 +739,17 @@ func (p *Proxy) recordProviderCaptureStore(params providerForwardParams, respons
 	if !requestDecoded {
 		decodedRequest = requestBody
 	}
-	concern := resolveCaptureConcern(params.cfg.CaptureRules, captureConcernInput{
-		Provider:            params.provider.ID().String(),
-		Host:                params.host,
-		Method:              params.req.Method,
-		Path:                params.req.URL.Path,
-		RequestContentType:  params.req.Header.Get("Content-Type"),
-		ResponseContentType: "",
-	})
-	contrib := extractIdentityContribution(params.host, params.req.URL.Path, params.req.Header)
-	identity := mitmRequestIdentity(params.req.Header, contrib)
-	p.store.Record(capture.Record{
-		Timestamp:         clock.Now(),
-		Client:            p.client,
-		Provider:          params.provider.ID().String(),
-		Concern:           concern,
-		Host:              params.host,
-		Method:            params.req.Method,
-		Path:              params.req.URL.Path,
-		Status:            status,
-		RequestID:         identity.RequestID,
-		UpstreamRequestID: identity.UpstreamRequestID,
-		SessionID:         identity.SessionID,
-		TraceID:           identity.TraceID,
-		RequestHeaders:    params.req.Header,
-		ResponseHeaders:   responseHeader,
-		RequestBody:       decodedRequest,
-		ResponseBody:      decodedBody,
-		RequestType:       params.req.Header.Get("Content-Type"),
-		ResponseType:      responseHeader.Get("Content-Type"),
-		Duration:          clock.Since(params.started),
+	p.recordCaptureStore(params.req, responseHeader, captureStoreInput{
+		provider:        params.provider.ID().String(),
+		host:            params.host,
+		method:          params.req.Method,
+		path:            params.req.URL.Path,
+		status:          status,
+		requestBody:     decodedRequest,
+		responseBody:    decodedBody,
+		duration:        clock.Since(params.started),
+		captureRules:    params.cfg.CaptureRules,
+		hasCaptureRules: true,
 	})
 }
 
