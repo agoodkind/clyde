@@ -174,6 +174,36 @@ func TestProviderExecutePreparedUsesPreparedCallback(t *testing.T) {
 	}
 }
 
+func TestProviderPrepareUsesConfiguredPreparation(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, requestID string) (PreparedRequest, error) {
+			called = true
+			if requestID != "req-responses" {
+				t.Fatalf("request id = %q, want req-responses", requestID)
+			}
+			resolved := req
+			return PreparedRequest{RequestID: requestID, Resolved: &resolved}, nil
+		},
+	})
+
+	prepared, err := provider.Prepare(WithRequestID(context.Background(), "req-responses"), adapterresolver.ResolvedRequest{
+		Provider: adapterresolver.ProviderAnthropic,
+		Model:    "claude-test",
+	})
+	if err != nil {
+		t.Fatalf("Prepare() err = %v", err)
+	}
+	if !called {
+		t.Fatal("preparation callback was not called")
+	}
+	if prepared.RequestID != "req-responses" {
+		t.Fatalf("prepared request id = %q, want req-responses", prepared.RequestID)
+	}
+}
+
 // satisfiesProviderInterface fails to compile if Provider does not
 // satisfy the upstream-agnostic adapter/provider.Provider contract.
 // It is the cheapest available guarantee that a future change to the

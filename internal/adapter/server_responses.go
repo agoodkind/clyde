@@ -12,7 +12,6 @@ import (
 
 	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clock"
@@ -93,11 +92,6 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	// and never performs the omission itself.
 	warningValues := adaptercompat.ResponsesWarningValues{N: rr.N, ToolChoice: rr.ToolChoice}
 	warnings := adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, warningValues, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
-	if !warnings.Empty() {
-		for _, header := range warnings.Headers() {
-			w.Header().Add("X-Clyde-Warning", header)
-		}
-	}
 
 	s.dispatchResolvedResponses(w, r, req, reqID, body, resolvedReq, warnings)
 	return nil
@@ -219,12 +213,9 @@ func responsesResponseID(reqID string) string {
 	return "resp_" + core
 }
 
-// dispatchResolvedResponses looks up the resolved provider and runs it
-// with a Responses writer. It mirrors dispatchResolvedChat's provider
-// lookup so responses and chat share the same backend contract, but the
-// output writer differs. Passthrough is a raw HTTP forward, handled
-// before the registry lookup, and targets the upstream's /responses
-// endpoint with the raw body.
+// dispatchResolvedResponses prepares a concrete provider request before it
+// writes warning headers or begins the Responses stream. Chat remains on the
+// generic provider registry; this boundary is Responses-specific.
 func (s *Server) dispatchResolvedResponses(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -238,19 +229,25 @@ func (s *Server) dispatchResolvedResponses(
 		s.forwardPassthroughResponses(w, r, reqID, &resolvedReq, body)
 		return
 	}
-	provider, lookupAdapterErr := s.lookupResolvedProvider(&resolvedReq, req.Model)
-	if lookupAdapterErr != nil {
-		s.respondAdapterError(w, r, lookupAdapterErr)
+	alias := resolvedRequestAlias(&resolvedReq)
+	providerContext := responsesProviderContext(r.Context(), resolvedReq)
+	prepared, prepareErr := s.prepareResponsesProvider(providerContext, resolvedReq)
+	if prepareErr != nil {
+		s.respondAdapterError(w, r, responsesPreparedProviderError(resolvedReq.Provider, alias, resolvedReq, prepareErr))
 		return
+	}
+	if !warnings.Empty() {
+		for _, header := range warnings.Headers() {
+			w.Header().Add("X-Clyde-Warning", header)
+		}
 	}
 	responseID := responsesResponseID(reqID)
-	alias := resolvedRequestAlias(&resolvedReq)
 	warningSlice := warnings.Slice()
 	if req.Stream {
-		s.dispatchResponsesStream(w, r, responseID, alias, resolvedReq, provider, warningSlice)
+		s.dispatchResponsesStream(w, r, responseID, alias, resolvedReq, prepared, warningSlice)
 		return
 	}
-	s.dispatchResponsesCollect(w, r, responseID, alias, resolvedReq, provider, warningSlice)
+	s.dispatchResponsesCollect(w, r, responseID, alias, resolvedReq, prepared, warningSlice)
 }
 
 // dispatchResponsesStream runs the provider with the streaming Responses
@@ -263,10 +260,10 @@ func (s *Server) dispatchResponsesStream(
 	responseID string,
 	alias string,
 	resolvedReq adapterresolver.ResolvedRequest,
-	provider adapterprovider.Provider,
+	prepared preparedResponsesProvider,
 	warnings []adaptercompat.CompatibilityWarning,
 ) {
-	ctx := r.Context()
+	ctx := responsesProviderContext(r.Context(), resolvedReq)
 	writer, err := newResponsesStreamWriter(w, responseID, alias, warnings, s.log)
 	if err != nil {
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
@@ -279,7 +276,7 @@ func (s *Server) dispatchResponsesStream(
 		)
 		return
 	}
-	result, runErr := provider.Execute(ctx, resolvedReq, writer)
+	result, runErr := prepared.Execute(ctx, writer, s)
 	if runErr != nil {
 		if failErr := writer.fail(runErr); failErr != nil {
 			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.fail_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
@@ -306,19 +303,14 @@ func (s *Server) dispatchResponsesCollect(
 	responseID string,
 	alias string,
 	resolvedReq adapterresolver.ResolvedRequest,
-	provider adapterprovider.Provider,
+	prepared preparedResponsesProvider,
 	warnings []adaptercompat.CompatibilityWarning,
 ) {
-	ctx := r.Context()
+	ctx := responsesProviderContext(r.Context(), resolvedReq)
 	collector := newProviderCollectorWriter()
-	result, runErr := provider.Execute(ctx, resolvedReq, collector)
+	result, runErr := prepared.Execute(ctx, collector, s)
 	if runErr != nil {
-		aerr := mapUpstreamForFamily(adapterRouteOpenAI, provider.ID().String(), 0, upstreamClassServerError, "", runErr.Error())
-		aerr.Backend = resolvedReq.Provider.String()
-		aerr.ModelAlias = alias
-		aerr.ResolvedModelName = resolvedReq.Model
-		aerr.Cause = runErr
-		s.respondAdapterError(w, r, aerr)
+		s.respondAdapterError(w, r, responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr))
 		return
 	}
 	collected := adapterrender.CollectMessageWithNativePatchRepresentation(

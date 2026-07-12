@@ -66,9 +66,10 @@ func TestRunDirectDoesNotReusePreviousResponseIDForRepeatedFreshPromptWithoutCon
 		}},
 	}
 	resolved := codexResolvedForTest(adaptermodel.ResolvedAlias{Alias: "gpt-5.4", WireModel: "gpt-5.4"})
+	transportPayload := BuildRequestWithConfig(req, resolved, "", RequestBuilderConfig{})
 
 	for range 2 {
-		if _, err := RunDirect(context.Background(), cfg, req, resolved, "", func(adapterrender.Event) error {
+		if _, err := runPrepared(context.Background(), cfg, transportPayload, resolved, func(adapterrender.Event) error {
 			return nil
 		}); err != nil {
 			t.Fatalf("run direct: %v", err)

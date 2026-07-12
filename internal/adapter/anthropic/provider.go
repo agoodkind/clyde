@@ -108,22 +108,24 @@ func (p *Provider) ID() adapterresolver.ProviderID {
 	return adapterresolver.ProviderAnthropic
 }
 
-// Execute is part of Clyde's typed adapter surface.
-func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
+// Prepare builds the provider-owned Anthropic request before output headers
+// commit. It delegates to the server-owned wire projection callback without
+// performing transport execution.
+func (p *Provider) Prepare(ctx context.Context, req adapterresolver.ResolvedRequest) (PreparedRequest, error) {
 	if p == nil || p.prepare == nil {
-		return adapterprovider.Result{
-				Usage: openai.
-					Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
-
-				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
-			}, &ExecuteError{
-				Status:  http.StatusInternalServerError,
-				Code:    "anthropic_prepare_unconfigured",
-				Message: "adapter built without anthropic request preparation; set adapter.direct_oauth=true and restart", Cause: nil,
-			}
+		return PreparedRequest{}, &ExecuteError{
+			Status:  http.StatusInternalServerError,
+			Code:    "anthropic_prepare_unconfigured",
+			Message: "adapter built without anthropic request preparation; set adapter.direct_oauth=true and restart", Cause: nil,
+		}
 	}
 	reqID := requestIDFromContext(ctx, req.Cursor.RequestID)
-	prepared, err := p.prepare(ctx, req, reqID)
+	return p.prepare(ctx, req, reqID)
+}
+
+// Execute is part of Clyde's typed adapter surface.
+func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
+	prepared, err := p.Prepare(ctx, req)
 	if err != nil {
 		return adapterprovider.Result{}, err
 	}

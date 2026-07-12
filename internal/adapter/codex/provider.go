@@ -145,10 +145,19 @@ func beforeAttemptFromContext(ctx context.Context) func(context.Context, int) (c
 	return v
 }
 
-// Execute satisfies adapterprovider.Provider.Execute. It builds a
-// DirectConfig from the provider's deps, runs the websocket transport
-// via RunDirect, and surfaces the result as adapterprovider.Result.
+// Execute satisfies adapterprovider.Provider.Execute by preparing then
+// executing the exact provider-owned transport payload.
 func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
+	prepared, err := p.Prepare(req)
+	if err != nil {
+		return adapterprovider.Result{}, err
+	}
+	return p.ExecutePrepared(ctx, prepared, w)
+}
+
+// ExecutePrepared performs Codex runtime work and executes the exact payload
+// returned by Prepare without invoking the request builder again.
+func (p *Provider) ExecutePrepared(ctx context.Context, prepared PreparedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
 	if p == nil {
 		return adapterprovider.Result{}, ErrCodexProviderNotConfigured
 	}
@@ -185,10 +194,10 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		WebsocketURL:                   codexWebsocketURL(p.cfg.BaseURL),
 		Token:                          token,
 		AccountID:                      p.accountID,
-		RequestID:                      codexRequestID(req),
-		CursorRequestID:                req.Cursor.RequestID,
-		Correlation:                    req.Correlation,
-		WorkspacePath:                  req.Cursor.WorkspacePath,
+		RequestID:                      codexRequestID(prepared.Resolved),
+		CursorRequestID:                prepared.Resolved.Cursor.RequestID,
+		Correlation:                    prepared.Resolved.Correlation,
+		WorkspacePath:                  prepared.Resolved.Cursor.WorkspacePath,
 		WorkspaceProbe:                 p.workspaceProbe,
 		SessionCache:                   p.sessionCache,
 		Log:                            p.log,
@@ -223,7 +232,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		)
 	}
 
-	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, &req, req.ProviderEffort().String(), w.WriteEvent)
+	runResult, runErr := runPrepared(ctx, directCfg, prepared.Transport, &prepared.Resolved, w.WriteEvent)
 	if runErr != nil {
 		return adapterprovider.Result{}, runErr
 	}

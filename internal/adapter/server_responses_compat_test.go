@@ -195,6 +195,31 @@ func TestResponsesCodexAutoToolChoiceDoesNotWarn(t *testing.T) {
 	}
 }
 
+func TestResponsesPreparationFailurePrecedesStreamingHeadersAndFrames(t *testing.T) {
+	fakes := newRoutingFakeEndpoints(t)
+	srv := newRoutingIntegrationServer(t, fakes)
+	// Responses dispatch must use the concrete provider retained by Server,
+	// not the generic registry entry. Removing this preparation dependency
+	// leaves the registry intact and distinguishes the two boundaries.
+	srv.codexProvider = nil
+	openAIURL, _ := startRoutingListeners(t, srv)
+
+	response, body := postResponsesRaw(t, openAIURL+"/v1/responses", `{"model":"gpt-future","input":"hello","stream":true}`)
+	if response.StatusCode == http.StatusOK {
+		t.Fatalf("status = %d, want typed pre-header error; body=%s", response.StatusCode, body)
+	}
+	if bytes.Contains(body, []byte("response.created")) || bytes.Contains(body, []byte("response.in_progress")) {
+		t.Fatalf("preparation failure emitted lifecycle frames: %s", body)
+	}
+	var envelope adapteropenai.ErrorResponse
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("unmarshal error envelope: %v; body=%s", err, body)
+	}
+	if envelope.Error.Type != "invalid_request_error" {
+		t.Fatalf("error type = %q, want invalid_request_error", envelope.Error.Type)
+	}
+}
+
 func TestResponsesUnsupportedToolOmittedAndWarned(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)
