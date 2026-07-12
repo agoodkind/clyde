@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 
 	"google.golang.org/grpc"
@@ -10,6 +12,8 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/tokencount"
+	"goodkind.io/clyde/internal/util"
 )
 
 // controlStreamChunkBytes is the payload size of one streamed control-leg chunk.
@@ -92,6 +96,8 @@ func (s *controlServer) StreamExportTranscript(req *clydev1.ExportTranscriptRequ
 		HistoryStart: int(req.GetHistoryStart()),
 		LastN:        int(req.GetLastN()),
 		MaxLines:     int(req.GetMaxLines()),
+		MaxTokens:    req.GetMaxTokens(),
+		TokenModel:   req.GetTokenModel(),
 		Whitespace:   conversation.WhitespaceMode(req.GetWhitespace()),
 		Content:      contentKindSetFromExportRequest(req),
 		Compaction: conversation.CompactionExportOptions{
@@ -108,7 +114,68 @@ func (s *controlServer) StreamExportTranscript(req *clydev1.ExportTranscriptRequ
 		)
 		return status.Errorf(codes.Internal, "export transcript: %v", err)
 	}
+	body, err = capExportBodyTokens(ctx, body, req.GetMaxTokens(), req.GetTokenModel(), record)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "max tokens: %v", err)
+	}
 	return streamExportChunks(stream, body)
+}
+
+// capExportBodyTokens caps a rendered export body to the max_tokens budget,
+// keeping the tail. The tokenizer family and model come from the conversation
+// record; a non-empty tokenModel overrides the model. An empty maxTokens or a
+// zero budget leaves the body unchanged. It returns an error only when the
+// max_tokens string cannot be parsed.
+func capExportBodyTokens(ctx context.Context, body []byte, maxTokens, tokenModel string, record conversation.Record) ([]byte, error) {
+	if maxTokens == "" {
+		return body, nil
+	}
+	budget, err := util.ParseHumanCount(maxTokens)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.stream_export.max_tokens_invalid", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"conversation_id", record.ID,
+			"max_tokens", maxTokens,
+			"err", err,
+		)
+		return nil, fmt.Errorf("parse max tokens: %w", err)
+	}
+	if budget <= 0 {
+		return body, nil
+	}
+	family := tokenFamilyForProvider(record.Provider)
+	model := record.Model
+	if tokenModel != "" {
+		family = tokencount.FamilyUnknown
+		model = tokenModel
+	}
+	settings := tokencount.Settings{
+		SafetyFactor:  tokencount.DefaultSafetyFactor,
+		CharsPerToken: tokencount.DefaultCharsPerToken,
+	}
+	counter := tokencount.LocalCounter(family, model, settings)
+	capped, tokens, truncated := tokencount.CapToLastTokens(string(body), budget, counter)
+	slog.DebugContext(ctx, "daemon.stream_export.token_cap", "concern", "process.daemon.lifecycle", "component", "daemon",
+		"conversation_id", record.ID,
+		"budget", budget,
+		"family", int(family),
+		"model", model,
+		"tokens", tokens,
+		"truncated", truncated,
+	)
+	return []byte(capped), nil
+}
+
+// tokenFamilyForProvider maps a conversation provider to the tokenizer family
+// used to count its transcript. Unmapped providers fall back to model inference.
+func tokenFamilyForProvider(provider conversation.Provider) tokencount.Family {
+	switch provider {
+	case conversation.ProviderClaude:
+		return tokencount.FamilyClaude
+	case conversation.ProviderCodex:
+		return tokencount.FamilyGPT
+	default:
+		return tokencount.FamilyUnknown
+	}
 }
 
 // streamTextChunks sends text as a sequence of ConversationChunk frames, each at

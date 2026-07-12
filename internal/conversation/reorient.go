@@ -154,6 +154,8 @@ func (idx *Index) renderReorientSnapshot(current Record, options ReorientOptions
 		HistoryStart: 0,
 		LastN:        0,
 		MaxLines:     0,
+		MaxTokens:    "",
+		TokenModel:   "",
 		Whitespace:   WhitespaceDense,
 		Content:      content,
 		Compaction:   CompactionExportOptions{IncludeSelector: selector, FullHistory: false},

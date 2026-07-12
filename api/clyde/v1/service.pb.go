@@ -3078,7 +3078,14 @@ type ExportTranscriptRequest struct {
 	LastN                  int64                  `protobuf:"varint,15,opt,name=last_n,json=lastN,proto3" json:"last_n,omitempty"`
 	// max_lines keeps only the last N rendered lines after whitespace compression.
 	// Zero leaves the output uncapped.
-	MaxLines      int64 `protobuf:"varint,16,opt,name=max_lines,json=maxLines,proto3" json:"max_lines,omitempty"`
+	MaxLines int64 `protobuf:"varint,16,opt,name=max_lines,json=maxLines,proto3" json:"max_lines,omitempty"`
+	// max_tokens caps the rendered body to a token budget, keeping the tail. It is
+	// a human-friendly size string (for example "200k") parsed by the daemon. Empty
+	// leaves the output uncapped.
+	MaxTokens string `protobuf:"bytes,17,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
+	// token_model overrides the model whose tokenizer counts max_tokens. Empty
+	// derives the tokenizer from the conversation's provider and model.
+	TokenModel    string `protobuf:"bytes,18,opt,name=token_model,json=tokenModel,proto3" json:"token_model,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3223,6 +3230,20 @@ func (x *ExportTranscriptRequest) GetMaxLines() int64 {
 		return x.MaxLines
 	}
 	return 0
+}
+
+func (x *ExportTranscriptRequest) GetMaxTokens() string {
+	if x != nil {
+		return x.MaxTokens
+	}
+	return ""
+}
+
+func (x *ExportTranscriptRequest) GetTokenModel() string {
+	if x != nil {
+		return x.TokenModel
+	}
+	return ""
 }
 
 type ConversationLineage struct {
@@ -3811,7 +3832,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\ttruncated\x18\b \x01(\bR\ttruncated\x12\x18\n" +
 	"\arestart\x18\t \x01(\bR\arestart\x12\x1a\n" +
 	"\bwarnings\x18\n" +
-	" \x03(\tR\bwarnings\"\xb4\x05\n" +
+	" \x03(\tR\bwarnings\"\xf4\x05\n" +
 	"\x17ExportTranscriptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x16\n" +
 	"\x06format\x18\x02 \x01(\tR\x06format\x12\x1e\n" +
@@ -3831,7 +3852,11 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x13include_compactions\x18\r \x01(\tR\x12includeCompactions\x12!\n" +
 	"\ffull_history\x18\x0e \x01(\bR\vfullHistory\x12\x15\n" +
 	"\x06last_n\x18\x0f \x01(\x03R\x05lastN\x12\x1b\n" +
-	"\tmax_lines\x18\x10 \x01(\x03R\bmaxLines\"\xc0\x01\n" +
+	"\tmax_lines\x18\x10 \x01(\x03R\bmaxLines\x12\x1d\n" +
+	"\n" +
+	"max_tokens\x18\x11 \x01(\tR\tmaxTokens\x12\x1f\n" +
+	"\vtoken_model\x18\x12 \x01(\tR\n" +
+	"tokenModel\"\xc0\x01\n" +
 	"\x13ConversationLineage\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12;\n" +
 	"\x0fparent_provider\x18\x02 \x01(\x0e2\x12.clyde.v1.ProviderR\x0eparentProvider\x12(\n" +

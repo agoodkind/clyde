@@ -759,6 +759,8 @@ func exportTranscriptRequest(conversationID string, options conversation.ExportO
 		HistoryStart:           int64(options.HistoryStart),
 		LastN:                  int64(options.LastN),
 		MaxLines:               int64(options.MaxLines),
+		MaxTokens:              options.MaxTokens,
+		TokenModel:             options.TokenModel,
 		IncludeSystemPrompts:   options.Content.Has(conversation.ContentKindSystemPrompts),
 		IncludeSystemMessages:  options.Content.Has(conversation.ContentKindSystemMessages),
 		IncludeToolOutputs:     options.Content.Has(conversation.ContentKindToolOutputs),
