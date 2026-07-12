@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -77,23 +78,57 @@ func TestResponsesPreparedCodexErrorPreservesProviderClassification(t *testing.T
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
+			wrappedErr := fmt.Errorf("execute prepared Codex Responses request: %w", testCase.err)
+			want := codexProviderAdapterError(wrappedErr)
 			aerr := responsesPreparedProviderError(
 				adapterresolver.ProviderCodex,
 				"clyde-codex-5.4",
 				resolved,
-				testCase.err,
+				wrappedErr,
 			)
 			if aerr.Class != testCase.wantClass || aerr.Code != testCase.wantCode {
 				t.Fatalf("classification = %s/%s, want %s/%s", aerr.Class, aerr.Code, testCase.wantClass, testCase.wantCode)
 			}
-			if aerr.Message != testCase.wantMessage {
-				t.Fatalf("message = %q, want %q", aerr.Message, testCase.wantMessage)
+			if aerr.Message != want.Message {
+				t.Fatalf("message = %q, want Codex mapper message %q", aerr.Message, want.Message)
+			}
+			if strings.Contains(aerr.Message, testCase.wantMessage) == false {
+				t.Fatalf("message = %q, want it to retain %q", aerr.Message, testCase.wantMessage)
 			}
 			if aerr.Backend != "codex" || aerr.ModelAlias != "clyde-codex-5.4" || aerr.ResolvedModelName != "gpt-5.4-wire" {
 				t.Fatalf("request context = backend %q alias %q resolved %q", aerr.Backend, aerr.ModelAlias, aerr.ResolvedModelName)
 			}
 			if !errors.Is(aerr.Cause, testCase.err) {
 				t.Fatalf("cause = %v, want original error %v", aerr.Cause, testCase.err)
+			}
+
+			server, _ := newTestServer(t)
+			jsonRecorder := httptest.NewRecorder()
+			jsonRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			server.respondAdapterError(jsonRecorder, jsonRequest, aerr)
+			var envelope adapteropenai.ErrorResponse
+			if err := json.Unmarshal(jsonRecorder.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("unmarshal JSON error envelope: %v", err)
+			}
+			if envelope.Error.Code != aerr.Code || !strings.Contains(envelope.Error.Message, aerr.Message) {
+				t.Fatalf("JSON error = %+v, want code %q and message %q", envelope.Error, aerr.Code, aerr.Message)
+			}
+
+			streamRecorder := httptest.NewRecorder()
+			streamWriter, err := newResponsesStreamWriter(streamRecorder, "resp_codex_error", "model", nil, slog.Default())
+			if err != nil {
+				t.Fatalf("new Responses stream writer: %v", err)
+			}
+			if err := streamWriter.fail(aerr); err != nil {
+				t.Fatalf("write response.failed: %v", err)
+			}
+			frames := parseResponsesStreamFrames(t, streamRecorder.Body.String())
+			failed := frames[len(frames)-1]
+			if failed.Name != adapteropenai.ResponsesEventFailed || failed.Response == nil || failed.Response.Error == nil {
+				t.Fatalf("stream terminal frame = %+v", failed)
+			}
+			if failed.Response.Error.Code != aerr.Code || failed.Response.Error.Message != aerr.Message {
+				t.Fatalf("stream error = %+v, want code %q message %q", failed.Response.Error, aerr.Code, aerr.Message)
 			}
 		})
 	}
@@ -125,7 +160,16 @@ func TestResponsesProviderExecutionPreservesClientErrorAndLogsContext(t *testing
 				Model:    "claude-future",
 				OpenAI:   adapteropenai.ChatRequest{Model: "claude-future", Stream: stream},
 			}
-			srv.dispatchResolvedResponses(response, request, resolved.OpenAI, "req-provider-error", nil, resolved, adaptercompat.WarningSet{})
+			srv.dispatchResolvedResponsesWithID(
+				response,
+				request,
+				resolved.OpenAI,
+				"req-provider-error",
+				responsesResponseID("req-provider-error"),
+				nil,
+				resolved,
+				adaptercompat.WarningSet{},
+			)
 			body := response.Body.Bytes()
 
 			if stream {
@@ -159,6 +203,44 @@ func TestResponsesProviderExecutionPreservesClientErrorAndLogsContext(t *testing
 				t.Fatalf("provider error log leaked secret value: %s", logOutput)
 			}
 		})
+	}
+}
+
+func TestResponsesNonStreamingProviderErrorCarriesCanonicalWarnings(t *testing.T) {
+	fakes := newRoutingFakeEndpoints(t)
+	srv := newRoutingIntegrationServer(t, fakes)
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, requestID string) (anthropic.PreparedRequest, error) {
+			resolved := req
+			return anthropic.PreparedRequest{RequestID: requestID, Resolved: &resolved}, nil
+		},
+		ExecutePrepared: func(_ context.Context, _ anthropic.PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			return adapterprovider.Result{}, errors.New("provider-visible failure")
+		},
+	})
+	openAIURL, _ := startRoutingListeners(t, srv)
+	response, body := postResponsesRaw(t, openAIURL+"/v1/responses", `{"model":"claude-future","input":"hello","background":true}`)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400; body=%s", response.StatusCode, body)
+	}
+	if len(response.Header.Values("X-Clyde-Warning")) == 0 {
+		t.Fatalf("missing warning header: %v", response.Header)
+	}
+	var envelope struct {
+		Error struct {
+			Clyde *struct {
+				Warnings []adaptercompat.CompatibilityWarning `json:"warnings"`
+			} `json:"clyde"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("unmarshal error: %v; body=%s", err, body)
+	}
+	if envelope.Error.Clyde == nil || len(envelope.Error.Clyde.Warnings) != 1 {
+		t.Fatalf("error warnings=%+v want one canonical warning", envelope.Error.Clyde)
+	}
+	if envelope.Error.Clyde.Warnings[0].Param != "background" {
+		t.Fatalf("error warning=%+v", envelope.Error.Clyde.Warnings[0])
 	}
 }
 

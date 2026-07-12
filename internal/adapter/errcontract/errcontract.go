@@ -11,6 +11,8 @@ package errcontract
 
 import (
 	"net/http"
+
+	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 )
 
 // ErrorInfo is the primitive payload the boundary hands to a family
@@ -59,18 +61,21 @@ type ErrorDiagnostics struct {
 	IdentityAttributes []DiagnosticField `json:"identity_attrs,omitempty"`
 	UpstreamRequestID  string            `json:"upstream_request_id,omitempty"`
 	UpstreamResponseID string            `json:"upstream_response_id,omitempty"`
-	Provider           string            `json:"provider,omitempty"`
-	Backend            string            `json:"backend,omitempty"`
-	ModelAlias         string            `json:"model_alias,omitempty"`
-	ResolvedModelName  string            `json:"resolved_model,omitempty"`
-	ErrorClass         string            `json:"error_class,omitempty"`
-	RouteFamily        string            `json:"route_family,omitempty"`
-	Method             string            `json:"method,omitempty"`
-	Path               string            `json:"path,omitempty"`
-	UserAgent          string            `json:"user_agent,omitempty"`
-	HeaderNames        []string          `json:"header_names,omitempty"`
-	Headers            map[string]string `json:"headers,omitempty"`
-	LogHint            string            `json:"log_hint,omitempty"`
+	// Warnings are bounded canonical compatibility notices for a failed
+	// Responses request.
+	Warnings          []adaptercompat.CompatibilityWarning `json:"warnings,omitempty"`
+	Provider          string                               `json:"provider,omitempty"`
+	Backend           string                               `json:"backend,omitempty"`
+	ModelAlias        string                               `json:"model_alias,omitempty"`
+	ResolvedModelName string                               `json:"resolved_model,omitempty"`
+	ErrorClass        string                               `json:"error_class,omitempty"`
+	RouteFamily       string                               `json:"route_family,omitempty"`
+	Method            string                               `json:"method,omitempty"`
+	Path              string                               `json:"path,omitempty"`
+	UserAgent         string                               `json:"user_agent,omitempty"`
+	HeaderNames       []string                             `json:"header_names,omitempty"`
+	Headers           map[string]string                    `json:"headers,omitempty"`
+	LogHint           string                               `json:"log_hint,omitempty"`
 }
 
 // DiagnosticField is a provider-owned identity field included in

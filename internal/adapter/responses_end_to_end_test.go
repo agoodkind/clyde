@@ -80,6 +80,9 @@ func TestResponsesEndpointEndToEnd(t *testing.T) {
 	if len(object.ID) < 5 || object.ID[:5] != "resp_" {
 		t.Fatalf("id = %q, want resp_ prefix", object.ID)
 	}
+	if object.ID == "resp-routing" || bytes.Contains(body, []byte(`"resp-routing"`)) {
+		t.Fatalf("provider response id escaped into the public Responses object: %s", body)
+	}
 	if !bytes.Contains(body, []byte(`"output_text"`)) || !bytes.Contains(body, []byte(`"ok"`)) {
 		t.Fatalf("codex responses object missing output_text ok; body=%s", body)
 	}

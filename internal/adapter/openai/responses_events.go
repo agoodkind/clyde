@@ -8,12 +8,15 @@ const (
 	ResponsesEventInProgress            = "response.in_progress"
 	ResponsesEventCompleted             = "response.completed"
 	ResponsesEventFailed                = "response.failed"
+	ResponsesEventIncomplete            = "response.incomplete"
 	ResponsesEventOutputItemAdded       = "response.output_item.added"
 	ResponsesEventOutputItemDone        = "response.output_item.done"
 	ResponsesEventContentPartAdded      = "response.content_part.added"
 	ResponsesEventContentPartDone       = "response.content_part.done"
 	ResponsesEventOutputTextDelta       = "response.output_text.delta"
 	ResponsesEventOutputTextDone        = "response.output_text.done"
+	ResponsesEventRefusalDelta          = "response.refusal.delta"
+	ResponsesEventRefusalDone           = "response.refusal.done"
 	ResponsesEventReasoningSummaryDelta = "response.reasoning_summary_text.delta"
 	ResponsesEventReasoningSummaryDone  = "response.reasoning_summary_text.done"
 	ResponsesEventFunctionArgsDelta     = "response.function_call_arguments.delta"
@@ -77,6 +80,26 @@ type ResponsesOutputTextDoneEvent struct {
 	SequenceNumber int    `json:"sequence_number"`
 }
 
+// ResponsesRefusalDeltaEvent is the frame shape for refusal.delta.
+type ResponsesRefusalDeltaEvent struct {
+	Type           string `json:"type"`
+	ItemID         string `json:"item_id"`
+	OutputIndex    int    `json:"output_index"`
+	ContentIndex   int    `json:"content_index"`
+	Delta          string `json:"delta"`
+	SequenceNumber int    `json:"sequence_number"`
+}
+
+// ResponsesRefusalDoneEvent is the frame shape for refusal.done.
+type ResponsesRefusalDoneEvent struct {
+	Type           string `json:"type"`
+	ItemID         string `json:"item_id"`
+	OutputIndex    int    `json:"output_index"`
+	ContentIndex   int    `json:"content_index"`
+	Refusal        string `json:"refusal"`
+	SequenceNumber int    `json:"sequence_number"`
+}
+
 // ResponsesReasoningSummaryDeltaEvent is the frame shape for
 // reasoning_summary_text.delta.
 type ResponsesReasoningSummaryDeltaEvent struct {
@@ -115,6 +138,7 @@ type ResponsesFunctionArgsDoneEvent struct {
 	Type           string `json:"type"`
 	ItemID         string `json:"item_id"`
 	OutputIndex    int    `json:"output_index"`
+	Name           string `json:"name"`
 	Arguments      string `json:"arguments"`
 	SequenceNumber int    `json:"sequence_number"`
 }
@@ -124,6 +148,8 @@ func (ResponsesOutputItemEvent) isResponsesStreamEvent()            {}
 func (ResponsesContentPartEvent) isResponsesStreamEvent()           {}
 func (ResponsesOutputTextDeltaEvent) isResponsesStreamEvent()       {}
 func (ResponsesOutputTextDoneEvent) isResponsesStreamEvent()        {}
+func (ResponsesRefusalDeltaEvent) isResponsesStreamEvent()          {}
+func (ResponsesRefusalDoneEvent) isResponsesStreamEvent()           {}
 func (ResponsesReasoningSummaryDeltaEvent) isResponsesStreamEvent() {}
 func (ResponsesReasoningSummaryDoneEvent) isResponsesStreamEvent()  {}
 func (ResponsesFunctionArgsDeltaEvent) isResponsesStreamEvent()     {}

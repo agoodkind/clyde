@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	"goodkind.io/clyde/internal/adapter/errcontract"
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/slogger"
@@ -69,6 +70,7 @@ type adapterError struct {
 	UpstreamStatus    int
 	Cause             error
 	SafeForClient     bool
+	Warnings          []adaptercompat.CompatibilityWarning
 }
 
 func (e *adapterError) Error() string {
@@ -105,6 +107,7 @@ func newAdapterError(class adapterErrorClass, message string) *adapterError {
 		UpstreamStatus:    0,
 		Cause:             nil,
 		SafeForClient:     true,
+		Warnings:          nil,
 	}
 	e.applyDefaults()
 	return e
@@ -407,6 +410,7 @@ func errorDiagnosticsForRequest(
 		IdentityAttributes: diagnosticIdentityAttributes(corr),
 		UpstreamRequestID:  clydeingress.UpstreamRequestID(corr),
 		UpstreamResponseID: clydeingress.UpstreamResponseID(corr),
+		Warnings:           aerr.Warnings,
 		Provider:           aerr.Provider,
 		Backend:            aerr.Backend,
 		ModelAlias:         aerr.ModelAlias,

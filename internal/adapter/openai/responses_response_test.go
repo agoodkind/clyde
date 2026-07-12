@@ -152,7 +152,7 @@ func TestBuildResponsesResponseNonStreamingShape(t *testing.T) {
 	if !strings.HasPrefix(fc.ID, "fc_") {
 		t.Errorf("function_call id=%q want fc_ prefix", fc.ID)
 	}
-	if fc.CallID != "call_xyz" || fc.Name != "get_weather" || fc.Arguments != `{"city":"SF"}` || fc.Status != "completed" {
+	if fc.CallID != "call_abc123_0" || fc.Name != "get_weather" || fc.Arguments != `{"city":"SF"}` || fc.Status != "completed" {
 		t.Errorf("function_call=%+v", fc)
 	}
 
@@ -183,5 +183,142 @@ func TestBuildResponsesResponseOmitsMessageWhenOnlyToolCall(t *testing.T) {
 	}
 	if resp.Output[0].Type != "function_call" {
 		t.Errorf("output[0].type=%q want function_call", resp.Output[0].Type)
+	}
+}
+
+func TestBuildResponsesResponseKeepsRefusalAsTypedContentPart(t *testing.T) {
+	t.Parallel()
+	resp := BuildResponsesResponse(ResponsesResponseParams{
+		ID:         "resp_refusal",
+		Model:      "m",
+		CreatedAt:  1,
+		Status:     ResponsesStatusCompleted,
+		Text:       "I can help with a safe alternative.",
+		Reasoning:  "",
+		Refusal:    "I cannot help with that request.",
+		ToolCalls:  nil,
+		Usage:      nil,
+		ItemIDBase: "refusal",
+	})
+
+	if len(resp.Output) != 1 {
+		t.Fatalf("output len=%d want 1", len(resp.Output))
+	}
+	if len(resp.Output[0].Content) != 2 {
+		t.Fatalf("content len=%d want 2", len(resp.Output[0].Content))
+	}
+
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	var wire struct {
+		Output []struct {
+			Content []struct {
+				Type    string `json:"type"`
+				Text    string `json:"text"`
+				Refusal string `json:"refusal"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	parts := wire.Output[0].Content
+	if parts[0].Type != "output_text" || parts[0].Text != "I can help with a safe alternative." {
+		t.Fatalf("text part = %+v", parts[0])
+	}
+	if parts[1].Type != "refusal" || parts[1].Refusal != "I cannot help with that request." {
+		t.Fatalf("refusal part = %+v", parts[1])
+	}
+}
+
+func TestBuildResponsesResponseIncompleteCarriesReason(t *testing.T) {
+	t.Parallel()
+	resp := BuildResponsesResponse(ResponsesResponseParams{
+		ID:         "resp_incomplete",
+		Model:      "m",
+		CreatedAt:  1,
+		Status:     ResponsesStatusIncomplete,
+		Text:       "partial",
+		Reasoning:  "",
+		Refusal:    "",
+		ToolCalls:  nil,
+		Usage:      nil,
+		ItemIDBase: "incomplete",
+	})
+	if resp.IncompleteDetails == nil {
+		t.Fatal("incomplete response omitted incomplete_details")
+	}
+	if resp.IncompleteDetails.Reason != "max_output_tokens" {
+		t.Fatalf("incomplete reason=%q want max_output_tokens", resp.IncompleteDetails.Reason)
+	}
+}
+
+func TestBuildResponsesResponseIncompleteMarksDerivedItemsIncomplete(t *testing.T) {
+	t.Parallel()
+	resp := BuildResponsesResponse(ResponsesResponseParams{
+		ID:        "resp_partial",
+		Model:     "m",
+		CreatedAt: 1,
+		Status:    ResponsesStatusIncomplete,
+		Text:      "partial answer",
+		Reasoning: "partial reasoning",
+		ToolCalls: []ToolCall{{
+			Index: 0,
+			Type:  "function",
+			Function: ToolCallFunction{
+				Name:      "lookup",
+				Arguments: `{"query":`,
+			},
+		}},
+		ItemIDBase: "partial",
+	})
+
+	if len(resp.Output) != 3 {
+		t.Fatalf("output len=%d want 3", len(resp.Output))
+	}
+	for index, item := range resp.Output {
+		if item.Status != "incomplete" {
+			t.Errorf("output[%d] type=%q status=%q want incomplete", index, item.Type, item.Status)
+		}
+	}
+
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if !strings.Contains(string(raw), `"type":"reasoning","id":"rs_partial","status":"incomplete"`) {
+		t.Fatalf("reasoning wire omitted incomplete status: %s", raw)
+	}
+}
+
+func TestResponsesTerminalForFinishReason(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		finish string
+		status ResponsesStatus
+		reason string
+	}{
+		{name: "clean", finish: "stop", status: ResponsesStatusCompleted, reason: ""},
+		{name: "length", finish: "length", status: ResponsesStatusIncomplete, reason: "max_output_tokens"},
+		{name: "content filter", finish: "content_filter", status: ResponsesStatusIncomplete, reason: "content_filter"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			status, details := ResponsesTerminalForFinishReason(test.finish)
+			if status != test.status {
+				t.Fatalf("status=%q want %q", status, test.status)
+			}
+			if test.reason == "" {
+				if details != nil {
+					t.Fatalf("details=%+v want nil", details)
+				}
+				return
+			}
+			if details == nil || details.Reason != test.reason {
+				t.Fatalf("details=%+v want reason %q", details, test.reason)
+			}
+		})
 	}
 }

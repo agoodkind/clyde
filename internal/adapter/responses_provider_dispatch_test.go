@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,8 +22,12 @@ func TestPreparedResponsesCodexExecutionUsesTrackedEgressContext(t *testing.T) {
 	requestStarted := make(chan struct{}, 1)
 	unblockRequest := make(chan struct{})
 	upstream := newLoopbackHTTPServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/backend-api/wham/usage" {
+		if strings.Contains(request.URL.Path, "/wham/usage") {
 			_, _ = writer.Write([]byte(`{}`))
+			return
+		}
+		if request.URL.Path != "/backend-api/codex/responses" {
+			writer.WriteHeader(http.StatusNotFound)
 			return
 		}
 		requestStarted <- struct{}{}
@@ -63,6 +69,7 @@ func TestPreparedResponsesCodexExecutionUsesTrackedEgressContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareResponsesProvider() error = %v", err)
 	}
+	approvedTransport := prepared.codex.Transport
 	executeDone := make(chan error, 1)
 	go func() {
 		_, executeErr := prepared.Execute(context.Background(), newProviderCollectorWriter(), srv)
@@ -74,8 +81,27 @@ func TestPreparedResponsesCodexExecutionUsesTrackedEgressContext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Codex request did not start")
 	}
-	if active := srv.egressRegistry.Count(); active == 0 {
-		t.Error("active egress sessions = 0, want tracked parent and attempt sessions")
+	sessions := srv.egressRegistry.Snapshot()
+	if len(sessions) != 2 {
+		t.Fatalf("active egress sessions = %d, want parent plus attempt: %+v", len(sessions), sessions)
+	}
+	var parentID string
+	var attemptParentID string
+	for _, session := range sessions {
+		if session.Meta.ParentRequestID != resolved.RequestID {
+			t.Errorf("session request id = %q, want %q", session.Meta.ParentRequestID, resolved.RequestID)
+		}
+		switch session.Meta.AttemptNo {
+		case 0:
+			parentID = session.ID
+		case 1:
+			attemptParentID = session.ParentID
+		default:
+			t.Errorf("unexpected attempt number %d", session.Meta.AttemptNo)
+		}
+	}
+	if parentID == "" || attemptParentID != parentID {
+		t.Fatalf("parent id = %q attempt parent id = %q", parentID, attemptParentID)
 	}
 	group.Quiesce(context.Background(), "test.responses.force_close", livetrack.Budget{
 		Cap:       50 * time.Millisecond,
@@ -91,5 +117,8 @@ func TestPreparedResponsesCodexExecutionUsesTrackedEgressContext(t *testing.T) {
 	}
 	if active := srv.egressRegistry.Count(); active != 0 {
 		t.Fatalf("active egress sessions after Execute = %d, want 0", active)
+	}
+	if !reflect.DeepEqual(prepared.codex.Transport, approvedTransport) {
+		t.Fatalf("prepared transport changed during execution: got %+v want %+v", prepared.codex.Transport, approvedTransport)
 	}
 }

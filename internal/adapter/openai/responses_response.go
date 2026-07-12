@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 )
@@ -19,10 +20,23 @@ const (
 	ResponsesStatusInProgress ResponsesStatus = "in_progress"
 	// ResponsesStatusCompleted marks a clean turn completion.
 	ResponsesStatusCompleted ResponsesStatus = "completed"
-	// ResponsesStatusIncomplete marks a turn truncated by a length limit.
+	// ResponsesStatusIncomplete marks a turn stopped by a length limit or filter.
 	ResponsesStatusIncomplete ResponsesStatus = "incomplete"
 	// ResponsesStatusFailed marks a turn that ended in an upstream error.
 	ResponsesStatusFailed ResponsesStatus = "failed"
+)
+
+// ResponsesOutputItemStatus enumerates the lifecycle states supported by
+// Responses message, reasoning, and function-call output items.
+type ResponsesOutputItemStatus string
+
+const (
+	// ResponsesOutputItemStatusInProgress marks an output item that is still open.
+	ResponsesOutputItemStatusInProgress ResponsesOutputItemStatus = "in_progress"
+	// ResponsesOutputItemStatusCompleted marks an output item that finished cleanly.
+	ResponsesOutputItemStatusCompleted ResponsesOutputItemStatus = "completed"
+	// ResponsesOutputItemStatusIncomplete marks an output item stopped before completion.
+	ResponsesOutputItemStatusIncomplete ResponsesOutputItemStatus = "incomplete"
 )
 
 // responsesObjectType is the constant `object` discriminator on the
@@ -59,9 +73,9 @@ type ResponsesClyde struct {
 	Warnings []adaptercompat.CompatibilityWarning `json:"warnings,omitempty"`
 }
 
-// ResponsesIncompleteDetails carries the reason a turn was truncated.
-// The adapter emits null today; the pointer field renders JSON null
-// when nil.
+// ResponsesIncompleteDetails carries the reason a turn was incomplete.
+// Completed responses render null through the nil pointer field. Incomplete
+// responses carry max_output_tokens or content_filter from the finish reason.
 type ResponsesIncompleteDetails struct {
 	Reason string `json:"reason"`
 }
@@ -79,45 +93,46 @@ type ResponsesError struct {
 // fields that belong to Type so each item matches the Responses wire
 // shape exactly.
 type ResponsesOutputItem struct {
-	Type      string                 `json:"type"`
-	ID        string                 `json:"id"`
-	Status    string                 `json:"status,omitempty"`
-	Role      string                 `json:"role,omitempty"`
-	Content   []ResponsesContentPart `json:"content,omitempty"`
-	Summary   []ResponsesSummaryPart `json:"summary,omitempty"`
-	CallID    string                 `json:"call_id,omitempty"`
-	Name      string                 `json:"name,omitempty"`
-	Arguments string                 `json:"arguments,omitempty"`
+	Type      string                    `json:"type"`
+	ID        string                    `json:"id"`
+	Status    ResponsesOutputItemStatus `json:"status,omitempty"`
+	Role      string                    `json:"role,omitempty"`
+	Content   []ResponsesContentPart    `json:"content,omitempty"`
+	Summary   []ResponsesSummaryPart    `json:"summary,omitempty"`
+	CallID    string                    `json:"call_id,omitempty"`
+	Name      string                    `json:"name,omitempty"`
+	Arguments string                    `json:"arguments,omitempty"`
 }
 
 // responsesMessageItemWire is the exact JSON shape of a message output
 // item. Content is never omitempty so an in-progress message renders
 // `"content":[]`.
 type responsesMessageItemWire struct {
-	Type    string                 `json:"type"`
-	ID      string                 `json:"id"`
-	Status  string                 `json:"status"`
-	Role    string                 `json:"role"`
-	Content []ResponsesContentPart `json:"content"`
+	Type    string                    `json:"type"`
+	ID      string                    `json:"id"`
+	Status  ResponsesOutputItemStatus `json:"status"`
+	Role    string                    `json:"role"`
+	Content []ResponsesContentPart    `json:"content"`
 }
 
 // responsesReasoningItemWire is the exact JSON shape of a reasoning
 // output item.
 type responsesReasoningItemWire struct {
-	Type    string                 `json:"type"`
-	ID      string                 `json:"id"`
-	Summary []ResponsesSummaryPart `json:"summary"`
+	Type    string                    `json:"type"`
+	ID      string                    `json:"id"`
+	Status  ResponsesOutputItemStatus `json:"status"`
+	Summary []ResponsesSummaryPart    `json:"summary"`
 }
 
 // responsesFunctionCallItemWire is the exact JSON shape of a
 // function_call output item.
 type responsesFunctionCallItemWire struct {
-	Type      string `json:"type"`
-	ID        string `json:"id"`
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-	Status    string `json:"status"`
+	Type      string                    `json:"type"`
+	ID        string                    `json:"id"`
+	CallID    string                    `json:"call_id"`
+	Name      string                    `json:"name"`
+	Arguments string                    `json:"arguments"`
+	Status    ResponsesOutputItemStatus `json:"status"`
 }
 
 // responsesOutputItemKind enumerates the Responses output item type
@@ -156,6 +171,7 @@ func (i ResponsesOutputItem) MarshalJSON() ([]byte, error) {
 		return marshalResponsesItemWire(i.Type, responsesReasoningItemWire{
 			Type:    "reasoning",
 			ID:      i.ID,
+			Status:  i.Status,
 			Summary: summary,
 		})
 	case responsesItemFunctionCall:
@@ -193,12 +209,67 @@ func (responsesMessageItemWire) isResponsesOutputItemWire()      {}
 func (responsesReasoningItemWire) isResponsesOutputItemWire()    {}
 func (responsesFunctionCallItemWire) isResponsesOutputItemWire() {}
 
-// ResponsesContentPart is one content part inside a message output
-// item. Task A only emits output_text parts.
+// ResponsesContentPart is one content part inside a message output item.
+// Its marshal implementation permits only output_text and refusal parts.
 type ResponsesContentPart struct {
 	Type        string                `json:"type"`
 	Text        string                `json:"text"`
+	Refusal     string                `json:"refusal"`
 	Annotations []ResponsesAnnotation `json:"annotations"`
+}
+
+type responsesContentPartKind string
+
+const (
+	responsesContentPartOutputText responsesContentPartKind = "output_text"
+	responsesContentPartRefusal    responsesContentPartKind = "refusal"
+)
+
+type responsesOutputTextPartWire struct {
+	Type        string                `json:"type"`
+	Text        string                `json:"text"`
+	Annotations []ResponsesAnnotation `json:"annotations"`
+}
+
+type responsesRefusalPartWire struct {
+	Type    string `json:"type"`
+	Refusal string `json:"refusal"`
+}
+
+type responsesContentPartWire interface {
+	isResponsesContentPartWire()
+}
+
+func (responsesOutputTextPartWire) isResponsesContentPartWire() {}
+func (responsesRefusalPartWire) isResponsesContentPartWire()    {}
+
+// MarshalJSON emits the closed content-part union shape selected by Type.
+func (p ResponsesContentPart) MarshalJSON() ([]byte, error) {
+	switch responsesContentPartKind(p.Type) {
+	case responsesContentPartOutputText:
+		annotations := p.Annotations
+		if annotations == nil {
+			annotations = []ResponsesAnnotation{}
+		}
+		return marshalResponsesContentPartWire(p.Type, responsesOutputTextPartWire{
+			Type:        "output_text",
+			Text:        p.Text,
+			Annotations: annotations,
+		})
+	case responsesContentPartRefusal:
+		return marshalResponsesContentPartWire(p.Type, responsesRefusalPartWire{Type: "refusal", Refusal: p.Refusal})
+	default:
+		return nil, fmt.Errorf("unsupported responses content part type %q", p.Type)
+	}
+}
+
+func marshalResponsesContentPartWire(partType string, wire responsesContentPartWire) ([]byte, error) {
+	b, err := json.Marshal(wire)
+	if err != nil {
+		slog.Warn("adapter.openai.responses_content_part_marshal_failed", "concern", "adapter.chat.render", "part_type", partType, "err", err)
+		return nil, fmt.Errorf("marshal responses %s content part: %w", partType, err)
+	}
+	return b, nil
 }
 
 // ResponsesAnnotation is a placeholder for output_text annotations.
@@ -251,9 +322,8 @@ func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
 }
 
 // ResponsesResponseParams carries the assembled turn content the
-// builder projects into a Responses response object. Text, Reasoning,
-// Refusal, and ToolCalls come from render.CollectMessage on the
-// non-streaming path or from the streaming writer's accumulated state.
+// builder projects into a Responses response object. Output preserves the
+// normalized event order when it is supplied by a renderer.
 type ResponsesResponseParams struct {
 	ID         string
 	Model      string
@@ -263,69 +333,19 @@ type ResponsesResponseParams struct {
 	Reasoning  string
 	Refusal    string
 	ToolCalls  []ToolCall
+	Output     []ResponsesOutputItem
 	Usage      *Usage
 	ItemIDBase string
 	Warnings   []adaptercompat.CompatibilityWarning
 }
 
 // BuildResponsesResponse assembles a Responses response object from the
-// collected turn content. It emits a reasoning item only when reasoning
-// text was produced, a message item only when there is assistant text
-// (refusal folded into text for Task A), and one function_call item per
-// tool call. Output item ids derive from ItemIDBase and the tool call
-// index so the streamed lifecycle events and the terminal object share
-// stable ids.
+// collected turn content. When Output is nil, it derives typed reasoning,
+// message, refusal, and function-call items from the collected fields.
 func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
-	output := make([]ResponsesOutputItem, 0, 2+len(params.ToolCalls))
-
-	if params.Reasoning != "" {
-		output = append(output, ResponsesOutputItem{
-			Type:      "reasoning",
-			ID:        responsesReasoningItemID(params.ItemIDBase),
-			Status:    "",
-			Role:      "",
-			Content:   nil,
-			Summary:   []ResponsesSummaryPart{{Type: "summary_text", Text: params.Reasoning}},
-			CallID:    "",
-			Name:      "",
-			Arguments: "",
-		})
-	}
-
-	// TODO(responses-refusal): a later task renders refusals as a
-	// dedicated refusal content part; Task A folds refusal text into the
-	// assistant output_text so no content is lost.
-	messageText := params.Text + params.Refusal
-	if messageText != "" {
-		output = append(output, ResponsesOutputItem{
-			Type:   "message",
-			ID:     responsesMessageItemID(params.ItemIDBase),
-			Status: "completed",
-			Role:   "assistant",
-			Content: []ResponsesContentPart{{
-				Type:        "output_text",
-				Text:        messageText,
-				Annotations: []ResponsesAnnotation{},
-			}},
-			Summary:   nil,
-			CallID:    "",
-			Name:      "",
-			Arguments: "",
-		})
-	}
-
-	for _, tc := range params.ToolCalls {
-		output = append(output, ResponsesOutputItem{
-			Type:      "function_call",
-			ID:        responsesFunctionCallItemID(params.ItemIDBase, tc.Index),
-			Status:    "completed",
-			Role:      "",
-			Content:   nil,
-			Summary:   nil,
-			CallID:    responsesCallID(params.ItemIDBase, tc),
-			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
-		})
+	output := params.Output
+	if output == nil {
+		output = buildResponsesOutput(params)
 	}
 
 	var usage *ResponsesUsage
@@ -339,6 +359,7 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 		clyde = &ResponsesClyde{Warnings: params.Warnings}
 	}
 
+	incompleteDetails := responsesIncompleteDetails(params.Status, "")
 	return ResponsesResponse{
 		ID:                params.ID,
 		Object:            responsesObjectType,
@@ -347,11 +368,108 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 		Model:             params.Model,
 		Output:            output,
 		Usage:             usage,
-		IncompleteDetails: nil,
+		IncompleteDetails: incompleteDetails,
 		Error:             nil,
 		Metadata:          responsesMetadataEmpty,
 		Clyde:             clyde,
 	}
+}
+
+func buildResponsesOutput(params ResponsesResponseParams) []ResponsesOutputItem {
+	output := make([]ResponsesOutputItem, 0, 2+len(params.ToolCalls))
+	itemStatus := responsesOutputItemStatus(params.Status)
+
+	if params.Reasoning != "" {
+		output = append(output, ResponsesOutputItem{
+			Type:      "reasoning",
+			ID:        responsesReasoningItemID(params.ItemIDBase),
+			Status:    itemStatus,
+			Role:      "",
+			Content:   nil,
+			Summary:   []ResponsesSummaryPart{{Type: "summary_text", Text: params.Reasoning}},
+			CallID:    "",
+			Name:      "",
+			Arguments: "",
+		})
+	}
+
+	if params.Text != "" || params.Refusal != "" {
+		content := make([]ResponsesContentPart, 0, 2)
+		if params.Text != "" {
+			content = append(content, ResponsesContentPart{
+				Type:        "output_text",
+				Text:        params.Text,
+				Refusal:     "",
+				Annotations: []ResponsesAnnotation{},
+			})
+		}
+		if params.Refusal != "" {
+			content = append(content, ResponsesContentPart{
+				Type:        "refusal",
+				Text:        "",
+				Refusal:     params.Refusal,
+				Annotations: nil,
+			})
+		}
+		output = append(output, ResponsesOutputItem{
+			Type:      "message",
+			ID:        responsesMessageItemID(params.ItemIDBase),
+			Status:    itemStatus,
+			Role:      "assistant",
+			Content:   content,
+			Summary:   nil,
+			CallID:    "",
+			Name:      "",
+			Arguments: "",
+		})
+	}
+
+	for _, tc := range params.ToolCalls {
+		output = append(output, ResponsesOutputItem{
+			Type:      "function_call",
+			ID:        responsesFunctionCallItemID(params.ItemIDBase, tc.Index),
+			Status:    itemStatus,
+			Role:      "",
+			Content:   nil,
+			Summary:   nil,
+			CallID:    responsesCallID(params.ItemIDBase, tc),
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
+	}
+
+	return output
+}
+
+func responsesOutputItemStatus(status ResponsesStatus) ResponsesOutputItemStatus {
+	if status == ResponsesStatusIncomplete {
+		return ResponsesOutputItemStatusIncomplete
+	}
+	if status == ResponsesStatusInProgress {
+		return ResponsesOutputItemStatusInProgress
+	}
+	return ResponsesOutputItemStatusCompleted
+}
+
+// ResponsesTerminalForFinishReason maps normalized provider finish reasons
+// to the Responses terminal status and incomplete details.
+func ResponsesTerminalForFinishReason(finishReason string) (ResponsesStatus, *ResponsesIncompleteDetails) {
+	trimmed := strings.TrimSpace(finishReason)
+	if trimmed == "length" || trimmed == "content_filter" {
+		return ResponsesStatusIncomplete, responsesIncompleteDetails(ResponsesStatusIncomplete, trimmed)
+	}
+	return ResponsesStatusCompleted, nil
+}
+
+func responsesIncompleteDetails(status ResponsesStatus, finishReason string) *ResponsesIncompleteDetails {
+	if status != ResponsesStatusIncomplete && finishReason != "length" && finishReason != "content_filter" {
+		return nil
+	}
+	reason := "max_output_tokens"
+	if strings.TrimSpace(finishReason) == "content_filter" {
+		reason = "content_filter"
+	}
+	return &ResponsesIncompleteDetails{Reason: reason}
 }
 
 // responsesReasoningItemID derives the reasoning item id from the base.
@@ -370,11 +488,8 @@ func responsesFunctionCallItemID(base string, index int) string {
 	return "fc_" + base + "_" + strconv.Itoa(index)
 }
 
-// responsesCallID returns the upstream tool call id when present, or a
-// stable synthesized call id derived from the base and index.
+// responsesCallID derives the public call id from Clyde's response base and
+// the provider tool-call index.
 func responsesCallID(base string, tc ToolCall) string {
-	if tc.ID != "" {
-		return tc.ID
-	}
 	return "call_" + base + "_" + strconv.Itoa(tc.Index)
 }
