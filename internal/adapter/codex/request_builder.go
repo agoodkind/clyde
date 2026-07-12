@@ -441,14 +441,16 @@ func BuildRequestWithConfig(
 		strategy = adapterrender.MaterializeDrop
 	}
 	cursorReq := adaptercursor.TranslateRequest(req)
+	toolIDs := newToolIDProjection()
 	input := make([]codexwire.InputItem, 0, len(req.Messages))
 	systemSections := make([]string, 0, 8)
 	modelName := codexResolvedModelName(resolved)
 	workspacePath := cursorReq.WorkspacePath
-	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections, strategy, cfg); ok {
+	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections, strategy, cfg, toolIDs); ok {
 		input = rawInput
 	} else {
-		input, systemSections = appendChatMessageInputs(input, systemSections, req.Messages, strategy, cfg)
+		toolIDs.reserveCompliant(chatToolCallIDs(req.Messages))
+		input, systemSections = appendChatMessageInputs(input, systemSections, req.Messages, strategy, cfg, toolIDs)
 	}
 	instructions := strings.TrimSpace(strings.Join(systemSections, "\n\n"))
 	if base := strings.TrimSpace(codexResolvedInstructions(resolved)); base != "" {
@@ -524,6 +526,7 @@ func appendChatMessageInputs(
 	messages []adapteropenai.ChatMessage,
 	strategy adapterrender.MaterializationStrategy,
 	cfg RequestBuilderConfig,
+	toolIDs *toolIDProjection,
 ) ([]codexwire.InputItem, []string) {
 	for _, msg := range messages {
 		rawText := adaptercontent.FlattenRaw(msg.Content)
@@ -534,9 +537,9 @@ func appendChatMessageInputs(
 				systemSections = append(systemSections, text)
 			}
 		case codexChatRoleAssistant:
-			input = appendAssistantInput(input, msg, rawText, strategy, cfg)
+			input = appendAssistantInput(input, msg, rawText, strategy, cfg, toolIDs)
 		case codexChatRoleTool, codexChatRoleFunction:
-			input = appendToolResultInput(input, msg, text)
+			input = appendToolResultInput(input, msg, text, toolIDs)
 		default:
 			if content := codexContentFromRaw(msg.Content, codexwire.ContentItemInputText, strategy, cfg); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
@@ -555,12 +558,13 @@ func appendAssistantInput(
 	rawText string,
 	strategy adapterrender.MaterializationStrategy,
 	cfg RequestBuilderConfig,
+	toolIDs *toolIDProjection,
 ) []codexwire.InputItem {
 	for _, tc := range msg.ToolCalls {
 		if strings.TrimSpace(tc.Function.Name) == "" {
 			continue
 		}
-		input = append(input, FunctionCallItem(tc))
+		input = append(input, functionCallItem(tc, toolIDs))
 	}
 	input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
 	if content := codexContentFromRaw(msg.Content, codexwire.ContentItemOutputText, strategy, cfg); len(content) > 0 {
@@ -576,14 +580,30 @@ func appendToolResultInput(
 	input []codexwire.InputItem,
 	msg adapteropenai.ChatMessage,
 	text string,
+	toolIDs *toolIDProjection,
 ) []codexwire.InputItem {
 	if text == "" {
 		return input
 	}
 	if strings.TrimSpace(msg.ToolCallID) != "" {
-		return append(input, FunctionCallOutputItem(msg.ToolCallID, text))
+		return append(input, FunctionCallOutputItem(toolIDs.project(strings.TrimSpace(msg.ToolCallID)), text))
 	}
 	return append(input, MessageContent("user", string(codexwire.ContentItemInputText), "tool: "+text))
+}
+
+func chatToolCallIDs(messages []adapteropenai.ChatMessage) []string {
+	toolCallIDs := make([]string, 0)
+	for _, message := range messages {
+		if toolCallID := strings.TrimSpace(message.ToolCallID); toolCallID != "" {
+			toolCallIDs = append(toolCallIDs, toolCallID)
+		}
+		for _, toolCall := range message.ToolCalls {
+			if toolCallID := strings.TrimSpace(toolCall.ID); toolCallID != "" {
+				toolCallIDs = append(toolCallIDs, toolCallID)
+			}
+		}
+	}
+	return toolCallIDs
 }
 
 func parallelToolCalls(req adapteropenai.ChatRequest) bool {
@@ -785,11 +805,12 @@ func isPathSeparatorByte(b byte) bool {
 	return false
 }
 
-func functionCallItem(tc adapteropenai.ToolCall) codexwire.InputItem {
+func functionCallItem(tc adapteropenai.ToolCall, toolIDs *toolIDProjection) codexwire.InputItem {
 	callID := strings.TrimSpace(tc.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("call_%d", tc.Index)
 	}
+	callID = toolIDs.project(callID)
 	return codexwire.InputItem{
 		Type:   codexwire.ItemTypeFunctionCall,
 		CallID: callID,
@@ -798,11 +819,6 @@ func functionCallItem(tc adapteropenai.ToolCall) codexwire.InputItem {
 		Name:      strings.TrimSpace(tc.Function.Name),
 		Arguments: tc.Function.Arguments,
 	}
-}
-
-// FunctionCallItem is part of Clyde's typed adapter surface.
-func FunctionCallItem(tc adapteropenai.ToolCall) codexwire.InputItem {
-	return functionCallItem(tc)
 }
 
 // FunctionCallOutputItem is part of Clyde's typed adapter surface.
@@ -814,7 +830,7 @@ func FunctionCallOutputItem(callID, text string) codexwire.InputItem {
 	}
 }
 
-func functionCallFromResponsesItem(item responsesInputItem, workspacePath string) codexwire.InputItem {
+func functionCallFromResponsesItem(item responsesInputItem, workspacePath string, toolIDs *toolIDProjection) codexwire.InputItem {
 	args := rewriteWorkspacePath(item.Arguments, workspacePath)
 	tc := adapteropenai.ToolCall{
 		ID:   item.CallID,
@@ -824,7 +840,7 @@ func functionCallFromResponsesItem(item responsesInputItem, workspacePath string
 			Arguments: args,
 		}, Index: 0,
 	}
-	return functionCallItem(tc)
+	return functionCallItem(tc, toolIDs)
 }
 
 func inputFromResponsesInput(
@@ -833,6 +849,7 @@ func inputFromResponsesInput(
 	developerSections *[]string,
 	strategy adapterrender.MaterializationStrategy,
 	cfg RequestBuilderConfig,
+	toolIDs *toolIDProjection,
 ) ([]codexwire.InputItem, bool) {
 	if len(raw) == 0 {
 		return nil, false
@@ -841,6 +858,7 @@ func inputFromResponsesInput(
 	if err := json.Unmarshal(raw, &items); err != nil || len(items) == 0 {
 		return nil, false
 	}
+	toolIDs.reserveCompliant(responsesToolCallIDs(items))
 	input := make([]codexwire.InputItem, 0, len(items))
 	customToolCallIDs := make(map[string]bool)
 	for _, item := range items {
@@ -864,16 +882,17 @@ func inputFromResponsesInput(
 				input = append(input, MessageContentItems("assistant", content))
 			}
 		case itemType == string(codexwire.ItemTypeFunctionCall):
-			input = append(input, functionCallFromResponsesItem(item, workspacePath))
+			input = append(input, functionCallFromResponsesItem(item, workspacePath, toolIDs))
 		case itemType == string(codexwire.ItemTypeFunctionCallOutput):
 			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath))
 			if output == "" {
 				continue
 			}
+			projectedCallID := toolIDs.project(strings.TrimSpace(item.CallID))
 			if customToolCallIDs[item.CallID] {
-				input = append(input, CustomToolCallOutputItem(item.CallID, output))
+				input = append(input, CustomToolCallOutputItem(projectedCallID, output))
 			} else {
-				input = append(input, FunctionCallOutputItem(item.CallID, output))
+				input = append(input, FunctionCallOutputItem(projectedCallID, output))
 			}
 		case itemType == string(codexwire.ItemTypeCustomToolCall):
 			inputText := rewriteWorkspacePath(UnwrapApplyPatchInput(item.Input), workspacePath)
@@ -882,18 +901,28 @@ func inputFromResponsesInput(
 			}
 			input = append(input, codexwire.InputItem{
 				Type:   codexwire.ItemTypeCustomToolCall,
-				CallID: item.CallID,
+				CallID: toolIDs.project(strings.TrimSpace(item.CallID)),
 				Name:   item.Name,
 				Input:  inputText,
 			})
 		case itemType == string(codexwire.ItemTypeCustomToolCallOutput):
 			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath))
 			if output != "" {
-				input = append(input, CustomToolCallOutputItem(item.CallID, output))
+				input = append(input, CustomToolCallOutputItem(toolIDs.project(strings.TrimSpace(item.CallID)), output))
 			}
 		}
 	}
 	return input, len(input) > 0
+}
+
+func responsesToolCallIDs(items []responsesInputItem) []string {
+	toolCallIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		if callID := strings.TrimSpace(item.CallID); callID != "" {
+			toolCallIDs = append(toolCallIDs, callID)
+		}
+	}
+	return toolCallIDs
 }
 
 type codexRequestContextIdentity struct {

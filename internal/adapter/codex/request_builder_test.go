@@ -2,6 +2,8 @@ package codex
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"slices"
@@ -982,6 +984,128 @@ func TestBuildCodexRequestSerializesAssistantToolCallsAndToolOutputs(t *testing.
 	}
 	if !sawOutput {
 		t.Fatalf("expected function_call_output in %#v", out.Input)
+	}
+}
+
+func TestBuildCodexRequestProjectsLongChatToolIDs(t *testing.T) {
+	longCallID := "call_" + strings.Repeat("a", 79)
+	secondLongCallID := "call_" + strings.Repeat("b", 79)
+	req := ChatRequest{
+		Messages: []ChatMessage{
+			{
+				Role:    "assistant",
+				Content: mustRaw(`""`),
+				ToolCalls: []ToolCall{
+					{ID: longCallID, Type: "function", Function: ToolCallFunction{Name: "ApplyPatch", Arguments: `{}`}},
+					{ID: secondLongCallID, Type: "function", Function: ToolCallFunction{Name: "ReadFile", Arguments: `{}`}},
+				},
+			},
+			{Role: "tool", ToolCallID: longCallID, Content: mustRaw(`"applied"`)},
+			{Role: "tool", ToolCallID: secondLongCallID, Content: mustRaw(`"read"`)},
+		},
+	}
+
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
+	callIDs := make(map[string]string)
+	outputIDs := make([]string, 0, 2)
+	for _, item := range out.Input {
+		switch item.Type {
+		case codexwire.ItemTypeFunctionCall:
+			callIDs[item.Name] = item.CallID
+		case codexwire.ItemTypeFunctionCallOutput:
+			outputIDs = append(outputIDs, item.CallID)
+		}
+	}
+	applyPatchID := callIDs["ApplyPatch"]
+	readFileID := callIDs["ReadFile"]
+	if applyPatchID == longCallID || readFileID == secondLongCallID {
+		t.Fatalf("long tool ids must not pass through: calls=%v", callIDs)
+	}
+	if len(applyPatchID) > 64 || len(readFileID) > 64 {
+		t.Fatalf("projected IDs exceed Codex limit: %q, %q", applyPatchID, readFileID)
+	}
+	if applyPatchID == readFileID {
+		t.Fatalf("distinct source IDs collided: %q", applyPatchID)
+	}
+	if len(outputIDs) != 2 || outputIDs[0] != applyPatchID || outputIDs[1] != readFileID {
+		t.Fatalf("output IDs=%q want paired call IDs %q, %q", outputIDs, applyPatchID, readFileID)
+	}
+}
+
+func TestBuildCodexRequestKeepsCompliantIDWhenLongIDProjectsToIt(t *testing.T) {
+	longCallID := "call_" + strings.Repeat("e", 79)
+	digest := sha256.Sum256([]byte(longCallID))
+	compliantCallID := "call_" + hex.EncodeToString(digest[:])[:codexToolCallIDMaxLength-len("call_")]
+	req := ChatRequest{Messages: []ChatMessage{{
+		Role:    "assistant",
+		Content: mustRaw(`""`),
+		ToolCalls: []ToolCall{
+			{ID: longCallID, Type: "function", Function: ToolCallFunction{Name: "ApplyPatch", Arguments: `{}`}},
+			{ID: compliantCallID, Type: "function", Function: ToolCallFunction{Name: "ReadFile", Arguments: `{}`}},
+		},
+	}}}
+
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
+	for _, item := range out.Input {
+		if item.Type == codexwire.ItemTypeFunctionCall && item.Name == "ReadFile" && item.CallID != compliantCallID {
+			t.Fatalf("compliant ID changed: got %q want %q", item.CallID, compliantCallID)
+		}
+	}
+}
+
+func TestBuildCodexRequestKeepsCompliantResponsesIDWhenLongIDProjectsToIt(t *testing.T) {
+	longCallID := "call_" + strings.Repeat("f", 79)
+	digest := sha256.Sum256([]byte(longCallID))
+	compliantCallID := "call_" + hex.EncodeToString(digest[:])[:codexToolCallIDMaxLength-len("call_")]
+	req := ChatRequest{Input: mustRaw(`[
+		{"type":"function_call","call_id":"` + longCallID + `","name":"ApplyPatch","arguments":"{}"},
+		{"type":"function_call","call_id":"` + compliantCallID + `","name":"ReadFile","arguments":"{}"}
+	]`)}
+
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
+	for _, item := range out.Input {
+		if item.Type == codexwire.ItemTypeFunctionCall && item.Name == "ReadFile" && item.CallID != compliantCallID {
+			t.Fatalf("compliant Responses ID changed: got %q want %q", item.CallID, compliantCallID)
+		}
+	}
+}
+
+func TestBuildCodexRequestProjectsLongResponsesToolIDs(t *testing.T) {
+	longCallID := "call_" + strings.Repeat("c", 79)
+	compliantCallID := "call_short"
+	req := ChatRequest{Input: mustRaw(`[
+		{"type":"function_call","call_id":"` + longCallID + `","name":"ApplyPatch","arguments":"{}"},
+		{"type":"function_call_output","call_id":"` + longCallID + `","output":"applied"},
+		{"type":"function_call","call_id":"` + compliantCallID + `","name":"ReadFile","arguments":"{}"},
+		{"type":"function_call_output","call_id":"` + compliantCallID + `","output":"read"}
+	]`)}
+
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
+	var projectedCallID, projectedOutputID, shortCallID, shortOutputID string
+	for _, item := range out.Input {
+		switch item.Type {
+		case codexwire.ItemTypeFunctionCall:
+			if item.Name == "ApplyPatch" {
+				projectedCallID = item.CallID
+			} else if item.Name == "ReadFile" {
+				shortCallID = item.CallID
+			}
+		case codexwire.ItemTypeFunctionCallOutput:
+			if item.CallID == compliantCallID {
+				shortOutputID = item.CallID
+			} else {
+				projectedOutputID = item.CallID
+			}
+		}
+	}
+	if projectedCallID == longCallID || len(projectedCallID) > 64 {
+		t.Fatalf("projected Responses call ID=%q", projectedCallID)
+	}
+	if projectedOutputID != projectedCallID {
+		t.Fatalf("Responses output ID=%q want paired call ID %q", projectedOutputID, projectedCallID)
+	}
+	if shortCallID != compliantCallID || shortOutputID != compliantCallID {
+		t.Fatalf("compliant ID changed: call=%q output=%q", shortCallID, shortOutputID)
 	}
 }
 
