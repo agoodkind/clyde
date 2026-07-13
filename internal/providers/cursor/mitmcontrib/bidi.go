@@ -117,7 +117,7 @@ func DecodeCaptureRequest(req RequestCapture) (capture.DecodedBody, bool) {
 			ToolEvents:         nil,
 		}, false
 	}
-	outerFields, err := parseProtobufFields(req.Body, 0)
+	outerFields, err := parseProtobufFields(req.Body)
 	if err != nil {
 		return failedDecodedBody(err), true
 	}
@@ -176,12 +176,12 @@ func outerFieldVarint(fields []protobufField, fieldNumber uint64) uint64 {
 	return 0
 }
 
-func parseProtobufFields(raw []byte, depth int) ([]protobufField, error) {
+func parseProtobufFields(raw []byte) ([]protobufField, error) {
 	budget := &protobufDecodeBudget{
 		remainingFields: maxProtobufDecodedFields,
 		remainingBytes:  maxProtobufDecodedBytes,
 	}
-	return parseProtobufFieldsWithBudget(raw, depth, budget, false)
+	return parseProtobufFieldsWithBudget(raw, 0, budget, false)
 }
 
 func parseProtobufFieldsWithBudget(raw []byte, depth int, budget *protobufDecodeBudget, countField bool) ([]protobufField, error) {
@@ -193,58 +193,65 @@ func parseProtobufFieldsWithBudget(raw []byte, depth int, budget *protobufDecode
 		if countField && !budget.reserveField() {
 			return fields, nil
 		}
-		fieldNumber, wireType, next, ok := readProtoKey(raw, offset)
-		if !ok {
-			return nil, fmt.Errorf("invalid protobuf field key at byte %d", offset)
-		}
-		offset = next
-		field := protobufField{FieldNumber: fieldNumber, WireType: "", Varint: nil, DataBase64: "", Text: "", Children: nil}
-		switch wireType {
-		case 0:
-			value, nextOffset, valid := readProtoVarint(raw, offset)
-			if !valid {
-				return nil, fmt.Errorf("invalid protobuf varint for field %d", fieldNumber)
-			}
-			field.WireType = "varint"
-			field.Varint = &value
-			offset = nextOffset
-		case 1:
-			if offset+8 > len(raw) {
-				return nil, fmt.Errorf("truncated protobuf fixed64 field %d", fieldNumber)
-			}
-			field.WireType = "fixed64"
-			field.DataBase64 = base64.StdEncoding.EncodeToString(raw[offset : offset+8])
-			offset += 8
-		case 2:
-			value, nextOffset, valid := readProtoBytes(raw, offset)
-			if !valid {
-				return nil, fmt.Errorf("invalid protobuf bytes field %d", fieldNumber)
-			}
-			field.WireType = "bytes"
-			field.DataBase64 = base64.StdEncoding.EncodeToString(value)
-			if utf8.Valid(value) {
-				field.Text = string(value)
-			}
-			if budget.reserveBytes(len(value)) {
-				children, childErr := parseProtobufFieldsWithBudget(value, depth+1, budget, true)
-				if childErr == nil && len(children) > 0 {
-					field.Children = children
-				}
-			}
-			offset = nextOffset
-		case 5:
-			if offset+4 > len(raw) {
-				return nil, fmt.Errorf("truncated protobuf fixed32 field %d", fieldNumber)
-			}
-			field.WireType = "fixed32"
-			field.DataBase64 = base64.StdEncoding.EncodeToString(raw[offset : offset+4])
-			offset += 4
-		default:
-			return nil, fmt.Errorf("unsupported protobuf wire type %d for field %d", wireType, fieldNumber)
+		field, next, err := parseProtobufField(raw, offset, depth, budget)
+		if err != nil {
+			return nil, err
 		}
 		fields = append(fields, field)
+		offset = next
 	}
 	return fields, nil
+}
+
+func parseProtobufField(raw []byte, offset, depth int, budget *protobufDecodeBudget) (protobufField, int, error) {
+	fieldNumber, wireType, next, ok := readProtoKey(raw, offset)
+	if !ok {
+		return protobufField{}, offset, fmt.Errorf("invalid protobuf field key at byte %d", offset)
+	}
+	field := protobufField{FieldNumber: fieldNumber, WireType: "", Varint: nil, DataBase64: "", Text: "", Children: nil}
+	switch wireType {
+	case 0:
+		value, nextOffset, valid := readProtoVarint(raw, next)
+		if !valid {
+			return protobufField{}, offset, fmt.Errorf("invalid protobuf varint for field %d", fieldNumber)
+		}
+		field.WireType = "varint"
+		field.Varint = &value
+		return field, nextOffset, nil
+	case 1:
+		if next+8 > len(raw) {
+			return protobufField{}, offset, fmt.Errorf("truncated protobuf fixed64 field %d", fieldNumber)
+		}
+		field.WireType = "fixed64"
+		field.DataBase64 = base64.StdEncoding.EncodeToString(raw[next : next+8])
+		return field, next + 8, nil
+	case 2:
+		value, nextOffset, valid := readProtoBytes(raw, next)
+		if !valid {
+			return protobufField{}, offset, fmt.Errorf("invalid protobuf bytes field %d", fieldNumber)
+		}
+		field.WireType = "bytes"
+		field.DataBase64 = base64.StdEncoding.EncodeToString(value)
+		if utf8.Valid(value) {
+			field.Text = string(value)
+		}
+		if budget.reserveBytes(len(value)) {
+			children, childErr := parseProtobufFieldsWithBudget(value, depth+1, budget, true)
+			if childErr == nil && len(children) > 0 {
+				field.Children = children
+			}
+		}
+		return field, nextOffset, nil
+	case 5:
+		if next+4 > len(raw) {
+			return protobufField{}, offset, fmt.Errorf("truncated protobuf fixed32 field %d", fieldNumber)
+		}
+		field.WireType = "fixed32"
+		field.DataBase64 = base64.StdEncoding.EncodeToString(raw[next : next+4])
+		return field, next + 4, nil
+	default:
+		return protobufField{}, offset, fmt.Errorf("unsupported protobuf wire type %d for field %d", wireType, fieldNumber)
+	}
 }
 
 // UnmarshalHexEnvelope decodes the first recognized hexadecimal protobuf
@@ -260,7 +267,7 @@ func UnmarshalHexEnvelope(fields []protobufField) (hexEnvelope, []capture.ToolEv
 			lastError = fmt.Errorf("decode hex envelope: %w", err)
 			continue
 		}
-		envelopeFields, err := parseProtobufFields(data, 0)
+		envelopeFields, err := parseProtobufFields(data)
 		if err != nil {
 			lastError = fmt.Errorf("decode hex envelope protobuf: %w", err)
 			continue
@@ -384,7 +391,7 @@ func decodeBidiAppendDiagnostic(decoded []byte, sentinel []byte) BidiAppendDiagn
 		diag.SentinelFound = bytes.Contains(decoded, sentinel)
 	}
 	values := scanProtoValues(decoded, 0)
-	outerFields, parseErr := parseProtobufFields(decoded, 0)
+	outerFields, parseErr := parseProtobufFields(decoded)
 	if parseErr == nil {
 		for _, field := range outerFields {
 			if field.FieldNumber != 2 || field.WireType != "varint" || field.Varint == nil {

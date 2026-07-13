@@ -266,7 +266,7 @@ func TestParseProtobufFieldsBoundsRecursiveChildren(t *testing.T) {
 	}
 	raw := appendProtoBytes(nil, 1, nested)
 
-	fields, err := parseProtobufFields(raw, 0)
+	fields, err := parseProtobufFields(raw)
 	if err != nil {
 		t.Fatalf("parseProtobufFields: %v", err)
 	}
