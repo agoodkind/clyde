@@ -6,8 +6,19 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
+
+// DecodeCaptureRequest implements mitm.CaptureDecoder for Cursor BidiAppend
+// transport bodies.
+func (routeProvider) DecodeCaptureRequest(exchange mitm.ExchangeDiagnostic) (capture.DecodedBody, bool) {
+	return DecodeCaptureRequest(RequestCapture{
+		Path:    exchange.Path,
+		Headers: exchange.RequestHeader,
+		Body:    exchange.DecodedRequestBody,
+	})
+}
 
 // DiagnoseExchange implements the optional [mitm.ExchangeDiagnostician]
 // contract. When the intercepted Cursor request looks like a BidiAppend

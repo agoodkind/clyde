@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -118,7 +119,49 @@ type Record struct {
 	ResponseBody      []byte
 	RequestType       string
 	ResponseType      string
+	DecodedRequest    *DecodedBody
 	Duration          time.Duration
+}
+
+// DecodeStatus identifies whether a provider-specific body decoder understood
+// the captured transport bytes. The raw body remains the authoritative record.
+type DecodeStatus string
+
+const (
+	// DecodeStatusSuccess indicates the provider decoder understood the body.
+	DecodeStatusSuccess DecodeStatus = "success"
+	// DecodeStatusFailed indicates the provider decoder retained an error.
+	DecodeStatusFailed DecodeStatus = "failed"
+)
+
+// ToolEvent is one semantic tool event recovered from a decoded provider body.
+type ToolEvent struct {
+	Ordering            uint64
+	CallID              string
+	ToolName            string
+	InputRepresentation string
+	InputEncoding       ToolInputEncoding
+}
+
+// ToolInputEncoding identifies how InputRepresentation stores recovered tool
+// input bytes.
+type ToolInputEncoding string
+
+const (
+	// ToolInputEncodingJSON stores valid JSON text unchanged.
+	ToolInputEncodingJSON ToolInputEncoding = "json"
+	// ToolInputEncodingBase64 stores non-JSON tool input as standard base64.
+	ToolInputEncodingBase64 ToolInputEncoding = "base64"
+)
+
+// DecodedBody is a durable provider-specific representation linked to a raw
+// capture body. RepresentationJSON must preserve the decoder's field tree.
+type DecodedBody struct {
+	Format             string
+	Status             DecodeStatus
+	Error              string
+	RepresentationJSON []byte
+	ToolEvents         []ToolEvent
 }
 
 // Store is the SQLite-backed capture sink. Construct it with [Open] and release
@@ -159,6 +202,10 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("capture: apply schema: %w", err)
+	}
+	if err := ensureToolEventColumns(ctx, db, log); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	// Checkpoint the schema write into the main database file so it carries a
 	// valid header immediately. In WAL mode the CREATE TABLE statements
@@ -219,6 +266,56 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 //
 //go:embed schema.sql
 var schemaSQL string
+
+func ensureToolEventColumns(ctx context.Context, db *sql.DB, log *slog.Logger) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(decoded_tool_events)`)
+	if err != nil {
+		log.WarnContext(ctx, "mitm.capture.inspect_decoded_tool_event_columns_failed", "err", err)
+		return fmt.Errorf("capture: inspect decoded tool event columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	hasInputEncoding := false
+	hasOrderingText := false
+	for rows.Next() {
+		var columnID int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue *string
+		var primaryKey int
+		if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			log.WarnContext(ctx, "mitm.capture.scan_decoded_tool_event_column_failed", "err", err)
+			return fmt.Errorf("capture: scan decoded tool event column: %w", err)
+		}
+		if name == "input_encoding" {
+			hasInputEncoding = true
+		}
+		if name == "ordering_text" {
+			hasOrderingText = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.WarnContext(ctx, "mitm.capture.inspect_decoded_tool_event_columns_failed", "err", err)
+		return fmt.Errorf("capture: inspect decoded tool event columns: %w", err)
+	}
+	if !hasInputEncoding {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE decoded_tool_events ADD COLUMN input_encoding TEXT NOT NULL DEFAULT ''`); err != nil {
+			log.WarnContext(ctx, "mitm.capture.add_decoded_tool_input_encoding_column_failed", "err", err)
+			return fmt.Errorf("capture: add decoded tool input encoding column: %w", err)
+		}
+	}
+	if !hasOrderingText {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE decoded_tool_events ADD COLUMN ordering_text TEXT NOT NULL DEFAULT ''`); err != nil {
+			log.WarnContext(ctx, "mitm.capture.add_decoded_tool_ordering_text_column_failed", "err", err)
+			return fmt.Errorf("capture: add decoded tool ordering text column: %w", err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE decoded_tool_events SET ordering_text=CAST(ordering AS TEXT) WHERE ordering_text=''`); err != nil {
+		log.WarnContext(ctx, "mitm.capture.backfill_decoded_tool_ordering_text_failed", "err", err)
+		return fmt.Errorf("capture: backfill decoded tool ordering text: %w", err)
+	}
+	return nil
+}
 
 // Record enqueues an exchange for asynchronous persistence. It never blocks: if
 // the writer queue is full or the store is closed, the record is dropped with a
@@ -325,9 +422,57 @@ func (s *Store) insert(ctx context.Context, queued queuedRecord) {
 		_ = tx.Rollback()
 		return
 	}
+	if !s.insertDecodedBody(ctx, tx, rowID, BodyRequest, rec.DecodedRequest) {
+		_ = tx.Rollback()
+		return
+	}
 	if err := tx.Commit(); err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.commit_failed", "host", rec.Host, "path", rec.Path, "err", err)
 	}
+}
+
+func (s *Store) insertDecodedBody(ctx context.Context, tx *sql.Tx, rowID int64, which BodySide, decoded *DecodedBody) bool {
+	if decoded == nil {
+		return true
+	}
+	decodedSQL, decodedArgs, err := sq.Insert("decoded_bodies").
+		Columns("request_row_id", "which", "format", "status", "decode_error", "representation_json").
+		Values(rowID, string(which), decoded.Format, string(decoded.Status), decoded.Error, decoded.RepresentationJSON).
+		ToSql()
+	if err != nil {
+		s.log.WarnContext(ctx, "mitm.capture.build_decoded_body_insert_failed", "which", string(which), "err", err)
+		return false
+	}
+	result, err := tx.ExecContext(ctx, decodedSQL, decodedArgs...)
+	if err != nil {
+		s.log.WarnContext(ctx, "mitm.capture.insert_decoded_body_failed", "which", string(which), "err", err)
+		return false
+	}
+	decodedBodyID, err := result.LastInsertId()
+	if err != nil {
+		s.log.WarnContext(ctx, "mitm.capture.decoded_body_last_insert_id_failed", "which", string(which), "err", err)
+		return false
+	}
+	for _, event := range decoded.ToolEvents {
+		legacyOrdering := int64(0)
+		if event.Ordering <= uint64(1<<63-1) {
+			legacyOrdering = int64(event.Ordering)
+		}
+		orderingText := strconv.FormatUint(event.Ordering, 10)
+		eventSQL, eventArgs, buildErr := sq.Insert("decoded_tool_events").
+			Columns("decoded_body_id", "ordering", "ordering_text", "call_id", "tool_name", "input_representation", "input_encoding").
+			Values(decodedBodyID, legacyOrdering, orderingText, event.CallID, event.ToolName, event.InputRepresentation, string(event.InputEncoding)).
+			ToSql()
+		if buildErr != nil {
+			s.log.WarnContext(ctx, "mitm.capture.build_decoded_tool_event_insert_failed", "err", buildErr)
+			return false
+		}
+		if _, execErr := tx.ExecContext(ctx, eventSQL, eventArgs...); execErr != nil {
+			s.log.WarnContext(ctx, "mitm.capture.insert_decoded_tool_event_failed", "err", execErr)
+			return false
+		}
+	}
+	return true
 }
 
 // insertBody writes one body row, returning false (after logging) on failure so

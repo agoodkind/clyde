@@ -339,14 +339,16 @@ type wsCaptureStoreInput struct {
 func (p *Proxy) recordWSCaptureStore(r *http.Request, responseHeader http.Header, in wsCaptureStoreInput) {
 	requestBody, responseBody := in.recorder.bodies()
 	p.recordCaptureStore(r, responseHeader, captureStoreInput{
-		provider:     in.provider,
-		host:         in.host,
-		method:       "WEBSOCKET",
-		path:         r.URL.Path,
-		status:       in.status,
-		requestBody:  requestBody,
-		responseBody: responseBody,
-		duration:     clock.Since(in.started),
+		provider:        in.provider,
+		host:            in.host,
+		method:          "WEBSOCKET",
+		path:            r.URL.Path,
+		status:          in.status,
+		requestBody:     requestBody,
+		responseBody:    responseBody,
+		duration:        clock.Since(in.started),
+		captureRules:    nil,
+		hasCaptureRules: false,
 	})
 }
 

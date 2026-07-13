@@ -131,6 +131,95 @@ func TestProxyHTTPCapturePersistsExchangeToStore(t *testing.T) {
 	}
 }
 
+func TestRecordCaptureStoreDecodesCursorBidiBodiesAcrossCapturePaths(t *testing.T) {
+	const providerName = "cursor-test-decoder"
+	const providerID ProviderID = 200
+	RegisterProviderFirst(testCaptureDecoderProvider{id: providerID, name: providerName})
+	t.Cleanup(func() { UnregisterProvider(providerID) })
+
+	dbPath := filepath.Join(t.TempDir(), "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
+	proxy := &Proxy{store: store, client: "test", cfg: config.MITMConfig{}, mu: sync.RWMutex{}}
+	request, err := http.NewRequest(http.MethodPost, "http://api2.cursor.sh/aiserver.v1.AiService/BidiAppend", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	for _, method := range []string{http.MethodPost, "TLS", "WEBSOCKET"} {
+		proxy.recordCaptureStore(request, http.Header{}, captureStoreInput{
+			provider:    providerName,
+			host:        "api2.cursor.sh",
+			method:      method,
+			path:        request.URL.Path,
+			status:      http.StatusOK,
+			requestBody: []byte("cursor-bidi-body-" + method),
+		})
+	}
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+
+	db := openCaptureDB(t, dbPath)
+	var decodedCount int
+	if err := db.QueryRow(`SELECT count(*) FROM decoded_bodies WHERE format='test.cursor.bidi' AND status='success'`).Scan(&decodedCount); err != nil {
+		t.Fatalf("count decoded Bidi bodies: %v", err)
+	}
+	if decodedCount != 3 {
+		t.Fatalf("decoded Bidi bodies = %d, want 3", decodedCount)
+	}
+	var rawCount int
+	if err := db.QueryRow(`SELECT count(*) FROM bodies WHERE which='request' AND data LIKE 'cursor-bidi-body-%'`).Scan(&rawCount); err != nil {
+		t.Fatalf("count raw Bidi bodies: %v", err)
+	}
+	if rawCount != 3 {
+		t.Fatalf("raw Bidi bodies = %d, want 3", rawCount)
+	}
+}
+
+type testCaptureDecoderProvider struct {
+	id   ProviderID
+	name string
+}
+
+func (p testCaptureDecoderProvider) ID() ProviderID { return p.id }
+
+func (p testCaptureDecoderProvider) ClassifyConnect(host string) ConnectClaim {
+	return ConnectClaim{Claimed: host == "api2.cursor.sh", Host: host, ProviderID: p.id}
+}
+
+func (p testCaptureDecoderProvider) ClassifyPlain(string) PlainRouteClaim {
+	return PlainRouteClaim{Claimed: false, Provider: "", UpstreamURL: ""}
+}
+
+func (p testCaptureDecoderProvider) ExtractIdentity(http.Header) IdentityContribution {
+	return IdentityContribution{}
+}
+
+func (p testCaptureDecoderProvider) DecodeCaptureRequest(exchange ExchangeDiagnostic) (capture.DecodedBody, bool) {
+	if exchange.Path != "/aiserver.v1.AiService/BidiAppend" {
+		return capture.DecodedBody{}, false
+	}
+	return capture.DecodedBody{
+		Format:             "test.cursor.bidi",
+		Status:             capture.DecodeStatusSuccess,
+		RepresentationJSON: []byte(`{"body":"decoded"}`),
+		ToolEvents:         nil,
+	}, true
+}
+
+func openCaptureDB(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open capture database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
 // TestProxyHTTPCaptureForwardsGzipBytesIntactWhileDecodingForStore is the
 // CLYDE-350 regression guard: a gzip-encoded upstream response must reach the
 // client byte-for-byte with its Content-Encoding intact (the capture path must
@@ -204,6 +293,64 @@ func TestProxyHTTPCaptureForwardsGzipBytesIntactWhileDecodingForStore(t *testing
 	}
 	if !bytes.Equal(storedResponse, decodedResponse) {
 		t.Fatalf("stored response = %d bytes, want decoded %d bytes (capture must hold the decompressed body)", len(storedResponse), len(decodedResponse))
+	}
+}
+
+func TestFinalizePlainHTTPCaptureUsesSnapshotCaptureRulesForStoreConcern(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	dbPath := filepath.Join(captureDir, "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	proxy := newHTTPProxyForCaptureTest(t, captureDir, store, upstream)
+	proxy.mu.Lock()
+	proxy.cfg.CaptureRules = []config.MITMCaptureRouteRule{{
+		Concern:   "live.concern",
+		Provider:  "cursor",
+		Method:    config.MITMMethodPost,
+		PathExact: "/aiserver.v1.AiService/BidiAppend",
+	}}
+	proxy.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "http://api2.cursor.sh/aiserver.v1.AiService/BidiAppend", nil)
+	req.Header.Set("content-type", "application/protobuf")
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/protobuf"}}}
+	buffer := &limitedBuffer{limit: 1024, buf: bytes.Buffer{}}
+	if _, err := buffer.Write([]byte("response-body")); err != nil {
+		t.Fatalf("buffer write: %v", err)
+	}
+
+	proxy.finalizePlainHTTPCapture(req, resp, plainHTTPCaptureFinalize{
+		cfg: config.MITMConfig{CaptureRules: []config.MITMCaptureRouteRule{{
+			Concern:   "snapshot.concern",
+			Provider:  "cursor",
+			Method:    config.MITMMethodPost,
+			PathExact: "/aiserver.v1.AiService/BidiAppend",
+		}}},
+		provider:         "cursor",
+		upstream:         "https://api2.cursor.sh",
+		requestBody:      []byte("request-body"),
+		capture:          buffer,
+		requestBodyIndex: newCaptureBodyIndexFromSummary(summarizeBody([]byte("request-body"))),
+		duration:         time.Millisecond,
+	})
+
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	db := openCaptureDB(t, dbPath)
+	var concern string
+	if err := db.QueryRow(`SELECT concern FROM requests ORDER BY ts DESC LIMIT 1`).Scan(&concern); err != nil {
+		t.Fatalf("scan concern: %v", err)
+	}
+	if concern != "snapshot.concern" {
+		t.Fatalf("concern=%q want snapshot.concern", concern)
 	}
 }
 

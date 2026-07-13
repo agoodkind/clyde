@@ -594,14 +594,16 @@ func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, f
 		clientFacet:    nil,
 	})
 	p.recordCaptureStore(r, resp.Header, captureStoreInput{
-		provider:     fin.provider,
-		host:         r.Host,
-		method:       r.Method,
-		path:         r.URL.Path,
-		status:       resp.StatusCode,
-		requestBody:  fin.requestBody,
-		responseBody: captureBody,
-		duration:     fin.duration,
+		provider:        fin.provider,
+		host:            r.Host,
+		method:          r.Method,
+		path:            r.URL.Path,
+		status:          resp.StatusCode,
+		requestBody:     fin.requestBody,
+		responseBody:    captureBody,
+		duration:        fin.duration,
+		captureRules:    fin.cfg.CaptureRules,
+		hasCaptureRules: true,
 	})
 	p.recordDriftCapture(fin.cfg, driftCaptureInput{
 		provider:    fin.provider,
@@ -619,14 +621,16 @@ func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, f
 // id, session id, trace id) from the same provider identity extraction the
 // wire-leg emitter uses so a stored row joins back to its wire log.
 type captureStoreInput struct {
-	provider     string
-	host         string
-	method       string
-	path         string
-	status       int
-	requestBody  []byte
-	responseBody []byte
-	duration     time.Duration
+	provider        string
+	host            string
+	method          string
+	path            string
+	status          int
+	requestBody     []byte
+	responseBody    []byte
+	duration        time.Duration
+	captureRules    []config.MITMCaptureRouteRule
+	hasCaptureRules bool
 }
 
 // recordCaptureStore builds a [capture.Record] from the completed exchange and
@@ -635,7 +639,11 @@ type captureStoreInput struct {
 func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, in captureStoreInput) {
 	contrib := extractIdentityContribution(r.Host, r.URL.Path, r.Header)
 	identity := mitmRequestIdentity(r.Header, contrib)
-	concern := resolveCaptureConcern(p.config().CaptureRules, captureConcernInput{
+	captureRules := in.captureRules
+	if !in.hasCaptureRules {
+		captureRules = p.config().CaptureRules
+	}
+	concern := resolveCaptureConcern(captureRules, captureConcernInput{
 		Provider:            in.provider,
 		Host:                in.host,
 		Method:              in.method,
@@ -643,6 +651,21 @@ func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, 
 		RequestContentType:  r.Header.Get("Content-Type"),
 		ResponseContentType: responseHeader.Get("Content-Type"),
 	})
+	var decodedRequest *capture.DecodedBody
+	if decoder, ok := captureDecoderFor(in.provider, in.host); ok {
+		decoded, supported := decoder.DecodeCaptureRequest(ExchangeDiagnostic{
+			RequestHeader:      r.Header,
+			DecodedRequestBody: in.requestBody,
+			Method:             in.method,
+			Path:               in.path,
+			Host:               in.host,
+			Concern:            concern,
+			HookName:           "",
+		})
+		if supported {
+			decodedRequest = &decoded
+		}
+	}
 	p.store.Record(capture.Record{
 		Timestamp:         clock.Now(),
 		Client:            p.client,
@@ -662,6 +685,7 @@ func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, 
 		ResponseBody:      in.responseBody,
 		RequestType:       r.Header.Get("Content-Type"),
 		ResponseType:      responseHeader.Get("Content-Type"),
+		DecodedRequest:    decodedRequest,
 		Duration:          in.duration,
 	})
 }

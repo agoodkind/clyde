@@ -35,6 +35,28 @@ CREATE TABLE IF NOT EXISTS bodies (
 	data BLOB,
 	PRIMARY KEY (request_row_id, which)
 );
+CREATE TABLE IF NOT EXISTS decoded_bodies (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	request_row_id INTEGER NOT NULL,
+	which TEXT NOT NULL,
+	format TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT '',
+	decode_error TEXT NOT NULL DEFAULT '',
+	representation_json BLOB NOT NULL DEFAULT '',
+	UNIQUE(request_row_id, which)
+);
+CREATE INDEX IF NOT EXISTS idx_decoded_bodies_request ON decoded_bodies(request_row_id);
+CREATE TABLE IF NOT EXISTS decoded_tool_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	decoded_body_id INTEGER NOT NULL,
+	ordering INTEGER NOT NULL DEFAULT 0,
+	ordering_text TEXT NOT NULL DEFAULT '',
+	call_id TEXT NOT NULL DEFAULT '',
+	tool_name TEXT NOT NULL DEFAULT '',
+	input_representation TEXT NOT NULL DEFAULT '',
+	input_encoding TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_decoded_tool_events_body ON decoded_tool_events(decoded_body_id, ordering);
 CREATE TABLE IF NOT EXISTS drift_shapes (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	provider TEXT NOT NULL DEFAULT '',

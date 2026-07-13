@@ -100,6 +100,7 @@ func (s *Store) RecordExchange(corr correlation.Context, ex Exchange) {
 		ResponseBody:      ex.ResponseBody,
 		RequestType:       ex.RequestType,
 		ResponseType:      ex.ResponseType,
+		DecodedRequest:    nil,
 		Duration:          clock.Since(ex.Started),
 	})
 }
@@ -121,6 +122,7 @@ func exchangeRecord(corr correlation.Context, ex Exchange) Record {
 		UpstreamRequestID: ex.UpstreamRequestID, SessionID: ex.SessionID, TraceID: string(corr.TraceID),
 		RequestHeaders: ex.RequestHeaders, ResponseHeaders: ex.ResponseHeaders, RequestBody: ex.RequestBody,
 		ResponseBody: ex.ResponseBody, RequestType: ex.RequestType, ResponseType: ex.ResponseType,
-		Duration: clock.Since(ex.Started),
+		DecodedRequest: nil,
+		Duration:       clock.Since(ex.Started),
 	}
 }

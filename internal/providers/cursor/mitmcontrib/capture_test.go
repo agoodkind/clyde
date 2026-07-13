@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"testing"
 
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 func TestRouteProviderClaimsCursorConnectHosts(t *testing.T) {
@@ -120,6 +122,177 @@ func TestDiagnoseExchangeSkipsNonBidiRequests(t *testing.T) {
 	})
 	if logBuffer.Len() != 0 {
 		t.Fatalf("expected no diagnostic for non-bidi request, got %s", logBuffer.String())
+	}
+}
+
+func TestDecodeCaptureRequestPreservesFieldTreeAndToolEvent(t *testing.T) {
+	outer := cursorBidiAppendPayload("request-1", 4, []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d"))
+
+	decoded, ok := DecodeCaptureRequest(RequestCapture{
+		Path:    "/aiserver.v1.AiService/BidiAppend",
+		Headers: http.Header{"Content-Type": []string{"application/protobuf"}},
+		Body:    outer,
+	})
+	if !ok {
+		t.Fatal("expected BidiAppend capture decode")
+	}
+	if decoded.Status != capture.DecodeStatusSuccess {
+		t.Fatalf("status = %q error = %q", decoded.Status, decoded.Error)
+	}
+	if !bytes.Contains(decoded.RepresentationJSON, []byte(`"hex_envelope"`)) {
+		t.Fatalf("representation omits hex envelope: %s", decoded.RepresentationJSON)
+	}
+	if len(decoded.ToolEvents) != 1 {
+		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
+	}
+	event := decoded.ToolEvents[0]
+	if event.Ordering != 4 || event.CallID != "call-1" || event.ToolName != "edit_file" || event.InputRepresentation != `{"patch":"hello"}` || event.InputEncoding != capture.ToolInputEncodingJSON {
+		t.Fatalf("tool event = %#v", event)
+	}
+}
+
+func TestDecodeCaptureRequestMarksRawToolInputAsBase64(t *testing.T) {
+	payload := appendProtoString(nil, 1, "call-raw")
+	payload = appendProtoString(payload, 2, "apply_patch")
+	payload = appendProtoBytes(payload, 3, []byte{0xff, 0x00, 0x7f})
+	outer := cursorBidiAppendPayload("request-raw", 5, []byte(hex.EncodeToString(payload)))
+
+	decoded, ok := DecodeCaptureRequest(RequestCapture{
+		Path: "/aiserver.v1.AiService/BidiAppend",
+		Body: outer,
+	})
+	if !ok || len(decoded.ToolEvents) != 1 {
+		t.Fatalf("decoded=%#v ok=%t", decoded, ok)
+	}
+	event := decoded.ToolEvents[0]
+	if event.InputEncoding != capture.ToolInputEncodingBase64 {
+		t.Fatalf("input encoding=%q", event.InputEncoding)
+	}
+	if event.InputRepresentation != "/wB/" {
+		t.Fatalf("input representation=%q", event.InputRepresentation)
+	}
+}
+
+func TestDecodeCaptureRequestPersistsMalformedFrameFailure(t *testing.T) {
+	decoded, ok := DecodeCaptureRequest(RequestCapture{
+		Path: "/aiserver.v1.AiService/BidiAppend",
+		Body: []byte{0x0a, 0x80},
+	})
+	if !ok {
+		t.Fatal("expected BidiAppend capture decode")
+	}
+	if decoded.Status != capture.DecodeStatusFailed {
+		t.Fatalf("status = %q", decoded.Status)
+	}
+	if decoded.Error == "" {
+		t.Fatal("decode error is empty")
+	}
+}
+
+func TestDecodeCaptureRequestUsesSequenceFieldForToolOrdering(t *testing.T) {
+	payload := []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d")
+	outer := appendProtoString(nil, 1, "request-1")
+	outer = appendProtoVarint(outer, 9, 99)
+	outer = appendProtoVarint(outer, 2, 4)
+	outer = appendProtoBytes(outer, 3, payload)
+
+	decoded, ok := DecodeCaptureRequest(RequestCapture{
+		Path: "/aiserver.v1.AiService/BidiAppend",
+		Body: outer,
+	})
+	if !ok {
+		t.Fatal("expected BidiAppend capture decode")
+	}
+	if len(decoded.ToolEvents) != 1 {
+		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
+	}
+	if decoded.ToolEvents[0].Ordering != 4 {
+		t.Fatalf("tool ordering = %d, want 4", decoded.ToolEvents[0].Ordering)
+	}
+}
+
+func TestDecodeCaptureRequestSkipsMalformedHexRequestIDBeforePayload(t *testing.T) {
+	payload := []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d")
+	outer := appendProtoString(nil, 1, "deadbeef")
+	outer = appendProtoVarint(outer, 2, 4)
+	outer = appendProtoBytes(outer, 3, payload)
+
+	decoded, ok := DecodeCaptureRequest(RequestCapture{
+		Path: "/aiserver.v1.AiService/BidiAppend",
+		Body: outer,
+	})
+	if !ok {
+		t.Fatal("expected BidiAppend capture decode")
+	}
+	if decoded.Status != capture.DecodeStatusSuccess {
+		t.Fatalf("status = %q error = %q", decoded.Status, decoded.Error)
+	}
+	if len(decoded.ToolEvents) != 1 {
+		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
+	}
+	if decoded.ToolEvents[0].CallID != "call-1" {
+		t.Fatalf("tool call id = %q", decoded.ToolEvents[0].CallID)
+	}
+}
+
+func TestDecodeCaptureRequestSkipsParseableNonEnvelopeBeforePayload(t *testing.T) {
+	payload := []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d")
+	outer := appendProtoString(nil, 1, "0a00")
+	outer = appendProtoVarint(outer, 2, 4)
+	outer = appendProtoBytes(outer, 3, payload)
+
+	decoded, ok := DecodeCaptureRequest(RequestCapture{
+		Path: "/aiserver.v1.AiService/BidiAppend",
+		Body: outer,
+	})
+	if !ok {
+		t.Fatal("expected BidiAppend capture decode")
+	}
+	if decoded.Status != capture.DecodeStatusSuccess {
+		t.Fatalf("status = %q error = %q", decoded.Status, decoded.Error)
+	}
+	if len(decoded.ToolEvents) != 1 {
+		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
+	}
+	if decoded.ToolEvents[0].CallID != "call-1" {
+		t.Fatalf("tool call id = %q", decoded.ToolEvents[0].CallID)
+	}
+}
+
+func TestParseProtobufFieldsBoundsRecursiveChildren(t *testing.T) {
+	nested := make([]byte, 0, 4097*3)
+	for i := 0; i < 4097; i++ {
+		nested = appendProtoBytes(nested, 1, []byte("x"))
+	}
+	raw := appendProtoBytes(nil, 1, nested)
+
+	fields, err := parseProtobufFields(raw)
+	if err != nil {
+		t.Fatalf("parseProtobufFields: %v", err)
+	}
+	if len(fields) != 1 {
+		t.Fatalf("top-level fields = %d, want 1", len(fields))
+	}
+	if fields[0].DataBase64 == "" {
+		t.Fatal("parent bytes field lost its base64 representation")
+	}
+	if len(fields[0].Children) > 4096 {
+		t.Fatalf("recursive children = %d, want at most 4096", len(fields[0].Children))
+	}
+}
+
+func TestParseProtobufFieldsBoundsTopLevelFields(t *testing.T) {
+	raw := make([]byte, 0, 4097*3)
+	for i := 0; i < 4097; i++ {
+		raw = appendProtoBytes(raw, 1, []byte("x"))
+	}
+
+	fields, err := parseProtobufFields(raw)
+	if err != nil {
+		t.Fatalf("parseProtobufFields: %v", err)
+	}
+	if len(fields) > 4096 {
+		t.Fatalf("top-level fields = %d, want at most 4096", len(fields))
 	}
 }
 

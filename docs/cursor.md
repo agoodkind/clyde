@@ -64,6 +64,29 @@ To recap:
 - Cursor MITM: passes through MITM directly via localhost
 - Cursor BYOK: routed through Cursor’s servers which then in turn calls our Cloudflare tunnel which then finally passes it down to localhost 
 
+## Cursor BYOK tool bridge
+
+The resolved Cursor model selects the `apply_patch` representation. This keeps
+the native GPT and `clyde-codex-*` contracts separate while ordinary function
+calls remain on the existing argument path.
+
+`clyde-codex-*` routes preserve the established JSON contract. Clyde streams a
+single JSON object with an `input` field and JSON-escapes each patch fragment.
+
+Native GPT routes preserve the exact freeform patch text that Codex returns.
+Clyde rejects an invalid freeform translation instead of replacing it with an
+empty object or repairing the patch.
+
+Cursor-visible tool call IDs remain unchanged. Clyde creates a bounded,
+deterministic ID only for Codex egress when Cursor supplies an ID longer than
+Codex accepts. The paired Codex tool output uses that same projected ID.
+
+The capture store preserves raw `BidiAppend` transport bytes as the forensic
+record. Linked decoded rows retain the protobuf field tree, recognized hex
+envelope, semantic tool fields, ordering, correlation identifiers, and an
+explicit decode error when the body cannot be decoded. The decoded record does
+not replace the raw body.
+
 ## Error Boundary
 
 Cursor shows a full BYOK error message when the status is a 4xx. 
