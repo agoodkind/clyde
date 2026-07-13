@@ -235,6 +235,52 @@ func TestDecodeCaptureRequestSkipsMalformedHexRequestIDBeforePayload(t *testing.
 	}
 }
 
+func TestDecodeCaptureRequestSkipsParseableNonEnvelopeBeforePayload(t *testing.T) {
+	payload := []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d")
+	outer := appendProtoString(nil, 1, "0a00")
+	outer = appendProtoVarint(outer, 2, 4)
+	outer = appendProtoBytes(outer, 3, payload)
+
+	decoded, ok := DecodeCaptureRequest(RequestCapture{
+		Path: "/aiserver.v1.AiService/BidiAppend",
+		Body: outer,
+	})
+	if !ok {
+		t.Fatal("expected BidiAppend capture decode")
+	}
+	if decoded.Status != capture.DecodeStatusSuccess {
+		t.Fatalf("status = %q error = %q", decoded.Status, decoded.Error)
+	}
+	if len(decoded.ToolEvents) != 1 {
+		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
+	}
+	if decoded.ToolEvents[0].CallID != "call-1" {
+		t.Fatalf("tool call id = %q", decoded.ToolEvents[0].CallID)
+	}
+}
+
+func TestParseProtobufFieldsBoundsRecursiveChildren(t *testing.T) {
+	nested := make([]byte, 0, 4097*3)
+	for i := 0; i < 4097; i++ {
+		nested = appendProtoBytes(nested, 1, []byte("x"))
+	}
+	raw := appendProtoBytes(nil, 1, nested)
+
+	fields, err := parseProtobufFields(raw, 0)
+	if err != nil {
+		t.Fatalf("parseProtobufFields: %v", err)
+	}
+	if len(fields) != 1 {
+		t.Fatalf("top-level fields = %d, want 1", len(fields))
+	}
+	if fields[0].DataBase64 == "" {
+		t.Fatal("parent bytes field lost its base64 representation")
+	}
+	if len(fields[0].Children) > 4096 {
+		t.Fatalf("recursive children = %d, want at most 4096", len(fields[0].Children))
+	}
+}
+
 func cursorBidiAppendPayload(requestID string, seqno uint64, payload []byte) []byte {
 	var out []byte
 	out = appendProtoString(out, 1, requestID)

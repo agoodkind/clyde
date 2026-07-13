@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -202,7 +203,7 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("capture: apply schema: %w", err)
 	}
-	if err := ensureToolEventEncodingColumn(ctx, db, log); err != nil {
+	if err := ensureToolEventColumns(ctx, db, log); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -266,13 +267,15 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 //go:embed schema.sql
 var schemaSQL string
 
-func ensureToolEventEncodingColumn(ctx context.Context, db *sql.DB, log *slog.Logger) error {
+func ensureToolEventColumns(ctx context.Context, db *sql.DB, log *slog.Logger) error {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(decoded_tool_events)`)
 	if err != nil {
 		log.WarnContext(ctx, "mitm.capture.inspect_decoded_tool_event_columns_failed", "err", err)
 		return fmt.Errorf("capture: inspect decoded tool event columns: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	hasInputEncoding := false
+	hasOrderingText := false
 	for rows.Next() {
 		var columnID int
 		var name string
@@ -285,16 +288,31 @@ func ensureToolEventEncodingColumn(ctx context.Context, db *sql.DB, log *slog.Lo
 			return fmt.Errorf("capture: scan decoded tool event column: %w", err)
 		}
 		if name == "input_encoding" {
-			return nil
+			hasInputEncoding = true
+		}
+		if name == "ordering_text" {
+			hasOrderingText = true
 		}
 	}
 	if err := rows.Err(); err != nil {
 		log.WarnContext(ctx, "mitm.capture.inspect_decoded_tool_event_columns_failed", "err", err)
 		return fmt.Errorf("capture: inspect decoded tool event columns: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE decoded_tool_events ADD COLUMN input_encoding TEXT NOT NULL DEFAULT ''`); err != nil {
-		log.WarnContext(ctx, "mitm.capture.add_decoded_tool_input_encoding_column_failed", "err", err)
-		return fmt.Errorf("capture: add decoded tool input encoding column: %w", err)
+	if !hasInputEncoding {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE decoded_tool_events ADD COLUMN input_encoding TEXT NOT NULL DEFAULT ''`); err != nil {
+			log.WarnContext(ctx, "mitm.capture.add_decoded_tool_input_encoding_column_failed", "err", err)
+			return fmt.Errorf("capture: add decoded tool input encoding column: %w", err)
+		}
+	}
+	if !hasOrderingText {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE decoded_tool_events ADD COLUMN ordering_text TEXT NOT NULL DEFAULT ''`); err != nil {
+			log.WarnContext(ctx, "mitm.capture.add_decoded_tool_ordering_text_column_failed", "err", err)
+			return fmt.Errorf("capture: add decoded tool ordering text column: %w", err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE decoded_tool_events SET ordering_text=CAST(ordering AS TEXT) WHERE ordering_text=''`); err != nil {
+		log.WarnContext(ctx, "mitm.capture.backfill_decoded_tool_ordering_text_failed", "err", err)
+		return fmt.Errorf("capture: backfill decoded tool ordering text: %w", err)
 	}
 	return nil
 }
@@ -436,9 +454,14 @@ func (s *Store) insertDecodedBody(ctx context.Context, tx *sql.Tx, rowID int64, 
 		return false
 	}
 	for _, event := range decoded.ToolEvents {
+		legacyOrdering := int64(0)
+		if event.Ordering <= uint64(1<<63-1) {
+			legacyOrdering = int64(event.Ordering)
+		}
+		orderingText := strconv.FormatUint(event.Ordering, 10)
 		eventSQL, eventArgs, buildErr := sq.Insert("decoded_tool_events").
-			Columns("decoded_body_id", "ordering", "call_id", "tool_name", "input_representation", "input_encoding").
-			Values(decodedBodyID, event.Ordering, event.CallID, event.ToolName, event.InputRepresentation, string(event.InputEncoding)).
+			Columns("decoded_body_id", "ordering", "ordering_text", "call_id", "tool_name", "input_representation", "input_encoding").
+			Values(decodedBodyID, legacyOrdering, orderingText, event.CallID, event.ToolName, event.InputRepresentation, string(event.InputEncoding)).
 			ToSql()
 		if buildErr != nil {
 			s.log.WarnContext(ctx, "mitm.capture.build_decoded_tool_event_insert_failed", "err", buildErr)

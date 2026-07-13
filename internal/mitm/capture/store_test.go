@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -191,6 +192,47 @@ func TestRecordPersistsLinkedDecodedRequestAndToolEvents(t *testing.T) {
 	}
 	if ordering != 7 || callID != "call-7" || toolName != "edit_file" || input != `{"patch":"hello"}` || inputEncoding != string(ToolInputEncodingJSON) {
 		t.Fatalf("tool event = (%d, %q, %q, %q, %q)", ordering, callID, toolName, input, inputEncoding)
+	}
+}
+
+func TestRecordPersistsFullUnsignedToolEventOrdering(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.db")
+	store := openTestStore(t, Config{DBPath: path})
+	ordering := ^uint64(0)
+	store.Record(Record{
+		Timestamp: time.Now(),
+		Host:      "api2.cursor.sh",
+		Path:      "/aiserver.v1.AiService/BidiAppend",
+		RequestID: "decoded-large-ordering",
+		DecodedRequest: &DecodedBody{
+			Format:             "cursor.bidi_append.protobuf_hex",
+			Status:             DecodeStatusSuccess,
+			RepresentationJSON: []byte(`{}`),
+			ToolEvents: []ToolEvent{{
+				Ordering:            ordering,
+				CallID:              "call-large-ordering",
+				ToolName:            "apply_patch",
+				InputRepresentation: "raw patch",
+				InputEncoding:       ToolInputEncodingBase64,
+			}},
+		},
+	})
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db := openVerifier(t, path)
+	var storedOrdering int64
+	var storedOrderingText string
+	row := db.QueryRow(`SELECT ordering, ordering_text FROM decoded_tool_events WHERE call_id='call-large-ordering'`)
+	if err := row.Scan(&storedOrdering, &storedOrderingText); err != nil {
+		t.Fatalf("tool event ordering: %v", err)
+	}
+	if storedOrdering != 0 {
+		t.Fatalf("legacy ordering = %d, want 0 for out-of-range value", storedOrdering)
+	}
+	if storedOrderingText != strconv.FormatUint(ordering, 10) {
+		t.Fatalf("ordering text = %q, want %q", storedOrderingText, strconv.FormatUint(ordering, 10))
 	}
 }
 

@@ -65,6 +65,32 @@ type hexEnvelope struct {
 	Fields      []protobufField `json:"fields"`
 }
 
+const (
+	maxProtobufDecodedFields = 4096
+	maxProtobufDecodedBytes  = 1 << 20
+)
+
+type protobufDecodeBudget struct {
+	remainingFields int
+	remainingBytes  int
+}
+
+func (b *protobufDecodeBudget) reserveField() bool {
+	if b.remainingFields <= 0 {
+		return false
+	}
+	b.remainingFields--
+	return true
+}
+
+func (b *protobufDecodeBudget) reserveBytes(size int) bool {
+	if size < 0 || size > b.remainingBytes {
+		return false
+	}
+	b.remainingBytes -= size
+	return true
+}
+
 // DiagnoseRequest returns a typed Cursor BidiAppend diagnostic and
 // `true` when the intercepted request looks like a BidiAppend call.
 // The decoder walks the request body by protobuf wire tags; the
@@ -143,7 +169,7 @@ func failedDecodedBody(err error) capture.DecodedBody {
 
 func outerFieldVarint(fields []protobufField, fieldNumber uint64) uint64 {
 	for _, field := range fields {
-		if field.FieldNumber == fieldNumber && field.Varint != nil {
+		if field.FieldNumber == fieldNumber && field.WireType == "varint" && field.Varint != nil {
 			return *field.Varint
 		}
 	}
@@ -151,11 +177,22 @@ func outerFieldVarint(fields []protobufField, fieldNumber uint64) uint64 {
 }
 
 func parseProtobufFields(raw []byte, depth int) ([]protobufField, error) {
+	budget := &protobufDecodeBudget{
+		remainingFields: maxProtobufDecodedFields,
+		remainingBytes:  maxProtobufDecodedBytes,
+	}
+	return parseProtobufFieldsWithBudget(raw, depth, budget, false)
+}
+
+func parseProtobufFieldsWithBudget(raw []byte, depth int, budget *protobufDecodeBudget, countField bool) ([]protobufField, error) {
 	if depth > 8 {
 		return nil, fmt.Errorf("protobuf nesting exceeds capture limit")
 	}
 	fields := make([]protobufField, 0)
 	for offset := 0; offset < len(raw); {
+		if countField && !budget.reserveField() {
+			return fields, nil
+		}
 		fieldNumber, wireType, next, ok := readProtoKey(raw, offset)
 		if !ok {
 			return nil, fmt.Errorf("invalid protobuf field key at byte %d", offset)
@@ -188,9 +225,11 @@ func parseProtobufFields(raw []byte, depth int) ([]protobufField, error) {
 			if utf8.Valid(value) {
 				field.Text = string(value)
 			}
-			children, childErr := parseProtobufFields(value, depth+1)
-			if childErr == nil && len(children) > 0 {
-				field.Children = children
+			if budget.reserveBytes(len(value)) {
+				children, childErr := parseProtobufFieldsWithBudget(value, depth+1, budget, true)
+				if childErr == nil && len(children) > 0 {
+					field.Children = children
+				}
 			}
 			offset = nextOffset
 		case 5:
@@ -227,10 +266,10 @@ func UnmarshalHexEnvelope(fields []protobufField) (hexEnvelope, []capture.ToolEv
 			continue
 		}
 		event, understood := decodeToolEvent(envelopeFields)
-		events := make([]capture.ToolEvent, 0)
-		if understood {
-			events = append(events, event)
+		if !understood {
+			continue
 		}
+		events := []capture.ToolEvent{event}
 		return hexEnvelope{
 			SourceField: field.FieldNumber,
 			DataBase64:  base64.StdEncoding.EncodeToString(data),

@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS decoded_tool_events (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	decoded_body_id INTEGER NOT NULL,
 	ordering INTEGER NOT NULL DEFAULT 0,
+	ordering_text TEXT NOT NULL DEFAULT '',
 	call_id TEXT NOT NULL DEFAULT '',
 	tool_name TEXT NOT NULL DEFAULT '',
 	input_representation TEXT NOT NULL DEFAULT '',
