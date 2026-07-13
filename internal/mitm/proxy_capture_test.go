@@ -296,6 +296,64 @@ func TestProxyHTTPCaptureForwardsGzipBytesIntactWhileDecodingForStore(t *testing
 	}
 }
 
+func TestFinalizePlainHTTPCaptureUsesSnapshotCaptureRulesForStoreConcern(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	dbPath := filepath.Join(captureDir, "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	proxy := newHTTPProxyForCaptureTest(t, captureDir, store, upstream)
+	proxy.mu.Lock()
+	proxy.cfg.CaptureRules = []config.MITMCaptureRouteRule{{
+		Concern:   "live.concern",
+		Provider:  "cursor",
+		Method:    config.MITMMethodPost,
+		PathExact: "/aiserver.v1.AiService/BidiAppend",
+	}}
+	proxy.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "http://api2.cursor.sh/aiserver.v1.AiService/BidiAppend", nil)
+	req.Header.Set("content-type", "application/protobuf")
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/protobuf"}}}
+	buffer := &limitedBuffer{limit: 1024, buf: bytes.Buffer{}}
+	if _, err := buffer.Write([]byte("response-body")); err != nil {
+		t.Fatalf("buffer write: %v", err)
+	}
+
+	proxy.finalizePlainHTTPCapture(req, resp, plainHTTPCaptureFinalize{
+		cfg: config.MITMConfig{CaptureRules: []config.MITMCaptureRouteRule{{
+			Concern:   "snapshot.concern",
+			Provider:  "cursor",
+			Method:    config.MITMMethodPost,
+			PathExact: "/aiserver.v1.AiService/BidiAppend",
+		}}},
+		provider:         "cursor",
+		upstream:         "https://api2.cursor.sh",
+		requestBody:      []byte("request-body"),
+		capture:          buffer,
+		requestBodyIndex: newCaptureBodyIndexFromSummary(summarizeBody([]byte("request-body"))),
+		duration:         time.Millisecond,
+	})
+
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	db := openCaptureDB(t, dbPath)
+	var concern string
+	if err := db.QueryRow(`SELECT concern FROM requests ORDER BY ts DESC LIMIT 1`).Scan(&concern); err != nil {
+		t.Fatalf("scan concern: %v", err)
+	}
+	if concern != "snapshot.concern" {
+		t.Fatalf("concern=%q want snapshot.concern", concern)
+	}
+}
+
 func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 	caDir := t.TempDir()
 	mitmCfg := config.MITMConfig{

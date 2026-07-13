@@ -108,9 +108,9 @@ func DecodeCaptureRequest(req RequestCapture) (capture.DecodedBody, bool) {
 		representation.HexEnvelope = &envelope
 		decodedBody.Status = capture.DecodeStatusSuccess
 		decodedBody.Error = ""
-		diag := decodeBidiAppendDiagnostic(req.Body, nil)
+		appendSeqno := outerFieldVarint(outerFields, 2)
 		for i := range events {
-			events[i].Ordering = diag.AppendSeqno
+			events[i].Ordering = appendSeqno
 		}
 		decodedBody.ToolEvents = events
 	} else {
@@ -139,6 +139,15 @@ func failedDecodedBody(err error) capture.DecodedBody {
 		RepresentationJSON: representationJSON,
 		ToolEvents:         nil,
 	}
+}
+
+func outerFieldVarint(fields []protobufField, fieldNumber uint64) uint64 {
+	for _, field := range fields {
+		if field.FieldNumber == fieldNumber && field.Varint != nil {
+			return *field.Varint
+		}
+	}
+	return 0
 }
 
 func parseProtobufFields(raw []byte, depth int) ([]protobufField, error) {

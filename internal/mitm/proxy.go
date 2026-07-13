@@ -602,8 +602,8 @@ func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, f
 		requestBody:     fin.requestBody,
 		responseBody:    captureBody,
 		duration:        fin.duration,
-		captureRules:    nil,
-		hasCaptureRules: false,
+		captureRules:    fin.cfg.CaptureRules,
+		hasCaptureRules: true,
 	})
 	p.recordDriftCapture(fin.cfg, driftCaptureInput{
 		provider:    fin.provider,
