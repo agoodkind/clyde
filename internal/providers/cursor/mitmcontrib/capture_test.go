@@ -281,6 +281,21 @@ func TestParseProtobufFieldsBoundsRecursiveChildren(t *testing.T) {
 	}
 }
 
+func TestParseProtobufFieldsBoundsTopLevelFields(t *testing.T) {
+	raw := make([]byte, 0, 4097*3)
+	for i := 0; i < 4097; i++ {
+		raw = appendProtoBytes(raw, 1, []byte("x"))
+	}
+
+	fields, err := parseProtobufFields(raw)
+	if err != nil {
+		t.Fatalf("parseProtobufFields: %v", err)
+	}
+	if len(fields) > 4096 {
+		t.Fatalf("top-level fields = %d, want at most 4096", len(fields))
+	}
+}
+
 func cursorBidiAppendPayload(requestID string, seqno uint64, payload []byte) []byte {
 	var out []byte
 	out = appendProtoString(out, 1, requestID)

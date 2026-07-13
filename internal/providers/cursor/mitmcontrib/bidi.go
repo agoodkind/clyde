@@ -181,16 +181,16 @@ func parseProtobufFields(raw []byte) ([]protobufField, error) {
 		remainingFields: maxProtobufDecodedFields,
 		remainingBytes:  maxProtobufDecodedBytes,
 	}
-	return parseProtobufFieldsWithBudget(raw, 0, budget, false)
+	return parseProtobufFieldsWithBudget(raw, 0, budget)
 }
 
-func parseProtobufFieldsWithBudget(raw []byte, depth int, budget *protobufDecodeBudget, countField bool) ([]protobufField, error) {
+func parseProtobufFieldsWithBudget(raw []byte, depth int, budget *protobufDecodeBudget) ([]protobufField, error) {
 	if depth > 8 {
 		return nil, fmt.Errorf("protobuf nesting exceeds capture limit")
 	}
 	fields := make([]protobufField, 0)
 	for offset := 0; offset < len(raw); {
-		if countField && !budget.reserveField() {
+		if !budget.reserveField() {
 			return fields, nil
 		}
 		field, next, err := parseProtobufField(raw, offset, depth, budget)
@@ -236,7 +236,7 @@ func parseProtobufField(raw []byte, offset, depth int, budget *protobufDecodeBud
 			field.Text = string(value)
 		}
 		if budget.reserveBytes(len(value)) {
-			children, childErr := parseProtobufFieldsWithBudget(value, depth+1, budget, true)
+			children, childErr := parseProtobufFieldsWithBudget(value, depth+1, budget)
 			if childErr == nil && len(children) > 0 {
 				field.Children = children
 			}
