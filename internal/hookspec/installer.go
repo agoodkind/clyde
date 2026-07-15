@@ -132,7 +132,7 @@ func (installer Installer) installClaudeCode(ctx context.Context, homeDir string
 	if err != nil {
 		return InstallFileResult{}, err
 	}
-	if err := document.marshalClaudeCodeHookInstalls(installs, installer.Registry.ClydeCommandSignatures(), clydeBin); err != nil {
+	if err := document.marshalClaudeCodeHookInstalls(installs, installer.Registry.managedCommandSignatures(), clydeBin); err != nil {
 		return InstallFileResult{}, err
 	}
 	body, err := document.MarshalJSON()
@@ -150,7 +150,7 @@ func (installer Installer) installCodex(ctx context.Context, homeDir string, cly
 		slog.WarnContext(ctx, "hooks install failed", "settings_path", settingsPath, "err", wrapped)
 		return InstallFileResult{}, wrapped
 	}
-	body, err := marshalCodexHookInstalls(existing, installs, installer.Registry.ClydeCommandSignatures(), clydeBin, settingsPath)
+	body, err := marshalCodexHookInstalls(existing, installs, installer.Registry.managedCommandSignatures(), clydeBin, settingsPath)
 	if err != nil {
 		return InstallFileResult{}, err
 	}
@@ -169,7 +169,7 @@ func (installer Installer) installCursor(ctx context.Context, homeDir string, cl
 	if err != nil {
 		return InstallFileResult{}, err
 	}
-	if err := document.marshalCursorHookInstalls(installs, installer.Registry.ClydeCommandSignatures(), clydeBin); err != nil {
+	if err := document.marshalCursorHookInstalls(installs, installer.Registry.managedCommandSignatures(), clydeBin); err != nil {
 		return InstallFileResult{}, err
 	}
 	body, err := document.MarshalJSON()
@@ -215,6 +215,12 @@ func installIDs(installs []RegisteredInstall) []HookID {
 		ids = append(ids, install.HookID)
 	}
 	return ids
+}
+
+func (registry Registry) managedCommandSignatures() [][]string {
+	signatures := registry.ClydeCommandSignatures()
+	signatures = append(signatures, registry.LegacyCommandSignatures()...)
+	return signatures
 }
 
 func readInstallHomeDir(raw string) (string, error) {

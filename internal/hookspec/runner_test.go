@@ -310,7 +310,7 @@ func TestRunnerAfterCompactWritesClaudeReorientNote(t *testing.T) {
 		Getenv:        getenvFromMap(nil),
 		SnapshotStore: store,
 	}
-	err := runner.Run(context.Background(), HookIDClaudeCodeReorientAfterCompact)
+	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -328,6 +328,19 @@ func TestRunnerAfterCompactWritesClaudeReorientNote(t *testing.T) {
 	assertReorientAfterCompactNote(t, decoded.HookSpecificOutput.AdditionalContext, "/tmp/session.jsonl")
 	if _, ok := store.snapshots[normalizeSnapshotKey(key)]; ok {
 		t.Fatal("after-compact should drain the before-compact snapshot so snapshots do not accumulate")
+	}
+}
+
+func TestRunnerRejectsLegacyRuntimeAlias(t *testing.T) {
+	t.Parallel()
+
+	runner := Runner{Registry: NewRegistry()}
+	err := runner.Run(context.Background(), HookIDClaudeCodeReorientAfterCompact)
+	if err == nil {
+		t.Fatal("Run() error = nil, want legacy runtime alias rejection")
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("Run() error = %q, want not registered", err)
 	}
 }
 

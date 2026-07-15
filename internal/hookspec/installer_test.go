@@ -69,8 +69,8 @@ func TestInstallerCreatesUserHookSettingsForAllClients(t *testing.T) {
 	assertInstallFile(t, result, ClientCursor, cursorPath, []HookID{HookIDReorientBeforeCompact, HookIDReorientStopFollowup})
 
 	claude := readTestClaudeSettings(t, claudePath)
-	assertClaudeHandler(t, claude, EventPreCompact, "", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient-before-compact"}, 600)
-	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient-after-compact"}, 600)
+	assertClaudeHandler(t, claude, EventPreCompact, "", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient", "before-compact"}, 600)
+	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient", "after-compact"}, 600)
 
 	codexBody := readTextFile(t, codexPath)
 	for _, want := range []string{
@@ -79,8 +79,8 @@ func TestInstallerCreatesUserHookSettingsForAllClients(t *testing.T) {
 		"[[hooks.pre_compact]]",
 		"[[hooks.session_start]]",
 		"matcher = \"compact\"",
-		"command = \"/usr/local/bin/clyde hooks run reorient-before-compact\"",
-		"command = \"/usr/local/bin/clyde hooks run reorient-after-compact\"",
+		"command = \"/usr/local/bin/clyde hooks run reorient before-compact\"",
+		"command = \"/usr/local/bin/clyde hooks run reorient after-compact\"",
 		"trusted_hash = \"sha256:",
 	} {
 		if !strings.Contains(codexBody, want) {
@@ -92,8 +92,8 @@ func TestInstallerCreatesUserHookSettingsForAllClients(t *testing.T) {
 	if cursor.Version != 1 {
 		t.Fatalf("Cursor version = %d, want 1", cursor.Version)
 	}
-	assertCursorCommand(t, cursor, EventCursorPre, "/usr/local/bin/clyde hooks run reorient-before-compact", 0)
-	assertCursorCommand(t, cursor, EventCursorStop, "/usr/local/bin/clyde hooks run reorient-stop-followup", 1)
+	assertCursorCommand(t, cursor, EventCursorPre, "/usr/local/bin/clyde hooks run reorient before-compact", 0)
+	assertCursorCommand(t, cursor, EventCursorStop, "/usr/local/bin/clyde hooks run reorient stop-followup", 1)
 }
 
 func TestInstallerIsIdempotent(t *testing.T) {
@@ -175,7 +175,7 @@ command = "/bin/echo old"
 		t.Fatalf("theme = %q, want dark", claude.Theme)
 	}
 	assertClaudeHandler(t, claude, EventSessionStart, "startup", "/bin/echo", []string{"hello"}, 0)
-	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient-after-compact"}, 600)
+	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient", "after-compact"}, 600)
 
 	codexBody := readTextFile(t, filepath.Join(homeDir, ".codex", "config.toml"))
 	for _, want := range []string{"experimental = true", "approval_policy = \"never\"", "command = \"/bin/echo old\""} {
@@ -197,11 +197,19 @@ func TestInstallerReplacesOldClydeSignatures(t *testing.T) {
 	homeDir := t.TempDir()
 	writeTestFile(t, filepath.Join(homeDir, ".claude", "settings.json"), `{
   "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "/old/clyde hooks run reorient-before-compact"}
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "compact",
         "hooks": [
-          {"type": "command", "command": "/old/clyde", "args": ["hooks", "run", "claude-code-reorient-after-compact"]}
+          {"type": "command", "command": "/old/clyde hook sessionstart"}
         ]
       }
     ]
@@ -212,7 +220,7 @@ matcher = "compact"
 
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "/usr/local/bin/clyde hooks run claude-code-reorient-after-compact"
+command = "/usr/local/bin/clyde hooks run reorient-after-compact"
 `)
 	writeTestFile(t, filepath.Join(homeDir, ".cursor", "hooks.json"), `{
   "version": 1,
@@ -231,23 +239,36 @@ command = "/usr/local/bin/clyde hooks run claude-code-reorient-after-compact"
 		t.Fatalf("Install: %v", err)
 	}
 
-	if strings.Contains(readTextFile(t, filepath.Join(homeDir, ".claude", "settings.json")), "claude-code-reorient-after-compact") {
-		t.Fatal("legacy Claude hook signature was preserved")
+	claudeBody := readTextFile(t, filepath.Join(homeDir, ".claude", "settings.json"))
+	for _, legacy := range []string{
+		"claude-code-reorient-after-compact",
+		"hook sessionstart",
+		"reorient-before-compact",
+	} {
+		if strings.Contains(claudeBody, legacy) {
+			t.Fatalf("legacy Claude hook signature %q was preserved", legacy)
+		}
 	}
 	claude := readTestClaudeSettings(t, filepath.Join(homeDir, ".claude", "settings.json"))
-	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient-after-compact"}, 600)
+	assertClaudeHandler(t, claude, EventPreCompact, "", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient", "before-compact"}, 600)
+	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient", "after-compact"}, 600)
 	codexBody := readTextFile(t, filepath.Join(homeDir, ".codex", "config.toml"))
-	if strings.Contains(codexBody, "claude-code-reorient-after-compact") {
-		t.Fatal("legacy Codex hook signature was preserved")
+	for _, legacy := range []string{
+		"claude-code-reorient-after-compact",
+		"reorient-after-compact",
+	} {
+		if strings.Contains(codexBody, legacy) {
+			t.Fatalf("legacy Codex hook signature %q was preserved", legacy)
+		}
 	}
-	if !strings.Contains(codexBody, "reorient-after-compact") {
+	if !strings.Contains(codexBody, "reorient after-compact") {
 		t.Fatal("new Codex after-compact hook signature was missing")
 	}
 	cursor := readTestCursorHooks(t, filepath.Join(homeDir, ".cursor", "hooks.json"))
 	if len(cursor.Hooks[EventCursorStop]) != 1 {
 		t.Fatalf("Cursor stop hooks len = %d, want 1", len(cursor.Hooks[EventCursorStop]))
 	}
-	if cursor.Hooks[EventCursorStop][0].Command != "/usr/local/bin/clyde hooks run reorient-stop-followup" {
+	if cursor.Hooks[EventCursorStop][0].Command != "/usr/local/bin/clyde hooks run reorient stop-followup" {
 		t.Fatalf("Cursor stop command = %q", cursor.Hooks[EventCursorStop][0].Command)
 	}
 }

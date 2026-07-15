@@ -40,3 +40,23 @@ func TestShellQuoteQuotesEmptyString(t *testing.T) {
 		t.Fatal("isShellBareWord(\"\") = true, want false")
 	}
 }
+
+func TestCommandHasManagedArgsMatchesSpacedReorientSyntax(t *testing.T) {
+	t.Parallel()
+
+	command := "/usr/local/bin/clyde hooks run reorient before-compact"
+	signatures := [][]string{{"hooks", "run", "reorient", "before-compact"}}
+	if !commandHasManagedArgs(command, signatures) {
+		t.Fatalf("commandHasManagedArgs(%q) = false, want true", command)
+	}
+}
+
+func TestCommandHasManagedArgsMatchesLegacySessionStartCommand(t *testing.T) {
+	t.Parallel()
+
+	command := "/opt/old/clyde hook sessionstart"
+	signatures := [][]string{{"hook", "sessionstart"}}
+	if !commandHasManagedArgs(command, signatures) {
+		t.Fatalf("commandHasManagedArgs(%q) = false, want true", command)
+	}
+}
