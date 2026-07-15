@@ -66,4 +66,40 @@ func TestInstallHooksCommandWritesUserHookSettings(t *testing.T) {
 	if !bytes.Contains(out.Bytes(), []byte("installed hooks")) {
 		t.Fatalf("output missing install summary:\n%s", out.String())
 	}
+	for _, want := range []string{
+		"hooks: reorient before-compact,reorient after-compact",
+		"hooks: reorient before-compact,reorient stop-followup",
+	} {
+		if !bytes.Contains(out.Bytes(), []byte(want)) {
+			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+	for _, legacy := range []string{
+		"reorient-before-compact",
+		"reorient-after-compact",
+		"reorient-stop-followup",
+		"claude-code-reorient-after-compact",
+	} {
+		if bytes.Contains(out.Bytes(), []byte(legacy)) {
+			t.Fatalf("output retained legacy hook label %q:\n%s", legacy, out.String())
+		}
+	}
+}
+
+func TestRootCommandRejectsLegacySingularHookCommand(t *testing.T) {
+	var out bytes.Buffer
+	root := &cobra.Command{Use: "clyde"}
+	output.PersistentFlag(root)
+	for _, command := range RenderCobra(NewConversationRegistry(), testFactory(&out)) {
+		root.AddCommand(command)
+	}
+	root.SetArgs([]string{"hook", "sessionstart"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("execute legacy singular hook command: nil error, want rejection")
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte(`unknown command "hook"`)) {
+		t.Fatalf("legacy singular hook command error = %q", err)
+	}
 }

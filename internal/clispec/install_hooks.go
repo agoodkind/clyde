@@ -114,7 +114,7 @@ func renderInstallHooksText(result hookspec.InstallResult) string {
 	}
 	for _, file := range result.Files {
 		fmt.Fprintf(&builder, "settings: %s\n", file.SettingsPath)
-		fmt.Fprintf(&builder, "hooks: %s\n", joinHookIDs(file.Installed))
+		fmt.Fprintf(&builder, "hooks: %s\n", joinHookNames(file.Installed))
 	}
 	if result.DryRun {
 		for _, file := range result.Files {
@@ -125,10 +125,23 @@ func renderInstallHooksText(result hookspec.InstallResult) string {
 	return builder.String()
 }
 
-func joinHookIDs(ids []hookspec.HookID) string {
+func joinHookNames(ids []hookspec.HookID) string {
 	parts := make([]string, 0, len(ids))
 	for _, id := range ids {
-		parts = append(parts, string(id))
+		parts = append(parts, renderHookName(id))
 	}
 	return strings.Join(parts, ",")
+}
+
+func renderHookName(id hookspec.HookID) string {
+	switch id {
+	case hookspec.HookIDReorientBeforeCompact:
+		return "reorient before-compact"
+	case hookspec.HookIDReorientAfterCompact, hookspec.HookIDClaudeCodeReorientAfterCompact:
+		return "reorient after-compact"
+	case hookspec.HookIDReorientStopFollowup:
+		return "reorient stop-followup"
+	default:
+		return string(id)
+	}
 }

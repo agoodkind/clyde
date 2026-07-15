@@ -11,12 +11,15 @@ import (
 
 // NewCmd builds the hooks runtime command.
 func NewCmd(f *cli.Factory) *cobra.Command {
-	return NewCmdWithReorient(f, daemon.ReorientConversationForHook)
+	return newCmdWithDeps(f, daemon.ReorientConversationForHook, nil, nil)
 }
 
-// NewCmdWithReorient builds the hooks runtime command with an injectable
-// reorient dependency for tests.
-func NewCmdWithReorient(f *cli.Factory, reorient hookspec.ReorientFunc) *cobra.Command {
+func newCmdWithDeps(
+	f *cli.Factory,
+	reorient hookspec.ReorientFunc,
+	snapshotStore hookspec.SnapshotStore,
+	getenv func(string) string,
+) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "hooks",
 		Short:   "Run installed Clyde hooks",
@@ -27,11 +30,16 @@ func NewCmdWithReorient(f *cli.Factory, reorient hookspec.ReorientFunc) *cobra.C
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newRunCmd(f, reorient))
+	cmd.AddCommand(newRunCmd(f, reorient, snapshotStore, getenv))
 	return cmd
 }
 
-func newRunCmd(f *cli.Factory, reorient hookspec.ReorientFunc) *cobra.Command {
+func newRunCmd(
+	f *cli.Factory,
+	reorient hookspec.ReorientFunc,
+	snapshotStore hookspec.SnapshotStore,
+	getenv func(string) string,
+) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "run",
 		Short:   "Run one installed Clyde hook.",
@@ -42,11 +50,16 @@ func newRunCmd(f *cli.Factory, reorient hookspec.ReorientFunc) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newRunReorientCmd(f, reorient))
+	cmd.AddCommand(newRunReorientCmd(f, reorient, snapshotStore, getenv))
 	return cmd
 }
 
-func newRunReorientCmd(f *cli.Factory, reorient hookspec.ReorientFunc) *cobra.Command {
+func newRunReorientCmd(
+	f *cli.Factory,
+	reorient hookspec.ReorientFunc,
+	snapshotStore hookspec.SnapshotStore,
+	getenv func(string) string,
+) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "reorient",
 		Short:   "Run one Clyde reorient hook.",
@@ -57,15 +70,17 @@ func newRunReorientCmd(f *cli.Factory, reorient hookspec.ReorientFunc) *cobra.Co
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newRunHookActionCmd(f, reorient, "before-compact", hookspec.HookIDReorientBeforeCompact))
-	cmd.AddCommand(newRunHookActionCmd(f, reorient, "after-compact", hookspec.HookIDReorientAfterCompact))
-	cmd.AddCommand(newRunHookActionCmd(f, reorient, "stop-followup", hookspec.HookIDReorientStopFollowup))
+	cmd.AddCommand(newRunHookActionCmd(f, reorient, snapshotStore, getenv, "before-compact", hookspec.HookIDReorientBeforeCompact))
+	cmd.AddCommand(newRunHookActionCmd(f, reorient, snapshotStore, getenv, "after-compact", hookspec.HookIDReorientAfterCompact))
+	cmd.AddCommand(newRunHookActionCmd(f, reorient, snapshotStore, getenv, "stop-followup", hookspec.HookIDReorientStopFollowup))
 	return cmd
 }
 
 func newRunHookActionCmd(
 	f *cli.Factory,
 	reorient hookspec.ReorientFunc,
+	snapshotStore hookspec.SnapshotStore,
+	getenv func(string) string,
 	action string,
 	hookID hookspec.HookID,
 ) *cobra.Command {
@@ -80,9 +95,9 @@ func newRunHookActionCmd(
 				Registry:      hookspec.NewRegistry(),
 				Input:         f.IOStreams.In,
 				Output:        f.IOStreams.Out,
-				Getenv:        nil,
+				Getenv:        getenv,
 				Reorient:      reorient,
-				SnapshotStore: nil,
+				SnapshotStore: snapshotStore,
 			}
 			return runner.Run(cmd.Context(), hookID)
 		},
