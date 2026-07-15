@@ -18,7 +18,7 @@ func TestMarshalCodexHookInstalls(t *testing.T) {
 				Client:         ClientCodex,
 				Event:          EventPreCompact,
 				Matcher:        "",
-				Args:           []string{"hooks", "run", string(HookIDReorientBeforeCompact)},
+				Args:           []string{"hooks", "run", "reorient", "before-compact"},
 				TimeoutSeconds: 600,
 				StatusMessage:  "Capturing Clyde reorient context",
 			},
@@ -39,7 +39,7 @@ func TestMarshalCodexHookInstalls(t *testing.T) {
 		"hooks = true",
 		"[hooks.state.\"/Users/me/.codex/config.toml:pre_compact:0:0\"]",
 		"[[hooks.pre_compact]]",
-		"command = \"/usr/local/bin/clyde hooks run reorient-before-compact\"",
+		"command = \"/usr/local/bin/clyde hooks run reorient before-compact\"",
 		"trusted_hash = \"sha256:",
 	} {
 		if !strings.Contains(text, want) {
@@ -160,6 +160,30 @@ func TestRemoveCodexCommandHookGroupsMatchesManagedArgsAcrossClydeBinChanges(t *
 	}, "\n")
 
 	got := removeCodexCommandHookGroups(body, [][]string{{"hooks", "run", string(HookIDReorientBeforeCompact)}})
+	if strings.Contains(got, command) {
+		t.Fatalf("command hook group survived:\n%s", got)
+	}
+	if !strings.Contains(got, "[other]") {
+		t.Fatalf("unrelated table missing:\n%s", got)
+	}
+}
+
+func TestRemoveCodexCommandHookGroupsMatchesLegacySessionStartCommand(t *testing.T) {
+	t.Parallel()
+
+	command := "/opt/old/clyde hook sessionstart"
+	body := strings.Join([]string{
+		"[[hooks.session_start]]",
+		"matcher = \"compact\"",
+		"",
+		"[[hooks.session_start.hooks]]",
+		"command = \"" + command + "\"",
+		"",
+		"[other]",
+		"value = true",
+	}, "\n")
+
+	got := removeCodexCommandHookGroups(body, [][]string{{"hook", "sessionstart"}})
 	if strings.Contains(got, command) {
 		t.Fatalf("command hook group survived:\n%s", got)
 	}

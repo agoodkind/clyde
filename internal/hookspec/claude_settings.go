@@ -236,6 +236,12 @@ func (handler *rawClaudeHookHandler) args() []string {
 	return args
 }
 
+func (handler *rawClaudeHookHandler) command() string {
+	var command string
+	_ = json.Unmarshal(handler.fields["command"], &command)
+	return command
+}
+
 func (handler *rawClaudeHookHandler) matchesHookSignature(signatures [][]string) bool {
 	args := handler.args()
 	for _, signature := range signatures {
@@ -243,7 +249,11 @@ func (handler *rawClaudeHookHandler) matchesHookSignature(signatures [][]string)
 			return true
 		}
 	}
-	return false
+	command := handler.command()
+	if command == "" {
+		return false
+	}
+	return commandHasManagedArgs(command, signatures)
 }
 
 func (handler *rawClaudeHookHandler) setString(key string, value string) {

@@ -41,8 +41,9 @@ func TestInstallHooksCommandWritesUserHookSettings(t *testing.T) {
 		t.Fatalf("Claude settings retained legacy hook id:\n%s", string(claudeBody))
 	}
 	if !bytes.Contains(claudeBody, []byte(`"command": "/usr/local/bin/clyde"`)) ||
-		!bytes.Contains(claudeBody, []byte(`"reorient-after-compact"`)) ||
-		!bytes.Contains(claudeBody, []byte(`"reorient-before-compact"`)) {
+		!bytes.Contains(claudeBody, []byte(`"reorient"`)) ||
+		!bytes.Contains(claudeBody, []byte(`"after-compact"`)) ||
+		!bytes.Contains(claudeBody, []byte(`"before-compact"`)) {
 		t.Fatalf("Claude settings missing reorient hooks:\n%s", string(claudeBody))
 	}
 	codexBody, err := os.ReadFile(filepath.Join(homeDir, ".codex", "config.toml"))
@@ -51,15 +52,15 @@ func TestInstallHooksCommandWritesUserHookSettings(t *testing.T) {
 	}
 	if !bytes.Contains(codexBody, []byte("[[hooks.session_start]]")) ||
 		!bytes.Contains(codexBody, []byte("[[hooks.pre_compact]]")) ||
-		!bytes.Contains(codexBody, []byte(`command = "/usr/local/bin/clyde hooks run reorient-after-compact"`)) ||
-		!bytes.Contains(codexBody, []byte(`command = "/usr/local/bin/clyde hooks run reorient-before-compact"`)) {
+		!bytes.Contains(codexBody, []byte(`command = "/usr/local/bin/clyde hooks run reorient after-compact"`)) ||
+		!bytes.Contains(codexBody, []byte(`command = "/usr/local/bin/clyde hooks run reorient before-compact"`)) {
 		t.Fatalf("Codex settings missing expected hooks:\n%s", string(codexBody))
 	}
 	cursorBody, err := os.ReadFile(filepath.Join(homeDir, ".cursor", "hooks.json"))
 	if err != nil {
 		t.Fatalf("ReadFile Cursor hooks: %v", err)
 	}
-	if !bytes.Contains(cursorBody, []byte(`/usr/local/bin/clyde hooks run reorient-stop-followup`)) {
+	if !bytes.Contains(cursorBody, []byte(`/usr/local/bin/clyde hooks run reorient stop-followup`)) {
 		t.Fatalf("Cursor hooks missing stop followup hook:\n%s", string(cursorBody))
 	}
 	if !bytes.Contains(out.Bytes(), []byte("installed hooks")) {

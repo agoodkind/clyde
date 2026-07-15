@@ -47,7 +47,7 @@ func TestRunCommandDispatchesHookRuntime(t *testing.T) {
 	}
 
 	cmd := NewCmdWithReorient(factory, reorient)
-	cmd.SetArgs([]string{"run", string(hookspec.HookIDReorientBeforeCompact)})
+	cmd.SetArgs([]string{"run", "reorient", "before-compact"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -58,6 +58,27 @@ func TestRunCommandDispatchesHookRuntime(t *testing.T) {
 	}
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty", output.String())
+	}
+}
+
+func TestRunCommandRejectsLegacyHookIDSyntax(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	factory := &cli.Factory{
+		IOStreams: &cli.IOStreams{
+			In:  strings.NewReader(`{}`),
+			Out: &bytes.Buffer{},
+			Err: &bytes.Buffer{},
+		},
+	}
+	cmd := NewCmdWithReorient(factory, nil)
+	cmd.SetArgs([]string{"run", string(hookspec.HookIDReorientBeforeCompact)})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want legacy syntax rejection")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("Execute() error = %q, want unknown command", err)
 	}
 }
 

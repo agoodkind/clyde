@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const reorientHookCommandName = "reorient"
+
 // HookID is the stable identifier for one Clyde-managed hook.
 type HookID string
 
@@ -206,16 +208,29 @@ func (registry Registry) ClydeCommandSignatures() [][]string {
 		for _, install := range hook.Installs {
 			signatures = append(signatures, slices.Clone(install.Args))
 		}
-		for _, alias := range hook.Aliases {
-			signatures = append(signatures, []string{"hooks", "run", string(alias)})
-		}
 	}
 	return signatures
+}
+
+// LegacyCommandSignatures returns every unpublished args shape that Clyde
+// should still treat as Clyde-owned during install-time cleanup.
+func (registry Registry) LegacyCommandSignatures() [][]string {
+	return [][]string{
+		{"hook", "sessionstart"},
+		{"hooks", "run", string(HookIDReorientBeforeCompact)},
+		{"hooks", "run", string(HookIDReorientAfterCompact)},
+		{"hooks", "run", string(HookIDReorientStopFollowup)},
+		{"hooks", "run", string(HookIDClaudeCodeReorientAfterCompact)},
+	}
 }
 
 func (install InstallSpec) clone() InstallSpec {
 	install.Args = slices.Clone(install.Args)
 	return install
+}
+
+func reorientHookArgs(action string) []string {
+	return []string{"hooks", "run", reorientHookCommandName, action}
 }
 
 func reorientBeforeCompactHook() Hook {
@@ -225,7 +240,7 @@ func reorientBeforeCompactHook() Hook {
 		ClaudeCode: ClaudeCodeHook{
 			Event:          ClaudeCodeEventPreCompact,
 			Matcher:        "",
-			Args:           []string{"hooks", "run", string(HookIDReorientBeforeCompact)},
+			Args:           reorientHookArgs("before-compact"),
 			TimeoutSeconds: 600,
 			StatusMessage:  "Capturing Clyde reorient context",
 		},
@@ -235,7 +250,7 @@ func reorientBeforeCompactHook() Hook {
 				Client:         ClientClaudeCode,
 				Event:          EventPreCompact,
 				Matcher:        "",
-				Args:           []string{"hooks", "run", string(HookIDReorientBeforeCompact)},
+				Args:           reorientHookArgs("before-compact"),
 				TimeoutSeconds: 600,
 				StatusMessage:  "Capturing Clyde reorient context",
 				FailClosed:     false,
@@ -245,7 +260,7 @@ func reorientBeforeCompactHook() Hook {
 				Client:         ClientCodex,
 				Event:          EventPreCompact,
 				Matcher:        "",
-				Args:           []string{"hooks", "run", string(HookIDReorientBeforeCompact)},
+				Args:           reorientHookArgs("before-compact"),
 				TimeoutSeconds: 600,
 				StatusMessage:  "Capturing Clyde reorient context",
 				FailClosed:     false,
@@ -255,7 +270,7 @@ func reorientBeforeCompactHook() Hook {
 				Client:         ClientCursor,
 				Event:          EventCursorPre,
 				Matcher:        "",
-				Args:           []string{"hooks", "run", string(HookIDReorientBeforeCompact)},
+				Args:           reorientHookArgs("before-compact"),
 				TimeoutSeconds: 600,
 				StatusMessage:  "",
 				FailClosed:     false,
@@ -273,17 +288,17 @@ func reorientAfterCompactHook() Hook {
 		ClaudeCode: ClaudeCodeHook{
 			Event:          ClaudeCodeEventSessionStart,
 			Matcher:        "compact",
-			Args:           []string{"hooks", "run", string(HookIDClaudeCodeReorientAfterCompact)},
+			Args:           reorientHookArgs("after-compact"),
 			TimeoutSeconds: 600,
 			StatusMessage:  "Recovering Clyde reorient context",
 		},
-		Aliases: []HookID{HookIDClaudeCodeReorientAfterCompact},
+		Aliases: nil,
 		Installs: []InstallSpec{
 			{
 				Client:         ClientClaudeCode,
 				Event:          EventSessionStart,
 				Matcher:        "compact",
-				Args:           []string{"hooks", "run", string(HookIDReorientAfterCompact)},
+				Args:           reorientHookArgs("after-compact"),
 				TimeoutSeconds: 600,
 				StatusMessage:  "Recovering Clyde reorient context",
 				FailClosed:     false,
@@ -293,7 +308,7 @@ func reorientAfterCompactHook() Hook {
 				Client:         ClientCodex,
 				Event:          EventSessionStart,
 				Matcher:        "compact",
-				Args:           []string{"hooks", "run", string(HookIDReorientAfterCompact)},
+				Args:           reorientHookArgs("after-compact"),
 				TimeoutSeconds: 600,
 				StatusMessage:  "Recovering Clyde reorient context",
 				FailClosed:     false,
@@ -320,7 +335,7 @@ func reorientStopFollowupHook() Hook {
 			Client:         ClientCursor,
 			Event:          EventCursorStop,
 			Matcher:        "",
-			Args:           []string{"hooks", "run", string(HookIDReorientStopFollowup)},
+			Args:           reorientHookArgs("stop-followup"),
 			TimeoutSeconds: 600,
 			StatusMessage:  "",
 			FailClosed:     false,

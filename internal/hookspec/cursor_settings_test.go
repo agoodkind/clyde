@@ -29,7 +29,7 @@ func TestCursorHooksDocumentMarshalCursorHookInstalls(t *testing.T) {
 			Client:         ClientCursor,
 			Event:          EventCursorStop,
 			Matcher:        "",
-			Args:           []string{"hooks", "run", string(HookIDReorientStopFollowup)},
+			Args:           []string{"hooks", "run", "reorient", "stop-followup"},
 			TimeoutSeconds: 600,
 			FailClosed:     false,
 			LoopLimit:      1,
@@ -49,7 +49,7 @@ func TestCursorHooksDocumentMarshalCursorHookInstalls(t *testing.T) {
 	if len(decoded.Hooks[EventCursorStop]) != 1 {
 		t.Fatalf("stop hooks len = %d, want 1", len(decoded.Hooks[EventCursorStop]))
 	}
-	if decoded.Hooks[EventCursorStop][0].Command != "/usr/local/bin/clyde hooks run reorient-stop-followup" {
+	if decoded.Hooks[EventCursorStop][0].Command != "/usr/local/bin/clyde hooks run reorient stop-followup" {
 		t.Fatalf("command = %q", decoded.Hooks[EventCursorStop][0].Command)
 	}
 	if decoded.Hooks[EventCursorStop][0].LoopLimit != 1 {
@@ -76,12 +76,12 @@ func TestCursorHooksDocumentPreservesUnrelatedHooksAndReplacesClydeCommands(t *t
 		Spec: InstallSpec{
 			Client:         ClientCursor,
 			Event:          EventCursorStop,
-			Args:           []string{"hooks", "run", string(HookIDReorientStopFollowup)},
+			Args:           []string{"hooks", "run", "reorient", "stop-followup"},
 			TimeoutSeconds: 600,
 			LoopLimit:      1,
 		},
 	}}
-	signatures := [][]string{{"hooks", "run", string(HookIDReorientStopFollowup)}}
+	signatures := [][]string{{"hooks", "run", "reorient", "stop-followup"}, {"hooks", "run", string(HookIDReorientStopFollowup)}}
 	if err := document.marshalCursorHookInstalls(installs, signatures, "/usr/local/bin/clyde"); err != nil {
 		t.Fatalf("marshalCursorHookInstalls: %v", err)
 	}
@@ -126,12 +126,12 @@ func TestCursorHooksDocumentReplacesManagedCommandAcrossClydeBinChanges(t *testi
 		Spec: InstallSpec{
 			Client:         ClientCursor,
 			Event:          EventCursorStop,
-			Args:           []string{"hooks", "run", string(HookIDReorientStopFollowup)},
+			Args:           []string{"hooks", "run", "reorient", "stop-followup"},
 			TimeoutSeconds: 600,
 			LoopLimit:      1,
 		},
 	}}
-	signatures := [][]string{{"hooks", "run", string(HookIDReorientStopFollowup)}}
+	signatures := [][]string{{"hooks", "run", "reorient", "stop-followup"}, {"hooks", "run", string(HookIDReorientStopFollowup)}}
 	if err := document.marshalCursorHookInstalls(installs, signatures, "/usr/local/bin/clyde"); err != nil {
 		t.Fatalf("marshalCursorHookInstalls: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestCursorHooksDocumentReplacesManagedCommandAcrossClydeBinChanges(t *testi
 	if len(decoded.Hooks[EventCursorStop]) != 1 {
 		t.Fatalf("stop hooks len = %d, want 1", len(decoded.Hooks[EventCursorStop]))
 	}
-	if decoded.Hooks[EventCursorStop][0].Command != "/usr/local/bin/clyde hooks run reorient-stop-followup" {
+	if decoded.Hooks[EventCursorStop][0].Command != "/usr/local/bin/clyde hooks run reorient stop-followup" {
 		t.Fatalf("command = %q", decoded.Hooks[EventCursorStop][0].Command)
 	}
 }

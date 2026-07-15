@@ -2,6 +2,7 @@ package hookspec
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -46,21 +47,28 @@ func TestRegisterRejectsAliasMatchingHookID(t *testing.T) {
 	}
 }
 
-func TestNewRegistryResolvesLegacyAliasWithoutInstallingIt(t *testing.T) {
+func TestNewRegistryDoesNotExposeLegacyRuntimeAliases(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
-	hook, ok := registry.Hook(HookIDClaudeCodeReorientAfterCompact)
-	if !ok {
-		t.Fatal("legacy Claude Code hook alias did not resolve")
+	if _, ok := registry.Hook(HookIDClaudeCodeReorientAfterCompact); ok {
+		t.Fatal("legacy Claude Code hook alias unexpectedly resolved")
 	}
-	if hook.ID != HookIDReorientAfterCompact {
-		t.Fatalf("legacy alias resolved to %q, want %q", hook.ID, HookIDReorientAfterCompact)
-	}
+}
 
-	for _, install := range registry.InstallsForClient(ClientClaudeCode) {
-		if install.HookID == HookIDClaudeCodeReorientAfterCompact {
-			t.Fatalf("legacy alias was installed: %#v", install)
+func TestNewRegistryLegacyCommandSignaturesIncludeUnpublishedForms(t *testing.T) {
+	t.Parallel()
+
+	signatures := NewRegistry().LegacyCommandSignatures()
+	for _, want := range []string{
+		"hook sessionstart",
+		"hooks run reorient-before-compact",
+		"hooks run reorient-after-compact",
+		"hooks run reorient-stop-followup",
+		"hooks run claude-code-reorient-after-compact",
+	} {
+		if !hasSignature(signatures, want) {
+			t.Fatalf("LegacyCommandSignatures() missing %q: %#v", want, signatures)
 		}
 	}
 }
@@ -73,15 +81,15 @@ func TestNewRegistryDeclaresExpectedInstallSpecs(t *testing.T) {
 	if !ok {
 		t.Fatal("missing reorient-before-compact hook")
 	}
-	if hook.ClaudeCode.Event != ClaudeCodeEventPreCompact || !slices.Equal(hook.ClaudeCode.Args, []string{"hooks", "run", "reorient-before-compact"}) {
+	if hook.ClaudeCode.Event != ClaudeCodeEventPreCompact || !slices.Equal(hook.ClaudeCode.Args, []string{"hooks", "run", "reorient", "before-compact"}) {
 		t.Fatalf("Claude Code pre-compact shape = %#v", hook.ClaudeCode)
 	}
-	assertInstallSpec(t, registry, ClientClaudeCode, HookIDReorientBeforeCompact, EventPreCompact, "", []string{"hooks", "run", "reorient-before-compact"}, 600, 0)
-	assertInstallSpec(t, registry, ClientClaudeCode, HookIDReorientAfterCompact, EventSessionStart, "compact", []string{"hooks", "run", "reorient-after-compact"}, 600, 0)
-	assertInstallSpec(t, registry, ClientCodex, HookIDReorientBeforeCompact, EventPreCompact, "", []string{"hooks", "run", "reorient-before-compact"}, 600, 0)
-	assertInstallSpec(t, registry, ClientCodex, HookIDReorientAfterCompact, EventSessionStart, "compact", []string{"hooks", "run", "reorient-after-compact"}, 600, 0)
-	assertInstallSpec(t, registry, ClientCursor, HookIDReorientBeforeCompact, EventCursorPre, "", []string{"hooks", "run", "reorient-before-compact"}, 600, 0)
-	assertInstallSpec(t, registry, ClientCursor, HookIDReorientStopFollowup, EventCursorStop, "", []string{"hooks", "run", "reorient-stop-followup"}, 600, 1)
+	assertInstallSpec(t, registry, ClientClaudeCode, HookIDReorientBeforeCompact, EventPreCompact, "", []string{"hooks", "run", "reorient", "before-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientClaudeCode, HookIDReorientAfterCompact, EventSessionStart, "compact", []string{"hooks", "run", "reorient", "after-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientCodex, HookIDReorientBeforeCompact, EventPreCompact, "", []string{"hooks", "run", "reorient", "before-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientCodex, HookIDReorientAfterCompact, EventSessionStart, "compact", []string{"hooks", "run", "reorient", "after-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientCursor, HookIDReorientBeforeCompact, EventCursorPre, "", []string{"hooks", "run", "reorient", "before-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientCursor, HookIDReorientStopFollowup, EventCursorStop, "", []string{"hooks", "run", "reorient", "stop-followup"}, 600, 1)
 }
 
 func assertInstallSpec(t *testing.T, registry Registry, client Client, id HookID, event string, matcher string, args []string, timeout int, loopLimit int) {
@@ -112,4 +120,13 @@ func assertInstallSpec(t *testing.T, registry Registry, client Client, id HookID
 		return
 	}
 	t.Fatalf("missing install spec %s/%s", client, id)
+}
+
+func hasSignature(signatures [][]string, want string) bool {
+	for _, signature := range signatures {
+		if slices.Equal(signature, strings.Split(want, " ")) {
+			return true
+		}
+	}
+	return false
 }
