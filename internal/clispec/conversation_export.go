@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -145,7 +146,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindArtifact,
 		Short:      "Export a conversation transcript.",
-		Long:       "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, with no destination and no --copy, export writes the default artifact file; pass --output PATH to write a file, or --stdout or --output - to write the export body to stdout. The global --copy flag copies the body to the clipboard and, on its own, replaces the default file write, so --copy alone copies without writing a file; combine --copy with --output to also write a file. Clipboard copy matches the selected format, is macOS only for now, and errors on other platforms. The MCP tool returns the body as text.",
+		Long:       "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, with no destination and no --copy, export writes the default artifact file; pass --output PATH to write a file, or --stdout or --output - to write the export body to stdout. The global --copy flag copies the body to the clipboard and, on its own, replaces the default file write, so --copy alone copies without writing a file; combine --copy with --output to also write a file. Clipboard copy matches the selected format, is macOS only for now, and errors on other platforms. The MCP tool writes the default artifact into the caller working directory, returns its absolute path in metadata, and retains the body as text fallback.",
 		Examples: []string{
 			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
 			"clyde conversation export claude:1a2b3c --only chat --include-compactions 0 --stdout",
@@ -233,14 +234,49 @@ func newExportInput() exportInput {
 // body is already going to stdout (--stdout) or the clipboard (--copy);
 // either of those replaces the implicit file, so --copy alone copies without
 // writing a file.
-func exportDestinationPath(ctx context.Context, p exportPayload) string {
+func exportDestinationPath(ctx context.Context, p exportPayload) (string, error) {
 	if p.OutputPath != "" {
-		return p.OutputPath
+		return absoluteExportPath(ctx, p.OutputPath)
 	}
 	if p.Stdout || copyRequested(ctx) {
-		return ""
+		return "", nil
 	}
-	return defaultExportOutputPath(p.ConversationID, p.Options.Format)
+	return absoluteExportPath(ctx, defaultExportOutputPath(p.ConversationID, p.Options.Format))
+}
+
+func absoluteExportPath(ctx context.Context, path string) (string, error) {
+	workingDirectory, err := exportWorkingDirectory(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workingDirectory, path)
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		slog.WarnContext(ctx, "clispec.export_path_resolve_failed", "concern", "cli.conversation", "component", "clispec", "path", path, "err", err)
+		return "", fmt.Errorf("resolve export path %q: %w", path, err)
+	}
+	return absPath, nil
+}
+
+func exportWorkingDirectory(ctx context.Context) (string, error) {
+	if surfaceFromContext(ctx) == SurfaceMCP {
+		result, ok := mcpCallerWorkingDirectoryResultFromContext(ctx)
+		if !ok {
+			return "", fmt.Errorf("MCP caller cwd is required")
+		}
+		if result.Err != nil {
+			return "", result.Err
+		}
+		return result.Directory, nil
+	}
+	directory, err := os.Getwd()
+	if err != nil {
+		slog.WarnContext(ctx, "clispec.export_cli_cwd_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
+		return "", fmt.Errorf("get CLI working directory: %w", err)
+	}
+	return directory, nil
 }
 
 func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, error) {
@@ -248,7 +284,11 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 	if err != nil {
 		return nil, logOperationError(ctx, "export transcript", err)
 	}
-	path := exportDestinationPath(ctx, p)
+	path, err := exportDestinationPath(ctx, p)
+	if err != nil {
+		slog.WarnContext(ctx, "clispec.export_destination_invalid", "concern", "cli.conversation", "component", "clispec", "err", err)
+		return nil, fmt.Errorf("select export destination: %w", err)
+	}
 	text := ""
 	if path != "" {
 		text = "wrote: " + path + "\n"
@@ -372,9 +412,10 @@ func writeCLIExportFile(
 	body []byte,
 	sink ResultSink,
 ) error {
-	path := p.OutputPath
-	if path == "" {
-		path = defaultExportOutputPath(p.ConversationID, p.Options.Format)
+	path, err := exportDestinationPath(ctx, p)
+	if err != nil {
+		slog.WarnContext(ctx, "clispec.export_destination_invalid", "concern", "cli.conversation", "component", "clispec", "err", err)
+		return fmt.Errorf("select export destination: %w", err)
 	}
 	if err := sink.WriteFile(path, body); err != nil {
 		slog.WarnContext(ctx, "cli.conversation.export_write_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)
