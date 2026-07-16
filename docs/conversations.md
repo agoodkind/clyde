@@ -157,8 +157,9 @@ operations. Use `clyde_conversation_info` to inspect metadata and the segment
 stack. Use `clyde_export_transcript` to export transcript content.
 
 `clyde_export_transcript` accepts `include_compactions`, `full_history`, and
-`last_n` with the same segment selection rules as the CLI. The MCP tool returns
-the export body as text instead of writing a file or using the clipboard.
+`last_n` with the same segment selection rules as the CLI. The MCP tool writes
+the export file into the caller working directory and returns its absolute path
+in metadata. The text fallback retains the export body.
 
 `conversation export tail` is a CLI-only shortcut. MCP clients can request the
 same range by calling `clyde_export_transcript` with `include_compactions: "0"`,

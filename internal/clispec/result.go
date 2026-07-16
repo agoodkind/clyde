@@ -249,6 +249,11 @@ func renderMCPResult(ctx context.Context, wantKind resultKind, result Result) (*
 	case valueResult:
 		return newMCPStructuredResult(ctx, typed.Payload, typed.Text)
 	case artifactResult:
+		if typed.DefaultPath != "" {
+			if err := writeFile(typed.DefaultPath, typed.Body); err != nil {
+				return nil, err
+			}
+		}
 		text := typed.InlineText
 		if text == "" {
 			text = string(typed.Body)
@@ -343,6 +348,10 @@ func writeFile(path string, body []byte) error {
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		slog.Warn("clispec.result.write_file_failed", "concern", "cli.conversation", "component", "clispec", "path", path, "err", err)
 		return fmt.Errorf("clispec: write file %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		slog.Warn("clispec.result.set_file_permissions_failed", "concern", "cli.conversation", "component", "clispec", "path", path, "err", err)
+		return fmt.Errorf("clispec: set file permissions %s: %w", path, err)
 	}
 	return nil
 }

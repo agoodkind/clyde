@@ -800,6 +800,107 @@ func TestMCPHandlerStructuredContent(t *testing.T) {
 	}
 }
 
+func TestRenderMCPArtifactWritesFileAndPreservesResult(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "claude-probe.txt")
+	body := []byte("export body\n")
+	result, err := renderMCPResult(context.Background(), resultKindArtifact, artifactResult{
+		Payload: exportTranscriptOutput{
+			ConversationID: "claude:probe",
+			Format:         "plain_text",
+			Path:           path,
+			Bytes:          len(body),
+		},
+		Body:        body,
+		DefaultPath: path,
+		InlineText:  string(body),
+	})
+	if err != nil {
+		t.Fatalf("renderMCPResult: %v", err)
+	}
+
+	gotBody, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export file: %v", err)
+	}
+	if !bytes.Equal(gotBody, body) {
+		t.Fatalf("export file body = %q, want %q", string(gotBody), string(body))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat export file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("export file permissions = %o, want 600", got)
+	}
+	if got := textOf(t, result); got != string(body) {
+		t.Fatalf("MCP text = %q, want %q", got, string(body))
+	}
+
+	raw, ok := result.StructuredContent.(json.RawMessage)
+	if !ok {
+		t.Fatalf("structured content type = %T, want json.RawMessage", result.StructuredContent)
+	}
+	var got exportTranscriptOutput
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal structured content: %v\n%s", err, string(raw))
+	}
+	if got.ConversationID != "claude:probe" || got.Format != "plain_text" || got.Path != path || got.Bytes != len(body) {
+		t.Fatalf("structured export = %#v, want preserved export metadata", got)
+	}
+
+	replacement := []byte("replacement export body\n")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("make export file permissive: %v", err)
+	}
+	_, err = renderMCPResult(context.Background(), resultKindArtifact, artifactResult{
+		Payload: exportTranscriptOutput{
+			ConversationID: "claude:probe",
+			Format:         "plain_text",
+			Path:           path,
+			Bytes:          len(replacement),
+		},
+		Body:        replacement,
+		DefaultPath: path,
+		InlineText:  string(replacement),
+	})
+	if err != nil {
+		t.Fatalf("render replacement MCP result: %v", err)
+	}
+	gotBody, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read replacement export file: %v", err)
+	}
+	if !bytes.Equal(gotBody, replacement) {
+		t.Fatalf("replacement export file body = %q, want %q", string(gotBody), string(replacement))
+	}
+	info, err = os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat replacement export file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("replacement export file permissions = %o, want 600", got)
+	}
+}
+
+func TestRenderMCPArtifactReturnsWriteFailure(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "missing", "export.txt")
+	_, err := renderMCPResult(context.Background(), resultKindArtifact, artifactResult{
+		Payload:     artifactProbePayload{Text: "metadata"},
+		Body:        []byte("body"),
+		DefaultPath: path,
+		InlineText:  "body",
+	})
+	if err == nil {
+		t.Fatal("renderMCPResult succeeded when the artifact file could not be written")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Fatalf("write error = %q, want path %q", err, path)
+	}
+}
+
 func TestMCPHandlerPrependsCorrelationMetadata(t *testing.T) {
 	t.Parallel()
 	_, handler := probeOp().mcpTool()
@@ -895,6 +996,10 @@ func TestDefaultExportOutputPath(t *testing.T) {
 
 func TestExportDestinationPath(t *testing.T) {
 	t.Parallel()
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
 	defaultPath := defaultExportOutputPath("claude:probe", conv.ExportFormatMarkdown)
 	cases := []struct {
 		name       string
@@ -903,9 +1008,9 @@ func TestExportDestinationPath(t *testing.T) {
 		copy       bool
 		want       string
 	}{
-		{name: "implicit file", outputPath: "", stdout: false, copy: false, want: defaultPath},
-		{name: "explicit file", outputPath: "transcript.md", stdout: false, copy: false, want: "transcript.md"},
-		{name: "explicit file with copy", outputPath: "transcript.md", stdout: false, copy: true, want: "transcript.md"},
+		{name: "implicit file", outputPath: "", stdout: false, copy: false, want: filepath.Join(workingDirectory, defaultPath)},
+		{name: "explicit file", outputPath: "transcript.md", stdout: false, copy: false, want: filepath.Join(workingDirectory, "transcript.md")},
+		{name: "explicit file with copy", outputPath: "transcript.md", stdout: false, copy: true, want: filepath.Join(workingDirectory, "transcript.md")},
 		{name: "stdout", outputPath: "", stdout: true, copy: false, want: ""},
 		{name: "copy only", outputPath: "", stdout: false, copy: true, want: ""},
 		{name: "stdout with copy", outputPath: "", stdout: true, copy: true, want: ""},
@@ -925,10 +1030,91 @@ func TestExportDestinationPath(t *testing.T) {
 				OutputPath: tc.outputPath,
 				Stdout:     tc.stdout,
 			}
-			if got := exportDestinationPath(ctx, payload); got != tc.want {
+			got, err := exportDestinationPath(ctx, payload)
+			if err != nil {
+				t.Fatalf("exportDestinationPath: %v", err)
+			}
+			if got != tc.want {
 				t.Fatalf("exportDestinationPath() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMCPCallerWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	file := filepath.Join(directory, "file.txt")
+	if err := os.WriteFile(file, []byte("body"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	spacedDirectory := filepath.Join(directory, "caller cwd ")
+	if err := os.Mkdir(spacedDirectory, 0o700); err != nil {
+		t.Fatalf("create spaced directory: %v", err)
+	}
+	_, err := withMCPCallerWorkingDirectory(context.Background(), mcp.CallToolRequest{})
+	if err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("missing metadata error = %v, want required cwd error", err)
+	}
+	cases := []struct {
+		name string
+		meta map[string]any
+		want string
+		err  string
+	}{
+		{name: "cwd", meta: map[string]any{"cwd": directory}, want: directory},
+		{name: "cwd with trailing space", meta: map[string]any{"cwd": spacedDirectory}, want: spacedDirectory},
+		{name: "codex cwd", meta: map[string]any{"codex_cwd": directory}, want: directory},
+		{name: "cwd takes precedence", meta: map[string]any{"cwd": directory, "codex_cwd": "/missing"}, want: directory},
+		{name: "missing", meta: nil, err: "required"},
+		{name: "non string", meta: map[string]any{"cwd": 3}, err: "must be a string"},
+		{name: "empty", meta: map[string]any{"cwd": " "}, err: "must not be empty"},
+		{name: "relative", meta: map[string]any{"cwd": "relative"}, err: "must be an absolute path"},
+		{name: "file", meta: map[string]any{"cwd": file}, err: "is not a directory"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := mcp.CallToolRequest{Params: mcp.CallToolParams{Meta: &mcp.Meta{AdditionalFields: tc.meta}}}
+			ctx, err := withMCPCallerWorkingDirectory(context.Background(), req)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("withMCPCallerWorkingDirectory() error = %v, want %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("withMCPCallerWorkingDirectory: %v", err)
+			}
+			result, ok := mcpCallerWorkingDirectoryResultFromContext(ctx)
+			if !ok || result.Directory != tc.want || result.Err != nil {
+				t.Fatalf("caller working directory result = %#v, %t, want %q without error", result, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestExportDestinationPathUsesMCPCallerWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	callerDirectory := t.TempDir()
+	req := mcp.CallToolRequest{Params: mcp.CallToolParams{Meta: &mcp.Meta{AdditionalFields: map[string]any{"cwd": callerDirectory}}}}
+	ctx, err := withMCPCallerWorkingDirectory(context.Background(), req)
+	if err != nil {
+		t.Fatalf("withMCPCallerWorkingDirectory: %v", err)
+	}
+	ctx = withSurface(ctx, SurfaceMCP)
+	path, err := exportDestinationPath(ctx, exportPayload{
+		ConversationID: "claude:probe",
+		Options: conv.ExportOptions{
+			Format: conv.ExportFormatPlainText,
+		},
+	})
+	if err != nil {
+		t.Fatalf("exportDestinationPath: %v", err)
+	}
+	want := filepath.Join(callerDirectory, "claude-probe.txt")
+	if path != want {
+		t.Fatalf("MCP export path = %q, want caller path %q", path, want)
 	}
 }
 
