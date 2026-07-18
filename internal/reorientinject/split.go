@@ -63,14 +63,19 @@ func extendInstructionStart(promptIndex int, total int, pairing toolPairing) int
 // tool pairs, then walks the recent half by count and byte cap, then snaps the older
 // half to end on a user message so no tool call or system reminder is orphaned. ok
 // is false when no valid split exists, so the caller falls back to no trim.
-func planSplit(messages []anthropicMessage, promptIndex int, maxBytes int) (splitPlan, bool) {
+//
+// recentFraction is the fraction of conversation messages, by count, allowed into
+// the recent half before the byte cap or the older-half floor stops the walk. A
+// larger fraction reattaches more of the conversation verbatim and leaves less for
+// the model to summarize.
+func planSplit(messages []anthropicMessage, promptIndex int, maxBytes int, recentFraction float64) (splitPlan, bool) {
 	pairing := indexToolPairs(messages)
 	instructionStart := extendInstructionStart(promptIndex, len(messages), pairing)
 	conversationLen := instructionStart
 	if conversationLen < reorientSplitMinConversation {
 		return splitPlan{recentStart: 0, instructionStart: 0}, false
 	}
-	half := conversationLen / 2
+	half := int(float64(conversationLen) * recentFraction)
 	if half < 1 {
 		return splitPlan{recentStart: 0, instructionStart: 0}, false
 	}

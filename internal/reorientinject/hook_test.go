@@ -96,7 +96,7 @@ func eventStreamResponse(body string) mitm.ResponseHookResponse {
 
 func TestHookMatchesCompactionSummaryRequest(t *testing.T) {
 	t.Parallel()
-	hook := New(fixedContentProvider("recovered"), 0)
+	hook := New(fixedContentProvider("recovered"), Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -141,7 +141,7 @@ func TestHookSetsWindowAwareMaxBytes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			hook := New(fixedContentProvider("recovered"), 0)
+			hook := New(fixedContentProvider("recovered"), Sizing{})
 			match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 				Method: http.MethodPost,
 				Path:   "/v1/messages",
@@ -159,6 +159,63 @@ func TestHookSetsWindowAwareMaxBytes(t *testing.T) {
 				t.Fatalf("maxBytes = %d, want %d", appender.maxBytes, tc.want)
 			}
 		})
+	}
+}
+
+func TestSizingOverridesMaxBytes(t *testing.T) {
+	t.Parallel()
+	// A caller that raises the standard window and the fraction, and lowers the
+	// bytes-per-token, must see all three reflected in the derived byte cap:
+	// min(maxTokens, window*fraction) * bytesPerToken = min(400k, 300k*0.75) * 3.
+	hook := New(fixedContentProvider("recovered"), Sizing{
+		MaxTokens:             400_000,
+		ContextWindowFraction: 0.75,
+		BytesPerToken:         3,
+		StandardContextWindow: 300_000,
+	})
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{"anthropic-beta": []string{""}},
+		Body:   staticHookBody{body: []byte(compactRequestBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	appender, ok := match.Transformer.(responseAppendTransformer)
+	if !ok {
+		t.Fatalf("transformer type = %T, want responseAppendTransformer", match.Transformer)
+	}
+	want := 225_000 * 3
+	if appender.maxBytes != want {
+		t.Fatalf("maxBytes = %d, want %d", appender.maxBytes, want)
+	}
+}
+
+func TestPlanSplitRecentFractionReattachesMore(t *testing.T) {
+	t.Parallel()
+	msg := func(role string) anthropicMessage {
+		return anthropicMessage{Role: role, Content: json.RawMessage(`"x"`)}
+	}
+	// Ten conversation messages then the prompt. With no byte cap the count
+	// fraction alone bounds the recent half, so a larger fraction must walk
+	// recentStart earlier (reattach more messages verbatim).
+	messages := []anthropicMessage{
+		msg("user"), msg("assistant"), msg("user"), msg("assistant"), msg("user"),
+		msg("assistant"), msg("user"), msg("assistant"), msg("user"), msg("assistant"),
+		msg("user"),
+	}
+	promptIndex := 10
+	small, ok := planSplit(messages, promptIndex, 0, 0.5)
+	if !ok {
+		t.Fatal("expected a split at fraction 0.5")
+	}
+	large, ok := planSplit(messages, promptIndex, 0, 0.9)
+	if !ok {
+		t.Fatal("expected a split at fraction 0.9")
+	}
+	if large.recentStart >= small.recentStart {
+		t.Fatalf("recentStart at 0.9 = %d, want earlier than at 0.5 = %d", large.recentStart, small.recentStart)
 	}
 }
 
@@ -182,7 +239,7 @@ const compactTinyBody = `{"messages":[` +
 
 func TestHookSplitsConversationAtMidpoint(t *testing.T) {
 	t.Parallel()
-	hook := New(nil, 0)
+	hook := New(nil, Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -274,7 +331,7 @@ func TestPlanSplitClampedByCap(t *testing.T) {
 	// older half ends on a user.
 	messages := []anthropicMessage{user, assistant, user, assistant, user, assistant, user, assistant, user}
 	promptIndex := 8
-	plan, ok := planSplit(messages, promptIndex, 150)
+	plan, ok := planSplit(messages, promptIndex, 150, DefaultRecentFraction)
 	if !ok {
 		t.Fatal("expected a split")
 	}
@@ -308,7 +365,7 @@ const compactWithToolPairsBody = `{"model":"m","messages":[` +
 
 func TestPlanSplitKeepsToolPairsAndValidates(t *testing.T) {
 	t.Parallel()
-	hook := New(nil, 0)
+	hook := New(nil, Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -391,7 +448,7 @@ const compactWithGhostToolResultBody = `{"messages":[` +
 
 func TestHookFallsBackWhenTrimWouldBeInvalid(t *testing.T) {
 	t.Parallel()
-	hook := New(fixedContentProvider("disk-recovered"), 0)
+	hook := New(fixedContentProvider("disk-recovered"), Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -415,7 +472,7 @@ func TestHookFallsBackWhenTrimWouldBeInvalid(t *testing.T) {
 
 func TestHookSmallConversationFallsBackToProvider(t *testing.T) {
 	t.Parallel()
-	hook := New(fixedContentProvider("disk-recovered"), 0)
+	hook := New(fixedContentProvider("disk-recovered"), Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -456,7 +513,7 @@ func TestPlanSplitEndsOlderHalfOnUser(t *testing.T) {
 		msg("assistant"), msg("system"), msg("user"),
 	}
 	promptIndex := 6
-	plan, ok := planSplit(messages, promptIndex, 0)
+	plan, ok := planSplit(messages, promptIndex, 0, DefaultRecentFraction)
 	if !ok {
 		t.Fatal("expected a split")
 	}
@@ -477,7 +534,7 @@ func TestPlanSplitFallsBackWithoutUserBoundary(t *testing.T) {
 		msg("user"),
 	}
 	promptIndex := 4
-	if _, ok := planSplit(messages, promptIndex, 0); ok {
+	if _, ok := planSplit(messages, promptIndex, 0, DefaultRecentFraction); ok {
 		t.Fatal("expected no split when the older half cannot end on a user")
 	}
 }
@@ -496,7 +553,7 @@ func TestHookDetectionTable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			hook := New(fixedContentProvider("recovered"), 0)
+			hook := New(fixedContentProvider("recovered"), Sizing{})
 			match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 				Method: http.MethodPost,
 				Path:   "/v1/messages",
@@ -518,7 +575,7 @@ func TestHookMatchesCompactionWithTrailingSystemMessage(t *testing.T) {
 	// Interactive Claude Code appends a system-reminder after the compaction
 	// prompt, so the final message is not the prompt. Detection must scan back to
 	// the last user message and still match.
-	hook := New(fixedContentProvider("recovered"), 0)
+	hook := New(fixedContentProvider("recovered"), Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -542,7 +599,7 @@ func TestHookMatchesCompactionWithTrailingSystemMessage(t *testing.T) {
 
 func TestHookIgnoresNormalTurn(t *testing.T) {
 	t.Parallel()
-	hook := New(fixedContentProvider("recovered"), 0)
+	hook := New(fixedContentProvider("recovered"), Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -565,7 +622,7 @@ func TestHookIgnoresCompactionWithoutSessionID(t *testing.T) {
 		`{"role":"user","content":"hi"},` +
 		`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
 		`]}`
-	hook := New(fixedContentProvider("recovered"), 0)
+	hook := New(fixedContentProvider("recovered"), Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -582,7 +639,7 @@ func TestHookIgnoresCompactionWithoutSessionID(t *testing.T) {
 
 func TestHookCheapRejectDoesNotReadBody(t *testing.T) {
 	t.Parallel()
-	hook := New(fixedContentProvider("recovered"), 0)
+	hook := New(fixedContentProvider("recovered"), Sizing{})
 	cases := []mitm.RequestResponseHookRequest{
 		{Method: http.MethodGet, Path: "/v1/messages", Header: http.Header{}, Body: staticHookBody{failIfRead: true, t: t}},
 		{Method: http.MethodPost, Path: "/v1/models", Header: http.Header{}, Body: staticHookBody{failIfRead: true, t: t}},
@@ -602,7 +659,7 @@ func TestHookMatchesQueryParameterizedPath(t *testing.T) {
 	t.Parallel()
 	// The seam strips the query, so Path is already query-free here; assert the
 	// suffix match still holds for the bare messages path.
-	hook := New(fixedContentProvider("recovered"), 0)
+	hook := New(fixedContentProvider("recovered"), Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",

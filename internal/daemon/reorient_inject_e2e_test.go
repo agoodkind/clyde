@@ -51,7 +51,7 @@ func TestReorientInjectEndToEnd(t *testing.T) {
 
 	const maxTokens = 80
 	const maxBytes = maxTokens * 4
-	provider := newReorientInjectContentProvider()
+	provider := newReorientInjectContentProvider(0)
 	content, err := provider(context.Background(), sessionID, maxBytes)
 	if err != nil {
 		t.Fatalf("provider err = %v", err)
@@ -66,7 +66,7 @@ func TestReorientInjectEndToEnd(t *testing.T) {
 		t.Fatalf("provider content len = %d, want <= %d", len(content), maxBytes)
 	}
 
-	hook := reorientinject.New(provider, maxTokens)
+	hook := reorientinject.New(provider, reorientinject.Sizing{MaxTokens: maxTokens})
 	requestBody := `{"messages":[` +
 		`{"role":"user","content":"earlier turn"},` +
 		`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +

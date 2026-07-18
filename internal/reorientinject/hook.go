@@ -39,14 +39,29 @@ const (
 	defaultMissingContentBlockIndex = -1
 
 	anthropicBetaHeader = "Anthropic-Beta"
+)
 
-	defaultReorientInjectMaxTokens  = 500_000
-	reorientStandardContextWindow   = 200_000
-	reorientOneMillionContextWindow = 1_000_000
-	reorientContextWindowFraction   = 0.5
-	// reorientBytesPerToken is a documented approximation used to keep the hot
-	// path tokenizer-free.
-	reorientBytesPerToken = 4
+// Reorient injection sizing defaults. A zero field in [Sizing] falls back to the
+// matching default here, so a caller may override only the knobs it cares about.
+const (
+	// DefaultMaxTokens caps the injected transcript before the context-window
+	// fraction is applied.
+	DefaultMaxTokens = 500_000
+	// DefaultStandardContextWindow is the assumed context window, in tokens, for a
+	// compaction request without the context-1m beta.
+	DefaultStandardContextWindow = 200_000
+	// DefaultOneMillionContextWindow is the assumed context window, in tokens, for a
+	// compaction request carrying the context-1m beta.
+	DefaultOneMillionContextWindow = 1_000_000
+	// DefaultContextWindowFraction is the fraction of the request's context window
+	// the injection may fill.
+	DefaultContextWindowFraction = 0.5
+	// DefaultBytesPerToken is a documented token-to-byte approximation used to keep
+	// the hot path tokenizer-free.
+	DefaultBytesPerToken = 4
+	// DefaultRecentFraction is the fraction of conversation messages, by count,
+	// reattached verbatim as the recent half in the R2 request-trim split.
+	DefaultRecentFraction = 0.5
 )
 
 // ContentProvider returns the recovered pre-compaction transcript for a Claude
@@ -55,22 +70,70 @@ const (
 // the response through unchanged.
 type ContentProvider func(ctx context.Context, sessionID string, maxBytes int) (string, error)
 
+// Sizing configures the reorient injection size caps. Every zero or non-positive
+// field falls back to the matching Default constant, so a caller may set only the
+// knobs it wants to change and leave the rest at their defaults.
+type Sizing struct {
+	// MaxTokens caps the injected transcript before the context-window fraction is
+	// applied. Zero uses DefaultMaxTokens.
+	MaxTokens int
+	// ContextWindowFraction is the fraction of the request's context window the
+	// injection may fill. Zero uses DefaultContextWindowFraction.
+	ContextWindowFraction float64
+	// BytesPerToken is the token-to-byte approximation. Zero uses DefaultBytesPerToken.
+	BytesPerToken int
+	// StandardContextWindow is the assumed window, in tokens, for a request without
+	// the context-1m beta. Zero uses DefaultStandardContextWindow.
+	StandardContextWindow int
+	// OneMillionContextWindow is the assumed window, in tokens, for a context-1m
+	// request. Zero uses DefaultOneMillionContextWindow.
+	OneMillionContextWindow int
+	// RecentFraction is the fraction of conversation messages, by count, reattached
+	// verbatim as the recent half in the R2 request-trim split. Zero uses
+	// DefaultRecentFraction. The maxBytes ceiling still bounds the reattached half,
+	// so a fraction near 1 reattaches as much recent history as fits MaxTokens.
+	RecentFraction float64
+}
+
+func (s Sizing) normalized() Sizing {
+	if s.MaxTokens <= 0 {
+		s.MaxTokens = DefaultMaxTokens
+	}
+	if s.ContextWindowFraction <= 0 {
+		s.ContextWindowFraction = DefaultContextWindowFraction
+	}
+	if s.BytesPerToken <= 0 {
+		s.BytesPerToken = DefaultBytesPerToken
+	}
+	if s.StandardContextWindow <= 0 {
+		s.StandardContextWindow = DefaultStandardContextWindow
+	}
+	if s.OneMillionContextWindow <= 0 {
+		s.OneMillionContextWindow = DefaultOneMillionContextWindow
+	}
+	if s.RecentFraction <= 0 {
+		s.RecentFraction = DefaultRecentFraction
+	}
+	return s
+}
+
 // Hook detects Claude compaction summarization requests and drives the summary
 // append. It implements [mitm.RequestResponseHook].
 type Hook struct {
-	provider  ContentProvider
-	maxTokens int
+	provider ContentProvider
+	sizing   Sizing
 }
 
 // New constructs a reorient summary injection hook. A nil provider yields a hook
-// that always passes responses through unchanged.
-func New(provider ContentProvider, maxTokens int) *Hook {
+// that always passes responses through unchanged. A zero Sizing field falls back
+// to its Default constant.
+func New(provider ContentProvider, sizing Sizing) *Hook {
 	if provider == nil {
 		provider = emptyContentProvider
 	}
 	return &Hook{
-		provider:  provider,
-		maxTokens: normalizeMaxTokens(maxTokens),
+		provider: provider,
+		sizing:   sizing.normalized(),
 	}
 }
 
@@ -125,7 +188,7 @@ func (h *Hook) MatchRequestResponse(
 	}
 	maxBytes := h.maxBytes(req.Header)
 	if promptIndex, ok := compactionPromptIndex(request); ok {
-		if plan, split := planSplit(request.Messages, promptIndex, maxBytes); split {
+		if plan, split := planSplit(request.Messages, promptIndex, maxBytes, h.sizing.RecentFraction); split {
 			keep := trimKeepIndexes(plan.recentStart, plan.instructionStart, len(request.Messages))
 			recent := renderRecentMessages(request.Messages[plan.recentStart:plan.instructionStart])
 			// Hard gate: only trim when the kept messages are Anthropic-valid, so a
@@ -159,24 +222,17 @@ func (h *Hook) MatchRequestResponse(
 	}, nil
 }
 
-func normalizeMaxTokens(maxTokens int) int {
-	if maxTokens <= 0 {
-		return defaultReorientInjectMaxTokens
-	}
-	return maxTokens
-}
-
 func (h *Hook) maxBytes(header http.Header) int {
-	contextWindow := reorientStandardContextWindow
+	contextWindow := h.sizing.StandardContextWindow
 	for _, beta := range anthropicBetaValues(header) {
 		if strings.Contains(strings.ToLower(beta), "context-1m") {
-			contextWindow = reorientOneMillionContextWindow
+			contextWindow = h.sizing.OneMillionContextWindow
 			break
 		}
 	}
-	windowTokens := int(float64(contextWindow) * reorientContextWindowFraction)
-	effectiveTokens := min(h.maxTokens, windowTokens)
-	return effectiveTokens * reorientBytesPerToken
+	windowTokens := int(float64(contextWindow) * h.sizing.ContextWindowFraction)
+	effectiveTokens := min(h.sizing.MaxTokens, windowTokens)
+	return effectiveTokens * h.sizing.BytesPerToken
 }
 
 func anthropicBetaValues(header http.Header) []string {
