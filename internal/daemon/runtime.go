@@ -249,8 +249,15 @@ func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
 	}
 	return []mitm.RequestResponseHook{
 		reorientinject.New(
-			newReorientInjectContentProvider(),
-			mitmCfg.ReorientInjectMaxTokens,
+			newReorientInjectContentProvider(mitmCfg.ReorientInjectMaxLines),
+			reorientinject.Sizing{
+				MaxTokens:               mitmCfg.ReorientInjectMaxTokens,
+				ContextWindowFraction:   mitmCfg.ReorientContextWindowFraction,
+				BytesPerToken:           mitmCfg.ReorientBytesPerToken,
+				StandardContextWindow:   mitmCfg.ReorientStandardContextWindow,
+				OneMillionContextWindow: mitmCfg.ReorientOneMillionContextWindow,
+				RecentFraction:          mitmCfg.ReorientRecentFraction,
+			},
 		),
 	}
 }
@@ -261,10 +268,11 @@ func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
 // the daemon's shared index and its refresh cycle. Given the session id parsed
 // from the intercepted compaction request, the provider resolves the Claude
 // transcript file and renders the recovered pre-compaction transcript off disk
-// with clyde's reorient knobs (tool outputs, dense, line-capped). An empty or
-// unresolvable session id yields empty content, which passes the response
+// with clyde's reorient knobs (tool outputs, dense, line-capped). maxLines caps
+// the recovered transcript; zero uses the conversation renderer default. An empty
+// or unresolvable session id yields empty content, which passes the response
 // through unchanged.
-func newReorientInjectContentProvider() reorientinject.ContentProvider {
+func newReorientInjectContentProvider(maxLines int) reorientinject.ContentProvider {
 	index := NewConversationIndex()
 	return func(ctx context.Context, sessionID string, maxBytes int) (string, error) {
 		if sessionID == "" {
@@ -285,7 +293,7 @@ func newReorientInjectContentProvider() reorientinject.ContentProvider {
 		return index.RenderReorientArtifact(path, providerid.ProviderClaude, conversation.ReorientOptions{
 			ConversationID:      "",
 			WorkspaceRoot:       "",
-			MaxLines:            0,
+			MaxLines:            maxLines,
 			MaxBytes:            maxBytes,
 			IncludeToolOutputs:  true,
 			SyntheticPreCompact: true,
