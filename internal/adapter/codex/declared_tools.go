@@ -44,7 +44,31 @@ func (r declaredToolResolver) patchToolName() (string, bool) {
 	if name, ok := r.firstByShape(toolShapeIsPatchLike); ok {
 		return name, true
 	}
+	// A client-declared custom (freeform) tool carries no parameter
+	// schema at all, so the shape classifier above can never match it.
+	// Its freeform payload is exactly what a native apply_patch call
+	// produces, which makes it the right target for one. The parameter
+	// shape is tried first so a client that declared both keeps the
+	// schema-driven choice.
+	if name, ok := r.firstCustomToolName(); ok {
+		return name, true
+	}
 	return r.soleDeclaredToolName()
+}
+
+// firstCustomToolName returns the first declared custom (freeform) tool
+// name. Declaration order is the client's, so the first one wins the
+// same way the shape classifiers pick their first match.
+func (r declaredToolResolver) firstCustomToolName() (string, bool) {
+	for _, tool := range r.tools {
+		if !tool.IsCustom() {
+			continue
+		}
+		if name := strings.TrimSpace(tool.Name); name != "" {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // commandToolName returns the client-declared tool name to use for a

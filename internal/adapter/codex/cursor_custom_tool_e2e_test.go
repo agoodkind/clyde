@@ -209,6 +209,25 @@ func TestCursorCustomToolCallReachesCursorAsRawPatch(t *testing.T) {
 	}
 }
 
+// TestBackendInjectedApplyPatchMapsToDeclaredCustomTool covers the case
+// where the codex backend answers with its own apply_patch tool type
+// rather than the client's name. The declared custom tool carries no
+// parameter schema, so the parameter-shape classifier cannot match it;
+// the freeform declaration itself is the signal.
+func TestBackendInjectedApplyPatchMapsToDeclaredCustomTool(t *testing.T) {
+	req := decodeCursorChatRequest(t)
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
+
+	calls := renderCursorToolCalls(t, customToolCallStream("apply_patch", cursorApplyPatchPatch), declared)
+
+	if len(calls) == 0 {
+		t.Fatalf("no tool calls reached the client")
+	}
+	if calls[0].Function.Name != "ApplyPatch" {
+		t.Fatalf("tool name = %q, want the client-declared ApplyPatch", calls[0].Function.Name)
+	}
+}
+
 // TestCursorCustomToolReplayKeepsFreeformShape proves the follow-up
 // turn. Cursor echoes a prior custom call back inside tool_calls with
 // type "function" and the raw patch as arguments. Replaying that as a

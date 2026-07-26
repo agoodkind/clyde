@@ -20,6 +20,11 @@ type ToolSpec struct {
 	Format      *ToolFormat     `json:"format,omitempty"`
 }
 
+// IsCustom reports whether the spec declares a freeform custom tool.
+func (s ToolSpec) IsCustom() bool {
+	return s.Type == ToolSpecTypeCustom
+}
+
 // ToolSpecType is the closed enum of tool-spec types this package
 // emits.
 type ToolSpecType string
