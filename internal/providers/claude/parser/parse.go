@@ -26,37 +26,12 @@ const (
 	contentBlockToolResult contentBlockType = "tool_result"
 )
 
-type claudeSystemSubtype string
-
-const (
-	claudeSystemSubtypeCompactBoundary      claudeSystemSubtype = "compact_boundary"
-	claudeSystemSubtypeMicrocompactBoundary claudeSystemSubtype = "microcompact_boundary"
-)
-
 type claudeCompactionTriggerValue string
 
 const (
 	claudeCompactionTriggerManual claudeCompactionTriggerValue = "manual"
 	claudeCompactionTriggerAuto   claudeCompactionTriggerValue = "auto"
 )
-
-// rawEntry mirrors one Claude transcript JSONL line.
-type rawEntry struct {
-	UUID                      string              `json:"uuid"`
-	ParentUUID                string              `json:"parentUuid"`
-	LogicalParentUUID         string              `json:"logicalParentUuid"`
-	Type                      string              `json:"type"`
-	Subtype                   claudeSystemSubtype `json:"subtype"`
-	Content                   string              `json:"content"`
-	IsMeta                    bool                `json:"isMeta"`
-	IsVisibleInTranscriptOnly bool                `json:"isVisibleInTranscriptOnly"`
-	IsCompactSummary          bool                `json:"isCompactSummary"`
-	CompactMetadata           json.RawMessage     `json:"compactMetadata"`
-	MicrocompactMetadata      json.RawMessage     `json:"microcompactMetadata"`
-	SummarizeMetadata         json.RawMessage     `json:"summarizeMetadata"`
-	Timestamp                 time.Time           `json:"timestamp"`
-	Message                   json.RawMessage     `json:"message"`
-}
 
 type rawMessage struct {
 	Role    string          `json:"role"`
@@ -197,17 +172,17 @@ func emptyMessage() transcript.Message {
 // when the line is not a usable user, assistant, or opted-in system compaction
 // turn.
 func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
-	var entry rawEntry
-	if err := json.Unmarshal(line, &entry); err != nil {
+	entry, err := DecodeTranscriptEntry(line)
+	if err != nil {
 		return emptyMessage(), false
 	}
-	if entry.Type == "system" {
+	if entry.Type == EntryTypeSystem {
 		if !opts.IncludeSystemMessages {
 			return emptyMessage(), false
 		}
 		return parseSystemEntry(entry)
 	}
-	if entry.Type != "user" && entry.Type != "assistant" {
+	if entry.Type != EntryTypeUser && entry.Type != EntryTypeAssistant {
 		return emptyMessage(), false
 	}
 	if len(entry.Message) == 0 {
@@ -223,7 +198,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 		UUID:              entry.UUID,
 		ParentUUID:        entry.ParentUUID,
 		LogicalParentUUID: entry.LogicalParentUUID,
-		Role:              entry.Type,
+		Role:              string(entry.Type),
 		Visibility:        messageVisibility(entry.IsMeta, entry.IsVisibleInTranscriptOnly),
 		Compaction:        nil,
 		Timestamp:         entry.Timestamp,
@@ -233,7 +208,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 		Tools:             nil,
 	}
 
-	if entry.Type == "user" {
+	if entry.Type == EntryTypeUser {
 		text := extractUserText(msg.Content)
 		if text == "" {
 			// tool result entry, skip
@@ -263,16 +238,31 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	return m, m.Text != "" || m.HasTools || m.Thinking != ""
 }
 
-func parseSystemEntry(entry rawEntry) (transcript.Message, bool) {
+func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 	var metadata *transcript.CompactionMetadata
 	switch entry.Subtype {
-	case claudeSystemSubtypeCompactBoundary:
+	case EntrySubtypeCompactBoundary:
 		metadata = claudeBoundaryMetadata(entry.CompactMetadata)
-	case claudeSystemSubtypeMicrocompactBoundary:
+	case EntrySubtypeMicrocompactBoundary:
 		metadata = claudeMicrocompactMetadata(
 			entry.MicrocompactMetadata,
 			entry.CompactMetadata,
 		)
+	case EntrySubtypeUnspecified,
+		EntrySubtypeTurnDuration,
+		EntrySubtypeStopHookSummary,
+		EntrySubtypeScheduledTaskFire,
+		EntrySubtypeAwaySummary,
+		EntrySubtypeLocalCommand,
+		EntrySubtypeAPIError,
+		EntrySubtypeBridgeStatus,
+		EntrySubtypeModelRefusalNoFallback,
+		EntrySubtypeModelRefusalFallback,
+		EntrySubtypeInformational,
+		EntrySubtypeAgentsKilled:
+		// Session telemetry rather than a compaction boundary. These records
+		// carry no conversation turn, so the transcript stream drops them.
+		return emptyMessage(), false
 	default:
 		return emptyMessage(), false
 	}
