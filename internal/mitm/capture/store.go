@@ -120,7 +120,10 @@ type Record struct {
 	RequestType       string
 	ResponseType      string
 	DecodedRequest    *DecodedBody
-	Duration          time.Duration
+	// Conversation ties this exchange to the chat that produced it. It is the
+	// unresolved ref for every request that names no chat.
+	Conversation ConversationRef
+	Duration     time.Duration
 }
 
 // DecodeStatus identifies whether a provider-specific body decoder understood
@@ -204,6 +207,10 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("capture: apply schema: %w", err)
 	}
 	if err := ensureToolEventColumns(ctx, db, log); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureRequestConversationColumns(ctx, db, log); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -391,11 +398,12 @@ func (s *Store) insert(ctx context.Context, queued queuedRecord) {
 		Columns("ts", "client", "provider", "concern", "host", "method", "path", "status",
 			"request_id", "upstream_request_id", "session_id", "trace_id",
 			"req_headers", "resp_headers", "req_content_type", "resp_content_type",
-			"req_bytes", "resp_bytes", "duration_ms").
+			"req_bytes", "resp_bytes", "duration_ms", "conversation_id", "conversation_source").
 		Values(rec.Timestamp.UnixNano(), rec.Client, rec.Provider, rec.Concern, rec.Host, rec.Method, rec.Path, rec.Status,
 			rec.RequestID, rec.UpstreamRequestID, rec.SessionID, rec.TraceID,
 			encodeHeaders(rec.RequestHeaders), encodeHeaders(rec.ResponseHeaders), rec.RequestType, rec.ResponseType,
-			queued.requestBytes, queued.responseBytes, rec.Duration.Milliseconds()).
+			queued.requestBytes, queued.responseBytes, rec.Duration.Milliseconds(),
+			rec.Conversation.ConversationID, string(rec.Conversation.Source)).
 		ToSql()
 	if err != nil {
 		_ = tx.Rollback()

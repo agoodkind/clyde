@@ -20,6 +20,14 @@ func (routeProvider) DecodeCaptureRequest(exchange mitm.ExchangeDiagnostic) (cap
 	})
 }
 
+// ResolveConversation implements [capture.ConversationRefResolver] on the
+// registered provider, so a captured Cursor agent-service request stores the
+// chat it belongs to. It delegates to [ConversationResolver], which is the same
+// extraction a query-time caller runs against an already-stored row.
+func (routeProvider) ResolveConversation(input capture.RequestConversationInput) (capture.ConversationRef, bool) {
+	return ConversationResolver{}.ResolveConversation(input)
+}
+
 // DiagnoseExchange implements the optional [mitm.ExchangeDiagnostician]
 // contract. When the intercepted Cursor request looks like a BidiAppend
 // gRPC-Web call, it decodes the typed [BidiAppendDiagnostic] from the

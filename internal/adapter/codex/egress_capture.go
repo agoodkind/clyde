@@ -127,6 +127,7 @@ func recordCodexEgress(store *capture.Store, corr correlation.Context, in codexE
 		ResponseBody:      in.respBody,
 		RequestType:       in.reqType,
 		ResponseType:      in.respType,
+		Conversation:      capture.UnresolvedConversation(),
 		Started:           in.started,
 	})
 }
