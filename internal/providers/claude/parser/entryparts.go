@@ -3,7 +3,6 @@ package parser
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"time"
 )
@@ -50,7 +49,10 @@ const (
 // classification form, and the remaining fields for the failure-object form.
 // Connection and rate-limit members of the object form stay in Raw.
 type EntryError struct {
-	Kind          EntryErrorKind
+	Kind EntryErrorKind
+	// Decode says whether the whole value matched the kind's model. A partial
+	// error keeps the members that decoded before the mismatch.
+	Decode        FieldDecode
 	Code          string
 	Message       string
 	Formatted     string
@@ -74,6 +76,7 @@ type entryErrorDetail struct {
 func emptyEntryError() EntryError {
 	return EntryError{
 		Kind:          EntryErrorKindAbsent,
+		Decode:        FieldDecodeComplete,
 		Code:          "",
 		Message:       "",
 		Formatted:     "",
@@ -85,8 +88,9 @@ func emptyEntryError() EntryError {
 }
 
 // UnmarshalJSON decodes the error union by its JSON shape. A shape this parser
-// does not model keeps Raw and returns no error, so an unfamiliar failure
-// record still yields the rest of the entry.
+// does not model keeps Raw, and a modeled shape whose members do not match
+// keeps what decoded and marks Decode partial. Neither returns an error, so an
+// unfamiliar failure record still yields the rest of the entry.
 func (entryError *EntryError) UnmarshalJSON(data []byte) error {
 	*entryError = emptyEntryError()
 	trimmed := bytes.TrimSpace(data)
@@ -96,18 +100,18 @@ func (entryError *EntryError) UnmarshalJSON(data []byte) error {
 	entryError.Raw = append(json.RawMessage(nil), data...)
 	switch trimmed[0] {
 	case '"':
+		entryError.Kind = EntryErrorKindCode
 		if err := json.Unmarshal(trimmed, &entryError.Code); err != nil {
 			slog.Debug("providers.claude.parser.entry_error_code_failed", "concern", concern, "component", "claude", "err", err)
-			return fmt.Errorf("decode claude entry error code: %w", err)
+			entryError.Decode = FieldDecodePartial
 		}
-		entryError.Kind = EntryErrorKindCode
 		return nil
 	case '{':
-		var fields entryErrorDetail
 		entryError.Kind = EntryErrorKindDetail
+		var fields entryErrorDetail
 		if err := json.Unmarshal(trimmed, &fields); err != nil {
 			slog.Debug("providers.claude.parser.entry_error_detail_failed", "concern", concern, "component", "claude", "err", err)
-			return fmt.Errorf("decode claude entry error detail: %w", err)
+			entryError.Decode = FieldDecodePartial
 		}
 		entryError.Message = fields.Message
 		entryError.Formatted = fields.Formatted
@@ -120,6 +124,56 @@ func (entryError *EntryError) UnmarshalJSON(data []byte) error {
 		entryError.Kind = EntryErrorKindUnsupported
 		return nil
 	}
+}
+
+// EntryTime is a timestamp on a transcript record. [time.Time] returns an error
+// for a value it cannot parse, and an error returned from a nested unmarshaler
+// costs every key after it, so this type keeps the text Claude wrote and
+// records the outcome on the field instead.
+type EntryTime struct {
+	Time time.Time
+	// Text is the value as Claude wrote it, kept only for a value this parser
+	// could not read so that it is still recoverable. A timestamp that parsed
+	// leaves it empty, because keeping it would cost an allocation on every
+	// record of every transcript for a string Time already carries.
+	Text   string
+	Decode FieldDecode
+}
+
+// emptyEntryTime returns the zero timestamp, written out so exhaustruct sees
+// every field set.
+func emptyEntryTime() EntryTime {
+	return EntryTime{Time: time.Time{}, Text: "", Decode: FieldDecodeComplete}
+}
+
+// UnmarshalJSON reads the RFC 3339 timestamp Claude writes. A value in any
+// other shape marks the field partial and keeps its text rather than failing
+// the record.
+func (entryTime *EntryTime) UnmarshalJSON(data []byte) error {
+	*entryTime = emptyEntryTime()
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	if len(trimmed) < 2 || trimmed[0] != '"' || trimmed[len(trimmed)-1] != '"' {
+		slog.Debug("providers.claude.parser.entry_time_not_a_string", "concern", concern, "component", "claude", "shape", string(trimmed[:1]))
+		entryTime.Text = string(trimmed)
+		entryTime.Decode = FieldDecodePartial
+		return nil
+	}
+	// The quoted body is read without unescaping, matching what
+	// time.Time.UnmarshalJSON does with the same input. An RFC 3339 timestamp
+	// has no character an encoder would escape.
+	value := string(trimmed[1 : len(trimmed)-1])
+	parsed, parseErr := time.Parse(time.RFC3339, value)
+	if parseErr != nil {
+		slog.Debug("providers.claude.parser.entry_time_unparsable", "concern", concern, "component", "claude", "err", parseErr)
+		entryTime.Text = value
+		entryTime.Decode = FieldDecodePartial
+		return nil
+	}
+	entryTime.Time = parsed
+	return nil
 }
 
 // EntryOrigin records who or what produced a user turn.
@@ -152,14 +206,14 @@ type WorktreeSession struct {
 type FileBackup struct {
 	BackupFileName string    `json:"backupFileName"`
 	Version        int       `json:"version"`
-	BackupTime     time.Time `json:"backupTime"`
+	BackupTime     EntryTime `json:"backupTime"`
 	RealParentDir  string    `json:"realParentDir"`
 }
 
 // FileHistorySnapshot is the tracked-file backup set as of one message.
 type FileHistorySnapshot struct {
 	MessageID          string                `json:"messageId"`
-	Timestamp          time.Time             `json:"timestamp"`
+	Timestamp          EntryTime             `json:"timestamp"`
 	TrackedFileBackups map[string]FileBackup `json:"trackedFileBackups"`
 }
 
@@ -198,7 +252,7 @@ type Attachment struct {
 
 	// Queued-command attachment types.
 	CommandMode string       `json:"commandMode"`
-	Timestamp   time.Time    `json:"timestamp"`
+	Timestamp   EntryTime    `json:"timestamp"`
 	Origin      *EntryOrigin `json:"origin"`
 
 	// Output-style attachment types.
@@ -224,18 +278,26 @@ type Attachment struct {
 	// Raw is the whole attachment object, kept so the type-specific keys this
 	// struct does not model are still recoverable.
 	Raw json.RawMessage `json:"-"`
+	// Decode says whether every modeled key of the attachment matched. It is
+	// filled by the unmarshaler rather than read from the record.
+	Decode FieldDecode `json:"-"`
 }
 
-// UnmarshalJSON decodes one attachment and keeps the original object in Raw.
+// UnmarshalJSON decodes one attachment and keeps the original object in Raw. A
+// key whose type does not match keeps the rest of the attachment and marks
+// Decode partial, because an error returned here would cost every key the
+// record carries after the attachment.
 func (attachment *Attachment) UnmarshalJSON(data []byte) error {
 	// attachmentFields drops the method set so decoding does not recurse.
 	type attachmentFields Attachment
 	var fields attachmentFields
+	decode := FieldDecodeComplete
 	if err := json.Unmarshal(data, &fields); err != nil {
 		slog.Debug("providers.claude.parser.attachment_decode_failed", "concern", concern, "component", "claude", "err", err)
-		return fmt.Errorf("decode claude attachment: %w", err)
+		decode = FieldDecodePartial
 	}
 	*attachment = Attachment(fields)
 	attachment.Raw = append(json.RawMessage(nil), data...)
+	attachment.Decode = decode
 	return nil
 }

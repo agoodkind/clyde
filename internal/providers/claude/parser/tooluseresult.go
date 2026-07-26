@@ -3,7 +3,6 @@ package parser
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 )
 
@@ -35,7 +34,10 @@ const (
 // original JSON, including for the unsupported kind, so no result value is
 // lost even when its shape is not modeled.
 type ToolUseResult struct {
-	Kind   ToolUseResultKind
+	Kind ToolUseResultKind
+	// Decode says whether the whole value matched the kind's model. A partial
+	// result keeps the members that decoded before the mismatch.
+	Decode FieldDecode
 	Text   string
 	Detail *ToolUseResultDetail
 	Blocks []ToolUseResultBlock
@@ -116,6 +118,8 @@ type ToolUseResultPatchHunk struct {
 // writes it either as the file text or as a list of content blocks, so both
 // forms are modeled and Raw keeps the original either way.
 type ToolUseResultContent struct {
+	// Decode says whether the whole value matched one of the two modeled forms.
+	Decode FieldDecode
 	Text   string
 	Blocks []ToolUseResultBlock
 	Raw    json.RawMessage
@@ -124,12 +128,13 @@ type ToolUseResultContent struct {
 // emptyToolUseResultContent returns the zero content value, written out so
 // exhaustruct sees every field set.
 func emptyToolUseResultContent() ToolUseResultContent {
-	return ToolUseResultContent{Text: "", Blocks: nil, Raw: nil}
+	return ToolUseResultContent{Decode: FieldDecodeComplete, Text: "", Blocks: nil, Raw: nil}
 }
 
 // UnmarshalJSON decodes the content member from either of its two forms. A
-// third shape keeps Raw and returns no error, on the same reasoning as
-// [ToolUseResult.UnmarshalJSON].
+// third shape keeps Raw, and a value that does not fit the form its shape
+// selects keeps what decoded and marks the field partial, on the same reasoning
+// as [ToolUseResult.UnmarshalJSON].
 func (content *ToolUseResultContent) UnmarshalJSON(data []byte) error {
 	*content = emptyToolUseResultContent()
 	trimmed := bytes.TrimSpace(data)
@@ -141,13 +146,13 @@ func (content *ToolUseResultContent) UnmarshalJSON(data []byte) error {
 	case '"':
 		if err := json.Unmarshal(trimmed, &content.Text); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_content_text_failed", "concern", concern, "component", "claude", "err", err)
-			return fmt.Errorf("decode claude tool use result content text: %w", err)
+			content.Decode = FieldDecodePartial
 		}
 		return nil
 	case '[':
 		if err := json.Unmarshal(trimmed, &content.Blocks); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_content_blocks_failed", "concern", concern, "component", "claude", "err", err)
-			return fmt.Errorf("decode claude tool use result content blocks: %w", err)
+			content.Decode = FieldDecodePartial
 		}
 		return nil
 	default:
@@ -173,6 +178,7 @@ type ToolUseResultBlock struct {
 func emptyToolUseResult() ToolUseResult {
 	return ToolUseResult{
 		Kind:   ToolUseResultKindAbsent,
+		Decode: FieldDecodeComplete,
 		Text:   "",
 		Detail: nil,
 		Blocks: nil,
@@ -182,8 +188,12 @@ func emptyToolUseResult() ToolUseResult {
 
 // UnmarshalJSON decodes the toolUseResult union by its JSON shape. A shape
 // this parser does not model decodes to [ToolUseResultKindUnsupported] with
-// the value preserved in Raw and no error, because a result shape clyde does
-// not read must not cost the reader the rest of the transcript entry.
+// the value preserved in Raw, because a result shape clyde does not read must
+// not cost the reader the rest of the transcript entry.
+//
+// A value whose shape is modeled but whose members are not keeps whatever the
+// decoder filled, marks Decode partial, and still returns no error, for the
+// same reason: an error returned here aborts the surrounding record.
 func (result *ToolUseResult) UnmarshalJSON(data []byte) error {
 	*result = emptyToolUseResult()
 	trimmed := bytes.TrimSpace(data)
@@ -193,28 +203,27 @@ func (result *ToolUseResult) UnmarshalJSON(data []byte) error {
 	result.Raw = append(json.RawMessage(nil), data...)
 	switch trimmed[0] {
 	case '"':
+		result.Kind = ToolUseResultKindText
 		if err := json.Unmarshal(trimmed, &result.Text); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_text_failed", "concern", concern, "component", "claude", "err", err)
-			return fmt.Errorf("decode claude tool use result text: %w", err)
+			result.Decode = FieldDecodePartial
 		}
-		result.Kind = ToolUseResultKindText
 		return nil
 	case '{':
-		var detail ToolUseResultDetail
 		result.Kind = ToolUseResultKindDetail
+		var detail ToolUseResultDetail
 		if err := json.Unmarshal(trimmed, &detail); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_detail_failed", "concern", concern, "component", "claude", "err", err)
-			result.Detail = &detail
-			return fmt.Errorf("decode claude tool use result detail: %w", err)
+			result.Decode = FieldDecodePartial
 		}
 		result.Detail = &detail
 		return nil
 	case '[':
-		var blocks []ToolUseResultBlock
 		result.Kind = ToolUseResultKindBlocks
+		var blocks []ToolUseResultBlock
 		if err := json.Unmarshal(trimmed, &blocks); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_blocks_failed", "concern", concern, "component", "claude", "err", err)
-			return fmt.Errorf("decode claude tool use result blocks: %w", err)
+			result.Decode = FieldDecodePartial
 		}
 		result.Blocks = blocks
 		return nil
