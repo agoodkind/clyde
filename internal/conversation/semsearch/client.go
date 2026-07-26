@@ -94,8 +94,7 @@ type SemHit struct {
 	Role                 string
 	TimestampUnix        int64
 	Content              string
-	// Score is the engine's retrieval relevance: vector similarity from a
-	// semantic search, or the keyword rank from the engine's literal fallback.
+	// Score is the engine's retrieval relevance.
 	Score float64
 }
 

@@ -297,19 +297,16 @@ func newControlServer(
 	grpcServer *grpc.Server,
 	runtime *runtimeServices,
 ) *controlServer {
-	// semanticSearch resolves the current engine-backed search client per query,
-	// so a background registration success (after a boot-time engine outage) is
-	// picked up with no daemon reload. A nil resolver means semantic search is
-	// not configured; a resolver that returns nil means it is configured but the
-	// engine is not yet reachable, which the search path fails fast on.
-	var semanticSearch func() conversationSemanticSearchClient
-	semanticCollectionID := ""
-	if cfg.Conversation.Semantic.Enabled {
-		semanticRuntime := runtime.semantic
-		semanticSearch = func() conversationSemanticSearchClient {
-			return semanticRuntime.currentSearchClient()
+	semanticSearch := func() conversationSemanticSearchClient {
+		if !cfg.Conversation.Semantic.Enabled || runtime.semantic == nil {
+			return nil
 		}
-		semanticCollectionID = cfg.Conversation.Semantic.CollectionID
+		return runtime.semantic.currentSearchClient()
+	}
+	searchSource := &semanticConversationSearchSource{
+		index:        index,
+		searchClient: semanticSearch,
+		collectionID: cfg.Conversation.Semantic.CollectionID,
 	}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
@@ -329,13 +326,10 @@ func newControlServer(
 		rebind: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return rebindDaemonWorker(ctx, log, grpcServer, runtime)
 		},
-		searchIndex:          index,
-		semanticSearch:       semanticSearch,
-		semanticCollectionID: semanticCollectionID,
-		literalFallback:      cfg.Conversation.Semantic.LiteralFallback,
-		captureStore:         runtime.captureStore,
-		freshness:            freshness,
-		exportTokens:         newExportTokenConfig(cfg),
+		searchSource: searchSource,
+		captureStore: runtime.captureStore,
+		freshness:    freshness,
+		exportTokens: newExportTokenConfig(cfg),
 	}
 }
 

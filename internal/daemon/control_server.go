@@ -37,31 +37,11 @@ type controlServer struct {
 	showCapture   func(ctx context.Context, id string) (mitmshow.ShowOutput, error)
 	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 	rebind        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
-	// searchIndex is the index surface the engine-first cross-conversation
-	// search reads: exact-id record lookup, filter resolution, and the live
-	// literal scan. newControlServer sets it to the same index the other RPCs
-	// use; holding it as the narrow searchConversationsIndex keeps the search
-	// path's dependency explicit and independently substitutable.
-	searchIndex searchConversationsIndex
+	// searchSource is the only cross-conversation lookup boundary.
+	searchSource conversationSearchSource
 	// freshness reports the conversation-index sync snapshot at query time, set
 	// at construction. Nil yields the zero-value freshness.
 	freshness func() conversation.SearchFreshness
-	// semanticSearch resolves the engine-backed cross-conversation search client
-	// the daemon prefers before the live literal scan. The resolver itself is nil
-	// when conversation semantic search is not configured; a nil return means it
-	// is configured but the engine is not yet reachable (registration has not
-	// succeeded), which the query path fails fast on instead of a full-corpus
-	// literal scan. Resolving per query means a background registration success
-	// after a boot-time engine outage is picked up with no reload.
-	// semanticCollectionID names the engine collection the search reads.
-	semanticSearch       func() conversationSemanticSearchClient
-	semanticCollectionID string
-	// literalFallback re-enables the live literal scan when the engine is
-	// configured but returns no matches. False (the default) makes a cold or
-	// empty engine surface a loud LiteralDisabledCold result instead of a
-	// misleading literal scan. It has no effect when semantic search is not
-	// configured.
-	literalFallback bool
 	// captureStore is the daemon's shared SQLite capture store. SeedBaseline
 	// reads the deduped shape corpus from it and writes the baseline through
 	// it; nil when MITM is disabled.
@@ -72,24 +52,12 @@ type controlServer struct {
 	exportTokens exportTokenConfig
 }
 
-// conversationSemanticSearchClient is the engine-backed conversation retrieval
-// surface: the cross-conversation search the control server prefers before the
-// live literal scan, and the within-conversation search whose fingerprint
-// drives the literal-tail fallback. The semsearch client satisfies it; tests
+// conversationSemanticSearchClient is the vector engine client adapted by
+// semanticConversationSearchSource. The semsearch client satisfies it and tests
 // supply a fake.
 type conversationSemanticSearchClient interface {
 	SearchConversations(ctx context.Context, collectionID, query string, limit int32, filter semsearch.SearchFilter, perConversationLimit int32) ([]semsearch.SemHit, error)
 	SearchWithinConversation(ctx context.Context, collectionID, conversationID, query string, limit int32, filter semsearch.SearchFilter) ([]semsearch.SemHit, string, error)
-}
-
-// searchConversationsIndex is the slice of the conversation index the
-// engine-first cross-conversation search needs: exact-id record lookup for
-// resolving engine hits, record-filter resolution into the id set that scopes
-// engine retrieval, and the live literal scan used as the fallback.
-type searchConversationsIndex interface {
-	RecordByID(id string) (conversation.Record, bool)
-	ConversationIDsMatching(ctx context.Context, provider conversation.Provider, workspaceRoot string, includeArchived bool) ([]string, error)
-	SearchConversations(context.Context, conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error)
 }
 
 func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
@@ -178,33 +146,62 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 // distinguished from a cold index.
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
 	// Establish correlation before any blocking search work so the operation is
-	// traceable, including the fast-fail path when the engine is unreachable.
+	// traceable, including a source failure.
 	ctx, _ = correlation.Ensure(ctx, "")
+	client, _ := peer.FromContext(ctx)
 	if req.GetQuery() == "" {
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
-	var semantic conversationSemanticSearchClient
-	semanticConfigured := s.semanticSearch != nil
-	if semanticConfigured {
-		semantic = s.semanticSearch()
+	if s.searchSource == nil {
+		failure := unavailableConversationSearchSourceError(nil)
+		return nil, status.Error(failure.grpcCode(), failure.Error())
 	}
-	result, err := searchConversationsResult(ctx, s.searchIndex, semantic, semanticConfigured, s.semanticCollectionID, s.literalFallback, req)
+	result, err := s.searchSource.SearchConversations(ctx, searchConversationsOptionsFromProto(req))
 	if err != nil {
 		var invalidBounds invalidSearchBoundsError
 		if errors.As(err, &invalidBounds) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		var engineUnavailable semanticEngineUnavailableError
-		if errors.As(err, &engineUnavailable) {
-			// FailedPrecondition, not Unavailable: the daemon is up and answering,
-			// its search dependency is not. daemonRPCError renders Unavailable as
-			// "clyde daemon is not running", which would misname this failure.
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		var sourceFailure conversationSearchSourceError
+		if errors.As(err, &sourceFailure) {
+			slog.WarnContext(ctx, "daemon.search_conversations.source_failed",
+				"concern", "process.daemon.lifecycle",
+				"component", "daemon",
+				"peer", peerString(client),
+				"failure_code", string(sourceFailure.code),
+				"err", sourceFailure.cause,
+			)
+			return nil, status.Error(sourceFailure.grpcCode(), sourceFailure.Error())
 		}
-		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
+		slog.WarnContext(ctx, "daemon.search_conversations.failed",
+			"concern", "process.daemon.lifecycle",
+			"component", "daemon",
+			"peer", peerString(client),
+			"err", err,
+		)
+		failure := failedConversationSearchSourceError(err)
+		return nil, status.Error(failure.grpcCode(), failure.Error())
 	}
 	result.Freshness = s.freshnessSnapshot()
 	return searchConversationsResponse(ctx, s.index, result), nil
+}
+
+func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest) conversation.SearchConversationsOptions {
+	return conversation.SearchConversationsOptions{
+		Query:                req.GetQuery(),
+		Limit:                int(req.GetLimit()),
+		Offset:               int(req.GetOffset()),
+		Provider:             providerFromProto(req.GetProvider()),
+		WorkspaceRoot:        req.GetWorkspace(),
+		IncludeArchived:      req.GetIncludeArchived(),
+		Roles:                req.GetRoles(),
+		FromUnix:             req.GetFromUnix(),
+		UntilUnix:            req.GetUntilUnix(),
+		MinScore:             req.GetMinScore(),
+		PerConversationLimit: int(req.GetPerConversationLimit()),
+		ConversationID:       req.GetConversationId(),
+		ContextWindow:        int(req.GetContextWindow()),
+	}
 }
 
 // ReorientConversation builds the recovered pre-compaction transcript for one
@@ -235,138 +232,6 @@ func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
 	return s.freshness()
 }
 
-// semanticEngineUnavailableError signals that conversation semantic search is
-// configured but the engine is unreachable: registration has not succeeded, or
-// an engine call failed with a transport/unavailable error. The query path
-// returns it fast instead of running an unbounded full-corpus literal scan, and
-// the RPC boundary maps it to codes.FailedPrecondition so the caller sees a
-// typed dependency failure rather than a hang.
-type semanticEngineUnavailableError struct {
-	operation semanticEngineOperation
-	err       error
-}
-
-// semanticEngineOperation names the step at which the engine was found
-// unreachable, so the returned error says whether the daemon never registered
-// the collection or lost the engine mid-query.
-type semanticEngineOperation string
-
-const (
-	// semanticEngineOperationRegistration means the daemon has no registered
-	// engine connection yet: the boot-time dial or register failed and the
-	// background retry has not succeeded.
-	semanticEngineOperationRegistration semanticEngineOperation = "registration"
-	// semanticEngineOperationSearch means a registered connection failed the
-	// search call with a transport error.
-	semanticEngineOperationSearch semanticEngineOperation = "search"
-)
-
-func (e semanticEngineUnavailableError) Error() string {
-	message := "conversation semantic engine unavailable during " + string(e.operation)
-	if e.err != nil {
-		return message + ": " + e.err.Error()
-	}
-	return message
-}
-
-func (e semanticEngineUnavailableError) Unwrap() error {
-	return e.err
-}
-
-// grpcStatusError is the interface a gRPC status error implements. Matching it
-// through [errors.As] walks the wrapped chain, so a transport failure is still
-// classified after a caller wraps it.
-type grpcStatusError interface {
-	error
-	GRPCStatus() *status.Status
-}
-
-// isEngineUnavailable reports whether err (or any error it wraps) is a gRPC
-// status naming an unreachable engine: Unavailable (connection refused, engine
-// down) or DeadlineExceeded (engine wedged). Other engine errors are not treated
-// as unreachable so the bounded cold-engine literal fallback still applies to
-// them.
-func isEngineUnavailable(err error) bool {
-	var statusErr grpcStatusError
-	if !errors.As(err, &statusErr) {
-		return false
-	}
-	code := statusErr.GRPCStatus().Code()
-	return code == codes.Unavailable || code == codes.DeadlineExceeded
-}
-
-// searchConversationsResult runs the engine-first cross-conversation search.
-// When the engine is configured and produces at least one match, those matches
-// are returned with Source semantic. When the engine is configured but produces
-// nothing, the literalFallback flag decides: false (the dogfood default) returns
-// a loud LiteralDisabledCold result with no matches, true falls through to the
-// live literal scan. When the engine is configured but unreachable (the client
-// is nil because registration has not succeeded, or an engine call fails with a
-// transport/unavailable error), it returns a typed semanticEngineUnavailableError
-// fast rather than running the full-corpus literal scan. When the engine is not
-// configured at all, the literal scan always answers. Facets and the filter
-// funnel are computed clyde-side from the index. conversation_id, when set,
-// scopes the engine to a single conversation, the within-search behavior.
-func searchConversationsResult(
-	ctx context.Context,
-	idx searchConversationsIndex,
-	semantic conversationSemanticSearchClient,
-	semanticConfigured bool,
-	collectionID string,
-	literalFallback bool,
-	req *clydev1.SearchConversationsRequest,
-) (conversation.SearchConversationsResult, error) {
-	if semanticConfigured && semantic == nil {
-		// Semantic search is configured but the engine is not reachable, so fail
-		// fast with a typed, logged error instead of an unbounded full-corpus
-		// literal scan that would not return in usable time. This runs before the
-		// filter funnel and any other index read so nothing blocks first.
-		unavailable := semanticEngineUnavailableError{operation: semanticEngineOperationRegistration, err: nil}
-		slog.WarnContext(ctx, "daemon.search_conversations.engine_unavailable", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"operation", string(unavailable.operation),
-			"err", unavailable,
-		)
-		return conversation.SearchConversationsResult{}, unavailable
-	}
-	accounting := filterAccounting(ctx, idx, req)
-	normalizedLimit := normalizedSearchLimit(req.GetLimit())
-	normalizedOffset := normalizedPagingOffset(req.GetOffset())
-	if semantic != nil {
-		semanticResult, handled, err := semanticSearchResult(ctx, idx, semantic, collectionID, literalFallback, req, accounting, normalizedLimit, normalizedOffset)
-		if err != nil {
-			return conversation.SearchConversationsResult{}, err
-		}
-		if handled {
-			return semanticResult, nil
-		}
-	}
-	result, err := idx.SearchConversations(ctx, conversation.SearchConversationsOptions{
-		Query:                req.GetQuery(),
-		Limit:                normalizedLimit,
-		Offset:               normalizedOffset,
-		Provider:             providerFromProto(req.GetProvider()),
-		WorkspaceRoot:        req.GetWorkspace(),
-		IncludeArchived:      req.GetIncludeArchived(),
-		Roles:                req.GetRoles(),
-		FromUnix:             req.GetFromUnix(),
-		UntilUnix:            req.GetUntilUnix(),
-		MinScore:             req.GetMinScore(),
-		PerConversationLimit: int(req.GetPerConversationLimit()),
-		ConversationID:       req.GetConversationId(),
-		ContextWindow:        int(req.GetContextWindow()),
-	})
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.search_conversations.live_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"err", err,
-		)
-		return conversation.SearchConversationsResult{}, fmt.Errorf("live search conversations: %w", err)
-	}
-	result.Source = conversation.SearchSourceLiteral
-	result.Facets = conversation.ComputeFacets(result.Matches, searchFacetTopN)
-	result.FilterAccounting = appendReturnedStage(accounting, len(result.Matches))
-	return result, nil
-}
-
 // searchFacetTopN bounds each facet dimension to its top values by count.
 const searchFacetTopN = 5
 
@@ -375,29 +240,29 @@ const searchFacetTopN = 5
 // reusing ConversationIDsMatching. A stage whose count cannot be resolved is
 // omitted rather than fabricated; the indexed baseline and the caller-appended
 // returned stage keep the funnel honest.
-func filterAccounting(ctx context.Context, idx searchConversationsIndex, req *clydev1.SearchConversationsRequest) []conversation.FilterStage {
+func filterAccounting(ctx context.Context, idx conversationSearchIndex, options conversation.SearchConversationsOptions) []conversation.FilterStage {
 	var anyProvider conversation.Provider
 	stages := make([]conversation.FilterStage, 0, 5)
 	if all, err := idx.ConversationIDsMatching(ctx, anyProvider, "", true); err == nil {
 		stages = append(stages, conversation.FilterStage{Name: "indexed", Remaining: len(all)})
 	}
-	provider := providerFromProto(req.GetProvider())
+	provider := options.Provider
 	if provider.Valid() {
 		if matched, err := idx.ConversationIDsMatching(ctx, provider, "", true); err == nil {
 			stages = append(stages, conversation.FilterStage{Name: "provider", Remaining: len(matched)})
 		}
 	}
-	if req.GetWorkspace() != "" {
-		if matched, err := idx.ConversationIDsMatching(ctx, provider, req.GetWorkspace(), true); err == nil {
+	if options.WorkspaceRoot != "" {
+		if matched, err := idx.ConversationIDsMatching(ctx, provider, options.WorkspaceRoot, true); err == nil {
 			stages = append(stages, conversation.FilterStage{Name: "workspace", Remaining: len(matched)})
 		}
 	}
-	if !req.GetIncludeArchived() {
-		if matched, err := idx.ConversationIDsMatching(ctx, provider, req.GetWorkspace(), false); err == nil {
+	if !options.IncludeArchived {
+		if matched, err := idx.ConversationIDsMatching(ctx, provider, options.WorkspaceRoot, false); err == nil {
 			stages = append(stages, conversation.FilterStage{Name: "archived_excluded", Remaining: len(matched)})
 		}
 	}
-	if req.GetConversationId() != "" {
+	if options.ConversationID != "" {
 		stages = append(stages, conversation.FilterStage{Name: "conversation", Remaining: 1})
 	}
 	return stages
@@ -410,22 +275,21 @@ func appendReturnedStage(stages []conversation.FilterStage, returned int) []conv
 
 // engineSearchMatches resolves each engine hit to a cached record, skipping
 // hits with no record or that fail the request provider, workspace, or archived
-// filter, and returns the bounded matches. A nil result (engine error or no
-// usable hits) signals the caller to fall back to the live literal scan.
+// filter, and returns the bounded matches. Every engine failure stays an error;
+// only a successful search may return an empty match set.
 func engineSearchMatches(
 	ctx context.Context,
-	idx searchConversationsIndex,
+	idx conversationSearchIndex,
 	semantic conversationSemanticSearchClient,
 	collectionID string,
-	req *clydev1.SearchConversationsRequest,
+	options conversation.SearchConversationsOptions,
 ) ([]conversation.SearchMatch, error) {
-	limit, offset, searchLimit, err := semanticSearchPageBounds(req)
+	limit, offset, searchLimit, err := semanticSearchPageBounds(options)
 	if err != nil {
 		return nil, err
 	}
-	provider := providerFromProto(req.GetProvider())
-	workspace := req.GetWorkspace()
-	includeArchived := req.GetIncludeArchived()
+	provider := options.Provider
+	workspace := options.WorkspaceRoot
 
 	var providers []string
 	if provider.Valid() {
@@ -433,13 +297,16 @@ func engineSearchMatches(
 	}
 	var conversationIDs []string
 	switch {
-	case req.GetConversationId() != "":
+	case options.ConversationID != "":
 		// A conversation_id scopes the engine to that one conversation, the
 		// within-search behavior. Provider and workspace scope are irrelevant
 		// then but still safe to pass; the id set is the tightest filter.
-		conversationIDs = []string{req.GetConversationId()}
+		conversationIDs = []string{options.ConversationID}
 	case workspace != "":
-		conversationIDs = workspaceConversationIDs(ctx, idx, workspace)
+		conversationIDs, err = workspaceConversationIDs(ctx, idx, workspace)
+		if err != nil {
+			return nil, err
+		}
 		if len(conversationIDs) == 0 {
 			// The workspace matched no conversations, so the result is empty. An
 			// empty id set would otherwise read as "no scope" and match the whole
@@ -450,28 +317,37 @@ func engineSearchMatches(
 	filter := semsearch.SearchFilter{
 		Providers:            providers,
 		WorkspaceRoots:       nil,
-		Roles:                req.GetRoles(),
-		FromUnix:             req.GetFromUnix(),
-		UntilUnix:            req.GetUntilUnix(),
+		Roles:                options.Roles,
+		FromUnix:             options.FromUnix,
+		UntilUnix:            options.UntilUnix,
 		ConversationIDs:      conversationIDs,
 		ParentConversationID: "",
-		MinScore:             req.GetMinScore(),
+		MinScore:             options.MinScore,
 		MessageIndexFrom:     0,
 		MessageIndexUntil:    0,
 	}
-	hits, err := semantic.SearchConversations(ctx, collectionID, req.GetQuery(), int32FromInt(searchLimit), filter, int32FromInt(int(req.GetPerConversationLimit())))
+	hits, err := semantic.SearchConversations(
+		ctx,
+		collectionID,
+		options.Query,
+		int32FromInt(searchLimit),
+		filter,
+		int32FromInt(options.PerConversationLimit),
+	)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.search_conversations.engine_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.search_conversations.source_call_failed",
+			"concern", "process.daemon.lifecycle",
+			"component", "daemon",
+			"source", conversation.SearchSourceSemantic.String(),
 			"err", err,
 		)
-		if isEngineUnavailable(err) {
-			// An unreachable engine must fail fast, never fall through to the
-			// unbounded full-corpus literal scan.
-			return nil, semanticEngineUnavailableError{operation: semanticEngineOperationSearch, err: err}
+		if isConversationSearchSourceUnavailable(err) {
+			return nil, unavailableConversationSearchSourceError(err)
 		}
-		// A non-transport engine error keeps the bounded cold-engine fallback:
-		// nil, nil lets the caller apply the literalFallback policy.
-		return nil, nil
+		if sourceRPCCode(err) != codes.Unknown {
+			return nil, refusedConversationSearchSourceError(err)
+		}
+		return nil, failedConversationSearchSourceError(err)
 	}
 	matches := make([]conversation.SearchMatch, 0, len(hits))
 	seenMatches := 0
@@ -486,7 +362,7 @@ func engineSearchMatches(
 		// record flag not stored on the engine rows, so it stays a clyde-side
 		// check. Archived conversations are rare, so dropping one from the top-K
 		// has negligible effect on recall.
-		if record.Archived && !includeArchived {
+		if record.Archived && !options.IncludeArchived {
 			continue
 		}
 		if seenMatches < offset {
@@ -516,18 +392,19 @@ func engineSearchMatches(
 // workspaceConversationIDs resolves a workspace filter to the conversation-id
 // set under it (prefix match, so a project root includes its subdirectories),
 // regardless of provider or archived state, which are handled separately. The
-// engine filters natively on the conversation_id column and batches a large
-// set. Returns nil on resolution failure.
-func workspaceConversationIDs(ctx context.Context, idx searchConversationsIndex, workspace string) []string {
+// engine filters natively on the conversation_id column and batches a large set.
+func workspaceConversationIDs(ctx context.Context, idx conversationSearchIndex, workspace string) ([]string, error) {
 	var anyProvider conversation.Provider
 	conversationIDs, err := idx.ConversationIDsMatching(ctx, anyProvider, workspace, true)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search_conversations.scope_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
-		return nil
+		return nil, failedConversationSearchSourceError(
+			fmt.Errorf("resolve workspace conversation ids for %q: %w", workspace, err),
+		)
 	}
-	return conversationIDs
+	return conversationIDs, nil
 }
 
 // searchConversationsResponse maps the cross-conversation search result onto its
@@ -567,10 +444,6 @@ func protoSearchSource(source conversation.SearchSource) clydev1.SearchSource {
 	switch source {
 	case conversation.SearchSourceSemantic:
 		return clydev1.SearchSource_SEARCH_SOURCE_SEMANTIC
-	case conversation.SearchSourceLiteral:
-		return clydev1.SearchSource_SEARCH_SOURCE_LITERAL
-	case conversation.SearchSourceLiteralDisabledCold:
-		return clydev1.SearchSource_SEARCH_SOURCE_LITERAL_DISABLED_COLD
 	case conversation.SearchSourceUnspecified:
 		return clydev1.SearchSource_SEARCH_SOURCE_UNSPECIFIED
 	default:

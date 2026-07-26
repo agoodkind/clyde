@@ -6,9 +6,7 @@ import (
 	"goodkind.io/clyde/internal/homedir"
 )
 
-// SearchSource names which engine produced a search result set, so the caller
-// can tell a semantic answer from a literal-scan fallback and from a cold index
-// that returned nothing on purpose.
+// SearchSource names the provider that produced a search result set.
 type SearchSource uint8
 
 const (
@@ -17,12 +15,6 @@ const (
 	SearchSourceUnspecified SearchSource = iota
 	// SearchSourceSemantic means the vector engine produced the matches.
 	SearchSourceSemantic
-	// SearchSourceLiteral means the engine was unavailable or empty and the
-	// literal transcript scan produced the matches.
-	SearchSourceLiteral
-	// SearchSourceLiteralDisabledCold means the engine produced nothing and the
-	// literal fallback is disabled, so no matches were returned on purpose.
-	SearchSourceLiteralDisabledCold
 )
 
 // String renders the source as a stable lowercase label for text output.
@@ -30,10 +22,6 @@ func (s SearchSource) String() string {
 	switch s {
 	case SearchSourceSemantic:
 		return "semantic"
-	case SearchSourceLiteral:
-		return "literal"
-	case SearchSourceLiteralDisabledCold:
-		return "literal_disabled_cold"
 	case SearchSourceUnspecified:
 		return "unspecified"
 	default:

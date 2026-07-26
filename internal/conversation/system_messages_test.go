@@ -200,22 +200,6 @@ func TestContextWindowTextDoesNotOptIntoSystemMessages(t *testing.T) {
 	}
 }
 
-func TestSearchConversationsDoesNotOptIntoSystemMessages(t *testing.T) {
-	t.Parallel()
-	idx, _ := newOptionAwareIndex()
-
-	result, err := idx.SearchConversations(context.Background(), SearchConversationsOptions{
-		Query: "compacted",
-		Limit: 1,
-	})
-	if err != nil {
-		t.Fatalf("SearchConversations returned error: %v", err)
-	}
-	if result.ReturnedCount != 0 {
-		t.Fatalf("returned count = %d, want 0", result.ReturnedCount)
-	}
-}
-
 func TestExportDoesNotOptIntoSystemMessages(t *testing.T) {
 	t.Parallel()
 	idx, record := newOptionAwareIndex()

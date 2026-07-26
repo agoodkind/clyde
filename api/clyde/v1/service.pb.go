@@ -21,20 +21,13 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SearchSource names where the returned matches came from, replacing the old
-// warming bool with an explicit provenance the caller can branch on.
+// SearchSource names the provider that produced the returned matches.
 type SearchSource int32
 
 const (
 	SearchSource_SEARCH_SOURCE_UNSPECIFIED SearchSource = 0
 	// SEARCH_SOURCE_SEMANTIC means the vector engine produced the matches.
 	SearchSource_SEARCH_SOURCE_SEMANTIC SearchSource = 1
-	// SEARCH_SOURCE_LITERAL means the engine was unavailable or empty and the
-	// literal transcript scan produced the matches.
-	SearchSource_SEARCH_SOURCE_LITERAL SearchSource = 2
-	// SEARCH_SOURCE_LITERAL_DISABLED_COLD means the engine produced nothing and
-	// the literal fallback is disabled, so no matches were returned on purpose.
-	SearchSource_SEARCH_SOURCE_LITERAL_DISABLED_COLD SearchSource = 3
 )
 
 // Enum value maps for SearchSource.
@@ -42,14 +35,10 @@ var (
 	SearchSource_name = map[int32]string{
 		0: "SEARCH_SOURCE_UNSPECIFIED",
 		1: "SEARCH_SOURCE_SEMANTIC",
-		2: "SEARCH_SOURCE_LITERAL",
-		3: "SEARCH_SOURCE_LITERAL_DISABLED_COLD",
 	}
 	SearchSource_value = map[string]int32{
-		"SEARCH_SOURCE_UNSPECIFIED":           0,
-		"SEARCH_SOURCE_SEMANTIC":              1,
-		"SEARCH_SOURCE_LITERAL":               2,
-		"SEARCH_SOURCE_LITERAL_DISABLED_COLD": 3,
+		"SEARCH_SOURCE_UNSPECIFIED": 0,
+		"SEARCH_SOURCE_SEMANTIC":    1,
 	}
 )
 
@@ -1980,7 +1969,7 @@ type ConversationSearchMatch struct {
 	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
 	TimestampUnix int64                  `protobuf:"varint,4,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
 	Snippet       string                 `protobuf:"bytes,5,opt,name=snippet,proto3" json:"snippet,omitempty"`
-	// score is the engine's retrieval relevance; zero on literal-scan matches.
+	// score is the provider's retrieval relevance.
 	Score float64 `protobuf:"fixed64,6,opt,name=score,proto3" json:"score,omitempty"`
 	// context_window is the rendered messages surrounding this hit, so the caller
 	// rarely needs a second read call.
@@ -3887,12 +3876,10 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x05limit\x18\x05 \x01(\x03R\x05limit\x12\x1f\n" +
 	"\vnext_offset\x18\x06 \x01(\x03R\n" +
 	"nextOffset\x12\x19\n" +
-	"\bhas_more\x18\a \x01(\bR\ahasMore*\x8d\x01\n" +
+	"\bhas_more\x18\a \x01(\bR\ahasMore*U\n" +
 	"\fSearchSource\x12\x1d\n" +
 	"\x19SEARCH_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
-	"\x16SEARCH_SOURCE_SEMANTIC\x10\x01\x12\x19\n" +
-	"\x15SEARCH_SOURCE_LITERAL\x10\x02\x12'\n" +
-	"#SEARCH_SOURCE_LITERAL_DISABLED_COLD\x10\x032\xc8\n" +
+	"\x16SEARCH_SOURCE_SEMANTIC\x10\x01\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x032\xc8\n" +
 	"\n" +
 	"\fClydeService\x12M\n" +
 	"\fReloadDaemon\x12\x1d.clyde.v1.ReloadDaemonRequest\x1a\x1e.clyde.v1.ReloadDaemonResponse\x12M\n" +

@@ -2,14 +2,10 @@ package conversation
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"goodkind.io/clyde/internal/transcript"
 )
 
 const (
@@ -55,10 +51,8 @@ type SearchConversationsOptions struct {
 	Provider        Provider
 	WorkspaceRoot   string
 	IncludeArchived bool
-	// Roles, FromUnix, UntilUnix, and MinScore narrow engine retrieval by row
-	// attributes; PerConversationLimit caps hits per conversation. The live
-	// literal fallback honors roles and time bounds and ignores the score
-	// knobs, which only mean something for engine relevance.
+	// Roles, FromUnix, UntilUnix, and MinScore narrow retrieval by row
+	// attributes. PerConversationLimit caps hits per conversation.
 	Roles                []string
 	FromUnix             int64
 	UntilUnix            int64
@@ -72,18 +66,17 @@ type SearchConversationsOptions struct {
 	ContextWindow int
 }
 
-// SearchMatch is the first matching message found in one conversation during
-// cross-conversation discovery.
+// SearchMatch is one matching message returned during cross-conversation
+// discovery.
 type SearchMatch struct {
 	Record       Record
 	MessageIndex int
 	Role         string
 	Timestamp    time.Time
 	Snippet      string
-	// Score is the engine's retrieval relevance; zero on literal-scan matches.
+	// Score is the source's retrieval relevance.
 	Score float64
-	// ContextWindow is the rendered messages surrounding this hit; empty on
-	// literal-scan matches and when the window render failed.
+	// ContextWindow is the rendered messages surrounding this hit.
 	ContextWindow string
 }
 
@@ -96,8 +89,7 @@ type SearchConversationsResult struct {
 	Offset               int
 	NextOffset           int
 	HasMore              bool
-	// Source names which engine produced the matches: the vector engine, the
-	// literal fallback, or a cold index with the fallback disabled.
+	// Source names the provider that produced the matches.
 	Source SearchSource
 	// Facets summarizes the match set by workspace, provider, and model.
 	Facets SearchFacets
@@ -172,147 +164,6 @@ func FilterRecords(records []Record, options ListOptions) ListResult {
 	}
 }
 
-// SearchConversations finds candidate conversations by scanning transcript text
-// until the bounded result set is full or every filtered conversation was read.
-func (idx *Index) SearchConversations(ctx context.Context, options SearchConversationsOptions) (SearchConversationsResult, error) {
-	options = normalizeSearchConversationsOptions(options)
-	terms := queryTerms(options.Query)
-	if len(terms) == 0 {
-		return SearchConversationsResult{
-			Matches:              nil,
-			ConversationsScanned: 0,
-			ReturnedCount:        0,
-			Limit:                options.Limit,
-			Offset:               options.Offset,
-			NextOffset:           options.Offset,
-			HasMore:              false,
-			Source:               SearchSourceUnspecified,
-			Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
-			Freshness:            SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-			FilterAccounting:     nil,
-		}, errorsQueryRequired()
-	}
-
-	listOptions := ListOptions{
-		Limit:           0,
-		Offset:          0,
-		Provider:        options.Provider,
-		WorkspaceRoot:   options.WorkspaceRoot,
-		Query:           "",
-		IncludeArchived: options.IncludeArchived,
-		All:             true,
-	}
-	candidates, err := idx.ListPage(ctx, listOptions)
-	if err != nil {
-		return SearchConversationsResult{}, err
-	}
-
-	result := SearchConversationsResult{
-		Matches:              nil,
-		ConversationsScanned: 0,
-		ReturnedCount:        0,
-		Limit:                options.Limit,
-		Offset:               options.Offset,
-		NextOffset:           options.Offset,
-		HasMore:              false,
-		Source:               SearchSourceLiteral,
-		Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
-		Freshness:            SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-		FilterAccounting:     nil,
-	}
-	seenMatches := 0
-	for _, record := range candidates.Records {
-		select {
-		case <-ctx.Done():
-			return result, fmt.Errorf("search conversations canceled: %w", ctx.Err())
-		default:
-		}
-		result.ConversationsScanned++
-		match, ok, err := idx.firstTranscriptMatch(record, terms, options)
-		if err != nil {
-			slog.WarnContext(ctx, "conversation.search_conversations.match_failed", "concern", "conversation.search", "conversation_id", record.ID, "err", err)
-			return result, fmt.Errorf("search conversation %s: %w", record.ID, err)
-		}
-		if !ok {
-			continue
-		}
-		if seenMatches < options.Offset {
-			seenMatches++
-			continue
-		}
-		result.Matches = append(result.Matches, match)
-		result.ReturnedCount = len(result.Matches)
-		result.NextOffset = options.Offset + result.ReturnedCount
-		seenMatches++
-		if result.ReturnedCount >= options.Limit {
-			result.HasMore = result.ConversationsScanned < len(candidates.Records)
-			return result, nil
-		}
-	}
-	return result, nil
-}
-
-func (idx *Index) firstTranscriptMatch(record Record, terms []string, options SearchConversationsOptions) (SearchMatch, bool, error) {
-	stream, err := idx.resolveStream(record, LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    true,
-	})
-	if err != nil {
-		return emptySearchMatch(), false, err
-	}
-	messageIndex := 0
-	for message, streamErr := range stream {
-		if streamErr != nil {
-			return emptySearchMatch(), false, streamErr
-		}
-		if !messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) {
-			messageIndex++
-			continue
-		}
-		indexText := transcript.RenderMessageIndexText(message)
-		if messageIndexTextMatchesTerms(indexText, terms) {
-			return SearchMatch{
-				Record:        record,
-				MessageIndex:  messageIndex,
-				Role:          message.Role,
-				Timestamp:     message.Timestamp,
-				Snippet:       snippet(indexText),
-				Score:         0,
-				ContextWindow: "",
-			}, true, nil
-		}
-		messageIndex++
-	}
-	return emptySearchMatch(), false, nil
-}
-
-// messageMatchesRowFilters applies the role and time conditions shared by the
-// literal scans, mirroring the engine-side filter semantics: inclusive from,
-// exclusive until, case-insensitive roles, empty conditions match everything.
-func messageMatchesRowFilters(message transcript.Message, roles []string, fromUnix int64, untilUnix int64) bool {
-	if len(roles) > 0 {
-		matched := false
-		for _, role := range roles {
-			if strings.EqualFold(role, message.Role) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	timestamp := message.Timestamp.Unix()
-	if fromUnix > 0 && timestamp < fromUnix {
-		return false
-	}
-	if untilUnix > 0 && timestamp >= untilUnix {
-		return false
-	}
-	return true
-}
-
 func normalizeListOptions(options ListOptions) ListOptions {
 	if options.Offset < 0 {
 		options.Offset = 0
@@ -328,33 +179,6 @@ func normalizeListOptions(options ListOptions) ListOptions {
 	}
 	if options.Limit > MaxListLimit {
 		options.Limit = MaxListLimit
-	}
-	return options
-}
-
-func emptySearchMatch() SearchMatch {
-	return SearchMatch{
-		Record:        emptyRecord(),
-		MessageIndex:  0,
-		Role:          "",
-		Timestamp:     time.Time{},
-		Snippet:       "",
-		Score:         0,
-		ContextWindow: "",
-	}
-}
-
-func normalizeSearchConversationsOptions(options SearchConversationsOptions) SearchConversationsOptions {
-	options.Query = strings.TrimSpace(options.Query)
-	options.WorkspaceRoot = cleanWorkspaceFilter(options.WorkspaceRoot)
-	if options.Offset < 0 {
-		options.Offset = 0
-	}
-	if options.Limit <= 0 {
-		options.Limit = DefaultSearchLimit
-	}
-	if options.Limit > MaxSearchLimit {
-		options.Limit = MaxSearchLimit
 	}
 	return options
 }
@@ -401,38 +225,6 @@ func recordMatchesTerms(record Record, terms []string) bool {
 		}
 	}
 	return true
-}
-
-func messageIndexTextMatchesTerms(indexText string, terms []string) bool {
-	// indexText can be multi-megabyte once tool outputs are included, and
-	// strings.ToLower allocates a full copy. Skip it when the text is already
-	// pure-ASCII-lowercase (common for paths, commands, and code output), matching
-	// the raw text directly; only allocate the lowercase copy when the text holds
-	// ASCII uppercase or any non-ASCII byte that may be a Unicode uppercase rune.
-	text := indexText
-	if needsLowering(indexText) {
-		text = strings.ToLower(indexText)
-	}
-	for _, term := range terms {
-		if !strings.Contains(text, term) {
-			return false
-		}
-	}
-	return true
-}
-
-// needsLowering reports whether s must be lowercased before a case-insensitive
-// match. It scans bytes without allocating and returns true on the first ASCII
-// uppercase letter or non-ASCII byte, so pure-ASCII-lowercase text is matched
-// as-is while anything that could hold an uppercase rune is lowercased.
-func needsLowering(s string) bool {
-	for i := range len(s) {
-		c := s[i]
-		if (c >= 'A' && c <= 'Z') || c >= 0x80 {
-			return true
-		}
-	}
-	return false
 }
 
 func queryTerms(query string) []string {
@@ -509,8 +301,4 @@ func Excerpt(text string) string {
 		cut--
 	}
 	return strings.TrimRight(trimmed[:cut], " \t\n") + "\n..."
-}
-
-func errorsQueryRequired() error {
-	return fmt.Errorf("query is required")
 }

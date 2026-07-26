@@ -205,11 +205,11 @@ func runMCPResultOperation[I Input, P Prepared](
 		runErr = fmt.Errorf("%s has no result execution path", op.Name.Canonical)
 	}
 	if runErr != nil {
-		return newMCPTextResult(ctx, runErr.Error())
+		return newMCPErrorResult(ctx, runErr.Error())
 	}
 	rendered, err := renderMCPResult(ctx, op.outputKind, result)
 	if err != nil {
-		return newMCPTextResult(ctx, err.Error())
+		return newMCPErrorResult(ctx, err.Error())
 	}
 	return rendered
 }
@@ -229,13 +229,17 @@ func runMCPLegacyOperation[I Input, P Prepared](
 	}
 	text := sink.String()
 	if runErr != nil {
-		text = runErr.Error()
+		return newMCPErrorResult(ctx, runErr.Error())
 	}
 	return newMCPTextResult(ctx, text)
 }
 
 func newMCPTextResult(ctx context.Context, text string) *mcp.CallToolResult {
 	return mcp.NewToolResultText(response.Text(ctx, text))
+}
+
+func newMCPErrorResult(ctx context.Context, text string) *mcp.CallToolResult {
+	return mcp.NewToolResultError(response.Text(ctx, text))
 }
 
 // mcpOption builds the schema property for one parameter.
