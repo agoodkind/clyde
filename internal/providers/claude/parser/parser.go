@@ -68,19 +68,18 @@ func emptyRecord() conversation.Record {
 	}
 }
 
+// claudeHeader is the narrow projection [scanHeader] needs. It stays separate
+// from [TranscriptEntry] so a header scan decodes only the record-shaping
+// fields, and so a malformed timestamp costs the created time rather than the
+// whole line.
 type claudeHeader struct {
-	SessionID   string            `json:"sessionId"`
-	CWD         string            `json:"cwd"`
-	Timestamp   string            `json:"timestamp"`
-	Type        string            `json:"type"`
-	Content     string            `json:"content"`
-	CustomTitle string            `json:"customTitle"`
-	ForkedFrom  *claudeForkedFrom `json:"forkedFrom"`
-}
-
-type claudeForkedFrom struct {
-	SessionID   string `json:"sessionId"`
-	MessageUUID string `json:"messageUuid"`
+	SessionID   string      `json:"sessionId"`
+	CWD         string      `json:"cwd"`
+	Timestamp   string      `json:"timestamp"`
+	Type        EntryType   `json:"type"`
+	Content     string      `json:"content"`
+	CustomTitle string      `json:"customTitle"`
+	ForkedFrom  *ForkedFrom `json:"forkedFrom"`
 }
 
 // Discover walks ~/.claude/projects and returns every transcript file as a scan
@@ -251,7 +250,7 @@ func applyHeaderLine(fields *headerFields, header claudeHeader) {
 	if header.CustomTitle != "" {
 		fields.title = header.CustomTitle
 	}
-	if header.Type == "user" && fields.title == "" && strings.TrimSpace(header.Content) != "" {
+	if header.Type == EntryTypeUser && fields.title == "" && strings.TrimSpace(header.Content) != "" {
 		fields.title = trimTitle(header.Content)
 	}
 	if header.Timestamp != "" && fields.createdAt.IsZero() {
