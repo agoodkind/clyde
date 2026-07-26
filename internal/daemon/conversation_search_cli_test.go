@@ -18,7 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const embeddingRefusalMessage = "embedding input rejected as context_length_exceeded: the input measured 15018 tokens against limit 8192"
+const embeddingRefusalCause = "context_length_exceeded at unix:///private/run/search.sock from lm-semantic-search using NV-EmbedCode-7b-v1 with credential sk-private"
 
 func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 	socketPath := conversationSearchSocketPath(t)
@@ -27,24 +27,20 @@ func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 		t.Fatalf("listen on daemon socket: %v", err)
 	}
 	grpcServer := grpc.NewServer()
-	searchIndex := &fakeSearchIndex{
-		records:   nil,
-		live:      conversation.SearchConversationsResult{},
-		liveErr:   nil,
-		liveCalls: 0,
-	}
+	searchIndex := &fakeSearchIndex{records: nil, matchingErr: nil}
 	semantic := &fakeSemanticSearch{
 		hits: nil,
-		err:  status.Error(codes.InvalidArgument, embeddingRefusalMessage),
+		err:  status.Error(codes.InvalidArgument, embeddingRefusalCause),
 	}
 	clydev1.RegisterClydeServiceServer(grpcServer, &controlServer{
-		index:       conversation.NewIndex(newConversationRegistry()),
-		searchIndex: searchIndex,
-		semanticSearch: func() conversationSemanticSearchClient {
-			return semantic
+		index: conversation.NewIndex(newConversationRegistry()),
+		searchSource: &semanticConversationSearchSource{
+			index: searchIndex,
+			searchClient: func() conversationSemanticSearchClient {
+				return semantic
+			},
+			collectionID: "conversations",
 		},
-		semanticCollectionID: "conversations",
-		literalFallback:      false,
 	})
 	serveErr := make(chan error, 1)
 	go func() {
@@ -97,9 +93,23 @@ func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 	if !errors.As(err, &exitError) || exitError.ExitCode() == 0 {
 		t.Fatalf("conversation search error = %v, want a non-zero exit; output:\n%s", err, output)
 	}
-	for _, expected := range []string{"context_length_exceeded", "15018", "8192"} {
+	for _, expected := range []string{
+		string(conversationSearchSourceRefused),
+		"conversation search source refused the query",
+		"InvalidArgument",
+	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("conversation search output missing %q:\n%s", expected, output)
+		}
+	}
+	for _, unsafeText := range []string{
+		"/private/run/search.sock",
+		"lm-semantic-search",
+		"NV-EmbedCode-7b-v1",
+		"sk-private",
+	} {
+		if strings.Contains(output, unsafeText) {
+			t.Fatalf("conversation search output exposed %q:\n%s", unsafeText, output)
 		}
 	}
 	if strings.Contains(output, "No results found") {

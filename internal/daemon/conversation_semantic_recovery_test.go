@@ -220,20 +220,18 @@ func TestControlServerSearchConversationsRecoversAfterFailedInitialRegister(t *t
 	}
 
 	idx := &fakeSearchIndex{
-		records:   map[string]conversation.Record{"claude:one": daemonTestRecord("claude:one", false)},
-		live:      conversation.SearchConversationsResult{},
-		liveErr:   nil,
-		liveCalls: 0,
+		records: map[string]conversation.Record{"claude:one": daemonTestRecord("claude:one", false)},
 	}
-	// index stays nil: the search path reads searchIndex, and the response mapper
-	// only consults the full index to resolve fork lineage, which is nil-safe.
+	// index stays nil: the source resolves records through its narrow index, and
+	// the response mapper only consults the full index for fork lineage.
 	srv := &controlServer{
-		searchIndex: idx,
-		semanticSearch: func() conversationSemanticSearchClient {
-			return runtime.currentSearchClient()
+		searchSource: &semanticConversationSearchSource{
+			index: idx,
+			searchClient: func() conversationSemanticSearchClient {
+				return runtime.currentSearchClient()
+			},
+			collectionID: "conversations",
 		},
-		semanticCollectionID: "conversations",
-		literalFallback:      true,
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
@@ -241,10 +239,6 @@ func TestControlServerSearchConversationsRecoversAfterFailedInitialRegister(t *t
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("status code before recovery = %v (err %v), want FailedPrecondition", status.Code(err), err)
 	}
-	if idx.liveCalls != 0 {
-		t.Fatalf("live scan called %d times before recovery, want 0", idx.liveCalls)
-	}
-
 	runtime.startRetryWorker(ctx, group)
 	awaitSearchClient(t, runtime)
 
@@ -260,9 +254,6 @@ func TestControlServerSearchConversationsRecoversAfterFailedInitialRegister(t *t
 	}
 	if got := resp.GetMatches()[0].GetConversation().GetId(); got != "claude:one" {
 		t.Fatalf("match conversation = %q, want claude:one", got)
-	}
-	if idx.liveCalls != 0 {
-		t.Fatalf("live scan called %d times after recovery, want 0", idx.liveCalls)
 	}
 	if connector.attemptCount() < 2 {
 		t.Fatalf("connector attempts = %d, want at least 2 (boot plus retry)", connector.attemptCount())
@@ -550,12 +541,13 @@ func TestConversationSemanticRuntimeRegisterIsIdempotent(t *testing.T) {
 func TestControlServerSearchConversationsUnreachableEngineFailsPrecondition(t *testing.T) {
 	t.Parallel()
 	srv := &controlServer{
-		searchIndex: conversation.NewIndex(newConversationRegistry()),
-		semanticSearch: func() conversationSemanticSearchClient {
-			return nil
+		searchSource: &semanticConversationSearchSource{
+			index: conversation.NewIndex(newConversationRegistry()),
+			searchClient: func() conversationSemanticSearchClient {
+				return nil
+			},
+			collectionID: "conversations",
 		},
-		semanticCollectionID: "conversations",
-		literalFallback:      true,
 	}
 	_, err := srv.SearchConversations(context.Background(), &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10})
 	if status.Code(err) != codes.FailedPrecondition {

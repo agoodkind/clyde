@@ -7,83 +7,90 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// semanticEngineUnavailableError signals that conversation semantic search is
-// configured but the engine is unreachable: registration has not succeeded, or
-// an engine call failed with a transport/unavailable error. The query path
-// returns it fast instead of running an unbounded full-corpus literal scan, and
-// the RPC boundary maps it to codes.FailedPrecondition so the caller sees a
-// typed dependency failure rather than a hang.
-type semanticEngineUnavailableError struct {
-	operation semanticEngineOperation
-	err       error
-}
-
-// semanticEngineOperation names the step at which the engine was found
-// unreachable, so the returned error says whether the daemon never registered
-// the collection or lost the engine mid-query.
-type semanticEngineOperation string
+type conversationSearchFailureCode string
 
 const (
-	// semanticEngineOperationRegistration means the daemon has no registered
-	// engine connection yet: the boot-time dial or register failed and the
-	// background retry has not succeeded.
-	semanticEngineOperationRegistration semanticEngineOperation = "registration"
-	// semanticEngineOperationSearch means a registered connection failed the
-	// search call with a transport error.
-	semanticEngineOperationSearch semanticEngineOperation = "search"
+	conversationSearchSourceUnavailable conversationSearchFailureCode = "conversation_search_source_unavailable"
+	conversationSearchSourceRefused     conversationSearchFailureCode = "conversation_search_source_refused"
+	conversationSearchSourceFailed      conversationSearchFailureCode = "conversation_search_source_failed"
 )
 
-func (e semanticEngineUnavailableError) Error() string {
-	message := "conversation semantic engine unavailable during " + string(e.operation)
-	if e.err != nil {
-		return message + ": " + e.err.Error()
+// conversationSearchSourceError carries a stable caller-safe classification
+// while retaining the complete source cause for structured logs.
+type conversationSearchSourceError struct {
+	code    conversationSearchFailureCode
+	rpcCode codes.Code
+	cause   error
+}
+
+func (e conversationSearchSourceError) Error() string {
+	switch e.code {
+	case conversationSearchSourceUnavailable:
+		return string(e.code) + ": conversation search is unavailable"
+	case conversationSearchSourceRefused:
+		return string(e.code) + ": conversation search source refused the query"
+	case conversationSearchSourceFailed:
+		return string(e.code) + ": conversation search failed"
+	default:
+		return string(conversationSearchSourceFailed) + ": conversation search failed"
 	}
-	return message
 }
 
-func (e semanticEngineUnavailableError) Unwrap() error {
-	return e.err
+func (e conversationSearchSourceError) Unwrap() error {
+	return e.cause
 }
 
-// semanticEngineSearchError preserves a non-transport engine rejection as a
-// failed search. The RPC boundary uses the engine's typed gRPC code and message
-// so callers receive the actionable refusal instead of an empty result.
-type semanticEngineSearchError struct {
-	err error
-}
-
-func (e semanticEngineSearchError) Error() string {
-	return "conversation semantic engine search failed: " + e.err.Error()
-}
-
-func (e semanticEngineSearchError) Unwrap() error {
-	return e.err
-}
-
-func (e semanticEngineSearchError) rpcCode() codes.Code {
-	var statusErr grpcStatusError
-	if errors.As(e.err, &statusErr) {
-		return statusErr.GRPCStatus().Code()
+func (e conversationSearchSourceError) grpcCode() codes.Code {
+	if e.rpcCode == codes.OK {
+		return codes.Internal
 	}
-	return codes.Internal
+	return e.rpcCode
+}
+
+func unavailableConversationSearchSourceError(cause error) conversationSearchSourceError {
+	return conversationSearchSourceError{
+		code:    conversationSearchSourceUnavailable,
+		rpcCode: codes.FailedPrecondition,
+		cause:   cause,
+	}
+}
+
+func refusedConversationSearchSourceError(cause error) conversationSearchSourceError {
+	rpcCode := sourceRPCCode(cause)
+	if rpcCode == codes.Unknown || rpcCode == codes.OK {
+		rpcCode = codes.InvalidArgument
+	}
+	return conversationSearchSourceError{
+		code:    conversationSearchSourceRefused,
+		rpcCode: rpcCode,
+		cause:   cause,
+	}
+}
+
+func failedConversationSearchSourceError(cause error) conversationSearchSourceError {
+	return conversationSearchSourceError{
+		code:    conversationSearchSourceFailed,
+		rpcCode: codes.Internal,
+		cause:   cause,
+	}
 }
 
 // grpcStatusError is the interface a gRPC status error implements. Matching it
-// through [errors.As] walks the wrapped chain, so a transport failure is still
-// classified after a caller wraps it.
+// through [errors.As] walks wrapped errors without inspecting caller-facing text.
 type grpcStatusError interface {
 	error
 	GRPCStatus() *status.Status
 }
 
-// isEngineUnavailable reports whether err (or any error it wraps) is a gRPC
-// status naming an unreachable engine: Unavailable (connection refused, engine
-// down) or DeadlineExceeded (engine wedged).
-func isEngineUnavailable(err error) bool {
+func sourceRPCCode(err error) codes.Code {
 	var statusErr grpcStatusError
 	if !errors.As(err, &statusErr) {
-		return false
+		return codes.Unknown
 	}
-	code := statusErr.GRPCStatus().Code()
+	return statusErr.GRPCStatus().Code()
+}
+
+func isConversationSearchSourceUnavailable(err error) bool {
+	code := sourceRPCCode(err)
 	return code == codes.Unavailable || code == codes.DeadlineExceeded
 }

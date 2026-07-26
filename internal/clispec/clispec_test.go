@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"goodkind.io/clyde/internal/cli/output"
 	conv "goodkind.io/clyde/internal/conversation"
 	"goodkind.io/gklog/correlation"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestNameSpellings(t *testing.T) {
@@ -800,6 +803,80 @@ func TestMCPHandlerStructuredContent(t *testing.T) {
 	}
 }
 
+func TestSearchMCPHandlerMarksEngineRefusalAsToolError(t *testing.T) {
+	t.Parallel()
+	operation := searchOp()
+	operation.runResult = func(_ context.Context, _ searchPayload) (Result, error) {
+		cause := status.Error(
+			codes.InvalidArgument,
+			"conversation_search_source_refused: conversation search source refused the query",
+		)
+		return nil, fmt.Errorf("search conversations: daemon rpc: %w", cause)
+	}
+	_, handler := operation.mcpTool()
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{"query": "oversized input"}
+
+	result, err := handler(ctx, request)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("IsError = false, want true")
+	}
+	text := textOf(t, result)
+	for _, expected := range []string{
+		"🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222",
+		"InvalidArgument",
+		"conversation_search_source_refused",
+		"conversation search source refused the query",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("tool error missing %q: %q", expected, text)
+		}
+	}
+	if result.StructuredContent != nil {
+		t.Fatalf("structured content = %T, want nil on a refusal", result.StructuredContent)
+	}
+	if strings.Contains(text, `"matches"`) || strings.Contains(text, "No results found") {
+		t.Fatalf("tool error contains an empty-result payload: %q", text)
+	}
+}
+
+func TestMCPHandlerMarksResultRenderingFailureAsToolError(t *testing.T) {
+	t.Parallel()
+	operation := probeOp()
+	operation.outputKind = resultKindArtifact
+	_, handler := operation.mcpTool()
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{"the_id": "xyz"}
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("33333333333333333333333333333333"),
+		SpanID:  correlation.SpanID("4444444444444444"),
+	})
+
+	result, err := handler(ctx, request)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("IsError = false, want true")
+	}
+	text := textOf(t, result)
+	for _, expected := range []string{
+		"🔎 trace_id=33333333333333333333333333333333 span_id=4444444444444444",
+		"declared artifact output but returned value",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("tool error missing %q: %q", expected, text)
+		}
+	}
+}
+
 func TestRenderMCPArtifactWritesFileAndPreservesResult(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
@@ -980,6 +1057,9 @@ func TestMCPResultHandlerRejectsTaskOnlyOperationWithoutTask(t *testing.T) {
 	result, err := handler(context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("IsError = false, want true")
 	}
 	if got := textOf(t, result); got != "task_only_probe requires task-augmented MCP calls" {
 		t.Fatalf("task-only error: got %q, want %q", got, "task_only_probe requires task-augmented MCP calls")

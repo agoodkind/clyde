@@ -2,9 +2,7 @@ package daemon
 
 import (
 	"context"
-	"log/slog"
 
-	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/conversation"
 )
 
@@ -16,29 +14,29 @@ func (e invalidSearchBoundsError) Error() string {
 	return string(e)
 }
 
-func normalizedPagingOffset(rawOffset int64) int {
+func normalizedPagingOffset(rawOffset int) int {
 	if rawOffset < 0 {
 		return 0
 	}
 	if rawOffset > maxInt32Value {
 		return maxInt32Value
 	}
-	return int(rawOffset)
+	return rawOffset
 }
 
-func normalizedSearchLimit(rawLimit int64) int {
+func normalizedSearchLimit(rawLimit int) int {
 	if rawLimit <= 0 {
 		return conversation.DefaultSearchLimit
 	}
 	if rawLimit > conversation.MaxSearchLimit {
 		return conversation.MaxSearchLimit
 	}
-	return int(rawLimit)
+	return rawLimit
 }
 
-func semanticSearchPageBounds(req *clydev1.SearchConversationsRequest) (int, int, int, error) {
-	limit := normalizedSearchLimit(req.GetLimit())
-	normalizedOffset := int64(normalizedPagingOffset(req.GetOffset()))
+func semanticSearchPageBounds(options conversation.SearchConversationsOptions) (int, int, int, error) {
+	limit := normalizedSearchLimit(options.Limit)
+	normalizedOffset := int64(normalizedPagingOffset(options.Offset))
 	searchLimit := int64(limit) + normalizedOffset
 	if normalizedOffset > maxInt32Value || searchLimit > maxInt32Value || searchLimit < int64(limit) {
 		return 0, 0, 0, invalidSearchBoundsError("offset too large")
@@ -48,110 +46,29 @@ func semanticSearchPageBounds(req *clydev1.SearchConversationsRequest) (int, int
 
 func semanticSearchResult(
 	ctx context.Context,
-	idx searchConversationsIndex,
+	index conversationSearchIndex,
 	semantic conversationSemanticSearchClient,
 	collectionID string,
-	literalFallback bool,
-	req *clydev1.SearchConversationsRequest,
-	accounting []conversation.FilterStage,
-	normalizedLimit int,
-	normalizedOffset int,
-) (conversation.SearchConversationsResult, bool, error) {
-	matches, err := engineSearchMatches(ctx, idx, semantic, collectionID, req)
+	options conversation.SearchConversationsOptions,
+) (conversation.SearchConversationsResult, error) {
+	accounting := filterAccounting(ctx, index, options)
+	normalizedLimit := normalizedSearchLimit(options.Limit)
+	normalizedOffset := normalizedPagingOffset(options.Offset)
+	matches, err := engineSearchMatches(ctx, index, semantic, collectionID, options)
 	if err != nil {
-		return conversation.SearchConversationsResult{}, false, err
+		return conversation.SearchConversationsResult{}, err
 	}
-	if len(matches) >= 1 {
-		return conversation.SearchConversationsResult{
-			Matches:              matches,
-			ConversationsScanned: len(matches),
-			ReturnedCount:        len(matches),
-			Limit:                normalizedLimit,
-			Offset:               normalizedOffset,
-			NextOffset:           normalizedOffset + len(matches),
-			HasMore:              len(matches) >= normalizedLimit && normalizedLimit > 0,
-			Source:               conversation.SearchSourceSemantic,
-			Facets:               conversation.ComputeFacets(matches, searchFacetTopN),
-			Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-			FilterAccounting:     appendReturnedStage(accounting, len(matches)),
-		}, true, nil
-	}
-	if normalizedOffset > 0 {
-		semanticAny, probeErr := semanticHasAnyMatches(ctx, idx, semantic, collectionID, req)
-		if probeErr != nil {
-			return conversation.SearchConversationsResult{}, false, probeErr
-		}
-		if semanticAny {
-			return emptySemanticPageResult(normalizedLimit, normalizedOffset, accounting), true, nil
-		}
-	}
-	if !literalFallback {
-		slog.WarnContext(ctx, "daemon.search_conversations.literal_disabled_cold", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"query", req.GetQuery(),
-		)
-		return conversation.SearchConversationsResult{
-			Matches:              nil,
-			ConversationsScanned: 0,
-			ReturnedCount:        0,
-			Limit:                normalizedLimit,
-			Offset:               normalizedOffset,
-			NextOffset:           normalizedOffset,
-			HasMore:              false,
-			Source:               conversation.SearchSourceLiteralDisabledCold,
-			Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
-			Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-			FilterAccounting:     appendReturnedStage(accounting, 0),
-		}, true, nil
-	}
-	var empty conversation.SearchConversationsResult
-	return empty, false, nil
-}
-
-func emptySemanticPageResult(normalizedLimit, normalizedOffset int, accounting []conversation.FilterStage) conversation.SearchConversationsResult {
 	return conversation.SearchConversationsResult{
-		Matches:              nil,
-		ConversationsScanned: 0,
-		ReturnedCount:        0,
+		Matches:              matches,
+		ConversationsScanned: len(matches),
+		ReturnedCount:        len(matches),
 		Limit:                normalizedLimit,
 		Offset:               normalizedOffset,
-		NextOffset:           normalizedOffset,
-		HasMore:              false,
+		NextOffset:           normalizedOffset + len(matches),
+		HasMore:              len(matches) >= normalizedLimit && normalizedLimit > 0,
 		Source:               conversation.SearchSourceSemantic,
-		Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
+		Facets:               conversation.ComputeFacets(matches, searchFacetTopN),
 		Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-		FilterAccounting:     appendReturnedStage(accounting, 0),
-	}
-}
-
-func semanticHasAnyMatches(
-	ctx context.Context,
-	idx searchConversationsIndex,
-	semantic conversationSemanticSearchClient,
-	collectionID string,
-	req *clydev1.SearchConversationsRequest,
-) (bool, error) {
-	probe := semanticMatchProbeRequest(req)
-	matches, err := engineSearchMatches(ctx, idx, semantic, collectionID, probe)
-	if err != nil {
-		return false, err
-	}
-	return len(matches) > 0, nil
-}
-
-func semanticMatchProbeRequest(req *clydev1.SearchConversationsRequest) *clydev1.SearchConversationsRequest {
-	return &clydev1.SearchConversationsRequest{
-		Query:                req.GetQuery(),
-		Limit:                int64(conversation.MaxSearchLimit),
-		Offset:               0,
-		Provider:             req.GetProvider(),
-		Workspace:            req.GetWorkspace(),
-		IncludeArchived:      req.GetIncludeArchived(),
-		Roles:                req.GetRoles(),
-		FromUnix:             req.GetFromUnix(),
-		UntilUnix:            req.GetUntilUnix(),
-		MinScore:             req.GetMinScore(),
-		PerConversationLimit: req.GetPerConversationLimit(),
-		ConversationId:       req.GetConversationId(),
-		ContextWindow:        req.GetContextWindow(),
-	}
+		FilterAccounting:     appendReturnedStage(accounting, len(matches)),
+	}, nil
 }
