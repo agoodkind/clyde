@@ -201,6 +201,10 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 			// "clyde daemon is not running", which would misname this failure.
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		}
+		var engineSearch semanticEngineSearchError
+		if errors.As(err, &engineSearch) {
+			return nil, status.Error(engineSearch.rpcCode(), engineSearch.Error())
+		}
 		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
 	}
 	result.Freshness = s.freshnessSnapshot()
@@ -233,66 +237,6 @@ func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
 		return conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0}
 	}
 	return s.freshness()
-}
-
-// semanticEngineUnavailableError signals that conversation semantic search is
-// configured but the engine is unreachable: registration has not succeeded, or
-// an engine call failed with a transport/unavailable error. The query path
-// returns it fast instead of running an unbounded full-corpus literal scan, and
-// the RPC boundary maps it to codes.FailedPrecondition so the caller sees a
-// typed dependency failure rather than a hang.
-type semanticEngineUnavailableError struct {
-	operation semanticEngineOperation
-	err       error
-}
-
-// semanticEngineOperation names the step at which the engine was found
-// unreachable, so the returned error says whether the daemon never registered
-// the collection or lost the engine mid-query.
-type semanticEngineOperation string
-
-const (
-	// semanticEngineOperationRegistration means the daemon has no registered
-	// engine connection yet: the boot-time dial or register failed and the
-	// background retry has not succeeded.
-	semanticEngineOperationRegistration semanticEngineOperation = "registration"
-	// semanticEngineOperationSearch means a registered connection failed the
-	// search call with a transport error.
-	semanticEngineOperationSearch semanticEngineOperation = "search"
-)
-
-func (e semanticEngineUnavailableError) Error() string {
-	message := "conversation semantic engine unavailable during " + string(e.operation)
-	if e.err != nil {
-		return message + ": " + e.err.Error()
-	}
-	return message
-}
-
-func (e semanticEngineUnavailableError) Unwrap() error {
-	return e.err
-}
-
-// grpcStatusError is the interface a gRPC status error implements. Matching it
-// through [errors.As] walks the wrapped chain, so a transport failure is still
-// classified after a caller wraps it.
-type grpcStatusError interface {
-	error
-	GRPCStatus() *status.Status
-}
-
-// isEngineUnavailable reports whether err (or any error it wraps) is a gRPC
-// status naming an unreachable engine: Unavailable (connection refused, engine
-// down) or DeadlineExceeded (engine wedged). Other engine errors are not treated
-// as unreachable so the bounded cold-engine literal fallback still applies to
-// them.
-func isEngineUnavailable(err error) bool {
-	var statusErr grpcStatusError
-	if !errors.As(err, &statusErr) {
-		return false
-	}
-	code := statusErr.GRPCStatus().Code()
-	return code == codes.Unavailable || code == codes.DeadlineExceeded
 }
 
 // searchConversationsResult runs the engine-first cross-conversation search.
@@ -410,8 +354,8 @@ func appendReturnedStage(stages []conversation.FilterStage, returned int) []conv
 
 // engineSearchMatches resolves each engine hit to a cached record, skipping
 // hits with no record or that fail the request provider, workspace, or archived
-// filter, and returns the bounded matches. A nil result (engine error or no
-// usable hits) signals the caller to fall back to the live literal scan.
+// filter, and returns the bounded matches. Every engine failure stays an error;
+// only a successful search may return an empty match set.
 func engineSearchMatches(
 	ctx context.Context,
 	idx searchConversationsIndex,
@@ -439,7 +383,10 @@ func engineSearchMatches(
 		// then but still safe to pass; the id set is the tightest filter.
 		conversationIDs = []string{req.GetConversationId()}
 	case workspace != "":
-		conversationIDs = workspaceConversationIDs(ctx, idx, workspace)
+		conversationIDs, err = workspaceConversationIDs(ctx, idx, workspace)
+		if err != nil {
+			return nil, err
+		}
 		if len(conversationIDs) == 0 {
 			// The workspace matched no conversations, so the result is empty. An
 			// empty id set would otherwise read as "no scope" and match the whole
@@ -469,9 +416,7 @@ func engineSearchMatches(
 			// unbounded full-corpus literal scan.
 			return nil, semanticEngineUnavailableError{operation: semanticEngineOperationSearch, err: err}
 		}
-		// A non-transport engine error keeps the bounded cold-engine fallback:
-		// nil, nil lets the caller apply the literalFallback policy.
-		return nil, nil
+		return nil, semanticEngineSearchError{err: err}
 	}
 	matches := make([]conversation.SearchMatch, 0, len(hits))
 	seenMatches := 0
@@ -516,18 +461,17 @@ func engineSearchMatches(
 // workspaceConversationIDs resolves a workspace filter to the conversation-id
 // set under it (prefix match, so a project root includes its subdirectories),
 // regardless of provider or archived state, which are handled separately. The
-// engine filters natively on the conversation_id column and batches a large
-// set. Returns nil on resolution failure.
-func workspaceConversationIDs(ctx context.Context, idx searchConversationsIndex, workspace string) []string {
+// engine filters natively on the conversation_id column and batches a large set.
+func workspaceConversationIDs(ctx context.Context, idx searchConversationsIndex, workspace string) ([]string, error) {
 	var anyProvider conversation.Provider
 	conversationIDs, err := idx.ConversationIDsMatching(ctx, anyProvider, workspace, true)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search_conversations.scope_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
-		return nil
+		return nil, fmt.Errorf("resolve workspace conversation ids for %q: %w", workspace, err)
 	}
-	return conversationIDs
+	return conversationIDs, nil
 }
 
 // searchConversationsResponse maps the cross-conversation search result onto its

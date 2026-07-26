@@ -17,11 +17,12 @@ import (
 // fakeSearchIndex stands in for *conversation.Index in engine-first search
 // tests, exposing exact-id lookup and a canned live literal scan.
 type fakeSearchIndex struct {
-	records   map[string]conversation.Record
-	live      conversation.SearchConversationsResult
-	liveErr   error
-	liveCalls int
-	lastLive  conversation.SearchConversationsOptions
+	records     map[string]conversation.Record
+	matchingErr error
+	live        conversation.SearchConversationsResult
+	liveErr     error
+	liveCalls   int
+	lastLive    conversation.SearchConversationsOptions
 }
 
 func (f *fakeSearchIndex) RecordByID(id string) (conversation.Record, bool) {
@@ -30,6 +31,9 @@ func (f *fakeSearchIndex) RecordByID(id string) (conversation.Record, bool) {
 }
 
 func (f *fakeSearchIndex) ConversationIDsMatching(_ context.Context, provider conversation.Provider, workspaceRoot string, includeArchived bool) ([]string, error) {
+	if f.matchingErr != nil {
+		return nil, f.matchingErr
+	}
 	conversationIDs := make([]string, 0, len(f.records))
 	for id, record := range f.records {
 		if !includeArchived && record.Archived {
@@ -294,48 +298,6 @@ func TestSearchConversationsResultEngineEmptyPageStaysSemantic(t *testing.T) {
 	}
 }
 
-func TestSearchConversationsResultEngineErrorFallsBackLiteral(t *testing.T) {
-	t.Parallel()
-	live := conversation.SearchConversationsResult{
-		Matches: []conversation.SearchMatch{
-			{
-				Record:        daemonTestRecord("claude:lit", false),
-				MessageIndex:  0,
-				Role:          "user",
-				Timestamp:     time.Unix(3, 0),
-				Snippet:       "literal match",
-				Score:         0,
-				ContextWindow: "",
-			},
-		},
-		ConversationsScanned: 1,
-		ReturnedCount:        1,
-		Limit:                10,
-		HasMore:              false,
-		Source:               conversation.SearchSourceLiteral,
-		Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
-		Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-		FilterAccounting:     nil,
-	}
-	idx := &fakeSearchIndex{records: nil, live: live, liveErr: nil, liveCalls: 0}
-	semantic := &fakeSemanticSearch{hits: nil, err: errors.New("engine down"), filters: nil}
-	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
-
-	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", true, req)
-	if err != nil {
-		t.Fatalf("search conversations result: %v", err)
-	}
-	if idx.liveCalls != 1 {
-		t.Fatalf("live scan called %d times, want 1 on engine error", idx.liveCalls)
-	}
-	if result.Source != conversation.SearchSourceLiteral {
-		t.Fatalf("source = %v, want literal on engine-error fallback", result.Source)
-	}
-	if result.ReturnedCount != 1 || result.Matches[0].Record.ID != "claude:lit" {
-		t.Fatalf("fallback result = %+v, want the live literal match", result)
-	}
-}
-
 func TestSearchConversationsResultEngineEmptyFallsBackLiteral(t *testing.T) {
 	t.Parallel()
 	live := conversation.SearchConversationsResult{
@@ -556,6 +518,39 @@ func TestSearchConversationsResultEngineTransportErrorFailsFast(t *testing.T) {
 	}
 	if idx.liveCalls != 0 {
 		t.Fatalf("live scan called %d times, want 0 on an engine transport failure", idx.liveCalls)
+	}
+}
+
+func TestSearchConversationsResultWorkspaceScopeFailureReturnsError(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records:     nil,
+		matchingErr: errors.New("read conversation index failed"),
+		live:        conversation.SearchConversationsResult{},
+		liveErr:     nil,
+		liveCalls:   0,
+	}
+	semantic := &fakeSemanticSearch{hits: nil, err: nil}
+	req := &clydev1.SearchConversationsRequest{
+		Query:     "auth",
+		Limit:     10,
+		Workspace: "/repo",
+	}
+
+	_, err := searchConversationsResult(
+		context.Background(),
+		idx,
+		semantic,
+		true,
+		"conversations",
+		false,
+		req,
+	)
+	if err == nil {
+		t.Fatal("expected workspace scope resolution failure")
+	}
+	if !strings.Contains(err.Error(), "read conversation index failed") {
+		t.Fatalf("error = %q, want conversation index failure", err)
 	}
 }
 
