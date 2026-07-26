@@ -6,17 +6,73 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
+	"time"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/livetrack"
 )
 
+// Registration retry cadence. A boot-time dial or register failure no longer
+// disables semantic search for the process life: the runtime keeps retrying in
+// the background with bounded exponential backoff so a later engine recovery
+// makes search work again with no daemon reload.
+const (
+	semanticInitialRetryBackoff = time.Second
+	semanticMaxRetryBackoff     = 30 * time.Second
+	// semanticDialRegisterTimeout bounds each dial-and-register attempt so a
+	// slow or wedged engine cannot stall boot or a retry tick indefinitely.
+	semanticDialRegisterTimeout = 10 * time.Second
+)
+
+// conversationSemanticRuntime owns the daemon's engine-backed semantic search
+// connection. It is created whenever semantic search is configured, even when
+// the engine is unreachable at boot: registration is retried in the background
+// until it succeeds, and the search read path resolves the current client
+// through currentSearchClient so a later success needs no reload. The livetrack
+// registry is attached once at construction; the grpc connection registers a
+// session on it whenever a dial-and-register attempt succeeds, and the group
+// drains that session on reload and shutdown.
 type conversationSemanticRuntime struct {
-	client   *semsearch.Client
-	registry *livetrack.Registry[conversationSemanticConnectionMeta]
-	session  *livetrack.Session[conversationSemanticConnectionMeta]
+	log       *slog.Logger
+	connector semanticConnector
+	registry  *livetrack.Registry[conversationSemanticConnectionMeta]
+	meta      conversationSemanticConnectionMeta
+
+	// initialRetryBackoff and maxRetryBackoff bound the registration retry
+	// cadence. They are fields rather than direct constant reads so a test can
+	// drive the real retry loop without waiting on the production cadence.
+	initialRetryBackoff time.Duration
+	maxRetryBackoff     time.Duration
+
+	// attemptMu serializes registration attempts so the initial boot attempt
+	// and the background retry loop never dial concurrently.
+	attemptMu sync.Mutex
+
+	// mu guards the resolved-connection state below.
+	mu         sync.Mutex
+	search     conversationSemanticSearchClient
+	feeder     conversationSemanticClient
+	registered bool
 }
+
+// semanticConnection is one established, collection-registered engine
+// connection: the search surface the control server queries, the feeder surface
+// the background sync worker drives, the grpc connection livetrack owns for
+// drain, and the closer that tears the connection down on a failed livetrack
+// registration.
+type semanticConnection struct {
+	search     conversationSemanticSearchClient
+	feeder     conversationSemanticClient
+	connCloser io.Closer
+	close      func() error
+}
+
+// semanticConnector dials the engine and registers the collection, returning a
+// ready connection or an error. Production dials the lm-semantic-search daemon;
+// tests inject a fake that fails and then succeeds.
+type semanticConnector func(ctx context.Context) (semanticConnection, error)
 
 type conversationSemanticConnectionMeta struct {
 	CollectionID string
@@ -55,6 +111,44 @@ func (c *conversationSemanticConnectionCloser) Close(reason string) error {
 	return nil
 }
 
+// semsearchConnector builds the production connector: it dials the
+// lm-semantic-search daemon and registers the conversation collection, and on
+// success returns the concrete client as both the search and feeder surface.
+// Each failing external call is logged here, at the boundary that made it, so
+// the retry loop above only has to record the retry cadence.
+func semsearchConnector(socketPath, collectionID string, log *slog.Logger) semanticConnector {
+	return func(ctx context.Context) (semanticConnection, error) {
+		client, err := semsearch.Dial(ctx, socketPath)
+		if err != nil {
+			log.WarnContext(ctx, "daemon.conversation_semantic.dial_failed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"socket_path", socketPath,
+				"err", err,
+			)
+			return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, fmt.Errorf("dial semantic search daemon: %w", err)
+		}
+		if registerErr := client.Register(ctx, collectionID); registerErr != nil {
+			if closeErr := client.Close(); closeErr != nil {
+				registerErr = errors.Join(registerErr, closeErr)
+			}
+			log.WarnContext(ctx, "daemon.conversation_semantic.collection_register_failed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"collection_id", collectionID,
+				"err", registerErr,
+			)
+			return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, fmt.Errorf("register semantic conversation collection: %w", registerErr)
+		}
+		return semanticConnection{
+			search:     client,
+			feeder:     client,
+			connCloser: client.Conn(),
+			close:      client.Close,
+		}, nil
+	}
+}
+
 func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, log *slog.Logger, group *livetrack.Group) *conversationSemanticRuntime {
 	if cfg == nil || !cfg.Conversation.Semantic.Enabled {
 		return nil
@@ -63,19 +157,11 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 		log = slog.Default()
 	}
 	semanticCfg := cfg.Conversation.Semantic
-	client, err := semsearch.Dial(ctx, semanticCfg.SocketPath)
-	if err != nil {
-		log.WarnContext(ctx, "daemon.conversation_semantic.dial_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"socket_path", semanticCfg.SocketPath,
-			"err", err,
-		)
-		return nil
-	}
 	// The semantic-search grpc connection is internal daemon-to-daemon work, so
 	// it attaches as a non-quiet-relevant PhaseWorkers member: the group drains
-	// it on reload and shutdown, but it never holds the quiet-wait.
+	// it on reload and shutdown, but it never holds the quiet-wait. The registry
+	// is attached once here and holds a session only once a dial-and-register
+	// attempt succeeds.
 	registry := livetrack.Attach[conversationSemanticConnectionMeta](group, livetrack.MemberSpec{
 		Phase:         livetrack.PhaseWorkers,
 		QuietRelevant: false,
@@ -94,66 +180,191 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 		SocketPath:   semanticCfg.SocketPath,
 	}
 	meta.IsLivetrackMeta()
-	session, registerErr := registry.Register(ctx, "conversation.semantic.grpc", meta, &conversationSemanticConnectionCloser{
-		closer: client.Conn(),
-		log:    log,
-	})
-	if registerErr != nil {
-		if closeErr := client.Close(); closeErr != nil {
-			registerErr = errors.Join(registerErr, closeErr)
-		}
-		log.WarnContext(ctx, "daemon.conversation_semantic.livetrack_register_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"err", registerErr,
-		)
-		return nil
-	}
-	runtime := &conversationSemanticRuntime{client: client, registry: registry, session: session}
-	if err := client.Register(ctx, semanticCfg.CollectionID); err != nil {
-		runtime.close(ctx, log, "register_failed")
-		log.WarnContext(ctx, "daemon.conversation_semantic.collection_register_failed",
+	runtime := newConversationSemanticRuntime(log, semsearchConnector(semanticCfg.SocketPath, semanticCfg.CollectionID, log), registry, meta)
+	if err := runtime.attemptRegister(ctx); err != nil {
+		// A boot-time failure is transient (the engine is often briefly down
+		// during a co-restart), so keep the runtime alive and retry in the
+		// background rather than disabling search for the process life.
+		log.WarnContext(ctx, "daemon.conversation_semantic.initial_register_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"collection_id", semanticCfg.CollectionID,
+			"retry_backoff_ms", semanticInitialRetryBackoff.Milliseconds(),
 			"err", err,
 		)
-		return nil
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					log.ErrorContext(ctx, "daemon.conversation_semantic.retry_panic",
+						"concern", "conversation.semantic",
+						"component", "daemon",
+						"err", fmt.Sprintf("panic: %v", recovered),
+					)
+				}
+			}()
+			runtime.retryRegisterLoop(ctx)
+		}()
+	} else {
+		log.InfoContext(ctx, "daemon.conversation_semantic.started",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", semanticCfg.CollectionID,
+		)
 	}
-	log.InfoContext(ctx, "daemon.conversation_semantic.started",
-		"concern", "conversation.semantic",
-		"component", "daemon",
-		"collection_id", semanticCfg.CollectionID,
-	)
 	return runtime
 }
 
-// close tears the semantic runtime down outside the group lifecycle. The group
-// drains the connection registry on reload and shutdown; close is the explicit
-// path used on the startup error branch and when the in-process config apply
-// restarts the runtime. It releases the livetrack session (so a later group
-// drain skips it) and closes the grpc client connection directly.
-func (r *conversationSemanticRuntime) close(ctx context.Context, log *slog.Logger, reason string) {
-	if r == nil {
+// newConversationSemanticRuntime builds the runtime around one connector and
+// one already-attached livetrack registry, with no connection established yet.
+// Registration is the caller's next step; until it succeeds the runtime resolves
+// a nil search client, which the query path fails fast on.
+func newConversationSemanticRuntime(
+	log *slog.Logger,
+	connector semanticConnector,
+	registry *livetrack.Registry[conversationSemanticConnectionMeta],
+	meta conversationSemanticConnectionMeta,
+) *conversationSemanticRuntime {
+	return &conversationSemanticRuntime{
+		log:                 log,
+		connector:           connector,
+		registry:            registry,
+		meta:                meta,
+		initialRetryBackoff: semanticInitialRetryBackoff,
+		maxRetryBackoff:     semanticMaxRetryBackoff,
+		attemptMu:           sync.Mutex{},
+		mu:                  sync.Mutex{},
+		search:              nil,
+		feeder:              nil,
+		registered:          false,
+	}
+}
+
+// attemptRegister dials the engine, registers the collection, and registers the
+// grpc connection with livetrack, publishing the resolved client on success. It
+// is idempotent: once registered, later calls return nil without dialing. The
+// attempt is bounded by semanticDialRegisterTimeout so a wedged engine cannot
+// block the caller. The connector logs the failing external call it made, so
+// this function only adds context for the livetrack registration step.
+func (r *conversationSemanticRuntime) attemptRegister(ctx context.Context) error {
+	r.attemptMu.Lock()
+	defer r.attemptMu.Unlock()
+
+	r.mu.Lock()
+	alreadyRegistered := r.registered
+	r.mu.Unlock()
+	if alreadyRegistered {
+		return nil
+	}
+
+	attemptCtx, cancel := context.WithTimeout(ctx, semanticDialRegisterTimeout)
+	defer cancel()
+	connection, err := r.connector(attemptCtx)
+	if err != nil {
+		return err
+	}
+	_, registerErr := r.registry.Register(ctx, "conversation.semantic.grpc", r.meta, &conversationSemanticConnectionCloser{
+		closer: connection.connCloser,
+		log:    r.log,
+	})
+	if registerErr != nil {
+		if connection.close != nil {
+			if closeErr := connection.close(); closeErr != nil {
+				r.log.WarnContext(ctx, "daemon.conversation_semantic.abandoned_connection_close_failed",
+					"concern", "conversation.semantic",
+					"component", "daemon",
+					"err", closeErr,
+				)
+			}
+		}
+		return fmt.Errorf("register semantic search connection with livetrack: %w", registerErr)
+	}
+	r.mu.Lock()
+	r.search = connection.search
+	r.feeder = connection.feeder
+	r.registered = true
+	r.mu.Unlock()
+	return nil
+}
+
+// retryRegisterLoop retries registration with bounded exponential backoff until
+// it succeeds, the registry closes (reload or shutdown drain), or the context is
+// done. A later success makes search work with no manual reload, and is logged
+// once here rather than per attempt.
+func (r *conversationSemanticRuntime) retryRegisterLoop(ctx context.Context) {
+	attempts, registered := r.retryRegisterUntilReady(ctx)
+	if !registered {
 		return
 	}
-	if log == nil {
-		log = slog.Default()
-	}
-	if r.session != nil && r.registry != nil {
-		r.registry.Release(ctx, r.session, reason)
-		r.session = nil
-	}
-	r.registry = nil
-	if r.client != nil {
-		if err := r.client.Close(); err != nil {
-			log.WarnContext(ctx, "daemon.conversation_semantic.close_failed",
+	r.log.InfoContext(ctx, "daemon.conversation_semantic.register_recovered",
+		"concern", "conversation.semantic",
+		"component", "daemon",
+		"collection_id", r.meta.CollectionID,
+		"attempt", attempts,
+	)
+}
+
+// retryRegisterUntilReady runs the backoff loop and reports the attempt count
+// and whether registration succeeded. It logs each failed retry at Debug and
+// leaves the success event to its caller, keeping the loop free of Info events.
+func (r *conversationSemanticRuntime) retryRegisterUntilReady(ctx context.Context) (int, bool) {
+	backoff := r.initialRetryBackoff
+	attempts := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return attempts, false
+		case <-time.After(backoff):
+		}
+		attempts++
+		err := r.attemptRegister(ctx)
+		if err == nil {
+			return attempts, true
+		}
+		if errors.Is(err, livetrack.ErrRegistryClosed) {
+			r.log.DebugContext(ctx, "daemon.conversation_semantic.retry_stopped_registry_closed",
 				"concern", "conversation.semantic",
 				"component", "daemon",
-				"reason", reason,
-				"err", fmt.Errorf("close semantic runtime: %w", err),
+				"attempt", attempts,
 			)
+			return attempts, false
 		}
-		r.client = nil
+		r.log.DebugContext(ctx, "daemon.conversation_semantic.register_retry_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"attempt", attempts,
+			"backoff_ms", backoff.Milliseconds(),
+			"err", err,
+		)
+		backoff = min(backoff*2, r.maxRetryBackoff)
 	}
+}
+
+// currentSearchClient returns the engine-backed search client when registration
+// has succeeded, or nil while the engine is still unreachable. The control
+// server resolves it per query so a background registration success is picked up
+// with no reload.
+func (r *conversationSemanticRuntime) currentSearchClient() conversationSemanticSearchClient {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.registered {
+		return nil
+	}
+	return r.search
+}
+
+// syncClient returns the engine feeder surface for the background sync worker
+// once registration has succeeded, or nil while the engine is unreachable.
+func (r *conversationSemanticRuntime) syncClient() conversationSemanticClient {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.registered {
+		return nil
+	}
+	return r.feeder
 }
