@@ -36,18 +36,63 @@ func FunctionToolSpec(name, description string, parameters json.RawMessage, stri
 	return spec
 }
 
-// CustomToolCallOutputItem is part of Clyde's typed adapter surface.
-// The Name field is fixed to codex's freeform apply_patch tool type
-// because custom_tool_call outputs on this path are apply_patch
-// results; the codex tool type is "apply_patch"
+// CustomToolSpec is part of Clyde's typed adapter surface. It renders
+// one custom (freeform) tool spec for the codex `tools` array. The
+// caller-provided name, description, and grammar pass through verbatim:
+// they are opaque application content owned by whoever declared the
+// tool, so clyde does not rewrite them into a codex-internal vocabulary.
+//
+// The upstream answers a custom tool with a custom_tool_call item
+// carrying raw `input` text rather than JSON `arguments`, which is the
+// shape [sseEventParser.handleCustomToolOutputItem] already parses.
+func CustomToolSpec(name, description string, format *codexwire.ToolFormat) codexwire.ToolSpec {
+	spec := codexwire.ToolSpec{
+		Type: codexwire.ToolSpecTypeCustom,
+		Name: strings.TrimSpace(name),
+	}
+	if desc := strings.TrimSpace(description); desc != "" {
+		spec.Description = desc
+	}
+	if format != nil {
+		copied := *format
+		spec.Format = &copied
+	}
+	return spec
+}
+
+// CustomToolCallOutputItem is part of Clyde's typed adapter surface. It
+// builds the reply item for one custom_tool_call. The name must be the
+// tool type the upstream used on the matching call: codex's own
+// freeform tool type "apply_patch"
 // (research/codex/codex-rs/core/src/tools/handlers/apply_patch_spec.rs
-// create_apply_patch_freeform_tool).
-func CustomToolCallOutputItem(callID, text string) codexwire.InputItem {
+// create_apply_patch_freeform_tool) when the backend injected the tool
+// server-side, or the client's declared tool name when the client
+// declared a custom tool itself.
+func CustomToolCallOutputItem(callID, name, text string) codexwire.InputItem {
+	toolName := strings.TrimSpace(name)
+	if toolName == "" {
+		toolName = codexApplyPatchToolType
+	}
 	return codexwire.InputItem{
 		Type:   codexwire.ItemTypeCustomToolCallOutput,
 		CallID: strings.TrimSpace(callID),
-		Name:   codexApplyPatchToolType,
+		Name:   toolName,
 		Output: codexwire.RawOutput(text),
+	}
+}
+
+// CustomToolCallItem is part of Clyde's typed adapter surface. It
+// replays one prior custom tool call as a codex input item, carrying
+// the freeform payload in `input` rather than JSON `arguments`. A
+// client such as Cursor echoes these back inside `tool_calls` with
+// type "function", so the caller classifies by the declared tool name
+// rather than by the replayed type.
+func CustomToolCallItem(callID, name, input string) codexwire.InputItem {
+	return codexwire.InputItem{
+		Type:   codexwire.ItemTypeCustomToolCall,
+		CallID: strings.TrimSpace(callID),
+		Name:   strings.TrimSpace(name),
+		Input:  input,
 	}
 }
 
