@@ -3,9 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"sync"
 	"testing"
 	"time"
@@ -131,18 +131,55 @@ func awaitSyncClient(t *testing.T, runtime *conversationSemanticRuntime) convers
 	return nil
 }
 
-// awaitConnectorAttempts waits until the connector has been called at least want
-// times, proving the retry loop is running rather than merely started.
-func awaitConnectorAttempts(t *testing.T, connector *flakySemanticConnector, want int) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if connector.attemptCount() >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
+// blockingSemanticConnector stalls inside a connection attempt until that
+// attempt's context is cancelled, standing in for a production dial or
+// collection registration that hangs against a wedged engine. attemptStarted
+// closes once an attempt is in flight, and cancelObserved closes once the
+// in-flight attempt has seen its context cancelled.
+type blockingSemanticConnector struct {
+	attemptStarted chan struct{}
+	cancelObserved chan struct{}
+	startOnce      sync.Once
+	observeOnce    sync.Once
+}
+
+func newBlockingSemanticConnector() *blockingSemanticConnector {
+	return &blockingSemanticConnector{
+		attemptStarted: make(chan struct{}),
+		cancelObserved: make(chan struct{}),
+		startOnce:      sync.Once{},
+		observeOnce:    sync.Once{},
 	}
-	t.Fatalf("connector attempts = %d, want at least %d", connector.attemptCount(), want)
+}
+
+func (c *blockingSemanticConnector) connect(ctx context.Context) (semanticConnection, error) {
+	c.startOnce.Do(func() { close(c.attemptStarted) })
+	<-ctx.Done()
+	c.observeOnce.Do(func() { close(c.cancelObserved) })
+	return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil},
+		fmt.Errorf("dial semantic search daemon: %w", ctx.Err())
+}
+
+// awaitSignal blocks until signal closes, failing the test with description if
+// it does not close within the test's patience window.
+func awaitSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		t.Fatal(description)
+	}
+}
+
+// assertClosed fails the test with description unless signal is already closed,
+// so an assertion made right after Quiesce returns cannot pass by waiting.
+func assertClosed(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	default:
+		t.Fatal(description)
+	}
 }
 
 // TestControlServerSearchConversationsRecoversAfterFailedInitialRegister proves
@@ -240,52 +277,62 @@ func TestControlServerSearchConversationsRecoversAfterFailedInitialRegister(t *t
 	}
 }
 
-// alwaysFailingSemanticConnector makes flakySemanticConnector fail every
-// attempt, standing in for an engine that never comes back.
-const alwaysFailingSemanticConnector = math.MaxInt
-
-// TestConversationSemanticRetryWorkerStopsBeforeRegistryDrain proves the
-// registration retry worker is owned by the lifecycle group rather than running
-// as an unowned goroutine. A permanently failing retry is left looping, the
-// group is quiesced with the daemon context still live, and the worker has
-// already returned by the time Quiesce returns, so nothing can dial or register
-// after the drain boundary. Without the PhaseWorkers stop-hook the worker would
-// still be sleeping or mid-attempt here.
-func TestConversationSemanticRetryWorkerStopsBeforeRegistryDrain(t *testing.T) {
+// TestConversationSemanticRetryWorkerStopsAnInFlightAttemptBeforeRegistryDrain
+// proves the registration retry worker is owned by the lifecycle group while it
+// is doing work, not only while it sleeps between attempts. The connector stalls
+// inside a dial-and-register attempt until its context is cancelled, so the
+// worker is provably mid-attempt when the drain starts. The group is quiesced
+// with the daemon context still live, and by the time Quiesce returns the
+// attempt has observed cancellation and the worker has returned, so nothing can
+// dial or register after the drain boundary.
+//
+// The blocked attempt is the point. A regression that stopped passing the
+// worker context down into the connector would leave a stalled dial running
+// past the drain, and the worker would only be joined at the drain's cap.
+func TestConversationSemanticRetryWorkerStopsAnInFlightAttemptBeforeRegistryDrain(t *testing.T) {
 	t.Parallel()
-	connector := &flakySemanticConnector{
-		mu:                    sync.Mutex{},
-		attempts:              0,
-		failuresBeforeSuccess: alwaysFailingSemanticConnector,
-		search:                nil,
-		feeder:                nil,
-		conn:                  &fakeSemanticConn{mu: sync.Mutex{}, closes: 0},
-	}
+	connector := newBlockingSemanticConnector()
 	runtime, group := newTestSemanticRuntime(t, connector.connect)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := runtime.attemptRegister(ctx); err == nil {
-		t.Fatal("expected the boot registration attempt to fail while the engine is down")
+	if !runtime.startRetryWorker(ctx, group) {
+		t.Fatal("the retry worker must start when the lifecycle group owns its stop")
 	}
-	runtime.startRetryWorker(ctx, group)
 	done := runtime.retryDone
 	if done == nil {
 		t.Fatal("starting the retry worker must publish a completion channel")
 	}
-	// Wait until the loop has retried at least once so the worker is provably
-	// live (sleeping on backoff or inside an attempt) when the drain starts.
-	awaitConnectorAttempts(t, connector, 2)
+	awaitSignal(t, connector.attemptStarted, "the retry worker never started a connection attempt")
 
 	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
 
 	if ctx.Err() != nil {
 		t.Fatal("daemon context must stay uncancelled so only the group stops the worker")
 	}
+	assertClosed(t, connector.cancelObserved, "the in-flight connection attempt never observed cancellation")
+	assertClosed(t, done, "retry worker was still running after Quiesce returned")
+}
+
+// TestConversationSemanticRetryWorkerRefusesToStartWithoutALifecycleOwner proves
+// the retry loop never runs as an unowned goroutine: with no lifecycle group
+// there is nothing to install the stop hook on, so no worker starts and no
+// attempt is made.
+func TestConversationSemanticRetryWorkerRefusesToStartWithoutALifecycleOwner(t *testing.T) {
+	t.Parallel()
+	connector := newBlockingSemanticConnector()
+	runtime, _ := newTestSemanticRuntime(t, connector.connect)
+
+	if runtime.startRetryWorker(context.Background(), nil) {
+		t.Fatal("the retry worker must not start without a lifecycle group to own its stop")
+	}
+	if runtime.retryDone != nil {
+		t.Fatal("a refused start must publish no completion channel")
+	}
 	select {
-	case <-done:
-	default:
-		t.Fatal("retry worker was still running after Quiesce returned")
+	case <-connector.attemptStarted:
+		t.Fatal("a retry worker dialed the engine without an installed stop hook")
+	case <-time.After(unownedWorkerObservationWindow):
 	}
 }
 
@@ -328,15 +375,15 @@ func TestConversationSemanticSyncFeederRecoversAfterFailedInitialRegister(t *tes
 	}
 
 	// The daemon starts the feeder even though the engine is unreachable, which
-	// is what lets it recover later. Stop it immediately so its background passes
-	// cannot interleave with the deterministic passes below.
-	stop := startConversationSemanticSync(ctx, semanticTestLogger(), index, runtime.syncClient, "collection-test", nil)
-	if stop == nil {
+	// is what lets it recover later. It runs on its own lifecycle group here so
+	// draining it immediately keeps its background passes from interleaving with
+	// the deterministic passes below, without draining the engine connection this
+	// test still needs.
+	feederGroup := newLifecycleGroup(semanticTestLogger())
+	if !startConversationSemanticSync(ctx, semanticTestLogger(), index, runtime.syncClient, "collection-test", nil, feederGroup) {
 		t.Fatal("the sync worker must start while the engine is unavailable so it can recover")
 	}
-	if err := stop(context.Background()); err != nil {
-		t.Fatalf("stop sync worker: %v", err)
-	}
+	feederGroup.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
 
 	worker := newConversationSemanticSyncWorker(index, runtime.syncClient, "collection-test", semanticTestLogger())
 	if err := worker.runPass(ctx); err != nil {
@@ -369,6 +416,103 @@ func TestConversationSemanticSyncFeederRecoversAfterFailedInitialRegister(t *tes
 	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 250 * time.Millisecond, IdleGrace: 0})
 	if connector.conn.closeCount() == 0 {
 		t.Fatal("livetrack drain did not close the recovered engine connection")
+	}
+}
+
+// unownedWorkerObservationWindow is how long a refused start is watched before
+// concluding no background goroutine ran. A refused start launches nothing, so
+// any observation at all within this window is a failure.
+const unownedWorkerObservationWindow = 100 * time.Millisecond
+
+// blockingConversationSemanticIndex parks the sync feeder inside its first pass
+// until the worker context is cancelled, so a test can hold the feeder provably
+// live across a drain boundary. listing closes once a pass has entered the
+// index, and cancelled closes once that pass has observed cancellation.
+type blockingConversationSemanticIndex struct {
+	listing    chan struct{}
+	cancelled  chan struct{}
+	listOnce   sync.Once
+	cancelOnce sync.Once
+}
+
+func newBlockingConversationSemanticIndex() *blockingConversationSemanticIndex {
+	return &blockingConversationSemanticIndex{
+		listing:    make(chan struct{}),
+		cancelled:  make(chan struct{}),
+		listOnce:   sync.Once{},
+		cancelOnce: sync.Once{},
+	}
+}
+
+func (idx *blockingConversationSemanticIndex) ListWithStamps(ctx context.Context) ([]conversation.StampedRecord, error) {
+	idx.listOnce.Do(func() { close(idx.listing) })
+	<-ctx.Done()
+	idx.cancelOnce.Do(func() { close(idx.cancelled) })
+	return nil, fmt.Errorf("list conversation records with stamps: %w", ctx.Err())
+}
+
+func (idx *blockingConversationSemanticIndex) LoadMessagesWithOptions(record conversation.Record, _ conversation.LoadOptions) ([]transcript.Message, error) {
+	return nil, fmt.Errorf("blocking index loads no messages for %s", record.ID)
+}
+
+// TestConversationSemanticSyncFeederIsGroupOwnedFromTheMomentItStarts proves a
+// drain that is already underway cannot finish while the feeder runs. The feeder
+// is started from inside a PhaseIngress hook, so the drain has begun but the
+// workers phase has not yet snapshotted its hooks, and the hook returns only once
+// the feeder is parked inside its first pass. Because the stop hook is installed
+// before the goroutine launches, the workers phase picks it up, cancels the
+// feeder, and joins it before Quiesce returns.
+//
+// Registering the stop after the start call returns is what this ordering
+// removes: a hook added after the workers phase took its snapshot is skipped by
+// that drain, and the feeder would still be writing to an engine connection the
+// registry is about to close.
+func TestConversationSemanticSyncFeederIsGroupOwnedFromTheMomentItStarts(t *testing.T) {
+	t.Parallel()
+	log := semanticTestLogger()
+	group := newLifecycleGroup(log)
+	index := newBlockingConversationSemanticIndex()
+	engineFeeder := &fakeConversationSemanticClient{needed: nil}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	started := make(chan bool, 1)
+	group.AddHookBefore(livetrack.PhaseIngress, "test.start_feeder_mid_drain", func(hookCtx context.Context) error {
+		started <- startConversationSemanticSync(ctx, log, index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, group)
+		select {
+		case <-index.listing:
+			return nil
+		case <-hookCtx.Done():
+			return fmt.Errorf("feeder never entered its first pass: %w", hookCtx.Err())
+		}
+	})
+
+	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+
+	if !<-started {
+		t.Fatal("the feeder must start when the lifecycle group owns its stop")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("daemon context must stay uncancelled so only the group stops the feeder")
+	}
+	assertClosed(t, index.cancelled, "the feeder was still running after the workers phase drained")
+}
+
+// TestConversationSemanticSyncRefusesToStartWithoutALifecycleOwner proves the
+// feeder never launches unowned: with no lifecycle group there is nothing to
+// install the stop hook on, so no goroutine runs and no pass reads the index.
+func TestConversationSemanticSyncRefusesToStartWithoutALifecycleOwner(t *testing.T) {
+	t.Parallel()
+	index := newBlockingConversationSemanticIndex()
+	engineFeeder := &fakeConversationSemanticClient{needed: nil}
+
+	if startConversationSemanticSync(context.Background(), semanticTestLogger(), index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, nil) {
+		t.Fatal("the feeder must not start without a lifecycle group to own its stop")
+	}
+	select {
+	case <-index.listing:
+		t.Fatal("a feeder goroutine ran without an installed stop hook")
+	case <-time.After(unownedWorkerObservationWindow):
 	}
 }
 

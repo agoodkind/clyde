@@ -120,6 +120,22 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
 	semanticFreshness := newConversationSemanticFreshness()
 
+	// Resolve the feeder client per pass rather than once here: when the engine
+	// is down at boot the resolver returns nil, and the worker starts anyway and
+	// picks the client up once the background registration retry succeeds, with
+	// no daemon reload. A nil resolver means semantic search is not configured.
+	var resolveSemanticClient conversationSemanticClientResolver
+	if runtime.semantic != nil {
+		resolveSemanticClient = runtime.semantic.syncClient
+	}
+	// Start the feeder before the control server serves. Its stop is installed on
+	// the lifecycle group inside the start call, ahead of the goroutine launch, so
+	// a ReloadDaemon or RebindDaemon RPC cannot begin the workers-phase drain
+	// while the feeder is running unowned. Reload and shutdown then both cancel
+	// and wait for the feeder before the semantic connection registry drains the
+	// engine connection it feeds.
+	startConversationSemanticSync(ctx, log, conversationIndex, resolveSemanticClient, cfg.Conversation.Semantic.CollectionID, semanticFreshness, runtime.group)
+
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
 		grpc.MaxSendMsgSize(controlMaxMessageBytes),
@@ -146,20 +162,6 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		}()
 		conversationIndex.Start(ctx, time.Minute)
 	}()
-	// Resolve the feeder client per pass rather than once here: when the engine
-	// is down at boot the resolver returns nil, and the worker starts anyway and
-	// picks the client up once the background registration retry succeeds, with
-	// no daemon reload. A nil resolver means semantic search is not configured.
-	var resolveSemanticClient conversationSemanticClientResolver
-	if runtime.semantic != nil {
-		resolveSemanticClient = runtime.semantic.syncClient
-	}
-	// The stop is owned by the lifecycle group, so reload and shutdown both
-	// cancel and wait for the feeder before the semantic connection registry
-	// drains the engine connection it feeds.
-	runtime.addConversationSemanticSyncHook(
-		startConversationSemanticSync(ctx, log, conversationIndex, resolveSemanticClient, cfg.Conversation.Semantic.CollectionID, semanticFreshness),
-	)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {

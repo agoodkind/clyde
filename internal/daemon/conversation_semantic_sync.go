@@ -13,6 +13,7 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -99,11 +100,11 @@ type conversationSemanticClient interface {
 // reload, the same way the search path picks up the recovered client.
 type conversationSemanticClientResolver func() conversationSemanticClient
 
-// conversationSemanticSyncStop cancels the sync worker and waits for it to
-// return, bounded by the passed context. It has the livetrack hook shape so the
-// daemon registers it directly as a lifecycle step instead of hand-rolling a
-// second shutdown path.
-type conversationSemanticSyncStop func(context.Context) error
+// conversationSemanticSyncHookName names the lifecycle hook that stops the sync
+// feeder. It runs in PhaseWorkers, before that phase's members drain, so the
+// feeder is gone before the semantic connection registry closes the engine
+// connection the feeder writes to.
+const conversationSemanticSyncHookName = "conversation.semantic.sync_stop"
 
 // conversationSemanticSyncWorker feeds the engine a content fingerprint per
 // conversation each pass and sends documents only for the conversations the
@@ -151,11 +152,49 @@ type conversationSemanticSyncStats struct {
 	failed            int
 }
 
+// installConversationSemanticSyncStop creates the feeder's worker context and
+// registers its stop as a PhaseWorkers before-hook on the lifecycle group. The
+// worker context and its completion channel do not exist until the hook is
+// installed, so a feeder goroutine cannot be launched before the group owns its
+// stop, and any drain that begins afterwards cancels and joins the feeder inside
+// the workers phase instead of finishing while it still runs. A nil group has no
+// owner, so nothing is created and the caller must start nothing.
+func installConversationSemanticSyncStop(
+	ctx context.Context,
+	group *livetrack.Group,
+	log *slog.Logger,
+) (context.Context, chan struct{}, bool) {
+	if group == nil {
+		return nil, nil, false
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	group.AddHookBefore(livetrack.PhaseWorkers, conversationSemanticSyncHookName, func(stopCtx context.Context) error {
+		cancel()
+		select {
+		case <-done:
+			return nil
+		case <-stopCtx.Done():
+			log.WarnContext(stopCtx, "daemon.conversation_semantic_sync.stop_timeout",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"err", stopCtx.Err(),
+			)
+			return fmt.Errorf("wait for conversation semantic sync worker: %w", stopCtx.Err())
+		}
+	})
+	return workerCtx, done, true
+}
+
 // startConversationSemanticSync starts the feeder whenever semantic search is
 // configured, even while the engine is unreachable. The worker resolves its
 // client per pass, so an engine that comes back after boot is fed with no daemon
-// reload. A nil resolver means semantic search is not configured at all, which
-// is the only case that starts nothing and returns a nil stopper.
+// reload. It reports whether a feeder started. Two cases start nothing: a nil
+// resolver, which means semantic search is not configured at all, and a nil
+// lifecycle group, which would leave the goroutine unowned across a reload
+// drain. The daemon must call this before the control server accepts reload or
+// rebind requests, so no drain can begin between the hook install and the
+// goroutine launch.
 func startConversationSemanticSync(
 	ctx context.Context,
 	log *slog.Logger,
@@ -163,14 +202,25 @@ func startConversationSemanticSync(
 	resolveClient conversationSemanticClientResolver,
 	collectionID string,
 	freshness *conversationSemanticFreshness,
-) conversationSemanticSyncStop {
+	group *livetrack.Group,
+) bool {
 	if resolveClient == nil {
-		return nil
+		return false
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	workerCtx, done, owned := installConversationSemanticSyncStop(ctx, group, log)
+	if !owned {
+		log.WarnContext(ctx, "daemon.conversation_semantic_sync.start_skipped_unowned",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", collectionID,
+		)
+		return false
 	}
 	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log)
 	worker.freshness = freshness
-	workerCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		defer func() {
@@ -184,20 +234,7 @@ func startConversationSemanticSync(
 		}()
 		worker.run(workerCtx)
 	}()
-	return func(stopCtx context.Context) error {
-		cancel()
-		select {
-		case <-done:
-			return nil
-		case <-stopCtx.Done():
-			worker.log.WarnContext(stopCtx, "daemon.conversation_semantic_sync.stop_timeout",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"err", stopCtx.Err(),
-			)
-			return fmt.Errorf("wait for conversation semantic sync worker: %w", stopCtx.Err())
-		}
-	}
+	return true
 }
 
 func newConversationSemanticSyncWorker(

@@ -101,18 +101,6 @@ func (r *runtimeServices) addMITMLifecycleHook(id string, proxy *mitm.Proxy) {
 	})
 }
 
-// addConversationSemanticSyncHook registers the conversation semantic sync
-// worker's stop as a PhaseWorkers before-hook, so the feeder is cancelled and
-// waited for before the semantic connection registry (a PhaseWorkers member)
-// drains and closes the engine connection the feeder writes to. A nil stop means
-// semantic search is not configured and nothing was started.
-func (r *runtimeServices) addConversationSemanticSyncHook(stop conversationSemanticSyncStop) {
-	if r.group == nil || stop == nil {
-		return
-	}
-	r.group.AddHookBefore(livetrack.PhaseWorkers, "conversation.semantic.sync_stop", stop)
-}
-
 // addCaptureStoreCloseHook registers the MITM capture store's close as a
 // PhaseStorage after-hook so its SQLite WAL flushes only after every surface
 // has drained.

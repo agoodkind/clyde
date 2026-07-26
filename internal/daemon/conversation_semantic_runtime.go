@@ -247,26 +247,48 @@ func newConversationSemanticRuntime(
 // closes.
 const semanticRetryWorkerHookName = "conversation.semantic.retry_stop"
 
-// startRetryWorker launches the background registration retry loop as a
-// group-owned worker rather than a bare goroutine. The worker runs under its own
-// cancellable context and publishes a completion channel, and stopRetryWorker is
-// registered as a PhaseWorkers before-hook, so reload and shutdown cancel the
-// worker and wait for it to return before the semantic connection registry (a
-// PhaseWorkers member) drains. No retry can dial or register across that drain
-// boundary.
-func (r *conversationSemanticRuntime) startRetryWorker(ctx context.Context, group *livetrack.Group) {
+// installRetryStop creates the retry worker's context and completion channel and
+// registers stopRetryWorker as a PhaseWorkers before-hook on the lifecycle group.
+// Neither handle exists until the hook is installed, so the worker goroutine
+// cannot be launched before the group owns its stop, and a drain that begins
+// afterwards cancels and joins the worker inside the workers phase, before the
+// semantic connection registry (a PhaseWorkers member) drains. A nil group has no
+// owner, so nothing is created and the caller must start nothing.
+func (r *conversationSemanticRuntime) installRetryStop(ctx context.Context, group *livetrack.Group) (context.Context, chan struct{}, bool) {
+	if group == nil {
+		return nil, nil, false
+	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	r.retryMu.Lock()
 	r.retryCancel = cancel
 	r.retryDone = done
 	r.retryMu.Unlock()
-	if group != nil {
-		group.AddHookBefore(livetrack.PhaseWorkers, semanticRetryWorkerHookName, r.stopRetryWorker)
+	group.AddHookBefore(livetrack.PhaseWorkers, semanticRetryWorkerHookName, r.stopRetryWorker)
+	return workerCtx, done, true
+}
+
+// startRetryWorker launches the background registration retry loop as a
+// group-owned worker rather than a bare goroutine, and reports whether it
+// started. The worker runs under a context the group's stop hook cancels, so
+// reload and shutdown cancel the worker and wait for it to return before the
+// semantic connection registry drains, and no retry can dial or register across
+// that drain boundary. The daemon starts it before the control server accepts
+// reload or rebind requests, so no drain can begin between the hook install and
+// the goroutine launch.
+func (r *conversationSemanticRuntime) startRetryWorker(ctx context.Context, group *livetrack.Group) bool {
+	workerCtx, done, owned := r.installRetryStop(ctx, group)
+	if !owned {
+		r.log.WarnContext(ctx, "daemon.conversation_semantic.retry_start_skipped_unowned",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", r.meta.CollectionID,
+		)
+		return false
 	}
 	go func() {
 		defer close(done)
-		defer cancel()
+		defer r.cancelRetryWorker()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				r.log.ErrorContext(workerCtx, "daemon.conversation_semantic.retry_panic",
@@ -278,6 +300,20 @@ func (r *conversationSemanticRuntime) startRetryWorker(ctx context.Context, grou
 		}()
 		r.retryRegisterLoop(workerCtx)
 	}()
+	return true
+}
+
+// cancelRetryWorker cancels the retry worker's context. The worker calls it on
+// return so a loop that ends on a successful registration releases its derived
+// context, and stopRetryWorker calls it to stop a running worker. It is nil-safe
+// and idempotent.
+func (r *conversationSemanticRuntime) cancelRetryWorker() {
+	r.retryMu.Lock()
+	cancel := r.retryCancel
+	r.retryMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // stopRetryWorker cancels the registration retry worker and waits for it to
@@ -290,13 +326,12 @@ func (r *conversationSemanticRuntime) stopRetryWorker(ctx context.Context) error
 		return nil
 	}
 	r.retryMu.Lock()
-	cancel := r.retryCancel
 	done := r.retryDone
 	r.retryMu.Unlock()
-	if cancel == nil || done == nil {
+	if done == nil {
 		return nil
 	}
-	cancel()
+	r.cancelRetryWorker()
 	select {
 	case <-done:
 		return nil
