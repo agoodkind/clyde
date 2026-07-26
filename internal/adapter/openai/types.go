@@ -75,10 +75,47 @@ type Reasoning struct {
 	Summary string `json:"summary,omitempty"`
 }
 
+// ToolGrammarFormatType is the closed enum of `format.type` values an
+// OpenAI custom tool declares. A grammar-constrained tool carries a
+// syntax and a definition; a plain freeform tool declares text.
+type ToolGrammarFormatType string
+
+// Custom-tool format type discriminators.
+const (
+	ToolGrammarFormatText    ToolGrammarFormatType = "text"
+	ToolGrammarFormatGrammar ToolGrammarFormatType = "grammar"
+)
+
+// ToolGrammarFormat is the `format` object on an OpenAI custom tool. It
+// constrains the freeform payload the model may emit for that tool.
+// Cursor declares its ApplyPatch tool this way, with a lark grammar whose
+// start rule is the `*** Begin Patch` envelope.
+type ToolGrammarFormat struct {
+	Type       ToolGrammarFormatType `json:"type"`
+	Syntax     string                `json:"syntax,omitempty"`
+	Definition string                `json:"definition,omitempty"`
+}
+
 // Tool is part of Clyde's typed adapter surface.
+//
+// Type carries the declared wire type verbatim so a custom (freeform)
+// tool stays distinguishable from a function tool all the way to the
+// provider request builder. Function stays populated for every variant,
+// custom included, because Name and Description are common to both and
+// every name-reading consumer reads them from there. Format is non-nil
+// only for a custom tool that declared one.
 type Tool struct {
 	Type     string             `json:"type"`
 	Function ToolFunctionSchema `json:"function"`
+	Format   *ToolGrammarFormat `json:"format,omitempty"`
+}
+
+// ToolIsCustom reports whether the client declared this tool as an
+// OpenAI custom (freeform) tool, whose payload is raw text rather than
+// JSON arguments. It is a function rather than a method so Tool keeps
+// only its two JSON marshaling methods and avoids a mixed receiver set.
+func ToolIsCustom(tool Tool) bool {
+	return openAIToolWireType(tool.Type) == openAIToolWireTypeCustom
 }
 
 // UnmarshalJSON is part of Clyde's typed adapter surface.
@@ -91,6 +128,7 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 		Parameters  json.RawMessage     `json:"parameters"`
 		InputSchema json.RawMessage     `json:"input_schema"`
 		Strict      *bool               `json:"strict"`
+		Format      *ToolGrammarFormat  `json:"format"`
 	}
 
 	var w rawTool
@@ -102,15 +140,17 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 		if w.Type != "" && w.Type != "function" {
 			return fmt.Errorf("tool has unsupported type %q", w.Type)
 		}
-		t.Type = "function"
+		t.Type = string(openAIToolWireTypeFunction)
 		t.Function = *w.Function
+		t.Format = nil
 		return nil
 	}
 
 	if w.Name == "" {
 		return fmt.Errorf("tool missing function schema")
 	}
-	switch openAIToolWireType(w.Type) {
+	wireType := openAIToolWireType(w.Type)
+	switch wireType {
 	case openAIToolWireTypeEmpty, openAIToolWireTypeFunction, openAIToolWireTypeCustom:
 	default:
 		return fmt.Errorf("tool has unsupported type %q", w.Type)
@@ -121,7 +161,25 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 		parameters = w.InputSchema
 	}
 
-	t.Type = "function"
+	// `type: "custom"` is overloaded across vendors. Anthropic uses it
+	// for an ordinary JSON-schema tool (its word for "not a server-side
+	// built-in"), which carries input_schema and projects to a function
+	// tool. OpenAI uses it for a freeform tool whose payload is raw
+	// text, which carries a format object and no schema at all.
+	//
+	// The absence of a schema is what makes a tool freeform, so a
+	// contradictory entry declaring BOTH a format and a schema stays a
+	// function tool. Preferring the schema keeps the parameters and the
+	// strict flag, which a custom tool has nowhere to carry: the custom
+	// wire shape has no parameters field, so classifying it the other way
+	// would drop the schema on the floor.
+	if wireType == openAIToolWireTypeCustom && len(parameters) == 0 {
+		t.Type = string(openAIToolWireTypeCustom)
+		t.Format = w.Format
+	} else {
+		t.Type = string(openAIToolWireTypeFunction)
+		t.Format = nil
+	}
 	t.Function = ToolFunctionSchema{
 		Name:        w.Name,
 		Description: w.Description,
@@ -129,6 +187,47 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 		Strict:      w.Strict,
 	}
 	return nil
+}
+
+// MarshalJSON emits the wire shape matching the declared type: a custom
+// tool serializes flat alongside its format object, and every other tool
+// keeps the nested function shape it decoded from.
+func (t Tool) MarshalJSON() ([]byte, error) {
+	if ToolIsCustom(t) {
+		flat := customToolWire{
+			Type:        string(openAIToolWireTypeCustom),
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			Format:      t.Format,
+		}
+		out, err := json.Marshal(flat)
+		if err != nil {
+			return nil, fmt.Errorf("marshal OpenAI custom tool: %w", err)
+		}
+		return out, nil
+	}
+	nested := functionToolWire{Type: t.Type, Function: t.Function}
+	out, err := json.Marshal(nested)
+	if err != nil {
+		return nil, fmt.Errorf("marshal OpenAI tool: %w", err)
+	}
+	return out, nil
+}
+
+// customToolWire is the flat serialization shape of an OpenAI custom
+// tool entry.
+type customToolWire struct {
+	Type        string             `json:"type"`
+	Name        string             `json:"name"`
+	Description string             `json:"description,omitempty"`
+	Format      *ToolGrammarFormat `json:"format,omitempty"`
+}
+
+// functionToolWire is the nested serialization shape of an OpenAI
+// function tool entry.
+type functionToolWire struct {
+	Type     string             `json:"type"`
+	Function ToolFunctionSchema `json:"function"`
 }
 
 // ToolFunctionSchema is part of Clyde's typed adapter surface.
