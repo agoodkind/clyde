@@ -86,6 +86,20 @@ func (h toolHandlers) patchToolName(nativeName string) string {
 	return codexApplyPatchToolType
 }
 
+// customToolReply resolves one custom_tool_call to the client-facing tool
+// name, and reports whether the CLIENT declared that tool itself.
+//
+// An exact name match means the client declared this freeform tool, so the
+// call already carries a name the client recognizes and its payload is that
+// tool's own content. Anything else is codex's apply_patch tool injected
+// server-side, which still maps back to a declared patch-like tool by shape.
+func (h toolHandlers) customToolReply(nativeName string) (string, bool) {
+	if name, ok := h.declared.declaredCustomToolName(nativeName); ok {
+		return name, true
+	}
+	return h.patchToolName(nativeName), false
+}
+
 // shellToolName resolves the client-declared tool name for a native
 // local_shell_call. It prefers a declared command-like tool, falling
 // back to the codex local_shell_call item type when the declared set is

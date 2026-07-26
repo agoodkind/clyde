@@ -129,7 +129,10 @@ func TestCursorCustomToolReachesUpstreamAsFreeformTool(t *testing.T) {
 // sends for a freeform tool call, matching a live capture: an added
 // custom_tool_call item, streamed input deltas, then the completed item.
 func customToolCallStream(toolName, patch string) *strings.Reader {
-	head, tail := patch[:len("*** Begin Patch\n")], patch[len("*** Begin Patch\n"):]
+	// Split anywhere so the payload arrives across two deltas; the exact
+	// boundary does not matter, only that it is reassembled.
+	split := len(patch) / 2
+	head, tail := patch[:split], patch[split:]
 	return strings.NewReader(strings.Join([]string{
 		"event: response.output_item.added",
 		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"` + toolName + `","input":""}}`,
@@ -226,6 +229,164 @@ func TestBackendInjectedApplyPatchMapsToDeclaredCustomTool(t *testing.T) {
 	if calls[0].Function.Name != "ApplyPatch" {
 		t.Fatalf("tool name = %q, want the client-declared ApplyPatch", calls[0].Function.Name)
 	}
+}
+
+// twoCustomToolRequestJSON declares two freeform tools. The upstream can
+// answer either one by name, so the reply must not be renamed to whichever
+// was declared first.
+const twoCustomToolRequestJSON = `{
+  "model": "gpt-5.6-sol",
+  "messages": [{"role": "user", "content": "run it"}],
+  "tools": [
+    {"type": "custom", "name": "RunSQL", "description": "Run a query.",
+      "format": {"type": "grammar", "syntax": "lark", "definition": "start: /(.|\n)+/\n"}},
+    {"type": "custom", "name": "ApplyPatch", "description": "Use this tool to edit files.",
+      "format": {"type": "grammar", "syntax": "lark",
+        "definition": "start: begin_patch hunk end_patch\nbegin_patch: \"*** Begin Patch\" LF\nend_patch: \"*** End Patch\" LF?\n"}}
+  ]
+}`
+
+func decodeChatRequest(t *testing.T, body string) adapteropenai.ChatRequest {
+	t.Helper()
+	var req adapteropenai.ChatRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("decode chat request: %v", err)
+	}
+	return req
+}
+
+// TestSecondCustomToolKeepsItsOwnName covers a reply the upstream names
+// explicitly. Resolving every custom reply to the first declared custom
+// tool would deliver an ApplyPatch call to the client as RunSQL.
+func TestSecondCustomToolKeepsItsOwnName(t *testing.T) {
+	req := decodeChatRequest(t, twoCustomToolRequestJSON)
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
+
+	calls := renderCursorToolCalls(t, customToolCallStream("ApplyPatch", cursorApplyPatchPatch), declared)
+
+	if len(calls) == 0 {
+		t.Fatalf("no tool calls reached the client")
+	}
+	if calls[0].Function.Name != "ApplyPatch" {
+		t.Fatalf("tool name = %q, want ApplyPatch, not the first declared custom tool", calls[0].Function.Name)
+	}
+}
+
+// TestNonPatchCustomToolPayloadSurvives covers a client-declared freeform
+// tool whose payload is not a patch. Forcing every custom reply through
+// apply_patch validation would fail the whole stream instead.
+func TestNonPatchCustomToolPayloadSurvives(t *testing.T) {
+	req := decodeChatRequest(t, twoCustomToolRequestJSON)
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
+	payload := "SELECT 1;\n"
+
+	calls := renderCursorToolCalls(t, customToolCallStream("RunSQL", payload), declared)
+
+	if len(calls) == 0 {
+		t.Fatalf("no tool calls reached the client")
+	}
+	if calls[0].Function.Name != "RunSQL" {
+		t.Fatalf("tool name = %q, want RunSQL", calls[0].Function.Name)
+	}
+	var got strings.Builder
+	for _, call := range calls {
+		got.WriteString(call.Function.Arguments)
+	}
+	if got.String() != payload {
+		t.Fatalf("client payload = %q, want the verbatim tool output %q", got.String(), payload)
+	}
+}
+
+// truncatedCustomToolCallStream ends after the input deltas, with no
+// response.output_item.done and no response.completed. The upstream does
+// this when a stream is cut short, so the buffered payload has to survive
+// on the end-of-stream path rather than only on the completed item.
+func truncatedCustomToolCallStream(toolName, payload string) *strings.Reader {
+	return strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_x","name":"` + toolName + `","input":""}}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_x","delta":` + jsonString(payload) + `}`,
+		"",
+	}, "\n") + "\n")
+}
+
+// TestTruncatedNonPatchCustomToolStillReachesClient covers a stream that
+// ends before the completed item. Dropping the buffered payload would
+// lose the call, and validating it as a patch would fail the stream for a
+// tool that is not a patch tool.
+func TestTruncatedNonPatchCustomToolStillReachesClient(t *testing.T) {
+	req := decodeChatRequest(t, twoCustomToolRequestJSON)
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
+	payload := "SELECT 1;\n"
+
+	calls := renderCursorToolCalls(t, truncatedCustomToolCallStream("RunSQL", payload), declared)
+
+	if len(calls) == 0 {
+		t.Fatalf("no tool calls reached the client")
+	}
+	if calls[0].Function.Name != "RunSQL" {
+		t.Fatalf("tool name = %q, want RunSQL", calls[0].Function.Name)
+	}
+	var got strings.Builder
+	for _, call := range calls {
+		got.WriteString(call.Function.Arguments)
+	}
+	if got.String() != payload {
+		t.Fatalf("client payload = %q, want the buffered payload %q", got.String(), payload)
+	}
+}
+
+// TestTruncatedCustomPatchToolStillReachesClient covers the same
+// truncation for a client-declared patch tool, whose buffered patch must
+// also survive the end-of-stream path.
+func TestTruncatedCustomPatchToolStillReachesClient(t *testing.T) {
+	req := decodeCursorChatRequest(t)
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
+
+	calls := renderCursorToolCalls(t, truncatedCustomToolCallStream("ApplyPatch", cursorApplyPatchPatch), declared)
+
+	if len(calls) == 0 {
+		t.Fatalf("no tool calls reached the client")
+	}
+	var got strings.Builder
+	for _, call := range calls {
+		got.WriteString(call.Function.Arguments)
+	}
+	if got.String() != cursorApplyPatchPatch {
+		t.Fatalf("client payload = %q, want the buffered patch", got.String())
+	}
+}
+
+// TestCustomToolReplayDoesNotUnwrapJSONPayload covers a freeform tool
+// whose own valid content is a JSON object. Unwrapping it as if it were a
+// patch wrapper would corrupt the replayed history.
+func TestCustomToolReplayDoesNotUnwrapJSONPayload(t *testing.T) {
+	req := decodeChatRequest(t, twoCustomToolRequestJSON)
+	payload := `{"input":"SELECT 1"}`
+	req.Messages = append(req.Messages, adapteropenai.ChatMessage{
+		Role: "assistant",
+		ToolCalls: []adapteropenai.ToolCall{{
+			Index:    0,
+			ID:       "call_sql",
+			Type:     "function",
+			Function: adapteropenai.ToolCallFunction{Name: "RunSQL", Arguments: payload},
+		}},
+	})
+
+	body := marshalUpstreamBody(t, BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}))
+
+	for i := range body.Input {
+		if body.Input[i].Type != codexwire.ItemTypeCustomToolCall {
+			continue
+		}
+		if body.Input[i].Input != payload {
+			t.Fatalf("replayed input = %q, want the payload verbatim %q", body.Input[i].Input, payload)
+		}
+		return
+	}
+	t.Fatalf("no custom_tool_call in the replayed input: %+v", body.Input)
 }
 
 // TestCursorCustomToolReplayKeepsFreeformShape proves the follow-up

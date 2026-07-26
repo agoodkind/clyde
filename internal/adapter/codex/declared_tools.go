@@ -56,6 +56,28 @@ func (r declaredToolResolver) patchToolName() (string, bool) {
 	return r.soleDeclaredToolName()
 }
 
+// declaredCustomToolName returns the client-declared custom tool whose
+// name equals the name the upstream put on a custom_tool_call. A match
+// means the reply belongs to a tool the CLIENT declared, so its payload
+// is that tool's own freeform content and carries no apply_patch
+// semantics. A miss means the reply came from a tool the codex backend
+// injected server-side, which is the apply_patch case.
+func (r declaredToolResolver) declaredCustomToolName(nativeName string) (string, bool) {
+	trimmed := strings.TrimSpace(nativeName)
+	if trimmed == "" {
+		return "", false
+	}
+	for _, tool := range r.tools {
+		if !tool.IsCustom() {
+			continue
+		}
+		if name := strings.TrimSpace(tool.Name); name == trimmed {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // firstCustomToolName returns the first declared custom (freeform) tool
 // name. Declaration order is the client's, so the first one wins the
 // same way the shape classifiers pick their first match.

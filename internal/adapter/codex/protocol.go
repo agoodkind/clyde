@@ -224,8 +224,13 @@ type toolCallState struct {
 	ArgumentDeltaSeen bool
 	ArgumentsEmitted  bool
 	NativeParseLogged bool
-	Arguments         strings.Builder
-	Input             strings.Builder
+	// ClientCustomTool marks a custom_tool_call whose name matches a
+	// tool the CLIENT declared as freeform. Its payload is that tool's
+	// own content, so it carries no apply_patch semantics: it is not
+	// unwrapped, not repaired, and not validated as a patch envelope.
+	ClientCustomTool bool
+	Arguments        strings.Builder
+	Input            strings.Builder
 }
 
 // ClientMetadataWithTurn builds the typed codex-cli client_metadata
@@ -445,7 +450,7 @@ func (p *sseEventParser) parse(ctx context.Context, body io.Reader) (RunResult, 
 }
 
 func (p *sseEventParser) finishEOF(ctx context.Context) (RunResult, error) {
-	if err := p.finalizePendingRawPatchInputs(ctx); err != nil {
+	if err := p.finalizePendingToolInputs(ctx); err != nil {
 		return p.out, err
 	}
 	p.out.ReasoningSignaled = p.reasoningSignaled
@@ -671,57 +676,6 @@ func (p *sseEventParser) handleLocalShellOutputItem(ctx context.Context, eventNa
 	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleCustomToolOutputItem(ctx context.Context, eventName string, item transportItem, itemType string) ssePayloadResult {
-	itemID := strings.TrimSpace(item.string("id"))
-	callID := strings.TrimSpace(item.string("call_id"))
-	name := strings.TrimSpace(item.string("name"))
-	// custom_tool_call is codex's freeform apply_patch type; the patch
-	// handler maps it back to the client-declared patch-like tool name by
-	// shape rather than by the codex-internal "apply_patch" name.
-	clientName := p.tools.patchToolName(name)
-	state, created := p.getToolState(itemID, callID, clientName)
-	if name != "" {
-		p.observeActualToolCallName(name)
-	} else {
-		p.observeActualToolCallName(state.Name)
-	}
-	if created {
-		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name, Arguments: ""}); err != nil {
-			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
-		}
-	}
-	p.out.SetFinishReason("tool_calls")
-	input := item.string("input")
-	if input == "" {
-		input = state.Input.String()
-	}
-	if eventName == "response.output_item.done" && item != nil {
-		completed := item.toInputItem()
-		completed.Input = input
-		p.out.OutputItems = append(p.out.OutputItems, completed)
-	}
-	if p.nativePatchRepresentation != "" && eventName == "response.output_item.done" {
-		finalInput := input
-		if p.nativePatchRepresentation == adapterrender.NativePatchRepresentationJSON && state.ArgumentDeltaSeen {
-			finalInput = ""
-		}
-		return p.emitNativePatchInput(ctx, eventName, itemType, state, finalInput, true)
-	}
-	// The patch handler unwraps the JSON wrapper and repairs the
-	// freeform body so it satisfies the vendored apply_patch grammar.
-	if args, ok := p.tools.handlePatchInput(input); ok {
-		return p.emitNativeParsedArguments(ctx, eventName, itemType, state, state.Name, args)
-	}
-	if eventName == "response.output_item.done" && !state.ArgumentsEmitted {
-		LogToolingEvent(nil, ctx, p.logCtx.RequestID, "native_custom_tool.parse_failed",
-			slog.String("item_type", itemType),
-			slog.String("item_id", itemID),
-			slog.String("tool_name", state.Name),
-		)
-	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
-}
-
 func (p *sseEventParser) emitNativeParsedArguments(ctx context.Context, eventName string, itemType string, state *toolCallState, toolName, args string) ssePayloadResult {
 	p.logNativeToolParsed(ctx, eventName, itemType, state, toolName)
 	if state.ArgumentsEmitted {
@@ -751,73 +705,6 @@ func (p *sseEventParser) handleFunctionCallArgumentsDelta(raw transportStreamEve
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
-}
-
-func (p *sseEventParser) handleCustomToolCallInputDelta(ctx context.Context, raw transportStreamEvent) ssePayloadResult {
-	itemID := strings.TrimSpace(raw.ItemID)
-	callID := strings.TrimSpace(raw.CallID)
-	delta := raw.Delta
-	// custom_tool_call input deltas carry codex's freeform apply_patch
-	// body; the patch handler maps it back to the client-declared
-	// patch-like tool name by shape.
-	state, created := p.getToolState(itemID, callID, p.tools.patchToolName(""))
-	p.observeActualToolCallName(state.Name)
-	if created {
-		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name, Arguments: ""}); err != nil {
-			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
-		}
-	}
-	if delta == "" {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
-	}
-	state.Input.WriteString(delta)
-	state.ArgumentDeltaSeen = true
-	p.out.SetFinishReason("tool_calls")
-	if p.nativePatchRepresentation != "" {
-		if p.nativePatchRepresentation == adapterrender.NativePatchRepresentationRaw {
-			return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
-		}
-		return p.emitNativePatchInput(ctx, "response.custom_tool_call_input.delta", "custom_tool_call", state, delta, false)
-	}
-	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta, Name: ""}); err != nil {
-		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
-	}
-	state.ArgumentsEmitted = true
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
-}
-
-func (p *sseEventParser) emitNativePatchInput(ctx context.Context, eventName string, itemType string, state *toolCallState, input string, final bool) ssePayloadResult {
-	if state == nil {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
-	}
-	if p.nativePatchRepresentation == adapterrender.NativePatchRepresentationRaw {
-		if !final {
-			return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
-		}
-		if !validNativePatchInput(input) {
-			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: &NativePatchInputError{ItemID: state.ItemID, InputLength: len(input)}}
-		}
-	}
-	p.logNativeToolParsed(ctx, eventName, itemType, state, state.Name)
-	patch := adapterrender.NativePatchInput{Input: input, Final: final}
-	if err := p.emitNormalized(adapterrender.ToolCallDelta{
-		ToolCalls: []adapteropenai.ToolCall{{
-			Index: state.Index, ID: "", Type: "", Function: adapteropenai.ToolCallFunction{Name: "", Arguments: ""},
-		}},
-		NativePatchInput: &patch,
-	}); err != nil {
-		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
-	}
-	state.ArgumentsEmitted = final
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
-}
-
-func validNativePatchInput(input string) bool {
-	hasPatchTerminator := strings.HasSuffix(input, "*** End Patch") || strings.HasSuffix(input, "*** End Patch\n")
-	return strings.HasPrefix(input, "*** Begin Patch\n") && hasPatchTerminator &&
-		(strings.Contains(input, "*** Add File: ") ||
-			strings.Contains(input, "*** Update File: ") ||
-			strings.Contains(input, "*** Delete File: "))
 }
 
 func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
