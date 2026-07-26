@@ -626,6 +626,7 @@ func requestTools(req adapteropenai.ChatRequest) []adapteropenai.Tool {
 					Description: fn.Description,
 					Parameters:  fn.Parameters, Strict: nil,
 				},
+				Format: nil,
 			})
 		}
 	}

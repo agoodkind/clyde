@@ -112,7 +112,7 @@ func envelopeIsFunctionTool(env responsesToolEnvelope) bool {
 // applies, without calling the strict unmarshal that rejects built-ins.
 func toolFromEnvelope(env responsesToolEnvelope) Tool {
 	if env.Function != nil {
-		return Tool{Type: string(openAIToolWireTypeFunction), Function: *env.Function}
+		return Tool{Type: string(openAIToolWireTypeFunction), Function: *env.Function, Format: nil}
 	}
 	parameters := env.Parameters
 	if len(parameters) == 0 {
@@ -126,6 +126,7 @@ func toolFromEnvelope(env responsesToolEnvelope) Tool {
 			Parameters:  parameters,
 			Strict:      env.Strict,
 		},
+		Format: nil,
 	}
 }
 
