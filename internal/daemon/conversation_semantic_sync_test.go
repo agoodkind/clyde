@@ -65,6 +65,14 @@ func (c *fakeConversationSemanticClient) UpsertConversationDocuments(_ context.C
 	return "upsert-job", nil
 }
 
+// staticSemanticSyncClient adapts one fixed fake client to the per-pass
+// resolver the sync worker calls, for the tests that are not about recovery.
+func staticSemanticSyncClient(client conversationSemanticClient) conversationSemanticClientResolver {
+	return func() conversationSemanticClient {
+		return client
+	}
+}
+
 type fakeConversationSemanticIndex struct {
 	records      []conversation.StampedRecord
 	messagesByID map[string][]transcript.Message
@@ -161,7 +169,7 @@ func TestConversationSemanticSyncCarriesToolsAndThinkingIntoDocs(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -212,7 +220,7 @@ func TestConversationSemanticSyncSendsNeededConversations(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -275,7 +283,7 @@ func TestConversationSemanticSyncSendsNothingWhenEngineNeedsNothing(t *testing.T
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: nil}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -305,7 +313,7 @@ func TestConversationSemanticSyncManifestReflectsCurrentRecordsOnly(t *testing.T
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: nil}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -343,7 +351,7 @@ func TestConversationSemanticSyncBatchesNeededConversations(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{firstID, secondID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -386,7 +394,7 @@ func TestConversationSemanticSyncEngineBusyIsBenign(t *testing.T) {
 		needed:    []string{conversationID},
 		upsertErr: errors.New(`upsert semantic conversation documents for collection "collection-test": conflicting active job j1 for conversation collection chat:///collection-test`),
 	}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error on a busy engine, want nil: %v", err)
@@ -421,7 +429,7 @@ func TestConversationSemanticSyncCarriesForkParentIntoDocs(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -458,7 +466,7 @@ func TestConversationSemanticSyncLeavesParentEmptyWithoutLineage(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -492,7 +500,7 @@ func TestConversationSemanticSyncCarriesZedWorkspaceAndArchivedFlags(t *testing.
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -569,7 +577,7 @@ func TestConversationSemanticSyncStreamsAllNeededInOnePass(t *testing.T) {
 		secondID: "0123456789",
 	})
 	client := &fakeConversationSemanticClient{needed: []string{firstID, secondID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -598,7 +606,7 @@ func TestConversationSemanticSyncShipsLargeConversationWhole(t *testing.T) {
 		conversationID: "0123456789012345678901234567890123456789",
 	})
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -624,7 +632,7 @@ func TestConversationSemanticSyncSkipsPassWhileEngineJobRuns(t *testing.T) {
 		needed:    []string{conversationID},
 		jobStates: map[string]string{"upsert-job": "running"},
 	}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("first runPass returned error: %v", err)
@@ -672,7 +680,7 @@ func TestConversationSemanticSyncDefersActivelyGrowingConversation(t *testing.T)
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 	worker.now = func() time.Time { return fixedNow }
 
 	if err := worker.runPass(context.Background()); err != nil {
@@ -705,7 +713,7 @@ func TestConversationSemanticSyncDeliversEveryNeededConversation(t *testing.T) {
 		"codex:c": "text-c",
 	})
 	client := &fakeConversationSemanticClient{needed: []string{"codex:a", "codex:b", "codex:c"}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -749,7 +757,7 @@ func TestConversationSemanticSyncOmitsZeroDocumentConversation(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{emptyID, realID}}
-	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("first runPass returned error: %v", err)

@@ -37,6 +37,12 @@ type controlServer struct {
 	showCapture   func(ctx context.Context, id string) (mitmshow.ShowOutput, error)
 	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 	rebind        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
+	// searchIndex is the index surface the engine-first cross-conversation
+	// search reads: exact-id record lookup, filter resolution, and the live
+	// literal scan. newControlServer sets it to the same index the other RPCs
+	// use; holding it as the narrow searchConversationsIndex keeps the search
+	// path's dependency explicit and independently substitutable.
+	searchIndex searchConversationsIndex
 	// freshness reports the conversation-index sync snapshot at query time, set
 	// at construction. Nil yields the zero-value freshness.
 	freshness func() conversation.SearchFreshness
@@ -182,7 +188,7 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	if semanticConfigured {
 		semantic = s.semanticSearch()
 	}
-	result, err := searchConversationsResult(ctx, s.index, semantic, semanticConfigured, s.semanticCollectionID, s.literalFallback, req)
+	result, err := searchConversationsResult(ctx, s.searchIndex, semantic, semanticConfigured, s.semanticCollectionID, s.literalFallback, req)
 	if err != nil {
 		var invalidBounds invalidSearchBoundsError
 		if errors.As(err, &invalidBounds) {

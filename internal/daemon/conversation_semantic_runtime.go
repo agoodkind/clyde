@@ -33,7 +33,9 @@ const (
 // through currentSearchClient so a later success needs no reload. The livetrack
 // registry is attached once at construction; the grpc connection registers a
 // session on it whenever a dial-and-register attempt succeeds, and the group
-// drains that session on reload and shutdown.
+// drains that session on reload and shutdown. The retry worker itself is group
+// owned too: it is cancelled and waited for by a PhaseWorkers before-hook, so it
+// cannot outlive the drain that closes the registry.
 type conversationSemanticRuntime struct {
 	log       *slog.Logger
 	connector semanticConnector
@@ -49,6 +51,14 @@ type conversationSemanticRuntime struct {
 	// attemptMu serializes registration attempts so the initial boot attempt
 	// and the background retry loop never dial concurrently.
 	attemptMu sync.Mutex
+
+	// retryMu guards the retry worker's lifecycle handles below. retryCancel
+	// stops the worker and retryDone closes once it has returned, so the
+	// PhaseWorkers before-hook can wait the worker out before the connection
+	// registry drains. Both stay nil until a retry worker starts.
+	retryMu     sync.Mutex
+	retryCancel context.CancelFunc
+	retryDone   <-chan struct{}
 
 	// mu guards the resolved-connection state below.
 	mu         sync.Mutex
@@ -192,18 +202,7 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 			"retry_backoff_ms", semanticInitialRetryBackoff.Milliseconds(),
 			"err", err,
 		)
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					log.ErrorContext(ctx, "daemon.conversation_semantic.retry_panic",
-						"concern", "conversation.semantic",
-						"component", "daemon",
-						"err", fmt.Sprintf("panic: %v", recovered),
-					)
-				}
-			}()
-			runtime.retryRegisterLoop(ctx)
-		}()
+		runtime.startRetryWorker(ctx, group)
 	} else {
 		log.InfoContext(ctx, "daemon.conversation_semantic.started",
 			"concern", "conversation.semantic",
@@ -232,10 +231,83 @@ func newConversationSemanticRuntime(
 		initialRetryBackoff: semanticInitialRetryBackoff,
 		maxRetryBackoff:     semanticMaxRetryBackoff,
 		attemptMu:           sync.Mutex{},
+		retryMu:             sync.Mutex{},
+		retryCancel:         nil,
+		retryDone:           nil,
 		mu:                  sync.Mutex{},
 		search:              nil,
 		feeder:              nil,
 		registered:          false,
+	}
+}
+
+// semanticRetryWorkerHookName names the lifecycle hook that stops the
+// registration retry worker. It runs in PhaseWorkers, before the phase's
+// members drain, so the worker is gone before the semantic connection registry
+// closes.
+const semanticRetryWorkerHookName = "conversation.semantic.retry_stop"
+
+// startRetryWorker launches the background registration retry loop as a
+// group-owned worker rather than a bare goroutine. The worker runs under its own
+// cancellable context and publishes a completion channel, and stopRetryWorker is
+// registered as a PhaseWorkers before-hook, so reload and shutdown cancel the
+// worker and wait for it to return before the semantic connection registry (a
+// PhaseWorkers member) drains. No retry can dial or register across that drain
+// boundary.
+func (r *conversationSemanticRuntime) startRetryWorker(ctx context.Context, group *livetrack.Group) {
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	r.retryMu.Lock()
+	r.retryCancel = cancel
+	r.retryDone = done
+	r.retryMu.Unlock()
+	if group != nil {
+		group.AddHookBefore(livetrack.PhaseWorkers, semanticRetryWorkerHookName, r.stopRetryWorker)
+	}
+	go func() {
+		defer close(done)
+		defer cancel()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				r.log.ErrorContext(workerCtx, "daemon.conversation_semantic.retry_panic",
+					"concern", "conversation.semantic",
+					"component", "daemon",
+					"err", fmt.Sprintf("panic: %v", recovered),
+				)
+			}
+		}()
+		r.retryRegisterLoop(workerCtx)
+	}()
+}
+
+// stopRetryWorker cancels the registration retry worker and waits for it to
+// return, bounded by the drain context. It is the PhaseWorkers before-hook, so
+// the wait completes before the connection registry drains. It is nil-safe,
+// idempotent, and a no-op when no retry worker was ever started (the boot
+// registration succeeded).
+func (r *conversationSemanticRuntime) stopRetryWorker(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	r.retryMu.Lock()
+	cancel := r.retryCancel
+	done := r.retryDone
+	r.retryMu.Unlock()
+	if cancel == nil || done == nil {
+		return nil
+	}
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		r.log.WarnContext(ctx, "daemon.conversation_semantic.retry_stop_timeout",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", r.meta.CollectionID,
+			"err", ctx.Err(),
+		)
+		return fmt.Errorf("wait for semantic registration retry worker: %w", ctx.Err())
 	}
 }
 
