@@ -51,7 +51,7 @@ func (p *sseEventParser) createToolState(itemID, callID, name string) *toolCallS
 		ItemID: itemID,
 		CallID: callID,
 		Name:   name,
-		Type:   "function", IdentityEmitted: false, ArgumentDeltaSeen: false, ArgumentsEmitted: false, NativeParseLogged: false, Arguments: strings.
+		Type:   "function", IdentityEmitted: false, ArgumentDeltaSeen: false, ArgumentsEmitted: false, NativeParseLogged: false, ClientCustomTool: false, Arguments: strings.
 			Builder{},
 
 		Input: strings.
