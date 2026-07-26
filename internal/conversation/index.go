@@ -23,41 +23,54 @@ import (
 const (
 	cacheFilename   = "conversation-index.json"
 	refreshDebounce = 30 * time.Second
+	// cacheFormatVersion is the record shape the current binary writes. A cache
+	// written by an older shape still loads its records, so startup stays fast,
+	// but its file stamps are dropped so the first refresh re-parses every
+	// artifact once and fills in the fields the old shape never stored. Raise it
+	// whenever a scan starts deriving a record field the old cache cannot supply.
+	cacheFormatVersion = 1
 )
 
 // Index owns the derived raw conversation cache. It resolves each artifact's
 // parser through the registry it is constructed with, so the daemon wires the
 // provider parsers in once and every read and scan dispatches through them.
 type Index struct {
-	mu           sync.Mutex
-	registry     *Registry
-	records      []Record
-	prevRecords  map[string]Record
-	prevStamps   map[string]FileStamp
-	loaded       bool
-	refreshing   bool
-	lastRefresh  time.Time
-	cachePath    string
-	debounce     time.Duration
-	scanProvider func(context.Context, *Registry, scanCache) (scanResult, error)
+	mu sync.Mutex
+	// includeSubagents exposes conversations a dispatched agent wrote. It is read
+	// when the index serves records rather than when it scans, so the cache holds
+	// every conversation regardless of the setting and flipping the setting needs
+	// no cache deletion and no re-parse.
+	includeSubagents bool
+	registry         *Registry
+	records          []Record
+	prevRecords      map[string]Record
+	prevStamps       map[string]FileStamp
+	loaded           bool
+	refreshing       bool
+	lastRefresh      time.Time
+	cachePath        string
+	debounce         time.Duration
+	scanProvider     func(context.Context, *Registry, scanCache) (scanResult, error)
 }
 
 // NewIndex returns an index backed by the default XDG cache path that resolves
-// artifacts through the provided registry. Callers are expected to register the
-// provider parsers they need before constructing the index.
-func NewIndex(registry *Registry) *Index {
+// artifacts through the provided registry and serves records under the given
+// conversation settings. Callers are expected to register the provider parsers
+// they need before constructing the index.
+func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) *Index {
 	return &Index{
-		mu:           sync.Mutex{},
-		registry:     registry,
-		records:      nil,
-		prevRecords:  nil,
-		prevStamps:   nil,
-		loaded:       false,
-		refreshing:   false,
-		lastRefresh:  time.Time{},
-		cachePath:    filepath.Join(config.GlobalCacheDir(), cacheFilename),
-		debounce:     refreshDebounce,
-		scanProvider: scan,
+		mu:               sync.Mutex{},
+		includeSubagents: conversationConfig.IncludeSubagentConversations,
+		registry:         registry,
+		records:          nil,
+		prevRecords:      nil,
+		prevStamps:       nil,
+		loaded:           false,
+		refreshing:       false,
+		lastRefresh:      time.Time{},
+		cachePath:        filepath.Join(config.GlobalCacheDir(), cacheFilename),
+		debounce:         refreshDebounce,
+		scanProvider:     scan,
 	}
 }
 
@@ -93,7 +106,28 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 	idx.refreshAsync(ctx)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	return cloneRecords(idx.records), nil
+	return idx.visibleRecords(), nil
+}
+
+// visibleRecords returns the cached records this index serves under its subagent
+// setting. Every read path funnels through it, so a conversation a dispatched
+// agent wrote is absent from listing, paging, search scoping, and the semantic
+// sync feeder alike while the setting hides it. Callers hold idx.mu.
+func (idx *Index) visibleRecords() []Record {
+	if idx.includeSubagents {
+		return cloneRecords(idx.records)
+	}
+	out := make([]Record, 0, len(idx.records))
+	for _, record := range idx.records {
+		if record.IsSubagent() {
+			continue
+		}
+		out = append(out, record)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ListWithStamps returns the cached records with their artifact file stamps and
@@ -105,7 +139,7 @@ func (idx *Index) ListWithStamps(ctx context.Context) ([]StampedRecord, error) {
 	idx.refreshAsync(ctx)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	return cloneStampedRecords(idx.records, idx.prevStamps), nil
+	return cloneStampedRecords(idx.visibleRecords(), idx.prevStamps), nil
 }
 
 // RecordByID returns the cached record with the exact id from the in-memory
@@ -118,17 +152,23 @@ func (idx *Index) RecordByID(id string) (Record, bool) {
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	// A hidden record is skipped rather than returned as a miss, so a subagent
+	// conversation that somehow shares an id with a real one can never mask it.
 	for _, record := range idx.records {
-		if record.ID == id {
-			return record, true
+		if record.ID != id {
+			continue
 		}
+		if record.IsSubagent() && !idx.includeSubagents {
+			continue
+		}
+		return record, true
 	}
 	return emptyRecord(), false
 }
 
 func (idx *Index) recordsSnapshot() []Record {
 	idx.mu.Lock()
-	records := cloneRecords(idx.records)
+	records := idx.visibleRecords()
 	idx.mu.Unlock()
 	return records
 }
@@ -190,7 +230,33 @@ func (idx *Index) Refresh(ctx context.Context) (err error) {
 	idx.refreshing = false
 	idx.lastRefresh = clock.Now()
 	idx.mu.Unlock()
+	idx.reportSkippedSubagents(ctx, result.records)
 	return nil
+}
+
+// reportSkippedSubagents names how many conversations the setting is hiding, so
+// someone hunting for a conversation that never appeared can see why. It says
+// nothing when the setting exposes subagent conversations or when the scan found
+// none.
+func (idx *Index) reportSkippedSubagents(ctx context.Context, records []Record) {
+	idx.mu.Lock()
+	includeSubagents := idx.includeSubagents
+	idx.mu.Unlock()
+	if includeSubagents {
+		return
+	}
+	skipped := 0
+	for _, record := range records {
+		if record.IsSubagent() {
+			skipped++
+		}
+	}
+	if skipped == 0 {
+		return
+	}
+	slog.InfoContext(ctx, "conversation.index.subagent_conversations_skipped",
+		"concern", "conversation.index", "component", "conversation",
+		"count", skipped, "setting", "conversation.include_subagent_conversations")
 }
 
 func (idx *Index) loadOnce() error {
@@ -235,7 +301,6 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 			err = writeCache(idx.cachePath, result.records, result.stamps)
 		}
 		idx.mu.Lock()
-		defer idx.mu.Unlock()
 		if err == nil {
 			idx.records = result.records
 			idx.prevRecords = recordsByPath(result.records)
@@ -244,6 +309,10 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 			idx.lastRefresh = clock.Now()
 		}
 		idx.refreshing = false
+		idx.mu.Unlock()
+		if err == nil {
+			idx.reportSkippedSubagents(ctx, result.records)
+		}
 	}()
 }
 
@@ -262,6 +331,9 @@ func recordsByPath(records []Record) map[string]Record {
 // re-parses only changed transcripts, instead of re-reading the whole corpus on
 // every start.
 type cacheFile struct {
+	// Version is the record shape the writing binary used. A file written before
+	// the field existed decodes to zero, which is older than every real version.
+	Version int                  `json:"version"`
 	Records []Record             `json:"records"`
 	Stamps  map[string]FileStamp `json:"stamps"`
 }
@@ -278,6 +350,14 @@ func readCache(path string) ([]Record, map[string]FileStamp, error) {
 	var cache cacheFile
 	if err := json.Unmarshal(data, &cache); err == nil && cache.Records != nil {
 		sortRecords(cache.Records)
+		if cache.Version < cacheFormatVersion {
+			// The records still serve reads immediately, but their stamps are
+			// dropped so the first refresh re-parses every artifact once and
+			// derives the fields this shape added. Without that, an unchanged file
+			// would keep its old record forever and never gain an origin.
+			slog.Info("conversation.index.cache_format_upgraded", "concern", "conversation.index", "component", "conversation", "path", path, "from_version", cache.Version, "to_version", cacheFormatVersion, "records", len(cache.Records))
+			return cache.Records, nil, nil
+		}
 		return cache.Records, cache.Stamps, nil
 	}
 	// Fall back to the legacy records-only array. The next write upgrades the
@@ -297,7 +377,7 @@ func writeCache(path string, records []Record, stamps map[string]FileStamp) erro
 		slog.Warn("conversation.index.cache_mkdir_failed", "concern", "conversation.index", "component", "conversation", "path", filepath.Dir(path), "err", err)
 		return fmt.Errorf("create conversation cache dir: %w", err)
 	}
-	data, err := json.MarshalIndent(cacheFile{Records: records, Stamps: stamps}, "", "  ")
+	data, err := json.MarshalIndent(cacheFile{Version: cacheFormatVersion, Records: records, Stamps: stamps}, "", "  ")
 	if err != nil {
 		slog.Warn("conversation.index.cache_encode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
 		return fmt.Errorf("encode conversation cache: %w", err)

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -65,7 +66,7 @@ func TestProtoConversationRecordSetsForkParent(t *testing.T) {
 		path:     parent.ArtifactPath,
 		record:   parent,
 	})
-	idx := conversation.NewIndex(registry)
+	idx := conversation.NewIndex(registry, config.ConversationConfig{})
 	if err := idx.Refresh(context.Background()); err != nil {
 		t.Fatalf("seed index via refresh: %v", err)
 	}

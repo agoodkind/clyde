@@ -12,6 +12,7 @@ import (
 	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -33,7 +34,7 @@ func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 		err:  status.Error(codes.InvalidArgument, embeddingRefusalCause),
 	}
 	clydev1.RegisterClydeServiceServer(grpcServer, &controlServer{
-		index: conversation.NewIndex(newConversationRegistry()),
+		index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
 		searchSource: &semanticConversationSearchSource{
 			index: searchIndex,
 			searchClient: func() conversationSemanticSearchClient {

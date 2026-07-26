@@ -11,6 +11,7 @@ import (
 	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/livetrack"
@@ -542,7 +543,7 @@ func TestControlServerSearchConversationsUnreachableEngineFailsPrecondition(t *t
 	t.Parallel()
 	srv := &controlServer{
 		searchSource: &semanticConversationSearchSource{
-			index: conversation.NewIndex(newConversationRegistry()),
+			index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
 			searchClient: func() conversationSemanticSearchClient {
 				return nil
 			},

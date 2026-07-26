@@ -17,7 +17,7 @@ func TestConversationRecordProtoRoundTripCarriesLineage(t *testing.T) {
 
 	// An empty index resolves no fork parent, so parent_conversation_id stays
 	// empty and the round trip exercises only the lineage mapping.
-	idx := conversation.NewIndex(conversation.NewRegistry())
+	idx := conversation.NewIndex(conversation.NewRegistry(), config.ConversationConfig{})
 
 	withLineage := testDaemonConversationRecord("codex:child", conversation.ProviderCodex)
 	withLineage.Lineage = &conversation.Lineage{
@@ -79,7 +79,7 @@ func testDaemonConversationRecord(id string, provider conversation.Provider) con
 
 func TestConversationInfoProtoMappingCarriesStatsAndSegments(t *testing.T) {
 	t.Parallel()
-	idx := conversation.NewIndex(conversation.NewRegistry())
+	idx := conversation.NewIndex(conversation.NewRegistry(), config.ConversationConfig{})
 	record := testDaemonConversationRecord("claude:info", conversation.ProviderClaude)
 	info := conversation.Info{
 		Record: record,
@@ -161,7 +161,7 @@ func TestConversationInfoProtoMappingCarriesStatsAndSegments(t *testing.T) {
 func TestConversationRecordProtoRoundTripCarriesZedProvider(t *testing.T) {
 	t.Parallel()
 
-	idx := conversation.NewIndex(conversation.NewRegistry())
+	idx := conversation.NewIndex(conversation.NewRegistry(), config.ConversationConfig{})
 	record := testDaemonConversationRecord("zed:thread", conversation.ProviderZed)
 
 	wire := protoConversationRecord(context.Background(), idx, record)

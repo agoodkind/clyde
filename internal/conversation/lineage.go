@@ -106,6 +106,7 @@ func emptyRecord() Record {
 		Provider:      providerid.ProviderUnspecified,
 		NativeID:      "",
 		Lineage:       nil,
+		Origin:        OriginUnspecified,
 		Title:         "",
 		WorkspaceRoot: "",
 		ArtifactPath:  "",

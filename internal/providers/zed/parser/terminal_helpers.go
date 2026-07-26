@@ -183,7 +183,9 @@ func resolveNativeDiscoveredThread(
 	if err != nil {
 		return emptyDiscoveredThread(), false, err
 	}
-	if !ok || metadata.Metadata.AgentID != "" {
+	// An agent-named thread resolves like any other; ScanRecord classifies its
+	// origin and the conversation setting decides whether it is served.
+	if !ok {
 		return emptyDiscoveredThread(), false, nil
 	}
 	thread, err := zedstore.ParseThreadDocument(row.DataType, row.Data)

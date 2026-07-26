@@ -63,6 +63,7 @@ func emptyRecord() conversation.Record {
 		Provider:      providerid.ProviderUnspecified,
 		NativeID:      "",
 		Lineage:       nil,
+		Origin:        conversation.OriginUnspecified,
 		Title:         "",
 		WorkspaceRoot: "",
 		ArtifactPath:  "",
@@ -204,6 +205,12 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			ParentMessageUUID: "",
 		}
 	}
+	// session_meta classifies the thread, and the spawn lineage above already
+	// carries the parent thread id, so the origin does not repeat it.
+	origin := conversation.OriginUser
+	if thread.IsSubagent {
+		origin = conversation.OriginSubagent
+	}
 	name := ""
 	if indexOK {
 		name = index.ThreadName(thread.ID)
@@ -218,6 +225,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		Provider:      providerid.ProviderCodex,
 		NativeID:      thread.ID,
 		Lineage:       lineage,
+		Origin:        origin,
 		Title:         title,
 		WorkspaceRoot: workspaceRoot,
 		ArtifactPath:  thread.RolloutPath,

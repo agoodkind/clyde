@@ -32,6 +32,7 @@ type Record struct {
 	Provider      Provider  `json:"provider"`
 	NativeID      string    `json:"native_id"`
 	Lineage       *Lineage  `json:"lineage,omitempty"`
+	Origin        Origin    `json:"origin,omitempty"`
 	Title         string    `json:"title"`
 	WorkspaceRoot string    `json:"workspace_root"`
 	ArtifactPath  string    `json:"artifact_path"`
@@ -50,13 +51,17 @@ type StampedRecord struct {
 	Stamp  FileStamp
 }
 
-// UnmarshalJSON decodes provider labels while keeping Provider enum-backed in memory.
+// UnmarshalJSON decodes provider labels while keeping Provider enum-backed in
+// memory. A cache written before origin classification carries no origin key, so
+// the field decodes to [OriginUnspecified] instead of failing; the index re-parses
+// such a cache once (see cacheFormatVersion) to fill it in.
 func (record *Record) UnmarshalJSON(data []byte) error {
 	type recordWire struct {
 		ID            string          `json:"id"`
 		Provider      json.RawMessage `json:"provider"`
 		NativeID      string          `json:"native_id"`
 		Lineage       *Lineage        `json:"lineage"`
+		Origin        Origin          `json:"origin"`
 		Title         string          `json:"title"`
 		WorkspaceRoot string          `json:"workspace_root"`
 		ArtifactPath  string          `json:"artifact_path"`
@@ -80,6 +85,7 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 		Provider:      provider,
 		NativeID:      wire.NativeID,
 		Lineage:       wire.Lineage,
+		Origin:        wire.Origin,
 		Title:         wire.Title,
 		WorkspaceRoot: wire.WorkspaceRoot,
 		ArtifactPath:  wire.ArtifactPath,

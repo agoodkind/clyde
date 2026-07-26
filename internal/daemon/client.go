@@ -377,6 +377,9 @@ func conversationRecordsFromProto(wireRecords []*clydev1.ConversationRecord) []c
 	return records
 }
 
+// conversationRecordFromProto rebuilds a record from the control protocol. The
+// protocol carries no origin, because the daemon's index already applied the
+// subagent setting before it served the record, so the client never re-decides.
 func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.Record {
 	var lineage *conversation.Lineage
 	if wireLineage := wire.GetLineage(); wireLineage != nil {
@@ -392,6 +395,7 @@ func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.
 		Provider:      providerFromProto(wire.GetProvider()),
 		NativeID:      wire.GetNativeId(),
 		Lineage:       lineage,
+		Origin:        conversation.OriginUnspecified,
 		Title:         wire.GetTitle(),
 		WorkspaceRoot: wire.GetWorkspaceRoot(),
 		ArtifactPath:  wire.GetArtifactPath(),

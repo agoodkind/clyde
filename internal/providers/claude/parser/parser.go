@@ -31,6 +31,10 @@ const (
 	headerLineCap = 256
 	// scanBufferMax bounds a single transcript line during scanning.
 	scanBufferMax = 4 * 1024 * 1024
+	// untitledSubagentTranscriptTitle names a sidechain transcript that carries no
+	// title of its own. It has no session id to fall back on either, because the
+	// one it records belongs to the conversation that dispatched it.
+	untitledSubagentTranscriptTitle = "Untitled Subagent Transcript"
 )
 
 // Parser implements [conversation.Parser] for Claude transcripts.
@@ -56,6 +60,7 @@ func emptyRecord() conversation.Record {
 		Provider:      providerid.ProviderUnspecified,
 		NativeID:      "",
 		Lineage:       nil,
+		Origin:        conversation.OriginUnspecified,
 		Title:         "",
 		WorkspaceRoot: "",
 		ArtifactPath:  "",
@@ -73,11 +78,17 @@ func emptyRecord() conversation.Record {
 // fields, and so a malformed timestamp costs the created time rather than the
 // whole line.
 type claudeHeader struct {
-	SessionID   string      `json:"sessionId"`
-	CWD         string      `json:"cwd"`
-	Timestamp   string      `json:"timestamp"`
-	Type        EntryType   `json:"type"`
-	Content     string      `json:"content"`
+	SessionID string    `json:"sessionId"`
+	CWD       string    `json:"cwd"`
+	Timestamp string    `json:"timestamp"`
+	Type      EntryType `json:"type"`
+	Content   string    `json:"content"`
+	// IsSidechain marks a transcript Claude Code wrote for a dispatched agent
+	// rather than for the user's own session. Claude Code writes it on every
+	// conversation record in the file, so any header line settles the origin. The
+	// separate agent-<id>.jsonl filename is a naming convention rather than a
+	// documented contract, so it is not consulted.
+	IsSidechain bool        `json:"isSidechain"`
 	CustomTitle string      `json:"customTitle"`
 	ForkedFrom  *ForkedFrom `json:"forkedFrom"`
 }
@@ -108,9 +119,12 @@ func (Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			return nil
 		}
-		if strings.Contains(path, string(os.PathSeparator)+"subagents"+string(os.PathSeparator)) {
-			return nil
-		}
+		// A transcript under subagents/ is admitted rather than dropped here.
+		// scanHeader reads its isSidechain marker, classifies it as subagent
+		// origin, and gives it an artifact-hash identity so it cannot collide with
+		// the parent conversation whose session id it records. The one conversation
+		// setting then decides whether it is served. Dropping it here instead would
+		// be a second, always-on skip the setting could not reach.
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			if errors.Is(infoErr, os.ErrNotExist) {
@@ -154,6 +168,7 @@ type headerFields struct {
 	title                 string
 	workspaceRoot         string
 	createdAt             time.Time
+	isSidechain           bool
 	forkedFromSessionID   string
 	forkedFromMessageUUID string
 }
@@ -168,6 +183,7 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 		title:                 "",
 		workspaceRoot:         "",
 		createdAt:             time.Time{},
+		isSidechain:           false,
 		forkedFromSessionID:   "",
 		forkedFromMessageUUID: "",
 	}
@@ -203,10 +219,6 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 	if fields.providerID == "" {
 		return emptyRecord(), false
 	}
-	title := fields.title
-	if title == "" {
-		title = fields.providerID
-	}
 	var lineage *conversation.Lineage
 	if fields.forkedFromSessionID != "" {
 		lineage = &conversation.Lineage{
@@ -216,11 +228,40 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 			ParentMessageUUID: fields.forkedFromMessageUUID,
 		}
 	}
+	// A sidechain transcript records the session id of the conversation that
+	// dispatched the agent, not one of its own, and that id is also the id of a
+	// real user conversation. Deriving claude:<session-id> from it would make the
+	// subagent record collide with the parent's, so a sidechain record takes an
+	// artifact-hash id and claims no native session id at all. Discover admits
+	// these files so the one conversation setting decides whether they are served,
+	// which makes this the only barrier keeping the two identities apart.
+	//
+	// The agentId field on those records names the agent, which is a different
+	// thing, and no parent lineage is invented from the borrowed session id.
+	origin := conversation.OriginUser
+	recordProviderID := fields.providerID
+	if fields.isSidechain {
+		origin = conversation.OriginSubagent
+		recordProviderID = ""
+	}
+	// A transcript with no title of its own falls back to its session id, which is
+	// what a person types to reach it. A sidechain transcript has no session id of
+	// its own, and Resolve matches on title as well as id, so falling back to the
+	// borrowed one would let a lookup for the parent conversation answer with the
+	// agent's transcript.
+	title := fields.title
+	if title == "" {
+		title = recordProviderID
+	}
+	if title == "" {
+		title = untitledSubagentTranscriptTitle
+	}
 	return conversation.Record{
-		ID:            conversation.DerivedID(providerid.ProviderClaude, fields.providerID, path),
+		ID:            conversation.DerivedID(providerid.ProviderClaude, recordProviderID, path),
 		Provider:      providerid.ProviderClaude,
-		NativeID:      fields.providerID,
+		NativeID:      recordProviderID,
 		Lineage:       lineage,
+		Origin:        origin,
 		Title:         title,
 		WorkspaceRoot: fields.workspaceRoot,
 		ArtifactPath:  path,
@@ -239,6 +280,11 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 func applyHeaderLine(fields *headerFields, header claudeHeader) {
 	if header.SessionID != "" && fields.providerID == "" {
 		fields.providerID = header.SessionID
+		// The marker is read off the same record that supplied the session id, so
+		// the origin describes whose conversation that id names. Latching it across
+		// the whole header window instead would let one sidechain entry inside a
+		// user's own transcript reclassify and hide the entire conversation.
+		fields.isSidechain = header.IsSidechain
 	}
 	if header.ForkedFrom != nil && header.ForkedFrom.SessionID != "" && fields.forkedFromSessionID == "" {
 		fields.forkedFromSessionID = header.ForkedFrom.SessionID

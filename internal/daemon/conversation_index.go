@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"log/slog"
+
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
 	codexparser "goodkind.io/clyde/internal/providers/codex/parser"
@@ -24,7 +27,14 @@ func newConversationRegistry() *conversation.Registry {
 // NewConversationIndex builds a disk-backed conversation index with the Claude,
 // Codex, Cursor, and Zed parsers wired in. It serves callers outside the daemon
 // worker, such as the scalar-backfill CLI command, that need the same derived
-// records the daemon serves without standing up the full daemon.
+// records the daemon serves without standing up the full daemon. It reads the
+// global config so those callers hide subagent conversations exactly as the
+// daemon does; an unreadable config falls back to the defaults.
 func NewConversationIndex() *conversation.Index {
-	return conversation.NewIndex(newConversationRegistry())
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		slog.Warn("daemon.conversation_index.config_load_failed", "concern", "conversation.index", "component", "daemon", "path", config.GlobalConfigPath(), "err", err)
+		return conversation.NewIndex(newConversationRegistry(), config.NewConfigWithDefaults().Conversation)
+	}
+	return conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
 }
