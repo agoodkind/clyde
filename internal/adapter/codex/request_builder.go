@@ -446,11 +446,12 @@ func BuildRequestWithConfig(
 	systemSections := make([]string, 0, 8)
 	modelName := codexResolvedModelName(resolved)
 	workspacePath := cursorReq.WorkspacePath
+	customTools := newDeclaredCustomTools(requestTools(req))
 	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections, strategy, cfg, toolIDs); ok {
 		input = rawInput
 	} else {
 		toolIDs.reserveCompliant(chatToolCallIDs(req.Messages))
-		input, systemSections = appendChatMessageInputs(input, systemSections, req.Messages, strategy, cfg, toolIDs)
+		input, systemSections = appendChatMessageInputs(input, systemSections, req.Messages, strategy, cfg, toolIDs, customTools)
 	}
 	instructions := strings.TrimSpace(strings.Join(systemSections, "\n\n"))
 	if base := strings.TrimSpace(codexResolvedInstructions(resolved)); base != "" {
@@ -516,96 +517,6 @@ func BuildRequestWithConfig(
 	}
 }
 
-// appendChatMessageInputs walks the Chat-shaped messages once and
-// folds each into the Codex Responses input slice and system
-// fragment list. The returned slices replace the originals so the
-// caller can keep this call pure.
-func appendChatMessageInputs(
-	input []codexwire.InputItem,
-	systemSections []string,
-	messages []adapteropenai.ChatMessage,
-	strategy adapterrender.MaterializationStrategy,
-	cfg RequestBuilderConfig,
-	toolIDs *toolIDProjection,
-) ([]codexwire.InputItem, []string) {
-	for _, msg := range messages {
-		rawText := adaptercontent.FlattenRaw(msg.Content)
-		text := strings.TrimSpace(sanitizeForUpstreamCacheWithRequestConfig(rawText, strategy, cfg))
-		switch codexChatRole(strings.ToLower(msg.Role)) {
-		case codexChatRoleSystem, codexChatRoleDeveloper:
-			if text != "" {
-				systemSections = append(systemSections, text)
-			}
-		case codexChatRoleAssistant:
-			input = appendAssistantInput(input, msg, rawText, strategy, cfg, toolIDs)
-		case codexChatRoleTool, codexChatRoleFunction:
-			input = appendToolResultInput(input, msg, text, toolIDs)
-		default:
-			if content := codexContentFromRaw(msg.Content, codexwire.ContentItemInputText, strategy, cfg); len(content) > 0 {
-				input = append(input, MessageContentItems("user", content))
-			}
-		}
-	}
-	return input, systemSections
-}
-
-// appendAssistantInput emits one assistant message's tool calls,
-// reasoning items, and visible content into the input slice. Reasoning
-// items must precede the matching Message item per codex-rs history.rs.
-func appendAssistantInput(
-	input []codexwire.InputItem,
-	msg adapteropenai.ChatMessage,
-	rawText string,
-	strategy adapterrender.MaterializationStrategy,
-	cfg RequestBuilderConfig,
-	toolIDs *toolIDProjection,
-) []codexwire.InputItem {
-	for _, tc := range msg.ToolCalls {
-		if strings.TrimSpace(tc.Function.Name) == "" {
-			continue
-		}
-		input = append(input, functionCallItem(tc, toolIDs))
-	}
-	input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
-	if content := codexContentFromRaw(msg.Content, codexwire.ContentItemOutputText, strategy, cfg); len(content) > 0 {
-		input = append(input, MessageContentItems("assistant", content))
-	}
-	return input
-}
-
-// appendToolResultInput emits one tool/function role message either as a
-// FunctionCallOutput item (when it has a tool_call_id) or as a tagged
-// user input fallback.
-func appendToolResultInput(
-	input []codexwire.InputItem,
-	msg adapteropenai.ChatMessage,
-	text string,
-	toolIDs *toolIDProjection,
-) []codexwire.InputItem {
-	if text == "" {
-		return input
-	}
-	if strings.TrimSpace(msg.ToolCallID) != "" {
-		return append(input, FunctionCallOutputItem(toolIDs.project(strings.TrimSpace(msg.ToolCallID)), text))
-	}
-	return append(input, MessageContent("user", string(codexwire.ContentItemInputText), "tool: "+text))
-}
-
-func chatToolCallIDs(messages []adapteropenai.ChatMessage) []string {
-	toolCallIDs := make([]string, 0)
-	for _, message := range messages {
-		if toolCallID := strings.TrimSpace(message.ToolCallID); toolCallID != "" {
-			toolCallIDs = append(toolCallIDs, toolCallID)
-		}
-		for _, toolCall := range message.ToolCalls {
-			if toolCallID := strings.TrimSpace(toolCall.ID); toolCallID != "" {
-				toolCallIDs = append(toolCallIDs, toolCallID)
-			}
-		}
-	}
-	return toolCallIDs
-}
-
 func parallelToolCalls(req adapteropenai.ChatRequest) bool {
 	if req.ParallelTools == nil {
 		return true
@@ -631,21 +542,6 @@ func requestTools(req adapteropenai.ChatRequest) []adapteropenai.Tool {
 		}
 	}
 	return tools
-}
-
-func toolSpecs(req adapteropenai.ChatRequest) []codexwire.ToolSpec {
-	tools := requestTools(req)
-	if len(tools) == 0 {
-		return nil
-	}
-	out := make([]codexwire.ToolSpec, 0, len(tools))
-	for _, tool := range tools {
-		// The tool name passes through verbatim: it is opaque
-		// application content owned by whoever declared the tool, so
-		// clyde does not rewrite it into a codex-internal vocabulary.
-		out = append(out, FunctionToolSpec(strings.TrimSpace(tool.Function.Name), tool.Function.Description, tool.Function.Parameters, tool.Function.Strict))
-	}
-	return out
 }
 
 // responsesContentText extracts the plain-text body from one
@@ -806,12 +702,18 @@ func isPathSeparatorByte(b byte) bool {
 	return false
 }
 
-func functionCallItem(tc adapteropenai.ToolCall, toolIDs *toolIDProjection) codexwire.InputItem {
-	callID := strings.TrimSpace(tc.ID)
-	if callID == "" {
-		callID = fmt.Sprintf("call_%d", tc.Index)
+// toolCallID returns the stable pre-projection call id for one tool
+// call, synthesizing one from the call's index when the client omitted
+// it.
+func toolCallID(tc adapteropenai.ToolCall) string {
+	if callID := strings.TrimSpace(tc.ID); callID != "" {
+		return callID
 	}
-	callID = toolIDs.project(callID)
+	return fmt.Sprintf("call_%d", tc.Index)
+}
+
+func functionCallItem(tc adapteropenai.ToolCall, toolIDs *toolIDProjection) codexwire.InputItem {
+	callID := toolIDs.project(toolCallID(tc))
 	return codexwire.InputItem{
 		Type:   codexwire.ItemTypeFunctionCall,
 		CallID: callID,
@@ -861,7 +763,9 @@ func inputFromResponsesInput(
 	}
 	toolIDs.reserveCompliant(responsesToolCallIDs(items))
 	input := make([]codexwire.InputItem, 0, len(items))
-	customToolCallIDs := make(map[string]bool)
+	// Maps a custom_tool_call's call id to the tool name that call
+	// carried, so the matching output item replies under the same name.
+	customToolCallNames := make(map[string]string)
 	for _, item := range items {
 		role := strings.ToLower(item.Role)
 		itemType := strings.TrimSpace(item.Type)
@@ -882,38 +786,71 @@ func inputFromResponsesInput(
 			if content := codexContentFromContent(item.Content, codexwire.ContentItemOutputText, strategy, cfg); len(content) > 0 {
 				input = append(input, MessageContentItems("assistant", content))
 			}
-		case itemType == string(codexwire.ItemTypeFunctionCall):
-			input = append(input, functionCallFromResponsesItem(item, workspacePath, toolIDs))
-		case itemType == string(codexwire.ItemTypeFunctionCallOutput):
-			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath))
-			if output == "" {
-				continue
-			}
-			projectedCallID := toolIDs.project(strings.TrimSpace(item.CallID))
-			if customToolCallIDs[item.CallID] {
-				input = append(input, CustomToolCallOutputItem(projectedCallID, output))
-			} else {
-				input = append(input, FunctionCallOutputItem(projectedCallID, output))
-			}
-		case itemType == string(codexwire.ItemTypeCustomToolCall):
-			inputText := rewriteWorkspacePath(UnwrapApplyPatchInput(item.Input), workspacePath)
-			if item.CallID != "" {
-				customToolCallIDs[item.CallID] = true
-			}
-			input = append(input, codexwire.InputItem{
-				Type:   codexwire.ItemTypeCustomToolCall,
-				CallID: toolIDs.project(strings.TrimSpace(item.CallID)),
-				Name:   item.Name,
-				Input:  inputText,
-			})
-		case itemType == string(codexwire.ItemTypeCustomToolCallOutput):
-			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath))
-			if output != "" {
-				input = append(input, CustomToolCallOutputItem(toolIDs.project(strings.TrimSpace(item.CallID)), output))
-			}
+		default:
+			input = appendResponsesToolItem(input, item, itemType, workspacePath, toolIDs, customToolCallNames)
 		}
 	}
 	return input, len(input) > 0
+}
+
+// appendResponsesToolItem folds one tool-related responses-input item
+// (function call, custom tool call, or either output) into the codex
+// input slice. customToolCallNames carries each custom call's tool name
+// forward so its matching output replies under the same name; the map is
+// updated in place when a custom call is seen.
+func appendResponsesToolItem(
+	input []codexwire.InputItem,
+	item responsesInputItem,
+	itemType string,
+	workspacePath string,
+	toolIDs *toolIDProjection,
+	customToolCallNames map[string]string,
+) []codexwire.InputItem {
+	switch itemType {
+	case string(codexwire.ItemTypeFunctionCall):
+		return append(input, functionCallFromResponsesItem(item, workspacePath, toolIDs))
+	case string(codexwire.ItemTypeCustomToolCall):
+		// The payload rides through verbatim: unwrapping a JSON wrapper
+		// would corrupt a freeform tool whose own content is JSON.
+		inputText := rewriteWorkspacePath(item.Input, workspacePath)
+		if item.CallID != "" {
+			customToolCallNames[item.CallID] = item.Name
+		}
+		return append(input, CustomToolCallItem(toolIDs.project(strings.TrimSpace(item.CallID)), item.Name, inputText))
+	case string(codexwire.ItemTypeFunctionCallOutput), string(codexwire.ItemTypeCustomToolCallOutput):
+		return appendResponsesToolOutput(input, item, itemType, workspacePath, toolIDs, customToolCallNames)
+	default:
+		return input
+	}
+}
+
+// appendResponsesToolOutput folds one tool-result item into the codex
+// input slice under the item type its matching call requires. A call id
+// known to belong to a custom tool always answers with a
+// custom_tool_call_output, whichever output type the client sent.
+func appendResponsesToolOutput(
+	input []codexwire.InputItem,
+	item responsesInputItem,
+	itemType string,
+	workspacePath string,
+	toolIDs *toolIDProjection,
+	customToolCallNames map[string]string,
+) []codexwire.InputItem {
+	output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath))
+	if output == "" {
+		return input
+	}
+	projectedCallID := toolIDs.project(strings.TrimSpace(item.CallID))
+	// A custom_tool_call_output carries no name of its own on the wire, so
+	// the matching call supplies it. Falling straight through to item.Name
+	// would answer a call named ApplyPatch with an output named apply_patch.
+	if name, ok := customToolCallNames[item.CallID]; ok {
+		return append(input, CustomToolCallOutputItem(projectedCallID, name, output))
+	}
+	if itemType == string(codexwire.ItemTypeCustomToolCallOutput) {
+		return append(input, CustomToolCallOutputItem(projectedCallID, item.Name, output))
+	}
+	return append(input, FunctionCallOutputItem(projectedCallID, output))
 }
 
 func responsesToolCallIDs(items []responsesInputItem) []string {
