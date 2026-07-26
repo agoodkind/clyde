@@ -13,6 +13,7 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -92,6 +93,19 @@ type conversationSemanticClient interface {
 	JobState(ctx context.Context, jobID string) (string, error)
 }
 
+// conversationSemanticClientResolver resolves the current engine feeder surface.
+// It returns nil while the engine is unreachable, which the worker treats as a
+// skipped pass rather than a permanent stop. The worker calls it once per pass,
+// so a background registration success starts feeding the engine with no daemon
+// reload, the same way the search path picks up the recovered client.
+type conversationSemanticClientResolver func() conversationSemanticClient
+
+// conversationSemanticSyncHookName names the lifecycle hook that stops the sync
+// feeder. It runs in PhaseWorkers, before that phase's members drain, so the
+// feeder is gone before the semantic connection registry closes the engine
+// connection the feeder writes to.
+const conversationSemanticSyncHookName = "conversation.semantic.sync_stop"
+
 // conversationSemanticSyncWorker feeds the engine a content fingerprint per
 // conversation each pass and sends documents only for the conversations the
 // engine reports it needs. The engine owns drift, so the worker keeps no
@@ -100,11 +114,14 @@ type conversationSemanticClient interface {
 // runs, and the delivery cursor, which rotates batch order so late-sorting
 // conversations are not starved.
 type conversationSemanticSyncWorker struct {
-	index        conversationSemanticIndex
-	client       conversationSemanticClient
-	collectionID string
-	log          *slog.Logger
-	interval     time.Duration
+	index conversationSemanticIndex
+	// resolveClient returns the engine feeder surface for the pass about to run.
+	// It is resolved per pass, never cached, so a pass that starts after the
+	// engine comes back feeds it without waiting for a daemon reload.
+	resolveClient conversationSemanticClientResolver
+	collectionID  string
+	log           *slog.Logger
+	interval      time.Duration
 	// activeJobID is the engine job started by the last accepted upsert. The
 	// worker runs in a single goroutine, so the field needs no lock.
 	activeJobID string
@@ -135,21 +152,75 @@ type conversationSemanticSyncStats struct {
 	failed            int
 }
 
+// installConversationSemanticSyncStop creates the feeder's worker context and
+// registers its stop as a PhaseWorkers before-hook on the lifecycle group. The
+// worker context and its completion channel do not exist until the hook is
+// installed, so a feeder goroutine cannot be launched before the group owns its
+// stop, and any drain that begins afterwards cancels and joins the feeder inside
+// the workers phase instead of finishing while it still runs. A nil group has no
+// owner, so nothing is created and the caller must start nothing.
+func installConversationSemanticSyncStop(
+	ctx context.Context,
+	group *livetrack.Group,
+	log *slog.Logger,
+) (context.Context, chan struct{}, bool) {
+	if group == nil {
+		return nil, nil, false
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	group.AddHookBefore(livetrack.PhaseWorkers, conversationSemanticSyncHookName, func(stopCtx context.Context) error {
+		cancel()
+		select {
+		case <-done:
+			return nil
+		case <-stopCtx.Done():
+			log.WarnContext(stopCtx, "daemon.conversation_semantic_sync.stop_timeout",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"err", stopCtx.Err(),
+			)
+			return fmt.Errorf("wait for conversation semantic sync worker: %w", stopCtx.Err())
+		}
+	})
+	return workerCtx, done, true
+}
+
+// startConversationSemanticSync starts the feeder whenever semantic search is
+// configured, even while the engine is unreachable. The worker resolves its
+// client per pass, so an engine that comes back after boot is fed with no daemon
+// reload. It reports whether a feeder started. Two cases start nothing: a nil
+// resolver, which means semantic search is not configured at all, and a nil
+// lifecycle group, which would leave the goroutine unowned across a reload
+// drain. The daemon must call this before the control server accepts reload or
+// rebind requests, so no drain can begin between the hook install and the
+// goroutine launch.
 func startConversationSemanticSync(
 	ctx context.Context,
 	log *slog.Logger,
-	index *conversation.Index,
-	client conversationSemanticClient,
+	index conversationSemanticIndex,
+	resolveClient conversationSemanticClientResolver,
 	collectionID string,
 	freshness *conversationSemanticFreshness,
-) func() {
-	if client == nil {
-		return func() {}
+	group *livetrack.Group,
+) bool {
+	if resolveClient == nil {
+		return false
 	}
-	worker := newConversationSemanticSyncWorker(index, client, collectionID, log)
+	if log == nil {
+		log = slog.Default()
+	}
+	workerCtx, done, owned := installConversationSemanticSyncStop(ctx, group, log)
+	if !owned {
+		log.WarnContext(ctx, "daemon.conversation_semantic_sync.start_skipped_unowned",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", collectionID,
+		)
+		return false
+	}
+	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log)
 	worker.freshness = freshness
-	workerCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		defer func() {
@@ -163,15 +234,12 @@ func startConversationSemanticSync(
 		}()
 		worker.run(workerCtx)
 	}()
-	return func() {
-		cancel()
-		<-done
-	}
+	return true
 }
 
 func newConversationSemanticSyncWorker(
 	index conversationSemanticIndex,
-	client conversationSemanticClient,
+	resolveClient conversationSemanticClientResolver,
 	collectionID string,
 	log *slog.Logger,
 ) *conversationSemanticSyncWorker {
@@ -180,7 +248,7 @@ func newConversationSemanticSyncWorker(
 	}
 	return &conversationSemanticSyncWorker{
 		index:          index,
-		client:         client,
+		resolveClient:  resolveClient,
 		collectionID:   strings.TrimSpace(collectionID),
 		log:            log,
 		interval:       conversationSemanticSyncInterval,
@@ -220,10 +288,22 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	if semanticSyncContextDone(ctx) {
 		return nil
 	}
-	if w == nil || w.index == nil || w.client == nil {
+	if w == nil || w.index == nil || w.resolveClient == nil {
 		return fmt.Errorf("semantic conversation sync worker is not configured")
 	}
-	if w.engineBusyWithLastJob(ctx) {
+	client := w.resolveClient()
+	if client == nil {
+		// The engine is configured but not yet reachable: registration has not
+		// succeeded. Skip the pass without reading any transcript from disk and
+		// let the next pass pick the client up once the background retry lands.
+		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_skipped_engine_unavailable",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", w.collectionID,
+		)
+		return nil
+	}
+	if w.engineBusyWithLastJob(ctx, client) {
 		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_skipped_engine_busy",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -248,7 +328,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return nil
 	}
 
-	needed, err := w.client.SyncConversationManifest(ctx, w.collectionID, manifest)
+	needed, err := client.SyncConversationManifest(ctx, w.collectionID, manifest)
 	if err != nil {
 		return fmt.Errorf("sync conversation manifest: %w", err)
 	}
@@ -267,7 +347,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return nil
 	}
 
-	w.sendDocuments(ctx, docs, manifest, sentConversations, &stats)
+	w.sendDocuments(ctx, client, docs, manifest, sentConversations, &stats)
 	w.logPass(ctx, stats)
 	return nil
 }
@@ -278,11 +358,11 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 // worker skips the whole pass: no manifest sync and no transcript loads. A
 // terminal state or a failed lookup clears the id and lets the pass proceed;
 // the upsert path still handles a busy engine on its own.
-func (w *conversationSemanticSyncWorker) engineBusyWithLastJob(ctx context.Context) bool {
+func (w *conversationSemanticSyncWorker) engineBusyWithLastJob(ctx context.Context, client conversationSemanticClient) bool {
 	if w.activeJobID == "" {
 		return false
 	}
-	state, err := w.client.JobState(ctx, w.activeJobID)
+	state, err := client.JobState(ctx, w.activeJobID)
 	if err != nil {
 		w.activeJobID = ""
 		return false
@@ -461,12 +541,13 @@ func rotateAfter(ids []string, cursor string) []string {
 // retries once the engine is free. Any other failure is a real error.
 func (w *conversationSemanticSyncWorker) sendDocuments(
 	ctx context.Context,
+	client conversationSemanticClient,
 	docs []semsearch.SemDoc,
 	manifest []semsearch.Fingerprint,
 	sentConversations int,
 	stats *conversationSemanticSyncStats,
 ) {
-	jobID, upsertErr := w.client.UpsertConversationDocuments(ctx, w.collectionID, docs, manifest)
+	jobID, upsertErr := client.UpsertConversationDocuments(ctx, w.collectionID, docs, manifest)
 	if upsertErr != nil {
 		if isConflictingActiveJob(upsertErr) {
 			w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.engine_busy",

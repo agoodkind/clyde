@@ -37,19 +37,30 @@ type controlServer struct {
 	showCapture   func(ctx context.Context, id string) (mitmshow.ShowOutput, error)
 	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 	rebind        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
+	// searchIndex is the index surface the engine-first cross-conversation
+	// search reads: exact-id record lookup, filter resolution, and the live
+	// literal scan. newControlServer sets it to the same index the other RPCs
+	// use; holding it as the narrow searchConversationsIndex keeps the search
+	// path's dependency explicit and independently substitutable.
+	searchIndex searchConversationsIndex
 	// freshness reports the conversation-index sync snapshot at query time, set
 	// at construction. Nil yields the zero-value freshness.
 	freshness func() conversation.SearchFreshness
-	// semanticSearch is the engine-backed cross-conversation search the daemon
-	// prefers before the live literal scan. It is nil when conversation semantic
-	// search is not configured. semanticCollectionID names the engine collection
-	// the search reads.
-	semanticSearch       conversationSemanticSearchClient
+	// semanticSearch resolves the engine-backed cross-conversation search client
+	// the daemon prefers before the live literal scan. The resolver itself is nil
+	// when conversation semantic search is not configured; a nil return means it
+	// is configured but the engine is not yet reachable (registration has not
+	// succeeded), which the query path fails fast on instead of a full-corpus
+	// literal scan. Resolving per query means a background registration success
+	// after a boot-time engine outage is picked up with no reload.
+	// semanticCollectionID names the engine collection the search reads.
+	semanticSearch       func() conversationSemanticSearchClient
 	semanticCollectionID string
 	// literalFallback re-enables the live literal scan when the engine is
 	// configured but returns no matches. False (the default) makes a cold or
 	// empty engine surface a loud LiteralDisabledCold result instead of a
-	// misleading literal scan. It has no effect when semanticSearch is nil.
+	// misleading literal scan. It has no effect when semantic search is not
+	// configured.
 	literalFallback bool
 	// captureStore is the daemon's shared SQLite capture store. SeedBaseline
 	// reads the deduped shape corpus from it and writes the baseline through
@@ -166,15 +177,29 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 // read; search never inlines it. The freshness snapshot lets a thin result be
 // distinguished from a cold index.
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
+	// Establish correlation before any blocking search work so the operation is
+	// traceable, including the fast-fail path when the engine is unreachable.
 	ctx, _ = correlation.Ensure(ctx, "")
 	if req.GetQuery() == "" {
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
-	result, err := searchConversationsResult(ctx, s.index, s.semanticSearch, s.semanticCollectionID, s.literalFallback, req)
+	var semantic conversationSemanticSearchClient
+	semanticConfigured := s.semanticSearch != nil
+	if semanticConfigured {
+		semantic = s.semanticSearch()
+	}
+	result, err := searchConversationsResult(ctx, s.searchIndex, semantic, semanticConfigured, s.semanticCollectionID, s.literalFallback, req)
 	if err != nil {
 		var invalidBounds invalidSearchBoundsError
 		if errors.As(err, &invalidBounds) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		var engineUnavailable semanticEngineUnavailableError
+		if errors.As(err, &engineUnavailable) {
+			// FailedPrecondition, not Unavailable: the daemon is up and answering,
+			// its search dependency is not. daemonRPCError renders Unavailable as
+			// "clyde daemon is not running", which would misname this failure.
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		}
 		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
 	}
@@ -210,23 +235,99 @@ func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
 	return s.freshness()
 }
 
+// semanticEngineUnavailableError signals that conversation semantic search is
+// configured but the engine is unreachable: registration has not succeeded, or
+// an engine call failed with a transport/unavailable error. The query path
+// returns it fast instead of running an unbounded full-corpus literal scan, and
+// the RPC boundary maps it to codes.FailedPrecondition so the caller sees a
+// typed dependency failure rather than a hang.
+type semanticEngineUnavailableError struct {
+	operation semanticEngineOperation
+	err       error
+}
+
+// semanticEngineOperation names the step at which the engine was found
+// unreachable, so the returned error says whether the daemon never registered
+// the collection or lost the engine mid-query.
+type semanticEngineOperation string
+
+const (
+	// semanticEngineOperationRegistration means the daemon has no registered
+	// engine connection yet: the boot-time dial or register failed and the
+	// background retry has not succeeded.
+	semanticEngineOperationRegistration semanticEngineOperation = "registration"
+	// semanticEngineOperationSearch means a registered connection failed the
+	// search call with a transport error.
+	semanticEngineOperationSearch semanticEngineOperation = "search"
+)
+
+func (e semanticEngineUnavailableError) Error() string {
+	message := "conversation semantic engine unavailable during " + string(e.operation)
+	if e.err != nil {
+		return message + ": " + e.err.Error()
+	}
+	return message
+}
+
+func (e semanticEngineUnavailableError) Unwrap() error {
+	return e.err
+}
+
+// grpcStatusError is the interface a gRPC status error implements. Matching it
+// through [errors.As] walks the wrapped chain, so a transport failure is still
+// classified after a caller wraps it.
+type grpcStatusError interface {
+	error
+	GRPCStatus() *status.Status
+}
+
+// isEngineUnavailable reports whether err (or any error it wraps) is a gRPC
+// status naming an unreachable engine: Unavailable (connection refused, engine
+// down) or DeadlineExceeded (engine wedged). Other engine errors are not treated
+// as unreachable so the bounded cold-engine literal fallback still applies to
+// them.
+func isEngineUnavailable(err error) bool {
+	var statusErr grpcStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	code := statusErr.GRPCStatus().Code()
+	return code == codes.Unavailable || code == codes.DeadlineExceeded
+}
+
 // searchConversationsResult runs the engine-first cross-conversation search.
 // When the engine is configured and produces at least one match, those matches
 // are returned with Source semantic. When the engine is configured but produces
 // nothing, the literalFallback flag decides: false (the dogfood default) returns
 // a loud LiteralDisabledCold result with no matches, true falls through to the
-// live literal scan. When the engine is not configured at all, the literal scan
-// always answers. Facets and the filter funnel are computed clyde-side from the
-// index. conversation_id, when set, scopes the engine to a single conversation,
-// the within-search behavior.
+// live literal scan. When the engine is configured but unreachable (the client
+// is nil because registration has not succeeded, or an engine call fails with a
+// transport/unavailable error), it returns a typed semanticEngineUnavailableError
+// fast rather than running the full-corpus literal scan. When the engine is not
+// configured at all, the literal scan always answers. Facets and the filter
+// funnel are computed clyde-side from the index. conversation_id, when set,
+// scopes the engine to a single conversation, the within-search behavior.
 func searchConversationsResult(
 	ctx context.Context,
 	idx searchConversationsIndex,
 	semantic conversationSemanticSearchClient,
+	semanticConfigured bool,
 	collectionID string,
 	literalFallback bool,
 	req *clydev1.SearchConversationsRequest,
 ) (conversation.SearchConversationsResult, error) {
+	if semanticConfigured && semantic == nil {
+		// Semantic search is configured but the engine is not reachable, so fail
+		// fast with a typed, logged error instead of an unbounded full-corpus
+		// literal scan that would not return in usable time. This runs before the
+		// filter funnel and any other index read so nothing blocks first.
+		unavailable := semanticEngineUnavailableError{operation: semanticEngineOperationRegistration, err: nil}
+		slog.WarnContext(ctx, "daemon.search_conversations.engine_unavailable", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"operation", string(unavailable.operation),
+			"err", unavailable,
+		)
+		return conversation.SearchConversationsResult{}, unavailable
+	}
 	accounting := filterAccounting(ctx, idx, req)
 	normalizedLimit := normalizedSearchLimit(req.GetLimit())
 	normalizedOffset := normalizedPagingOffset(req.GetOffset())
@@ -363,6 +464,13 @@ func engineSearchMatches(
 		slog.WarnContext(ctx, "daemon.search_conversations.engine_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
+		if isEngineUnavailable(err) {
+			// An unreachable engine must fail fast, never fall through to the
+			// unbounded full-corpus literal scan.
+			return nil, semanticEngineUnavailableError{operation: semanticEngineOperationSearch, err: err}
+		}
+		// A non-transport engine error keeps the bounded cold-engine fallback:
+		// nil, nil lets the caller apply the literalFallback policy.
 		return nil, nil
 	}
 	matches := make([]conversation.SearchMatch, 0, len(hits))

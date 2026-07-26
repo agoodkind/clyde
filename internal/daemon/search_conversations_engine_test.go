@@ -10,6 +10,8 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // fakeSearchIndex stands in for *conversation.Index in engine-first search
@@ -108,7 +110,7 @@ func TestSearchConversationsResultEngineHitsReturnWithoutFallback(t *testing.T) 
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -156,7 +158,7 @@ func TestSearchConversationsResultEngineAppliesOffset(t *testing.T) {
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 1, Offset: 1}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -191,7 +193,7 @@ func TestSearchConversationsResultEngineNormalizesLimit(t *testing.T) {
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 0, Offset: 1}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -224,7 +226,7 @@ func TestSearchConversationsResultEngineNormalizesNegativeOffset(t *testing.T) {
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 1, Offset: -5}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -250,7 +252,7 @@ func TestSearchConversationsResultEngineRejectsOffsetTooLarge(t *testing.T) {
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Offset: int64(maxInt32Value)}
 
-	_, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	_, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, req)
 	if err == nil {
 		t.Fatal("expected an error for an offset that overflows the semantic page size")
 	}
@@ -277,7 +279,7 @@ func TestSearchConversationsResultEngineEmptyPageStaysSemantic(t *testing.T) {
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 1, Offset: 1}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", true, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", true, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -319,7 +321,7 @@ func TestSearchConversationsResultEngineErrorFallsBackLiteral(t *testing.T) {
 	semantic := &fakeSemanticSearch{hits: nil, err: errors.New("engine down"), filters: nil}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", true, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", true, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -361,7 +363,7 @@ func TestSearchConversationsResultEngineEmptyFallsBackLiteral(t *testing.T) {
 	semantic := &fakeSemanticSearch{hits: nil, err: nil, filters: nil}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", true, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", true, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -387,7 +389,7 @@ func TestSearchConversationsResultLiteralDisabledCold(t *testing.T) {
 	semantic := &fakeSemanticSearch{hits: nil, err: nil, filters: nil}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -425,7 +427,7 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	}
 	providerScoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Provider: clydev1.Provider_PROVIDER_CLAUDE}
 
-	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, providerScoped); err != nil {
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, providerScoped); err != nil {
 		t.Fatalf("provider-scoped search: %v", err)
 	}
 	if len(semantic.filters) != 1 {
@@ -440,7 +442,7 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	}
 
 	workspaceScoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Workspace: "/repo"}
-	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, workspaceScoped); err != nil {
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, workspaceScoped); err != nil {
 		t.Fatalf("workspace-scoped search: %v", err)
 	}
 	if len(semantic.filters) != 2 {
@@ -452,7 +454,7 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	}
 
 	unscoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
-	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, unscoped); err != nil {
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, unscoped); err != nil {
 		t.Fatalf("unscoped search: %v", err)
 	}
 	if len(semantic.filters) != 3 {
@@ -484,7 +486,7 @@ func TestSearchConversationsResultNativeFiltersSupportZedProvider(t *testing.T) 
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Provider: clydev1.Provider_PROVIDER_ZED}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", false, req)
 	if err != nil {
 		t.Fatalf("zed provider search: %v", err)
 	}
@@ -499,6 +501,61 @@ func TestSearchConversationsResultNativeFiltersSupportZedProvider(t *testing.T) 
 	}
 	if len(result.Matches) != 1 || result.Matches[0].Record.Provider != conversation.ProviderZed {
 		t.Fatalf("matches = %+v", result.Matches)
+	}
+}
+
+// TestSearchConversationsResultConfiguredEngineUnavailableFailsFast proves the
+// unreachable-engine fast-fail: with semantic search configured but no ready
+// client (registration has not succeeded), the result is a typed
+// semanticEngineUnavailableError and the full-corpus literal scan is never run,
+// even with literalFallback on.
+func TestSearchConversationsResultConfiguredEngineUnavailableFailsFast(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records:   map[string]conversation.Record{"claude:one": daemonTestRecord("claude:one", false)},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
+
+	_, err := searchConversationsResult(context.Background(), idx, nil, true, "conversations", true, req)
+	if err == nil {
+		t.Fatal("expected a typed error when the engine is configured but unreachable")
+	}
+	var unavailable semanticEngineUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("error = %v, want semanticEngineUnavailableError", err)
+	}
+	if idx.liveCalls != 0 {
+		t.Fatalf("live scan called %d times, want 0 on an unreachable engine", idx.liveCalls)
+	}
+}
+
+// TestSearchConversationsResultEngineTransportErrorFailsFast proves a gRPC
+// Unavailable from the engine fails fast rather than falling through to the
+// full-corpus literal scan, even with literalFallback on.
+func TestSearchConversationsResultEngineTransportErrorFailsFast(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records:   map[string]conversation.Record{"claude:one": daemonTestRecord("claude:one", false)},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{hits: nil, err: status.Error(codes.Unavailable, "connection refused")}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
+
+	_, err := searchConversationsResult(context.Background(), idx, semantic, true, "conversations", true, req)
+	if err == nil {
+		t.Fatal("expected a typed error on an engine transport failure")
+	}
+	var unavailable semanticEngineUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("error = %v, want semanticEngineUnavailableError", err)
+	}
+	if idx.liveCalls != 0 {
+		t.Fatalf("live scan called %d times, want 0 on an engine transport failure", idx.liveCalls)
 	}
 }
 
@@ -518,7 +575,7 @@ func TestSearchConversationsResultNoEngineLiveOnly(t *testing.T) {
 	idx := &fakeSearchIndex{records: nil, live: live, liveErr: nil, liveCalls: 0}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 0, Offset: -5}
 
-	result, err := searchConversationsResult(context.Background(), idx, nil, "", false, req)
+	result, err := searchConversationsResult(context.Background(), idx, nil, false, "", false, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}

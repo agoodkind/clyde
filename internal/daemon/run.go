@@ -120,6 +120,22 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
 	semanticFreshness := newConversationSemanticFreshness()
 
+	// Resolve the feeder client per pass rather than once here: when the engine
+	// is down at boot the resolver returns nil, and the worker starts anyway and
+	// picks the client up once the background registration retry succeeds, with
+	// no daemon reload. A nil resolver means semantic search is not configured.
+	var resolveSemanticClient conversationSemanticClientResolver
+	if runtime.semantic != nil {
+		resolveSemanticClient = runtime.semantic.syncClient
+	}
+	// Start the feeder before the control server serves. Its stop is installed on
+	// the lifecycle group inside the start call, ahead of the goroutine launch, so
+	// a ReloadDaemon or RebindDaemon RPC cannot begin the workers-phase drain
+	// while the feeder is running unowned. Reload and shutdown then both cancel
+	// and wait for the feeder before the semantic connection registry drains the
+	// engine connection it feeds.
+	startConversationSemanticSync(ctx, log, conversationIndex, resolveSemanticClient, cfg.Conversation.Semantic.CollectionID, semanticFreshness, runtime.group)
+
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
 		grpc.MaxSendMsgSize(controlMaxMessageBytes),
@@ -146,12 +162,6 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		}()
 		conversationIndex.Start(ctx, time.Minute)
 	}()
-	var semanticClient conversationSemanticClient
-	if runtime.semantic != nil {
-		semanticClient = runtime.semantic.client
-	}
-	semanticStop := startConversationSemanticSync(ctx, log, conversationIndex, semanticClient, cfg.Conversation.Semantic.CollectionID, semanticFreshness)
-	defer semanticStop()
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -287,10 +297,18 @@ func newControlServer(
 	grpcServer *grpc.Server,
 	runtime *runtimeServices,
 ) *controlServer {
-	var semanticSearch conversationSemanticSearchClient
+	// semanticSearch resolves the current engine-backed search client per query,
+	// so a background registration success (after a boot-time engine outage) is
+	// picked up with no daemon reload. A nil resolver means semantic search is
+	// not configured; a resolver that returns nil means it is configured but the
+	// engine is not yet reachable, which the search path fails fast on.
+	var semanticSearch func() conversationSemanticSearchClient
 	semanticCollectionID := ""
-	if runtime.semantic != nil && runtime.semantic.client != nil {
-		semanticSearch = runtime.semantic.client
+	if cfg.Conversation.Semantic.Enabled {
+		semanticRuntime := runtime.semantic
+		semanticSearch = func() conversationSemanticSearchClient {
+			return semanticRuntime.currentSearchClient()
+		}
 		semanticCollectionID = cfg.Conversation.Semantic.CollectionID
 	}
 	return &controlServer{
@@ -311,6 +329,7 @@ func newControlServer(
 		rebind: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return rebindDaemonWorker(ctx, log, grpcServer, runtime)
 		},
+		searchIndex:          index,
 		semanticSearch:       semanticSearch,
 		semanticCollectionID: semanticCollectionID,
 		literalFallback:      cfg.Conversation.Semantic.LiteralFallback,
