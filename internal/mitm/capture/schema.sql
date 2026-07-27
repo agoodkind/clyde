@@ -18,14 +18,7 @@ CREATE TABLE IF NOT EXISTS requests (
 	resp_content_type TEXT NOT NULL DEFAULT '',
 	req_bytes INTEGER NOT NULL DEFAULT 0,
 	resp_bytes INTEGER NOT NULL DEFAULT 0,
-	duration_ms INTEGER NOT NULL DEFAULT 0,
-	-- conversation_id is clyde's derived conversation id for the chat this
-	-- request belongs to, empty when the request names no chat. Databases
-	-- created before these columns existed pick them up through
-	-- ensureRequestConversationColumns, which also creates their index; the
-	-- index cannot live here because this file runs before that ALTER.
-	conversation_id TEXT NOT NULL DEFAULT '',
-	conversation_source TEXT NOT NULL DEFAULT ''
+	duration_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts);
 CREATE INDEX IF NOT EXISTS idx_requests_client ON requests(client);

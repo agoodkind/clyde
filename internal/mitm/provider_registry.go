@@ -114,28 +114,6 @@ type CaptureDecoder interface {
 	DecodeCaptureRequest(exchange ExchangeDiagnostic) (capture.DecodedBody, bool)
 }
 
-// captureConversationResolverFor returns the claiming provider's conversation
-// resolver when it implements one. Providers satisfy
-// [capture.ConversationRefResolver] directly, so the same implementation serves
-// this record-time path and a query-time read of an already-stored row.
-func captureConversationResolverFor(providerName string, host string) (capture.ConversationRefResolver, bool) {
-	for _, provider := range defaultRegistry.snapshot() {
-		resolver, ok := provider.(capture.ConversationRefResolver)
-		if !ok || provider.ID().String() != providerName {
-			continue
-		}
-		return resolver, true
-	}
-	for _, provider := range defaultRegistry.snapshot() {
-		resolver, ok := provider.(capture.ConversationRefResolver)
-		if !ok || !provider.ClassifyConnect(normalizeConnectHost(host)).Claimed {
-			continue
-		}
-		return resolver, true
-	}
-	return nil, false
-}
-
 func captureDecoderFor(providerName string, host string) (CaptureDecoder, bool) {
 	for _, provider := range defaultRegistry.snapshot() {
 		decoder, ok := provider.(CaptureDecoder)

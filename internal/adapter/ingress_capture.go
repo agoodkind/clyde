@@ -123,7 +123,6 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 		ResponseBody:      capW.body.Bytes(),
 		RequestType:       r.Header.Get("Content-Type"),
 		ResponseType:      capW.Header().Get("Content-Type"),
-		Conversation:      capture.UnresolvedConversation(),
 		Started:           started,
 	})
 }
