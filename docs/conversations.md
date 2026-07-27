@@ -1,8 +1,12 @@
 # Conversations
 
-Clyde reads raw Claude and Codex conversation artifacts so users can inspect,
-search, and export provider-owned transcripts without changing those provider
-files.
+Clyde reads raw conversation artifacts from Claude, Codex, Cursor, and Zed so
+users can inspect, search, and export provider-owned transcripts without
+changing those provider files.
+
+Claude and Codex each write one transcript file per conversation. Cursor and Zed
+keep conversations in SQLite databases the running application owns, and Cursor
+uses more than one store. See [Cursor stores](cursor/stores.md).
 
 ## Model
 
@@ -12,7 +16,8 @@ artifact kind, model, creation time, update time, size, archive state, and
 resolved fork lineage when the index can resolve it.
 
 Clyde reads provider artifacts only. It does not create, rename, resume,
-compact, wrap, or mutate Claude or Codex sessions.
+compact, wrap, or mutate a provider's sessions, and it opens provider databases
+read-only because the application that owns them may be running.
 
 ## IDs
 
@@ -20,6 +25,9 @@ Conversation ids are derived ids:
 
 - `claude:<provider-session-id>` for Claude transcripts with a provider session id.
 - `codex:<thread-id>` for Codex transcripts with a thread id.
+- `cursor:<native-id>` for Cursor conversations, where the native id depends on
+  which store holds the conversation.
+- `zed:<thread-id>` for Zed threads.
 - `artifact:<path-hash>` when a provider id is not available.
 
 CLI and MCP calls use `conversation_id` for this value. Most conversation tools
