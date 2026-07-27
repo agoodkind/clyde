@@ -41,6 +41,7 @@ func TestConversationRegistryNames(t *testing.T) {
 	reg := NewConversationRegistry()
 	want := []string{
 		"clyde_conversation_info",
+		"clyde_conversation_resolve_request",
 		"clyde_export_transcript",
 		"clyde_reorient",
 		"clyde_search",
@@ -126,7 +127,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	if conversationParent == nil {
 		t.Fatal("conversation parent missing")
 	}
-	wantConversationChildren := []string{"export", "info", "reorient", "search"}
+	wantConversationChildren := []string{"export", "info", "reorient", "resolve-request", "search"}
 	var gotChildren []string
 	for _, child := range conversationParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())

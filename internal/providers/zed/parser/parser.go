@@ -154,20 +154,21 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			title = "Untitled Zed Terminal"
 		}
 		return conversation.Record{
-			ID:            conversation.DerivedID(providerid.ProviderZed, terminalSessionID(terminal.TerminalID), path),
-			Provider:      providerid.ProviderZed,
-			NativeID:      terminal.TerminalID,
-			Lineage:       nil,
-			Origin:        conversation.OriginUnspecified,
-			Title:         title,
-			WorkspaceRoot: firstNonEmptyString(terminal.WorkingDirectory, firstPath(terminal.FolderPaths), firstPath(terminal.MainWorktreePaths)),
-			ArtifactPath:  path,
-			ArtifactKind:  artifactKindZedTerm,
-			Model:         "",
-			CreatedAt:     terminal.CreatedAt,
-			UpdatedAt:     terminal.CreatedAt,
-			SizeBytes:     0,
-			Archived:      false,
+			ID:              conversation.DerivedID(providerid.ProviderZed, terminalSessionID(terminal.TerminalID), path),
+			Provider:        providerid.ProviderZed,
+			NativeID:        terminal.TerminalID,
+			Lineage:         nil,
+			Origin:          conversation.OriginUnspecified,
+			Title:           title,
+			WorkspaceRoot:   firstNonEmptyString(terminal.WorkingDirectory, firstPath(terminal.FolderPaths), firstPath(terminal.MainWorktreePaths)),
+			ArtifactPath:    path,
+			ArtifactKind:    artifactKindZedTerm,
+			Model:           "",
+			CreatedAt:       terminal.CreatedAt,
+			UpdatedAt:       terminal.CreatedAt,
+			SizeBytes:       0,
+			Archived:        false,
+			LatestRequestID: "",
 		}, true
 	}
 
@@ -187,6 +188,8 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		UpdatedAt:     latestNonZeroTime(discovered.Metadata.UpdatedAt, discovered.Row.UpdatedAt, thread.UpdatedAt),
 		SizeBytes:     stamp.Size,
 		Archived:      discovered.Metadata.Archived,
+		// Zed thread headers carry no request id.
+		LatestRequestID: "",
 	}, true
 }
 

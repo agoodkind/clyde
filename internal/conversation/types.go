@@ -42,6 +42,13 @@ type Record struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 	SizeBytes     int64     `json:"size_bytes"`
 	Archived      bool      `json:"archived"`
+	// LatestRequestID is the provider request id of the conversation's most
+	// recent turn, when the artifact header the scan already reads carries one.
+	// It makes that one id resolvable straight from the index; every earlier
+	// request in the same conversation resolves through the provider's live
+	// lookup instead. Empty when the provider records no request id in its
+	// header.
+	LatestRequestID string `json:"latest_request_id,omitempty"`
 }
 
 // StampedRecord pairs an index record with the artifact stamp used by the
@@ -57,20 +64,21 @@ type StampedRecord struct {
 // such a cache once (see cacheFormatVersion) to fill it in.
 func (record *Record) UnmarshalJSON(data []byte) error {
 	type recordWire struct {
-		ID            string          `json:"id"`
-		Provider      json.RawMessage `json:"provider"`
-		NativeID      string          `json:"native_id"`
-		Lineage       *Lineage        `json:"lineage"`
-		Origin        Origin          `json:"origin"`
-		Title         string          `json:"title"`
-		WorkspaceRoot string          `json:"workspace_root"`
-		ArtifactPath  string          `json:"artifact_path"`
-		ArtifactKind  string          `json:"artifact_kind"`
-		Model         string          `json:"model"`
-		CreatedAt     time.Time       `json:"created_at"`
-		UpdatedAt     time.Time       `json:"updated_at"`
-		SizeBytes     int64           `json:"size_bytes"`
-		Archived      bool            `json:"archived"`
+		ID              string          `json:"id"`
+		Provider        json.RawMessage `json:"provider"`
+		NativeID        string          `json:"native_id"`
+		Lineage         *Lineage        `json:"lineage"`
+		Origin          Origin          `json:"origin"`
+		Title           string          `json:"title"`
+		WorkspaceRoot   string          `json:"workspace_root"`
+		ArtifactPath    string          `json:"artifact_path"`
+		ArtifactKind    string          `json:"artifact_kind"`
+		Model           string          `json:"model"`
+		CreatedAt       time.Time       `json:"created_at"`
+		UpdatedAt       time.Time       `json:"updated_at"`
+		SizeBytes       int64           `json:"size_bytes"`
+		Archived        bool            `json:"archived"`
+		LatestRequestID string          `json:"latest_request_id"`
 	}
 	var wire recordWire
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -81,20 +89,21 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*record = Record{
-		ID:            wire.ID,
-		Provider:      provider,
-		NativeID:      wire.NativeID,
-		Lineage:       wire.Lineage,
-		Origin:        wire.Origin,
-		Title:         wire.Title,
-		WorkspaceRoot: wire.WorkspaceRoot,
-		ArtifactPath:  wire.ArtifactPath,
-		ArtifactKind:  wire.ArtifactKind,
-		Model:         wire.Model,
-		CreatedAt:     wire.CreatedAt,
-		UpdatedAt:     wire.UpdatedAt,
-		SizeBytes:     wire.SizeBytes,
-		Archived:      wire.Archived,
+		ID:              wire.ID,
+		Provider:        provider,
+		NativeID:        wire.NativeID,
+		Lineage:         wire.Lineage,
+		Origin:          wire.Origin,
+		Title:           wire.Title,
+		WorkspaceRoot:   wire.WorkspaceRoot,
+		ArtifactPath:    wire.ArtifactPath,
+		ArtifactKind:    wire.ArtifactKind,
+		Model:           wire.Model,
+		CreatedAt:       wire.CreatedAt,
+		UpdatedAt:       wire.UpdatedAt,
+		SizeBytes:       wire.SizeBytes,
+		Archived:        wire.Archived,
+		LatestRequestID: wire.LatestRequestID,
 	}
 	return nil
 }

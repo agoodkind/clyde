@@ -262,13 +262,16 @@ type bubbleProjection struct {
 // path rather than a second one written in SQL.
 func (row bubbleProjection) bubble() Bubble {
 	bubble := Bubble{
-		BubbleID:       "",
-		Type:           int(row.Type.Int64),
-		SchemaVersion:  0,
-		Text:           row.Text.String,
-		Thinking:       BubbleThinking{Text: row.Thinking.String},
-		ToolCall:       nil,
-		CreatedAt:      row.CreatedAt.String,
+		BubbleID:      "",
+		Type:          int(row.Type.Int64),
+		SchemaVersion: 0,
+		Text:          row.Text.String,
+		Thinking:      BubbleThinking{Text: row.Thinking.String},
+		ToolCall:      nil,
+		CreatedAt:     row.CreatedAt.String,
+		// RequestID is not projected. Nothing about ordering or supersession reads
+		// it, and the lookup that does have a use for it reads the row itself.
+		RequestID:      "",
 		ServerBubbleID: row.ServerBubbleID.String,
 	}
 	// `json_type` answers the string "null" for a member explicitly set to JSON
@@ -343,7 +346,7 @@ func forEachComposerBubbleProjection(
 	}
 
 	query := "SELECT " + composerBubbleProjectionColumns + " FROM " + sqlTableName +
-		keyRangePredicate(bounds) + decodableValueSQL + " ORDER BY key"
+		keyRangePredicate(bounds, "") + decodableValueSQL + " ORDER BY key"
 	rows, err := snapshot.queryRange(ctx, query, bounds, "bubble digests")
 	if err != nil {
 		return err
@@ -386,7 +389,7 @@ func readUnreadableComposerBubbleIDs(
 	if err != nil {
 		return err
 	}
-	query := "SELECT key FROM " + sqlTableName + keyRangePredicate(bounds) + undecodableValueSQL
+	query := "SELECT key FROM " + sqlTableName + keyRangePredicate(bounds, "") + undecodableValueSQL
 	rows, err := snapshot.queryRange(ctx, query, bounds, "unreadable bubbles")
 	if err != nil {
 		return err

@@ -19,21 +19,22 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ClydeService_ReloadDaemon_FullMethodName              = "/clyde.v1.ClydeService/ReloadDaemon"
-	ClydeService_RebindDaemon_FullMethodName              = "/clyde.v1.ClydeService/RebindDaemon"
-	ClydeService_GetProviderStats_FullMethodName          = "/clyde.v1.ClydeService/GetProviderStats"
-	ClydeService_SubscribeProviderStats_FullMethodName    = "/clyde.v1.ClydeService/SubscribeProviderStats"
-	ClydeService_ListConversations_FullMethodName         = "/clyde.v1.ClydeService/ListConversations"
-	ClydeService_GetConversationInfo_FullMethodName       = "/clyde.v1.ClydeService/GetConversationInfo"
-	ClydeService_SearchConversations_FullMethodName       = "/clyde.v1.ClydeService/SearchConversations"
-	ClydeService_ReorientConversation_FullMethodName      = "/clyde.v1.ClydeService/ReorientConversation"
-	ClydeService_StreamConversation_FullMethodName        = "/clyde.v1.ClydeService/StreamConversation"
-	ClydeService_StreamConversationContext_FullMethodName = "/clyde.v1.ClydeService/StreamConversationContext"
-	ClydeService_StreamExportTranscript_FullMethodName    = "/clyde.v1.ClydeService/StreamExportTranscript"
-	ClydeService_GetMITMStatus_FullMethodName             = "/clyde.v1.ClydeService/GetMITMStatus"
-	ClydeService_ShowCapture_FullMethodName               = "/clyde.v1.ClydeService/ShowCapture"
-	ClydeService_SeedBaseline_FullMethodName              = "/clyde.v1.ClydeService/SeedBaseline"
-	ClydeService_LogsInventory_FullMethodName             = "/clyde.v1.ClydeService/LogsInventory"
+	ClydeService_ReloadDaemon_FullMethodName               = "/clyde.v1.ClydeService/ReloadDaemon"
+	ClydeService_RebindDaemon_FullMethodName               = "/clyde.v1.ClydeService/RebindDaemon"
+	ClydeService_GetProviderStats_FullMethodName           = "/clyde.v1.ClydeService/GetProviderStats"
+	ClydeService_SubscribeProviderStats_FullMethodName     = "/clyde.v1.ClydeService/SubscribeProviderStats"
+	ClydeService_ListConversations_FullMethodName          = "/clyde.v1.ClydeService/ListConversations"
+	ClydeService_GetConversationInfo_FullMethodName        = "/clyde.v1.ClydeService/GetConversationInfo"
+	ClydeService_SearchConversations_FullMethodName        = "/clyde.v1.ClydeService/SearchConversations"
+	ClydeService_ResolveConversationRequest_FullMethodName = "/clyde.v1.ClydeService/ResolveConversationRequest"
+	ClydeService_ReorientConversation_FullMethodName       = "/clyde.v1.ClydeService/ReorientConversation"
+	ClydeService_StreamConversation_FullMethodName         = "/clyde.v1.ClydeService/StreamConversation"
+	ClydeService_StreamConversationContext_FullMethodName  = "/clyde.v1.ClydeService/StreamConversationContext"
+	ClydeService_StreamExportTranscript_FullMethodName     = "/clyde.v1.ClydeService/StreamExportTranscript"
+	ClydeService_GetMITMStatus_FullMethodName              = "/clyde.v1.ClydeService/GetMITMStatus"
+	ClydeService_ShowCapture_FullMethodName                = "/clyde.v1.ClydeService/ShowCapture"
+	ClydeService_SeedBaseline_FullMethodName               = "/clyde.v1.ClydeService/SeedBaseline"
+	ClydeService_LogsInventory_FullMethodName              = "/clyde.v1.ClydeService/LogsInventory"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -49,6 +50,11 @@ type ClydeServiceClient interface {
 	ListConversations(ctx context.Context, in *ListConversationsRequest, opts ...grpc.CallOption) (*ListConversationsResponse, error)
 	GetConversationInfo(ctx context.Context, in *GetConversationInfoRequest, opts ...grpc.CallOption) (*GetConversationInfoResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
+	// ResolveConversationRequest maps one provider request id, such as the value
+	// Cursor's Copy Request ID action yields, to the conversation that issued it.
+	// The response names which path answered, because the index and the provider's
+	// live store are different sources that can disagree.
+	ResolveConversationRequest(ctx context.Context, in *ResolveConversationRequestRequest, opts ...grpc.CallOption) (*ResolveConversationRequestResponse, error)
 	// ReorientConversation resolves the post-fork, post-compaction recovery
 	// context for one conversation and returns one bounded, cursor-paged page of
 	// evidence. Each page stays small enough to render inline, so a caller loops
@@ -149,6 +155,16 @@ func (c *clydeServiceClient) SearchConversations(ctx context.Context, in *Search
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SearchConversationsResponse)
 	err := c.cc.Invoke(ctx, ClydeService_SearchConversations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) ResolveConversationRequest(ctx context.Context, in *ResolveConversationRequestRequest, opts ...grpc.CallOption) (*ResolveConversationRequestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveConversationRequestResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ResolveConversationRequest_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -275,6 +291,11 @@ type ClydeServiceServer interface {
 	ListConversations(context.Context, *ListConversationsRequest) (*ListConversationsResponse, error)
 	GetConversationInfo(context.Context, *GetConversationInfoRequest) (*GetConversationInfoResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
+	// ResolveConversationRequest maps one provider request id, such as the value
+	// Cursor's Copy Request ID action yields, to the conversation that issued it.
+	// The response names which path answered, because the index and the provider's
+	// live store are different sources that can disagree.
+	ResolveConversationRequest(context.Context, *ResolveConversationRequestRequest) (*ResolveConversationRequestResponse, error)
 	// ReorientConversation resolves the post-fork, post-compaction recovery
 	// context for one conversation and returns one bounded, cursor-paged page of
 	// evidence. Each page stays small enough to render inline, so a caller loops
@@ -321,6 +342,9 @@ func (UnimplementedClydeServiceServer) GetConversationInfo(context.Context, *Get
 }
 func (UnimplementedClydeServiceServer) SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchConversations not implemented")
+}
+func (UnimplementedClydeServiceServer) ResolveConversationRequest(context.Context, *ResolveConversationRequestRequest) (*ResolveConversationRequestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveConversationRequest not implemented")
 }
 func (UnimplementedClydeServiceServer) ReorientConversation(context.Context, *ReorientConversationRequest) (*ReorientConversationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReorientConversation not implemented")
@@ -485,6 +509,24 @@ func _ClydeService_SearchConversations_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_ResolveConversationRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveConversationRequestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ResolveConversationRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ResolveConversationRequest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ResolveConversationRequest(ctx, req.(*ResolveConversationRequestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClydeService_ReorientConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReorientConversationRequest)
 	if err := dec(in); err != nil {
@@ -638,6 +680,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SearchConversations",
 			Handler:    _ClydeService_SearchConversations_Handler,
+		},
+		{
+			MethodName: "ResolveConversationRequest",
+			Handler:    _ClydeService_ResolveConversationRequest_Handler,
 		},
 		{
 			MethodName: "ReorientConversation",

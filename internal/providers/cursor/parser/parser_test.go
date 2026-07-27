@@ -14,6 +14,7 @@ import (
 
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/providerid"
+	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
 )
 
 const (
@@ -247,6 +248,22 @@ func TestParserAdmitsComposersByWhatTheyStoreNotByTheirHeaderList(t *testing.T) 
 	}
 	if unlistedStamp.Size == 0 {
 		t.Fatal("unlisted composer stamp has no bubble-range revision")
+	}
+
+	// The stamp is the change key rather than a byte count, and this chat has no
+	// `lastUpdatedAt` for the stamp's time to track, so the key is the only thing
+	// that moves when the chat does. Retrying a turn is the case the revision alone
+	// cannot catch: it gives the chat a new request id while the stored bubbles and
+	// the time stay exactly as they were.
+	issued := cursorstore.ComposerHeader{
+		ComposerID:               unlistedComposerID,
+		LastUpdatedAt:            0,
+		LatestChatGenerationUUID: "11111111-aaaa-4aaa-8aaa-111111111111",
+	}
+	retried := issued
+	retried.LatestChatGenerationUUID = "22222222-bbbb-4bbb-8bbb-222222222222"
+	if composerChangeKey(7, issued) == composerChangeKey(7, retried) {
+		t.Fatal("the change key ignores the latest request id, so a retried turn leaves the record holding an id the chat no longer has")
 	}
 
 	messages, err := conversation.CollectMessages(parser.Stream(unlistedPath, conversation.LoadOptions{
@@ -842,5 +859,83 @@ func TestParserKeepsThePriorRecordWhenMetadataCannotBeRead(t *testing.T) {
 	}
 	if !record.Archived {
 		t.Fatal("Archived = false, want the prior flag kept")
+	}
+}
+
+// TestComposerStampMovesWhenTheLatestRequestIDChanges covers an incremental
+// refresh that would otherwise reuse a stale record. Retrying a turn gives the
+// chat a new latest request id while the stored row count stays put, and
+// `lastUpdatedAt` is null on 52.5% of chats so the stamp's time is frozen for
+// exactly those. The record would then keep a request id the chat no longer has,
+// and resolving the new one would miss the index and fall through to the
+// provider's live store.
+//
+// It runs the scan rather than the helper, because a change key nothing reaches
+// is a change key that does not exist.
+func TestComposerStampMovesWhenTheLatestRequestIDChanges(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+	globalDBPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+
+	retriedComposerID := "99999999-9999-4999-8999-999999999999"
+	composerRow := func(latestRequest string) string {
+		return `{"composerId":"` + retriedComposerID + `","name":"Retried","createdAt":1710000000400,` +
+			`"latestChatGenerationUUID":"` + latestRequest + `",` +
+			`"fullConversationHeadersOnly":[{"bubbleId":"b-1","type":1},{"bubbleId":"b-2","type":2}]}`
+	}
+
+	// A chat whose turn count and (absent) lastUpdatedAt do not move while its
+	// latest request id does, which is what retrying a turn leaves behind.
+	stampFor := func(t *testing.T, latestRequest string) conversation.FileStamp {
+		t.Helper()
+
+		if err := os.RemoveAll(filepath.Dir(globalDBPath)); err != nil {
+			t.Fatalf("RemoveAll global db dir: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(globalDBPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll global db dir: %v", err)
+		}
+		db, err := sql.Open("sqlite3", "file:"+globalDBPath+"?_busy_timeout=5000")
+		if err != nil {
+			t.Fatalf("sql.Open global db: %v", err)
+		}
+		for _, statement := range []string{
+			"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
+			"CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)",
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + retriedComposerID + `', '` + composerRow(latestRequest) + `')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + retriedComposerID + `:b-1', '{"_v":3,"type":1,"bubbleId":"b-1","text":"q"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + retriedComposerID + `:b-2', '{"_v":3,"type":2,"bubbleId":"b-2","text":"a"}')`,
+		} {
+			if _, err := db.Exec(statement); err != nil {
+				_ = db.Close()
+				t.Fatalf("exec %q: %v", statement, err)
+			}
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close global db: %v", err)
+		}
+
+		candidates, err := New().Discover(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Discover returned error: %v", err)
+		}
+		path := findPathContaining(t, candidatePaths(candidates), retriedComposerID)
+		for _, candidate := range candidates {
+			if candidate.Path == path {
+				return candidate.Stamp
+			}
+		}
+		t.Fatalf("no candidate for %q", path)
+		return conversation.FileStamp{Size: 0, Mtime: time.Time{}}
+	}
+
+	before := stampFor(t, "request-a")
+	after := stampFor(t, "request-b")
+	if before.Equal(after) {
+		t.Fatalf("stamp %+v is unchanged after the chat's latest request id changed, so the scan would reuse the stale record", before)
+	}
+	if again := stampFor(t, "request-b"); !again.Equal(after) {
+		t.Fatalf("stamp %+v then %+v for an unchanged chat, want the same stamp", after, again)
 	}
 }

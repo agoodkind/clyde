@@ -54,6 +54,10 @@ type Bubble struct {
 	// but both rows keep the same server id, so it is what tells a superseded copy
 	// apart from a genuinely repeated turn. Not every row carries one.
 	ServerBubbleID string
+	// RequestID identifies the provider request that produced the bubble. Cursor
+	// writes it on the user bubble that opened a turn and leaves it empty on the
+	// rest, so an empty value is ordinary rather than a defect.
+	RequestID string
 }
 
 // HasContent reports whether a bubble carries anything a reader would see. A
@@ -115,6 +119,7 @@ type bubbleWire struct {
 	ToolCall       *BubbleToolCall `json:"toolFormerData"`
 	CreatedAt      string          `json:"createdAt"`
 	ServerBubbleID string          `json:"serverBubbleId"`
+	RequestID      string          `json:"requestId"`
 }
 
 // DecodeBubbleJSON decodes one Cursor bubble value. A bubble whose `_v` schema
@@ -135,6 +140,7 @@ func DecodeBubbleJSON(data []byte) (Bubble, error) {
 		ToolCall:       wire.ToolCall,
 		CreatedAt:      wire.CreatedAt,
 		ServerBubbleID: wire.ServerBubbleID,
+		RequestID:      wire.RequestID,
 	}, nil
 }
 

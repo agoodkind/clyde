@@ -10,16 +10,25 @@ import (
 
 const composerDataKeyPrefix = "composerData:"
 
+// composerHeadersTableName is Cursor's per-chat header table. Unlike the
+// key-value tables it has real columns, so predicates on its timestamps are
+// cheap.
+const composerHeadersTableName = "composerHeaders"
+
 // ComposerHeader models the indexed subset of Cursor's undocumented,
 // version-pinned `composerData:<composerId>` on-disk payload.
 type ComposerHeader struct {
-	ComposerID                  string              `json:"composerId"`
-	Name                        string              `json:"name"`
-	CreatedAt                   int64               `json:"createdAt"`
-	LastUpdatedAt               int64               `json:"lastUpdatedAt"`
-	Status                      string              `json:"status"`
-	UnifiedMode                 string              `json:"unifiedMode"`
-	ForceMode                   string              `json:"forceMode"`
+	ComposerID    string `json:"composerId"`
+	Name          string `json:"name"`
+	CreatedAt     int64  `json:"createdAt"`
+	LastUpdatedAt int64  `json:"lastUpdatedAt"`
+	Status        string `json:"status"`
+	UnifiedMode   string `json:"unifiedMode"`
+	ForceMode     string `json:"forceMode"`
+	// LatestChatGenerationUUID is the request id of the chat's most recent
+	// generation. Cursor keeps only the newest one here, so it identifies the
+	// last request of the chat and says nothing about earlier ones.
+	LatestChatGenerationUUID    string              `json:"latestChatGenerationUUID"`
 	FullConversationHeadersOnly []ComposerBubbleRef `json:"fullConversationHeadersOnly"`
 }
 

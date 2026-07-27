@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/gklog/trace"
 )
 
@@ -29,11 +31,18 @@ const (
 	// artifact once and fills in the fields the old shape never stored. Raise it
 	// whenever a scan starts deriving a record field the old cache cannot supply.
 	//
-	// Version 2 reads a Cursor chat's workspace root, origin, archived flag, and
-	// fallback title from a store version 1 never opened. A chat's own artifact
-	// does not change when any of those change, so without this the overwhelming
-	// majority of them would keep a version-1 record with an empty workspace
-	// forever.
+	// Version 2 covers fields added together, because the version marks the record
+	// shape rather than counting fields, and one raise re-parses the corpus once for
+	// all of them.
+	//
+	// A Cursor chat's workspace root, origin, archived flag, and fallback title come
+	// from a store version 1 never opened, and a chat's own artifact does not change
+	// when any of those change, so without the raise the overwhelming majority would
+	// keep a version 1 record with an empty workspace forever.
+	//
+	// Record.LatestRequestID is derived the same way: without the raise, an artifact
+	// whose stamp is unchanged keeps its version 1 record and never gains the field,
+	// so every conversation not written to since the upgrade resolves no request id.
 	cacheFormatVersion = 2
 )
 
@@ -53,10 +62,16 @@ type Index struct {
 	prevStamps       map[string]FileStamp
 	loaded           bool
 	refreshing       bool
-	lastRefresh      time.Time
-	cachePath        string
-	debounce         time.Duration
-	scanProvider     func(context.Context, *Registry, scanCache) (scanResult, error)
+	// refreshRun is the refresh currently in flight and the outcome it finished
+	// with. A synchronous Refresh waits on it rather than returning, because every
+	// read path starts a background refresh a moment before it asks for a
+	// synchronous one, so returning early would hand the caller back the same stale
+	// snapshot it already failed against.
+	refreshRun   *refreshRun
+	lastRefresh  time.Time
+	cachePath    string
+	debounce     time.Duration
+	scanProvider func(context.Context, *Registry, scanCache) (scanResult, error)
 }
 
 // NewIndex returns an index backed by the default XDG cache path that resolves
@@ -73,6 +88,7 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		prevStamps:       nil,
 		loaded:           false,
 		refreshing:       false,
+		refreshRun:       nil,
 		lastRefresh:      time.Time{},
 		cachePath:        filepath.Join(config.GlobalCacheDir(), cacheFilename),
 		debounce:         refreshDebounce,
@@ -179,7 +195,13 @@ func (idx *Index) recordsSnapshot() []Record {
 	return records
 }
 
-// Resolve finds one conversation by id, native id, title, or artifact path.
+// Resolve finds one conversation by id, native id, title, artifact path, or
+// provider request id.
+//
+// A selector shaped like a request id skips the fuzzy title pass and takes
+// [Index.resolveUUIDShapedSelector] instead. A request id names one exact thing,
+// so answering it with a conversation whose title merely contains those
+// characters would be a guess.
 func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
@@ -189,55 +211,429 @@ func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) 
 	if err != nil {
 		return Record{}, err
 	}
-	if record, ok := resolveRecord(records, selector); ok {
+	if record, ok := resolveRecordExact(records, selector); ok {
 		return record, nil
 	}
-	if err := idx.Refresh(ctx); err != nil {
-		return Record{}, err
+	if looksLikeRequestID(selector) {
+		return idx.resolveUUIDShapedSelector(ctx, selector)
 	}
+	if record, ok := resolveRecordFuzzyTitle(records, selector); ok {
+		return record, nil
+	}
+	fresh := idx.refreshBeforeLookup(ctx)
 	records = idx.recordsSnapshot()
 	if record, ok := resolveRecord(records, selector); ok {
 		return record, nil
 	}
+	if !fresh {
+		return Record{}, fmt.Errorf("conversation %q not found: %s", selector, staleIndexNote)
+	}
 	return Record{}, fmt.Errorf("conversation %q not found", selector)
 }
 
-// Refresh rebuilds the cache synchronously.
+// staleIndexNote is what a lookup says when it could not bring the index up to
+// date before answering, so a miss over records that may be out of date is not
+// presented as a confirmed absence.
+const staleIndexNote = "the conversation index could not be refreshed, so this miss may be stale"
+
+// refreshBeforeLookup brings the records up to date when it can, and reports
+// whether it managed to.
+//
+// A lookup wants fresh records and it wants an answer. Failing the whole command
+// because the refresh timed out or its scan errored trades the second for the
+// first, and does so exactly where the caller is under most pressure: the first
+// lookup after a cache-format upgrade re-parses the whole corpus under a
+// background rescan that runs uncancellably, so a caller under an RPC deadline
+// would get a deadline error where the records it already had would have
+// answered. The refresh is therefore best effort, it is logged when it fails, and
+// the caller reports the miss as possibly stale rather than as a determination.
+func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
+	if err := idx.Refresh(ctx); err != nil {
+		slog.WarnContext(ctx, "conversation.index.lookup_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", err)
+		return false
+	}
+	return true
+}
+
+// resolveUUIDShapedSelector finishes resolution for a selector shaped like a
+// UUID, which every provider request id is written in and so are Claude session
+// ids, Codex thread ids, and Cursor composer ids.
+//
+// The shape check cannot tell those apart, so the cheap index paths run first
+// and in full. A refresh and a second exact pass come before the provider is
+// asked anything, which is what a native id absent from a stale cache relies on
+// and what keeps an id the index already knows off the provider's live store
+// entirely.
+//
+// Only after that does the provider's bounded request-id lookup run. The
+// exhaustive provider scan is never reached from here: it is opt-in and lives on
+// [Index.ResolveRequest].
+//
+// Nothing here fails the caller's command over a provider's store. This runs for
+// every UUID-shaped selector of every provider, so a Cursor directory Clyde
+// cannot read would otherwise turn an ordinary Claude conversation miss into an
+// unrelated permission error. A store that could not be read makes the miss
+// inconclusive instead, which is what it is.
+// The index's own request-id pass runs here rather than in the exact matcher, so
+// every selector surface answers a request id the same way `resolve-request`
+// does, ambiguity included.
+func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string) (Record, error) {
+	fresh := idx.refreshBeforeLookup(ctx)
+	records := idx.recordsSnapshot()
+	if record, ok := resolveRecordExact(records, selector); ok {
+		return record, nil
+	}
+	switch record, carriers := recordByLatestRequestID(records, selector); {
+	case carriers == 1:
+		return record, nil
+	case carriers > 1:
+		return Record{}, fmt.Errorf("conversation %q not found: %s", selector,
+			notFoundNote(RequestNotFoundReasonAmbiguousConversation, fresh))
+	}
+
+	match := idx.resolveRequestMatch(ctx, selector, RequestLookupOptions{AllowFullScan: false})
+	if !match.Found {
+		return Record{}, fmt.Errorf("conversation %q not found: %s", selector, notFoundNote(match.Reason, fresh))
+	}
+	if record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID); ok {
+		return record, nil
+	}
+	return Record{}, fmt.Errorf(
+		"conversation %q not found: %s",
+		selector,
+		notFoundNote(RequestNotFoundReasonUnindexedConversation, fresh),
+	)
+}
+
+// notFoundNote renders the reason a lookup missed, and says so was over records
+// that may be out of date when the refresh before it did not succeed.
+func notFoundNote(reason RequestNotFoundReason, fresh bool) string {
+	if fresh {
+		return reason.Describe()
+	}
+	return reason.Describe() + "; " + staleIndexNote
+}
+
+// ResolveRequest maps one provider request id to the conversation that issued
+// it, and reports which path answered.
+//
+// It tries Clyde's own index first, which is derived from artifact headers the
+// scan already reads and so costs nothing extra. When the index does not know
+// the id it asks each registered provider resolver for a bounded lookup against
+// the provider's live store. The exhaustive provider scan runs only when the
+// caller sets opts.AllowFullScan, because it costs tens of seconds.
+//
+// An id no path resolves reports not found with the reason, never a nearby
+// conversation.
+func (idx *Index) ResolveRequest(
+	ctx context.Context,
+	requestID string,
+	opts RequestLookupOptions,
+) (RequestResolution, error) {
+	requestID = normalizeRequestID(requestID)
+	if requestID == "" {
+		return RequestResolution{}, errors.New("request id is required")
+	}
+	records, err := idx.List(ctx)
+	if err != nil {
+		return RequestResolution{}, err
+	}
+	if record, carriers := recordByLatestRequestID(records, requestID); carriers == 1 {
+		return foundRequestResolution(requestID, RequestOriginIndex, record), nil
+	} else if carriers > 1 {
+		return ambiguousRequestResolution(ctx, requestID, carriers), nil
+	}
+	// Refresh before falling through, so a cold or stale cache does not send a
+	// request the index does know to the provider's store and report the wrong
+	// origin for it. A refresh that does not finish is not fatal; it makes a miss
+	// inconclusive, because the records the miss was established over may be the
+	// stale ones.
+	fresh := idx.refreshBeforeLookup(ctx)
+	records = idx.recordsSnapshot()
+	if record, carriers := recordByLatestRequestID(records, requestID); carriers == 1 {
+		return foundRequestResolution(requestID, RequestOriginIndex, record), nil
+	} else if carriers > 1 {
+		return ambiguousRequestResolution(ctx, requestID, carriers), nil
+	}
+	return idx.resolveRequestLive(ctx, requestID, opts, records, fresh), nil
+}
+
+// ambiguousRequestResolution reports a request id several conversations carry.
+// Answering with one of them would be answering with whichever the record order
+// happened to reach, which is the guess this operation exists not to make.
+func ambiguousRequestResolution(ctx context.Context, requestID string, carriers int) RequestResolution {
+	slog.InfoContext(ctx, "conversation.index.request_carried_by_several_conversations", "concern", "conversation.index", "component", "conversation", "request_id", requestID, "count", carriers)
+	return missingRequestResolution(requestID, RequestNotFoundReasonAmbiguousConversation)
+}
+
+// resolveRequestLive asks the providers, then maps the native conversation id
+// they report back onto an index record.
+func (idx *Index) resolveRequestLive(
+	ctx context.Context,
+	requestID string,
+	opts RequestLookupOptions,
+	records []Record,
+	fresh bool,
+) RequestResolution {
+	match := idx.resolveRequestMatch(ctx, requestID, opts)
+	if !match.Found {
+		reason := match.Reason
+		if !fresh {
+			reason = MergeRequestNotFoundReason(reason, RequestNotFoundReasonInconclusive)
+		}
+		return missingRequestResolution(requestID, reason)
+	}
+	record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID)
+	if !ok {
+		// "The index does not hold it" is a claim about the index, and it can only
+		// be made over an index that is current. A refresh that did not finish is
+		// the likelier reason the conversation is missing than the provider having
+		// invented it.
+		reason := RequestNotFoundReasonUnindexedConversation
+		if !fresh {
+			reason = MergeRequestNotFoundReason(reason, RequestNotFoundReasonInconclusive)
+		}
+		return missingRequestResolution(requestID, reason)
+	}
+	return foundRequestResolution(requestID, match.Origin, record)
+}
+
+// resolveRequestMatch asks each registered provider resolver, in a stable
+// provider order, which conversation issued a request id. It reads no index
+// records, so a caller can run it before deciding whether a refresh is worth it.
+//
+// A miss carries the reason [MergeRequestNotFoundReason] settles on, so an
+// inconclusive result outranks a confirmed one: if any provider could not read
+// part of its store, the corpus-level answer cannot be a confirmed absence.
+//
+// A resolver that returns an error is one of those providers. Its store is what
+// broke, and the id may well be sitting in it, so the error is logged and the
+// provider contributes an inconclusive miss instead of failing the lookup. One
+// provider's unreadable store must not decide the corpus answer, and it must not
+// become the error a caller asking about another provider's conversation sees.
+func (idx *Index) resolveRequestMatch(
+	ctx context.Context,
+	requestID string,
+	opts RequestLookupOptions,
+) RequestMatch {
+	resolvers := idx.requestResolvers()
+	if len(resolvers) == 0 {
+		return missingRequestMatch(RequestNotFoundReasonNoResolver)
+	}
+
+	reason := RequestNotFoundReasonUnspecified
+	for _, resolver := range resolvers {
+		match, err := resolver.ResolveRequestID(ctx, requestID, opts)
+		if err != nil {
+			slog.WarnContext(ctx, "conversation.index.request_resolver_failed", "concern", "conversation.index", "component", "conversation", "request_id", requestID, "err", err)
+			reason = MergeRequestNotFoundReason(reason, RequestNotFoundReasonInconclusive)
+			continue
+		}
+		if match.Found {
+			return match
+		}
+		reason = MergeRequestNotFoundReason(reason, match.Reason)
+	}
+	return missingRequestMatch(reason)
+}
+
+func missingRequestMatch(reason RequestNotFoundReason) RequestMatch {
+	return RequestMatch{
+		Found:                false,
+		Provider:             providerid.ProviderUnspecified,
+		NativeConversationID: "",
+		Origin:               RequestOriginUnspecified,
+		Reason:               reason,
+	}
+}
+
+// requestResolvers returns the registered parsers that resolve request ids, in
+// ascending provider order so the answer does not depend on map iteration.
+func (idx *Index) requestResolvers() []RequestResolver {
+	providers := idx.registry.Providers()
+	slices.Sort(providers)
+	resolvers := make([]RequestResolver, 0, len(providers))
+	for _, provider := range providers {
+		parser, err := idx.registry.Lookup(provider)
+		if err != nil {
+			continue
+		}
+		resolver, ok := parser.(RequestResolver)
+		if !ok {
+			continue
+		}
+		resolvers = append(resolvers, resolver)
+	}
+	return resolvers
+}
+
+func foundRequestResolution(requestID string, origin RequestOrigin, record Record) RequestResolution {
+	return RequestResolution{
+		RequestID: requestID,
+		Found:     true,
+		Origin:    origin,
+		Reason:    RequestNotFoundReasonUnspecified,
+		Record:    record,
+	}
+}
+
+func missingRequestResolution(requestID string, reason RequestNotFoundReason) RequestResolution {
+	return RequestResolution{
+		RequestID: requestID,
+		Found:     false,
+		Origin:    RequestOriginUnspecified,
+		Reason:    reason,
+		Record:    emptyRecord(),
+	}
+}
+
+// recordByLatestRequestID finds the conversation whose most recent turn carries
+// the request id, and reports how many conversations carry it. The comparison is
+// whole-string, so a record that merely contains the id in some other field never
+// matches.
+//
+// The count is what the caller needs, not just the first hit. Duplicating a
+// conversation copies the field: measured on a real Cursor store, 43 of 1,836
+// chats advertising a latest request id share it with another chat, so the first
+// record carrying one is not evidence that it is the only one.
+func recordByLatestRequestID(records []Record, requestID string) (Record, int) {
+	if requestID == "" {
+		return emptyRecord(), 0
+	}
+	first := emptyRecord()
+	carriers := 0
+	for _, record := range records {
+		if record.LatestRequestID != requestID {
+			continue
+		}
+		if carriers == 0 {
+			first = record
+		}
+		carriers++
+	}
+	return first, carriers
+}
+
+// recordByNativeID maps a provider's own conversation id back to the index
+// record for it.
+//
+// It is deliberately narrower than [resolveRecordExact], which is a
+// human-selector matcher and also compares titles and artifact paths across every
+// provider. A native id arriving here is not something a human typed: a resolver
+// stated it, and the only record that can answer for it is the one that provider
+// owns under that id. Going through the selector matcher instead lets a
+// conversation from any provider whose title happens to be that id answer, so a
+// Cursor composer id pasted into a Claude chat while debugging returns the Claude
+// conversation as the one that issued the request.
+func recordByNativeID(records []Record, provider providerid.Provider, nativeID string) (Record, bool) {
+	if nativeID == "" {
+		return emptyRecord(), false
+	}
+	for _, record := range records {
+		if record.Provider == provider && record.NativeID == nativeID {
+			return record, true
+		}
+	}
+	return emptyRecord(), false
+}
+
+// Refresh rebuilds the cache synchronously, and waits for the rebuild already in
+// flight when one is running rather than returning while it is still going.
+//
+// Waiting on someone else's rebuild reports that rebuild's outcome, so a nil
+// error means the records were rebuilt, whoever rebuilt them.
 func (idx *Index) Refresh(ctx context.Context) (err error) {
 	defer trace.Op(ctx, "conversation.index.refresh")(&err)
-	idx.mu.Lock()
-	if idx.refreshing {
-		idx.mu.Unlock()
-		return nil
+	run, prior, claimed := idx.beginRefresh()
+	if !claimed {
+		return idx.waitForRefresh(ctx, run)
 	}
-	idx.refreshing = true
-	prior := scanCache{records: idx.prevRecords, stamps: idx.prevStamps}
-	idx.mu.Unlock()
+	defer func() { idx.endRefresh(run, err) }()
 
 	result, err := idx.scanProvider(ctx, idx.registry, prior)
 	if err != nil {
-		idx.mu.Lock()
-		idx.refreshing = false
-		idx.mu.Unlock()
 		return err
 	}
 	sortRecords(result.records)
-	if err := writeCache(idx.cachePath, result.records, result.stamps); err != nil {
-		idx.mu.Lock()
-		idx.refreshing = false
-		idx.mu.Unlock()
+	if err = writeCache(idx.cachePath, result.records, result.stamps); err != nil {
 		return err
 	}
+	idx.installRefreshResult(result)
+	idx.reportSkippedSubagents(ctx, result.records)
+	return nil
+}
+
+// refreshRun is one rebuild in flight and what it produced. The outcome travels
+// with the channel because a caller that waits on someone else's rebuild is
+// asking whether the records are now rebuilt, and a closed channel alone answers
+// only that the rebuild stopped.
+type refreshRun struct {
+	done chan struct{}
+	// err is the rebuild's outcome, written once before done is closed and read
+	// only after it is, which is what orders the two without a second lock.
+	err error
+}
+
+// beginRefresh claims the single refresh slot. The third result is false when
+// another refresh already holds it, and the returned run is then the one already
+// in flight.
+func (idx *Index) beginRefresh() (*refreshRun, scanCache, bool) {
 	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if idx.refreshing {
+		return idx.refreshRun, scanCache{records: nil, stamps: nil}, false
+	}
+	idx.refreshing = true
+	idx.refreshRun = &refreshRun{done: make(chan struct{}), err: nil}
+	return idx.refreshRun, scanCache{records: idx.prevRecords, stamps: idx.prevStamps}, true
+}
+
+// endRefresh records the rebuild's outcome, releases the refresh slot, and wakes
+// every caller waiting on it. It runs after the records are installed, so a woken
+// caller reads the new snapshot rather than the one it was waiting to replace.
+func (idx *Index) endRefresh(run *refreshRun, err error) {
+	run.err = err
+	idx.mu.Lock()
+	idx.refreshing = false
+	if idx.refreshRun == run {
+		idx.refreshRun = nil
+	}
+	idx.mu.Unlock()
+	close(run.done)
+}
+
+// waitForRefresh blocks until the refresh already in flight finishes, and
+// reports what it produced.
+//
+// A rebuild that returned an error installed nothing, so reporting the wait as a
+// success would tell the caller the records are rebuilt when they are the same
+// ones it was waiting to replace. The background rebuild logs its own failure,
+// but the waiter is a different caller and the log is not an answer to it.
+func (idx *Index) waitForRefresh(ctx context.Context, run *refreshRun) error {
+	if run == nil {
+		return nil
+	}
+	select {
+	case <-run.done:
+		if run.err != nil {
+			slog.WarnContext(ctx, "conversation.index.awaited_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", run.err)
+			return fmt.Errorf("await conversation index refresh: %w", run.err)
+		}
+		return nil
+	case <-ctx.Done():
+		slog.WarnContext(ctx, "conversation.index.refresh_wait_canceled", "concern", "conversation.index", "component", "conversation", "err", ctx.Err())
+		return fmt.Errorf("wait for conversation index refresh: %w", ctx.Err())
+	}
+}
+
+func (idx *Index) installRefreshResult(result scanResult) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
 	idx.records = result.records
 	idx.prevRecords = recordsByPath(result.records)
 	idx.prevStamps = result.stamps
 	idx.loaded = true
-	idx.refreshing = false
 	idx.lastRefresh = clock.Now()
-	idx.mu.Unlock()
-	idx.reportSkippedSubagents(ctx, result.records)
-	return nil
 }
 
 // reportSkippedSubagents names how many conversations the setting is hiding, so
@@ -288,17 +684,24 @@ func (idx *Index) loadOnce() error {
 
 func (idx *Index) refreshAsync(ctx context.Context) {
 	idx.mu.Lock()
-	if idx.refreshing || clock.Now().Sub(idx.lastRefresh) < idx.debounce {
-		idx.mu.Unlock()
+	debounced := clock.Now().Sub(idx.lastRefresh) < idx.debounce
+	idx.mu.Unlock()
+	if debounced {
 		return
 	}
-	idx.refreshing = true
-	prior := scanCache{records: idx.prevRecords, stamps: idx.prevStamps}
-	idx.mu.Unlock()
+	run, prior, claimed := idx.beginRefresh()
+	if !claimed {
+		return
+	}
 	go func() {
+		// The outcome is recorded on the run so a caller of Refresh that waits on
+		// this rebuild is told what it produced, rather than only that it stopped.
+		var err error
+		defer func() { idx.endRefresh(run, err) }()
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(ctx, "conversation.index.refresh_panic", "concern", "conversation.index", "component", "conversation", "err", fmt.Sprintf("panic: %v", recovered))
+				err = fmt.Errorf("conversation index refresh panicked: %v", recovered)
+				slog.ErrorContext(ctx, "conversation.index.refresh_panic", "concern", "conversation.index", "component", "conversation", "err", err)
 			}
 		}()
 		result, err := idx.scanProvider(context.WithoutCancel(ctx), idx.registry, prior)
@@ -306,19 +709,12 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 			sortRecords(result.records)
 			err = writeCache(idx.cachePath, result.records, result.stamps)
 		}
-		idx.mu.Lock()
-		if err == nil {
-			idx.records = result.records
-			idx.prevRecords = recordsByPath(result.records)
-			idx.prevStamps = result.stamps
-			idx.loaded = true
-			idx.lastRefresh = clock.Now()
+		if err != nil {
+			slog.WarnContext(ctx, "conversation.index.background_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", err)
+			return
 		}
-		idx.refreshing = false
-		idx.mu.Unlock()
-		if err == nil {
-			idx.reportSkippedSubagents(ctx, result.records)
-		}
+		idx.installRefreshResult(result)
+		idx.reportSkippedSubagents(ctx, result.records)
 	}()
 }
 
@@ -397,6 +793,24 @@ func writeCache(path string, records []Record, stamps map[string]FileStamp) erro
 }
 
 func resolveRecord(records []Record, selector string) (Record, bool) {
+	if record, ok := resolveRecordExact(records, selector); ok {
+		return record, true
+	}
+	return resolveRecordFuzzyTitle(records, selector)
+}
+
+// resolveRecordExact matches a selector against the identifiers a record owns
+// outright. Every comparison is whole-string, so a record that merely contains
+// the selector somewhere never matches here.
+//
+// A request id is deliberately not one of them. It does not identify one
+// conversation: duplicating a chat copies the field, and 43 of 1,836 chats
+// advertising one share it with another chat, so returning the first record
+// carrying it answers with whichever sorted first. Matching it here would also
+// answer before [Index.Resolve] reaches the request-id route, so every selector
+// surface would quietly disagree with `resolve-request` about the same id.
+// [recordByLatestRequestID] is the one place that lookup happens, and it counts.
+func resolveRecordExact(records []Record, selector string) (Record, bool) {
 	for _, record := range records {
 		if record.ID == selector ||
 			record.NativeID == selector ||
@@ -405,6 +819,14 @@ func resolveRecord(records []Record, selector string) (Record, bool) {
 			return record, true
 		}
 	}
+	return emptyRecord(), false
+}
+
+// resolveRecordFuzzyTitle matches a selector against record titles by substring,
+// and answers only when exactly one record matches. It is a convenience for
+// human-typed titles and it can return a conversation the caller did not name,
+// so it must never run for a selector that identifies one exact thing.
+func resolveRecordFuzzyTitle(records []Record, selector string) (Record, bool) {
 	lower := strings.ToLower(selector)
 	var matched Record
 	matchCount := 0
@@ -414,7 +836,10 @@ func resolveRecord(records []Record, selector string) (Record, bool) {
 			matchCount++
 		}
 	}
-	return matched, matchCount == 1
+	if matchCount != 1 {
+		return emptyRecord(), false
+	}
+	return matched, true
 }
 
 func sortRecords(records []Record) {

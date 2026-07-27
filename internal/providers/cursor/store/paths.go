@@ -31,10 +31,32 @@ type DataRoot struct {
 }
 
 // WorkspaceEntry names one Cursor workspace database and its folder descriptor.
+// WorkspaceJSONPath is empty for a workspace Cursor stored without one, which is
+// what a window opened on no folder looks like.
 type WorkspaceEntry struct {
 	WorkspaceHash     string
 	StateDBPath       string
 	WorkspaceJSONPath string
+}
+
+// WorkspaceListing is what one data root's workspaceStorage directory holds: the
+// workspace databases Clyde can name, and how much of the directory it could not
+// read.
+//
+// The counts exist because a search across every workspace has to know whether
+// its miss covered the whole directory. A directory entry Clyde could not examine
+// is a workspace whose database was never opened, so a miss over it proves
+// nothing about what that database holds.
+type WorkspaceListing struct {
+	Entries []WorkspaceEntry
+	// Unreadable counts directory entries this listing could not examine. A
+	// directory that simply holds no state.vscdb is not counted, because it holds
+	// nothing a search could have missed.
+	Unreadable int
+	// StorageDirMissing reports that the workspaceStorage directory does not
+	// exist. That is an answer rather than a failure: this machine has no workspace
+	// databases, so a miss across them is a real absence rather than an unread one.
+	StorageDirMissing bool
 }
 
 type workspaceDescriptor struct {
@@ -66,14 +88,30 @@ func ResolveDataRootsFromEnv(ctx context.Context) ([]DataRoot, error) {
 }
 
 // ListWorkspaceEntries lists Cursor workspace databases below one data root.
-func (root DataRoot) ListWorkspaceEntries() ([]WorkspaceEntry, error) {
+//
+// Every directory holding a `state.vscdb` is listed, including the ones with no
+// `workspace.json` beside it. The descriptor names the folder a workspace is open
+// on and nothing else, so requiring it drops a workspace that has no folder
+// rather than one that has no data: Cursor stores a window opened on no folder
+// under `workspaceStorage/empty-window`, with no descriptor and its own
+// `aiService.generations` ring. On this machine that directory is one of 123 and
+// holds a full ring of 50 request ids, every one of which a listing that required
+// the descriptor put out of reach.
+//
+// A directory entry that cannot be examined is counted rather than skipped
+// quietly, so a search across the workspaces can tell a miss over everything from
+// a miss over what it managed to read.
+func (root DataRoot) ListWorkspaceEntries() (WorkspaceListing, error) {
+	listing := WorkspaceListing{Entries: nil, Unreadable: 0, StorageDirMissing: false}
+
 	entries, err := os.ReadDir(root.WorkspaceStorageDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			listing.StorageDirMissing = true
+			return listing, nil
 		}
 		slog.Warn("providers.cursor.store.workspace_storage_read_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
-		return nil, fmt.Errorf("read cursor workspace storage dir %s: %w", root.WorkspaceStorageDir, err)
+		return listing, fmt.Errorf("read cursor workspace storage dir %s: %w", root.WorkspaceStorageDir, err)
 	}
 
 	out := make([]WorkspaceEntry, 0, len(entries))
@@ -84,23 +122,46 @@ func (root DataRoot) ListWorkspaceEntries() ([]WorkspaceEntry, error) {
 		workspaceHash := entry.Name()
 		workspaceDir := filepath.Join(root.WorkspaceStorageDir, workspaceHash)
 		stateDBPath := filepath.Join(workspaceDir, cursorWorkspaceDBName)
-		if !fileExists(stateDBPath) {
+		present, statErr := filePresent(stateDBPath)
+		if statErr != nil {
+			listing.Unreadable++
 			continue
 		}
-		workspaceJSONPath := filepath.Join(workspaceDir, cursorWorkspaceJSONName)
-		if !fileExists(workspaceJSONPath) {
+		if !present {
 			continue
 		}
 		out = append(out, WorkspaceEntry{
 			WorkspaceHash:     workspaceHash,
 			StateDBPath:       stateDBPath,
-			WorkspaceJSONPath: workspaceJSONPath,
+			WorkspaceJSONPath: workspaceDescriptorPath(workspaceDir),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].WorkspaceHash < out[j].WorkspaceHash
 	})
-	return out, nil
+	listing.Entries = out
+	return listing, nil
+}
+
+// workspaceDescriptorPath returns the folder descriptor beside one workspace
+// database, or the empty string when the workspace has none.
+//
+// A stat that fails for any reason other than absence yields the path anyway. An
+// empty path here means "this workspace has no folder", which is a claim about
+// the workspace, while a descriptor Clyde was denied is a claim about Clyde, and
+// collapsing the two indexes the conversation with an empty workspace root and no
+// sign that anything went wrong. Returning the path sends the real read at it,
+// which reports the real failure.
+func workspaceDescriptorPath(workspaceDir string) string {
+	descriptorPath := filepath.Join(workspaceDir, cursorWorkspaceJSONName)
+	present, err := filePresent(descriptorPath)
+	if err != nil {
+		return descriptorPath
+	}
+	if !present {
+		return ""
+	}
+	return descriptorPath
 }
 
 // ReadWorkspaceFolderPath reads one Cursor workspace.json file and returns its
@@ -195,9 +256,20 @@ func defaultCursorDataDir(ctx context.Context) (string, error) {
 	return filepath.Join(userHome, ".config", "Cursor", "User"), nil
 }
 
-func fileExists(path string) bool {
+// filePresent reports whether a path exists, and separates that from failing to
+// find out. Collapsing the two turns a directory Clyde was denied into one that
+// holds nothing, which reads downstream as a confirmed absence of whatever the
+// caller was looking for.
+func filePresent(path string) (bool, error) {
 	_, err := os.Stat(path)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	slog.Warn("providers.cursor.store.file_stat_failed", "concern", concern, "path", path, "err", err)
+	return false, fmt.Errorf("stat cursor path %s: %w", path, err)
 }
 
 func fileURIToPath(folder string) (string, error) {

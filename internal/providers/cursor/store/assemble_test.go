@@ -24,6 +24,7 @@ func bubbleFixture(bubbleID string, bubbleType int, createdAt string, text strin
 		ToolCall:       nil,
 		CreatedAt:      createdAt,
 		ServerBubbleID: "",
+		RequestID:      "",
 	}
 }
 
@@ -51,6 +52,7 @@ func headerFixture(composerID string, bubbleIDs ...string) ComposerHeader {
 		Status:                      "",
 		UnifiedMode:                 "",
 		ForceMode:                   "",
+		LatestChatGenerationUUID:    "",
 		FullConversationHeadersOnly: refs,
 	}
 }

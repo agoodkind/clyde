@@ -56,20 +56,21 @@ func (Parser) Provider() providerid.Provider {
 // usable identity, written out so exhaustruct sees every field set.
 func emptyRecord() conversation.Record {
 	return conversation.Record{
-		ID:            "",
-		Provider:      providerid.ProviderUnspecified,
-		NativeID:      "",
-		Lineage:       nil,
-		Origin:        conversation.OriginUnspecified,
-		Title:         "",
-		WorkspaceRoot: "",
-		ArtifactPath:  "",
-		ArtifactKind:  "",
-		Model:         "",
-		CreatedAt:     time.Time{},
-		UpdatedAt:     time.Time{},
-		SizeBytes:     0,
-		Archived:      false,
+		ID:              "",
+		Provider:        providerid.ProviderUnspecified,
+		NativeID:        "",
+		Lineage:         nil,
+		Origin:          conversation.OriginUnspecified,
+		Title:           "",
+		WorkspaceRoot:   "",
+		ArtifactPath:    "",
+		ArtifactKind:    "",
+		Model:           "",
+		CreatedAt:       time.Time{},
+		UpdatedAt:       time.Time{},
+		SizeBytes:       0,
+		Archived:        false,
+		LatestRequestID: "",
 	}
 }
 
@@ -271,6 +272,8 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 		UpdatedAt:     stamp.Mtime,
 		SizeBytes:     stamp.Size,
 		Archived:      false,
+		// Claude transcript headers carry no request id.
+		LatestRequestID: "",
 	}, true
 }
 
