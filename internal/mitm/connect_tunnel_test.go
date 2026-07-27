@@ -267,8 +267,12 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 		}
 	}
 	// The full decoded request/response bodies persist to the SQLite capture
-	// store, not to per-leg .raw files. Close flushes the writer queue so the
-	// row is committed before we query it.
+	// store, not to per-leg .raw files. Wait for the row before closing: the
+	// store's Record is asynchronous and a Record that arrives after Close is
+	// dropped, which would leave this query with nothing to scan.
+	waitForStoredRequestRow(t, dbPath, requestID)
+	// Close flushes the writer queue and checkpoints the WAL into the main
+	// database file so the verifier handle below sees every committed row.
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
@@ -321,11 +325,19 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 
 func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 	const providerHost = "chatgpt.com"
+	gate := newHeldUpstreamGate()
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == heldUpstreamPath {
+			gate.hold()
+		}
 		w.Header().Set("content-type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
 	}))
 	defer upstream.Close()
+	// Released before upstream.Close because defers unwind last-registered
+	// first: a handler still parked in the gate would block Close forever if
+	// the test failed before its own release.
+	defer gate.releaseAll()
 
 	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
 	defer proxy.shutdown()
@@ -372,21 +384,45 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 	assertProviderTLSRequest(t, tlsClient, tlsReader, providerHost, "/first")
 	waitForExactTunnelCount(t, proxy.proxy, 1, 2*time.Second)
 
-	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	// Park a request inside the upstream handler and leave it there across the
+	// drain. Its per-request livetrack session stays registered and the
+	// tunnel's drain watcher sees a non-zero in-flight count, so the registry
+	// holds StateDraining until this test releases the request instead of
+	// passing through it on the way to StateClosed.
+	held := make(chan providerTLSResponse, 1)
+	go func() {
+		held <- requestProviderTLS(tlsClient, tlsReader, providerHost, heldUpstreamPath)
+	}()
+	<-gate.entered
+
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), drainBudgetCap)
 	defer cancelDrain()
 	// Drive the drain through the lifecycle group's Quiesce, the only public
 	// drain entry point. The tunnel registry is the group's sole member here, so
 	// Quiesce drains it and transitions it to StateClosed once the in-flight
-	// request completes. The natural (non-force) completion is proven by the
-	// in-flight request finishing; the exact force-closed count is unit-tested in
+	// request completes and the keepalive loop exits. The cap is far longer than
+	// the exchange needs, so reaching StateClosed is the natural (non-force)
+	// completion path; the exact force-closed count is unit-tested in
 	// livetrack/drain_test.go.
 	drainDone := make(chan struct{})
 	go func() {
-		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: drainBudgetCap, IdleGrace: 0})
 		close(drainDone)
 	}()
 	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
 
+	// A request already in flight when the drain begins runs to completion.
+	gate.releaseAll()
+	inFlight := <-held
+	if inFlight.err != nil {
+		t.Fatalf("in-flight request across the drain boundary: %v", inFlight.err)
+	}
+	if !bytes.Contains(inFlight.body, []byte(heldUpstreamPath)) {
+		t.Fatalf("in-flight response missing path marker: %q", inFlight.body)
+	}
+
+	// The keepalive loop stops at the drain boundary once that request
+	// finishes, so the next request on the same tunnel is never served.
 	assertProviderTLSRequestRejected(t, tlsClient, tlsReader, providerHost, "/second")
 
 	select {
@@ -394,7 +430,7 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 		if got := proxy.proxy.Tunnels.State(); got != livetrack.StateClosed {
 			t.Fatalf("drain final state = %s, want closed", got)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for drain to finish after TLS close")
 	}
 }
@@ -509,24 +545,30 @@ func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
 	assertProviderTLSRequest(t, tlsClient, tlsReader, providerHost, "/first")
 	waitForExactTunnelCount(t, proxy.proxy, 1, 2*time.Second)
 
-	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), drainBudgetCap)
 	defer cancelDrain()
 	// Drive the drain through the lifecycle group's Quiesce, the only public
 	// drain entry point. With an idle keepalive tunnel and idle-grace set, the
-	// tunnel registry force-closes the wedged tunnel and reaches StateClosed.
+	// tunnel registry closes the wedged tunnel and reaches StateClosed well
+	// inside the budget cap. The cap is deliberately far above the wait below,
+	// so finishing at all is what proves the tunnel was closed on the drain's
+	// own initiative rather than by the budget expiring.
+	//
+	// There is no wait for StateDraining here: it is a state the registry
+	// passes through, and the terminal StateClosed asserted below is only
+	// reachable through it.
 	drainDone := make(chan struct{})
 	go func() {
-		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 50 * time.Millisecond})
+		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: drainBudgetCap, IdleGrace: 50 * time.Millisecond})
 		close(drainDone)
 	}()
-	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
 
 	select {
 	case <-drainDone:
 		if got := proxy.proxy.Tunnels.State(); got != livetrack.StateClosed {
 			t.Fatalf("drain final state = %s, want closed", got)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for idle provider TLS tunnel to close during drain")
 	}
 }
@@ -770,29 +812,93 @@ func waitForTunnelState(t *testing.T, proxy *Proxy, want livetrack.State, timeou
 	t.Fatalf("Tunnels.State: got %s, want %s after %s", proxy.Tunnels.State(), want, timeout)
 }
 
-func assertProviderTLSRequest(t *testing.T, conn net.Conn, reader *bufio.Reader, host string, path string) {
-	t.Helper()
+// drainBudgetCap bounds the drain tests' Quiesce budget. It is set far
+// above what any of those exchanges need so the deadline force-close
+// path never fires incidentally: a drain that reaches StateClosed inside
+// this cap did so because its sessions were released, not because the
+// budget ran out.
+const drainBudgetCap = 30 * time.Second
+
+// heldUpstreamPath is the request path whose upstream handler parks in
+// [heldUpstreamGate] until the test releases it.
+const heldUpstreamPath = "/hold"
+
+// heldUpstreamGate lets a test hold one upstream request open for as
+// long as it wants. A drain test uses it to keep a request genuinely in
+// flight, which pins the tunnel registry in StateDraining rather than
+// leaving the test to sample a state the registry only passes through.
+type heldUpstreamGate struct {
+	entered     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func newHeldUpstreamGate() *heldUpstreamGate {
+	return &heldUpstreamGate{
+		entered:     make(chan struct{}, 1),
+		release:     make(chan struct{}),
+		releaseOnce: sync.Once{},
+	}
+}
+
+// hold signals that the upstream handler has been entered and blocks
+// until releaseAll runs. The entered channel is buffered and the send is
+// non-blocking, so a handler that runs more than once never wedges on a
+// test that only waits for the first entry.
+func (g *heldUpstreamGate) hold() {
+	select {
+	case g.entered <- struct{}{}:
+	default:
+	}
+	<-g.release
+}
+
+// releaseAll unblocks every parked handler. It is idempotent so a test
+// can release explicitly and still defer it as a cleanup guard.
+func (g *heldUpstreamGate) releaseAll() {
+	g.releaseOnce.Do(func() { close(g.release) })
+}
+
+// providerTLSResponse is the outcome of one request written over an
+// intercepted provider TLS connection. [requestProviderTLS] runs on a
+// helper goroutine in the drain test, where t.Fatalf is not legal, so
+// the outcome travels back as a value.
+type providerTLSResponse struct {
+	body []byte
+	err  error
+}
+
+func requestProviderTLS(conn net.Conn, reader *bufio.Reader, host string, path string) providerTLSResponse {
 	req, err := http.NewRequest(http.MethodGet, "https://"+host+path, nil)
 	if err != nil {
-		t.Fatalf("build request: %v", err)
+		return providerTLSResponse{body: nil, err: fmt.Errorf("build request %s: %w", path, err)}
 	}
 	if err := req.Write(conn); err != nil {
-		t.Fatalf("write provider TLS request %s: %v", path, err)
+		return providerTLSResponse{body: nil, err: fmt.Errorf("write provider TLS request %s: %w", path, err)}
 	}
 	resp, err := http.ReadResponse(reader, req)
 	if err != nil {
-		t.Fatalf("read provider TLS response %s: %v", path, err)
+		return providerTLSResponse{body: nil, err: fmt.Errorf("read provider TLS response %s: %w", path, err)}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("read provider TLS response body %s: %v", path, err)
+		return providerTLSResponse{body: nil, err: fmt.Errorf("read provider TLS response body %s: %w", path, err)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status for %s = %d want %d; body=%q", path, resp.StatusCode, http.StatusOK, body)
+		return providerTLSResponse{body: body, err: fmt.Errorf("status for %s = %d want %d; body=%q", path, resp.StatusCode, http.StatusOK, body)}
 	}
-	if !bytes.Contains(body, []byte(path)) {
-		t.Fatalf("response for %s missing path marker: %q", path, body)
+	return providerTLSResponse{body: body, err: nil}
+}
+
+func assertProviderTLSRequest(t *testing.T, conn net.Conn, reader *bufio.Reader, host string, path string) {
+	t.Helper()
+	result := requestProviderTLS(conn, reader, host, path)
+	if result.err != nil {
+		t.Fatalf("provider TLS exchange: %v", result.err)
+	}
+	if !bytes.Contains(result.body, []byte(path)) {
+		t.Fatalf("response for %s missing path marker: %q", path, result.body)
 	}
 }
 
@@ -802,7 +908,12 @@ func assertProviderTLSRequestRejected(t *testing.T, conn net.Conn, reader *bufio
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	// The deadline is a hang guard rather than the mechanism under test: the
+	// drain closes the tunnel, so the read fails as soon as the peer's FIN
+	// lands. A timeout means the tunnel stayed open and simply served nothing,
+	// which is a different behavior, so it fails instead of passing as a
+	// rejection.
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	if err := req.Write(conn); err != nil {
 		return
@@ -811,6 +922,9 @@ func assertProviderTLSRequestRejected(t *testing.T, conn net.Conn, reader *bufio
 	if err == nil {
 		defer resp.Body.Close()
 		t.Fatalf("expected provider TLS request %s to fail during drain, got status %d", path, resp.StatusCode)
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("provider TLS request %s was neither served nor refused: the read timed out with the tunnel still open", path)
 	}
 }
 
@@ -1059,6 +1173,49 @@ func waitForCaptureRecordWithLeg(t *testing.T, path string, leg logevent.Leg) []
 	}
 }
 
+// waitForCaptureCommit polls the capture database until probe reports
+// the awaited row is committed, using a second read-only handle while
+// the store stays open.
+//
+// The capture store's writer is asynchronous and Record drops silently
+// once the store is closed, so closing the store is only safe after the
+// exchange has handed its record over. No wire leg marks that hand-off:
+// the intercepted-TLS path emits every leg, including the capture-index
+// leg, and only then calls into the store. Waiting on the row itself is
+// the one signal that the record cannot still be in flight.
+func waitForCaptureCommit(t *testing.T, dbPath string, what string, probe func(*sql.DB) (bool, error)) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open capture reader: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		found, probeErr := probe(db)
+		if found {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s in %s: %v", what, dbPath, probeErr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForStoredRequestRow blocks until the capture store has committed
+// the request row carrying requestID.
+func waitForStoredRequestRow(t *testing.T, dbPath string, requestID string) {
+	t.Helper()
+	waitForCaptureCommit(t, dbPath, "capture row for request "+requestID, func(db *sql.DB) (bool, error) {
+		var count int
+		if err := db.QueryRow(`SELECT count(*) FROM requests WHERE request_id=?`, requestID).Scan(&count); err != nil {
+			return false, err
+		}
+		return count > 0, nil
+	})
+}
+
 func reverse(s string) string {
 	b := []byte(s)
 	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
@@ -1067,25 +1224,84 @@ func reverse(s string) string {
 	return string(b)
 }
 
+// spliceIdleStep is how far the splice test advances its manual clock
+// to make a session look idle. The value is virtual time, so it costs
+// the test nothing to wait.
+const spliceIdleStep = 250 * time.Millisecond
+
+// manualClock is a race-safe time source whose value moves only when the
+// test advances it. livetrack reads it through Options.Now, so both the
+// session's recorded activity and the idle measurement come from it.
+type manualClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newManualClock(start time.Time) *manualClock {
+	return &manualClock{mu: sync.Mutex{}, now: start}
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *manualClock) Advance(step time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(step)
+}
+
+// waitForSessionTouch blocks until the session's recorded activity
+// catches up with the manual clock, which happens only when Touch fires.
+// The clock stands still while it waits, so the condition latches: once
+// idle reaches zero it stays there, and a poll goroutine that loses the
+// CPU for an arbitrary stretch still observes it. The deadline can only
+// expire if the Touch never happened at all.
+func waitForSessionTouch(t *testing.T, sess *livetrack.Session[TunnelMeta], clock *manualClock, direction string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if sess.IdleSince(clock.Now()) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s touch never observed: idle=%v", direction, sess.IdleSince(clock.Now()))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // TestSpliceConnectionsTouchesSessionOnWrite drives a pair of
 // net.Pipe connections through spliceConnections, sends bytes in one
 // direction at a time, and asserts the registered livetrack session's
-// IdleSince drops back under 10ms after each successful write. The
+// activity timestamp catches up after each successful write. The
 // test exists so a refactor that drops the touchOnWrite wrapper from
 // spliceConnections fails here instead of silently regressing the
 // daemon reload-drain idle-grace behavior.
+//
+// The registry runs on a manual clock because idle time grows on its
+// own: an assertion phrased as "idle is small right now" is only true
+// inside a window, and a poll loop that gets descheduled past that
+// window reports a touch that did happen as one that never did. Freezing
+// the clock turns each expected touch into idle == 0, which stays true
+// until the test advances the clock itself.
 func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	t.Parallel()
+	clock := newManualClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	registry := livetrack.Attach[TunnelMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{
 		Phase:         livetrack.PhaseIngress,
 		QuietRelevant: true,
 		CancelNoWait:  false,
 	}, livetrack.Options[TunnelMeta]{
-		Component:   "test",
-		Concern:     "test.splice.touch",
-		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		PollEvery:   5 * time.Millisecond,
-		CloserGrace: 100 * time.Millisecond,
+		Component:     "test",
+		Concern:       "test.splice.touch",
+		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:     5 * time.Millisecond,
+		CloserGrace:   100 * time.Millisecond,
+		ParallelClose: false,
+		Now:           clock.Now,
 	})
 	clientLocal, clientRemote := net.Pipe()
 	upstreamLocal, upstreamRemote := net.Pipe()
@@ -1098,12 +1314,12 @@ func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	// Sleep so initial IdleSince comfortably exceeds 10ms before any
-	// byte flows, giving the post-write assertion something to drop
-	// against.
-	time.Sleep(15 * time.Millisecond)
-	if before := sess.IdleSince(time.Now()); before < 10*time.Millisecond {
-		t.Fatalf("pre-splice idle: got %v, want >= 10ms (test fixture timing)", before)
+	// Register stamped the session's activity at the current clock value, so
+	// advancing the clock with no byte flow is what makes it look idle. That
+	// is the same measurement the drain idle-grace fast-path takes.
+	clock.Advance(spliceIdleStep)
+	if before := sess.IdleSince(clock.Now()); before != spliceIdleStep {
+		t.Fatalf("pre-splice idle: got %v, want %v", before, spliceIdleStep)
 	}
 
 	spliceDone := make(chan struct{})
@@ -1123,24 +1339,14 @@ func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	if _, err := upstreamRemote.Read(readBuf); err != nil {
 		t.Fatalf("upstream read after client write: %v", err)
 	}
-	// Allow the io.Copy goroutine in spliceConnections to return
-	// from its write call so Touch has fired.
-	deadlineCh := time.After(500 * time.Millisecond)
-	for sess.IdleSince(time.Now()) >= 10*time.Millisecond {
-		select {
-		case <-deadlineCh:
-			t.Fatalf("client->upstream touch never observed: idle=%v", sess.IdleSince(time.Now()))
-		default:
-		}
-		time.Sleep(1 * time.Millisecond)
-	}
+	waitForSessionTouch(t, sess, clock, "client->upstream")
 
 	// Now drive a byte the other direction and confirm Touch fires
-	// from the downstream goroutine too.
-	preDown := sess.IdleSince(time.Now())
-	time.Sleep(15 * time.Millisecond)
-	if mid := sess.IdleSince(time.Now()); mid <= preDown {
-		t.Fatalf("idle should grow during silence: pre=%v mid=%v", preDown, mid)
+	// from the downstream goroutine too. The clock step first proves
+	// nothing else refreshes the session while no bytes move.
+	clock.Advance(spliceIdleStep)
+	if mid := sess.IdleSince(clock.Now()); mid != spliceIdleStep {
+		t.Fatalf("idle during silence: got %v, want %v", mid, spliceIdleStep)
 	}
 	go func() {
 		_, _ = upstreamRemote.Write([]byte("u"))
@@ -1148,15 +1354,7 @@ func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	if _, err := clientRemote.Read(readBuf); err != nil {
 		t.Fatalf("client read after upstream write: %v", err)
 	}
-	deadlineCh = time.After(500 * time.Millisecond)
-	for sess.IdleSince(time.Now()) >= 10*time.Millisecond {
-		select {
-		case <-deadlineCh:
-			t.Fatalf("upstream->client touch never observed: idle=%v", sess.IdleSince(time.Now()))
-		default:
-		}
-		time.Sleep(1 * time.Millisecond)
-	}
+	waitForSessionTouch(t, sess, clock, "upstream->client")
 
 	// Close both ends so spliceConnections returns. clientRemote
 	// and upstreamRemote close together; the spliceConnections

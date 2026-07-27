@@ -138,6 +138,11 @@ func TestRequestResponseHookAppendsProviderTLSResponseBody(t *testing.T) {
 	}
 
 	waitForCaptureRecordWithLeg(t, mitmWireConcernTestPath(captureDir), logevent.LegMITMCaptureIndex)
+	// The intercepted-TLS path emits its wire legs and only afterwards hands
+	// the exchange to the capture store, whose writer is asynchronous, so the
+	// capture-index leg does not mean the row exists yet. Closing the store
+	// first would drop a record still on its way in and leave nothing to scan.
+	waitForStoredResponseBody(t, dbPath)
 	closeHookTestCaptureStore(t, store)
 	storedResponse := latestStoredResponseBody(t, dbPath)
 	if !bytes.Equal(storedResponse, wantBody) {
@@ -280,6 +285,19 @@ func closeHookTestCaptureStore(t *testing.T, store *capture.Store) {
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+}
+
+// waitForStoredResponseBody blocks until the capture store has
+// committed at least one response body row.
+func waitForStoredResponseBody(t *testing.T, dbPath string) {
+	t.Helper()
+	waitForCaptureCommit(t, dbPath, "stored response body", func(db *sql.DB) (bool, error) {
+		var count int
+		if err := db.QueryRow(`SELECT count(*) FROM bodies WHERE which='response'`).Scan(&count); err != nil {
+			return false, err
+		}
+		return count > 0, nil
+	})
 }
 
 func latestStoredResponseBody(t *testing.T, dbPath string) []byte {
