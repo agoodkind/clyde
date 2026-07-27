@@ -212,6 +212,7 @@ func emptyRecord() conversation.Record {
 		Provider:      conversation.Provider(0),
 		NativeID:      "",
 		Lineage:       nil,
+		Origin:        conversation.OriginUnspecified,
 		Title:         "",
 		WorkspaceRoot: "",
 		ArtifactPath:  "",

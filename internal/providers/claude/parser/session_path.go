@@ -18,8 +18,11 @@ import (
 // metadata.user_id.session_id, which is the transcript file's base name (a fork
 // can copy the id into a second file, handled below).
 //
-// The scan mirrors [Parser.Discover]: it walks the same projects root and skips
-// subagent transcripts. When more than one file carries the id (a fork copied
+// The scan walks the same projects root as [Parser.Discover] but, unlike it,
+// still skips subagent transcripts. That is not the conversation index's subagent
+// policy: a subagent transcript records its parent's session id, so admitting one
+// here could answer a lookup for the parent's session with an agent's transcript.
+// When more than one file carries the id (a fork copied
 // the id into a second transcript), the most recently modified file wins. The
 // second return is false when no transcript is found or the home dir is
 // unavailable.

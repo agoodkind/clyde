@@ -18,6 +18,12 @@
 [logging]
 level = "debug"
 
+# Transcripts written by a dispatched agent are indexed only when this is true.
+# They are hidden by default because one working session can write hundreds of
+# them in a day. Changing it needs no cache deletion.
+[conversation]
+include_subagent_conversations = false
+
 [conversation.semantic]
 enabled = false
 socket_path = ""

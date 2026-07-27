@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -59,7 +60,7 @@ func TestRenderReorientArtifactReadsPathWithoutIndex(t *testing.T) {
 	}})
 	// NewIndex builds an unscanned index: RenderReorientArtifact must read the
 	// path directly through the parser rather than consult cached records.
-	index := NewIndex(registry)
+	index := NewIndex(registry, config.ConversationConfig{})
 	body, err := index.RenderReorientArtifact(path, providerid.ProviderClaude, ReorientOptions{
 		SyntheticPreCompact: true,
 		IncludeToolOutputs:  true,
@@ -78,7 +79,7 @@ func TestRenderReorientArtifactUnknownProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x\n"), 0o600); err != nil {
 		t.Fatalf("write temp transcript: %v", err)
 	}
-	index := NewIndex(NewRegistry())
+	index := NewIndex(NewRegistry(), config.ConversationConfig{})
 	if _, err := index.RenderReorientArtifact(path, providerid.ProviderClaude, ReorientOptions{SyntheticPreCompact: true}); err == nil {
 		t.Fatal("expected an error when no registered provider parses the artifact")
 	}
@@ -86,7 +87,7 @@ func TestRenderReorientArtifactUnknownProvider(t *testing.T) {
 
 func TestRenderReorientArtifactMissingFile(t *testing.T) {
 	t.Parallel()
-	index := NewIndex(NewRegistry())
+	index := NewIndex(NewRegistry(), config.ConversationConfig{})
 	missing := filepath.Join(t.TempDir(), "does-not-exist.jsonl")
 	if _, err := index.RenderReorientArtifact(missing, providerid.ProviderClaude, ReorientOptions{SyntheticPreCompact: true}); err == nil {
 		t.Fatal("expected an error for a missing transcript file")

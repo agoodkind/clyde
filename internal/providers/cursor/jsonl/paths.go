@@ -19,6 +19,7 @@ const (
 	cursorProjectsDirsEnvVar = "CLYDE_CURSOR_PROJECTS_DIRS"
 	cursorProjectsSubdir     = ".cursor/projects"
 	agentTranscriptsDirName  = "agent-transcripts"
+	subagentsDirName         = "subagents"
 	jsonlExtension           = ".jsonl"
 )
 
@@ -32,6 +33,11 @@ type TranscriptFile struct {
 	Path           string
 	ConversationID string
 	ProjectKey     string
+	// ParentConversationID names the conversation that owns this transcript, set
+	// only for a subagent transcript, where the containing directory is literally
+	// the parent conversation's id. It is empty for a conversation's own
+	// transcript.
+	ParentConversationID string
 }
 
 // ResolveProjectRoots resolves the Cursor modern transcript roots from
@@ -88,8 +94,11 @@ func MatchTranscriptFile(path string) (TranscriptFile, bool, error) {
 	return emptyFile, false, nil
 }
 
-// DiscoverTranscriptFiles walks Cursor modern transcript roots and returns
-// files matching <projectKey>/agent-transcripts/<uuid>/<uuid>.jsonl.
+// DiscoverTranscriptFiles walks Cursor modern transcript roots and returns files
+// matching either <projectKey>/agent-transcripts/<uuid>/<uuid>.jsonl, a
+// conversation's own transcript, or
+// <projectKey>/agent-transcripts/<parent-uuid>/subagents/<uuid>.jsonl, a subagent
+// transcript whose containing directory names the conversation that owns it.
 func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {
 	files := make([]TranscriptFile, 0)
 	for _, root := range roots {
@@ -146,22 +155,46 @@ func transcriptFileFromPath(rootPath string, path string) (TranscriptFile, bool)
 		return emptyFile, false
 	}
 	parts := splitPathParts(relativePath)
-	if len(parts) != 4 {
+	if len(parts) < 4 || parts[1] != agentTranscriptsDirName {
 		return emptyFile, false
 	}
 	projectKey := parts[0]
-	if parts[1] != agentTranscriptsDirName {
+	conversationDirName := parts[2]
+	if conversationDirName == "" {
 		return emptyFile, false
 	}
-	conversationID := parts[2]
-	filenameStem := strings.TrimSuffix(parts[3], jsonlExtension)
-	if conversationID == "" || filenameStem != conversationID {
+
+	// A conversation's own transcript: <projectKey>/agent-transcripts/<id>/<id>.jsonl.
+	if len(parts) == 4 {
+		filenameStem := strings.TrimSuffix(parts[3], jsonlExtension)
+		if filenameStem != conversationDirName {
+			return emptyFile, false
+		}
+		return TranscriptFile{
+			Path:                 path,
+			ConversationID:       conversationDirName,
+			ProjectKey:           projectKey,
+			ParentConversationID: "",
+		}, true
+	}
+
+	// A subagent transcript, one level deeper under a literal subagents/
+	// directory: <projectKey>/agent-transcripts/<parent-id>/subagents/<own-id>.jsonl.
+	// The shape is pinned exactly so no other file that happens to sit under
+	// agent-transcripts/ becomes a conversation. The file is named with its own
+	// uuid, so its derived id does not collide with the parent's.
+	if len(parts) != 5 || parts[3] != subagentsDirName {
+		return emptyFile, false
+	}
+	subagentID := strings.TrimSuffix(parts[4], jsonlExtension)
+	if subagentID == "" {
 		return emptyFile, false
 	}
 	return TranscriptFile{
-		Path:           path,
-		ConversationID: conversationID,
-		ProjectKey:     projectKey,
+		Path:                 path,
+		ConversationID:       subagentID,
+		ProjectKey:           projectKey,
+		ParentConversationID: conversationDirName,
 	}, true
 }
 

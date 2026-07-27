@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/clyde/internal/transcript"
@@ -582,7 +583,7 @@ func buildReorientFixture(t *testing.T, extraChildTail []transcript.Message) reo
 			child.ArtifactPath:  childMessages,
 		},
 	})
-	index := NewIndex(registry)
+	index := NewIndex(registry, config.ConversationConfig{})
 	records := []Record{child, parent}
 	index.records = records
 	index.prevRecords = recordsByPath(index.records)

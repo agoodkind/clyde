@@ -87,8 +87,12 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 		rootHash := RootHash(root.RootDir)
 
 		for _, row := range rows {
+			// A thread whose sidebar metadata names an agent is a subagent thread.
+			// Discovery admits it and ScanRecord classifies it, so the one
+			// conversation setting decides whether it is served. Dropping it here
+			// instead would be a second, always-on skip the setting could not reach.
 			metadata, ok := metadataByThread[row.ThreadID]
-			if !ok || metadata.Metadata.AgentID != "" {
+			if !ok {
 				continue
 			}
 			thread, err := zedstore.ParseThreadDocument(row.DataType, row.Data)
@@ -132,7 +136,9 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 }
 
 // ScanRecord turns one discovered native Zed thread into a derived Clyde
-// record without streaming the full transcript.
+// record without streaming the full transcript. Zed threads carry a subagent
+// context, and both are read into the record's origin so the one conversation
+// setting decides whether a subagent thread is served.
 func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
 	discovered, err := p.resolveDiscoveredThread(path)
 	if err != nil {
@@ -152,6 +158,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			Provider:      providerid.ProviderZed,
 			NativeID:      terminal.TerminalID,
 			Lineage:       nil,
+			Origin:        conversation.OriginUnspecified,
 			Title:         title,
 			WorkspaceRoot: firstNonEmptyString(terminal.WorkingDirectory, firstPath(terminal.FolderPaths), firstPath(terminal.MainWorktreePaths)),
 			ArtifactPath:  path,
@@ -170,6 +177,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		Provider:      providerid.ProviderZed,
 		NativeID:      discovered.Row.ThreadID,
 		Lineage:       buildLineage(discovered.Row.ParentThreadID, thread.SubagentContext),
+		Origin:        zedThreadOrigin(discovered.Metadata.AgentID, thread.SubagentContext),
 		Title:         resolvedTitle(discovered.Metadata, thread),
 		WorkspaceRoot: firstNonEmptyString(firstPath(discovered.Metadata.FolderPaths), firstPath(discovered.Row.FolderPaths)),
 		ArtifactPath:  path,
@@ -434,6 +442,22 @@ func readSidebarThreadMetadataForRoot(
 		}
 	}
 	return emptyMetadata, false, nil
+}
+
+// zedThreadOrigin classifies a Zed thread from the two markers Zed writes: the
+// sidebar metadata names the agent that owns the thread, and the thread document
+// persists a subagent context naming the parent. Either one marks a thread Zed
+// itself dispatched. Before the conversation setting existed, a thread with an
+// agent id was dropped during discovery instead, which the setting could not
+// reach.
+func zedThreadOrigin(agentID string, subagentContext *zedstore.SubagentContext) conversation.Origin {
+	if strings.TrimSpace(agentID) != "" {
+		return conversation.OriginSubagent
+	}
+	if subagentContext != nil {
+		return conversation.OriginSubagent
+	}
+	return conversation.OriginUser
 }
 
 func buildLineage(parentSessionID string, subagentContext *zedstore.SubagentContext) *conversation.Lineage {

@@ -3,11 +3,13 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"google.golang.org/grpc/codes"
@@ -54,10 +56,19 @@ type fakeSemanticSearch struct {
 	limits  []int32
 }
 
+// SearchConversations truncates to the requested limit the way a real ranked
+// engine does, so a test can distinguish a page the engine filled from one it
+// exhausted.
 func (f *fakeSemanticSearch) SearchConversations(_ context.Context, _ string, _ string, limit int32, filter semsearch.SearchFilter, _ int32) ([]semsearch.SemHit, error) {
 	f.filters = append(f.filters, filter)
 	f.limits = append(f.limits, limit)
-	return f.hits, f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	if limit > 0 && int(limit) < len(f.hits) {
+		return f.hits[:limit], nil
+	}
+	return f.hits, nil
 }
 
 func (f *fakeSemanticSearch) SearchWithinConversation(context.Context, string, string, string, int32, semsearch.SearchFilter) ([]semsearch.SemHit, string, error) {
@@ -141,7 +152,7 @@ func TestControlServerSearchConversationsAcceptsAlternateSource(t *testing.T) {
 		options: conversation.SearchConversationsOptions{},
 	}
 	server := &controlServer{
-		index:        conversation.NewIndex(newConversationRegistry()),
+		index:        conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
 		searchSource: source,
 	}
 
@@ -491,6 +502,108 @@ func TestSemanticConversationSearchSourceReportsTransportFailure(t *testing.T) {
 	var failure conversationSearchSourceError
 	if !errors.As(err, &failure) || failure.code != conversationSearchSourceUnavailable {
 		t.Fatalf("error = %v, want unavailable conversationSearchSourceError", err)
+	}
+}
+
+// hiddenAndVisibleHits builds a ranked list whose first hiddenCount hits belong
+// to conversations the index does not serve, followed by visibleCount hits that
+// do resolve. It mirrors the live corpus, where retained subagent chunks stay
+// rankable and can occupy the top of any page.
+func hiddenAndVisibleHits(hiddenCount int, visibleCount int) ([]semsearch.SemHit, map[string]conversation.Record) {
+	hits := make([]semsearch.SemHit, 0, hiddenCount+visibleCount)
+	for i := 0; i < hiddenCount; i++ {
+		hits = append(hits, semsearch.SemHit{
+			ConversationID: "claude:hidden-" + strconv.Itoa(i),
+			MessageIndex:   int32(i),
+			Role:           "user",
+			TimestampUnix:  int64(i),
+			Content:        "hidden subagent chunk",
+		})
+	}
+	records := make(map[string]conversation.Record, visibleCount)
+	for i := 0; i < visibleCount; i++ {
+		id := "claude:visible-" + strconv.Itoa(i)
+		records[id] = daemonTestRecord(id, false)
+		hits = append(hits, semsearch.SemHit{
+			ConversationID: id,
+			MessageIndex:   int32(i),
+			Role:           "assistant",
+			TimestampUnix:  int64(hiddenCount + i),
+			Content:        "the milvus checkpoint note",
+		})
+	}
+	return hits, records
+}
+
+func filterStageRemaining(stages []conversation.FilterStage, name string) (int, bool) {
+	for _, stage := range stages {
+		if stage.Name == name {
+			return stage.Remaining, true
+		}
+	}
+	return 0, false
+}
+
+// TestSearchConversationsResultOverfetchesPastHiddenConversations proves a page
+// whose top ranked hits belong to hidden conversations still comes back full.
+// Hidden rows stay in the vector store under the retain reconcile mode, so they
+// keep consuming ranked slots that clyde then drops; without headroom the caller
+// gets a short page and no signal that anything was withheld.
+func TestSearchConversationsResultOverfetchesPastHiddenConversations(t *testing.T) {
+	t.Parallel()
+	hits, records := hiddenAndVisibleHits(3, 10)
+	idx := &fakeSearchIndex{records: records}
+	semantic := &fakeSemanticSearch{hits: hits, err: nil}
+	req := &clydev1.SearchConversationsRequest{Query: "milvus checkpoint", Limit: 10}
+
+	result, err := searchSemanticSource(context.Background(), idx, semantic, req)
+	if err != nil {
+		t.Fatalf("search conversations result: %v", err)
+	}
+	if len(result.Matches) != 10 {
+		t.Fatalf("matches = %d, want a full page of 10; hidden conversations consumed ranked slots", len(result.Matches))
+	}
+	if len(semantic.limits) < 2 {
+		t.Fatalf("engine limits = %v, want a second, larger query once hidden hits shortened the page", semantic.limits)
+	}
+	if semantic.limits[1] <= semantic.limits[0] {
+		t.Fatalf("engine limits = %v, want the retry to ask for more than the first attempt", semantic.limits)
+	}
+}
+
+// TestSearchConversationsResultReportsWithheldHitsOnAShortPage covers the case
+// the retry budget cannot rescue: hidden rows dominate the ranking deeper than
+// the bounded over-fetch reaches. The page is short, so it must not claim to be
+// complete, and the funnel must show that ranked hits were withheld.
+func TestSearchConversationsResultReportsWithheldHitsOnAShortPage(t *testing.T) {
+	t.Parallel()
+	visible, records := hiddenAndVisibleHits(0, 2)
+	hidden, _ := hiddenAndVisibleHits(600, 0)
+	hits := append(visible, hidden...)
+	idx := &fakeSearchIndex{records: records}
+	semantic := &fakeSemanticSearch{hits: hits, err: nil}
+	req := &clydev1.SearchConversationsRequest{Query: "milvus checkpoint", Limit: 10}
+
+	result, err := searchSemanticSource(context.Background(), idx, semantic, req)
+	if err != nil {
+		t.Fatalf("search conversations result: %v", err)
+	}
+	if len(result.Matches) != 2 {
+		t.Fatalf("matches = %d, want the 2 that resolve", len(result.Matches))
+	}
+	if !result.HasMore {
+		t.Fatal("HasMore = false on a short page the over-fetch budget could not fill, so the caller cannot tell ranked matches were dropped")
+	}
+	ranked, ok := filterStageRemaining(result.FilterAccounting, "engine_ranked")
+	if !ok {
+		t.Fatalf("filter accounting = %+v, want an engine_ranked stage", result.FilterAccounting)
+	}
+	visibleRemaining, ok := filterStageRemaining(result.FilterAccounting, "hidden_excluded")
+	if !ok {
+		t.Fatalf("filter accounting = %+v, want a hidden_excluded stage", result.FilterAccounting)
+	}
+	if ranked <= visibleRemaining {
+		t.Fatalf("engine_ranked = %d, hidden_excluded = %d, want the funnel to show the withheld hits", ranked, visibleRemaining)
 	}
 }
 

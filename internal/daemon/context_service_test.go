@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"goodkind.io/clyde/api/contextpb"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 )
 
@@ -44,7 +45,7 @@ func TestConversationContextServiceDialSmoke(t *testing.T) {
 	}
 
 	grpcServer := grpc.NewServer()
-	index := conversation.NewIndex(newConversationRegistry())
+	index := conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{})
 	registerConversationContextService(grpcServer, index)
 	serveErr := make(chan error, 1)
 	go func() {

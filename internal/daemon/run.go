@@ -117,7 +117,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	}
 	defer runtime.shutdown(ctx)
 
-	conversationIndex := conversation.NewIndex(newConversationRegistry())
+	conversationIndex := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
 	semanticFreshness := newConversationSemanticFreshness()
 
 	// Resolve the feeder client per pass rather than once here: when the engine

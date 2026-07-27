@@ -42,14 +42,22 @@ type discoveredArtifact struct {
 	Path           string
 	ConversationID string
 	ProjectKey     string
-	RootDir        string
-	ComposerID     string
-	ComposerHeader cursorstore.ComposerHeader
-	ComposerInfo   cursorstore.WorkspaceComposerInfo
-	HasInfo        bool
-	IsBackground   bool
-	LegacyTab      cursorstore.LegacyChatTab
-	WorkspaceRoot  string
+	// Origin is decided during Discover, once the resume-link index over every
+	// parent transcript is complete, so a record's origin never depends on the
+	// order candidates are scanned in.
+	Origin conversation.Origin
+	// ParentConversationID names the conversation that owns a subagent
+	// transcript: the id the provider stated in a resume link when there is one,
+	// otherwise the containing directory.
+	ParentConversationID string
+	RootDir              string
+	ComposerID           string
+	ComposerHeader       cursorstore.ComposerHeader
+	ComposerInfo         cursorstore.WorkspaceComposerInfo
+	HasInfo              bool
+	IsBackground         bool
+	LegacyTab            cursorstore.LegacyChatTab
+	WorkspaceRoot        string
 }
 
 // Parser discovers Cursor conversation artifacts and caches the rows needed by
@@ -57,13 +65,21 @@ type discoveredArtifact struct {
 type Parser struct {
 	mu         sync.Mutex
 	discovered map[string]discoveredArtifact
+	// resumeLinks remembers each parent transcript's extracted resume links
+	// against the file state they were read from, so an unchanged parent is never
+	// re-read on a later refresh.
+	resumeLinks map[string]resumeLinkCacheEntry
 }
 
 var _ conversation.Parser = (*Parser)(nil)
 
 // New returns a Cursor conversation parser.
 func New() *Parser {
-	return &Parser{mu: sync.Mutex{}, discovered: make(map[string]discoveredArtifact)}
+	return &Parser{
+		mu:          sync.Mutex{},
+		discovered:  make(map[string]discoveredArtifact),
+		resumeLinks: make(map[string]resumeLinkCacheEntry),
+	}
 }
 
 // Provider reports that this parser handles Cursor artifacts.
@@ -78,7 +94,7 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 	discovered := make(map[string]discoveredArtifact)
 	seenConversationIDs := make(map[string]bool)
 
-	jsonlCandidates, err := discoverJSONL(ctx, discovered, seenConversationIDs)
+	jsonlCandidates, err := p.discoverJSONL(ctx, discovered, seenConversationIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +119,22 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 
 // ScanRecord turns one discovered Cursor artifact into a derived Clyde record
 // without streaming the full transcript.
+//
+// A modern JSONL record carries the origin and parent that Discover resolved,
+// because classification needs the resume-link index over every parent transcript
+// and that is only complete once Discover returns.
+//
+// Cursor writes no origin marker inside a transcript: a subagent transcript
+// carries the same top-level keys as its parent and names neither an agent nor a
+// parent. Classification therefore rests on path shape, corroborated by the
+// resume link where one exists. A future Cursor layout change would silently
+// reclassify these as user conversations, which is why an unexpected resume link
+// is logged during Discover.
+//
+// IsBackground is deliberately not read as an origin: a background composer is an
+// agent the person started, not one a conversation dispatched. Composer and legacy
+// records stay at [conversation.OriginUnspecified], which is ingested rather than
+// hidden.
 func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
 	discovered, err := p.resolveDiscovered(path)
 	if err != nil {
@@ -120,7 +152,8 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			ID:            conversation.DerivedID(providerid.ProviderCursor, discovered.ConversationID, path),
 			Provider:      providerid.ProviderCursor,
 			NativeID:      discovered.ConversationID,
-			Lineage:       nil,
+			Lineage:       cursorSpawnLineage(discovered.ParentConversationID),
+			Origin:        discovered.Origin,
 			Title:         firstNonEmptyString(truncateTitle(header.FirstUserText), untitledCursorConversationText),
 			WorkspaceRoot: cursorjsonl.WorkspacePathFromProjectKey(discovered.ProjectKey),
 			ArtifactPath:  path,
@@ -146,6 +179,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			Provider:      providerid.ProviderCursor,
 			NativeID:      discovered.ComposerID,
 			Lineage:       nil,
+			Origin:        conversation.OriginUnspecified,
 			Title:         firstNonEmptyString(header.Name, workspaceTitle, untitledCursorConversationText),
 			WorkspaceRoot: workspaceRoot,
 			ArtifactPath:  path,
@@ -168,6 +202,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			Provider:      providerid.ProviderCursor,
 			NativeID:      legacyConversationID,
 			Lineage:       nil,
+			Origin:        conversation.OriginUnspecified,
 			Title:         firstNonEmptyString(tab.ChatTitle, untitledCursorChatText),
 			WorkspaceRoot: discovered.WorkspaceRoot,
 			ArtifactPath:  path,
@@ -223,7 +258,7 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 	}
 }
 
-func discoverJSONL(
+func (p *Parser) discoverJSONL(
 	ctx context.Context,
 	discovered map[string]discoveredArtifact,
 	seenConversationIDs map[string]bool,
@@ -238,6 +273,8 @@ func discoverJSONL(
 		slog.WarnContext(ctx, "providers.cursor.parser.discover_transcripts_failed", "concern", concern, "err", err)
 		return nil, fmt.Errorf("discover cursor transcript files: %w", err)
 	}
+	resumeLinks := p.buildResumeLinkIndex(ctx, files)
+	unexpectedResumeLinks := 0
 
 	candidates := make([]conversation.ScanCandidate, 0, len(files))
 	for _, file := range files {
@@ -253,15 +290,53 @@ func discoverJSONL(
 				Mtime: info.ModTime(),
 			},
 		})
+		// The path shape decides whether a transcript is a subagent conversation.
+		// The resume link corroborates that call and supplies the parent reference
+		// when it exists, because the provider stated that link outright. A resume
+		// link that disagrees with the path is logged and otherwise ignored: acting
+		// on it alone would hide a conversation the layout says is the user's own,
+		// which is the loss this classification exists to prevent.
+		resumeParentID, resumedByAConversation := resumeLinks.parentOf(file.ConversationID)
+		parentConversationID := file.ParentConversationID
+		origin := originFromParentConversationID(parentConversationID)
+		switch {
+		case origin == conversation.OriginSubagent && resumedByAConversation:
+			parentConversationID = resumeParentID
+		case resumedByAConversation:
+			unexpectedResumeLinks++
+		}
+
 		var artifact discoveredArtifact
 		artifact.Kind = discoveredKindJSONL
 		artifact.Path = file.Path
 		artifact.ConversationID = file.ConversationID
 		artifact.ProjectKey = file.ProjectKey
+		artifact.Origin = origin
+		artifact.ParentConversationID = parentConversationID
 		discovered[file.Path] = artifact
 		seenConversationIDs[file.ConversationID] = true
 	}
+	if unexpectedResumeLinks > 0 {
+		// A resumed conversation that is not under a subagents/ directory means the
+		// path rule no longer describes where Cursor puts these, which would
+		// otherwise go unnoticed until subagent conversations quietly returned to
+		// the index. These conversations stay user origin, so this is an early
+		// warning rather than a reclassification.
+		slog.InfoContext(ctx, "providers.cursor.parser.resume_link_outside_subagents_dir",
+			"concern", concern, "component", "cursor", "count", unexpectedResumeLinks)
+	}
 	return candidates, nil
+}
+
+// originFromParentConversationID reads the origin off the path shape, which is
+// the one classifier both the Discover pass and the direct resolve can apply.
+// A transcript nested under another conversation's subagents/ directory carries
+// that conversation's id here; a conversation's own transcript carries none.
+func originFromParentConversationID(parentConversationID string) conversation.Origin {
+	if parentConversationID == "" {
+		return conversation.OriginUser
+	}
+	return conversation.OriginSubagent
 }
 
 func discoverSQLite(
@@ -503,11 +578,17 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 		slog.WarnContext(ctx, "providers.cursor.parser.jsonl_path_not_found", "concern", concern, "path", path)
 		return emptyDiscoveredArtifact(), fmt.Errorf("cursor transcript path not discovered: %s", path)
 	}
+	// The direct resolve has no resume-link index, which Discover builds over
+	// every parent transcript. The path shape is the classifier either way, so
+	// this record carries the same origin and parent Discover would have given it
+	// rather than an unspecified origin that would bypass the setting.
 	var artifact discoveredArtifact
 	artifact.Kind = discoveredKindJSONL
 	artifact.Path = file.Path
 	artifact.ConversationID = file.ConversationID
 	artifact.ProjectKey = file.ProjectKey
+	artifact.Origin = originFromParentConversationID(file.ParentConversationID)
+	artifact.ParentConversationID = file.ParentConversationID
 	return artifact, nil
 }
 
@@ -722,6 +803,23 @@ func msToTime(ms int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(0, ms*int64(time.Millisecond))
+}
+
+// cursorSpawnLineage records the conversation that dispatched a subagent
+// transcript. Cursor names its parent either through the containing directory or
+// through a resume link, so unlike Claude the relationship is real data rather
+// than an inference, and it lands in the same typed lineage Codex and Zed use.
+func cursorSpawnLineage(parentConversationID string) *conversation.Lineage {
+	parentConversationID = strings.TrimSpace(parentConversationID)
+	if parentConversationID == "" {
+		return nil
+	}
+	return &conversation.Lineage{
+		Kind:              conversation.ConversationLineageKindSpawn,
+		ParentProvider:    providerid.ProviderCursor,
+		ParentNativeID:    parentConversationID,
+		ParentMessageUUID: "",
+	}
 }
 
 func firstNonEmptyString(values ...string) string {
