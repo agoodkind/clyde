@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"context"
-
 	cursorjsonl "goodkind.io/clyde/internal/providers/cursor/jsonl"
 	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
 )
@@ -40,8 +38,6 @@ var (
 	_ = cursorstore.DecodeBackgroundComposerWindowMappingJSON
 	_ = cursorstore.ListBackgroundComposers
 	_ = cursorstore.DecodeBubbleJSON
-	_ = cursorstore.ReadBubble
-	_ = cursorstore.LoadBubblesForComposer
 	_ = cursorstore.DecodeLegacyChatDataJSON
 	_ = cursorstore.ReadLegacyChatData
 	_ = cursorstore.DecodeAllComposersJSON
@@ -58,8 +54,4 @@ func init() {
 	_ = unknownKVTableNameError.Error
 	_ = cursorJSONDecodeError.Error
 	_ = cursorJSONDecodeError.Unwrap
-	if false {
-		var composerHeader cursorstore.ComposerHeader
-		_, _ = cursorstore.LoadBubblesForComposer(context.Background(), nil, composerHeader)
-	}
 }

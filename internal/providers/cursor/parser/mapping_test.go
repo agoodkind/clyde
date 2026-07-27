@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"goodkind.io/clyde/internal/conversation"
 	cursorjsonl "goodkind.io/clyde/internal/providers/cursor/jsonl"
@@ -127,6 +128,57 @@ func TestMapComposerBubbleMapsRolesThinkingAndToolOutputGate(t *testing.T) {
 	}
 	if user.Role != "user" {
 		t.Fatalf("user Role = %q, want user", user.Role)
+	}
+}
+
+// TestMapComposerBubbleCarriesTheStoredWriteTime pins the timestamp a reader
+// sees to the one that ordered the chat. The same value places the bubble during
+// assembly, so a message that carried it in one place and not the other would be
+// describing two different conversations.
+func TestMapComposerBubbleCarriesTheStoredWriteTime(t *testing.T) {
+	t.Parallel()
+
+	dated, include := mapComposerBubble(cursorstore.Bubble{
+		BubbleID:       "bubble-dated",
+		Type:           cursorstore.BubbleTypeUser,
+		SchemaVersion:  3,
+		Text:           "hello",
+		Thinking:       cursorstore.BubbleThinking{Text: ""},
+		ToolCall:       nil,
+		CreatedAt:      "2026-05-06T05:00:30.500Z",
+		ServerBubbleID: "",
+	}, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	})
+	if !include {
+		t.Fatal("include = false, want true")
+	}
+	want := time.Date(2026, time.May, 6, 5, 0, 30, 500_000_000, time.UTC)
+	if !dated.Timestamp.Equal(want) {
+		t.Fatalf("Timestamp = %s, want %s", dated.Timestamp, want)
+	}
+
+	undated, include := mapComposerBubble(cursorstore.Bubble{
+		BubbleID:       "bubble-undated",
+		Type:           cursorstore.BubbleTypeUser,
+		SchemaVersion:  3,
+		Text:           "hello",
+		Thinking:       cursorstore.BubbleThinking{Text: ""},
+		ToolCall:       nil,
+		CreatedAt:      "",
+		ServerBubbleID: "",
+	}, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	})
+	if !include {
+		t.Fatal("undated include = false, want true")
+	}
+	if !undated.Timestamp.IsZero() {
+		t.Fatalf("undated Timestamp = %s, want the zero time", undated.Timestamp)
 	}
 }
 
