@@ -384,9 +384,11 @@ func TestBackfillConversationDocumentsDryRunSelectsLimit(t *testing.T) {
 	if strings.Join(index.loadedIDs, ",") != "claude:one,claude:two" {
 		t.Fatalf("loaded ids = %v, want first two records", index.loadedIDs)
 	}
+	// The backfill reads under the same content policy the daemon feeder runs, so
+	// it does not read tool outputs the policy would withhold anyway.
 	for _, opts := range index.loadOptions {
-		if !opts.IncludeToolOutputs {
-			t.Fatalf("load options = %+v, want IncludeToolOutputs true", opts)
+		if opts.IncludeToolOutputs {
+			t.Fatalf("load options = %+v, want IncludeToolOutputs false under the default content policy", opts)
 		}
 	}
 	if dialCalled {

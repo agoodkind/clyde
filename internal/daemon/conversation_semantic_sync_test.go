@@ -182,8 +182,8 @@ func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 	if len(index.loadOptions) != 1 {
 		t.Fatalf("load options calls = %d, want 1", len(index.loadOptions))
 	}
-	if !index.loadOptions[0].IncludeToolOutputs {
-		t.Fatalf("IncludeToolOutputs = false, want true")
+	if index.loadOptions[0].IncludeToolOutputs {
+		t.Fatalf("IncludeToolOutputs = true, want false; tool_output is not a default indexed class")
 	}
 	if len(client.upsertCalls) != 1 || len(client.upsertCalls[0].Docs) != 1 {
 		t.Fatalf("upsert calls = %+v", client.upsertCalls)
@@ -199,8 +199,11 @@ func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 		t.Fatalf("doc tools = %d, want 1", len(doc.Tools))
 	}
 	tool := doc.Tools[0]
-	if tool.Name != "exec_command" || tool.InputJSON != `{"cmd":"date"}` || tool.Command != "date" || tool.LangHint != "bash" || tool.Output != "Mon Jul 6" || !tool.IsError {
-		t.Fatalf("tool = %+v, want structured exec_command with output and error flag", tool)
+	if tool.Name != "exec_command" || tool.InputJSON != `{"cmd":"date"}` || tool.Command != "date" || tool.LangHint != "bash" || !tool.IsError {
+		t.Fatalf("tool = %+v, want structured exec_command with its command and error flag", tool)
+	}
+	if tool.Output != "" {
+		t.Fatalf("tool output = %q, want empty; tool_output is not a default indexed class", tool.Output)
 	}
 }
 
@@ -270,8 +273,8 @@ func TestConversationSemanticSyncSendsNeededConversations(t *testing.T) {
 		t.Fatalf("load options calls = %d, want 1", len(index.loadOptions))
 	}
 	opts := index.loadOptions[0]
-	if opts.IncludeSystemPrompts || opts.IncludeSystemMessages || !opts.IncludeToolOutputs {
-		t.Fatalf("load options = %+v, want system fields false and tool outputs true", opts)
+	if opts.IncludeSystemPrompts || opts.IncludeSystemMessages || opts.IncludeToolOutputs {
+		t.Fatalf("load options = %+v, want every opt-in class off under the default content policy", opts)
 	}
 }
 

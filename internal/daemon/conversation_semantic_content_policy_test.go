@@ -107,13 +107,51 @@ func TestDefaultConfigWithholdsReasoningOnly(t *testing.T) {
 	for _, doc := range built.Docs {
 		if len(doc.Tools) > 0 {
 			toolDocs++
-			if doc.Tools[0].Output == "" {
-				t.Fatalf("tool output missing from document %d; the default policy indexes it", doc.MessageIndex)
+			if doc.Tools[0].Command != "go test ./..." {
+				t.Fatalf("tool command = %q, want the command the default policy indexes", doc.Tools[0].Command)
+			}
+			if doc.Tools[0].Output != "" {
+				t.Fatalf("tool output = %q, want empty; tool_output is not a default class", doc.Tools[0].Output)
 			}
 		}
 	}
 	if toolDocs != 1 {
 		t.Fatalf("documents carrying tools = %d, want 1", toolDocs)
+	}
+}
+
+// TestDefaultConfigDoesNotEvenReadToolOutput proves the largest excluded class
+// is dropped at the transcript loader rather than after projection, so a corpus
+// where tool results dominate is never paid for in the first place.
+func TestDefaultConfigDoesNotEvenReadToolOutput(t *testing.T) {
+	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if SemanticConversationLoadOptions(policy).IncludeToolOutputs {
+		t.Fatal("default load options read tool outputs; tool_output is opt-in")
+	}
+
+	optedIn, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"text\", \"tool_call\", \"tool_output\"]\n")
+	if err != nil {
+		t.Fatalf("load opted-in config: %v", err)
+	}
+	if !SemanticConversationLoadOptions(optedIn).IncludeToolOutputs {
+		t.Fatal("naming tool_output did not reach the transcript loader")
+	}
+
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), optedIn)
+	if err != nil {
+		t.Fatalf("build documents: %v", err)
+	}
+	found := false
+	for _, doc := range built.Docs {
+		if len(doc.Tools) > 0 && doc.Tools[0].Output != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("naming tool_output did not carry the result into the document")
 	}
 }
 
@@ -210,12 +248,43 @@ func TestWithholdingToolOutputKeepsTheCallAndDropsTheResult(t *testing.T) {
 		if doc.Tools[0].Output != "" {
 			t.Fatalf("tool output = %q, want empty when tool_output is not indexed", doc.Tools[0].Output)
 		}
+		if doc.Tools[0].Command != "" {
+			t.Fatalf("tool command = %q, want empty when tool_command is not indexed", doc.Tools[0].Command)
+		}
 		if !strings.Contains(doc.Tools[0].InputJSON, "go test") {
 			t.Fatalf("tool input = %q, want the call arguments", doc.Tools[0].InputJSON)
 		}
 	}
 	if !found {
 		t.Fatal("no document carried the tool call; withholding tool_output must not drop the call")
+	}
+}
+
+// TestToolCallSurvivesEveryFinerClassBeingWithheld covers the shape that would
+// otherwise produce an empty stored row: a tool call whose command, arguments
+// and result are all withheld still carries its name, which is what the engine
+// derives the call's own row from, so the message keeps an indexed class and is
+// still delivered.
+func TestToolCallSurvivesEveryFinerClassBeingWithheld(t *testing.T) {
+	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"tool_call\"]\n")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), policy)
+	if err != nil {
+		t.Fatalf("build documents: %v", err)
+	}
+
+	if len(built.Docs) != 1 {
+		t.Fatalf("documents = %d, want 1 (only the turn carrying a tool call)", len(built.Docs))
+	}
+	tool := built.Docs[0].Tools[0]
+	if tool.Name != "Bash" {
+		t.Fatalf("tool name = %q, want Bash; the name is what keeps the call retrievable", tool.Name)
+	}
+	if tool.Command != "" || tool.InputJSON != "" || tool.Output != "" {
+		t.Fatalf("tool = %+v, want only the name retained", tool)
 	}
 }
 

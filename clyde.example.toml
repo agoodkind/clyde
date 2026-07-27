@@ -29,11 +29,12 @@ enabled = false
 socket_path = ""
 collection_id = "clyde-conversations"
 # Content classes offered to the search engine. Omit the key for this default
-# set. "reasoning" and "system_messages" are the two classes it leaves out, so
-# name them here to search a model's private reasoning or the provider's own
-# control messages. Use enabled = false to stop indexing entirely; an empty list
-# means the default set rather than nothing.
-indexed_content = ["text", "tool_call", "tool_command", "tool_input", "tool_output"]
+# set, which is the chat turns plus the half of a tool call that says what was
+# run. It leaves out "reasoning", "system_messages", and "tool_output", so name
+# those here to search a model's private reasoning, the provider's own control
+# messages, or what tools returned. Use enabled = false to stop indexing
+# entirely; an empty list means the default set rather than nothing.
+indexed_content = ["text", "tool_call", "tool_command", "tool_input"]
 
 [logging.rotation]
 enabled = true

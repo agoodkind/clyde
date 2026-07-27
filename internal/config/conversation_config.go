@@ -31,7 +31,11 @@ const (
 	IndexedContentToolCommand IndexedContentClass = "tool_command"
 	// IndexedContentToolInput is the tool call's JSON arguments.
 	IndexedContentToolInput IndexedContentClass = "tool_input"
-	// IndexedContentToolOutput is what a tool returned.
+	// IndexedContentToolOutput is what a tool returned. It is absent from the
+	// default set because it is by far the largest class, 67.7% of the bytes
+	// offered before this default, and it is the weakest to retrieve: a result's
+	// serialization envelope makes up much of what its vector encodes, while the
+	// command and its arguments carry the searchable meaning.
 	IndexedContentToolOutput IndexedContentClass = "tool_output"
 	// IndexedContentSystemMessages is the provider's own system and control
 	// messages. It is absent from the default set, and the transcript loader has
@@ -41,8 +45,9 @@ const (
 )
 
 // DefaultIndexedContent is the content offered to the engine when the config
-// names no classes. Reasoning and system messages are absent, so a fresh install
-// embeds what a person would search for and nothing else.
+// names no classes: the chat turns, and the half of a tool call that says what
+// was run. Reasoning, system messages, and tool output are absent, so a fresh
+// install embeds what a person would search for and nothing else.
 //
 // It is exported because the policy resolver repeats this default for a Config
 // built as a struct literal, which never passes through the loader.
@@ -52,7 +57,6 @@ func DefaultIndexedContent() []IndexedContentClass {
 		IndexedContentToolCall,
 		IndexedContentToolCommand,
 		IndexedContentToolInput,
-		IndexedContentToolOutput,
 	}
 }
 
