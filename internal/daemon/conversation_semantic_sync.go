@@ -141,6 +141,10 @@ type conversationSemanticSyncWorker struct {
 	// freshness receives the latest pass stats so the control server can report
 	// index sync state at query time. Nil disables publishing.
 	freshness *conversationSemanticFreshness
+	// contentKinds names the content this feeder offers. It is resolved once at
+	// daemon startup from the export surface's selector vocabulary, so a change
+	// takes effect on the next daemon generation.
+	contentKinds conversation.ContentKindSet
 }
 
 type conversationSemanticSyncStats struct {
@@ -149,7 +153,13 @@ type conversationSemanticSyncStats struct {
 	sentConversations int
 	documents         int
 	deferred          int
-	failed            int
+	// failed counts conversations whose transcript could not be loaded or
+	// projected. It is content lost, so nothing else may be folded into it.
+	failed int
+	// policySkipped counts messages the content policy withheld because every
+	// indexed class was empty for them. It is deliberate, so it is reported
+	// beside failed rather than inside it.
+	policySkipped int
 }
 
 // installConversationSemanticSyncStop creates the feeder's worker context and
@@ -203,6 +213,7 @@ func startConversationSemanticSync(
 	collectionID string,
 	freshness *conversationSemanticFreshness,
 	group *livetrack.Group,
+	contentKinds conversation.ContentKindSet,
 ) bool {
 	if resolveClient == nil {
 		return false
@@ -219,7 +230,7 @@ func startConversationSemanticSync(
 		)
 		return false
 	}
-	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log)
+	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log, contentKinds)
 	worker.freshness = freshness
 	go func() {
 		defer close(done)
@@ -242,6 +253,7 @@ func newConversationSemanticSyncWorker(
 	resolveClient conversationSemanticClientResolver,
 	collectionID string,
 	log *slog.Logger,
+	contentKinds conversation.ContentKindSet,
 ) *conversationSemanticSyncWorker {
 	if log == nil {
 		log = slog.Default()
@@ -257,6 +269,7 @@ func newConversationSemanticSyncWorker(
 		emptyDelivered: make(map[string]string),
 		now:            time.Now,
 		freshness:      nil,
+		contentKinds:   contentKinds,
 	}
 }
 
@@ -322,7 +335,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	}
 
 	manifest, recordsByID, stampsByID := w.buildManifest(stampedRecords)
-	stats := conversationSemanticSyncStats{manifest: len(manifest), needed: 0, sentConversations: 0, documents: 0, deferred: 0, failed: 0}
+	stats := conversationSemanticSyncStats{manifest: len(manifest), needed: 0, sentConversations: 0, documents: 0, deferred: 0, failed: 0, policySkipped: 0}
 	if len(manifest) == 0 {
 		w.logPass(ctx, stats)
 		return nil
@@ -484,22 +497,28 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			stats.deferred++
 			continue
 		}
-		conversationDocs, loadErr := w.loadDocs(ctx, record)
+		built, loadErr := w.loadDocs(ctx, record)
 		if loadErr != nil {
 			stats.failed++
 			continue
 		}
-		if len(conversationDocs) == 0 {
+		// A message the content policy withheld is counted apart from failed and
+		// deferred, because it is the policy working rather than content lost.
+		stats.policySkipped += built.PolicySkipped
+		if len(built.Docs) == 0 {
 			// The conversation rendered no deliverable documents, so the engine
 			// can never mark it satisfied and would keep listing it as needed.
 			// Record its fingerprint so the next manifest omits it until its
 			// content changes, and do not count it as a delivered conversation.
+			// A conversation every one of whose messages the policy withheld
+			// lands here too, which is why the policy feeds this path rather
+			// than bypassing it.
 			if stamp, stamped := stampsByID[conversationID]; stamped {
 				w.emptyDelivered[conversationID] = stamp.Fingerprint()
 			}
 			continue
 		}
-		docs = append(docs, conversationDocs...)
+		docs = append(docs, built.Docs...)
 		sentConversations++
 		w.deliveryCursor = conversationID
 	}
@@ -586,9 +605,12 @@ func isConflictingActiveJob(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "conflicting active job")
 }
 
+// logPass records one pass. policy_skipped is reported beside failed rather than
+// folded into it, and a pass that withheld anything is logged at Info, so a
+// feeder skipping most of a corpus is visible rather than buried at Debug.
 func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conversationSemanticSyncStats) {
 	w.freshness.publish(stats)
-	if stats.sentConversations > 0 || stats.failed > 0 {
+	if stats.sentConversations > 0 || stats.failed > 0 || stats.policySkipped > 0 {
 		w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -598,6 +620,7 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 			"documents", stats.documents,
 			"deferred", stats.deferred,
 			"failed", stats.failed,
+			"policy_skipped", stats.policySkipped,
 		)
 		return
 	}
@@ -610,59 +633,135 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 	)
 }
 
-// SemanticConversationLoadOptions returns the transcript load options for
-// semantic document production.
-func SemanticConversationLoadOptions() conversation.LoadOptions {
+// SemanticConversationLoadOptions maps the selected content kinds onto the
+// parser's load gate, so a kind nobody selected is never parsed rather than
+// parsed and discarded. Three of the eight kinds have a matching field; the rest
+// are applied when the documents are projected.
+func SemanticConversationLoadOptions(kinds conversation.ContentKindSet) conversation.LoadOptions {
 	return conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    true,
+		IncludeSystemPrompts:  kinds.Has(conversation.ContentKindSystemPrompts),
+		IncludeSystemMessages: kinds.Has(conversation.ContentKindSystemMessages),
+		IncludeToolOutputs:    kinds.Has(conversation.ContentKindToolOutputs),
 	}
 }
 
+// SemanticConversationDocuments is one conversation's projection: the documents
+// offered to the engine, and how many messages the content policy withheld.
+//
+// The two counts stay separate all the way to the caller because they mean
+// opposite things. A withheld message is the policy working, while a conversation
+// that fails to load is content lost, and a counter that mixed them would hide
+// real loss behind routine policy.
+type SemanticConversationDocuments struct {
+	Docs          []semsearch.SemDoc
+	PolicySkipped int
+}
+
 // BuildSemanticConversationDocuments projects loaded transcript messages into
-// the document shape sent to lm-semantic-search.
-func BuildSemanticConversationDocuments(record conversation.Record, messages []transcript.Message) ([]semsearch.SemDoc, error) {
+// the document shape sent to lm-semantic-search, keeping only the content the
+// policy names.
+//
+// A message whose every indexed class is empty is not offered at all. That rule
+// is derived rather than configured: there is nothing to retrieve, so there is
+// no setting under which offering it would be right. It is deliberately not the
+// same as "the text is empty", because a turn carrying only a tool call or only
+// reasoning has no text and still has content, and skipping on empty text would
+// discard it.
+//
+// A skipped message keeps its index rather than renumbering the ones after it.
+// The message index is a position in this same loaded slice, and the search path
+// feeds an engine hit's index back into the loader as a position, so renumbering
+// would silently shift every later hit's context window.
+func BuildSemanticConversationDocuments(
+	record conversation.Record,
+	messages []transcript.Message,
+	kinds conversation.ContentKindSet,
+) (SemanticConversationDocuments, error) {
 	parentConversationID := ""
 	if derivedParentID, ok := conversation.ParentConversationID(record); ok {
 		parentConversationID = derivedParentID
 	}
-	docs := make([]semsearch.SemDoc, 0, len(messages))
+	built := SemanticConversationDocuments{
+		Docs:          make([]semsearch.SemDoc, 0, len(messages)),
+		PolicySkipped: 0,
+	}
 	for i, message := range messages {
 		if i > int(maxSemanticMessageIndex) {
-			return nil, fmt.Errorf("message index %d exceeds semantic search int32 limit", i)
+			return SemanticConversationDocuments{Docs: nil, PolicySkipped: 0},
+				fmt.Errorf("message index %d exceeds semantic search int32 limit", i)
 		}
-		docs = append(docs, semsearch.SemDoc{
+		text := ""
+		if kinds.Has(conversation.ContentKindChat) {
+			// Replace invalid UTF-8 so the protobuf upsert never fails to marshal
+			// on a transcript byte sequence the encoder rejects (one codex doc
+			// with invalid UTF-8 used to break the whole batch).
+			text = strings.ToValidUTF8(message.Text, "")
+		}
+		thinking := ""
+		if kinds.Has(conversation.ContentKindThinking) {
+			thinking = strings.ToValidUTF8(message.Thinking, "")
+		}
+		tools := semanticToolCalls(message.Tools, kinds)
+		if text == "" && thinking == "" && len(tools) == 0 {
+			built.PolicySkipped++
+			continue
+		}
+		built.Docs = append(built.Docs, semsearch.SemDoc{
 			ConversationID:       record.ID,
 			ParentConversationID: parentConversationID,
 			MessageIndex:         int32(i),
 			Role:                 message.Role,
 			TimestampUnix:        message.Timestamp.Unix(),
-			// Replace invalid UTF-8 so the protobuf upsert never fails to marshal
-			// on a transcript byte sequence the encoder rejects (one codex doc
-			// with invalid UTF-8 used to break the whole batch).
-			Text:          strings.ToValidUTF8(message.Text, ""),
-			Tools:         semanticToolCalls(message.Tools),
-			Thinking:      strings.ToValidUTF8(message.Thinking, ""),
-			WorkspaceRoot: record.WorkspaceRoot,
-			Archived:      record.Archived,
+			Text:                 text,
+			Tools:                tools,
+			Thinking:             thinking,
+			WorkspaceRoot:        record.WorkspaceRoot,
+			Archived:             record.Archived,
 		})
 	}
-	return docs, nil
+	return built, nil
 }
 
-func semanticToolCalls(tools []transcript.ToolCall) []semsearch.SemToolCall {
+// semanticToolCalls projects a message's tool calls at the selected detail level.
+//
+// The three tool kinds are nested rather than parallel, and
+// [conversation.NewContentKindSet] collapses them, so exactly one applies: the
+// summary level carries the tool's name alone, the call level adds the command
+// and the arguments, and the output level adds what the tool returned. Selecting
+// no tool kind drops the calls entirely.
+//
+// The projection stays structured rather than rendering to text, because the
+// engine derives a separate chunk family from each field, including the distilled
+// row it builds by decomposing the command into program names and file paths.
+// Flattening the call into prose would collapse all of that into the message's
+// own row and lose the distilled one.
+func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKindSet) []semsearch.SemToolCall {
+	summariesOnly := kinds.Has(conversation.ContentKindToolSummaries)
+	withArguments := kinds.Has(conversation.ContentKindToolCalls)
+	withOutput := kinds.Has(conversation.ContentKindToolOutputs)
+	if !summariesOnly && !withArguments && !withOutput {
+		return nil
+	}
 	out := make([]semsearch.SemToolCall, 0, len(tools))
 	for _, tool := range tools {
-		command, langHint := deriveToolCommandAndLang(tool.Name, tool.Input)
-		out = append(out, semsearch.SemToolCall{
+		projected := semsearch.SemToolCall{
 			Name:      tool.Name,
-			InputJSON: string(tool.Input.Raw),
-			Command:   command,
-			LangHint:  langHint,
-			Output:    tool.Output,
+			InputJSON: "",
+			Command:   "",
+			LangHint:  "",
+			Output:    "",
 			IsError:   tool.IsError,
-		})
+		}
+		if withArguments || withOutput {
+			command, langHint := deriveToolCommandAndLang(tool.Name, tool.Input)
+			projected.Command = command
+			projected.LangHint = langHint
+			projected.InputJSON = string(tool.Input.Raw)
+		}
+		if withOutput {
+			projected.Output = tool.Output
+		}
+		out = append(out, projected)
 	}
 	return out
 }
@@ -688,8 +787,9 @@ func deriveToolCommandAndLang(name string, input transcript.ToolInputJSON) (stri
 	return "", "json"
 }
 
-func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) ([]semsearch.SemDoc, error) {
-	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions())
+func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) (SemanticConversationDocuments, error) {
+	empty := SemanticConversationDocuments{Docs: nil, PolicySkipped: 0}
+	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentKinds))
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
 			"concern", "conversation.semantic",
@@ -698,13 +798,13 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 			"provider", record.Provider.String(),
 			"err", err,
 		)
-		return nil, fmt.Errorf("load conversation messages for %s: %w", record.ID, err)
+		return empty, fmt.Errorf("load conversation messages for %s: %w", record.ID, err)
 	}
-	docs, err := BuildSemanticConversationDocuments(record, messages)
+	built, err := BuildSemanticConversationDocuments(record, messages, w.contentKinds)
 	if err != nil {
-		return nil, err
+		return empty, err
 	}
-	return docs, nil
+	return built, nil
 }
 
 func semanticSyncContextDone(ctx context.Context) bool {

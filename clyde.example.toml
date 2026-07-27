@@ -28,6 +28,14 @@ include_subagent_conversations = false
 enabled = false
 socket_path = ""
 collection_id = "clyde-conversations"
+# Content kinds offered to the search engine, using the same selector names the
+# export surface accepts. Omit the key for this default, which is the chat turns
+# plus tool calls without their results. The three tool kinds are nested rather
+# than parallel: "tools" is names only, "tool_calls" adds the command and
+# arguments, and "tool_outputs" adds what the tool returned. Name "thinking",
+# "system_messages", or "tool_outputs" here to index those too. Use
+# enabled = false to stop indexing entirely; an empty list means the default.
+indexed_content = ["chat", "tool_calls"]
 
 [logging.rotation]
 enabled = true

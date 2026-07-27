@@ -12,8 +12,20 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
+	daemonsvc "goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/transcript"
 )
+
+// backfillTestContentKinds is the shipped default content selection, so the
+// backfill tests project documents exactly as the backfill command does.
+func backfillTestContentKinds(t *testing.T) conversation.ContentKindSet {
+	t.Helper()
+	kinds, err := daemonsvc.SemanticContentKinds(config.NewConfigWithDefaults().Conversation.Semantic)
+	if err != nil {
+		t.Fatalf("resolve default content kinds: %v", err)
+	}
+	return kinds
+}
 
 func testBackfillRecord(id, workspace string, archived bool) conversation.Record {
 	return conversation.Record{
@@ -321,7 +333,7 @@ func TestBuildBackfillConversationDocumentsSkipsLoadFailure(t *testing.T) {
 		testDocumentStampedRecord("claude:three", 30),
 	}
 
-	docs, manifest, skipped := buildBackfillConversationDocuments(context.Background(), &index, stampedRecords)
+	docs, manifest, skipped := buildBackfillConversationDocuments(context.Background(), &index, stampedRecords, backfillTestContentKinds(t))
 
 	if skipped != 1 {
 		t.Fatalf("skipped = %d, want 1", skipped)
@@ -377,9 +389,11 @@ func TestBackfillConversationDocumentsDryRunSelectsLimit(t *testing.T) {
 	if strings.Join(index.loadedIDs, ",") != "claude:one,claude:two" {
 		t.Fatalf("loaded ids = %v, want first two records", index.loadedIDs)
 	}
+	// The backfill reads under the same content policy the daemon feeder runs, so
+	// it does not read tool outputs the policy would withhold anyway.
 	for _, opts := range index.loadOptions {
-		if !opts.IncludeToolOutputs {
-			t.Fatalf("load options = %+v, want IncludeToolOutputs true", opts)
+		if opts.IncludeToolOutputs {
+			t.Fatalf("load options = %+v, want IncludeToolOutputs false under the default content policy", opts)
 		}
 	}
 	if dialCalled {

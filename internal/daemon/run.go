@@ -128,13 +128,9 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	if runtime.semantic != nil {
 		resolveSemanticClient = runtime.semantic.syncClient
 	}
-	// Start the feeder before the control server serves. Its stop is installed on
-	// the lifecycle group inside the start call, ahead of the goroutine launch, so
-	// a ReloadDaemon or RebindDaemon RPC cannot begin the workers-phase drain
-	// while the feeder is running unowned. Reload and shutdown then both cancel
-	// and wait for the feeder before the semantic connection registry drains the
-	// engine connection it feeds.
-	startConversationSemanticSync(ctx, log, conversationIndex, resolveSemanticClient, cfg.Conversation.Semantic.CollectionID, semanticFreshness, runtime.group)
+	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, resolveSemanticClient, semanticFreshness, runtime.group); err != nil {
+		return err
+	}
 
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
