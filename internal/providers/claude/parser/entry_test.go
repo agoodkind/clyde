@@ -235,8 +235,8 @@ func TestDecodeTranscriptEntryReadsRecordWithoutNewerFields(t *testing.T) {
 	if entry.UUID != "entry-10" || entry.ParentUUID != "parent-10" || entry.Type != EntryTypeUser {
 		t.Fatalf("core fields = %q/%q/%q, want entry-10/parent-10/user", entry.UUID, entry.ParentUUID, entry.Type)
 	}
-	if !entry.Timestamp.Equal(time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)) {
-		t.Fatalf("timestamp = %s, want 2024-01-02T03:04:05Z", entry.Timestamp)
+	if !entry.Timestamp.Time.Equal(time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)) {
+		t.Fatalf("timestamp = %s, want 2024-01-02T03:04:05Z", entry.Timestamp.Time)
 	}
 	if entry.ToolUseResult.Kind != ToolUseResultKindAbsent {
 		t.Fatalf("tool use result kind = %q, want absent", entry.ToolUseResult.Kind)
@@ -408,7 +408,7 @@ func TestDecodeTranscriptEntryReadsSessionControlRecords(t *testing.T) {
 	if backup.Version != 3 || backup.BackupFileName != "" {
 		t.Fatalf("backup = %+v, want version 3 with a null backup file name", backup)
 	}
-	if backup.BackupTime.IsZero() {
+	if backup.BackupTime.Time.IsZero() {
 		t.Fatalf("backup time is zero, want the parsed 2026-07-24T19:06:44.845Z")
 	}
 
@@ -465,10 +465,17 @@ func TestDecodeTranscriptEntryReadsUserTurnProvenance(t *testing.T) {
 	}
 }
 
-func TestDecodeTranscriptEntryRejectsNonJSONLine(t *testing.T) {
+// TestDecodeTranscriptEntryRejectsMalformedJSONLine covers the syntax rule
+// separately from the object rule: the line opens as an object, so it clears
+// the object gate and fails only because the JSON never closes. A truncated
+// line is what a half-written transcript record looks like on disk.
+func TestDecodeTranscriptEntryRejectsMalformedJSONLine(t *testing.T) {
 	t.Parallel()
-	if _, err := DecodeTranscriptEntry([]byte("not json at all")); err == nil {
-		t.Fatalf("decode error = nil, want a failure for a line that is not JSON")
+	lines := []string{`{"type":"user","uuid":"entry-20"`, `{"type":}`, `not json at all`}
+	for _, line := range lines {
+		if _, err := DecodeTranscriptEntry([]byte(line)); err == nil {
+			t.Errorf("decode error = nil for %s, want a failure for malformed JSON", line)
+		}
 	}
 }
 

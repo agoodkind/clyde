@@ -1,11 +1,11 @@
 package parser
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 )
 
 // TranscriptEntry is clyde's model of one line of a Claude Code transcript
@@ -21,6 +21,10 @@ type TranscriptEntry struct {
 	// agent, skill, plugin, or MCP tool produced this turn.
 	TurnAttribution
 
+	// Decode reports how completely this record decoded. It is filled by
+	// [DecodeTranscriptEntry] rather than read from the line.
+	Decode EntryDecode `json:"-"`
+
 	// Identity and threading.
 	UUID              string       `json:"uuid"`
 	ParentUUID        string       `json:"parentUuid"`
@@ -28,7 +32,10 @@ type TranscriptEntry struct {
 	LeafUUID          string       `json:"leafUuid"`
 	Type              EntryType    `json:"type"`
 	Subtype           EntrySubtype `json:"subtype"`
-	Timestamp         time.Time    `json:"timestamp"`
+	Timestamp         EntryTime    `json:"timestamp"`
+	// IsSidechain marks a record Claude Code wrote for a dispatched agent
+	// rather than for the user's own session.
+	IsSidechain bool `json:"isSidechain"`
 
 	// Session and environment.
 	SessionID string `json:"sessionId"`
@@ -155,23 +162,63 @@ type TranscriptEntry struct {
 // Code releases still decode against the current model.
 //
 // A field whose JSON type does not match the model is logged and tolerated
-// rather than failing the line: encoding/json still fills the rest of the
-// entry, and losing a whole turn over one unexpected field would drop
-// transcript content clyde can otherwise read. Only a line that is not a JSON
-// object at all fails.
+// rather than failing the line, because losing a whole turn over one unexpected
+// field would drop transcript content clyde can otherwise read. The returned
+// entry's Decode says whether that happened and names the fields, so a
+// tolerated record is never mistaken for a whole one. A line that is not a JSON
+// object, and a line whose JSON is malformed, both fail.
+//
+// The tolerance holds for every field because no unmarshaler in the entry tree
+// returns an error: each one records its own outcome instead. encoding/json
+// aborts the surrounding object when a nested unmarshaler returns an error, so
+// a returned error would cost every key Claude wrote after that field.
 func DecodeTranscriptEntry(line []byte) (TranscriptEntry, error) {
 	var entry TranscriptEntry
+	entry.Decode = emptyEntryDecode()
+	if !isJSONObject(line) {
+		slog.Warn("providers.claude.parser.entry_not_an_object", "concern", concern, "component", "claude")
+		return entry, errors.New("decode claude transcript entry: line is not a JSON object")
+	}
 	err := json.Unmarshal(line, &entry)
 	if err == nil {
+		entry.Decode = decodeReport(entry.partialFields())
 		return entry, nil
 	}
+	// encoding/json reports a field whose type does not match by saving the
+	// error and decoding the remaining keys, and it reports malformed JSON by
+	// stopping where it stands. Re-scanning the line separates the two without
+	// reading the error, and only runs on the failing line.
+	if !json.Valid(line) {
+		slog.Warn("providers.claude.parser.entry_decode_failed", "concern", concern, "component", "claude", "err", err)
+		return entry, fmt.Errorf("decode claude transcript entry: %w", err)
+	}
+	fields := entry.partialFields()
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) {
-		slog.Debug("providers.claude.parser.entry_field_type_mismatch",
-			"concern", concern, "component", "claude",
-			"field", typeErr.Field, "value", typeErr.Value, "err", err)
-		return entry, nil
+		fields = append(fields, typeErr.Field)
 	}
-	slog.Warn("providers.claude.parser.entry_decode_failed", "concern", concern, "component", "claude", "err", err)
-	return entry, fmt.Errorf("decode claude transcript entry: %w", err)
+	entry.Decode = EntryDecode{Outcome: EntryDecodePartial, Fields: fields}
+	slog.Debug("providers.claude.parser.entry_field_type_mismatch",
+		"concern", concern, "component", "claude",
+		"fields", fields, "err", err)
+	return entry, nil
+}
+
+// isJSONObject reports whether line opens a JSON object. A transcript line that
+// is a JSON array, string, number, boolean, or null carries no record, so it
+// fails rather than decoding to an entry with every field zero.
+func isJSONObject(line []byte) bool {
+	trimmed := bytes.TrimSpace(line)
+	return len(trimmed) > 0 && trimmed[0] == '{'
+}
+
+// decodeReport renders the fields a record decoded only partially into its
+// decode report.
+func decodeReport(fields []string) EntryDecode {
+	if len(fields) == 0 {
+		return emptyEntryDecode()
+	}
+	slog.Debug("providers.claude.parser.entry_field_type_mismatch",
+		"concern", concern, "component", "claude", "fields", fields)
+	return EntryDecode{Outcome: EntryDecodePartial, Fields: fields}
 }
