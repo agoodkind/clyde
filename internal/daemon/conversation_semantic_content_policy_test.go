@@ -13,10 +13,10 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// loadPolicyFromTOML writes a config file and loads it the way the daemon does,
-// so these tests assert what an operator's config actually produces rather than
-// what a hand-built policy struct would.
-func loadPolicyFromTOML(t *testing.T, body string) (SemanticContentPolicy, error) {
+// loadKindsFromTOML writes a config file and resolves it the way the daemon
+// does, so these tests assert what an operator's config actually produces rather
+// than what a hand-built set would.
+func loadKindsFromTOML(t *testing.T, body string) (conversation.ContentKindSet, error) {
 	t.Helper()
 	configRoot := t.TempDir()
 	configDir := filepath.Join(configRoot, "clyde")
@@ -29,9 +29,9 @@ func loadPolicyFromTOML(t *testing.T, body string) (SemanticContentPolicy, error
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
-		return SemanticContentPolicy{}, err
+		return conversation.ContentKindSet{}, err
 	}
-	return SemanticContentPolicyFromConfig(cfg.Conversation.Semantic), nil
+	return SemanticContentKinds(cfg.Conversation.Semantic)
 }
 
 func policyTestRecord() conversation.Record {
@@ -77,21 +77,26 @@ func policyTestMessages() []transcript.Message {
 	}
 }
 
-// TestDefaultConfigWithholdsReasoningOnly proves what a fresh install indexes:
-// the reasoning-only turn is withheld because reasoning is not a default class
-// and the turn carries nothing else, while the tool-only turn is still offered
+// TestDefaultConfigSelectsChatAndToolCalls proves what a fresh install indexes.
+// The reasoning-only turn is withheld because reasoning is not a default kind and
+// the turn carries nothing else, while the tool-only turn is still offered
 // because a tool call is content even with no text.
-func TestDefaultConfigWithholdsReasoningOnly(t *testing.T) {
-	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+func TestDefaultConfigSelectsChatAndToolCalls(t *testing.T) {
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
+	if !kinds.Has(conversation.ContentKindChat) || !kinds.Has(conversation.ContentKindToolCalls) {
+		t.Fatalf("default kinds = %v, want chat and tool_calls", kinds.Kinds())
+	}
+	if kinds.Has(conversation.ContentKindThinking) || kinds.Has(conversation.ContentKindToolOutputs) {
+		t.Fatalf("default kinds = %v, want reasoning and tool outputs absent", kinds.Kinds())
+	}
 
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), policy)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents: %v", err)
 	}
-
 	if built.PolicySkipped != 1 {
 		t.Fatalf("PolicySkipped = %d, want 1 (the reasoning-only turn)", built.PolicySkipped)
 	}
@@ -100,58 +105,16 @@ func TestDefaultConfigWithholdsReasoningOnly(t *testing.T) {
 	}
 	for _, doc := range built.Docs {
 		if doc.Thinking != "" {
-			t.Fatalf("document at index %d carries reasoning %q under the default policy", doc.MessageIndex, doc.Thinking)
+			t.Fatalf("document %d carries reasoning %q under the default", doc.MessageIndex, doc.Thinking)
 		}
-	}
-	toolDocs := 0
-	for _, doc := range built.Docs {
-		if len(doc.Tools) > 0 {
-			toolDocs++
-			if doc.Tools[0].Command != "go test ./..." {
-				t.Fatalf("tool command = %q, want the command the default policy indexes", doc.Tools[0].Command)
+		for _, tool := range doc.Tools {
+			if tool.Command != "go test ./..." {
+				t.Fatalf("tool command = %q, want the command the default indexes", tool.Command)
 			}
-			if doc.Tools[0].Output != "" {
-				t.Fatalf("tool output = %q, want empty; tool_output is not a default class", doc.Tools[0].Output)
+			if tool.Output != "" {
+				t.Fatalf("tool output = %q, want empty; tool_outputs is not a default kind", tool.Output)
 			}
 		}
-	}
-	if toolDocs != 1 {
-		t.Fatalf("documents carrying tools = %d, want 1", toolDocs)
-	}
-}
-
-// TestDefaultConfigDoesNotEvenReadToolOutput proves the largest excluded class
-// is dropped at the transcript loader rather than after projection, so a corpus
-// where tool results dominate is never paid for in the first place.
-func TestDefaultConfigDoesNotEvenReadToolOutput(t *testing.T) {
-	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\n")
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if SemanticConversationLoadOptions(policy).IncludeToolOutputs {
-		t.Fatal("default load options read tool outputs; tool_output is opt-in")
-	}
-
-	optedIn, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"text\", \"tool_call\", \"tool_output\"]\n")
-	if err != nil {
-		t.Fatalf("load opted-in config: %v", err)
-	}
-	if !SemanticConversationLoadOptions(optedIn).IncludeToolOutputs {
-		t.Fatal("naming tool_output did not reach the transcript loader")
-	}
-
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), optedIn)
-	if err != nil {
-		t.Fatalf("build documents: %v", err)
-	}
-	found := false
-	for _, doc := range built.Docs {
-		if len(doc.Tools) > 0 && doc.Tools[0].Output != "" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("naming tool_output did not carry the result into the document")
 	}
 }
 
@@ -160,12 +123,12 @@ func TestDefaultConfigDoesNotEvenReadToolOutput(t *testing.T) {
 // the transcript loader, so a withheld message must leave a gap rather than
 // renumber the turns after it.
 func TestSkippedMessageKeepsTheIndexOfEveryLaterMessage(t *testing.T) {
-	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), policy)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents: %v", err)
 	}
@@ -178,35 +141,31 @@ func TestSkippedMessageKeepsTheIndexOfEveryLaterMessage(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("message indexes = %v, want %v", got, want)
 	}
+	messages := policyTestMessages()
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("message indexes = %v, want %v; index 1 was withheld and must leave a gap", got, want)
 		}
-	}
-	messages := policyTestMessages()
-	for _, doc := range built.Docs {
-		if messages[doc.MessageIndex].Role != doc.Role {
-			t.Fatalf("document %d has role %q but the loader's message at that position has %q", doc.MessageIndex, doc.Role, messages[doc.MessageIndex].Role)
+		if messages[got[i]].Role != built.Docs[i].Role {
+			t.Fatalf("document %d has role %q but the loader's message at that position has %q", got[i], built.Docs[i].Role, messages[got[i]].Role)
 		}
 	}
 }
 
-// TestNamingReasoningOffersTheReasoningOnlyTurn proves the opt-in works: naming
-// reasoning makes the previously withheld turn deliverable, carrying its
-// reasoning text.
-func TestNamingReasoningOffersTheReasoningOnlyTurn(t *testing.T) {
-	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"text\", \"reasoning\", \"tool_call\", \"tool_input\", \"tool_output\"]\n")
+// TestNamingThinkingOffersTheReasoningOnlyTurn proves the opt-in works, using the
+// export surface's own selector name.
+func TestNamingThinkingOffersTheReasoningOnlyTurn(t *testing.T) {
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \"thinking\", \"tool_calls\"]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), policy)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents: %v", err)
 	}
-
 	if built.PolicySkipped != 0 {
-		t.Fatalf("PolicySkipped = %d, want 0 once reasoning is indexed", built.PolicySkipped)
+		t.Fatalf("PolicySkipped = %d, want 0 once thinking is indexed", built.PolicySkipped)
 	}
 	if len(built.Docs) != 4 {
 		t.Fatalf("documents = %d, want 4", len(built.Docs))
@@ -222,142 +181,130 @@ func TestNamingReasoningOffersTheReasoningOnlyTurn(t *testing.T) {
 	}
 }
 
-// TestWithholdingToolOutputKeepsTheCallAndDropsTheResult proves a finer class
-// empties its own field without discarding the call it belongs to, so the tool
-// stays searchable by name and arguments.
-func TestWithholdingToolOutputKeepsTheCallAndDropsTheResult(t *testing.T) {
-	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"text\", \"tool_call\", \"tool_input\"]\n")
+// projectedToolAt resolves one selector and returns the tool call the projection
+// produced, so the nested-level assertions read against real config input.
+func projectedToolAt(t *testing.T, selector string) (int, string, string, string, bool) {
+	t.Helper()
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \""+selector+"\"]\n")
 	if err != nil {
-		t.Fatalf("load config: %v", err)
+		t.Fatalf("load config for %q: %v", selector, err)
 	}
-
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), policy)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
-		t.Fatalf("build documents: %v", err)
+		t.Fatalf("build documents for %q: %v", selector, err)
 	}
-
-	found := false
 	for _, doc := range built.Docs {
-		if len(doc.Tools) == 0 {
-			continue
-		}
-		found = true
-		if doc.Tools[0].Name != "Bash" {
-			t.Fatalf("tool name = %q, want Bash", doc.Tools[0].Name)
-		}
-		if doc.Tools[0].Output != "" {
-			t.Fatalf("tool output = %q, want empty when tool_output is not indexed", doc.Tools[0].Output)
-		}
-		if doc.Tools[0].Command != "" {
-			t.Fatalf("tool command = %q, want empty when tool_command is not indexed", doc.Tools[0].Command)
-		}
-		if !strings.Contains(doc.Tools[0].InputJSON, "go test") {
-			t.Fatalf("tool input = %q, want the call arguments", doc.Tools[0].InputJSON)
+		if len(doc.Tools) > 0 {
+			tool := doc.Tools[0]
+			return built.PolicySkipped, tool.Name, tool.InputJSON, tool.Output, true
 		}
 	}
+	return built.PolicySkipped, "", "", "", false
+}
+
+// TestToolKindsAreNestedLevels proves the three tool kinds behave as one nested
+// ladder rather than as parallel switches: summaries carry the name alone, calls
+// add the arguments, and outputs add the result. That is the property
+// collapseToolContentKinds encodes, applied to the projection.
+func TestToolKindsAreNestedLevels(t *testing.T) {
+	_, name, input, output, found := projectedToolAt(t, "tools")
 	if !found {
-		t.Fatal("no document carried the tool call; withholding tool_output must not drop the call")
+		t.Fatal("summaries level dropped the tool call entirely")
+	}
+	if name != "Bash" {
+		t.Fatalf("summaries level name = %q, want Bash", name)
+	}
+	if input != "" || output != "" {
+		t.Fatalf("summaries level carried arguments %q or output %q", input, output)
+	}
+
+	_, _, input, output, found = projectedToolAt(t, "tool_calls")
+	if !found {
+		t.Fatal("calls level dropped the tool call entirely")
+	}
+	if !strings.Contains(input, "go test") {
+		t.Fatalf("calls level arguments = %q, want the call arguments", input)
+	}
+	if output != "" {
+		t.Fatalf("calls level output = %q, want empty", output)
+	}
+
+	_, _, input, output, found = projectedToolAt(t, "tool_outputs")
+	if !found {
+		t.Fatal("outputs level dropped the tool call entirely")
+	}
+	if output == "" {
+		t.Fatal("outputs level did not carry the tool result")
+	}
+	if !strings.Contains(input, "go test") {
+		t.Fatal("outputs level dropped the arguments the calls level carries")
 	}
 }
 
-// TestToolCallSurvivesEveryFinerClassBeingWithheld covers the shape that would
-// otherwise produce an empty stored row: a tool call whose command, arguments
-// and result are all withheld still carries its name, which is what the engine
-// derives the call's own row from, so the message keeps an indexed class and is
-// still delivered.
-func TestToolCallSurvivesEveryFinerClassBeingWithheld(t *testing.T) {
-	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"tool_call\"]\n")
+// TestSelectingNoToolKindDropsTheCall proves the ladder's bottom rung: a
+// selection naming no tool kind carries no tool calls, and the tool-only turn is
+// then withheld because nothing it holds is indexed.
+func TestSelectingNoToolKindDropsTheCall(t *testing.T) {
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\"]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), policy)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents: %v", err)
 	}
-
-	if len(built.Docs) != 1 {
-		t.Fatalf("documents = %d, want 1 (only the turn carrying a tool call)", len(built.Docs))
-	}
-	tool := built.Docs[0].Tools[0]
-	if tool.Name != "Bash" {
-		t.Fatalf("tool name = %q, want Bash; the name is what keeps the call retrievable", tool.Name)
-	}
-	if tool.Command != "" || tool.InputJSON != "" || tool.Output != "" {
-		t.Fatalf("tool = %+v, want only the name retained", tool)
-	}
-}
-
-// TestWithholdingToolCallDropsTheWholeCall proves the coarse class removes the
-// call outright, because the engine derives the call's own row from the call
-// being present at all.
-func TestWithholdingToolCallDropsTheWholeCall(t *testing.T) {
-	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"text\"]\n")
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), policy)
-	if err != nil {
-		t.Fatalf("build documents: %v", err)
-	}
-
 	for _, doc := range built.Docs {
 		if len(doc.Tools) != 0 {
-			t.Fatalf("document %d still carries tools with only text indexed", doc.MessageIndex)
+			t.Fatalf("document %d carries tools with only chat selected", doc.MessageIndex)
 		}
 	}
-	// The reasoning-only turn and the tool-only turn both go, leaving the two
-	// turns that carry text.
 	if built.PolicySkipped != 2 {
-		t.Fatalf("PolicySkipped = %d, want 2", built.PolicySkipped)
-	}
-	if len(built.Docs) != 2 {
-		t.Fatalf("documents = %d, want 2", len(built.Docs))
+		t.Fatalf("PolicySkipped = %d, want 2 (the reasoning-only and tool-only turns)", built.PolicySkipped)
 	}
 }
 
-// TestUnknownContentClassFailsTheLoad proves a typo is rejected rather than
-// silently narrowing the corpus, which is how an operator would discover they
-// had stopped indexing something.
-func TestUnknownContentClassFailsTheLoad(t *testing.T) {
-	_, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"text\", \"resoning\"]\n")
+// TestUnknownContentKindFailsResolution proves a typo is rejected by the export
+// surface's own validator rather than silently narrowing the corpus.
+func TestUnknownContentKindFailsResolution(t *testing.T) {
+	_, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \"resoning\"]\n")
 	if err == nil {
-		t.Fatal("load succeeded with an unknown content class; a typo must fail the load")
+		t.Fatal("resolution succeeded with an unknown content kind; a typo must fail")
 	}
 	if !strings.Contains(err.Error(), "resoning") {
-		t.Fatalf("error = %v, want the rejected class named", err)
+		t.Fatalf("error = %v, want the rejected kind named", err)
 	}
-	if !strings.Contains(err.Error(), "reasoning") {
-		t.Fatalf("error = %v, want the supported classes listed", err)
+	if !strings.Contains(err.Error(), "thinking") {
+		t.Fatalf("error = %v, want the supported kinds listed", err)
 	}
 }
 
-// TestSystemMessagesAreOptInThroughTheLoader proves the system class reaches the
-// transcript loader rather than being filtered after the fact, so a class the
-// operator did not name is never parsed.
-func TestSystemMessagesAreOptInThroughTheLoader(t *testing.T) {
-	defaultPolicy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+// TestExcludedKindsNeverReachTheParser proves the gate pushes down into
+// LoadOptions for the three kinds that have a field, so content nobody selected
+// is never parsed rather than parsed and discarded.
+func TestExcludedKindsNeverReachTheParser(t *testing.T) {
+	defaultKinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
 	if err != nil {
 		t.Fatalf("load default config: %v", err)
 	}
-	if SemanticConversationLoadOptions(defaultPolicy).IncludeSystemMessages {
-		t.Fatal("default load options include system messages; they are opt-in")
+	defaultOptions := SemanticConversationLoadOptions(defaultKinds)
+	if defaultOptions.IncludeSystemPrompts || defaultOptions.IncludeSystemMessages || defaultOptions.IncludeToolOutputs {
+		t.Fatalf("default load options = %+v, want every gated kind off", defaultOptions)
 	}
 
-	optedIn, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"text\", \"system_messages\"]\n")
+	optedIn, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \"system_messages\", \"system_prompts\", \"tool_outputs\"]\n")
 	if err != nil {
 		t.Fatalf("load opted-in config: %v", err)
 	}
-	if !SemanticConversationLoadOptions(optedIn).IncludeSystemMessages {
-		t.Fatal("naming system_messages did not reach the transcript loader")
+	optedInOptions := SemanticConversationLoadOptions(optedIn)
+	if !optedInOptions.IncludeSystemPrompts || !optedInOptions.IncludeSystemMessages || !optedInOptions.IncludeToolOutputs {
+		t.Fatalf("opted-in load options = %+v, want every gated kind on", optedInOptions)
 	}
 }
 
 // TestPolicySkipsAreCountedApartFromFailures proves the counters stay distinct
 // through a real sync pass: the pass withholds messages and reports them without
-// touching the failure count, so deliberate policy can never fill the counter
-// that means content was lost.
+// touching the failure count.
 func TestPolicySkipsAreCountedApartFromFailures(t *testing.T) {
 	conversationID := "claude:policy-counts"
 	index := &fakeConversationSemanticIndex{
@@ -369,18 +316,17 @@ func TestPolicySkipsAreCountedApartFromFailures(t *testing.T) {
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	policy, err := loadPolicyFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), policy)
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), kinds)
 	freshness := newConversationSemanticFreshness()
 	worker.freshness = freshness
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
 	}
-
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
 	}

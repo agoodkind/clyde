@@ -277,9 +277,7 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 
-	if err := applyConversationDefaults(&cfg.Conversation); err != nil {
-		return err
-	}
+	applyConversationDefaults(&cfg.Conversation)
 
 	applyExportDefaults(&cfg.Export)
 

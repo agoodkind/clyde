@@ -16,10 +16,15 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// backfillTestContentPolicy is the shipped default content policy, so the
+// backfillTestContentKinds is the shipped default content selection, so the
 // backfill tests project documents exactly as the backfill command does.
-func backfillTestContentPolicy() daemonsvc.SemanticContentPolicy {
-	return daemonsvc.SemanticContentPolicyFromConfig(config.NewConfigWithDefaults().Conversation.Semantic)
+func backfillTestContentKinds(t *testing.T) conversation.ContentKindSet {
+	t.Helper()
+	kinds, err := daemonsvc.SemanticContentKinds(config.NewConfigWithDefaults().Conversation.Semantic)
+	if err != nil {
+		t.Fatalf("resolve default content kinds: %v", err)
+	}
+	return kinds
 }
 
 func testBackfillRecord(id, workspace string, archived bool) conversation.Record {
@@ -328,7 +333,7 @@ func TestBuildBackfillConversationDocumentsSkipsLoadFailure(t *testing.T) {
 		testDocumentStampedRecord("claude:three", 30),
 	}
 
-	docs, manifest, skipped := buildBackfillConversationDocuments(context.Background(), &index, stampedRecords, backfillTestContentPolicy())
+	docs, manifest, skipped := buildBackfillConversationDocuments(context.Background(), &index, stampedRecords, backfillTestContentKinds(t))
 
 	if skipped != 1 {
 		t.Fatalf("skipped = %d, want 1", skipped)

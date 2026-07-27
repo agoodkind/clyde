@@ -1,84 +1,8 @@
 package config
 
-import (
-	"fmt"
-	"slices"
-	"strings"
-)
+import "strings"
 
 const defaultConversationSemanticCollectionID = "clyde-conversations"
-
-// IndexedContentClass names one kind of content a conversation message carries.
-// It is the closed enum for `conversation.semantic.indexed_content`.
-//
-// The classes match the chunk families the search engine stores, so naming one
-// here governs exactly one family of embedded rows rather than a vague notion of
-// relevance. A class the list omits is still read from the provider artifact and
-// still rendered by export; only the embedding index skips it.
-type IndexedContentClass string
-
-const (
-	// IndexedContentText is the message text a person or a model wrote.
-	IndexedContentText IndexedContentClass = "text"
-	// IndexedContentReasoning is a model's private reasoning block. It is absent
-	// from the default set, because reasoning is working-out rather than
-	// conclusion, so embedding it by default puts a model's intermediate thinking
-	// into the results of someone searching their own conversation.
-	IndexedContentReasoning IndexedContentClass = "reasoning"
-	// IndexedContentToolCall is the tool's name and call token.
-	IndexedContentToolCall IndexedContentClass = "tool_call"
-	// IndexedContentToolCommand is the shell command a tool call carried.
-	IndexedContentToolCommand IndexedContentClass = "tool_command"
-	// IndexedContentToolInput is the tool call's JSON arguments.
-	IndexedContentToolInput IndexedContentClass = "tool_input"
-	// IndexedContentToolOutput is what a tool returned. It is absent from the
-	// default set because it is by far the largest class, 67.7% of the bytes
-	// offered before this default, and it is the weakest to retrieve: a result's
-	// serialization envelope makes up much of what its vector encodes, while the
-	// command and its arguments carry the searchable meaning.
-	IndexedContentToolOutput IndexedContentClass = "tool_output"
-	// IndexedContentSystemMessages is the provider's own system and control
-	// messages. It is absent from the default set, and the transcript loader has
-	// excluded them all along, so naming it here is what makes them reachable
-	// rather than what hides them.
-	IndexedContentSystemMessages IndexedContentClass = "system_messages"
-)
-
-// DefaultIndexedContent is the content offered to the engine when the config
-// names no classes: the chat turns, and the half of a tool call that says what
-// was run. Reasoning, system messages, and tool output are absent, so a fresh
-// install embeds what a person would search for and nothing else.
-//
-// It is exported because the policy resolver repeats this default for a Config
-// built as a struct literal, which never passes through the loader.
-func DefaultIndexedContent() []IndexedContentClass {
-	return []IndexedContentClass{
-		IndexedContentText,
-		IndexedContentToolCall,
-		IndexedContentToolCommand,
-		IndexedContentToolInput,
-	}
-}
-
-// knownIndexedContent lists every accepted class, so an unrecognized name in the
-// config fails the load instead of silently indexing less than the operator
-// asked for.
-func knownIndexedContent() []IndexedContentClass {
-	return []IndexedContentClass{
-		IndexedContentText,
-		IndexedContentReasoning,
-		IndexedContentToolCall,
-		IndexedContentToolCommand,
-		IndexedContentToolInput,
-		IndexedContentToolOutput,
-		IndexedContentSystemMessages,
-	}
-}
-
-// Valid reports whether the class is one this build understands.
-func (c IndexedContentClass) Valid() bool {
-	return slices.Contains(knownIndexedContent(), c)
-}
 
 // ConversationConfig configures raw conversation indexing integrations.
 type ConversationConfig struct {
@@ -103,70 +27,37 @@ type ConversationSemanticConfig struct {
 	Enabled      bool   `json:"enabled,omitempty" toml:"enabled,omitempty"`
 	SocketPath   string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
 	CollectionID string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
-	// IndexedContent names the content classes offered to the search engine. It
-	// selects parts of a message, which is a different level from
+	// IndexedContent names the content kinds offered to the search engine, using
+	// the same selector vocabulary the export surface accepts. The names and their
+	// validation belong to the conversation package's content-kind taxonomy, which
+	// this package cannot import without a cycle, so the values are carried as
+	// written and resolved where they are used.
+	//
+	// It selects parts of a message, which is a different level from
 	// [ConversationConfig.IncludeSubagentConversations]. The conversation is still
 	// delivered, so the engine reconciles the message rows it stops receiving
 	// rather than retaining them.
 	//
-	// An absent or empty list means the default set. Naming no classes is not how
-	// an operator turns indexing off, because that would quietly stop embedding
-	// everything; `enabled = false` is.
-	IndexedContent []IndexedContentClass `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
+	// An absent or empty list means the indexing default. Naming no kinds is not
+	// how an operator turns indexing off, because that would quietly stop
+	// embedding everything; `enabled = false` is.
+	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
 }
 
-// applyConversationDefaults fills the conversation defaults and rejects an
-// unrecognized content class, so a typo fails the load rather than silently
-// narrowing what is indexed.
-func applyConversationDefaults(conversation *ConversationConfig) error {
+func applyConversationDefaults(conversation *ConversationConfig) {
 	if conversation == nil {
-		return nil
+		return
 	}
 	conversation.Semantic.SocketPath = strings.TrimSpace(conversation.Semantic.SocketPath)
 	conversation.Semantic.CollectionID = strings.TrimSpace(conversation.Semantic.CollectionID)
 	if conversation.Semantic.CollectionID == "" {
 		conversation.Semantic.CollectionID = defaultConversationSemanticCollectionID
 	}
-	normalized, err := normalizeIndexedContent(conversation.Semantic.IndexedContent)
-	if err != nil {
-		return err
-	}
-	conversation.Semantic.IndexedContent = normalized
-	return nil
-}
-
-func normalizeIndexedContent(classes []IndexedContentClass) ([]IndexedContentClass, error) {
-	normalized := make([]IndexedContentClass, 0, len(classes))
-	seen := make(map[IndexedContentClass]bool, len(classes))
-	for _, class := range classes {
-		trimmed := IndexedContentClass(strings.ToLower(strings.TrimSpace(string(class))))
-		if trimmed == "" {
-			continue
+	trimmed := make([]string, 0, len(conversation.Semantic.IndexedContent))
+	for _, value := range conversation.Semantic.IndexedContent {
+		if selector := strings.TrimSpace(value); selector != "" {
+			trimmed = append(trimmed, selector)
 		}
-		if !trimmed.Valid() {
-			return nil, fmt.Errorf(
-				"conversation.semantic.indexed_content contains unknown class %q; supported classes are %s",
-				string(class),
-				indexedContentClassNames(),
-			)
-		}
-		if seen[trimmed] {
-			continue
-		}
-		seen[trimmed] = true
-		normalized = append(normalized, trimmed)
 	}
-	if len(normalized) == 0 {
-		return DefaultIndexedContent(), nil
-	}
-	return normalized, nil
-}
-
-func indexedContentClassNames() string {
-	known := knownIndexedContent()
-	names := make([]string, 0, len(known))
-	for _, class := range known {
-		names = append(names, string(class))
-	}
-	return strings.Join(names, "|")
+	conversation.Semantic.IndexedContent = trimmed
 }

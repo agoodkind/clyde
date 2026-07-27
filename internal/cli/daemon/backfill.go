@@ -185,10 +185,14 @@ func runBackfillConversationDocumentsWithDeps(
 		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.config_failed", "concern", "cli.daemon", "component", "cli", "err", err)
 		return fmt.Errorf("load config: %w", err)
 	}
-	// The backfill projects documents under the same content policy the daemon
+	// The backfill projects documents under the same content kinds the daemon
 	// feeder runs, so a backfill cannot re-add rows the next sync would remove.
-	contentPolicy := daemonsvc.SemanticContentPolicyFromConfig(cfg.Conversation.Semantic)
-	docs, manifest, skipped := buildBackfillConversationDocuments(ctx, index, selectedRecords, contentPolicy)
+	contentKinds, err := daemonsvc.SemanticContentKinds(cfg.Conversation.Semantic)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.content_kinds_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return fmt.Errorf("resolve backfill content kinds: %w", err)
+	}
+	docs, manifest, skipped := buildBackfillConversationDocuments(ctx, index, selectedRecords, contentKinds)
 	if skipped > 0 {
 		// nextCursor was derived from the full selected order before document
 		// building. A selected conversation that failed to load or build sits before
@@ -287,12 +291,12 @@ func selectBackfillDocumentRecords(stampedRecords []conversation.StampedRecord, 
 	return selectedRecords, nextCursor, nil
 }
 
-func buildBackfillConversationDocuments(ctx context.Context, index conversationDocumentBackfillIndex, stampedRecords []conversation.StampedRecord, contentPolicy daemonsvc.SemanticContentPolicy) ([]semsearch.SemDoc, []semsearch.Fingerprint, int) {
+func buildBackfillConversationDocuments(ctx context.Context, index conversationDocumentBackfillIndex, stampedRecords []conversation.StampedRecord, contentKinds conversation.ContentKindSet) ([]semsearch.SemDoc, []semsearch.Fingerprint, int) {
 	docs := make([]semsearch.SemDoc, 0)
 	manifest := make([]semsearch.Fingerprint, 0, len(stampedRecords))
 	skipped := 0
 	for _, stampedRecord := range stampedRecords {
-		messages, err := index.LoadMessagesWithOptions(stampedRecord.Record, daemonsvc.SemanticConversationLoadOptions(contentPolicy))
+		messages, err := index.LoadMessagesWithOptions(stampedRecord.Record, daemonsvc.SemanticConversationLoadOptions(contentKinds))
 		if err != nil {
 			slog.WarnContext(ctx, "cli.daemon.backfill_documents.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", stampedRecord.Record.ID, "err", err)
 			skipped++
@@ -300,7 +304,7 @@ func buildBackfillConversationDocuments(ctx context.Context, index conversationD
 		}
 		// skipped counts conversations that failed, never messages the content
 		// policy withheld, so a policy skip can never be read as a backfill failure.
-		built, err := daemonsvc.BuildSemanticConversationDocuments(stampedRecord.Record, messages, contentPolicy)
+		built, err := daemonsvc.BuildSemanticConversationDocuments(stampedRecord.Record, messages, contentKinds)
 		if err != nil {
 			slog.WarnContext(ctx, "cli.daemon.backfill_documents.build_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", stampedRecord.Record.ID, "err", err)
 			skipped++

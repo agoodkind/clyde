@@ -141,10 +141,10 @@ type conversationSemanticSyncWorker struct {
 	// freshness receives the latest pass stats so the control server can report
 	// index sync state at query time. Nil disables publishing.
 	freshness *conversationSemanticFreshness
-	// contentPolicy names the content classes this feeder offers. It is read on
-	// every pass from the value the daemon resolved at startup, so a change takes
-	// effect on the next daemon generation.
-	contentPolicy SemanticContentPolicy
+	// contentKinds names the content this feeder offers. It is resolved once at
+	// daemon startup from the export surface's selector vocabulary, so a change
+	// takes effect on the next daemon generation.
+	contentKinds conversation.ContentKindSet
 }
 
 type conversationSemanticSyncStats struct {
@@ -213,7 +213,7 @@ func startConversationSemanticSync(
 	collectionID string,
 	freshness *conversationSemanticFreshness,
 	group *livetrack.Group,
-	contentPolicy SemanticContentPolicy,
+	contentKinds conversation.ContentKindSet,
 ) bool {
 	if resolveClient == nil {
 		return false
@@ -230,7 +230,7 @@ func startConversationSemanticSync(
 		)
 		return false
 	}
-	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log, contentPolicy)
+	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log, contentKinds)
 	worker.freshness = freshness
 	go func() {
 		defer close(done)
@@ -253,7 +253,7 @@ func newConversationSemanticSyncWorker(
 	resolveClient conversationSemanticClientResolver,
 	collectionID string,
 	log *slog.Logger,
-	contentPolicy SemanticContentPolicy,
+	contentKinds conversation.ContentKindSet,
 ) *conversationSemanticSyncWorker {
 	if log == nil {
 		log = slog.Default()
@@ -269,7 +269,7 @@ func newConversationSemanticSyncWorker(
 		emptyDelivered: make(map[string]string),
 		now:            time.Now,
 		freshness:      nil,
-		contentPolicy:  contentPolicy,
+		contentKinds:   contentKinds,
 	}
 }
 
@@ -633,15 +633,15 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 	)
 }
 
-// SemanticConversationLoadOptions returns the transcript load options for
-// semantic document production under a content policy. System messages are read
-// only when the policy names them, so a class the operator did not ask for is
-// never parsed, let alone offered.
-func SemanticConversationLoadOptions(policy SemanticContentPolicy) conversation.LoadOptions {
+// SemanticConversationLoadOptions maps the selected content kinds onto the
+// parser's load gate, so a kind nobody selected is never parsed rather than
+// parsed and discarded. Three of the eight kinds have a matching field; the rest
+// are applied when the documents are projected.
+func SemanticConversationLoadOptions(kinds conversation.ContentKindSet) conversation.LoadOptions {
 	return conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: policy.SystemMessages,
-		IncludeToolOutputs:    policy.ToolOutput,
+		IncludeSystemPrompts:  kinds.Has(conversation.ContentKindSystemPrompts),
+		IncludeSystemMessages: kinds.Has(conversation.ContentKindSystemMessages),
+		IncludeToolOutputs:    kinds.Has(conversation.ContentKindToolOutputs),
 	}
 }
 
@@ -675,7 +675,7 @@ type SemanticConversationDocuments struct {
 func BuildSemanticConversationDocuments(
 	record conversation.Record,
 	messages []transcript.Message,
-	policy SemanticContentPolicy,
+	kinds conversation.ContentKindSet,
 ) (SemanticConversationDocuments, error) {
 	parentConversationID := ""
 	if derivedParentID, ok := conversation.ParentConversationID(record); ok {
@@ -691,17 +691,17 @@ func BuildSemanticConversationDocuments(
 				fmt.Errorf("message index %d exceeds semantic search int32 limit", i)
 		}
 		text := ""
-		if policy.Text {
+		if kinds.Has(conversation.ContentKindChat) {
 			// Replace invalid UTF-8 so the protobuf upsert never fails to marshal
 			// on a transcript byte sequence the encoder rejects (one codex doc
 			// with invalid UTF-8 used to break the whole batch).
 			text = strings.ToValidUTF8(message.Text, "")
 		}
 		thinking := ""
-		if policy.Reasoning {
+		if kinds.Has(conversation.ContentKindThinking) {
 			thinking = strings.ToValidUTF8(message.Thinking, "")
 		}
-		tools := semanticToolCalls(message.Tools, policy)
+		tools := semanticToolCalls(message.Tools, kinds)
 		if text == "" && thinking == "" && len(tools) == 0 {
 			built.PolicySkipped++
 			continue
@@ -722,36 +722,46 @@ func BuildSemanticConversationDocuments(
 	return built, nil
 }
 
-// semanticToolCalls projects a message's tool calls under the policy. A policy
-// without the tool-call class drops the call outright, because the engine derives
-// the call's own row from the call's presence; the finer classes empty their
-// field instead, which is what the engine already treats as "no such row".
-func semanticToolCalls(tools []transcript.ToolCall, policy SemanticContentPolicy) []semsearch.SemToolCall {
-	if !policy.ToolCall {
+// semanticToolCalls projects a message's tool calls at the selected detail level.
+//
+// The three tool kinds are nested rather than parallel, and
+// [conversation.NewContentKindSet] collapses them, so exactly one applies: the
+// summary level carries the tool's name alone, the call level adds the command
+// and the arguments, and the output level adds what the tool returned. Selecting
+// no tool kind drops the calls entirely.
+//
+// The projection stays structured rather than rendering to text, because the
+// engine derives a separate chunk family from each field, including the distilled
+// row it builds by decomposing the command into program names and file paths.
+// Flattening the call into prose would collapse all of that into the message's
+// own row and lose the distilled one.
+func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKindSet) []semsearch.SemToolCall {
+	summariesOnly := kinds.Has(conversation.ContentKindToolSummaries)
+	withArguments := kinds.Has(conversation.ContentKindToolCalls)
+	withOutput := kinds.Has(conversation.ContentKindToolOutputs)
+	if !summariesOnly && !withArguments && !withOutput {
 		return nil
 	}
 	out := make([]semsearch.SemToolCall, 0, len(tools))
 	for _, tool := range tools {
-		command, langHint := deriveToolCommandAndLang(tool.Name, tool.Input)
-		if !policy.ToolCommand {
-			command = ""
-		}
-		inputJSON := ""
-		if policy.ToolInput {
-			inputJSON = string(tool.Input.Raw)
-		}
-		output := ""
-		if policy.ToolOutput {
-			output = tool.Output
-		}
-		out = append(out, semsearch.SemToolCall{
+		projected := semsearch.SemToolCall{
 			Name:      tool.Name,
-			InputJSON: inputJSON,
-			Command:   command,
-			LangHint:  langHint,
-			Output:    output,
+			InputJSON: "",
+			Command:   "",
+			LangHint:  "",
+			Output:    "",
 			IsError:   tool.IsError,
-		})
+		}
+		if withArguments || withOutput {
+			command, langHint := deriveToolCommandAndLang(tool.Name, tool.Input)
+			projected.Command = command
+			projected.LangHint = langHint
+			projected.InputJSON = string(tool.Input.Raw)
+		}
+		if withOutput {
+			projected.Output = tool.Output
+		}
+		out = append(out, projected)
 	}
 	return out
 }
@@ -779,7 +789,7 @@ func deriveToolCommandAndLang(name string, input transcript.ToolInputJSON) (stri
 
 func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) (SemanticConversationDocuments, error) {
 	empty := SemanticConversationDocuments{Docs: nil, PolicySkipped: 0}
-	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentPolicy))
+	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentKinds))
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
 			"concern", "conversation.semantic",
@@ -790,7 +800,7 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 		)
 		return empty, fmt.Errorf("load conversation messages for %s: %w", record.ID, err)
 	}
-	built, err := BuildSemanticConversationDocuments(record, messages, w.contentPolicy)
+	built, err := BuildSemanticConversationDocuments(record, messages, w.contentKinds)
 	if err != nil {
 		return empty, err
 	}
