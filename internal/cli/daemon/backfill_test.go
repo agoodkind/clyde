@@ -12,8 +12,15 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
+	daemonsvc "goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/transcript"
 )
+
+// backfillTestContentPolicy is the shipped default content policy, so the
+// backfill tests project documents exactly as the backfill command does.
+func backfillTestContentPolicy() daemonsvc.SemanticContentPolicy {
+	return daemonsvc.SemanticContentPolicyFromConfig(config.NewConfigWithDefaults().Conversation.Semantic)
+}
 
 func testBackfillRecord(id, workspace string, archived bool) conversation.Record {
 	return conversation.Record{
@@ -321,7 +328,7 @@ func TestBuildBackfillConversationDocumentsSkipsLoadFailure(t *testing.T) {
 		testDocumentStampedRecord("claude:three", 30),
 	}
 
-	docs, manifest, skipped := buildBackfillConversationDocuments(context.Background(), &index, stampedRecords)
+	docs, manifest, skipped := buildBackfillConversationDocuments(context.Background(), &index, stampedRecords, backfillTestContentPolicy())
 
 	if skipped != 1 {
 		t.Fatalf("skipped = %d, want 1", skipped)

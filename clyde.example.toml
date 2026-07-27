@@ -28,6 +28,12 @@ include_subagent_conversations = false
 enabled = false
 socket_path = ""
 collection_id = "clyde-conversations"
+# Content classes offered to the search engine. Omit the key for this default
+# set. "reasoning" and "system_messages" are the two classes it leaves out, so
+# name them here to search a model's private reasoning or the provider's own
+# control messages. Use enabled = false to stop indexing entirely; an empty list
+# means the default set rather than nothing.
+indexed_content = ["text", "tool_call", "tool_command", "tool_input", "tool_output"]
 
 [logging.rotation]
 enabled = true

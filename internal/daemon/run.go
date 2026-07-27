@@ -134,7 +134,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	// while the feeder is running unowned. Reload and shutdown then both cancel
 	// and wait for the feeder before the semantic connection registry drains the
 	// engine connection it feeds.
-	startConversationSemanticSync(ctx, log, conversationIndex, resolveSemanticClient, cfg.Conversation.Semantic.CollectionID, semanticFreshness, runtime.group)
+	startConversationSemanticSync(ctx, log, conversationIndex, resolveSemanticClient, cfg.Conversation.Semantic.CollectionID, semanticFreshness, runtime.group, SemanticContentPolicyFromConfig(cfg.Conversation.Semantic))
 
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(controlMaxMessageBytes),

@@ -384,7 +384,7 @@ func TestHiddenSubagentConversationIsOmittedFromTheEngineManifest(t *testing.T) 
 	}
 
 	client := &fakeConversationSemanticClient{needed: nil}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentPolicy())
 	if err := worker.runPass(ctx); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
 	}

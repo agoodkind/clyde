@@ -372,12 +372,12 @@ func TestConversationSemanticSyncFeederRecoversAfterFailedInitialRegister(t *tes
 	// the deterministic passes below, without draining the engine connection this
 	// test still needs.
 	feederGroup := newLifecycleGroup(semanticTestLogger())
-	if !startConversationSemanticSync(ctx, semanticTestLogger(), index, runtime.syncClient, "collection-test", nil, feederGroup) {
+	if !startConversationSemanticSync(ctx, semanticTestLogger(), index, runtime.syncClient, "collection-test", nil, feederGroup, semanticTestContentPolicy()) {
 		t.Fatal("the sync worker must start while the engine is unavailable so it can recover")
 	}
 	feederGroup.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
 
-	worker := newConversationSemanticSyncWorker(index, runtime.syncClient, "collection-test", semanticTestLogger())
+	worker := newConversationSemanticSyncWorker(index, runtime.syncClient, "collection-test", semanticTestLogger(), semanticTestContentPolicy())
 	if err := worker.runPass(ctx); err != nil {
 		t.Fatalf("pass while the engine is down: %v", err)
 	}
@@ -470,7 +470,7 @@ func TestConversationSemanticSyncFeederIsGroupOwnedFromTheMomentItStarts(t *test
 
 	started := make(chan bool, 1)
 	group.AddHookBefore(livetrack.PhaseIngress, "test.start_feeder_mid_drain", func(hookCtx context.Context) error {
-		started <- startConversationSemanticSync(ctx, log, index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, group)
+		started <- startConversationSemanticSync(ctx, log, index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, group, semanticTestContentPolicy())
 		select {
 		case <-index.listing:
 			return nil
@@ -498,7 +498,7 @@ func TestConversationSemanticSyncRefusesToStartWithoutALifecycleOwner(t *testing
 	index := newBlockingConversationSemanticIndex()
 	engineFeeder := &fakeConversationSemanticClient{needed: nil}
 
-	if startConversationSemanticSync(context.Background(), semanticTestLogger(), index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, nil) {
+	if startConversationSemanticSync(context.Background(), semanticTestLogger(), index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, nil, semanticTestContentPolicy()) {
 		t.Fatal("the feeder must not start without a lifecycle group to own its stop")
 	}
 	select {
