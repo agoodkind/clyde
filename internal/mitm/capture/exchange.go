@@ -70,10 +70,7 @@ type Exchange struct {
 	ResponseBody      []byte
 	RequestType       string
 	ResponseType      string
-	// Conversation ties this exchange to the chat that produced it. Callers
-	// that cannot identify a chat leave it as the unresolved ref.
-	Conversation ConversationRef
-	Started      time.Time
+	Started           time.Time
 }
 
 // RecordExchange builds a Record from an Exchange and the request's correlation
@@ -104,7 +101,6 @@ func (s *Store) RecordExchange(corr correlation.Context, ex Exchange) {
 		RequestType:       ex.RequestType,
 		ResponseType:      ex.ResponseType,
 		DecodedRequest:    nil,
-		Conversation:      ex.Conversation,
 		Duration:          clock.Since(ex.Started),
 	})
 }
@@ -127,7 +123,6 @@ func exchangeRecord(corr correlation.Context, ex Exchange) Record {
 		RequestHeaders: ex.RequestHeaders, ResponseHeaders: ex.ResponseHeaders, RequestBody: ex.RequestBody,
 		ResponseBody: ex.ResponseBody, RequestType: ex.RequestType, ResponseType: ex.ResponseType,
 		DecodedRequest: nil,
-		Conversation:   ex.Conversation,
 		Duration:       clock.Since(ex.Started),
 	}
 }

@@ -651,32 +651,19 @@ func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, 
 		RequestContentType:  r.Header.Get("Content-Type"),
 		ResponseContentType: responseHeader.Get("Content-Type"),
 	})
-	diagnostic := ExchangeDiagnostic{
-		RequestHeader:      r.Header,
-		DecodedRequestBody: in.requestBody,
-		Method:             in.method,
-		Path:               in.path,
-		Host:               in.host,
-		Concern:            concern,
-		HookName:           "",
-	}
 	var decodedRequest *capture.DecodedBody
 	if decoder, ok := captureDecoderFor(in.provider, in.host); ok {
-		decoded, supported := decoder.DecodeCaptureRequest(diagnostic)
-		if supported {
-			decodedRequest = &decoded
-		}
-	}
-	conversationRef := capture.UnresolvedConversation()
-	if resolver, ok := captureConversationResolverFor(in.provider, in.host); ok {
-		resolved, supported := resolver.ResolveConversation(capture.RequestConversationInput{
-			Path:        in.path,
-			ContentType: r.Header.Get("Content-Type"),
-			Headers:     r.Header,
-			Body:        in.requestBody,
+		decoded, supported := decoder.DecodeCaptureRequest(ExchangeDiagnostic{
+			RequestHeader:      r.Header,
+			DecodedRequestBody: in.requestBody,
+			Method:             in.method,
+			Path:               in.path,
+			Host:               in.host,
+			Concern:            concern,
+			HookName:           "",
 		})
 		if supported {
-			conversationRef = resolved
+			decodedRequest = &decoded
 		}
 	}
 	p.store.Record(capture.Record{
@@ -699,7 +686,6 @@ func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, 
 		RequestType:       r.Header.Get("Content-Type"),
 		ResponseType:      responseHeader.Get("Content-Type"),
 		DecodedRequest:    decodedRequest,
-		Conversation:      conversationRef,
 		Duration:          in.duration,
 	})
 }

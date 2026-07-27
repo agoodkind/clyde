@@ -79,7 +79,6 @@ func (c *Client) recordEgress(ctx context.Context, ex egressExchange, status int
 		ResponseBody:      respBody,
 		RequestType:       ex.reqType,
 		ResponseType:      respHeaders.Get("Content-Type"),
-		Conversation:      capture.UnresolvedConversation(),
 		Started:           ex.started,
 	})
 }
