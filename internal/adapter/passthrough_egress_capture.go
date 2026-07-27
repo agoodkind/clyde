@@ -36,7 +36,8 @@ func (s *Server) recordPassthroughEgressAttempt(
 		Host: request.URL.Host, Method: request.Method, Path: request.URL.Path, Status: status,
 		UpstreamRequestID: upstreamRequestID, SessionID: "", RequestHeaders: requestHeaders,
 		ResponseHeaders: responseHeaders, RequestBody: requestBody, ResponseBody: result.body,
-		RequestType: request.Header.Get("Content-Type"), ResponseType: responseType, Started: started,
+		RequestType: request.Header.Get("Content-Type"), ResponseType: responseType,
+		Conversation: capture.UnresolvedConversation(), Started: started,
 	}, result.totalBytes, result.truncated)
 }
 
