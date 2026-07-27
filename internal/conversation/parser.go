@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"strings"
 	"time"
 
 	"goodkind.io/clyde/internal/providerid"
@@ -66,6 +67,47 @@ type Parser interface {
 	// implementation holds at most one message in flight; only [CollectMessages]
 	// builds a slice. A caller may stop the range early to read a window.
 	Stream(path string, opts LoadOptions) iter.Seq2[transcript.Message, error]
+}
+
+// TailParser is implemented by a provider whose artifact is a byte-addressable,
+// line-oriented file: [Parser.Stream]'s forward per-line decode has no state
+// carried across lines under the caller's options, so a caller that only
+// needs the newest few messages, such as [contextsvc], can read a bounded
+// byte range near the end instead of the whole file. A registered [Parser]
+// is type-asserted against this interface; a provider that does not
+// implement it, or whose [TailParser.TailSize] reports an artifact is not
+// byte-addressable, falls back to [Parser.Stream] plus [CollectMessages].
+//
+// One [Parser] can serve more than one artifact kind (Cursor serves a JSONL
+// kind plus two SQLite-backed kinds behind one parser), so the capability
+// check is keyed to the artifact path, not to the provider as a whole:
+// TailSize itself decides per artifact whether a bounded read applies.
+type TailParser interface {
+	Parser
+	// TailSize reports the artifact's current byte size and whether this
+	// artifact is byte-addressable this way. ok is false when the artifact
+	// is not line-oriented on disk (for example, a provider that unmarshals
+	// its whole document from a SQLite blob before yielding anything).
+	TailSize(path string) (size int64, ok bool)
+	// StreamFrom yields exactly what Stream would yield, restricted to the
+	// byte range [start, end), beginning at the first full line at or after
+	// start. start == 0 begins at the first byte with no discard, so
+	// StreamFrom(path, opts, 0, size) is byte-identical to Stream(path, opts)
+	// for the same size. It returns an error rather than a partial result
+	// when opts require a full forward read (IncludeToolOutputs needs
+	// cross-line buffering to attach a tool result to an earlier call, which
+	// a bounded suffix cannot do).
+	StreamFrom(path string, opts LoadOptions, start int64, end int64) iter.Seq2[transcript.Message, error]
+}
+
+// IsConversationalTurn reports whether a message counts as a visible
+// conversation turn: role user or assistant. [Index.LoadRecentTurns]'s
+// growth-loop counter and [contextsvc]'s reply-shaping filter both call this
+// one function, so there is structurally one predicate for what qualifies,
+// not two definitions that could drift apart.
+func IsConversationalTurn(message transcript.Message) bool {
+	role := strings.ToLower(strings.TrimSpace(message.Role))
+	return role == "user" || role == "assistant"
 }
 
 // CollectMessages folds a streaming parse into a full slice. Use it only where a

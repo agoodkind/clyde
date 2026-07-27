@@ -40,7 +40,10 @@ const (
 // Parser implements [conversation.Parser] for Claude transcripts.
 type Parser struct{}
 
-var _ conversation.Parser = Parser{}
+var (
+	_ conversation.Parser     = Parser{}
+	_ conversation.TailParser = Parser{}
+)
 
 // New returns a Claude transcript parser.
 func New() Parser {
@@ -326,20 +329,87 @@ func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tra
 			PreserveSystemPrompts: opts.IncludeSystemPrompts,
 			IncludeSystemMessages: opts.IncludeSystemMessages,
 		}
-		reader := bufio.NewReader(file)
-		for {
-			line, readErr := reader.ReadBytes('\n')
-			if stop := emitLine(line, parseOpts, yield); stop {
+		streamLines(bufio.NewReader(file), path, parseOpts, yield)
+	}
+}
+
+// StreamFrom implements [conversation.TailParser]. It yields exactly what
+// Stream would yield, restricted to the byte range [start, end): the same
+// bufio-over-reader loop as Stream (streamLines), pointed at an
+// [io.SectionReader] instead of the whole file, with the (likely partial)
+// first line before the range discarded when start > 0. A raw 0x0A cannot
+// appear inside a JSON string, so the first newline at or after start is
+// always a true record boundary, and streamLines is a pure per-line decode
+// under these options (IncludeToolOutputs is guarded out below), so this
+// never differs from Stream's output for the same trailing bytes.
+func (p Parser) StreamFrom(
+	path string,
+	opts conversation.LoadOptions,
+	start int64,
+	end int64,
+) iter.Seq2[transcript.Message, error] {
+	if opts.IncludeToolOutputs {
+		return func(yield func(transcript.Message, error) bool) {
+			yield(emptyMessage(), fmt.Errorf(
+				"claude StreamFrom: IncludeToolOutputs needs the whole transcript to attach a tool result to an earlier call, so it cannot be answered from a bounded range",
+			))
+		}
+	}
+	return func(yield func(transcript.Message, error) bool) {
+		file, err := os.Open(path)
+		if err != nil {
+			slog.Warn("providers.claude.parser.open_failed", "concern", concern, "component", "claude", "path", path, "err", err)
+			yield(emptyMessage(), fmt.Errorf("open transcript: %w", err))
+			return
+		}
+		defer func() { _ = file.Close() }()
+		section := io.NewSectionReader(file, start, end-start)
+		reader := bufio.NewReader(section)
+		if start > 0 {
+			// Discard the partial line before the first true line boundary in
+			// range. Hitting EOF here means no newline exists in [start, end),
+			// so there is nothing to discard or to stream; the caller's growth
+			// loop widens the window further back.
+			if _, err := reader.ReadBytes('\n'); err == io.EOF {
 				return
 			}
-			if readErr == io.EOF {
-				return
-			}
-			if readErr != nil {
-				slog.Warn("providers.claude.parser.read_line_failed", "concern", concern, "component", "claude", "path", path, "err", readErr)
-				yield(emptyMessage(), fmt.Errorf("read transcript line: %w", readErr))
-				return
-			}
+		}
+		parseOpts := parseOptions{
+			PreserveSystemPrompts: opts.IncludeSystemPrompts,
+			IncludeSystemMessages: opts.IncludeSystemMessages,
+		}
+		streamLines(reader, path, parseOpts, yield)
+	}
+}
+
+// TailSize implements [conversation.TailParser]. Claude transcripts are one
+// JSONL file per artifact, so every artifact this parser resolves is
+// byte-addressable.
+func (p Parser) TailSize(path string) (int64, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		slog.Warn("providers.claude.parser.tail_size_stat_failed", "concern", concern, "component", "claude", "path", path, "err", err)
+		return 0, false
+	}
+	return info.Size(), true
+}
+
+// streamLines runs the shared per-line forward decode loop over reader. Both
+// Stream (over the whole file) and StreamFrom (over a bounded section) call
+// it, so the two can never decode a line differently from each other.
+func streamLines(reader *bufio.Reader, path string, opts parseOptions, yield func(transcript.Message, error) bool) {
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if stop := emitLine(line, opts, yield); stop {
+			return
+		}
+		if readErr == io.EOF {
+			return
+		}
+		if readErr != nil {
+			slog.Warn("providers.claude.parser.read_line_failed", "concern", concern, "component", "claude", "path", path, "err", readErr)
+			yield(emptyMessage(), fmt.Errorf("read transcript line: %w", readErr))
+			return
 		}
 	}
 }
@@ -348,18 +418,23 @@ func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tra
 // it. It returns true when the caller stopped the range so the stream loop can
 // return. A blank or non-turn line yields nothing and does not stop the loop.
 func emitLine(line []byte, opts parseOptions, yield func(transcript.Message, error) bool) bool {
-	if len(line) == 0 {
-		return false
-	}
-	trimmed := trimLine(line)
-	if len(trimmed) == 0 {
-		return false
-	}
-	msg, ok := parseLine(trimmed, opts)
+	msg, ok := decodeLine(line, opts)
 	if !ok {
 		return false
 	}
 	return !yield(msg, nil)
+}
+
+// decodeLine trims and parses one raw transcript line.
+func decodeLine(line []byte, opts parseOptions) (transcript.Message, bool) {
+	if len(line) == 0 {
+		return emptyMessage(), false
+	}
+	trimmed := trimLine(line)
+	if len(trimmed) == 0 {
+		return emptyMessage(), false
+	}
+	return parseLine(trimmed, opts)
 }
 
 func (p Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {

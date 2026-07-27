@@ -66,10 +66,10 @@ func (source *fakeConversationSource) Resolve(
 	return conversation.Record{}, errors.New("conversation not found")
 }
 
-func (source *fakeConversationSource) LoadMessages(
+func (source *fakeConversationSource) LoadRecentTurns(
 	record conversation.Record,
-	_ bool,
-	_ bool,
+	_ int,
+	_ conversation.LoadOptions,
 ) ([]transcript.Message, error) {
 	return source.messages[record.ID], nil
 }

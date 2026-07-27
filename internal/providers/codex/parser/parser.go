@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -38,7 +39,10 @@ type Parser struct {
 	indexOK bool
 }
 
-var _ conversation.Parser = (*Parser)(nil)
+var (
+	_ conversation.Parser     = (*Parser)(nil)
+	_ conversation.TailParser = (*Parser)(nil)
+)
 
 // New returns a Codex rollout parser.
 func New() *Parser {
@@ -266,6 +270,59 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 			}
 		}
 	}
+}
+
+// StreamFrom implements [conversation.TailParser]. It yields exactly what
+// Stream would yield, restricted to the byte range [start, end), by pointing
+// codexstore.StreamMessagesFrom at that range: the same forward per-line
+// loop Stream calls, over an [io.SectionReader] instead of the whole file.
+// A caller requesting tool outputs must fall back to Stream, which buffers
+// the whole rollout to attach each tool result to its call by call_id, since
+// that pairing can span outside any bounded suffix.
+func (p *Parser) StreamFrom(
+	path string,
+	opts conversation.LoadOptions,
+	start int64,
+	end int64,
+) iter.Seq2[transcript.Message, error] {
+	if opts.IncludeToolOutputs {
+		return func(yield func(transcript.Message, error) bool) {
+			yield(emptyMessage(), fmt.Errorf(
+				"codex StreamFrom: IncludeToolOutputs needs the whole rollout to attach a tool result to an earlier call, so it cannot be answered from a bounded range",
+			))
+		}
+	}
+	return func(yield func(transcript.Message, error) bool) {
+		streamOpts := codexstore.HistoryOptions{
+			IncludeSystemMessages: opts.IncludeSystemMessages,
+			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
+		}
+		for msg, err := range codexstore.StreamMessagesFrom(path, streamOpts, start, end) {
+			if err != nil {
+				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
+				return
+			}
+			message, ok := codexTranscriptMessage(msg, opts.IncludeSystemMessages)
+			if !ok {
+				continue
+			}
+			if !yield(message, nil) {
+				return
+			}
+		}
+	}
+}
+
+// TailSize implements [conversation.TailParser]. A Codex rollout is one
+// JSONL file per artifact, so every artifact this parser resolves is
+// byte-addressable.
+func (p *Parser) TailSize(path string) (int64, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		slog.Warn("providers.codex.parser.tail_size_stat_failed", "concern", concern, "component", "codex", "path", path, "err", err)
+		return 0, false
+	}
+	return info.Size(), true
 }
 
 // streamWithToolOutputs collects the whole rollout, links each tool-output

@@ -177,29 +177,67 @@ func StreamMessages(path string, opts HistoryOptions) iter.Seq2[HistoryMessage, 
 		}
 		defer func() { _ = f.Close() }()
 
-		reader := bufio.NewReaderSize(f, streamReaderBufferSize)
-		for {
-			if !opts.IncludeSystemMessages {
-				skipped, skipErr := skipLargeCompactedLine(reader)
-				if skipErr != nil {
-					reportStreamReadError(path, skipErr, yield)
-					return
-				}
-				if skipped {
-					continue
-				}
-			}
-			raw, readErr := reader.ReadBytes('\n')
-			if !emitStreamLine(raw, opts, yield) {
+		streamHistoryLines(bufio.NewReaderSize(f, streamReaderBufferSize), path, opts, yield)
+	}
+}
+
+// StreamMessagesFrom yields exactly what StreamMessages would yield,
+// restricted to the byte range [start, end): the same streamHistoryLines
+// loop as StreamMessages, pointed at an [io.SectionReader] instead of the
+// whole file, with the (likely partial) first line before the range
+// discarded via drainLine when start > 0, matching skipLargeCompactedLine's
+// existing bounded-chunk drain rather than a plain ReadBytes so a giant
+// compacted envelope straddling the offset never lands in one allocation. A
+// raw 0x0A cannot appear inside a JSON string, so the first newline at or
+// after start is always a true record boundary.
+func StreamMessagesFrom(path string, opts HistoryOptions, start int64, end int64) iter.Seq2[HistoryMessage, error] {
+	return func(yield func(HistoryMessage, error) bool) {
+		f, err := os.Open(path)
+		if err != nil {
+			slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
+			yield(emptyHistoryMessage(), fmt.Errorf("open codex rollout %s: %w", path, err))
+			return
+		}
+		defer func() { _ = f.Close() }()
+
+		section := io.NewSectionReader(f, start, end-start)
+		reader := bufio.NewReaderSize(section, streamReaderBufferSize)
+		if start > 0 {
+			if err := drainLine(reader); err != nil {
+				reportStreamReadError(path, err, yield)
 				return
 			}
-			if readErr == io.EOF {
+		}
+		streamHistoryLines(reader, path, opts, yield)
+	}
+}
+
+// streamHistoryLines runs the shared per-line forward decode loop over
+// reader. Both StreamMessages (over the whole file) and StreamMessagesFrom
+// (over a bounded section) call it, so the two can never decode a line
+// differently from each other.
+func streamHistoryLines(reader *bufio.Reader, path string, opts HistoryOptions, yield func(HistoryMessage, error) bool) {
+	for {
+		if !opts.IncludeSystemMessages {
+			skipped, skipErr := skipLargeCompactedLine(reader)
+			if skipErr != nil {
+				reportStreamReadError(path, skipErr, yield)
 				return
 			}
-			if readErr != nil {
-				reportStreamReadError(path, readErr, yield)
-				return
+			if skipped {
+				continue
 			}
+		}
+		raw, readErr := reader.ReadBytes('\n')
+		if !emitStreamLine(raw, opts, yield) {
+			return
+		}
+		if readErr == io.EOF {
+			return
+		}
+		if readErr != nil {
+			reportStreamReadError(path, readErr, yield)
+			return
 		}
 	}
 }
@@ -208,19 +246,28 @@ func StreamMessages(path string, opts HistoryOptions) iter.Seq2[HistoryMessage, 
 // when the envelope produces one. It returns false when the consumer asked to
 // stop iterating, and true otherwise so the caller continues reading.
 func emitStreamLine(raw []byte, opts HistoryOptions, yield func(HistoryMessage, error) bool) bool {
-	line := bytes.TrimRight(raw, "\r\n")
-	if len(line) == 0 {
-		return true
-	}
-	var envelope historyLine
-	if json.Unmarshal(line, &envelope) != nil {
-		return true
-	}
-	msg, ok := streamMessageFromEnvelope(envelope, opts)
+	msg, ok := DecodeHistoryLine(raw, opts)
 	if !ok {
 		return true
 	}
 	return yield(msg, nil)
+}
+
+// DecodeHistoryLine decodes one raw JSONL rollout line into a normalized
+// message. It is a pure function of the line's own bytes with no dependency
+// on neighboring lines, so both the forward stream (via emitStreamLine) and a
+// backward tail read call it to guarantee identical per-line decoding
+// regardless of read direction.
+func DecodeHistoryLine(raw []byte, opts HistoryOptions) (HistoryMessage, bool) {
+	line := bytes.TrimRight(raw, "\r\n")
+	if len(line) == 0 {
+		return emptyHistoryMessage(), false
+	}
+	var envelope historyLine
+	if json.Unmarshal(line, &envelope) != nil {
+		return emptyHistoryMessage(), false
+	}
+	return streamMessageFromEnvelope(envelope, opts)
 }
 
 // reportStreamReadError logs a Codex rollout read failure and surfaces it to the

@@ -22,7 +22,7 @@ const (
 
 type conversationSource interface {
 	ListPage(context.Context, conversation.ListOptions) (conversation.ListResult, error)
-	LoadMessages(conversation.Record, bool, bool) ([]transcript.Message, error)
+	LoadRecentTurns(record conversation.Record, need int, opts conversation.LoadOptions) ([]transcript.Message, error)
 }
 
 // Server serves recent conversation context from Clyde's indexed conversation store.
@@ -68,7 +68,11 @@ func (server *Server) GetRecentTurns(
 		return &contextpb.GetRecentTurnsReply{Turns: nil}, nil
 	}
 
-	messages, err := server.source.LoadMessages(record, false, false)
+	messages, err := server.source.LoadRecentTurns(record, turnBudget, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "contextsvc.get_recent_turns.load_failed", "concern", "conversation.context", "component", "contextsvc",
 			"conversation_id", record.ID,
@@ -144,11 +148,10 @@ func recentTurns(
 ) []*contextpb.Turn {
 	candidates := make([]transcript.Message, 0, len(messages))
 	for _, message := range messages {
-		role := normalizedRole(message.Role)
-		if role != "user" && role != "assistant" {
+		if !conversation.IsConversationalTurn(message) {
 			continue
 		}
-		message.Role = role
+		message.Role = normalizedRole(message.Role)
 		candidates = append(candidates, message)
 	}
 
