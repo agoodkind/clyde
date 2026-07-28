@@ -11,7 +11,7 @@ Clyde is a Go CLI and daemon for raw provider artifact reading plus adapter, MIT
 Core surfaces:
 
 - A first-party `clyde` CLI that owns Clyde-specific conversation, export, logs, daemon, MITM, and MCP commands.
-- A raw conversation index that reads Claude and Codex artifacts without writing provider files.
+- A raw conversation index that reads Claude, Codex, Cursor, and Zed artifacts without writing provider files.
 - An MCP server for conversation listing, retrieval, context windows, search, analysis, and export.
 - An OpenAI-compatible adapter under `internal/adapter/`.
 - A MITM capture proxy under `internal/mitm/`.
@@ -33,15 +33,24 @@ Prefer code and tests over this file for exact behavior.
 - Use `internal/mitm/` plus `internal/providers/*/mitmcontrib/` for MITM provider registration, route claims, identity facets, and capture extensions.
 - Use `docs/logging/` and `internal/slogger/` for logging, sink, inventory, and correlation contracts.
 - Use `internal/contextsvc/` and `docs/context/overview.md` for the ConversationContext gRPC service that returns recent conversation turns.
-- Use `docs/cursor.md` for the empirical reasons behind Cursor-specific adapter rules.
+- Use `docs/cursor.md` for the empirical reasons behind Cursor-specific adapter rules, and `docs/cursor/stores.md` for the Cursor conversation stores and how they are read.
 - Use `docs/reorient/overview.md` for the two-tier reorient-after-compaction delivery and the MITM summary-injection hook.
 
 Do not add stale snapshots of command tables, schemas, request payloads, local machine setup, or dated audits to this file. Add links or brief pointers instead.
 
+## Find The Existing Primitive First
+
+Search for an existing implementation before writing one. A format this repository emits, parses, or owns has exactly one home, and a second implementation drifts from the first the moment either changes.
+
+Search by behavior rather than by name. A primitive is named for the concern that produced it, not the concern you are working in, so it will not surface under the word you searched for. Search the format's literal markers, key prefixes, or field names instead, and read the package that emits a value before writing anything that consumes it.
+
+When an existing primitive is close but not sufficient, extend it in place or say plainly why it cannot serve. Do not fork it. Adding a second parser, registry, or drain needs its reason stated in the pull request rather than left for a reviewer to find.
+
 ## Raw Conversation Rules
 
-- Conversation IDs are stable derived IDs: `claude:<provider-session-id>`, `codex:<thread-id>`, or `artifact:<path-hash>` when the provider ID is missing.
-- Clyde reads provider-owned artifacts only. It must not mutate Claude or Codex transcript files, settings, metadata, or runtime state.
+- Conversation IDs are stable derived IDs: `claude:<provider-session-id>`, `codex:<thread-id>`, `cursor:<native-id>`, `zed:<thread-id>`, or `artifact:<path-hash>` when the provider ID is missing.
+- Clyde reads provider-owned artifacts only. It must not mutate any provider's transcript files, settings, metadata, or runtime state.
+- Cursor and Zed keep conversations in SQLite databases their running application owns. Open those read-only and never write, migrate, or checkpoint them. Cursor holds conversations in more than one store; see `docs/cursor/stores.md`.
 - Startup must load the last completed conversation cache quickly and refresh in a debounced background worker.
 - Refreshes must be idempotent and keyed by provider, artifact path, size, and mtime.
 - Stale cache data is acceptable while a refresh is running.
@@ -181,7 +190,7 @@ Default log paths are under `$XDG_STATE_HOME/clyde`; when `XDG_STATE_HOME` is un
 - MITM wire legs: `logs/providers/mitm/wire.jsonl` via the `providers.mitm.wire` concern; join to capture.db rows on `request_id`/`trace_id`.
 - macOS LaunchAgent stderr/stdout fallback: `daemon.log`.
 
-Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.models`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `process.daemon`, and `mcp.server`.
+Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.models`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.cursor`, `providers.zed`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `process.daemon`, and `mcp.server`.
 
 ## Networking And Security
 
