@@ -157,7 +157,9 @@ func collectCursorSemanticDocs(
 		}
 		manifest = append(manifest, semsearch.Fingerprint{
 			ConversationID: record.ID,
-			Value:          candidate.Stamp.Fingerprint(),
+			// The same fingerprint the daemon sync and the backfill advertise, so
+			// the smoke probe does not state a third value for one conversation.
+			Value: conversation.ContentFingerprint(record, candidate.Stamp),
 		})
 	}
 	if len(expectedIDs) != 2 {

@@ -397,6 +397,7 @@ func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.
 		Lineage:         lineage,
 		Origin:          conversation.OriginUnspecified,
 		Title:           wire.GetTitle(),
+		TitleUncertain:  false,
 		WorkspaceRoot:   wire.GetWorkspaceRoot(),
 		ArtifactPath:    wire.GetArtifactPath(),
 		ArtifactKind:    wire.GetArtifactKind(),

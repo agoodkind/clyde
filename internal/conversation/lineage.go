@@ -108,6 +108,7 @@ func emptyRecord() Record {
 		Lineage:         nil,
 		Origin:          OriginUnspecified,
 		Title:           "",
+		TitleUncertain:  false,
 		WorkspaceRoot:   "",
 		ArtifactPath:    "",
 		ArtifactKind:    "",

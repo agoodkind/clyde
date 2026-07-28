@@ -214,6 +214,7 @@ func emptyRecord() conversation.Record {
 		Lineage:         nil,
 		Origin:          conversation.OriginUnspecified,
 		Title:           "",
+		TitleUncertain:  false,
 		WorkspaceRoot:   "",
 		ArtifactPath:    "",
 		ArtifactKind:    "",

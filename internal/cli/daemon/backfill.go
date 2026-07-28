@@ -313,7 +313,10 @@ func buildBackfillConversationDocuments(ctx context.Context, index conversationD
 		docs = append(docs, built.Docs...)
 		manifest = append(manifest, semsearch.Fingerprint{
 			ConversationID: stampedRecord.Record.ID,
-			Value:          stampedRecord.Stamp.Fingerprint(),
+			// The same fingerprint the daemon sync advertises. A second value here
+			// would make every conversation look needed on the next daemon pass, so
+			// each backfill run would cost a full re-embed.
+			Value: conversation.ContentFingerprint(stampedRecord.Record, stampedRecord.Stamp),
 		})
 	}
 	return docs, manifest, skipped

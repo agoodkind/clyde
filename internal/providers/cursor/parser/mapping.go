@@ -53,6 +53,17 @@ func mapJSONLMessage(
 		}
 	}
 	text := strings.Join(textParts, "\n")
+	// A turn Cursor recorded as failed or aborted, or one that ended at a boundary
+	// Clyde could not read, must not reach a reader as an ordinary finished
+	// answer. The transcript message model carries no turn-outcome field, so the
+	// marker goes in the text, where every renderer already shows it.
+	if marker := turnOutcomeMarker(message.Outcome); marker != "" {
+		if text == "" {
+			text = marker
+		} else {
+			text += "\n" + marker
+		}
+	}
 	if text == "" && len(tools) == 0 {
 		return emptyMessage(), false
 	}
@@ -69,6 +80,26 @@ func mapJSONLMessage(
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
 	}, true
+}
+
+// turnOutcomeMarker renders what the transcript said about how a turn ended.
+// A turn that simply ran into the next role change, or into the end of the file,
+// gets no marker, because the artifact says nothing about it either way.
+func turnOutcomeMarker(outcome cursorjsonl.TurnOutcome) string {
+	if outcome.Uncertain {
+		return "[turn boundary unreadable: this turn may be incomplete]"
+	}
+	if !outcome.Failed() {
+		return ""
+	}
+	// Label falls back to the boundary kind, because Cursor's standalone error
+	// event carries its reason with no status at all.
+	label := outcome.Label()
+	reason := strings.TrimSpace(outcome.Error)
+	if reason == "" {
+		return "[turn ended: " + label + "]"
+	}
+	return "[turn ended: " + label + " (" + reason + ")]"
 }
 
 func mapComposerBubble(

@@ -31,6 +31,65 @@ func (a FileStamp) Fingerprint() string {
 	return fmt.Sprintf("%d:%d", a.Size, a.Mtime.UnixNano())
 }
 
+// readerGeneration counts the times a provider's reader has changed what it
+// produces from bytes that did not change.
+//
+// A conversation's message index is a position the search path feeds back into
+// the loader, so a reader change that renumbers messages leaves every stored
+// index pointing at a different turn. The artifact itself does not change, so
+// the file stamp cannot notice, and a finished transcript would never be re-fed.
+//
+// Including the generation in the advertised fingerprint re-advertises every
+// conversation of that provider exactly once. The engine then asks for those
+// conversations through the ordinary additive sync and clyde delivers their
+// documents again. Nothing here rewrites or deletes a stored row, so this is a
+// re-feed rather than a backfill.
+//
+// It is keyed by artifact kind rather than by provider, because a provider can
+// read several unrelated stores and only one of them may have changed. Bump an
+// artifact kind's entry when its reader changes which messages it yields, or
+// their positions, for an unchanged artifact. A kind absent from the map is at
+// generation zero and keeps the bare stamp fingerprint, so a store whose reader
+// did not change is never re-embedded.
+var readerGeneration = map[ArtifactKind]int{
+	// Cursor turn reconstruction groups each turn's records into one message,
+	// which renumbers every message after the first multi-record turn. It changed
+	// the JSONL transcript reader alone: Cursor's composer and legacy-chat stores
+	// have their own readers and their numbering is untouched.
+	ArtifactKindCursorAgentTranscript: 1,
+}
+
+// ArtifactKind names the store an artifact came from, which decides both which
+// reader produced its messages and, through [readerGeneration], whether that
+// reader has changed what it yields.
+//
+// [Record.ArtifactKind] is still a plain string because it crosses the daemon's
+// wire format, where changing it reaches every provider and both RPC surfaces.
+// Converting at the one lookup below keeps the classification typed everywhere
+// this package owns it.
+type ArtifactKind string
+
+// ArtifactKindCursorAgentTranscript names Cursor's modern JSONL transcript. It
+// is declared here because [readerGeneration] keys on it and this package cannot
+// import a provider package.
+const ArtifactKindCursorAgentTranscript ArtifactKind = "cursor_agent_transcript"
+
+// ContentFingerprint is the value a conversation manifest advertises for one
+// conversation. It changes when the artifact changes, and when the reader for
+// that artifact kind changes what it produces from an unchanged artifact.
+//
+// Every caller that builds a manifest uses this, so the daemon sync and the
+// operator backfill state the same value for the same conversation. Two
+// implementations would report every conversation as needed on each alternation
+// between them, re-embedding the corpus once per run.
+func ContentFingerprint(record Record, stamp FileStamp) string {
+	generation := readerGeneration[ArtifactKind(record.ArtifactKind)]
+	if generation == 0 {
+		return stamp.Fingerprint()
+	}
+	return fmt.Sprintf("%s:r%d", stamp.Fingerprint(), generation)
+}
+
 // ScanCandidate is one artifact a provider's [Parser.Discover] surfaced for the
 // incremental scan. Stamp lets the scan driver skip files whose size and mtime
 // are unchanged, reusing the prior record without re-reading the file.

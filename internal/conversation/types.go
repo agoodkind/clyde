@@ -28,20 +28,29 @@ const (
 
 // Record is a derived index row for one raw provider conversation.
 type Record struct {
-	ID            string    `json:"id"`
-	Provider      Provider  `json:"provider"`
-	NativeID      string    `json:"native_id"`
-	Lineage       *Lineage  `json:"lineage,omitempty"`
-	Origin        Origin    `json:"origin,omitempty"`
-	Title         string    `json:"title"`
-	WorkspaceRoot string    `json:"workspace_root"`
-	ArtifactPath  string    `json:"artifact_path"`
-	ArtifactKind  string    `json:"artifact_kind"`
-	Model         string    `json:"model"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	SizeBytes     int64     `json:"size_bytes"`
-	Archived      bool      `json:"archived"`
+	ID       string   `json:"id"`
+	Provider Provider `json:"provider"`
+	NativeID string   `json:"native_id"`
+	Lineage  *Lineage `json:"lineage,omitempty"`
+	Origin   Origin   `json:"origin,omitempty"`
+	Title    string   `json:"title"`
+	// TitleUncertain marks a title the scan settled on after skipping a record it
+	// could not read. That record may have been the conversation's real first user
+	// message, so the title is the earliest one clyde could read rather than the
+	// conversation's own. It stays false for every artifact that read cleanly.
+	//
+	// It is daemon-local today. The control server's wire record carries no such
+	// field, so a CLI or MCP listing reads back a record with it cleared; carrying
+	// it to those surfaces needs a wire field and is not done here.
+	TitleUncertain bool      `json:"title_uncertain,omitempty"`
+	WorkspaceRoot  string    `json:"workspace_root"`
+	ArtifactPath   string    `json:"artifact_path"`
+	ArtifactKind   string    `json:"artifact_kind"`
+	Model          string    `json:"model"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	SizeBytes      int64     `json:"size_bytes"`
+	Archived       bool      `json:"archived"`
 	// LatestRequestID is the provider request id of the conversation's most
 	// recent turn, when the artifact header the scan already reads carries one.
 	// It makes that one id resolvable straight from the index; every earlier
@@ -70,6 +79,7 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 		Lineage         *Lineage        `json:"lineage"`
 		Origin          Origin          `json:"origin"`
 		Title           string          `json:"title"`
+		TitleUncertain  bool            `json:"title_uncertain"`
 		WorkspaceRoot   string          `json:"workspace_root"`
 		ArtifactPath    string          `json:"artifact_path"`
 		ArtifactKind    string          `json:"artifact_kind"`
@@ -95,6 +105,7 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 		Lineage:         wire.Lineage,
 		Origin:          wire.Origin,
 		Title:           wire.Title,
+		TitleUncertain:  wire.TitleUncertain,
 		WorkspaceRoot:   wire.WorkspaceRoot,
 		ArtifactPath:    wire.ArtifactPath,
 		ArtifactKind:    wire.ArtifactKind,
