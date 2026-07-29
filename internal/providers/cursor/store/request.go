@@ -586,7 +586,7 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 	}
 	coverage.Readable = true
 
-	storedChats, err := snapshot.countRange(ctx, KVTableCursorDiskKV, keyRangeForPrefix(composerDataKeyPrefix))
+	storedChats, err := snapshot.countRange(ctx, keyRangeForPrefix(composerDataKeyPrefix))
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.composer_chat_count_failed", "concern", concern, "err", err)
 		return coverage, fmt.Errorf("count cursor chats: %w", err)

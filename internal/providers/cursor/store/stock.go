@@ -62,7 +62,7 @@ func ReadComposerBubbleStock(
 	}
 	defer snapshot.rollback()
 
-	storedRows, err := snapshot.countRange(ctx, KVTableCursorDiskKV, bounds)
+	storedRows, err := snapshot.countRange(ctx, bounds)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.composer_bubble_count_failed", "concern", concern, "composer_id", composerID, "err", err)
 		return stock, fmt.Errorf("count cursor bubbles for composer %q: %w", composerID, err)

@@ -1008,7 +1008,7 @@ func TestReadSnapshotPinsBubbleCountAndProjectionToOneWALRevision(t *testing.T) 
 	}
 	t.Cleanup(snapshot.rollback)
 	bounds := keyRangeForPrefix("bubbleId:c:")
-	storedRows, err := snapshot.countRange(context.Background(), KVTableCursorDiskKV, bounds)
+	storedRows, err := snapshot.countRange(context.Background(), bounds)
 	if err != nil {
 		t.Fatalf("countRange returned error: %v", err)
 	}

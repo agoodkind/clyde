@@ -172,14 +172,15 @@ func (snapshot readSnapshot) queryRange(
 	return rows, nil
 }
 
-// countRange counts the rows of one key range on this snapshot, from the key
-// index alone.
-func (snapshot readSnapshot) countRange(
-	ctx context.Context,
-	tableName KVTableName,
-	bounds keyRange,
-) (int, error) {
-	sqlTableName, err := tableName.sqlTableName()
+// countRange counts the rows of one `cursorDiskKV` key range on this snapshot,
+// from the key index alone.
+//
+// The table is named here rather than taken as an argument because counting a key
+// range is a `cursorDiskKV` operation. Cursor's other key-value table, `ItemTable`,
+// stores one row per exact item key and is only ever read by that key, so it has
+// no ranges to count.
+func (snapshot readSnapshot) countRange(ctx context.Context, bounds keyRange) (int, error) {
+	sqlTableName, err := KVTableCursorDiskKV.sqlTableName()
 	if err != nil {
 		return 0, err
 	}

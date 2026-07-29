@@ -840,15 +840,6 @@ func backgroundComposerIDSet(ctx context.Context, db *sql.DB, path string) map[s
 	return backgroundIDs
 }
 
-func readWorkspaceRoot(ctx context.Context, entry cursorstore.WorkspaceEntry) string {
-	workspaceRoot, err := cursorstore.ReadWorkspaceFolderPath(entry.WorkspaceJSONPath)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.read_workspace_folder_failed", "concern", concern, "path", entry.WorkspaceJSONPath, "workspace_hash", entry.WorkspaceHash, "err", err)
-		return ""
-	}
-	return workspaceRoot
-}
-
 func globalDBPathForDiscovered(
 	ctx context.Context,
 	discovered discoveredArtifact,
