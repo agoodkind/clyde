@@ -131,37 +131,80 @@ func runSandbox(ctx context.Context, f *cli.Factory, keep bool) error {
 	writeSandboxBanner(f, roots, configPath)
 
 	daemonCmd := exec.CommandContext(ctx, self, "daemon", "run")
-	daemonCmd.Env = append(os.Environ(), roots.env()...)
+	daemonCmd.Env = append(sandboxParentEnv(), roots.env()...)
 	daemonCmd.Stdout = f.IOStreams.Out
 	daemonCmd.Stderr = f.IOStreams.Err
 	daemonCmd.Stdin = nil
 
-	// Ctrl-C reaches this process and the daemon alike because they share a
-	// process group. Registering the signals stops this process from dying on
-	// the first one, so it stays alive to wait for the daemon's own shutdown and
-	// to run the deferred cleanup afterwards. Nothing reads the channel: the
-	// registration is the whole mechanism, and a full buffer simply drops the
-	// repeat signals, which are already reaching the daemon directly.
-	//
-	// Recording that a signal arrived is what separates the two ways this command
-	// ends. An operator stopping the sandbox is success; the daemon exiting on its
-	// own is a failure the operator must see, because a sandbox that dies on a bad
-	// config would otherwise look exactly like one they stopped.
+	// Registering the signals stops this process from dying on the first one, so
+	// it stays alive to wait for the daemon's shutdown and to clean up afterwards.
+	// A terminal delivers Ctrl-C to the whole foreground process group, so the
+	// daemon usually receives it too, but a sandbox started from a script or a
+	// supervisor may not share that group. Forwarding explicitly means the daemon
+	// is asked to stop in either case rather than being left running.
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
-	runErr := daemonCmd.Run()
+	// Start before watching for signals, so the daemon's process handle exists by
+	// the time anything could forward one to it. Run would leave a window where a
+	// signal arriving early found no process to pass it to, and the wrapper would
+	// report a clean stop for a daemon that never received one.
+	if err := daemonCmd.Start(); err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.daemon_start_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
+		return fmt.Errorf("start the sandbox daemon: %w", err)
+	}
+
+	stopped := make(chan struct{})
+	forwarded := make(chan struct{})
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(ctx, "cli.daemon.sandbox.signal_forward_panic", "concern", "cmd.dispatch", "component", "cli", "err", fmt.Errorf("forwarding a stop signal panicked: %v", recovered))
+			}
+		}()
+		forwardSignalsToDaemon(ctx, signals, daemonCmd, stopped, forwarded)
+	}()
+
+	runErr := daemonCmd.Wait()
+	close(stopped)
 	if runErr == nil {
 		return nil
 	}
+
+	// Whether a stop signal arrived is what separates the two ways this ends. An
+	// operator stopping the sandbox is success; the daemon exiting on its own is a
+	// failure they must see, because a sandbox that never started would otherwise
+	// look exactly like one they stopped.
 	select {
-	case <-signals:
+	case <-forwarded:
 		slog.InfoContext(ctx, "cli.daemon.sandbox.stopped", "concern", "cmd.dispatch", "component", "cli", "err", runErr)
 		return nil
 	default:
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.daemon_failed", "concern", "cmd.dispatch", "component", "cli", "err", runErr)
 		return fmt.Errorf("the sandbox daemon exited on its own, so it never became usable: %w", runErr)
+	}
+}
+
+// forwardSignalsToDaemon passes a stop signal on to the sandbox daemon and
+// closes forwarded to record that one arrived. It returns when the daemon exits.
+func forwardSignalsToDaemon(
+	ctx context.Context,
+	signals <-chan os.Signal,
+	daemonCmd *exec.Cmd,
+	stopped <-chan struct{},
+	forwarded chan<- struct{},
+) {
+	select {
+	case received := <-signals:
+		close(forwarded)
+		if daemonCmd.Process == nil {
+			return
+		}
+		if err := daemonCmd.Process.Signal(received); err != nil {
+			slog.WarnContext(ctx, "cli.daemon.sandbox.signal_forward_failed", "concern", "cmd.dispatch", "component", "cli", "signal", received.String(), "err", err)
+		}
+	case <-stopped:
 	}
 }
 
@@ -189,6 +232,47 @@ func newSandboxRoots() (sandboxRoots, error) {
 		}
 	}
 	return roots, nil
+}
+
+// clydeOwnedPathVars name the environment variables that point clyde at a file
+// or directory it owns. Each one overrides a path the XDG redirections would
+// otherwise place inside the sandbox, so an operator who has any of them set
+// would get a sandbox writing into their deployed daemon's logs or state. They
+// are dropped from the child's environment rather than redirected, so the
+// sandbox falls back to its own roots.
+//
+// Variables naming a provider's own data are deliberately absent from this list.
+// Reading the operator's real conversations is the point of the sandbox, so
+// CLYDE_CURSOR_DATA_DIRS and its siblings pass through untouched.
+var clydeOwnedPathVars = []string{
+	"CLYDE_ANTHROPIC_LOG_PATH",
+	"CLYDE_CODEX_LOG_PATH",
+	"CLYDE_SLOG_PATH",
+	"CLYDE_DAEMON_INHERITED_LISTENERS",
+	"CLYDE_DAEMON_READY_FD",
+	"CLYDE_DAEMON_RELOAD_CHILD",
+	"CLYDE_DAEMON_SUPERVISOR_SOCKET",
+	"CLYDE_DEBUG_PPROF_ADDR",
+}
+
+// sandboxParentEnv copies the parent environment without the clyde-owned path
+// overrides, so nothing the operator exported can pull the sandbox back onto the
+// deployed daemon's files.
+func sandboxParentEnv() []string {
+	drop := make(map[string]bool, len(clydeOwnedPathVars))
+	for _, name := range clydeOwnedPathVars {
+		drop[name] = true
+	}
+	parent := os.Environ()
+	kept := make([]string, 0, len(parent))
+	for _, entry := range parent {
+		name, _, found := strings.Cut(entry, "=")
+		if found && drop[name] {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 // env returns the redirections that move every clyde-owned path into the
