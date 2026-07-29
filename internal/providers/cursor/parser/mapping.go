@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	"goodkind.io/clyde/internal/conversation"
 	cursorjsonl "goodkind.io/clyde/internal/providers/cursor/jsonl"
 	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
@@ -29,8 +30,17 @@ func mapJSONLMessage(
 	for _, part := range message.Parts {
 		switch part.Type {
 		case cursorjsonl.PartTypeText:
-			if strings.TrimSpace(part.Text) != "" {
-				textParts = append(textParts, part.Text)
+			text := part.Text
+			// Clyde injects synthetic envelopes into the assistant stream
+			// only, so stripping is scoped to an assistant turn. Running it
+			// on a user turn would risk deleting part of what the user
+			// actually wrote, e.g. a pasted transcript or source file that
+			// happens to quote the marker syntax.
+			if message.Role == cursorjsonl.RoleAssistant {
+				text = stripClydeSyntheticEnvelopes(text)
+			}
+			if strings.TrimSpace(text) != "" {
+				textParts = append(textParts, text)
 			}
 		case cursorjsonl.PartTypeToolUse:
 			tools = append(tools, transcript.ToolCall{
@@ -83,7 +93,24 @@ func mapComposerBubble(
 			IsError: toolErrored(bubble.ToolCall.Status),
 		})
 	}
-	if bubble.Text == "" && bubble.Thinking.Text == "" && len(tools) == 0 {
+	// Cursor persists whatever Clyde's MITM/BYOK ingress streamed into
+	// delta.content as an ordinary bubble, so a prior turn's synthetic
+	// envelope (thinking, notice, redacted-thinking) reads back here
+	// looking like genuine assistant prose unless it is stripped before
+	// Clyde re-ingests its own conversation. Clyde injects only into the
+	// assistant stream, so stripping requires bubble.Type to say assistant
+	// explicitly, rather than merely "not user": a bubble whose type is
+	// neither (a partial write, or a future value this parser does not
+	// yet know) must not fall into the destructive branch by default. A
+	// match on anything other than a confirmed assistant bubble is the
+	// user's own text (e.g. a pasted transcript or source file quoting the
+	// marker syntax), not Clyde's content, and stripping it could delete
+	// part of what the user actually wrote, up to the entire message.
+	text := bubble.Text
+	if bubble.Type == cursorstore.BubbleTypeAssistant {
+		text = stripClydeSyntheticEnvelopes(bubble.Text)
+	}
+	if text == "" && bubble.Thinking.Text == "" && len(tools) == 0 {
 		return emptyMessage(), false
 	}
 	return transcript.Message{
@@ -94,7 +121,7 @@ func mapComposerBubble(
 		Visibility:        transcript.MessageVisibilityVisible,
 		Compaction:        nil,
 		Timestamp:         composerBubbleTimestamp(bubble.CreatedAt),
-		Text:              bubble.Text,
+		Text:              text,
 		Thinking:          bubble.Thinking.Text,
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
@@ -143,7 +170,13 @@ func mapLegacyBubble(
 	default:
 		return emptyMessage(), false
 	}
-	if bubble.Text == "" {
+	// See mapComposerBubble: Clyde injects only into the assistant stream,
+	// so a user bubble is never stripped.
+	text := bubble.Text
+	if role == "assistant" {
+		text = stripClydeSyntheticEnvelopes(bubble.Text)
+	}
+	if text == "" {
 		return emptyMessage(), false
 	}
 	return transcript.Message{
@@ -154,7 +187,7 @@ func mapLegacyBubble(
 		Visibility:        transcript.MessageVisibilityVisible,
 		Compaction:        nil,
 		Timestamp:         time.Time{},
-		Text:              bubble.Text,
+		Text:              text,
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
@@ -175,6 +208,48 @@ func emptyMessage() transcript.Message {
 		HasTools:          false,
 		Tools:             nil,
 	}
+}
+
+// stripClydeSyntheticEnvelopes removes every Clyde-owned synthetic content
+// envelope (reasoning, notice, redacted-thinking) from Cursor-owned
+// assistant message text, keeping only the surrounding prose. Kept text
+// segments are joined with a blank line, because an envelope removed from
+// between two prose spans leaves no separator of its own: the open marker
+// carries no leading newline and the close marker's trailing blank line is
+// discarded as decoration, so concatenating the surviving spans directly
+// would fuse the end of one into the start of the next.
+//
+// Clyde's MITM proxy and BYOK ingress inject these envelopes into the
+// assistant delta.content stream Cursor renders; Cursor's app then persists
+// that stream verbatim as an ordinary bubble or transcript line. Left
+// unstripped, a prior turn's injected envelope reads back through this
+// parser as if it were genuine conversation content. [render.ExtractSyntheticParts]
+// is the single parser for the marker format; this helper never re-parses
+// or matches the marker text itself.
+//
+// Callers must apply this to assistant-authored text only. Clyde injects
+// envelopes into the assistant stream alone, so a marker match on a user
+// turn is never Clyde's own content; it is the user's own text (e.g. a
+// pasted transcript or source file quoting the marker syntax), and
+// stripping it there would delete part of what the user actually wrote.
+//
+// Text is unchanged unless the extractor finds a complete open-and-close
+// pair somewhere in it (the single-part, same-body fast path covers both
+// "no marker at all" and "a marker present but never paired"). A marker
+// with no matching counterpart is equally consistent with prose that
+// quotes or discusses the marker syntax as it is with a genuinely
+// truncated envelope, so it is left as ordinary text rather than assumed
+// to be Clyde's own content and removed.
+func stripClydeSyntheticEnvelopes(text string) string {
+	parts := adapterrender.ExtractSyntheticParts(text)
+	textBodies := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.Kind != adapterrender.SyntheticKindText {
+			continue
+		}
+		textBodies = append(textBodies, part.Body)
+	}
+	return strings.Join(textBodies, "\n\n")
 }
 
 func cloneRaw(raw json.RawMessage) json.RawMessage {
