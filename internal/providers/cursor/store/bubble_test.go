@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -79,23 +80,27 @@ func TestDecodeBubbleJSONWrapsInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestLoadBubblesForComposerReturnsHeaderOrderAndSkipsMissingRefs(t *testing.T) {
+// TestStreamComposerBubblesReadsTheKeyRangeFromARealDatabase exercises the
+// assembly through an actual SQLite read rather than an in-memory map, so the
+// key-range query and the decode are covered alongside the ordering rules.
+func TestStreamComposerBubblesReadsTheKeyRangeFromARealDatabase(t *testing.T) {
 	dbPath := createCursorStoreTestDatabase(t)
 	writable, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
-	if _, err := writable.Exec(
-		`UPDATE cursorDiskKV SET value = '{"_v":3,"type":1,"bubbleId":"bubble-1","text":"first"}' WHERE key = 'bubbleId:composer-a:bubble-1'`,
-	); err != nil {
-		_ = writable.Close()
-		t.Fatalf("update bubble-1: %v", err)
+	statements := []string{
+		`UPDATE cursorDiskKV SET value = '{"_v":3,"type":1,"bubbleId":"bubble-1","text":"first","createdAt":"2026-05-06T05:00:00.000Z"}' WHERE key = 'bubbleId:composer-a:bubble-1'`,
+		`UPDATE cursorDiskKV SET value = '{"_v":3,"type":2,"bubbleId":"bubble-2","text":"second","thinking":{"text":"thought"},"createdAt":"2026-05-06T05:00:30.000Z"}' WHERE key = 'bubbleId:composer-a:bubble-2'`,
+		// Stored under the composer's key range but absent from the header, which
+		// is the shape that used to go unread.
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:composer-a:bubble-orphan', '{"_v":3,"type":2,"bubbleId":"bubble-orphan","text":"unreferenced","createdAt":"2026-05-06T05:00:10.000Z"}')`,
 	}
-	if _, err := writable.Exec(
-		`UPDATE cursorDiskKV SET value = '{"_v":3,"type":2,"bubbleId":"bubble-2","text":"second","thinking":{"text":"thought"}}' WHERE key = 'bubbleId:composer-a:bubble-2'`,
-	); err != nil {
-		_ = writable.Close()
-		t.Fatalf("update bubble-2: %v", err)
+	for _, statement := range statements {
+		if _, err := writable.Exec(statement); err != nil {
+			_ = writable.Close()
+			t.Fatalf("exec %q: %v", statement, err)
+		}
 	}
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
@@ -110,22 +115,21 @@ func TestLoadBubblesForComposerReturnsHeaderOrderAndSkipsMissingRefs(t *testing.
 	header := ComposerHeader{
 		ComposerID: "composer-a",
 		FullConversationHeadersOnly: []ComposerBubbleRef{
-			{BubbleID: "bubble-2", Type: BubbleTypeAssistant},
-			{BubbleID: "missing", Type: BubbleTypeUser},
 			{BubbleID: "bubble-1", Type: BubbleTypeUser},
+			{BubbleID: "missing", Type: BubbleTypeUser},
+			{BubbleID: "bubble-2", Type: BubbleTypeAssistant},
 		},
 	}
-	bubbles, err := LoadBubblesForComposer(context.Background(), readonly, header)
+	got := make([]string, 0)
+	err = StreamComposerBubbles(context.Background(), readonly, "composer-a", header, func(bubble Bubble) bool {
+		got = append(got, bubble.BubbleID)
+		return true
+	})
 	if err != nil {
-		t.Fatalf("LoadBubblesForComposer returned error: %v", err)
+		t.Fatalf("StreamComposerBubbles returned error: %v", err)
 	}
-	if len(bubbles) != 2 {
-		t.Fatalf("bubbles len = %d, want 2", len(bubbles))
-	}
-	if bubbles[0].BubbleID != "bubble-2" {
-		t.Fatalf("bubbles[0].BubbleID = %q, want bubble-2", bubbles[0].BubbleID)
-	}
-	if bubbles[1].BubbleID != "bubble-1" {
-		t.Fatalf("bubbles[1].BubbleID = %q, want bubble-1", bubbles[1].BubbleID)
+	want := "bubble-1|bubble-orphan|bubble-2"
+	if strings.Join(got, "|") != want {
+		t.Fatalf("bubbles = %v, want %s: the missing reference is skipped and the unreferenced row is placed by its timestamp", got, want)
 	}
 }

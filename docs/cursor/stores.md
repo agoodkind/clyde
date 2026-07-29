@@ -29,12 +29,22 @@ its workspace.
 
 ## Reading a composer
 
-Clyde reads a composer's messages by following the ordered list of message
-references on the composer record, fetching each referenced message row in turn.
+Clyde reads every message row stored under a composer, not only the ones its
+record references. The record's ordered list of message references is not a
+complete index: messages exist in the store that it never names, and they carry
+real conversation content, so following the list alone reads a composer short.
 
-That list is known to be incomplete. Messages exist in the store that the record
-does not reference, and they carry real conversation content, so a composer can
-read short. Tracked as CLYDE-599.
+Reading everything needs its own judgement, because most unreferenced rows are
+superseded copies. Cursor rewrites a turn under a new message id and leaves the
+previous row in place, marking both with the same server-side message identity,
+so that identity is what separates a copy from a turn that genuinely happened
+twice. The record's order is reproduced exactly for the messages it does name,
+and a recovered message is placed by its write time between the two dated
+messages that bracket it.
+
+A composer with no message references at all is still a conversation when its
+message rows hold content, and Clyde indexes it on that basis rather than on the
+reference list. A composer with no stored messages is a draft and stays out.
 
 ## Subagents
 

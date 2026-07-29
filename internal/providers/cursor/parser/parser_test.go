@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -174,7 +175,15 @@ func TestParserDiscoversScansAndStreamsCursorSources(t *testing.T) {
 	}
 }
 
-func TestParserSkipsEmptyHeaderComposers(t *testing.T) {
+// TestParserAdmitsComposersByWhatTheyStoreNotByTheirHeaderList covers the three
+// shapes a chat's header reference list and its key range can combine into.
+//
+// The list alone cannot decide the empty case, because it is not a complete index
+// of a chat's bubbles. Measured on a real store, 631 of 2,470 chats list no
+// references, 9 of those hold stored bubbles anyway, and one is a 2,189-message
+// agent run that never reached `conversation list` while the list decided this.
+// The other 622 hold no bubble row at all and stay out.
+func TestParserAdmitsComposersByWhatTheyStoreNotByTheirHeaderList(t *testing.T) {
 	rootDir := t.TempDir()
 	projectsDir := t.TempDir()
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
@@ -188,13 +197,19 @@ func TestParserSkipsEmptyHeaderComposers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open global db: %v", err)
 	}
-	emptyComposerID := "44444444-4444-4444-8444-444444444444"
+	draftComposerID := "44444444-4444-4444-8444-444444444444"
 	realComposerID := "55555555-5555-4555-8555-555555555555"
+	unlistedComposerID := "66666666-6666-4666-8666-666666666666"
 	statements := []string{
 		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)",
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + emptyComposerID + `', '{"composerId":"` + emptyComposerID + `","name":"","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"isDraft":true,"fullConversationHeadersOnly":[]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + draftComposerID + `', '{"composerId":"` + draftComposerID + `","name":"","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"isDraft":true,"fullConversationHeadersOnly":[]}')`,
 		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + realComposerID + `', '{"composerId":"` + realComposerID + `","name":"Real","createdAt":1710000000200,"lastUpdatedAt":1710000000300,"fullConversationHeadersOnly":[{"bubbleId":"real-user","type":1}]}')`,
+		// A chat Cursor left with no header references, no `lastUpdatedAt`, and a
+		// stored conversation, which is the shape of the 2,189-message agent run.
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + unlistedComposerID + `', '{"composerId":"` + unlistedComposerID + `","name":"Unlisted","createdAt":1710000000400,"fullConversationHeadersOnly":[]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + unlistedComposerID + `:u-1', '{"_v":3,"type":1,"bubbleId":"u-1","text":"the unlisted question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + unlistedComposerID + `:u-2', '{"_v":3,"type":2,"bubbleId":"u-2","text":"the unlisted answer","createdAt":"2026-05-06T05:00:10.000Z"}')`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
@@ -213,14 +228,37 @@ func TestParserSkipsEmptyHeaderComposers(t *testing.T) {
 	}
 	paths := candidatePaths(candidates)
 	if slices.ContainsFunc(paths, func(path string) bool {
-		return strings.Contains(path, emptyComposerID)
+		return strings.Contains(path, draftComposerID)
 	}) {
-		t.Fatalf("empty-header composer was offered as a candidate: %#v", paths)
+		t.Fatalf("draft composer with nothing stored was offered as a candidate: %#v", paths)
 	}
 	if !slices.ContainsFunc(paths, func(path string) bool {
 		return strings.Contains(path, realComposerID)
 	}) {
 		t.Fatalf("real composer missing from candidates: %#v", paths)
+	}
+
+	unlistedPath := findPathContaining(t, paths, unlistedComposerID)
+	unlistedStamp := conversation.FileStamp{Size: 0, Mtime: time.Time{}}
+	for _, candidate := range candidates {
+		if candidate.Path == unlistedPath {
+			unlistedStamp = candidate.Stamp
+		}
+	}
+	if unlistedStamp.Size == 0 {
+		t.Fatal("unlisted composer stamp has no bubble-range revision")
+	}
+
+	messages, err := conversation.CollectMessages(parser.Stream(unlistedPath, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("CollectMessages for the unlisted composer returned error: %v", err)
+	}
+	if len(messages) != 2 || messages[0].Text != "the unlisted question" || messages[1].Text != "the unlisted answer" {
+		t.Fatalf("unlisted composer messages = %#v, want both stored turns", messages)
 	}
 }
 
@@ -324,5 +362,233 @@ func createCursorParserWorkspaceDB(t *testing.T, rootDir string, workspaceHash s
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close workspace db: %v", err)
+	}
+}
+
+// TestDiscoverKeepsAChatWhoseStoredBubblesCannotBeRead covers a probe that fails
+// rather than answering. The scan rebuilds the record set from what Discover
+// returns, so a chat left out here loses the record it already had: one busy
+// database while Cursor checkpoints would take a conversation out of the index
+// until a later pass succeeded.
+func TestDiscoverKeepsAChatWhoseStoredBubblesCannotBeRead(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+
+	globalDBPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+	if err := os.MkdirAll(filepath.Dir(globalDBPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll global db dir: %v", err)
+	}
+	unreadableComposerID := "77777777-7777-4777-8777-777777777777"
+	writeRows := func(t *testing.T, bubbleValue string) {
+		t.Helper()
+
+		db, err := sql.Open("sqlite3", "file:"+globalDBPath+"?_busy_timeout=5000")
+		if err != nil {
+			t.Fatalf("sql.Open global db: %v", err)
+		}
+		for _, statement := range []string{
+			"CREATE TABLE IF NOT EXISTS ItemTable(key TEXT UNIQUE, value BLOB)",
+			"CREATE TABLE IF NOT EXISTS cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + unreadableComposerID + `', '{"composerId":"` + unreadableComposerID + `","name":"Unreadable","createdAt":1710000000400,"fullConversationHeadersOnly":[]}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + unreadableComposerID + `:u-1', ` + bubbleValue + `)`,
+		} {
+			if _, err := db.Exec(statement); err != nil {
+				_ = db.Close()
+				t.Fatalf("exec statement %q: %v", statement, err)
+			}
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close global db: %v", err)
+		}
+	}
+
+	path := BuildVirtualPath(RootHash(rootDir), VirtualKindComposer, unreadableComposerID)
+	parser := New()
+
+	// One pass that can read the chat, which is what gives the parser a stamp to
+	// fall back on.
+	writeRows(t, `'{"_v":3,"type":1,"bubbleId":"u-1","text":"the question"}'`)
+	firstPass, err := parser.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	readableStamp := conversation.FileStamp{Size: 0, Mtime: time.Time{}}
+	for _, candidate := range firstPass {
+		if candidate.Path == path {
+			readableStamp = candidate.Stamp
+		}
+	}
+	if readableStamp.Size == 0 {
+		t.Fatalf("the readable pass did not admit the chat: %#v", candidatePaths(firstPass))
+	}
+
+	// Then the row becomes one no pass can read, which is what a busy database or
+	// a NULL value looks like from here.
+	writeRows(t, "NULL")
+	candidates, err := parser.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if !slices.Contains(candidatePaths(candidates), path) {
+		t.Fatalf("a chat whose bubbles could not be read was dropped from Discover: %#v", candidatePaths(candidates))
+	}
+	for _, candidate := range candidates {
+		if candidate.Path == path && !candidate.Stamp.Equal(readableStamp) {
+			t.Fatalf("stamp = %+v, want the stamp the last readable pass gave it, %+v: an unequal stamp re-runs the scan and changes the engine's fingerprint",
+				candidate.Stamp, readableStamp)
+		}
+	}
+
+	// A cold parser still knows the chat's key range holds a row. The read cannot
+	// classify the row as empty, so discovery must keep the candidate and let the
+	// stream report that the stored conversation cannot be read.
+	coldCandidates, err := New().Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if !slices.Contains(candidatePaths(coldCandidates), path) {
+		t.Fatalf("a cold chat whose stored row could not be classified was dropped from Discover: %#v", candidatePaths(coldCandidates))
+	}
+}
+
+// TestComposerRecordCarriesACreationTimeWhenCursorNeverStampedAnUpdate covers the
+// listing order. A listing sorts by UpdatedAt descending, and the chats this
+// parser admits by their stored bubbles are exactly the ones Cursor never gave a
+// lastUpdatedAt, so taking that field alone puts the 2,189-message agent run at
+// the zero time and last of roughly 2,470 records.
+func TestComposerRecordCarriesACreationTimeWhenCursorNeverStampedAnUpdate(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+
+	globalDBPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+	if err := os.MkdirAll(filepath.Dir(globalDBPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll global db dir: %v", err)
+	}
+	db, err := sql.Open("sqlite3", "file:"+globalDBPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open global db: %v", err)
+	}
+	unstampedComposerID := "88888888-8888-4888-8888-888888888888"
+	statements := []string{
+		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
+		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)",
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + unstampedComposerID + `', '{"composerId":"` + unstampedComposerID + `","name":"Unstamped","createdAt":1710000000400,"fullConversationHeadersOnly":[]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + unstampedComposerID + `:u-1', '{"_v":3,"type":1,"bubbleId":"u-1","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("exec statement %q: %v", statement, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close global db: %v", err)
+	}
+
+	parser := New()
+	candidates, err := parser.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	path := findPathContaining(t, candidatePaths(candidates), unstampedComposerID)
+	var stamp conversation.FileStamp
+	for _, candidate := range candidates {
+		if candidate.Path == path {
+			stamp = candidate.Stamp
+		}
+	}
+	record, ok := parser.ScanRecord(path, stamp)
+	if !ok {
+		t.Fatalf("ScanRecord(%q) ok = false", path)
+	}
+	if record.UpdatedAt.IsZero() {
+		t.Fatal("UpdatedAt is the zero time, so the chat sorts below every dated conversation")
+	}
+	if !record.UpdatedAt.Equal(time.UnixMilli(1710000000400).UTC()) {
+		t.Fatalf("UpdatedAt = %v, want the chat's creation time", record.UpdatedAt)
+	}
+}
+
+// TestComposerStampMovesWhenAnUnreferencedBubbleArrives covers a chat that gains
+// a bubble its header does not reference. Assembly reads the whole key range, so
+// the chat has changed, and a stamp taken from the reference list and
+// `lastUpdatedAt` alone would leave the old transcript in the index and in
+// semantic search for good.
+func TestComposerStampMovesWhenAnUnreferencedBubbleArrives(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+	globalDBPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+	if err := os.MkdirAll(filepath.Dir(globalDBPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll global db dir: %v", err)
+	}
+
+	composerID := "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+	exec := func(t *testing.T, statements []string) {
+		t.Helper()
+
+		db, err := sql.Open("sqlite3", "file:"+globalDBPath+"?_busy_timeout=5000")
+		if err != nil {
+			t.Fatalf("sql.Open global db: %v", err)
+		}
+		for _, statement := range statements {
+			if _, err := db.Exec(statement); err != nil {
+				_ = db.Close()
+				t.Fatalf("exec %q: %v", statement, err)
+			}
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close global db: %v", err)
+		}
+	}
+	stampFor := func(t *testing.T, parser *Parser) conversation.FileStamp {
+		t.Helper()
+
+		candidates, err := parser.Discover(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Discover returned error: %v", err)
+		}
+		path := findPathContaining(t, candidatePaths(candidates), composerID)
+		for _, candidate := range candidates {
+			if candidate.Path == path {
+				return candidate.Stamp
+			}
+		}
+		t.Fatalf("no candidate for %q", path)
+		return conversation.FileStamp{Size: 0, Mtime: time.Time{}}
+	}
+
+	// A chat whose header references one bubble, with a fixed lastUpdatedAt.
+	exec(t, []string{
+		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
+		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + composerID + `', '{"composerId":"` + composerID + `","name":"Chat","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"fullConversationHeadersOnly":[{"bubbleId":"b-1","type":1}]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + composerID + `:b-1', '{"_v":3,"type":1,"bubbleId":"b-1","text":"the question"}')`,
+	})
+	parser := New()
+	before := stampFor(t, parser)
+
+	// Cursor adds a bubble the header does not reference and touches neither the
+	// reference list nor lastUpdatedAt.
+	exec(t, []string{
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + composerID + `:b-2', '{"_v":3,"type":2,"bubbleId":"b-2","text":"the unreferenced answer"}')`,
+	})
+	after := stampFor(t, parser)
+
+	if before.Equal(after) {
+		t.Fatalf("stamp %+v is unchanged after the chat gained an unreferenced bubble, so the scan keeps the old transcript", before)
+	}
+
+	// Cursor replaces one stored row without changing the row count or header
+	// timestamp. The stamp still has to move because search must re-index the new
+	// text.
+	exec(t, []string{
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + composerID + `:b-2', '{"_v":3,"type":2,"bubbleId":"b-2","text":"the replacement answer"}')`,
+	})
+	afterRewrite := stampFor(t, parser)
+	if after.Equal(afterRewrite) {
+		t.Fatalf("stamp %+v is unchanged after one stored bubble was rewritten, so search keeps the old content", after)
 	}
 }
