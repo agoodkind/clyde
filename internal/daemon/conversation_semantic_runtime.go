@@ -160,7 +160,10 @@ func semsearchConnector(socketPath, collectionID string, log *slog.Logger) seman
 }
 
 func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, log *slog.Logger, group *livetrack.Group) *conversationSemanticRuntime {
-	if cfg == nil || !cfg.Conversation.Semantic.Enabled {
+	// One connection serves both directions, so it is built when either one is
+	// wanted. Which direction actually uses it is decided at the two call sites
+	// that read from it.
+	if cfg == nil || !cfg.Conversation.Semantic.UsesEngine() {
 		return nil
 	}
 	if log == nil {

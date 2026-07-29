@@ -22,11 +22,25 @@ type ConversationConfig struct {
 	Semantic                     ConversationSemanticConfig `json:"semantic,omitzero" toml:"semantic,omitempty"`
 }
 
-// ConversationSemanticConfig configures background semantic-search sync.
+// ConversationSemanticConfig configures conversation semantic search: offering
+// conversations to the search engine, and reading them back.
+//
+// The two are separate settings because they carry different costs. Offering
+// conversations embeds text, which occupies the GPU and grows the store, so an
+// operator has real reasons to stop it. Reading queries a corpus that already
+// exists and costs nothing, so stopping the writes does not put the stored
+// conversations out of reach.
 type ConversationSemanticConfig struct {
-	Enabled      bool   `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	SocketPath   string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
-	CollectionID string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
+	// Enabled offers conversations to the search engine. Turning it off stops
+	// new embedding and leaves everything already stored searchable.
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	// SearchEnabled answers conversation searches from the engine. It is a
+	// pointer so an absent setting stays distinguishable from an explicit
+	// false, and an absent setting means on: a corpus that exists should be
+	// reachable unless an operator says otherwise.
+	SearchEnabled *bool  `json:"searchEnabled,omitempty" toml:"search_enabled,omitempty"`
+	SocketPath    string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
+	CollectionID  string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
 	// IndexedContent names the content kinds offered to the search engine, using
 	// the same selector vocabulary the export surface accepts. The names and their
 	// validation belong to the conversation package's content-kind taxonomy, which
@@ -42,6 +56,28 @@ type ConversationSemanticConfig struct {
 	// how an operator turns indexing off, because that would quietly stop
 	// embedding everything; `enabled = false` is.
 	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
+}
+
+// FeedsEngine reports whether the daemon offers conversations to the search
+// engine.
+func (semantic ConversationSemanticConfig) FeedsEngine() bool {
+	return semantic.Enabled
+}
+
+// AnswersSearch reports whether the daemon answers conversation searches from
+// the engine. An unset value means yes, so a corpus that already exists stays
+// reachable when an operator stops the writes.
+func (semantic ConversationSemanticConfig) AnswersSearch() bool {
+	if semantic.SearchEnabled == nil {
+		return true
+	}
+	return *semantic.SearchEnabled
+}
+
+// UsesEngine reports whether either direction needs a connection to the engine,
+// which is what decides whether the daemon builds one.
+func (semantic ConversationSemanticConfig) UsesEngine() bool {
+	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
 func applyConversationDefaults(conversation *ConversationConfig) {

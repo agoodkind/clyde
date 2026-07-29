@@ -25,7 +25,14 @@ level = "debug"
 include_subagent_conversations = false
 
 [conversation.semantic]
+# Offer conversations to the search engine. This embeds text, so it occupies the
+# GPU and grows the store. Turning it off stops new embedding and leaves
+# everything already stored searchable.
 enabled = false
+# Answer conversation searches from the engine. Reading queries a corpus that
+# already exists and costs nothing, so this stays on when enabled is off. Omit
+# the key for that default; set it false to stop answering searches as well.
+search_enabled = true
 socket_path = ""
 collection_id = "clyde-conversations"
 # Content kinds offered to the search engine, using the same selector names the
@@ -36,6 +43,7 @@ collection_id = "clyde-conversations"
 # "system_messages", or "tool_outputs" here to index those too. Use
 # enabled = false to stop indexing entirely; an empty list means the default.
 indexed_content = ["chat", "tool_calls"]
+
 
 [logging.rotation]
 enabled = true

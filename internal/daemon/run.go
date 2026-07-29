@@ -124,8 +124,10 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	// is down at boot the resolver returns nil, and the worker starts anyway and
 	// picks the client up once the background registration retry succeeds, with
 	// no daemon reload. A nil resolver means semantic search is not configured.
+	// A nil resolver is how the feeder is left unstarted, so offering
+	// conversations is gated here rather than inside the worker.
 	var resolveSemanticClient conversationSemanticClientResolver
-	if runtime.semantic != nil {
+	if runtime.semantic != nil && cfg.Conversation.Semantic.FeedsEngine() {
 		resolveSemanticClient = runtime.semantic.syncClient
 	}
 	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, resolveSemanticClient, semanticFreshness, runtime.group); err != nil {
@@ -294,7 +296,7 @@ func newControlServer(
 	runtime *runtimeServices,
 ) *controlServer {
 	semanticSearch := func() conversationSemanticSearchClient {
-		if !cfg.Conversation.Semantic.Enabled || runtime.semantic == nil {
+		if !cfg.Conversation.Semantic.AnswersSearch() || runtime.semantic == nil {
 			return nil
 		}
 		return runtime.semantic.currentSearchClient()
