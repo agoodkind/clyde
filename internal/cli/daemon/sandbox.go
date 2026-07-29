@@ -142,16 +142,27 @@ func runSandbox(ctx context.Context, f *cli.Factory, keep bool) error {
 	// to run the deferred cleanup afterwards. Nothing reads the channel: the
 	// registration is the whole mechanism, and a full buffer simply drops the
 	// repeat signals, which are already reaching the daemon directly.
+	//
+	// Recording that a signal arrived is what separates the two ways this command
+	// ends. An operator stopping the sandbox is success; the daemon exiting on its
+	// own is a failure the operator must see, because a sandbox that dies on a bad
+	// config would otherwise look exactly like one they stopped.
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
-	if err := daemonCmd.Run(); err != nil {
-		// A daemon stopped by Ctrl-C exits non-zero, which is the ordinary way
-		// this command ends rather than a failure worth reporting as one.
-		slog.InfoContext(ctx, "cli.daemon.sandbox.stopped", "concern", "cmd.dispatch", "component", "cli", "err", err)
+	runErr := daemonCmd.Run()
+	if runErr == nil {
+		return nil
 	}
-	return nil
+	select {
+	case <-signals:
+		slog.InfoContext(ctx, "cli.daemon.sandbox.stopped", "concern", "cmd.dispatch", "component", "cli", "err", runErr)
+		return nil
+	default:
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.daemon_failed", "concern", "cmd.dispatch", "component", "cli", "err", runErr)
+		return fmt.Errorf("the sandbox daemon exited on its own, so it never became usable: %w", runErr)
+	}
 }
 
 // newSandboxRoots creates the throwaway directory set. The runtime root sits
