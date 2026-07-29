@@ -28,7 +28,13 @@ const (
 	// but its file stamps are dropped so the first refresh re-parses every
 	// artifact once and fills in the fields the old shape never stored. Raise it
 	// whenever a scan starts deriving a record field the old cache cannot supply.
-	cacheFormatVersion = 1
+	//
+	// Version 2 reads a Cursor chat's workspace root, origin, archived flag, and
+	// fallback title from a store version 1 never opened. A chat's own artifact
+	// does not change when any of those change, so without this the overwhelming
+	// majority of them would keep a version-1 record with an empty workspace
+	// forever.
+	cacheFormatVersion = 2
 )
 
 // Index owns the derived raw conversation cache. It resolves each artifact's

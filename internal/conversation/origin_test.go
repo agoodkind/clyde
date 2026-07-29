@@ -144,3 +144,26 @@ func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 		t.Fatalf("re-read records = %#v, want the subagent origin preserved", roundTripped)
 	}
 }
+
+// Blocker 1: composer records now derive a workspace root, an origin, an
+// archived flag, and a title fallback from a Cursor store the version-1 shape
+// never read. A cache written at version 1 must therefore lose its stamps so the
+// first refresh re-derives those fields, exactly as it does for an older shape.
+func TestReadCacheDropsStampsFromVersionOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation-index.json")
+	body := `{"version":1,"records":[{"id":"cursor:composer-a","provider":"cursor","native_id":"composer-a","artifact_path":"cursor://root/composer/composer-a"}],"stamps":{"cursor://root/composer/composer-a":{"size":3,"mtime":"2026-01-01T00:00:00Z"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	records, stamps, err := readCache(path)
+	if err != nil {
+		t.Fatalf("readCache returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want the one cached record kept", len(records))
+	}
+	if len(stamps) != 0 {
+		t.Fatalf("stamps = %v, want none so the first refresh re-derives composer metadata", stamps)
+	}
+}
