@@ -22,16 +22,36 @@ import (
 // /tmp while the other roots may sit anywhere.
 const sandboxRootPrefix = "clyde-sandbox-"
 
-// sandboxConfig is the config a sandbox daemon boots with. Every listener is off
-// because the sandbox exists to exercise conversation reading by hand: the
-// adapter and MITM proxy would bind ports, and the semantic feed would write to
-// the shared search engine. Reading Cursor is unaffected by all three.
-const sandboxConfig = `[logging]
+// sandboxCollectionID names the search-engine collection every sandbox writes
+// into. It is one fixed name rather than one per run, because clyde can ask the
+// engine to create a collection but has no call to drop one, so per-run names
+// would accumulate with no way to remove them from here. Reusing one name means
+// there is never more than a single sandbox collection however often the sandbox
+// runs, and the operator can drop that one by hand whenever they like.
+//
+// Reuse also carries content between runs, so a second run re-embeds only what
+// changed. A run that needs a cold start drops this collection first.
+const sandboxCollectionID = "clyde-sandbox"
+
+// sandboxConfigTemplate is the config a sandbox daemon boots with, with its
+// collection id substituted.
+//
+// The adapter and MITM listeners stay off because they would bind ports the
+// deployed daemon already owns and neither takes part in reading or searching
+// conversations.
+//
+// Semantic search is on, against the same engine the deployed daemon uses but a
+// collection of the sandbox's own. That is what makes this an end-to-end target
+// rather than a read check: a conversation is read, embedded, and searched back,
+// so a defect anywhere along that path shows up in the search result. Leaving the
+// socket path unset resolves the engine exactly as production does.
+const sandboxConfigTemplate = `[logging]
 level = "debug"
 
 [conversation.semantic]
-enabled = false
-search_enabled = false
+enabled = true
+search_enabled = true
+collection_id = %q
 
 [adapter]
 enabled = false
@@ -102,6 +122,7 @@ func runSandbox(ctx context.Context, f *cli.Factory, keep bool) error {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_dir_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
 		return fmt.Errorf("create the sandbox config directory %s: %w", filepath.Dir(configPath), err)
 	}
+	sandboxConfig := fmt.Sprintf(sandboxConfigTemplate, sandboxCollectionID)
 	if err := os.WriteFile(configPath, []byte(sandboxConfig), 0o600); err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_write_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
 		return fmt.Errorf("write the sandbox config %s: %w", configPath, err)
@@ -186,6 +207,7 @@ func writeSandboxBanner(f *cli.Factory, roots sandboxRoots, configPath string) {
 	_, _ = fmt.Fprintf(out, "  root:   %s\n", roots.base)
 	_, _ = fmt.Fprintf(out, "  config: %s\n", configPath)
 	_, _ = fmt.Fprintln(out, "  reads:  the real provider conversation stores, with an empty cache")
+	_, _ = fmt.Fprintf(out, "  embeds: into the live search engine, collection %q\n", sandboxCollectionID)
 	_, _ = fmt.Fprintln(out, "  binds:  nothing, every listener is disabled")
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "drive it from another terminal with this prefix:")
