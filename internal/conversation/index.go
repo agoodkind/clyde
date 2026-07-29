@@ -198,10 +198,13 @@ func (idx *Index) recordsSnapshot() []Record {
 // Resolve finds one conversation by id, native id, title, artifact path, or
 // provider request id.
 //
-// A selector shaped like a request id skips the fuzzy title pass and takes
-// [Index.resolveUUIDShapedSelector] instead. A request id names one exact thing,
-// so answering it with a conversation whose title merely contains those
-// characters would be a guess.
+// A selector shaped like a request id is matched against the identifiers a
+// record owns and then taken to [Index.resolveUUIDShapedSelector]. It never
+// reaches a title, exactly or by substring. A request id names one exact thing,
+// while a title is a summary of what a conversation is about, so a conversation
+// whose title happens to be those 36 characters is not the conversation that
+// issued the request, and pasting a request id into a chat is how a title comes
+// to be one.
 func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
@@ -211,11 +214,14 @@ func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) 
 	if err != nil {
 		return Record{}, err
 	}
+	if looksLikeRequestID(selector) {
+		if record, ok := resolveRecordIdentity(records, selector); ok {
+			return record, nil
+		}
+		return idx.resolveUUIDShapedSelector(ctx, selector)
+	}
 	if record, ok := resolveRecordExact(records, selector); ok {
 		return record, nil
-	}
-	if looksLikeRequestID(selector) {
-		return idx.resolveUUIDShapedSelector(ctx, selector)
 	}
 	if record, ok := resolveRecordFuzzyTitle(records, selector); ok {
 		return record, nil
@@ -280,7 +286,7 @@ func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string) (Record, error) {
 	fresh := idx.refreshBeforeLookup(ctx)
 	records := idx.recordsSnapshot()
-	if record, ok := resolveRecordExact(records, selector); ok {
+	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
 	switch record, carriers := recordByLatestRequestID(records, selector); {
@@ -323,6 +329,15 @@ func notFoundNote(reason RequestNotFoundReason, fresh bool) string {
 // the provider's live store. The exhaustive provider scan runs only when the
 // caller sets opts.AllowFullScan, because it costs tens of seconds.
 //
+// The index pass runs after the refresh rather than before it. Answering from
+// the cached records first would be answering a question about how many
+// conversations carry the id over a snapshot that predates the duplicate: a chat
+// the operator copied since the last scan carries the request as truly as the
+// original does, and the cache still shows one carrier, so the cheap path would
+// name a conversation the current corpus calls ambiguous. The refresh is also
+// what a cold cache relies on to know the id at all, so running it first costs a
+// rebuild the fall-through was going to pay for anyway.
+//
 // An id no path resolves reports not found with the reason, never a nearby
 // conversation.
 func (idx *Index) ResolveRequest(
@@ -334,22 +349,15 @@ func (idx *Index) ResolveRequest(
 	if requestID == "" {
 		return RequestResolution{}, errors.New("request id is required")
 	}
-	records, err := idx.List(ctx)
-	if err != nil {
+	// List is what loads the cache, which the refresh then scans incrementally
+	// against. Its records are deliberately not consulted here.
+	if _, err := idx.List(ctx); err != nil {
 		return RequestResolution{}, err
 	}
-	if record, carriers := recordByLatestRequestID(records, requestID); carriers == 1 {
-		return foundRequestResolution(requestID, RequestOriginIndex, record), nil
-	} else if carriers > 1 {
-		return ambiguousRequestResolution(ctx, requestID, carriers), nil
-	}
-	// Refresh before falling through, so a cold or stale cache does not send a
-	// request the index does know to the provider's store and report the wrong
-	// origin for it. A refresh that does not finish is not fatal; it makes a miss
-	// inconclusive, because the records the miss was established over may be the
-	// stale ones.
+	// A refresh that does not finish is not fatal; it makes a miss inconclusive,
+	// because the records the miss was established over may be the stale ones.
 	fresh := idx.refreshBeforeLookup(ctx)
-	records = idx.recordsSnapshot()
+	records := idx.recordsSnapshot()
 	if record, carriers := recordByLatestRequestID(records, requestID); carriers == 1 {
 		return foundRequestResolution(requestID, RequestOriginIndex, record), nil
 	} else if carriers > 1 {
@@ -811,10 +819,31 @@ func resolveRecord(records []Record, selector string) (Record, bool) {
 // surface would quietly disagree with `resolve-request` about the same id.
 // [recordByLatestRequestID] is the one place that lookup happens, and it counts.
 func resolveRecordExact(records []Record, selector string) (Record, bool) {
+	if record, ok := resolveRecordIdentity(records, selector); ok {
+		return record, true
+	}
+	for _, record := range records {
+		if record.Title == selector {
+			return record, true
+		}
+	}
+	return emptyRecord(), false
+}
+
+// resolveRecordIdentity is [resolveRecordExact] without the title, for a
+// selector that names one exact thing.
+//
+// A title is what a conversation is about rather than what it is, so it can be
+// any string at all, request ids included: pasting one into a chat is enough to
+// make it that chat's title. Matching a request-id-shaped selector against a
+// title would hand back a conversation that merely discussed the request as the
+// conversation that issued it, and would do so before the request-id route ran,
+// so every selector surface would quietly disagree with `resolve-request` about
+// the same id.
+func resolveRecordIdentity(records []Record, selector string) (Record, bool) {
 	for _, record := range records {
 		if record.ID == selector ||
 			record.NativeID == selector ||
-			record.Title == selector ||
 			record.ArtifactPath == selector {
 			return record, true
 		}

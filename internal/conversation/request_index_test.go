@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -203,10 +204,16 @@ func testRecord(id string, provider Provider, nativeID string, title string) Rec
 
 // stubParser is a registered provider whose only real behaviour is the request
 // lookup a test is about: the match it reports, or the store failure it hits.
+//
+// It counts the lookups it was asked for, because whether the provider's store
+// was consulted at all is a fact about the run rather than something to read out
+// of the answer. The counter is a pointer so the registry's copy of the parser
+// and the test's own share it.
 type stubParser struct {
 	provider providerid.Provider
 	match    RequestMatch
 	err      error
+	lookups  *atomic.Int64
 }
 
 var (
@@ -233,12 +240,13 @@ func (parser stubParser) ResolveRequestID(
 	string,
 	RequestLookupOptions,
 ) (RequestMatch, error) {
+	parser.lookups.Add(1)
 	return parser.match, parser.err
 }
 
 // resolverParser wraps one request-lookup outcome as a registered Cursor parser.
 func resolverParser(match RequestMatch, err error) stubParser {
-	return stubParser{provider: providerid.ProviderCursor, match: match, err: err}
+	return stubParser{provider: providerid.ProviderCursor, match: match, err: err, lookups: &atomic.Int64{}}
 }
 
 // TestWaitForRefreshReportsAFailedInFlightRefresh is the difference between a
@@ -593,6 +601,119 @@ func TestResolveRequestDoesNotClaimUnindexedOverAFailedRefresh(t *testing.T) {
 	}
 	if resolution.Reason != RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %v, want inconclusive", resolution.Reason)
+	}
+}
+
+// TestResolveRequestDoesNotAnswerFromACacheThatPredatesTheDuplicate covers the
+// uniqueness the index path asserts when it answers. How many conversations carry
+// a request id is a question about the corpus as it is now, and the cached
+// records are the corpus as it was at the last scan. A chat the operator
+// duplicated since then carries the request as truly as the original does, so an
+// answer read off the old snapshot names one conversation for an id the current
+// corpus cannot narrow to one.
+func TestResolveRequestDoesNotAnswerFromACacheThatPredatesTheDuplicate(t *testing.T) {
+	t.Parallel()
+
+	requestID := "0e3f0000-0000-4000-8000-000000000000"
+	original := testRecord("cursor:original", ProviderCursor, "original", "the chat")
+	original.LatestRequestID = requestID
+	duplicate := testRecord("cursor:duplicate", ProviderCursor, "duplicate", "(1) the chat")
+	duplicate.LatestRequestID = requestID
+
+	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
+		return scanResult{records: []Record{original, duplicate}, stamps: nil}, nil
+	})
+	// The cache as it stood before the chat was duplicated.
+	idx.records = []Record{original}
+	idx.loaded = true
+
+	resolution, err := idx.ResolveRequest(context.Background(), requestID, RequestLookupOptions{AllowFullScan: false})
+	if err != nil {
+		t.Fatalf("ResolveRequest returned error: %v", err)
+	}
+	if resolution.Found {
+		t.Fatalf("resolution = %+v, want no answer: the cached snapshot showed one carrier and the corpus now holds two", resolution.Record)
+	}
+	if resolution.Reason != RequestNotFoundReasonAmbiguousConversation {
+		t.Fatalf("reason = %v, want ambiguous_conversation", resolution.Reason)
+	}
+}
+
+// TestResolveNeverAnswersARequestIDWithATitleThatEqualsIt covers the exact-title
+// pass in front of the request-id route. A title is what a conversation is about,
+// so it can be any string at all, and pasting a request id into a chat is enough
+// to make it that chat's title. Answering the id with that chat says it issued
+// the request, which is the guess the route exists not to make.
+func TestResolveNeverAnswersARequestIDWithATitleThatEqualsIt(t *testing.T) {
+	t.Parallel()
+
+	requestID := "0e3f0000-0000-4000-8000-000000000000"
+	titled := testRecord("cursor:titled", ProviderCursor, "titled-chat", requestID)
+	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
+		return scanResult{records: []Record{titled}, stamps: nil}, nil
+	}, resolverParser(RequestMatch{
+		Found:                false,
+		Provider:             providerid.ProviderUnspecified,
+		NativeConversationID: "",
+		Origin:               RequestOriginUnspecified,
+		Reason:               RequestNotFoundReasonNotRetained,
+	}, nil))
+
+	record, err := idx.Resolve(context.Background(), requestID)
+	if err == nil {
+		t.Fatalf("Resolve returned %q for a request id no conversation issued, matched on its title", record.ID)
+	}
+	if !strings.Contains(err.Error(), RequestNotFoundReasonNotRetained.Describe()) {
+		t.Fatalf("Resolve error = %v, want the request lookup's own reason", err)
+	}
+
+	// The controls: the same conversation is still reachable by what it is, and a
+	// title that is not shaped like a request id still resolves exactly.
+	if found, err := idx.Resolve(context.Background(), "titled-chat"); err != nil || found.ID != "cursor:titled" {
+		t.Fatalf("Resolve by native id = (%+v, %v), want the conversation", found, err)
+	}
+	plain := testRecord("cursor:plain", ProviderCursor, "plain-chat", "release notes")
+	plainIdx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
+		return scanResult{records: []Record{plain}, stamps: nil}, nil
+	})
+	if found, err := plainIdx.Resolve(context.Background(), "release notes"); err != nil || found.ID != "cursor:plain" {
+		t.Fatalf("Resolve by exact title = (%+v, %v), want the conversation", found, err)
+	}
+}
+
+// TestResolveOnlyAsksTheProviderStoreForARequestShapedSelector counts the
+// lookups instead of inferring them from the error text. An implementation that
+// queried the store, discarded the result, and reported a plain not-found reads
+// identically in the message and is exactly what the shape gate exists to
+// prevent, because the gate runs for every selector of every provider.
+func TestResolveOnlyAsksTheProviderStoreForARequestShapedSelector(t *testing.T) {
+	t.Parallel()
+
+	parser := resolverParser(RequestMatch{
+		Found:                false,
+		Provider:             providerid.ProviderUnspecified,
+		NativeConversationID: "",
+		Origin:               RequestOriginUnspecified,
+		Reason:               RequestNotFoundReasonNotRetained,
+	}, nil)
+	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
+		return scanResult{records: nil, stamps: nil}, nil
+	}, parser)
+
+	if _, err := idx.Resolve(context.Background(), "not-a-request-id"); err == nil {
+		t.Fatal("Resolve of an unknown selector returned no error")
+	}
+	if asked := parser.lookups.Load(); asked != 0 {
+		t.Fatalf("the provider store was asked %d times about a selector that is not shaped like a request id", asked)
+	}
+
+	// The positive control: the counter does move, so the assertion above is about
+	// the shape gate rather than about a resolver that is never reached at all.
+	if _, err := idx.Resolve(context.Background(), "0e3f0000-0000-4000-8000-000000000000"); err == nil {
+		t.Fatal("Resolve of an unknown request id returned no error")
+	}
+	if asked := parser.lookups.Load(); asked != 1 {
+		t.Fatalf("lookups = %d, want the request-id-shaped selector to reach the store exactly once", asked)
 	}
 }
 

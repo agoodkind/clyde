@@ -106,7 +106,7 @@ func (root DataRoot) ListWorkspaceEntries() (WorkspaceListing, error) {
 
 	entries, err := os.ReadDir(root.WorkspaceStorageDir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if StatSaysAbsent(err, root.WorkspaceStorageDir) {
 			listing.StorageDirMissing = true
 			return listing, nil
 		}
@@ -256,6 +256,32 @@ func defaultCursorDataDir(ctx context.Context) (string, error) {
 	return filepath.Join(userHome, ".config", "Cursor", "User"), nil
 }
 
+// StatSaysAbsent reports whether a failed [os.Stat] established that nothing is
+// stored at path. It is the one place that decision is made, because every
+// caller that reads a stat failure as an absence goes on to report a confirmed
+// absence of whatever it was looking for.
+//
+// A not-exist error is not enough on its own. Stat follows symlinks, so it
+// reports not-exist for a link whose target it could not resolve, and a Cursor
+// database reached through a link into an unmounted volume is a store this
+// process never read rather than one that holds nothing. [os.Lstat] is what
+// tells the two apart: it answers about the entry itself, so a link that is
+// there and will not resolve is unreadable, and a path with no entry at all is
+// the real absence.
+func StatSaysAbsent(statErr error, path string) bool {
+	if statErr == nil {
+		return false
+	}
+	if !errors.Is(statErr, os.ErrNotExist) {
+		return false
+	}
+	if _, err := os.Lstat(path); err == nil {
+		slog.Warn("providers.cursor.store.path_link_unresolved", "concern", concern, "path", path, "err", statErr)
+		return false
+	}
+	return true
+}
+
 // filePresent reports whether a path exists, and separates that from failing to
 // find out. Collapsing the two turns a directory Clyde was denied into one that
 // holds nothing, which reads downstream as a confirmed absence of whatever the
@@ -265,7 +291,7 @@ func filePresent(path string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	if errors.Is(err, os.ErrNotExist) {
+	if StatSaysAbsent(err, path) {
 		return false, nil
 	}
 	slog.Warn("providers.cursor.store.file_stat_failed", "concern", concern, "path", path, "err", err)

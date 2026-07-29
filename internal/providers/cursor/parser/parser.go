@@ -798,7 +798,7 @@ const (
 
 func openOptionalDatabase(ctx context.Context, path string, component string) (*sql.DB, databaseAvailability) {
 	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if cursorstore.StatSaysAbsent(err, path) {
 			return nil, databaseAvailabilityAbsent
 		}
 		slog.WarnContext(ctx, "providers.cursor.parser.stat_db_failed", "concern", concern, "component", component, "path", path, "err", err)

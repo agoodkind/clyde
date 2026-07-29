@@ -172,13 +172,11 @@ func TestListWorkspaceEntriesSeparatesAMissingDirectoryFromAnUnreadableOne(t *te
 	if err := os.MkdirAll(unreadableDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll denied workspace: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(unreadableDir, "state.vscdb"), []byte("sqlite"), 0o644); err != nil {
+	deniedDBPath := filepath.Join(unreadableDir, "state.vscdb")
+	if err := os.WriteFile(deniedDBPath, []byte("sqlite"), 0o644); err != nil {
 		t.Fatalf("WriteFile denied state db: %v", err)
 	}
-	if err := os.Chmod(unreadableDir, 0o000); err != nil {
-		t.Fatalf("Chmod denied workspace: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(unreadableDir, 0o755) })
+	denyStatOrSkip(t, unreadableDir, deniedDBPath)
 
 	denied, err := root.ListWorkspaceEntries()
 	if err != nil {
@@ -224,12 +222,63 @@ func TestWorkspaceDescriptorPathKeepsADescriptorItCannotStat(t *testing.T) {
 	}
 
 	// A descriptor whose directory denies metadata access is not the same answer.
-	if err := os.Chmod(workspaceDir, 0o000); err != nil {
-		t.Fatalf("Chmod workspace: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(workspaceDir, 0o755) })
+	denyStatOrSkip(t, workspaceDir, descriptorPath)
 	if got := workspaceDescriptorPath(workspaceDir); got == "" {
 		t.Fatal("a descriptor that could not be stat'd reported as absent, so the conversation indexes with an empty workspace root")
+	}
+}
+
+// denyStatOrSkip removes every permission from a directory and then verifies
+// that a stat inside it actually fails.
+//
+// The verification is the point. A test that only asks for the denial and never
+// checks it got one proves nothing under a runner that ignores the mode, because
+// the stat then succeeds, the code takes its ordinary path, and the assertion
+// about the denied path passes without the denial ever happening. Skipping says
+// so rather than reporting a pass this run did not earn.
+func denyStatOrSkip(t *testing.T, dir string, pathInside string) {
+	t.Helper()
+
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatalf("Chmod %s: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := os.Stat(pathInside); err == nil {
+		t.Skipf("this runner stats %s despite mode 0000 on %s, so the denial this test needs did not happen", pathInside, dir)
+	}
+}
+
+// TestListWorkspaceEntriesCountsADatabaseLinkItCannotFollow covers a workspace
+// whose state.vscdb is a symlink Clyde cannot resolve, which is what a Cursor
+// store reached through an unmounted volume looks like. Stat follows the link and
+// reports not-exist, so reading that as an absence drops the workspace silently
+// and a later ring sweep reports a confirmed miss over a database it never
+// opened.
+func TestListWorkspaceEntriesCountsADatabaseLinkItCannotFollow(t *testing.T) {
+	rootDir := t.TempDir()
+	root := DataRoot{
+		RootDir:             rootDir,
+		GlobalDBPath:        filepath.Join(rootDir, "globalStorage", "state.vscdb"),
+		WorkspaceStorageDir: filepath.Join(rootDir, "workspaceStorage"),
+	}
+	workspaceDir := filepath.Join(root.WorkspaceStorageDir, "linked")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll linked workspace: %v", err)
+	}
+	unmounted := filepath.Join(t.TempDir(), "volume-not-mounted", "state.vscdb")
+	if err := os.Symlink(unmounted, filepath.Join(workspaceDir, "state.vscdb")); err != nil {
+		t.Fatalf("Symlink state db: %v", err)
+	}
+
+	listing, err := root.ListWorkspaceEntries()
+	if err != nil {
+		t.Fatalf("ListWorkspaceEntries returned error: %v", err)
+	}
+	if len(listing.Entries) != 0 {
+		t.Fatalf("entries = %#v, want the link not listed as a usable workspace", listing.Entries)
+	}
+	if listing.Unreadable != 1 {
+		t.Fatalf("Unreadable = %d, want the workspace whose database link would not resolve counted", listing.Unreadable)
 	}
 }
 

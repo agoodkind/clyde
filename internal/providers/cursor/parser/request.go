@@ -41,16 +41,22 @@ func (*Parser) ResolveRequestID(
 		return conversation.RequestMatch{}, fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 
-	// The reason is folded through the shared precedence rather than latched at the
-	// first knowable one. Two roots is an ordinary shape, Cursor beside Cursor
-	// Insiders, and a clean miss in the first must not be reported as a confirmed
-	// absence over a second whose database was locked: the id may be sitting in the
-	// root this lookup could not open.
+	// Every root is searched and the answers are decided together, rather than the
+	// first root that finds something answering for all of them. Two roots is an
+	// ordinary shape, Cursor beside Cursor Insiders, and each is a whole store: two
+	// of them holding the id is the same plural answer two chats in one store are,
+	// and returning the first would answer with whichever root the path list
+	// happened to name first.
 	//
-	// A root that fails outright is the same case and is treated the same way. Its
-	// store is what broke, the id may be in it, and abandoning the roots after it
-	// would let one unreadable directory hide an answer sitting in the next one.
+	// The reason is folded through the shared precedence rather than latched at the
+	// first knowable one, so a clean miss in the first root is not reported as a
+	// confirmed absence over a second whose database was locked: the id may be
+	// sitting in the root this lookup could not open. A root that fails outright is
+	// the same case and is treated the same way. Its store is what broke, the id may
+	// be in it, and abandoning the roots after it would let one unreadable directory
+	// hide an answer sitting in the next one.
 	reason := conversation.RequestNotFoundReasonUnspecified
+	found := make([]conversation.RequestMatch, 0, len(roots))
 	for _, root := range roots {
 		match, err := resolveRequestIDInRoot(ctx, root, requestID, opts)
 		if err != nil {
@@ -59,11 +65,52 @@ func (*Parser) ResolveRequestID(
 			continue
 		}
 		if match.Found {
-			return match, nil
+			found = append(found, match)
+			continue
 		}
 		reason = conversation.MergeRequestNotFoundReason(reason, match.Reason)
 	}
-	return missingRequestMatch(reason), nil
+	return matchAcrossRoots(ctx, requestID, found, reason), nil
+}
+
+// matchAcrossRoots settles what the roots together established.
+//
+// Two roots naming the same chat is one answer, because a root list can name the
+// same store twice by two paths. Two roots naming different chats is the plural
+// case, and the id alone cannot say which of them issued the request.
+//
+// A single answer stands only when every root was read. A root that could not be
+// opened is a store this lookup never searched, so a second carrier sitting in it
+// is exactly what searching past the first root exists to find, and naming the
+// one chat it did see would assert a uniqueness it never established.
+func matchAcrossRoots(
+	ctx context.Context,
+	requestID string,
+	found []conversation.RequestMatch,
+	reason conversation.RequestNotFoundReason,
+) conversation.RequestMatch {
+	distinct := make([]conversation.RequestMatch, 0, len(found))
+	seen := make(map[string]bool, len(found))
+	for _, match := range found {
+		if seen[match.NativeConversationID] {
+			continue
+		}
+		seen[match.NativeConversationID] = true
+		distinct = append(distinct, match)
+	}
+
+	switch {
+	case len(distinct) > 1:
+		slog.InfoContext(ctx, "providers.cursor.parser.request_carried_by_several_roots", "concern", concern, "request_id", requestID, "count", len(distinct))
+		return missingRequestMatch(conversation.RequestNotFoundReasonAmbiguousConversation)
+	case len(distinct) == 1 && reason == conversation.RequestNotFoundReasonInconclusive:
+		slog.WarnContext(ctx, "providers.cursor.parser.request_answered_while_a_root_went_unread", "concern", concern, "request_id", requestID)
+		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive)
+	case len(distinct) == 1:
+		return distinct[0]
+	default:
+		return missingRequestMatch(reason)
+	}
 }
 
 // resolveRequestIDInRoot runs the bounded lookup against one Cursor data root,
@@ -132,8 +179,8 @@ func resolveRequestIDWithoutChatStore(
 		slog.WarnContext(ctx, "providers.cursor.parser.generation_lookup_failed", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "err", err)
 		return conversation.RequestMatch{}, fmt.Errorf("find cursor generation entry for request %q: %w", requestID, err)
 	}
-	if lookup.Found {
-		slog.WarnContext(ctx, "providers.cursor.parser.request_listed_without_chat_store", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "workspace_hash", lookup.Hit.WorkspaceHash)
+	if lookup.Found() {
+		slog.WarnContext(ctx, "providers.cursor.parser.request_listed_without_chat_store", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "workspace_hashes", lookup.WorkspaceHashes())
 		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive), nil
 	}
 	if lookup.UnreadableWorkspaces > 0 {
@@ -158,7 +205,7 @@ func resolveRequestIDFromGenerationRing(
 		slog.WarnContext(ctx, "providers.cursor.parser.generation_lookup_failed", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "err", err)
 		return conversation.RequestNotFoundReasonUnspecified, conversation.RequestMatch{}, fmt.Errorf("find cursor generation entry for request %q: %w", requestID, err)
 	}
-	if !lookup.Found {
+	if !lookup.Found() {
 		// A miss is only meaningful when every workspace was actually readable.
 		// Cursor runs while Clyde reads, so a locked workspace reads the same as
 		// one that never held the id, and claiming the request is gone would be
@@ -171,6 +218,11 @@ func resolveRequestIDFromGenerationRing(
 		return reason, missingRequestMatch(reason), nil
 	}
 
+	// Every instant the rings recorded is searched, not just the first. Two windows
+	// can list the same request, and the instant is what the chat headers are
+	// narrowed by, so a chat the second instant would have selected is one the
+	// first instant's candidate list never contained.
+	//
 	// The candidates are narrowed by the instant alone, and deliberately not by the
 	// workspace the ring entry came from. A workspace-scoped pass would be a strict
 	// subset of this one, because the unscoped predicate matches every workspace,
@@ -179,23 +231,31 @@ func resolveRequestIDFromGenerationRing(
 	// the unread total twice. Narrowing by workspace would also have to be a
 	// preference rather than a filter, since a header whose workspace disagrees
 	// with the ring must not turn a real chat into a reported miss.
-	hit := lookup.Hit
 	carriers := newRequestCarriers()
-	findRequestBubbleAmongCandidates(ctx, root, db, requestID, hit.Entry.UnixMs, carriers)
+	for _, unixMs := range lookup.Instants() {
+		findRequestBubbleAmongCandidates(ctx, root, db, requestID, unixMs, carriers)
+	}
 	if len(carriers.composerIDs) > 0 {
 		match := matchFromCarriers(ctx, root, requestID, carriers, conversation.RequestOriginLive,
 			conversation.RequestNotFoundReasonNoMatchingConversation)
 		return match.Reason, match, nil
 	}
 
-	// The narrowing searched the chats the header table lists, so it can only claim
-	// a confirmed absence when that table lists them all. It does not always: on a
-	// real store it accounts for 2,390 of 2,470 chats, and the 80 it omits are
-	// unreachable from any predicate over it. Nor can it claim one when part of the
-	// search went unread.
+	// A confirmed absence needs the search to have covered every stored chat, and
+	// that is two separate claims. The header table has to list them all, which it
+	// does not always: on a real store it accounts for 2,390 of 2,470 chats, and
+	// the 80 it omits are unreachable from any predicate over it. The instant's
+	// predicate then has to have selected every chat the table does list, which it
+	// almost never does, because selecting a window of chats is the whole point of
+	// the narrowing. Membership is not reachability, and a miss over a window is
+	// not evidence about the chats outside it.
 	reason := conversation.RequestNotFoundReasonNoMatchingConversation
 	if carriers.unread > 0 {
 		slog.WarnContext(ctx, "providers.cursor.parser.request_candidates_partially_read", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "unread", carriers.unread)
+		reason = conversation.RequestNotFoundReasonInconclusive
+	}
+	if carriers.excluded > 0 {
+		slog.DebugContext(ctx, "providers.cursor.parser.request_candidates_narrowed_past_chats", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "excluded", carriers.excluded)
 		reason = conversation.RequestNotFoundReasonInconclusive
 	}
 	coverage, err := cursorstore.ReadComposerHeaderCoverage(ctx, db)
@@ -219,10 +279,14 @@ type requestCarriers struct {
 	// candidate whose bubbles would not read, a narrowing that could not run, and
 	// the rows a byte search selected and a decode then rejected.
 	unread int
+	// excluded counts the listed chats the narrowing left out of its candidates.
+	// Those chats were readable and were never read, which is a different gap from
+	// unread and rules out a confirmed absence for the same reason.
+	excluded int
 }
 
 func newRequestCarriers() *requestCarriers {
-	return &requestCarriers{composerIDs: nil, seen: make(map[string]bool), unread: 0}
+	return &requestCarriers{composerIDs: nil, seen: make(map[string]bool), unread: 0, excluded: 0}
 }
 
 func (carriers *requestCarriers) add(composerID string) {
@@ -308,7 +372,8 @@ func findRequestBubbleAmongCandidates(
 		carriers.unread++
 		return
 	}
-	slog.DebugContext(ctx, "providers.cursor.parser.request_candidates_narrowed", "concern", concern, "request_id", requestID, "count", len(narrowing.ComposerIDs))
+	slog.DebugContext(ctx, "providers.cursor.parser.request_candidates_narrowed", "concern", concern, "request_id", requestID, "count", len(narrowing.ComposerIDs), "excluded", narrowing.ExcludedChats)
+	carriers.excluded += narrowing.ExcludedChats
 
 	for _, composerID := range narrowing.ComposerIDs {
 		search, err := cursorstore.FindBubbleRequestIDInComposer(ctx, db, composerID, requestID)

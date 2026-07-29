@@ -38,8 +38,13 @@ type GenerationHit struct {
 // GenerationLookup reports the outcome of searching a data root's workspace
 // databases for one request id.
 type GenerationLookup struct {
-	Hit   GenerationHit
-	Found bool
+	// Hits holds every workspace ring that listed the id, in the order the sweep
+	// read them. It is plural because a workspace ring is per window and the same
+	// request can be listed by more than one of them, at instants that differ by
+	// however long the two windows were apart when they wrote it. Keeping only the
+	// first hit would narrow the chat search to one of those instants and answer
+	// definitively from a search the other instant was never part of.
+	Hits []GenerationHit
 	// UnreadableWorkspaces counts the workspaces this search did not read: the
 	// databases that could not be opened or decoded, and the directory entries the
 	// listing could not examine. Cursor runs while Clyde reads, so a locked
@@ -49,17 +54,41 @@ type GenerationLookup struct {
 	UnreadableWorkspaces int
 }
 
+// Found reports whether any workspace ring listed the request id.
+func (lookup GenerationLookup) Found() bool {
+	return len(lookup.Hits) > 0
+}
+
+// Instants returns the distinct times the rings recorded for the request, in the
+// order the sweep found them. Two windows writing the same instant is one search
+// to run, not two, so the caller narrows the chat headers once per value here.
+func (lookup GenerationLookup) Instants() []int64 {
+	seen := make(map[int64]bool, len(lookup.Hits))
+	instants := make([]int64, 0, len(lookup.Hits))
+	for _, hit := range lookup.Hits {
+		if seen[hit.Entry.UnixMs] {
+			continue
+		}
+		seen[hit.Entry.UnixMs] = true
+		instants = append(instants, hit.Entry.UnixMs)
+	}
+	return instants
+}
+
+// WorkspaceHashes returns the workspaces whose rings listed the request, for the
+// log line that says where it was seen.
+func (lookup GenerationLookup) WorkspaceHashes() []string {
+	hashes := make([]string, 0, len(lookup.Hits))
+	for _, hit := range lookup.Hits {
+		hashes = append(hashes, hit.WorkspaceHash)
+	}
+	return hashes
+}
+
 // BubbleRequestRef locates the composer bubble that carried one request id.
 type BubbleRequestRef struct {
 	ComposerID string
 	BubbleID   string
-}
-
-// bubbleRequestWire decodes only the request id out of a bubble value, so a
-// substring hit inside unrelated content can be rejected by exact comparison
-// without decoding the surrounding message.
-type bubbleRequestWire struct {
-	RequestID string `json:"requestId"`
 }
 
 // DecodeGenerationEntriesJSON decodes one `aiService.generations` value.
@@ -91,8 +120,8 @@ func ReadGenerationEntries(ctx context.Context, workspaceDB *sql.DB) ([]Generati
 }
 
 // FindGenerationEntry searches one data root's workspace databases for the
-// generation entry whose uuid equals requestID exactly, and returns the
-// workspace that carried it.
+// generation entries whose uuid equals requestID exactly, and returns every
+// workspace that carried one.
 //
 // Every workspace is read, because each holds its own capped ring and skipping
 // one would turn a real hit into a reported miss. The sweep is affordable at that
@@ -101,9 +130,12 @@ func ReadGenerationEntries(ctx context.Context, workspaceDB *sql.DB) ([]Generati
 // opt-in flag exists to gate. Its bound is the caller's own context deadline,
 // checked here rather than left to fail one database open at a time.
 //
-// Workspaces are still searched newest first, because Cursor caps the ring at 50
-// recent entries and the owning workspace is almost always one that was written
-// recently, so a hit usually lands in the first few reads.
+// The sweep runs to the end rather than stopping at the first ring that lists
+// the id, because the instant a hit carries is what narrows the chat search, and
+// two windows can list the same request at instants far enough apart to select
+// different chats. Stopping early would answer definitively from a search the
+// second instant was never part of, and the cost of going on is the same 63ms a
+// complete miss already pays.
 //
 // A workspace database that fails to open or decode is skipped rather than
 // failing the search, so one damaged workspace cannot hide a hit in another, and
@@ -124,11 +156,7 @@ func FindGenerationEntry(ctx context.Context, root DataRoot, requestID string) (
 	entries := listing.Entries
 	sortWorkspaceEntriesNewestFirst(entries)
 
-	lookup := GenerationLookup{
-		Hit:                  GenerationHit{WorkspaceHash: "", Entry: GenerationEntry{GenerationUUID: "", UnixMs: 0, Type: ""}},
-		Found:                false,
-		UnreadableWorkspaces: listing.Unreadable,
-	}
+	lookup := GenerationLookup{Hits: nil, UnreadableWorkspaces: listing.Unreadable}
 	for position, entry := range entries {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			unread := len(entries) - position
@@ -142,13 +170,11 @@ func FindGenerationEntry(ctx context.Context, root DataRoot, requestID string) (
 			continue
 		}
 		if found {
-			lookup.Hit = hit
-			lookup.Found = true
-			slog.DebugContext(ctx, "providers.cursor.store.generation_sweep_hit", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "read", position+1)
-			return lookup, nil
+			lookup.Hits = append(lookup.Hits, hit)
+			slog.DebugContext(ctx, "providers.cursor.store.generation_sweep_hit", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "workspace_hash", hit.WorkspaceHash, "read", position+1)
 		}
 	}
-	slog.DebugContext(ctx, "providers.cursor.store.generation_sweep_missed", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "count", len(entries), "unreadable", lookup.UnreadableWorkspaces)
+	slog.DebugContext(ctx, "providers.cursor.store.generation_sweep_finished", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "count", len(entries), "hits", len(lookup.Hits), "unreadable", lookup.UnreadableWorkspaces)
 	return lookup, nil
 }
 
@@ -315,6 +341,34 @@ func selectComposerIDsCoveringTimeQuery(columns map[string]bool, scopeByWorkspac
 type ComposerNarrowing struct {
 	ComposerIDs []string
 	Usable      bool
+	// ExcludedChats counts the chats the header table lists, under a row a
+	// predicate over it can select, that this instant's predicate did not select.
+	//
+	// It is what separates the two questions a narrowed miss has to answer.
+	// [ComposerHeaderCoverage] says the table accounts for every stored chat, which
+	// is membership; this says the search actually reached them, which is not the
+	// same thing. A chat whose recorded lifetime does not span the instant is
+	// listed, is reachable in principle, and was never read, so a miss over the
+	// candidates it produced proves nothing about that chat. A non-zero count is
+	// therefore an inconclusive miss rather than a confirmed absence.
+	ExcludedChats int
+}
+
+// reachableComposerHeaderCountQuery counts the header rows a predicate over the
+// table can select at all, under the same workspace scope the candidate query
+// runs with, so the two counts are taken over the same set of chats.
+//
+// A NULL `createdAt` makes both sides of the lifetime comparison NULL, and a zero
+// one with no end stamp gives an end of zero, so either row is listed and never
+// selected. Counting those as excluded would report every lookup inconclusive
+// over rows no instant could ever reach.
+func reachableComposerHeaderCountQuery(scopeByWorkspace bool) string {
+	query := "SELECT count(*) FROM " + composerHeadersTableName +
+		" WHERE " + composerCreatedAtColumn + " IS NOT NULL AND " + composerCreatedAtColumn + " > 0"
+	if scopeByWorkspace {
+		query += " AND (? = '' OR " + composerWorkspaceColumn + " = ?)"
+	}
+	return query
 }
 
 // readTableColumns reports which columns one table has, so a predicate over an
@@ -359,13 +413,17 @@ func scanTableColumns(ctx context.Context, rows *sql.Rows, table string) (map[st
 // `composerHeaders.workspaceId` holds the same hash that names a workspace's
 // storage directory. Passing an empty workspaceID searches every workspace, and
 // so does a database whose header table has no workspace column.
+//
+// It also reports how many listed chats the instant left out, because that is
+// the difference between a search that read every chat and one that read a
+// window of them.
 func ListComposerIDsCoveringTime(
 	ctx context.Context,
 	db *sql.DB,
 	unixMs int64,
 	workspaceID string,
 ) (ComposerNarrowing, error) {
-	narrowing := ComposerNarrowing{ComposerIDs: nil, Usable: false}
+	narrowing := ComposerNarrowing{ComposerIDs: nil, Usable: false, ExcludedChats: 0}
 
 	if ctx == nil {
 		return narrowing, fmt.Errorf("list cursor composers covering %d: nil context", unixMs)
@@ -407,7 +465,7 @@ func ListComposerIDsCoveringTime(
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_query_failed", "concern", concern, "unix_ms", unixMs, "err", err)
-		return ComposerNarrowing{ComposerIDs: nil, Usable: false}, fmt.Errorf("query cursor composer headers covering %d: %w", unixMs, err)
+		return ComposerNarrowing{ComposerIDs: nil, Usable: false, ExcludedChats: 0}, fmt.Errorf("query cursor composer headers covering %d: %w", unixMs, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -416,16 +474,51 @@ func ListComposerIDsCoveringTime(
 		var composerID string
 		if err := rows.Scan(&composerID); err != nil {
 			slog.WarnContext(ctx, "providers.cursor.store.composer_header_scan_failed", "concern", concern, "unix_ms", unixMs, "err", err)
-			return ComposerNarrowing{ComposerIDs: nil, Usable: false}, fmt.Errorf("scan cursor composer header covering %d: %w", unixMs, err)
+			return ComposerNarrowing{ComposerIDs: nil, Usable: false, ExcludedChats: 0}, fmt.Errorf("scan cursor composer header covering %d: %w", unixMs, err)
 		}
 		composerIDs = append(composerIDs, composerID)
 	}
 	if err := rows.Err(); err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_iterate_failed", "concern", concern, "unix_ms", unixMs, "err", err)
-		return ComposerNarrowing{ComposerIDs: nil, Usable: false}, fmt.Errorf("iterate cursor composer headers covering %d: %w", unixMs, err)
+		return ComposerNarrowing{ComposerIDs: nil, Usable: false, ExcludedChats: 0}, fmt.Errorf("iterate cursor composer headers covering %d: %w", unixMs, err)
 	}
 	narrowing.ComposerIDs = composerIDs
+
+	reachable, err := countReachableComposerHeaders(ctx, db, scopeByWorkspace, workspaceID)
+	if err != nil {
+		// The candidates stand; what is lost is the ability to say the search
+		// reached every listed chat, so the count is left saying it did not.
+		narrowing.ExcludedChats = len(composerIDs) + 1
+		return narrowing, nil
+	}
+	if reachable > len(composerIDs) {
+		narrowing.ExcludedChats = reachable - len(composerIDs)
+	}
 	return narrowing, nil
+}
+
+// countReachableComposerHeaders counts the header rows any instant's predicate
+// could select, which is what the candidates for one instant are compared
+// against.
+func countReachableComposerHeaders(
+	ctx context.Context,
+	db *sql.DB,
+	scopeByWorkspace bool,
+	workspaceID string,
+) (int, error) {
+	query := reachableComposerHeaderCountQuery(scopeByWorkspace)
+	var row *sql.Row
+	if scopeByWorkspace {
+		row = db.QueryRowContext(ctx, query, workspaceID, workspaceID)
+	} else {
+		row = db.QueryRowContext(ctx, query)
+	}
+	reachable := 0
+	if err := row.Scan(&reachable); err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_header_reachable_count_failed", "concern", concern, "err", err)
+		return 0, fmt.Errorf("count reachable cursor composer headers: %w", err)
+	}
+	return reachable, nil
 }
 
 // ComposerHeaderCoverage says how much of the store the chat header table
@@ -611,6 +704,13 @@ func ScanAllBubblesForRequestID(
 // byte search alone would accept a value that merely mentions the id somewhere
 // in its content, so the decode step is what makes the match exact.
 //
+// The decode is [DecodeBubbleJSON], the one decoder this package has for a
+// bubble value, rather than a narrower one that reads the id field alone. A
+// narrower decoder disagrees with it: a row this package cannot read as a bubble
+// would be named here as the definite chat that issued the request while every
+// other reader rejects it. Counting that row unread instead says what is true,
+// which is that a row holding the id's bytes was not read.
+//
 // The read continues past every row, rather than stopping at the first match,
 // because one match is not evidence that there is only one.
 func findBubbleRequestIDInRange(
@@ -630,8 +730,8 @@ func findBubbleRequestIDInRange(
 		return search, fmt.Errorf("read cursor bubbles for request id: %w", err)
 	}
 	for _, row := range rows {
-		var wire bubbleRequestWire
-		if err := json.Unmarshal(row.Value, &wire); err != nil {
+		bubble, err := DecodeBubbleJSON(row.Value)
+		if err != nil {
 			// This row holds the id's bytes, which is why the byte search selected
 			// it. Skipping it quietly would turn the likeliest carrier into evidence
 			// that no carrier exists, so it is counted and the caller reports the
@@ -640,7 +740,7 @@ func findBubbleRequestIDInRange(
 			slog.WarnContext(ctx, "providers.cursor.store.bubble_request_decode_skipped", "concern", concern, "key", row.Key, "err", err)
 			continue
 		}
-		if wire.RequestID != requestID {
+		if bubble.RequestID != requestID {
 			continue
 		}
 		composerID, bubbleID, ok := parseBubbleKey(row.Key)

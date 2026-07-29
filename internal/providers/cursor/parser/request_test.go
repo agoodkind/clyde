@@ -8,11 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
 )
 
 // The fixture mirrors the shapes Cursor writes: chats in composerData with their
@@ -223,35 +225,17 @@ func TestUnresolvableRequestIDNeverMatchesATitle(t *testing.T) {
 	}
 }
 
-// TestResolveUnknownSelectorStillFailsWithoutAStoreLookup covers the shape gate
-// in front of the provider lookup. A selector that is not shaped like a request
-// id must not reach the store at all, and the two paths are told apart by their
-// error: only the request-id route appends the reason the lookup missed for, so
-// an implementation that scanned the store before giving up would say why.
-func TestResolveUnknownSelectorStillFailsWithoutAStoreLookup(t *testing.T) {
+// TestResolveARequestIDReportsWhatTheRealStoreSaid carries the selector route
+// through to the real Cursor store and back, so the reason an operator reads is
+// one this store actually produced rather than a generic miss.
+//
+// Whether a selector of another shape reaches the store at all is counted rather
+// than read out of the message, in the conversation package where the resolver
+// can be observed directly.
+func TestResolveARequestIDReportsWhatTheRealStoreSaid(t *testing.T) {
 	index := newCursorRequestIndex(t)
 
-	_, err := index.Resolve(context.Background(), "not-a-request-id")
-	if err == nil {
-		t.Fatal("Resolve of an unknown selector returned no error")
-	}
-	for _, reason := range []conversation.RequestNotFoundReason{
-		conversation.RequestNotFoundReasonNotRetained,
-		conversation.RequestNotFoundReasonNoMatchingConversation,
-		conversation.RequestNotFoundReasonInconclusive,
-		conversation.RequestNotFoundReasonUnindexedConversation,
-		conversation.RequestNotFoundReasonAmbiguousConversation,
-	} {
-		if strings.Contains(err.Error(), reason.Describe()) {
-			t.Fatalf("error = %v, want no lookup reason: a selector this shape never reaches the store", err)
-		}
-	}
-
-	// The positive control: a selector that is shaped like a request id does take
-	// the store route, and says what it found there. Without this the assertion
-	// above would pass against an implementation that never reports a reason at
-	// all.
-	_, err = index.Resolve(context.Background(), unknownRequestID)
+	_, err := index.Resolve(context.Background(), unknownRequestID)
 	if err == nil {
 		t.Fatal("Resolve of an unknown request id returned no error")
 	}
@@ -463,7 +447,62 @@ func writeCursorRequestWorkspaceDB(t *testing.T, rootDir string, workspaceHash s
 }
 
 func generationEntry(requestID string) string {
-	return `{"unixMs":` + strconv.Itoa(generationUnixMs) + `,"generationUUID":"` + requestID + `","type":"composer"}`
+	return generationEntryAt(requestID, generationUnixMs)
+}
+
+func generationEntryAt(requestID string, unixMs int) string {
+	return `{"unixMs":` + strconv.Itoa(unixMs) + `,"generationUUID":"` + requestID + `","type":"composer"}`
+}
+
+// awayFromRingMs is an hour, which is far enough outside the tolerance the chat
+// narrowing allows that a chat stamped there is never a candidate for the instant
+// the ring recorded.
+const awayFromRingMs = 3_600_000
+
+// writeCursorRequestWorkspaceRing writes one workspace holding a ring with a
+// single request at a chosen instant, and returns the database path so the test
+// can order the workspaces by write time.
+func writeCursorRequestWorkspaceRing(
+	t *testing.T,
+	rootDir string,
+	workspaceHash string,
+	requestID string,
+	unixMs int,
+) string {
+	t.Helper()
+
+	workspaceDir := filepath.Join(rootDir, "workspaceStorage", workspaceHash)
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workspace dir: %v", err)
+	}
+	dbPath := filepath.Join(workspaceDir, "state.vscdb")
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open workspace db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	statements := []string{
+		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
+		`INSERT INTO ItemTable(key, value) VALUES ('aiService.generations', '[` +
+			generationEntryAt(requestID, unixMs) + `]')`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("exec workspace statement %q: %v", statement, err)
+		}
+	}
+	return dbPath
+}
+
+// writtenAt stamps a workspace database's write time, which is the order the ring
+// sweep reads the workspaces in.
+func writtenAt(t *testing.T, dbPath string, when time.Time) {
+	t.Helper()
+
+	if err := os.Chtimes(dbPath, when, when); err != nil {
+		t.Fatalf("Chtimes %s: %v", dbPath, err)
+	}
 }
 
 func composerDataStatement(composerID string, name string, latestRequest string, bubbleIDs []string) string {
@@ -512,8 +551,14 @@ func datedBubbleStatementWithRequest(
 }
 
 func composerHeaderStatement(composerID string) string {
+	return composerHeaderStatementAt(composerID, generationUnixMs-1000, generationUnixMs+1000)
+}
+
+// composerHeaderStatementAt writes a chat header with a chosen recorded lifetime,
+// which is what decides whether an instant's narrowing selects the chat.
+func composerHeaderStatementAt(composerID string, createdAt int, lastUpdatedAt int) string {
 	return `INSERT INTO composerHeaders(composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt, value) VALUES ('` +
-		composerID + `', 'workspace-hash', ` + strconv.Itoa(generationUnixMs-1000) + `, ` + strconv.Itoa(generationUnixMs+1000) + `, 0, 0, 0, 0, '{}')`
+		composerID + `', 'workspace-hash', ` + strconv.Itoa(createdAt) + `, ` + strconv.Itoa(lastUpdatedAt) + `, 0, 0, 0, 0, '{}')`
 }
 
 // TestResolveRequestIDReadsAWorkspaceWithNoFolderDescriptor is the workspace a
@@ -633,9 +678,10 @@ func writeEmptyWindowWorkspaceDB(t *testing.T, rootDir string, requestID string)
 }
 
 // TestResolveRequestIDSearchesEveryRootAfterOneFails covers a first data root
-// that fails outright, which is different from one that reads and misses. A root
-// whose workspace storage cannot be listed must not abandon the roots after it,
-// because the id may be sitting in the next one.
+// that fails outright. It must not abandon the roots after it, because the id may
+// be sitting in the next one, and it must not let the root after it answer
+// definitively either: a root that could not be read is a whole store this lookup
+// never searched, so a second chat carrying the id could be sitting in it.
 func TestResolveRequestIDSearchesEveryRootAfterOneFails(t *testing.T) {
 	brokenRoot := t.TempDir()
 	writeCursorRequestGlobalDB(t, filepath.Join(brokenRoot, "globalStorage", "state.vscdb"))
@@ -645,10 +691,7 @@ func TestResolveRequestIDSearchesEveryRootAfterOneFails(t *testing.T) {
 	if err := os.MkdirAll(brokenWorkspaces, 0o755); err != nil {
 		t.Fatalf("MkdirAll broken workspaceStorage: %v", err)
 	}
-	if err := os.Chmod(brokenWorkspaces, 0o000); err != nil {
-		t.Fatalf("Chmod broken workspaceStorage: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(brokenWorkspaces, 0o755) })
+	denyAccessOrSkip(t, brokenWorkspaces)
 
 	goodRoot := t.TempDir()
 	writeCursorRequestGlobalDB(t, filepath.Join(goodRoot, "globalStorage", "state.vscdb"))
@@ -661,11 +704,95 @@ func TestResolveRequestIDSearchesEveryRootAfterOneFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+	if match.Found {
+		t.Fatalf("match = %+v, want no definite answer while a whole root went unread", match)
+	}
+	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
+		t.Fatalf("reason = %s, want inconclusive", match.Reason)
+	}
+}
+
+// TestResolveRequestIDStillAnswersPastARootThatIsSimplyNotThere is the control
+// for the test above, and it is what keeps the ordinary two-root machine
+// answering. A root that is not there was read successfully as absent, so it hides
+// nothing, and searching on past it must still produce the chat the next root
+// holds.
+func TestResolveRequestIDStillAnswersPastARootThatIsSimplyNotThere(t *testing.T) {
+	absentRoot := filepath.Join(t.TempDir(), "cursor-insiders-was-never-installed")
+
+	goodRoot := t.TempDir()
+	writeCursorRequestGlobalDB(t, filepath.Join(goodRoot, "globalStorage", "state.vscdb"))
+	writeCursorRequestWorkspaceDB(t, goodRoot, "workspace-hash")
+
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", absentRoot+string(os.PathListSeparator)+goodRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+
+	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	if err != nil {
+		t.Fatalf("ResolveRequestID returned error: %v", err)
+	}
 	if !match.Found {
-		t.Fatalf("match = %+v, want the chat in the root after the one that failed", match)
+		t.Fatalf("match = %+v, want the chat in the root after the one that is not there", match)
 	}
 	if match.NativeConversationID != historyChatID {
 		t.Fatalf("native id = %q, want %q", match.NativeConversationID, historyChatID)
+	}
+}
+
+// TestResolveRequestIDReportsAmbiguityWhenTwoRootsEachCarryIt covers two whole
+// Cursor stores that each hold a chat carrying the id, which is what copying a
+// data root or running Cursor beside Cursor Insiders on restored data produces.
+// Answering with one of them answers with whichever path the root list named
+// first.
+func TestResolveRequestIDReportsAmbiguityWhenTwoRootsEachCarryIt(t *testing.T) {
+	firstRoot := t.TempDir()
+	writeCursorRequestGlobalDB(t, filepath.Join(firstRoot, "globalStorage", "state.vscdb"))
+	writeCursorRequestWorkspaceDB(t, firstRoot, "workspace-hash")
+
+	secondRoot := t.TempDir()
+	secondDBPath := filepath.Join(secondRoot, "globalStorage", "state.vscdb")
+	writeCursorRequestGlobalDB(t, secondDBPath)
+	writeCursorRequestWorkspaceDB(t, secondRoot, "workspace-hash")
+
+	// The second root's copy of the turn lives under its own chat id, so the two
+	// roots name different conversations for the same request.
+	copiedChatID := "bbbbcccc-9999-4999-8999-bbbbccccdddd"
+	appendCursorRequestStatements(t, secondDBPath, []string{
+		`DELETE FROM cursorDiskKV WHERE key LIKE 'bubbleId:` + historyChatID + `:%'`,
+		composerDataStatement(copiedChatID, "Restored History Chat", "", []string{"restored-user"}),
+		bubbleStatement(copiedChatID, "restored-user", 1, "history first question", olderRequestID),
+		composerHeaderStatement(copiedChatID),
+	})
+
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", firstRoot+string(os.PathListSeparator)+secondRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+
+	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	if err != nil {
+		t.Fatalf("ResolveRequestID returned error: %v", err)
+	}
+	if match.Found {
+		t.Fatalf("match = %+v, want no answer when two roots each carry the request", match)
+	}
+	if match.Reason != conversation.RequestNotFoundReasonAmbiguousConversation {
+		t.Fatalf("reason = %s, want ambiguous_conversation", match.Reason)
+	}
+}
+
+// denyAccessOrSkip removes every permission from a path and verifies the change
+// actually took effect, because a test that only asks for the denial proves
+// nothing under a runner that ignores it. A privileged runner reads the path
+// anyway, so the case this test exists for never occurs and the test would pass
+// against code that no longer separates unreadable from absent.
+func denyAccessOrSkip(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("Chmod %s: %v", path, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
+	if _, err := os.ReadDir(path); err == nil {
+		t.Skipf("this runner reads %s despite mode 0000, so the denial this test needs did not happen", path)
 	}
 }
 
@@ -820,6 +947,161 @@ func TestResolveRequestIDDoesNotNameOneCarrierWhileRowsWentUnread(t *testing.T) 
 	}
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %s, want inconclusive", match.Reason)
+	}
+}
+
+// TestResolveRequestIDSearchesEveryInstantTheRingsRecorded covers two Cursor
+// windows that both list the same request. The instant a ring entry carries is
+// what the chat headers are narrowed by, so a sweep that stops at the first ring
+// it finds searches one instant and reports a miss for a chat the other instant
+// would have selected.
+func TestResolveRequestIDSearchesEveryInstantTheRingsRecorded(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+
+	writeCursorRequestGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"))
+
+	// The window written most recently lists the request an hour away from the
+	// chat that carries it, so its instant selects nothing. The older window lists
+	// the same request at the instant the chat covers.
+	strayRing := writeCursorRequestWorkspaceRing(t, rootDir, "aaa-recent", olderRequestID, generationUnixMs+awayFromRingMs)
+	owningRing := writeCursorRequestWorkspaceRing(t, rootDir, "bbb-older", olderRequestID, generationUnixMs)
+	now := time.Now()
+	writtenAt(t, strayRing, now)
+	writtenAt(t, owningRing, now.Add(-time.Hour))
+
+	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	if err != nil {
+		t.Fatalf("ResolveRequestID returned error: %v", err)
+	}
+	if !match.Found {
+		t.Fatalf("match = %+v, want the chat the second window's instant selects", match)
+	}
+	if match.NativeConversationID != historyChatID {
+		t.Fatalf("native id = %q, want %q", match.NativeConversationID, historyChatID)
+	}
+}
+
+// TestBoundedMissIsInconclusiveWhenTheInstantLeftChatsOut is the coverage gate
+// the header table alone cannot close. Listing every stored chat says the table
+// knows about them; it says nothing about whether the instant's predicate
+// selected them, and selecting a window of chats is the whole point of the
+// narrowing. A chat stamped outside that window is readable, was never read, and
+// a miss over the window is not evidence about it.
+func TestBoundedMissIsInconclusiveWhenTheInstantLeftChatsOut(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+
+	dbPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+	writeCursorRequestGlobalDB(t, dbPath)
+	writeCursorRequestWorkspaceDB(t, rootDir, "workspace-hash")
+
+	// This chat really did issue the request, and its recorded lifetime is an hour
+	// from the instant the ring recorded, so the narrowing never offers it.
+	strandedChatID := "ffff0000-1010-4010-8010-ffff00001010"
+	appendCursorRequestStatements(t, dbPath, []string{
+		composerDataStatement(strandedChatID, "Stranded Chat", "", []string{"stranded-user"}),
+		bubbleStatement(strandedChatID, "stranded-user", 1, "stranded question", quotedRequestID),
+		composerHeaderStatementAt(strandedChatID, generationUnixMs+awayFromRingMs, generationUnixMs+awayFromRingMs+1000),
+	})
+
+	bounded, err := (&Parser{}).ResolveRequestID(context.Background(), quotedRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	if err != nil {
+		t.Fatalf("ResolveRequestID returned error: %v", err)
+	}
+	if bounded.Found {
+		t.Fatalf("match = %+v, want the bounded lookup to miss", bounded)
+	}
+	if bounded.Reason != conversation.RequestNotFoundReasonInconclusive {
+		t.Fatalf("reason = %s, want inconclusive rather than a confirmed absence over chats the instant never reached", bounded.Reason)
+	}
+
+	// The control that makes the miss above a real defect rather than a guess: the
+	// chat is in the store, and the search that reads every chat finds it.
+	scanned, err := (&Parser{}).ResolveRequestID(context.Background(), quotedRequestID, conversation.RequestLookupOptions{AllowFullScan: true})
+	if err != nil {
+		t.Fatalf("ResolveRequestID with full scan returned error: %v", err)
+	}
+	if !scanned.Found || scanned.NativeConversationID != strandedChatID {
+		t.Fatalf("full scan = %+v, want the chat the bounded narrowing skipped", scanned)
+	}
+}
+
+// TestResolveRequestIDDoesNotNameAChatFromARowItCannotRead covers a row that one
+// decoder accepts and another rejects. Reading only the request id out of a
+// bubble accepts rows this package cannot read as bubbles at all, so the request
+// lookup would name a chat as the definite answer while every other reader
+// rejects the row it named it from.
+func TestResolveRequestIDDoesNotNameAChatFromARowItCannotRead(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+
+	dbPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+	writeCursorRequestGlobalDB(t, dbPath)
+	writeCursorRequestWorkspaceDB(t, rootDir, "workspace-hash")
+
+	// `type` is a number in every bubble Cursor writes, so a row spelling it as a
+	// string is one this package's decoder rejects whole.
+	oddChatID := "ffff1111-2020-4020-8020-ffff11112020"
+	oddBubble := `{"bubbleId":"odd-user","requestId":"` + quotedRequestID + `","type":"assistant"}`
+	appendCursorRequestStatements(t, dbPath, []string{
+		composerDataStatement(oddChatID, "Odd Chat", "", []string{"odd-user"}),
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + oddChatID +
+			`:odd-user', '` + oddBubble + `')`,
+		composerHeaderStatement(oddChatID),
+	})
+
+	// Verifying the instrument before the reading. This row only separates the two
+	// decoders while the package's own decoder rejects it, so a schema change that
+	// made it decodable would quietly turn this into a test of nothing.
+	if _, err := cursorstore.DecodeBubbleJSON([]byte(oddBubble)); err == nil {
+		t.Fatal("the bubble decoder accepted this row, so the fixture no longer separates a whole-bubble decode from a request-id-only one")
+	}
+
+	match, err := (&Parser{}).ResolveRequestID(context.Background(), quotedRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	if err != nil {
+		t.Fatalf("ResolveRequestID returned error: %v", err)
+	}
+	if match.Found {
+		t.Fatalf("match = %+v, want no answer from a row this package cannot read", match)
+	}
+	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
+		t.Fatalf("reason = %s, want inconclusive over a row that would not decode", match.Reason)
+	}
+}
+
+// TestResolveRequestIDDoesNotReadAnUnfollowableLinkAsAnEmptyStore covers a
+// database reached through a link Clyde cannot resolve, which is what a Cursor
+// store on an unmounted volume looks like. Stat follows the link and reports
+// not-exist, so reading that as an absence tells the operator the request was
+// never issued on this machine about a store this lookup never opened.
+func TestResolveRequestIDDoesNotReadAnUnfollowableLinkAsAnEmptyStore(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+
+	globalDir := filepath.Join(rootDir, "globalStorage")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll global db dir: %v", err)
+	}
+	unmounted := filepath.Join(t.TempDir(), "volume-not-mounted", "state.vscdb")
+	if err := os.Symlink(unmounted, filepath.Join(globalDir, "state.vscdb")); err != nil {
+		t.Fatalf("Symlink global db: %v", err)
+	}
+	writeCursorRequestWorkspaceDB(t, rootDir, "workspace-hash")
+
+	match, err := (&Parser{}).ResolveRequestID(context.Background(), unknownRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	if err != nil {
+		t.Fatalf("ResolveRequestID returned error: %v", err)
+	}
+	if match.Found {
+		t.Fatalf("match = %+v, want a miss", match)
+	}
+	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
+		t.Fatalf("reason = %s, want inconclusive for a store behind a link that would not resolve", match.Reason)
 	}
 }
 
