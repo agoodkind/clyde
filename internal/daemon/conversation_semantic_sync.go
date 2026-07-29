@@ -696,6 +696,21 @@ func BuildSemanticConversationDocuments(
 			// on a transcript byte sequence the encoder rejects (one codex doc
 			// with invalid UTF-8 used to break the whole batch).
 			text = strings.ToValidUTF8(message.Text, "")
+			// Text that holds only spacing carries nothing a search could return,
+			// so offer it as no text at all. The receiving contract carries text
+			// as a plain string, where an unset field and an empty one are the
+			// same bytes, so absence is expressible only as empty, and a single
+			// space is content on the wire that would be stored as an
+			// unreturnable row.
+			//
+			// Only text that is entirely spacing is replaced. Trimming text that
+			// has content would make every already-stored message differ from its
+			// newly offered form, and the receiver re-embeds a message whose text
+			// changed, so the whole collection would be embedded again for no
+			// gain.
+			if strings.TrimSpace(text) == "" {
+				text = ""
+			}
 		}
 		thinking := ""
 		if kinds.Has(conversation.ContentKindThinking) {
