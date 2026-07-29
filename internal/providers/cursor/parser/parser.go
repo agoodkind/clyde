@@ -53,11 +53,18 @@ type discoveredArtifact struct {
 	RootDir              string
 	ComposerID           string
 	ComposerHeader       cursorstore.ComposerHeader
-	ComposerInfo         cursorstore.WorkspaceComposerInfo
+	ComposerInfo         cursorstore.ComposerMetadata
 	HasInfo              bool
-	IsBackground         bool
-	LegacyTab            cursorstore.LegacyChatTab
-	WorkspaceRoot        string
+	// MetadataComplete reports that every store a composer's metadata is drawn
+	// from could be read. When it is false, a record built here would state an
+	// absence that was never established, so PriorRecord answers instead wherever
+	// the index already held one.
+	MetadataComplete bool
+	PriorRecord      conversation.Record
+	HasPriorRecord   bool
+	IsBackground     bool
+	LegacyTab        cursorstore.LegacyChatTab
+	WorkspaceRoot    string
 }
 
 // Parser discovers Cursor conversation artifacts and caches the rows needed by
@@ -96,7 +103,7 @@ func (*Parser) Provider() providerid.Provider {
 
 // Discover resolves local Cursor transcript and SQLite data roots, then returns
 // scan candidates for modern JSONL transcripts, composers, and legacy chats.
-func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
+func (p *Parser) Discover(ctx context.Context, prior map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
 	candidates := make([]conversation.ScanCandidate, 0)
 	discovered := make(map[string]discoveredArtifact)
 	seenConversationIDs := make(map[string]bool)
@@ -111,7 +118,7 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 	priorStamps := p.composerStamps
 	p.mu.Unlock()
 
-	sqliteCandidates, err := discoverSQLite(ctx, priorStamps, discovered, seenConversationIDs)
+	sqliteCandidates, err := discoverSQLite(ctx, priorStamps, prior, discovered, seenConversationIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -151,9 +158,14 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 // is logged during Discover.
 //
 // IsBackground is deliberately not read as an origin: a background composer is an
-// agent the person started, not one a conversation dispatched. Composer and legacy
-// records stay at [conversation.OriginUnspecified], which is ingested rather than
-// hidden.
+// agent the person started, not one a conversation dispatched.
+//
+// A composer's origin comes from the subagent flag Cursor writes beside it, which
+// is a statement rather than an inference and so is trusted where the transcript
+// path's shape is only corroborated. A composer with no metadata row stays at
+// [conversation.OriginUnspecified] rather than being called the person's own,
+// because nothing said either way. Legacy chats predate the flag and stay
+// unspecified too, which is ingested rather than hidden.
 func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
 	discovered, err := p.resolveDiscovered(path)
 	if err != nil {
@@ -184,21 +196,32 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			Archived:      false,
 		}, true
 	case discoveredKindComposer:
+		if !discovered.MetadataComplete && discovered.HasPriorRecord {
+			// A store that could not be read established nothing, and the record
+			// built below would state an empty workspace, no archive, and no origin
+			// as though it had. The scan rebuilds its whole record set from this
+			// pass, so that record would replace a good one and, because the chat's
+			// own artifact has not changed, nothing would ever prompt a correction.
+			// The record already held is the better answer until the store reads.
+			return discovered.PriorRecord, true
+		}
 		header := discovered.ComposerHeader
 		workspaceTitle := ""
 		workspaceRoot := ""
 		archived := false
+		origin := conversation.OriginUnspecified
 		if discovered.HasInfo {
 			workspaceTitle = discovered.ComposerInfo.Name
-			workspaceRoot = discovered.ComposerInfo.Cwd
+			workspaceRoot = discovered.ComposerInfo.WorkspaceRoot
 			archived = discovered.ComposerInfo.Archived
+			origin = composerOrigin(discovered.ComposerInfo.Subagent)
 		}
 		return conversation.Record{
 			ID:            conversation.DerivedID(providerid.ProviderCursor, discovered.ComposerID, path),
 			Provider:      providerid.ProviderCursor,
 			NativeID:      discovered.ComposerID,
 			Lineage:       nil,
-			Origin:        conversation.OriginUnspecified,
+			Origin:        origin,
 			Title:         firstNonEmptyString(header.Name, workspaceTitle, untitledCursorConversationText),
 			WorkspaceRoot: workspaceRoot,
 			ArtifactPath:  path,
@@ -361,6 +384,7 @@ func originFromParentConversationID(parentConversationID string) conversation.Or
 func discoverSQLite(
 	ctx context.Context,
 	priorStamps map[string]conversation.FileStamp,
+	prior map[string]conversation.Record,
 	discovered map[string]discoveredArtifact,
 	seenConversationIDs map[string]bool,
 ) ([]conversation.ScanCandidate, error) {
@@ -372,7 +396,7 @@ func discoverSQLite(
 
 	candidates := make([]conversation.ScanCandidate, 0)
 	for _, root := range roots {
-		candidates = append(candidates, discoverComposersForRoot(ctx, root, priorStamps, discovered, seenConversationIDs)...)
+		candidates = append(candidates, discoverComposersForRoot(ctx, root, priorStamps, prior, discovered, seenConversationIDs)...)
 		candidates = append(candidates, discoverLegacyForRoot(ctx, root, discovered)...)
 	}
 	return candidates, nil
@@ -382,6 +406,7 @@ func discoverComposersForRoot(
 	ctx context.Context,
 	root cursorstore.DataRoot,
 	priorStamps map[string]conversation.FileStamp,
+	prior map[string]conversation.Record,
 	discovered map[string]discoveredArtifact,
 	seenConversationIDs map[string]bool,
 ) []conversation.ScanCandidate {
@@ -397,7 +422,7 @@ func discoverComposersForRoot(
 		return nil
 	}
 	backgroundIDs := backgroundComposerIDSet(ctx, db, root.GlobalDBPath)
-	workspaceIndex := workspaceComposerIndex(ctx, root)
+	metadataIndex := composerMetadataIndex(ctx, db, root)
 	rootHash := RootHash(root.RootDir)
 
 	candidates := make([]conversation.ScanCandidate, 0, len(composerIDs))
@@ -421,11 +446,18 @@ func discoverComposersForRoot(
 		if !admitted {
 			continue
 		}
-		info, hasInfo := workspaceIndex[composerID]
-		candidates = append(candidates, conversation.ScanCandidate{Path: path, Stamp: stamp})
+		info, hasInfo := metadataIndex.ByComposerID[composerID]
+		candidates = append(candidates, conversation.ScanCandidate{
+			Path:  path,
+			Stamp: stampCoveringMetadata(stamp, info, hasInfo),
+		})
+		priorRecord, hasPriorRecord := prior[path]
 		var artifact discoveredArtifact
 		artifact.Kind = discoveredKindComposer
 		artifact.Path = path
+		artifact.MetadataComplete = metadataIndex.Err == nil
+		artifact.PriorRecord = priorRecord
+		artifact.HasPriorRecord = hasPriorRecord
 		artifact.RootDir = root.RootDir
 		artifact.ComposerID = composerID
 		artifact.ComposerHeader = header
@@ -751,12 +783,15 @@ func resolveComposerDiscovered(
 	if !found {
 		return emptyDiscoveredArtifact(), fmt.Errorf("cursor composer %q not found", composerID)
 	}
-	workspaceIndex := workspaceComposerIndex(ctx, root)
-	info, hasInfo := workspaceIndex[composerID]
+	metadataIndex := composerMetadataIndex(ctx, db, root)
+	info, hasInfo := metadataIndex.ByComposerID[composerID]
 	backgroundIDs := backgroundComposerIDSet(ctx, db, root.GlobalDBPath)
 	var artifact discoveredArtifact
 	artifact.Kind = discoveredKindComposer
 	artifact.Path = path
+	// This path resolves one chat on demand, outside any scan, so there is no
+	// prior record to fall back to and the metadata read stands on its own.
+	artifact.MetadataComplete = true
 	artifact.RootDir = root.RootDir
 	artifact.ComposerID = composerID
 	artifact.ComposerHeader = header
@@ -851,18 +886,6 @@ func backgroundComposerIDSet(ctx context.Context, db *sql.DB, path string) map[s
 		backgroundIDs[backgroundComposer.ComposerID] = true
 	}
 	return backgroundIDs
-}
-
-func workspaceComposerIndex(
-	ctx context.Context,
-	root cursorstore.DataRoot,
-) map[string]cursorstore.WorkspaceComposerInfo {
-	index, err := cursorstore.BuildWorkspaceComposerIndex(ctx, root)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.workspace_composer_index_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
-		return make(map[string]cursorstore.WorkspaceComposerInfo)
-	}
-	return index
 }
 
 func readWorkspaceRoot(ctx context.Context, entry cursorstore.WorkspaceEntry) string {

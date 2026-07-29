@@ -110,3 +110,111 @@ func createWorkspaceRegistryTestDatabase(t *testing.T, dbPath string) {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
 }
+
+// Finding 2: current Cursor writes the workspace composer registry under
+// `composer.composerData`. Reading only the older key reports an empty registry
+// on a build that in fact has one.
+func TestBuildWorkspaceComposerIndexReadsCurrentComposerDataKey(t *testing.T) {
+	rootDir := t.TempDir()
+	root := DataRoot{
+		RootDir:             rootDir,
+		GlobalDBPath:        filepath.Join(rootDir, "globalStorage", "state.vscdb"),
+		WorkspaceStorageDir: filepath.Join(rootDir, "workspaceStorage"),
+	}
+	workspaceDir := filepath.Join(root.WorkspaceStorageDir, "hash-current")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workspaceDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "workspace.json"), []byte(`{"folder":"file:///Users/alice/source/current"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile workspace json: %v", err)
+	}
+	writable, err := sql.Open("sqlite3", "file:"+filepath.Join(workspaceDir, "state.vscdb")+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open returned error: %v", err)
+	}
+	statements := []string{
+		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
+		`INSERT INTO ItemTable(key, value) VALUES ('composer.composerData', '{"allComposers":[{"composerId":"composer-current","name":"Current Key","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"subtitle":"repo","isArchived":false}],"selectedComposerId":"composer-current"}')`,
+	}
+	for _, statement := range statements {
+		if _, err := writable.Exec(statement); err != nil {
+			_ = writable.Close()
+			t.Fatalf("exec %q: %v", statement, err)
+		}
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("close writable sqlite database: %v", err)
+	}
+
+	index, err := BuildWorkspaceComposerIndex(t.Context(), root)
+	if err != nil {
+		t.Fatalf("BuildWorkspaceComposerIndex returned error: %v", err)
+	}
+	info, found := index["composer-current"]
+	if !found {
+		t.Fatalf("index[composer-current] missing, got %d entries", len(index))
+	}
+	if info.Name != "Current Key" {
+		t.Fatalf("Name = %q, want Current Key", info.Name)
+	}
+	if info.Cwd != filepath.FromSlash("/Users/alice/source/current") {
+		t.Fatalf("Cwd = %q, want the workspace folder", info.Cwd)
+	}
+}
+
+// Finding 3: the index is shared across workspaces and keyed by composer id, so
+// a workspace whose descriptor cannot be read must not blank a path another
+// workspace already supplied for the same chat.
+func TestBuildWorkspaceComposerIndexKeepsAKnownPathOverAnUnreadableOne(t *testing.T) {
+	rootDir := t.TempDir()
+	root := DataRoot{
+		RootDir:             rootDir,
+		GlobalDBPath:        filepath.Join(rootDir, "globalStorage", "state.vscdb"),
+		WorkspaceStorageDir: filepath.Join(rootDir, "workspaceStorage"),
+	}
+	// Two workspaces list the same composer. "hash-a" sorts first and has a
+	// readable descriptor; "hash-b" sorts second and its descriptor is corrupt.
+	writeSharedComposerWorkspace(t, root, "hash-a", `{"folder":"file:///Users/alice/source/real"}`)
+	writeSharedComposerWorkspace(t, root, "hash-b", `{not json`)
+
+	index, err := BuildWorkspaceComposerIndex(t.Context(), root)
+	if err != nil {
+		t.Fatalf("BuildWorkspaceComposerIndex returned error: %v", err)
+	}
+	info, found := index["composer-shared"]
+	if !found {
+		t.Fatal("index[composer-shared] missing")
+	}
+	if info.Cwd != filepath.FromSlash("/Users/alice/source/real") {
+		t.Fatalf("Cwd = %q, want the path the readable workspace supplied", info.Cwd)
+	}
+}
+
+func writeSharedComposerWorkspace(t *testing.T, root DataRoot, workspaceHash string, descriptor string) {
+	t.Helper()
+
+	workspaceDir := filepath.Join(root.WorkspaceStorageDir, workspaceHash)
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workspaceDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "workspace.json"), []byte(descriptor), 0o644); err != nil {
+		t.Fatalf("WriteFile workspace json: %v", err)
+	}
+	writable, err := sql.Open("sqlite3", "file:"+filepath.Join(workspaceDir, "state.vscdb")+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open returned error: %v", err)
+	}
+	registry := `{"allComposers":[{"composerId":"composer-shared","name":"Shared","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"subtitle":"s","isArchived":false}],"selectedComposerId":"composer-shared"}`
+	for _, statement := range []string{
+		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
+		`INSERT INTO ItemTable(key, value) VALUES ('composer.composerData', '` + registry + `')`,
+	} {
+		if _, err := writable.Exec(statement); err != nil {
+			_ = writable.Close()
+			t.Fatalf("exec %q: %v", statement, err)
+		}
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatalf("close writable sqlite database: %v", err)
+	}
+}

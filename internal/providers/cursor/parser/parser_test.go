@@ -592,3 +592,255 @@ func TestComposerStampMovesWhenAnUnreferencedBubbleArrives(t *testing.T) {
 		t.Fatalf("stamp %+v is unchanged after one stored bubble was rewritten, so search keeps the old content", after)
 	}
 }
+
+func TestParserReadsComposerMetadataFromGlobalComposerHeaders(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+
+	globalOnlyID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	createCursorParserGlobalDBWithStatements(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		composerHeadersTableDDL,
+		`INSERT INTO composerHeaders VALUES ('` + globalOnlyID + `', 'ws', 1710000000000, 1710000000100, 1, 0, 0, 0, '{"name":"Global Title","subtitle":"repo","isArchived":true,"workspaceIdentifier":{"uri":{"fsPath":"/Users/alice/source/global repo","path":"/Users/alice/source/global repo"}}}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + globalOnlyID + `', '{"composerId":"` + globalOnlyID + `","name":"","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"fullConversationHeadersOnly":[{"bubbleId":"global-user","type":1}]}')`,
+	})
+
+	record := scanOneComposerRecord(t, globalOnlyID)
+	if record.WorkspaceRoot != filepath.FromSlash("/Users/alice/source/global repo") {
+		t.Fatalf("record WorkspaceRoot = %q, want the global workspace root", record.WorkspaceRoot)
+	}
+	if record.Title != "Global Title" {
+		t.Fatalf("record Title = %q, want Global Title", record.Title)
+	}
+	if !record.Archived {
+		t.Fatal("record Archived = false, want true")
+	}
+}
+
+// Finding 3: a metadata-only change must move the candidate stamp, because the
+// scan reuses the cached record whenever the stamp is unchanged.
+func TestParserStampFollowsGlobalMetadataTimestamp(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+
+	renamedID := "99999999-9999-4999-8999-999999999999"
+	globalDBPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+	// The record's own lastUpdatedAt stays at 1710000000100 while the global
+	// table has moved on to 1710000999000, which is what a rename or an archive
+	// looks like on disk.
+	createCursorParserGlobalDBWithStatements(t, globalDBPath, []string{
+		composerHeadersTableDDL,
+		`INSERT INTO composerHeaders VALUES ('` + renamedID + `', 'ws', 1710000000000, 1710000999000, 0, 0, 0, 0, '{"name":"Renamed"}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + renamedID + `', '{"composerId":"` + renamedID + `","name":"","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}')`,
+	})
+
+	stamp := findComposerStamp(t, renamedID)
+	want := msToTime(1710000999000)
+	if !stamp.Mtime.Equal(want) {
+		t.Fatalf("stamp Mtime = %s, want the global metadata timestamp %s; a rename would leave the cached record in place", stamp.Mtime, want)
+	}
+}
+
+func findComposerStamp(t *testing.T, composerID string) conversation.FileStamp {
+	t.Helper()
+
+	parser := New()
+	candidates, err := parser.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	for _, candidate := range candidates {
+		if strings.Contains(candidate.Path, composerID) {
+			return candidate.Stamp
+		}
+	}
+	t.Fatalf("no candidate for composer %q in %#v", composerID, candidatePaths(candidates))
+	return conversation.FileStamp{Size: 0, Mtime: time.Time{}}
+}
+
+func scanOneComposerRecord(t *testing.T, composerID string) conversation.Record {
+	t.Helper()
+
+	parser := New()
+	candidates, err := parser.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	for _, candidate := range candidates {
+		if !strings.Contains(candidate.Path, composerID) {
+			continue
+		}
+		record, ok := parser.ScanRecord(candidate.Path, candidate.Stamp)
+		if !ok {
+			t.Fatalf("ScanRecord(%q) ok = false, want true", candidate.Path)
+		}
+		return record
+	}
+	t.Fatalf("no candidate for composer %q in %#v", composerID, candidatePaths(candidates))
+	return conversation.Record{}
+}
+
+const composerHeadersTableDDL = "CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT)"
+
+func createCursorParserGlobalDBWithStatements(t *testing.T, dbPath string, extra []string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll global db dir: %v", err)
+	}
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open global db: %v", err)
+	}
+	statements := []string{
+		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
+		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)",
+	}
+	statements = append(statements, extra...)
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("exec global statement %q: %v", statement, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close global db: %v", err)
+	}
+}
+
+// Finding 1: a metadata table Clyde cannot read must cost that store's metadata,
+// not the index. Discover feeds one scan shared by every provider, and an error
+// from any provider discards the whole pass, so a Cursor schema change would stop
+// Claude and Codex conversations from ever being indexed again.
+func TestParserKeepsDiscoveringWhenGlobalMetadataIsUnreadable(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+
+	transcriptPath := writeCursorJSONLTranscript(t, projectsDir, "Users-alice-source-repo", jsonlOnlyConversationID, []string{
+		`{"role":"user","message":{"content":[{"type":"text","text":"still indexed"}]}}`,
+	})
+
+	brokenID := "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	createCursorParserGlobalDBWithStatements(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		// The table is present but carries none of the columns Clyde reads, which
+		// is what a Cursor schema change looks like.
+		"CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, somethingElse TEXT)",
+		`INSERT INTO composerHeaders VALUES ('` + brokenID + `', 'x')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + brokenID + `', '{"composerId":"` + brokenID + `","name":"Still Named","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}')`,
+	})
+
+	parser := New()
+	candidates, err := parser.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error %v; an unreadable metadata table must not stop the scan for every provider", err)
+	}
+	paths := candidatePaths(candidates)
+	if !slices.Contains(paths, transcriptPath) {
+		t.Fatalf("transcript candidate lost to a metadata failure: %#v", paths)
+	}
+
+	composerPath := findPathContaining(t, paths, brokenID)
+	var stamp conversation.FileStamp
+	for _, candidate := range candidates {
+		if candidate.Path == composerPath {
+			stamp = candidate.Stamp
+		}
+	}
+	record, ok := parser.ScanRecord(composerPath, stamp)
+	if !ok {
+		t.Fatalf("ScanRecord(%q) ok = false, want the chat kept with what its own record supplies", composerPath)
+	}
+	if record.Title != "Still Named" {
+		t.Fatalf("record Title = %q, want the title from the chat's own record", record.Title)
+	}
+	if record.WorkspaceRoot != "" {
+		t.Fatalf("record WorkspaceRoot = %q, want empty rather than invented when metadata is unreadable", record.WorkspaceRoot)
+	}
+}
+
+// Finding 3: Cursor marks a dispatched agent on its own record. The transcript
+// path has to infer this from the path shape; here it is stated outright.
+func TestParserMarksSubagentComposersFromTheGlobalFlag(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+
+	subagentID := "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	ownID := "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	createCursorParserGlobalDBWithStatements(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		composerHeadersTableDDL,
+		`INSERT INTO composerHeaders VALUES ('` + subagentID + `', 'ws', 1710000000000, 1710000000100, 0, 1, 0, 0, '{"name":"Dispatched"}')`,
+		`INSERT INTO composerHeaders VALUES ('` + ownID + `', 'ws', 1710000000000, 1710000000100, 0, 0, 0, 0, '{"name":"Mine"}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + subagentID + `', '{"composerId":"` + subagentID + `","name":"Dispatched","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + ownID + `', '{"composerId":"` + ownID + `","name":"Mine","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}')`,
+	})
+
+	if origin := scanOneComposerRecord(t, subagentID).Origin; origin != conversation.OriginSubagent {
+		t.Fatalf("subagent composer Origin = %v, want OriginSubagent", origin)
+	}
+	if origin := scanOneComposerRecord(t, ownID).Origin; origin == conversation.OriginSubagent {
+		t.Fatalf("ordinary composer Origin = %v, want it left alone", origin)
+	}
+}
+
+// Blocker 2: a metadata read that failed is not a chat with no workspace. The
+// scan rebuilds the whole record set from this pass, so writing the blank would
+// replace a record that had a workspace root with one that never regains it.
+func TestParserKeepsThePriorRecordWhenMetadataCannotBeRead(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+
+	brokenID := "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	createCursorParserGlobalDBWithStatements(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		"CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, somethingElse TEXT)",
+		`INSERT INTO composerHeaders VALUES ('` + brokenID + `', 'x')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + brokenID + `', '{"composerId":"` + brokenID + `","name":"Named","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1}]}')`,
+	})
+
+	path := BuildVirtualPath(RootHash(rootDir), VirtualKindComposer, brokenID)
+	priorRecord := conversation.Record{
+		ID:            conversation.DerivedID(providerid.ProviderCursor, brokenID, path),
+		Provider:      providerid.ProviderCursor,
+		NativeID:      brokenID,
+		Title:         "Named",
+		WorkspaceRoot: filepath.FromSlash("/Users/alice/source/known"),
+		ArtifactPath:  path,
+		ArtifactKind:  "cursor_composer",
+		Origin:        conversation.OriginSubagent,
+		Archived:      true,
+	}
+
+	parser := New()
+	candidates, err := parser.Discover(context.Background(), map[string]conversation.Record{path: priorRecord})
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	var stamp conversation.FileStamp
+	for _, candidate := range candidates {
+		if candidate.Path == path {
+			stamp = candidate.Stamp
+		}
+	}
+
+	record, ok := parser.ScanRecord(path, stamp)
+	if !ok {
+		t.Fatalf("ScanRecord(%q) ok = false, want the prior record kept", path)
+	}
+	if record.WorkspaceRoot != priorRecord.WorkspaceRoot {
+		t.Fatalf("WorkspaceRoot = %q, want the prior %q kept rather than blanked by a failed read", record.WorkspaceRoot, priorRecord.WorkspaceRoot)
+	}
+	if record.Origin != conversation.OriginSubagent {
+		t.Fatalf("Origin = %v, want the prior origin kept", record.Origin)
+	}
+	if !record.Archived {
+		t.Fatal("Archived = false, want the prior flag kept")
+	}
+}
