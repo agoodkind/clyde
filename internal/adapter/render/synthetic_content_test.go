@@ -85,6 +85,43 @@ func TestExtractSyntheticPartsMultipleConsecutiveThinking(t *testing.T) {
 	}
 }
 
+// TestExtractSyntheticPartsMentionedOpenDoesNotAbsorbLaterPair reproduces
+// the merge-gate blocker: a lone open marker mentioned in prose (e.g. an
+// assistant reply explaining the marker format, ordinary traffic in this
+// repository), followed later by a real, unrelated complete envelope. A
+// single regex spanning open...(lazily-anything)...close would pair the
+// FIRST open (the mention) with the NEXT close (the real envelope's),
+// deleting every sentence and code fence in between along with the real
+// envelope's own open marker. Sequential pairing must instead leave the
+// mention as ordinary text and correctly pair only the real envelope.
+func TestExtractSyntheticPartsMentionedOpenDoesNotAbsorbLaterPair(t *testing.T) {
+	mention := "Here is the open marker: `<!--clyde-thinking-->`. "
+	sentence1 := "This sentence sits entirely outside any envelope. "
+	sentence2 := "So does this one, with a code fence: ```go\nfunc f() {}\n``` "
+	real := FormatSyntheticContent(SyntheticReasoning, "genuine reasoning")
+	trailing := "Final answer after the real block."
+	in := mention + sentence1 + sentence2 + real + trailing
+
+	parts := ExtractSyntheticParts(in)
+	if len(parts) != 3 {
+		t.Fatalf("want 3 parts, got %d: %#v", len(parts), parts)
+	}
+	if parts[0].Kind != SyntheticKindText {
+		t.Fatalf("part0 kind=%q want text: %#v", parts[0].Kind, parts[0])
+	}
+	for _, want := range []string{mention, sentence1, sentence2} {
+		if !strings.Contains(parts[0].Body, want) {
+			t.Fatalf("part0=%q, want it to contain %q (prose around the mention must survive untouched)", parts[0].Body, want)
+		}
+	}
+	if parts[1].Kind != SyntheticKindThinking || parts[1].Body != "genuine reasoning" {
+		t.Fatalf("part1=%#v, want the real envelope's own body, not the text spanning both markers", parts[1])
+	}
+	if parts[2].Kind != SyntheticKindText || !strings.Contains(parts[2].Body, trailing) {
+		t.Fatalf("part2=%#v, want %q preserved", parts[2], trailing)
+	}
+}
+
 func TestExtractSyntheticPartsNoticeMaterializes(t *testing.T) {
 	notice := FormatSyntheticContent(SyntheticNotice, "⚠️ heads up")
 	parts := ExtractSyntheticParts(notice + "Body.")
@@ -96,6 +133,29 @@ func TestExtractSyntheticPartsNoticeMaterializes(t *testing.T) {
 	}
 	if parts[1].Kind != SyntheticKindText || parts[1].Body != "Body." {
 		t.Fatalf("part1=%#v", parts[1])
+	}
+}
+
+// TestExtractSyntheticPartsPreservesIndentationAfterClose asserts that
+// content immediately following a close marker keeps its own leading
+// whitespace. The close marker's own decorative blank line (the "\n\n"
+// SyntheticContentCloseWithAttrs always appends) is consumed, but a space
+// or tab that belongs to the next line's own content, e.g. an indented
+// code block, is not: only a newline run is decoration, never a run that
+// includes non-newline whitespace.
+func TestExtractSyntheticPartsPreservesIndentationAfterClose(t *testing.T) {
+	notice := FormatSyntheticContent(SyntheticNotice, "heads up")
+	in := notice + "    indented code line"
+
+	parts := ExtractSyntheticParts(in)
+	if len(parts) != 2 {
+		t.Fatalf("want 2 parts, got %d: %#v", len(parts), parts)
+	}
+	if parts[0].Kind != SyntheticKindNotice {
+		t.Fatalf("part0 kind=%q want notice: %#v", parts[0].Kind, parts[0])
+	}
+	if parts[1].Kind != SyntheticKindText || parts[1].Body != "    indented code line" {
+		t.Fatalf("part1=%#v, want text %q with leading indentation intact", parts[1], "    indented code line")
 	}
 }
 

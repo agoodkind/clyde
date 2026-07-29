@@ -117,8 +117,19 @@ type syntheticContentSpec struct {
 	Marker      string
 	Header      string
 	QuotePrefix bool
-	stripRE     *regexp.Regexp
-	captureRE   *regexp.Regexp
+	// openOnlyRE matches a bare open marker (with its optional data-ref /
+	// data-origin attributes), independent of what follows. closeOnlyRE
+	// matches a bare close marker (with its optional data-encrypted /
+	// data-signature attributes), independent of what precedes it.
+	// pairKindMatches scans both and pairs them sequentially rather than
+	// matching a single open-through-close regex across the whole text:
+	// a regex written as open...(lazily-anything)...close pairs the FIRST
+	// open with the NEXT close regardless of what lies between them,
+	// which wrongly absorbs a real complete envelope (and everything
+	// around it) into the span between an unrelated earlier mention of
+	// the open marker and that envelope's own close.
+	openOnlyRE  *regexp.Regexp
+	closeOnlyRE *regexp.Regexp
 }
 
 var syntheticContentSpecs = map[SyntheticContentKind]*syntheticContentSpec{
@@ -177,29 +188,15 @@ func init() {
 		// data-ref and data-origin are known when the open marker is
 		// emitted, so they ride on the open marker. data-encrypted
 		// (codex encrypted_content) and data-signature (anthropic
-		// per-thinking-block signature) arrive late on the wire, so
-		// they ride on the close marker. Attribute order on the wire
-		// is fixed within each marker so the regex stays linear.
-		spec.stripRE = regexp.MustCompile(
-			`(?s)<!--` + marker +
-				`(?: data-ref="[^"]*")?` +
-				`(?: data-origin="[^"]*")?-->` +
-				`.*?` +
-				`<!--/` + marker +
-				`(?: data-encrypted="[^"]*")?` +
-				`(?: data-signature="[^"]*")?-->\s*`,
+		// per-thinking-block signature) arrive late on the wire, so they
+		// ride on the close marker. openOnlyRE submatches (1) data-ref,
+		// (2) data-origin; closeOnlyRE submatches (1) data-encrypted,
+		// (2) data-signature.
+		spec.openOnlyRE = regexp.MustCompile(
+			`<!--` + marker + dataRefAttrPattern + dataOriginAttrPattern + `-->`,
 		)
-		// captureRE submatches (1) data-ref, (2) data-origin on the
-		// open marker, then (3) the inner body, then (4) data-encrypted
-		// and (5) data-signature on the close marker.
-		spec.captureRE = regexp.MustCompile(
-			`(?s)<!--` + marker +
-				dataRefAttrPattern +
-				dataOriginAttrPattern + `-->` +
-				`(.*?)` +
-				`<!--/` + marker +
-				dataEncryptedAttrPattern +
-				dataSignatureAttrPattern + `-->\s*`,
+		spec.closeOnlyRE = regexp.MustCompile(
+			`<!--/` + marker + dataEncryptedAttrPattern + dataSignatureAttrPattern + `-->`,
 		)
 	}
 }
@@ -223,8 +220,8 @@ func SyntheticContentOpen(kind SyntheticContentKind) string {
 // header for the requested synthetic block kind, annotated with the data-ref
 // and data-origin attributes. Both are independently optional; an empty ref
 // omits data-ref, and an [OriginUnknown] origin omits data-origin. The
-// on-wire order is fixed (ref first, origin second) so the captureRE stays
-// linear.
+// on-wire order is fixed (ref first, origin second) so openOnlyRE's
+// submatch groups stay in that order.
 //
 // The ref correlates the round-tripped envelope with provider state (e.g. a
 // stored Codex encrypted_content blob); the origin identifies the producing
@@ -262,8 +259,9 @@ func SyntheticContentClose(kind SyntheticContentKind) string {
 // `data-encrypted` attribute (codex `encrypted_content` blob) and a
 // `data-signature` attribute (Anthropic per-thinking-block signature).
 // Each attribute is independently optional. The order on the wire is
-// fixed: encrypted first, signature second; this keeps the captureRE
-// linear and lets each provider mapper read only the attribute it owns.
+// fixed: encrypted first, signature second, matching closeOnlyRE's
+// submatch order, so each provider mapper reads only the attribute it
+// owns.
 //
 // Both attributes ride on the CLOSE marker because they arrive late on the
 // upstream wire (encrypted_content on response.output_item.done; signature
@@ -351,7 +349,8 @@ func formatSyntheticBody(spec *syntheticContentSpec, body string, leadingPrefix 
 // caller passed to [FormatSyntheticContent] / [FormatSyntheticContentDeltaWithRef].
 //
 // The decorated input begins immediately after the open marker and ends
-// immediately before the close marker (i.e. the captureRE submatch).
+// immediately before the close marker (i.e. the text a paired open and
+// close marker enclose; see [pairKindMatches]).
 func stripDecoration(spec *syntheticContentSpec, decorated string) string {
 	body := decorated
 	// Capture body sometimes begins with a leading newline because
@@ -390,10 +389,36 @@ type syntheticMatch struct {
 	signature string
 }
 
+// markerOccurrence is one open or close marker occurrence found while
+// scanning text for one kind, carrying whatever attributes that half of
+// the marker can carry (an open marker's data-ref/data-origin, or a close
+// marker's data-encrypted/data-signature; the other pair is always empty).
+type markerOccurrence struct {
+	isOpen    bool
+	start     int
+	end       int
+	ref       string
+	origin    SyntheticOrigin
+	encrypted string
+	signature string
+}
+
 // ExtractSyntheticParts parses text and returns the ordered list of parts.
 // Envelope segments produce [SyntheticPart] entries with the matching kind and
 // the raw upstream-ready Body (decoration stripped). Non-envelope text
 // segments produce [SyntheticKindText] parts. An empty input returns nil.
+//
+// A marker that cannot be matched as a complete open-and-close pair is left
+// inside the surrounding [SyntheticKindText] part rather than treated as an
+// envelope on its own: an unmatched marker is equally consistent with prose
+// that quotes or discusses the marker syntax (ordinary traffic in a
+// repository that builds this exact feature) as it is with a genuinely
+// truncated envelope, and the two cannot be told apart from the marker
+// alone. Only a complete pair is strong enough evidence that this is
+// Clyde's own injected content. See [pairKindMatches] for how a pair is
+// identified: proximity between an open and a later close is not enough,
+// because a marker merely mentioned in prose before a real, unrelated
+// envelope is not that envelope's open half.
 //
 // Consecutive envelope blocks of the same kind produce separate parts;
 // callers that need to merge them can do so explicitly.
@@ -410,8 +435,8 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 }
 
 // collectSyntheticMatches scans text for every registered marker kind and
-// returns one [syntheticMatch] per envelope found. Order is per-kind grouped;
-// the caller sorts before splicing.
+// returns one [syntheticMatch] per complete open-and-close pair found. Order
+// is per-kind grouped; the caller sorts before splicing.
 func collectSyntheticMatches(text string) []syntheticMatch {
 	var matches []syntheticMatch
 	for _, kind := range orderedSyntheticKinds {
@@ -419,30 +444,124 @@ func collectSyntheticMatches(text string) []syntheticMatch {
 		if !strings.Contains(text, "<!--"+spec.Marker) {
 			continue
 		}
-		for _, idx := range spec.captureRE.FindAllStringSubmatchIndex(text, -1) {
-			matches = append(matches, decodeSyntheticMatch(text, kind, spec, idx))
-		}
+		matches = append(matches, pairKindMatches(text, kind, spec)...)
 	}
 	return matches
 }
 
-// decodeSyntheticMatch unpacks one captureRE submatch index slice into a
-// [syntheticMatch]. The submatch group order is fixed by the regex:
-// (1) data-ref, (2) data-origin, (3) inner body, (4) data-encrypted,
-// (5) data-signature.
-func decodeSyntheticMatch(text string, kind SyntheticContentKind, spec *syntheticContentSpec, idx []int) syntheticMatch {
-	outerStart, outerEnd := idx[0], idx[1]
-	innerStart, innerEnd := idx[6], idx[7]
-	return syntheticMatch{
-		kind:      kind,
-		start:     outerStart,
-		end:       outerEnd,
-		bodyTrim:  stripDecoration(spec, text[innerStart:innerEnd]),
-		ref:       captureSubstring(text, idx[2], idx[3]),
-		origin:    SyntheticOrigin(captureSubstring(text, idx[4], idx[5])),
-		encrypted: captureSubstring(text, idx[8], idx[9]),
-		signature: captureSubstring(text, idx[10], idx[11]),
+// pairKindMatches finds every complete open-and-close pair for one kind by
+// scanning marker occurrences (open and close) in text order and pairing
+// each open with the very next marker event of that kind, but only when
+// that event is a close.
+//
+// A single regex spanning open...(lazily-anything)...close cannot express
+// this: it pairs the FIRST open it finds with the NEXT close anywhere
+// after it, so an open marker merely mentioned in prose ("here's what the
+// marker looks like: <!--clyde-thinking-->"), followed later by a real,
+// unrelated complete envelope, gets wrongly paired with that envelope's
+// close, and everything between the mention and the real close, including
+// the real envelope's own open marker, is swallowed into one bogus match.
+//
+// This sequential scan instead tracks one pending open at a time: an open
+// event supersedes whatever open was already pending (the superseded one
+// never pairs with anything, so its literal marker text stays put as
+// ordinary text) rather than waiting for some later close to (wrongly)
+// complete it. A close event completes the pending open into a pair, if
+// there is one; a close with nothing pending is an orphan and is left in
+// place the same way.
+func pairKindMatches(text string, kind SyntheticContentKind, spec *syntheticContentSpec) []syntheticMatch {
+	occurrences := collectMarkerOccurrences(text, spec)
+	var matches []syntheticMatch
+	var pending *markerOccurrence
+	for i := range occurrences {
+		occ := &occurrences[i]
+		if occ.isOpen {
+			pending = occ
+			continue
+		}
+		if pending == nil {
+			continue
+		}
+		matches = append(matches, syntheticMatch{
+			kind:      kind,
+			start:     pending.start,
+			end:       consumeTrailingNewlines(text, occ.end),
+			bodyTrim:  stripDecoration(spec, text[pending.end:occ.start]),
+			ref:       pending.ref,
+			origin:    pending.origin,
+			encrypted: occ.encrypted,
+			signature: occ.signature,
+		})
+		pending = nil
 	}
+	return matches
+}
+
+// collectMarkerOccurrences finds every open and close marker occurrence for
+// one kind and returns them merged into one text-order list. Both
+// spec.openOnlyRE.FindAllStringSubmatchIndex and its closeOnlyRE
+// counterpart already return their own matches in left-to-right order, so
+// merging the two lists is a linear merge rather than a full sort.
+func collectMarkerOccurrences(text string, spec *syntheticContentSpec) []markerOccurrence {
+	openIdxs := spec.openOnlyRE.FindAllStringSubmatchIndex(text, -1)
+	closeIdxs := spec.closeOnlyRE.FindAllStringSubmatchIndex(text, -1)
+
+	opens := make([]markerOccurrence, len(openIdxs))
+	for i, idx := range openIdxs {
+		opens[i] = markerOccurrence{
+			isOpen:    true,
+			start:     idx[0],
+			end:       idx[1],
+			ref:       captureSubstring(text, idx[2], idx[3]),
+			origin:    SyntheticOrigin(captureSubstring(text, idx[4], idx[5])),
+			encrypted: "",
+			signature: "",
+		}
+	}
+	closes := make([]markerOccurrence, len(closeIdxs))
+	for i, idx := range closeIdxs {
+		closes[i] = markerOccurrence{
+			isOpen:    false,
+			start:     idx[0],
+			end:       idx[1],
+			ref:       "",
+			origin:    OriginUnknown,
+			encrypted: captureSubstring(text, idx[2], idx[3]),
+			signature: captureSubstring(text, idx[4], idx[5]),
+		}
+	}
+
+	merged := make([]markerOccurrence, 0, len(opens)+len(closes))
+	i, j := 0, 0
+	for i < len(opens) && j < len(closes) {
+		if opens[i].start <= closes[j].start {
+			merged = append(merged, opens[i])
+			i++
+		} else {
+			merged = append(merged, closes[j])
+			j++
+		}
+	}
+	merged = append(merged, opens[i:]...)
+	merged = append(merged, closes[j:]...)
+	return merged
+}
+
+// consumeTrailingNewlines advances past from (the index right after a
+// close tag's own "-->") over a run of literal newline characters,
+// returning the first index that is not one. It is bounded to newline
+// characters only, matching exactly the decorative blank line
+// SyntheticContentCloseWithAttrs always appends after the close tag: a
+// broader whitespace class would also consume real leading whitespace on
+// whatever immediately follows (e.g. an indented code block line),
+// destroying content that happens to sit right after a close marker with
+// no other separator.
+func consumeTrailingNewlines(text string, from int) int {
+	end := from
+	for end < len(text) && text[end] == '\n' {
+		end++
+	}
+	return end
 }
 
 // captureSubstring returns text[start:end] when both indices are non-negative
