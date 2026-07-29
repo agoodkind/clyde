@@ -40,8 +40,10 @@ func TestWhitespaceOnlyTextIsOfferedAsNoText(t *testing.T) {
 			Text:      spacing,
 			HasTools:  true,
 			Tools: []transcript.ToolCall{{
-				Name:  "Bash",
-				Input: transcript.ToolInputJSON{Raw: []byte(`{"command":"ls"}`)},
+				Name:        "Bash",
+				Input:       transcript.ToolInputJSON{Raw: []byte(`{"command":"ls"}`)},
+				Display:     "",
+				DisplayLang: "",
 			}},
 		}}
 		built, err := BuildSemanticConversationDocuments(policyTestRecord(), messages, kinds)

@@ -667,11 +667,13 @@ func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) 
 				output, isError = zedToolResultOutput(message.ToolResults[part.ToolUse.ID])
 			}
 			tools = append(tools, transcript.ToolCall{
-				ID:      part.ToolUse.ID,
-				Name:    part.ToolUse.Name,
-				Input:   transcript.ToolInputJSON{Raw: append([]byte(nil), part.ToolUse.Input...)},
-				Output:  output,
-				IsError: isError,
+				ID:          part.ToolUse.ID,
+				Name:        part.ToolUse.Name,
+				Input:       transcript.ToolInputJSON{Raw: append([]byte(nil), part.ToolUse.Input...)},
+				Display:     "",
+				DisplayLang: "",
+				Output:      output,
+				IsError:     isError,
 			})
 		}
 	}

@@ -160,11 +160,13 @@ func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 					HasTools:  true,
 					Tools: []transcript.ToolCall{
 						{
-							ID:      "tool-1",
-							Name:    "exec_command",
-							Input:   transcript.ToolInputJSON{Raw: json.RawMessage(`{"cmd":"date"}`)},
-							Output:  "Mon Jul 6",
-							IsError: true,
+							ID:          "tool-1",
+							Name:        "exec_command",
+							Input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"cmd":"date"}`)},
+							Display:     "",
+							DisplayLang: "",
+							Output:      "Mon Jul 6",
+							IsError:     true,
 						},
 					},
 				},

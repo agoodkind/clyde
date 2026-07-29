@@ -137,11 +137,13 @@ func toolCallHistoryMessage(callID, name, raw string, timestamp time.Time) (Hist
 	}
 	message := textHistoryMessage("assistant", "", timestamp, "")
 	message.Tools = []transcript.ToolCall{{
-		ID:      callID,
-		Name:    name,
-		Input:   toolInputJSON(raw),
-		Output:  "",
-		IsError: false,
+		ID:          callID,
+		Name:        name,
+		Input:       toolInputJSON(raw),
+		Display:     "",
+		DisplayLang: "",
+		Output:      "",
+		IsError:     false,
 	}}
 	message.HasTools = true
 	return message, true

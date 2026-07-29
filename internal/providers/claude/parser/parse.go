@@ -589,11 +589,13 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 		case contentBlockToolUse:
 			m.HasTools = true
 			m.Tools = append(m.Tools, transcript.ToolCall{
-				ID:      b.ID,
-				Name:    b.Name,
-				Input:   b.Input,
-				Output:  "",
-				IsError: false,
+				ID:          b.ID,
+				Name:        b.Name,
+				Input:       b.Input,
+				Display:     "",
+				DisplayLang: "",
+				Output:      "",
+				IsError:     false,
 			})
 		case contentBlockToolResult:
 			// Assistant entries should not carry tool results; the

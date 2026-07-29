@@ -36,8 +36,10 @@ func newToolAwareIndex(seen *[]LoadOptions) (*Index, Record) {
 					Input: transcript.ToolInputJSON{
 						Raw: json.RawMessage(`{"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`),
 					},
-					Output:  output,
-					IsError: false,
+					Display:     "",
+					DisplayLang: "",
+					Output:      output,
+					IsError:     false,
 				}},
 			}
 			yield(message, nil)

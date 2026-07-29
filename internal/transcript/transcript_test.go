@@ -10,8 +10,8 @@ func TestShapeConversationCompactsToolOnlyTurns(t *testing.T) {
 		Role:     "assistant",
 		HasTools: true,
 		Tools: []ToolCall{
-			{Name: "Bash"},
-			{Name: "Read"},
+			{Name: "Bash", Display: "", DisplayLang: ""},
+			{Name: "Read", Display: "", DisplayLang: ""},
 		},
 	}}, DefaultShapeOptions())
 	if len(turns) != 1 {
@@ -28,12 +28,16 @@ func TestShapeConversationUsesToolInputSummary(t *testing.T) {
 		HasTools: true,
 		Tools: []ToolCall{
 			{
-				Name:  "Bash",
-				Input: ToolInputJSON{Raw: json.RawMessage(`{"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`)},
+				Name:        "Bash",
+				Input:       ToolInputJSON{Raw: json.RawMessage(`{"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`)},
+				Display:     "",
+				DisplayLang: "",
 			},
 			{
-				Name:  "Read",
-				Input: ToolInputJSON{Raw: json.RawMessage(`{"file_path":"/tmp/probe.log"}`)},
+				Name:        "Read",
+				Input:       ToolInputJSON{Raw: json.RawMessage(`{"file_path":"/tmp/probe.log"}`)},
+				Display:     "",
+				DisplayLang: "",
 			},
 		},
 	}}, ShapeOptions{ToolOnly: ToolOnlyInputSummary})
@@ -50,7 +54,7 @@ func TestShapeConversationOmitsToolOnlyTurns(t *testing.T) {
 	turns := ShapeConversation([]Message{{
 		Role:     "assistant",
 		HasTools: true,
-		Tools:    []ToolCall{{Name: "Bash"}},
+		Tools:    []ToolCall{{Name: "Bash", Display: "", DisplayLang: ""}},
 	}}, ShapeOptions{ToolOnly: ToolOnlyOmit})
 	if len(turns) != 0 {
 		t.Fatalf("turns=%d want 0", len(turns))
@@ -88,7 +92,7 @@ func TestRenderJSONUsesShapedConversation(t *testing.T) {
 	body, err := RenderJSONWithOptions([]Message{{
 		Role:     "assistant",
 		HasTools: true,
-		Tools:    []ToolCall{{Name: "Bash"}},
+		Tools:    []ToolCall{{Name: "Bash", Display: "", DisplayLang: ""}},
 	}}, DefaultShapeOptions())
 	if err != nil {
 		t.Fatalf("RenderJSON: %v", err)
