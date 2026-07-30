@@ -352,6 +352,9 @@ func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tra
 // emitLine parses one raw transcript line and, when it is a usable turn, yields
 // it. It returns true when the caller stopped the range so the stream loop can
 // return. A blank or non-turn line yields nothing and does not stop the loop.
+//
+// Tool results the line carried are discarded here, because this path serves a
+// caller that did not ask for them.
 func emitLine(line []byte, opts parseOptions, yield func(transcript.Message, error) bool) bool {
 	if len(line) == 0 {
 		return false
@@ -360,7 +363,7 @@ func emitLine(line []byte, opts parseOptions, yield func(transcript.Message, err
 	if len(trimmed) == 0 {
 		return false
 	}
-	msg, ok := parseLine(trimmed, opts)
+	msg, _, ok := parseLine(trimmed, opts)
 	if !ok {
 		return false
 	}
@@ -369,18 +372,12 @@ func emitLine(line []byte, opts parseOptions, yield func(transcript.Message, err
 
 func (p Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
-		messages, err := p.collectMessages(path, opts)
+		messages, results, err := collectWithToolResults(path, opts)
 		if err != nil {
 			yield(emptyMessage(), err)
 			return
 		}
-		body, readErr := os.ReadFile(path)
-		if readErr != nil {
-			slog.Warn("providers.claude.parser.tool_output_read_failed", "concern", concern, "component", "claude", "path", path, "err", readErr)
-			yield(emptyMessage(), fmt.Errorf("read transcript for tool outputs: %w", readErr))
-			return
-		}
-		attachToolOutputs(body, messages)
+		attachToolResults(messages, results)
 		for _, msg := range messages {
 			if !yield(msg, nil) {
 				return
@@ -389,15 +386,41 @@ func (p Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions
 	}
 }
 
-func (p Parser) collectMessages(path string, opts conversation.LoadOptions) ([]transcript.Message, error) {
-	noOutputs := opts
-	noOutputs.IncludeToolOutputs = false
-	messages, err := conversation.CollectMessages(p.Stream(path, noOutputs))
+// collectWithToolResults reads the transcript once, returning every usable turn
+// and every tool result the file carried. A result arrives on a later line than
+// the call it answers, which is why the turns are buffered rather than streamed.
+func collectWithToolResults(path string, opts conversation.LoadOptions) ([]transcript.Message, []claudeToolResult, error) {
+	file, err := os.Open(path)
 	if err != nil {
-		slog.Warn("providers.claude.parser.collect_failed", "concern", concern, "component", "claude", "path", path, "err", err)
-		return messages, fmt.Errorf("collect claude transcript messages: %w", err)
+		slog.Warn("providers.claude.parser.open_failed", "concern", concern, "component", "claude", "path", path, "err", err)
+		return nil, nil, fmt.Errorf("open transcript: %w", err)
 	}
-	return messages, nil
+	defer func() { _ = file.Close() }()
+
+	parseOpts := parseOptions{
+		PreserveSystemPrompts: opts.IncludeSystemPrompts,
+		IncludeSystemMessages: opts.IncludeSystemMessages,
+	}
+	messages := make([]transcript.Message, 0)
+	results := make([]claudeToolResult, 0)
+	reader := bufio.NewReader(file)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if trimmed := trimLine(line); len(trimmed) > 0 {
+			message, lineResults, ok := parseLine(trimmed, parseOpts)
+			results = append(results, lineResults...)
+			if ok {
+				messages = append(messages, message)
+			}
+		}
+		if readErr == io.EOF {
+			return messages, results, nil
+		}
+		if readErr != nil {
+			slog.Warn("providers.claude.parser.read_line_failed", "concern", concern, "component", "claude", "path", path, "err", readErr)
+			return nil, nil, fmt.Errorf("read transcript line: %w", readErr)
+		}
+	}
 }
 
 func trimLine(line []byte) []byte {
