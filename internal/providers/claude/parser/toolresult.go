@@ -13,8 +13,9 @@ import (
 func attachToolOutputs(body []byte, messages []transcript.Message) {
 	toolsByID := make(map[string]*transcript.ToolCall)
 	for i := range messages {
-		for j := range messages[i].Tools {
-			tool := &messages[i].Tools[j]
+		tools := messages[i].Tools
+		for j := range tools {
+			tool := &tools[j]
 			if tool.ID != "" {
 				toolsByID[tool.ID] = tool
 			}
@@ -47,7 +48,7 @@ func attachToolOutputsFromLine(line []byte, toolsByID map[string]*transcript.Too
 		if block.Type != "tool_result" || tool == nil {
 			continue
 		}
-		tool.Output = block.Content
+		tool.Output = block.Content.SearchableText()
 		tool.IsError = block.IsError
 	}
 }
@@ -61,9 +62,15 @@ type toolResultMessage struct {
 	Content json.RawMessage `json:"content"`
 }
 
+// toolResultBlock is one tool_result block inside a user entry's content. Its
+// own content is a union: a tool returns its result as a string, as a list of
+// content blocks, or in a shape this parser does not model, so it decodes
+// through [ToolUseResultContent] rather than as a bare string. Declaring it as a
+// string fails the whole entry when any one result is a list, taking the results
+// beside it down with it.
 type toolResultBlock struct {
-	Type      string `json:"type"`
-	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
-	IsError   bool   `json:"is_error"`
+	Type      string               `json:"type"`
+	ToolUseID string               `json:"tool_use_id"`
+	Content   ToolUseResultContent `json:"content"`
+	IsError   bool                 `json:"is_error"`
 }

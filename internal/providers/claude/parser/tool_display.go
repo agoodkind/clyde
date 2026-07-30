@@ -33,25 +33,49 @@ type claudeToolDisplayOption struct {
 	Description string `json:"description"`
 }
 
+// claudeOwnTools names the tools Claude Code itself defines. The key list below
+// is Claude's own vocabulary, so it may only be applied to a call Claude made.
+//
+// Anything else is a tool some other server defined, and its keys mean whatever
+// that server decided. A key named plan or questions in a foreign schema is not
+// Claude's plan or Claude's questions, so reading it would be a guess dressed up
+// as knowledge.
+var claudeOwnTools = map[string]struct{}{
+	"Bash": {}, "BashOutput": {}, "Edit": {}, "ExitPlanMode": {}, "Glob": {},
+	"Grep": {}, "KillShell": {}, "NotebookEdit": {}, "Read": {}, "Task": {},
+	"TodoWrite": {}, "WebFetch": {}, "WebSearch": {}, "Write": {},
+	"AskUserQuestion": {}, "Skill": {}, "SlashCommand": {}, "ToolSearch": {},
+}
+
 // toolDisplayText is what the user saw for one tool call, and the language that
 // text is written in. The language is "bash" when the call ran a shell and empty
 // otherwise.
 //
-// A tool whose shape this parser does not recognize shows nothing rather than
-// its serialization. An unrecognized tool is a gap to fill here, and showing
-// the JSON instead would hide the gap behind text nobody wrote.
+// A tool this parser does not own keeps its input exactly as it arrived. Those
+// keys belong to whoever defined the tool, so reading a foreign one through
+// Claude's vocabulary drops whatever does not match, and a question or an answer
+// the person read stops being searchable. Keeping the input keeps those words
+// reachable. A tool of Claude's whose input will not decode keeps its input for
+// the same reason.
+//
+// A tool of Claude's that decodes but carries none of these keys stores its name
+// alone. Its shape is known and holds nothing a person read, so a gap here is a
+// key to add rather than a payload to keep.
 //
 // A plan and a question come before the file and search fields because they are
 // prose the person read and that exists nowhere else. A file path is enough for
 // a call that edits or writes a file, since the file itself carries that content
 // and the code index already reaches it.
-func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) {
+func toolDisplayText(name string, input transcript.ToolInputJSON) (string, string) {
 	if input.Len() == 0 {
 		return "", ""
 	}
+	if _, own := claudeOwnTools[strings.TrimSpace(name)]; !own {
+		return string(input.Raw), ""
+	}
 	var parsed claudeToolDisplayInput
 	if err := json.Unmarshal(input.Raw, &parsed); err != nil {
-		return "", ""
+		return string(input.Raw), ""
 	}
 	if command := strings.TrimSpace(parsed.Command); command != "" {
 		return command, "bash"

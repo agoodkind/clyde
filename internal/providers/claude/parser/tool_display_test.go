@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/conversation"
@@ -14,22 +15,23 @@ func TestToolDisplayText(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
+		tool     string
 		input    string
 		wantText string
 		wantLang string
 	}{
-		{name: "command", input: `{"command":"git status"}`, wantText: "git status", wantLang: "bash"},
-		{name: "file path", input: `{"file_path":"/repo/main.go"}`, wantText: "/repo/main.go", wantLang: ""},
-		{name: "pattern", input: `{"pattern":"TODO"}`, wantText: "TODO", wantLang: ""},
-		{name: "prompt", input: `{"prompt":"inspect callers"}`, wantText: "inspect callers", wantLang: ""},
-		{name: "url", input: `{"url":"https://example.com"}`, wantText: "https://example.com", wantLang: ""},
-		{name: "query", input: `{"query":"adapter error"}`, wantText: "adapter error", wantLang: ""},
-		{name: "unknown", input: `{"other":"value"}`, wantText: "", wantLang: ""},
-		{name: "empty", input: "", wantText: "", wantLang: ""},
+		{name: "command", tool: "Bash", input: `{"command":"git status"}`, wantText: "git status", wantLang: "bash"},
+		{name: "file path", tool: "Read", input: `{"file_path":"/repo/main.go"}`, wantText: "/repo/main.go", wantLang: ""},
+		{name: "pattern", tool: "Grep", input: `{"pattern":"TODO"}`, wantText: "TODO", wantLang: ""},
+		{name: "prompt", tool: "Task", input: `{"prompt":"inspect callers"}`, wantText: "inspect callers", wantLang: ""},
+		{name: "url", tool: "WebFetch", input: `{"url":"https://example.com"}`, wantText: "https://example.com", wantLang: ""},
+		{name: "query", tool: "WebSearch", input: `{"query":"adapter error"}`, wantText: "adapter error", wantLang: ""},
+		{name: "a known tool whose keys do not match", tool: "TodoWrite", input: `{"other":"value"}`, wantText: "", wantLang: ""},
+		{name: "empty", tool: "Bash", input: "", wantText: "", wantLang: ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			display, language := toolDisplayText("tool", transcript.ToolInputJSON{Raw: json.RawMessage(test.input)})
+			display, language := toolDisplayText(test.tool, transcript.ToolInputJSON{Raw: json.RawMessage(test.input)})
 			if display != test.wantText || language != test.wantLang {
 				t.Fatalf("toolDisplayText() = %q, %q; want %q, %q", display, language, test.wantText, test.wantLang)
 			}
@@ -40,7 +42,7 @@ func TestToolDisplayText(t *testing.T) {
 func TestClaudeFixtureFillsToolDisplay(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
-	body := `{"uuid":"assistant-1","type":"assistant","timestamp":"2026-07-30T12:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-command","name":"Bash","input":{"command":"git status"}},{"type":"tool_use","id":"tool-path","name":"Read","input":{"file_path":"/repo/main.go"}},{"type":"tool_use","id":"tool-pattern","name":"Grep","input":{"pattern":"TODO"}},{"type":"tool_use","id":"tool-prompt","name":"Task","input":{"prompt":"inspect callers"}},{"type":"tool_use","id":"tool-url","name":"WebFetch","input":{"url":"https://example.com"}},{"type":"tool_use","id":"tool-query","name":"Search","input":{"query":"adapter error"}}]}}` + "\n"
+	body := `{"uuid":"assistant-1","type":"assistant","timestamp":"2026-07-30T12:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-command","name":"Bash","input":{"command":"git status"}},{"type":"tool_use","id":"tool-path","name":"Read","input":{"file_path":"/repo/main.go"}},{"type":"tool_use","id":"tool-pattern","name":"Grep","input":{"pattern":"TODO"}},{"type":"tool_use","id":"tool-prompt","name":"Task","input":{"prompt":"inspect callers"}},{"type":"tool_use","id":"tool-url","name":"WebFetch","input":{"url":"https://example.com"}},{"type":"tool_use","id":"tool-query","name":"WebSearch","input":{"query":"adapter error"}}]}}` + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -98,30 +100,35 @@ func TestAPlanAndAQuestionAreStored(t *testing.T) {
 
 	cases := []struct {
 		name     string
+		tool     string
 		input    string
 		want     string
 		wantLang string
 	}{
 		{
 			name:     "a plan is stored as the markdown it was written in",
+			tool:     "ExitPlanMode",
 			input:    `{"plan":"# Fix CI\n\nTwo repos have red CI."}`,
 			want:     "# Fix CI\n\nTwo repos have red CI.",
 			wantLang: "markdown",
 		},
 		{
 			name:     "a question is stored with the choices offered under it",
+			tool:     "AskUserQuestion",
 			input:    `{"questions":[{"question":"Which split?","options":[{"label":"Broadest","description":"one PR"},{"label":"Stub","description":"two PRs"}]}]}`,
 			want:     "Which split?\nBroadest\none PR\nStub\ntwo PRs",
 			wantLang: "",
 		},
 		{
 			name:     "a file edit still stores its path alone",
+			tool:     "Edit",
 			input:    `{"file_path":"/tmp/a.go","old_string":"x","new_string":"y"}`,
 			want:     "/tmp/a.go",
 			wantLang: "",
 		},
 		{
 			name:     "a shell command still wins over everything else",
+			tool:     "Bash",
 			input:    `{"command":"ls -la","plan":"ignored"}`,
 			want:     "ls -la",
 			wantLang: "bash",
@@ -131,7 +138,7 @@ func TestAPlanAndAQuestionAreStored(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			got, gotLang := toolDisplayText("", transcript.ToolInputJSON{Raw: []byte(testCase.input)})
+			got, gotLang := toolDisplayText(testCase.tool, transcript.ToolInputJSON{Raw: []byte(testCase.input)})
 			if got != testCase.want {
 				t.Fatalf("display = %q, want %q", got, testCase.want)
 			}
@@ -139,5 +146,58 @@ func TestAPlanAndAQuestionAreStored(t *testing.T) {
 				t.Fatalf("language = %q, want %q", gotLang, testCase.wantLang)
 			}
 		})
+	}
+}
+
+// TestAToolClaudeDoesNotOwnKeepsItsInput is the rule this parser runs under. The
+// key list is Claude's own vocabulary, so a call from some other server is not
+// read through it. Its input is kept instead, because the question a person read
+// and the answer they gave live in that input and nowhere else.
+//
+// Eight rows in a live corpus held nothing but the tool's name before this,
+// because a third party question tool writes each choice as a bare string rather
+// than the object Claude writes, the decode failed on that difference, and the
+// whole payload went with it.
+func TestAToolClaudeDoesNotOwnKeepsItsInput(t *testing.T) {
+	t.Parallel()
+
+	foreign := `{"questions":[{"question":"Which approach?","options":["Script belt","Simple belt"]}]}`
+
+	got, gotLang := toolDisplayText("mcp__conductor__AskUserQuestion", transcript.ToolInputJSON{Raw: []byte(foreign)})
+	if got != foreign {
+		t.Fatalf("a foreign tool lost its input: %q", got)
+	}
+	if gotLang != "" {
+		t.Fatalf("a foreign tool claimed a language: %q", gotLang)
+	}
+	for _, word := range []string{"Which approach?", "Script belt", "Simple belt"} {
+		if !strings.Contains(got, word) {
+			t.Fatalf("the stored text cannot be searched for %q: %q", word, got)
+		}
+	}
+
+	// The same question under Claude's own name goes through Claude's keys,
+	// because that vocabulary is Claude's there.
+	own := `{"questions":[{"question":"Which approach?","options":[{"label":"Script belt","description":"fewest false positives"}]}]}`
+	got, _ = toolDisplayText("AskUserQuestion", transcript.ToolInputJSON{Raw: []byte(own)})
+	if got != "Which approach?\nScript belt\nfewest false positives" {
+		t.Fatalf("Claude's own question was not read: %q", got)
+	}
+}
+
+// TestAToolWhoseInputWillNotDecodeKeepsIt pins that a call of Claude's carrying
+// input the decoder rejects keeps that input, so its words stay searchable.
+func TestAToolWhoseInputWillNotDecodeKeepsIt(t *testing.T) {
+	t.Parallel()
+
+	// A bare JSON string rather than the object the field list expects.
+	raw := `"*** Begin Patch\n*** End Patch"`
+
+	got, gotLang := toolDisplayText("Bash", transcript.ToolInputJSON{Raw: []byte(raw)})
+	if got != raw {
+		t.Fatalf("an undecodable input was dropped: %q", got)
+	}
+	if gotLang != "" {
+		t.Fatalf("an undecodable input claimed a language: %q", gotLang)
 	}
 }

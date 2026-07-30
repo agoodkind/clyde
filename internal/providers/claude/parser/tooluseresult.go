@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"strings"
 )
 
 // ToolUseResultKind names the JSON shape Claude wrote for a transcript entry's
@@ -171,6 +172,31 @@ type ToolUseResultBlock struct {
 	MimeType    string `json:"mimeType"`
 	Description string `json:"description"`
 	Server      string `json:"server"`
+}
+
+// SearchableText is the words a person read in this result.
+//
+// A string result is those words already. A list of blocks joins the text each
+// block carries, so a result of several blocks stays searchable by any of them;
+// a block carrying no text, an image being the common one, contributes nothing,
+// because its payload is bytes nobody could search for. A shape this parser does
+// not model returns the value as it arrived, since preserving what a tool
+// returned beats discarding it for not matching a form.
+func (content *ToolUseResultContent) SearchableText() string {
+	switch {
+	case content.Text != "":
+		return content.Text
+	case content.Blocks != nil:
+		lines := make([]string, 0, len(content.Blocks))
+		for _, block := range content.Blocks {
+			if text := strings.TrimSpace(block.Text); text != "" {
+				lines = append(lines, block.Text)
+			}
+		}
+		return strings.Join(lines, "\n")
+	default:
+		return string(content.Raw)
+	}
 }
 
 // emptyToolUseResult returns the zero union value, written out so exhaustruct
