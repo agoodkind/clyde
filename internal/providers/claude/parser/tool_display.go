@@ -26,35 +26,11 @@ type claudeToolDisplayQuestion struct {
 	Options  []claudeToolDisplayOption `json:"options"`
 }
 
-// claudeToolDisplayOption is one choice offered under a question. Only the words
-// on the screen are read, which is the label and the description.
+// claudeToolDisplayOption is one choice offered under a question. Only the label
+// and the description are read, because those are the words on the screen.
 type claudeToolDisplayOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description"`
-}
-
-// UnmarshalJSON accepts a choice written either as an object carrying a label
-// and a description or as a bare string. Different tools that ask a question
-// spell a choice differently, and a decode that insisted on one shape would
-// fail the whole payload and drop the question with it, leaving the row holding
-// nothing but the tool's name.
-func (option *claudeToolDisplayOption) UnmarshalJSON(data []byte) error {
-	var label string
-	if json.Unmarshal(data, &label) == nil {
-		option.Label = label
-		option.Description = ""
-		return nil
-	}
-	var shaped struct {
-		Label       string `json:"label"`
-		Description string `json:"description"`
-	}
-	if err := json.Unmarshal(data, &shaped); err != nil {
-		return err
-	}
-	option.Label = shaped.Label
-	option.Description = shaped.Description
-	return nil
 }
 
 // toolDisplayText is what the user saw for one tool call, and the language that
