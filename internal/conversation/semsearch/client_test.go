@@ -174,11 +174,10 @@ func TestSendUpsertStreamTruncatesSingleOversizedToolOutput(t *testing.T) {
 			Text:           "searchable assistant text",
 			Tools: []SemToolCall{
 				{
-					Name:      "Bash",
-					InputJSON: `{"command":"generate-large-output"}`,
-					Command:   "generate-large-output",
-					LangHint:  "bash",
-					Output:    strings.Repeat("é", upsertStreamMaxBytesPerChunk/2+1024),
+					Name:     "Bash",
+					Display:  "generate-large-output",
+					LangHint: "bash",
+					Output:   strings.Repeat("é", upsertStreamMaxBytesPerChunk/2+1024),
 				},
 			},
 		},
@@ -206,17 +205,14 @@ func TestSendUpsertStreamTruncatesSingleOversizedToolOutput(t *testing.T) {
 		t.Fatalf("document chunk bytes = %d, want <= %d", chunkBytes, upsertStreamMaxBytesPerChunk)
 	}
 	tool := documents[0].GetTools()[0]
-	if tool.GetName() != "Bash" || tool.GetCommand() != "generate-large-output" || tool.GetLangHint() != "bash" {
-		t.Fatalf("tool identity = %+v, want name, command, and lang hint intact", tool)
+	if tool.GetName() != "Bash" || tool.GetDisplay() != "generate-large-output" || tool.GetLangHint() != "bash" {
+		t.Fatalf("tool identity = %+v, want name, display, and lang hint intact", tool)
 	}
 	if !strings.Contains(tool.GetOutput(), "\n…[truncated ") {
 		t.Fatalf("tool output was not truncated: suffix %q", tool.GetOutput()[len(tool.GetOutput())-64:])
 	}
 	if !utf8.ValidString(tool.GetOutput()) {
 		t.Fatalf("tool output is not valid UTF-8")
-	}
-	if tool.GetInputJson() != `{"command":"generate-large-output"}` {
-		t.Fatalf("tool input_json = %q, want intact input", tool.GetInputJson())
 	}
 }
 
@@ -282,12 +278,11 @@ func TestConversationDocumentsCarriesToolsAndThinking(t *testing.T) {
 			Thinking:       "reasoning text",
 			Tools: []SemToolCall{
 				{
-					Name:      "Bash\xff",
-					InputJSON: `{"command":"printf hi"}` + "\xff",
-					Command:   "printf hi\xff",
-					LangHint:  "bash\xff",
-					Output:    "hi\xff",
-					IsError:   true,
+					Name:     "Bash\xff",
+					Display:  "printf hi\xff",
+					LangHint: "bash\xff",
+					Output:   "hi\xff",
+					IsError:  true,
 				},
 			},
 		},
@@ -307,11 +302,8 @@ func TestConversationDocumentsCarriesToolsAndThinking(t *testing.T) {
 	if tool.GetName() != "Bash" {
 		t.Fatalf("tool name = %q, want Bash", tool.GetName())
 	}
-	if tool.GetInputJson() != `{"command":"printf hi"}` {
-		t.Fatalf("tool input_json = %q, want command JSON", tool.GetInputJson())
-	}
-	if tool.GetCommand() != "printf hi" {
-		t.Fatalf("tool command = %q, want printf hi", tool.GetCommand())
+	if tool.GetDisplay() != "printf hi" {
+		t.Fatalf("tool display = %q, want printf hi", tool.GetDisplay())
 	}
 	if tool.GetLangHint() != "bash" {
 		t.Fatalf("tool lang_hint = %q, want bash", tool.GetLangHint())
@@ -347,12 +339,11 @@ func protoToolCalls(tools []*lmsemanticsearchv1.ConversationToolCall) []SemToolC
 	out := make([]SemToolCall, 0, len(tools))
 	for _, tool := range tools {
 		out = append(out, SemToolCall{
-			Name:      tool.GetName(),
-			InputJSON: tool.GetInputJson(),
-			Command:   tool.GetCommand(),
-			LangHint:  tool.GetLangHint(),
-			Output:    tool.GetOutput(),
-			IsError:   tool.GetIsError(),
+			Name:     tool.GetName(),
+			Display:  tool.GetDisplay(),
+			LangHint: tool.GetLangHint(),
+			Output:   tool.GetOutput(),
+			IsError:  tool.GetIsError(),
 		})
 	}
 	return out

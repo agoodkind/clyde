@@ -124,11 +124,15 @@ type ToolCall struct {
 	Input ToolInputJSON `json:"input"` // opaque tool input payload, preserved verbatim
 	// Display is what the user saw for this call: a shell command, a file path,
 	// a search pattern. Each provider's parser fills it from its own harness's
-	// tool shapes.
+	// tool shapes. Anything that shows or stores a tool call reads this rather than
+	// re-deriving it from Input, which keeps the harness's serialization inside the
+	// provider package.
 	Display string `json:"display,omitempty"`
 	// DisplayLang names the language Display is written in, "bash" when the call
 	// ran a shell and empty otherwise. The same parser names the language from
-	// its own harness's tool shapes.
+	// its own harness's tool shapes. Anything that shows or stores a tool call
+	// reads this rather than re-deriving it from Input, which keeps the harness's
+	// serialization inside the provider package.
 	DisplayLang string `json:"display_lang,omitempty"`
 	Output      string `json:"output"`   // tool result text (loaded on demand, empty by default)
 	IsError     bool   `json:"is_error"` // true if tool result was an error
