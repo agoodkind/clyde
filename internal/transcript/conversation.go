@@ -64,6 +64,23 @@ func DefaultShapeOptions() ShapeOptions {
 	}
 }
 
+// ContextWindowMaxTextRunes bounds one message in a context window.
+//
+// A context window previews what surrounds a point in a conversation, so it is
+// sized for reading; an export carries no cap because it is the document. The
+// bound matters now that one message is a whole turn: the largest turn in the
+// observed Cursor corpus renders to roughly 300 KB, so an uncapped five-message
+// window returns most of a megabyte where it used to return five short records.
+const ContextWindowMaxTextRunes = 2000
+
+// ContextWindowShapeOptions is the shaping a context window uses: the default
+// rendering, bounded per message.
+func ContextWindowShapeOptions() ShapeOptions {
+	opts := DefaultShapeOptions()
+	opts.MaxTextRunes = ContextWindowMaxTextRunes
+	return opts
+}
+
 // ShapeConversation is part of Clyde's typed adapter surface.
 func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn {
 	if opts.ToolOnly == "" {
@@ -77,6 +94,12 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 			Timestamp: msg.Timestamp,
 			HasTools:  msg.HasTools, Text: "", Thinking: "", ToolNames: nil, IsToolOnly: false,
 		}
+		// The cap bounds the prose, which is the part that grows without limit now
+		// that one message is a whole turn. The tool block is appended after it and
+		// is not truncated: capping the joined text cut the block off a turn whose
+		// prose already filled the budget, which loses the record that the turn
+		// called anything at all. That is information the model cannot recover,
+		// where prose is merely shortened and marked.
 		text := normalizeConversationText(msg.Text, opts.MaxTextRunes, opts.ConversationOnly)
 		thinking := ""
 		if opts.IncludeThinking {
@@ -85,23 +108,10 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 		if len(msg.Tools) > 0 {
 			turn.ToolNames = msg.ToolNames()
 		}
-		if text == "" && msg.HasTools {
-			turn.IsToolOnly = true
-			if opts.ConversationOnly {
-				continue
-			}
-			switch opts.ToolOnly {
-			case ToolOnlyOmit:
-				continue
-			case ToolOnlyCompactSummary:
-				text = toolSummaryText(turn.ToolNames)
-			case ToolOnlyInputSummary:
-				text = toolInputSummaryText(msg.Tools)
-			case ToolOnlyFullDetail:
-				text = toolFullDetailText(msg.Tools)
-			default:
-				text = toolSummaryText(turn.ToolNames)
-			}
+		turn.IsToolOnly = msg.HasTools && text == ""
+		text, keepTurn := textWithTools(text, turn.ToolNames, msg, opts)
+		if !keepTurn {
+			continue
 		}
 		if text == "" && thinking == "" {
 			continue
@@ -145,13 +155,20 @@ func normalizeConversationText(text string, maxRunes int, conversationOnly bool)
 	if text == "" {
 		return ""
 	}
-	if maxRunes > 0 {
-		runes := []rune(text)
-		if len(runes) > maxRunes {
-			text = string(runes[:maxRunes]) + "..."
-		}
+	return capRunes(text, maxRunes)
+}
+
+// capRunes truncates text to maxRunes and marks it, leaving it unchanged when
+// no cap is set.
+func capRunes(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return text
 	}
-	return text
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func shouldDropConversationOnlyLine(line string) bool {
@@ -162,6 +179,70 @@ func shouldDropConversationOnlyLine(line string) bool {
 		return true
 	}
 	return conversationOnlyImageLineRe.MatchString(line)
+}
+
+// textWithTools folds a turn's tool calls into its rendered text. A turn that
+// holds prose and tool calls together keeps both, because gating the tool
+// rendering on empty text hid every tool call in a turn that also said
+// something. It reports false when the turn has nothing left to show.
+func textWithTools(text string, names []string, msg Message, opts ShapeOptions) (string, bool) {
+	if !msg.HasTools {
+		return text, true
+	}
+	// The conversation-only view is prose, so it renders no tool lines and keeps
+	// a turn only for what it said.
+	if opts.ConversationOnly {
+		return text, text != ""
+	}
+	toolText := renderToolText(opts.ToolOnly, names, msg.Tools)
+	if toolText == "" {
+		// The omit mode renders no tools, so a tool-only turn has nothing to show
+		// while one that also carried prose keeps the prose.
+		return text, text != ""
+	}
+	// A tool-only turn is entirely its calls, so their position is unambiguous.
+	if text == "" {
+		return toolText, true
+	}
+	return text + "\n" + labeledToolBlock(opts.ToolOnly, names, toolText), true
+}
+
+// mixedTurnToolHeading introduces the tool block on a turn that also carries
+// prose. [Message] models a turn as text plus a separate tool list, with no way
+// to record where in the text each call happened, so the block is labeled as the
+// turn's calls in call order rather than written as though it followed the
+// prose. Appending it unlabeled would assert an order the model cannot know.
+const mixedTurnToolHeading = "[tool calls in this turn]"
+
+// labeledToolBlock names a mixed turn's tool block so the rendering claims only
+// what the model records: which calls the turn made, and their order relative to
+// each other.
+func labeledToolBlock(mode ToolOnlyMode, names []string, toolText string) string {
+	if mode == ToolOnlyCompactSummary || mode == "" {
+		if len(names) == 0 {
+			return mixedTurnToolHeading
+		}
+		return "[tool calls in this turn: " + strings.Join(names, ", ") + "]"
+	}
+	return mixedTurnToolHeading + "\n" + toolText
+}
+
+// renderToolText renders a turn's tool calls at the selected level of detail.
+// It returns the empty string for [ToolOnlyOmit], which is the caller's signal
+// that this turn shows no tools at all.
+func renderToolText(mode ToolOnlyMode, names []string, tools []ToolCall) string {
+	switch mode {
+	case ToolOnlyOmit:
+		return ""
+	case ToolOnlyCompactSummary:
+		return toolSummaryText(names)
+	case ToolOnlyInputSummary:
+		return toolInputSummaryText(tools)
+	case ToolOnlyFullDetail:
+		return toolFullDetailText(tools)
+	default:
+		return toolSummaryText(names)
+	}
 }
 
 func toolSummaryText(names []string) string {
@@ -207,16 +288,16 @@ func toolFullDetailText(tools []ToolCall) string {
 	}
 	lines := make([]string, 0, len(tools))
 	for _, tool := range tools {
-		if tool.Input.Len() == 0 {
-			lines = append(lines, "[tool: "+tool.Name+"]")
-			continue
+		// The call's input and its output are separate pieces of what the tool did,
+		// so a call with no readable input still renders whatever it returned.
+		// Skipping to the next tool on an absent or unmarshalable input dropped the
+		// output with it.
+		line := "[tool: " + tool.Name + "]"
+		if tool.Input.Len() > 0 {
+			if body, err := json.Marshal(&tool.Input); err == nil {
+				line = fmt.Sprintf("[tool: %s] %s", tool.Name, string(body))
+			}
 		}
-		body, err := json.Marshal(&tool.Input)
-		if err != nil {
-			lines = append(lines, "[tool: "+tool.Name+"]")
-			continue
-		}
-		line := fmt.Sprintf("[tool: %s] %s", tool.Name, string(body))
 		if strings.TrimSpace(tool.Output) != "" {
 			line += "\n[tool output]\n" + strings.TrimSpace(tool.Output)
 		}

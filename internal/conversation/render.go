@@ -107,7 +107,7 @@ func (idx *Index) contextWindowByIndex(record Record, messageIndex, before, afte
 		return "Provide timestamp or message_index to center on.", nil
 	}
 	renderedEnd := start + len(window)
-	rendered := transcript.RenderPlainTextWithOptions(window, transcript.DefaultShapeOptions())
+	rendered := transcript.RenderPlainTextWithOptions(window, transcript.ContextWindowShapeOptions())
 	return fmt.Sprintf(
 		"Messages %d-%d centered on %d:\n\n%s",
 		start,
@@ -128,7 +128,7 @@ func renderContextWindow(messages []transcript.Message, total, center, before, a
 		end-1,
 		total,
 		center,
-		transcript.RenderPlainTextWithOptions(messages[start:end], transcript.DefaultShapeOptions()),
+		transcript.RenderPlainTextWithOptions(messages[start:end], transcript.ContextWindowShapeOptions()),
 	)
 }
 

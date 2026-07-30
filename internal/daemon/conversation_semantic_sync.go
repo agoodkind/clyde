@@ -426,7 +426,10 @@ func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversa
 			continue
 		}
 		seen[conversationID] = true
-		fingerprint := stampedRecord.Stamp.Fingerprint()
+		// The advertised fingerprint carries the provider's reader generation as
+		// well as the file stamp, so a reader change that renumbers messages
+		// re-advertises the conversation once even though its bytes never changed.
+		fingerprint := conversation.ContentFingerprint(stampedRecord.Record, stampedRecord.Stamp)
 		if priorFingerprint, delivered := w.emptyDelivered[conversationID]; delivered {
 			if priorFingerprint == fingerprint {
 				continue
@@ -513,8 +516,10 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			// A conversation every one of whose messages the policy withheld
 			// lands here too, which is why the policy feeds this path rather
 			// than bypassing it.
+			// The same fingerprint the manifest advertises, so the suppression
+			// lifts on exactly the changes that re-advertise the conversation.
 			if stamp, stamped := stampsByID[conversationID]; stamped {
-				w.emptyDelivered[conversationID] = stamp.Fingerprint()
+				w.emptyDelivered[conversationID] = conversation.ContentFingerprint(record, stamp)
 			}
 			continue
 		}

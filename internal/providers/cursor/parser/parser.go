@@ -179,21 +179,31 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			slog.Warn("providers.cursor.parser.scan_header_failed", "concern", concern, "path", path, "err", err)
 			return emptyRecord(), false
 		}
+		if header.FirstUserTextUncertain {
+			// The scan skipped a record it could not decode before settling on this
+			// text, so the title is the earliest user message Clyde could read rather
+			// than the conversation's first. The record carries that, but the daemon's
+			// wire record has no such field, so it does not currently reach CLI or MCP
+			// listings: inside the daemon and in this warning is where it is visible.
+			slog.Warn("providers.cursor.parser.title_from_incomplete_header",
+				"concern", concern, "path", path, "conversation_id", discovered.ConversationID)
+		}
 		return conversation.Record{
-			ID:            conversation.DerivedID(providerid.ProviderCursor, discovered.ConversationID, path),
-			Provider:      providerid.ProviderCursor,
-			NativeID:      discovered.ConversationID,
-			Lineage:       cursorSpawnLineage(discovered.ParentConversationID),
-			Origin:        discovered.Origin,
-			Title:         firstNonEmptyString(truncateTitle(header.FirstUserText), untitledCursorConversationText),
-			WorkspaceRoot: cursorjsonl.WorkspacePathFromProjectKey(discovered.ProjectKey),
-			ArtifactPath:  path,
-			ArtifactKind:  artifactKindCursorAgent,
-			Model:         "",
-			CreatedAt:     stamp.Mtime,
-			UpdatedAt:     stamp.Mtime,
-			SizeBytes:     stamp.Size,
-			Archived:      false,
+			ID:             conversation.DerivedID(providerid.ProviderCursor, discovered.ConversationID, path),
+			Provider:       providerid.ProviderCursor,
+			NativeID:       discovered.ConversationID,
+			Lineage:        cursorSpawnLineage(discovered.ParentConversationID),
+			Origin:         discovered.Origin,
+			Title:          firstNonEmptyString(truncateTitle(header.FirstUserText), untitledCursorConversationText),
+			TitleUncertain: header.FirstUserTextUncertain,
+			WorkspaceRoot:  cursorjsonl.WorkspacePathFromProjectKey(discovered.ProjectKey),
+			ArtifactPath:   path,
+			ArtifactKind:   artifactKindCursorAgent,
+			Model:          "",
+			CreatedAt:      stamp.Mtime,
+			UpdatedAt:      stamp.Mtime,
+			SizeBytes:      stamp.Size,
+			Archived:       false,
 			// Cursor's agent transcripts carry no request id.
 			LatestRequestID: "",
 		}, true
@@ -219,20 +229,21 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			origin = composerOrigin(discovered.ComposerInfo.Subagent)
 		}
 		return conversation.Record{
-			ID:            conversation.DerivedID(providerid.ProviderCursor, discovered.ComposerID, path),
-			Provider:      providerid.ProviderCursor,
-			NativeID:      discovered.ComposerID,
-			Lineage:       nil,
-			Origin:        origin,
-			Title:         firstNonEmptyString(header.Name, workspaceTitle, untitledCursorConversationText),
-			WorkspaceRoot: workspaceRoot,
-			ArtifactPath:  path,
-			ArtifactKind:  composerArtifactKind(discovered.IsBackground),
-			Model:         "",
-			CreatedAt:     msToTime(header.CreatedAt),
-			UpdatedAt:     composerUpdatedAt(header),
-			SizeBytes:     0,
-			Archived:      archived,
+			ID:             conversation.DerivedID(providerid.ProviderCursor, discovered.ComposerID, path),
+			Provider:       providerid.ProviderCursor,
+			NativeID:       discovered.ComposerID,
+			Lineage:        nil,
+			Origin:         origin,
+			Title:          firstNonEmptyString(header.Name, workspaceTitle, untitledCursorConversationText),
+			TitleUncertain: false,
+			WorkspaceRoot:  workspaceRoot,
+			ArtifactPath:   path,
+			ArtifactKind:   composerArtifactKind(discovered.IsBackground),
+			Model:          "",
+			CreatedAt:      msToTime(header.CreatedAt),
+			UpdatedAt:      composerUpdatedAt(header),
+			SizeBytes:      0,
+			Archived:       archived,
 			// The chat header the scan already read carries the request id of the
 			// chat's latest turn, so recording it here costs no extra read. Earlier
 			// requests are not in the header and resolve through the live lookup.
@@ -246,20 +257,21 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		}
 		legacyConversationID := virtualPath.ID
 		return conversation.Record{
-			ID:            conversation.DerivedID(providerid.ProviderCursor, legacyConversationID, path),
-			Provider:      providerid.ProviderCursor,
-			NativeID:      legacyConversationID,
-			Lineage:       nil,
-			Origin:        conversation.OriginUnspecified,
-			Title:         firstNonEmptyString(tab.ChatTitle, untitledCursorChatText),
-			WorkspaceRoot: discovered.WorkspaceRoot,
-			ArtifactPath:  path,
-			ArtifactKind:  artifactKindCursorLegacyChat,
-			Model:         "",
-			CreatedAt:     stamp.Mtime,
-			UpdatedAt:     stamp.Mtime,
-			SizeBytes:     0,
-			Archived:      false,
+			ID:             conversation.DerivedID(providerid.ProviderCursor, legacyConversationID, path),
+			Provider:       providerid.ProviderCursor,
+			NativeID:       legacyConversationID,
+			Lineage:        nil,
+			Origin:         conversation.OriginUnspecified,
+			Title:          firstNonEmptyString(tab.ChatTitle, untitledCursorChatText),
+			TitleUncertain: false,
+			WorkspaceRoot:  discovered.WorkspaceRoot,
+			ArtifactPath:   path,
+			ArtifactKind:   artifactKindCursorLegacyChat,
+			Model:          "",
+			CreatedAt:      stamp.Mtime,
+			UpdatedAt:      stamp.Mtime,
+			SizeBytes:      0,
+			Archived:       false,
 			// Cursor's legacy chat panel records no request id.
 			LatestRequestID: "",
 		}, true
