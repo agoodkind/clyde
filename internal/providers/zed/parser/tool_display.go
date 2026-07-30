@@ -32,10 +32,5 @@ func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) 
 	if command := strings.TrimSpace(parsed.Command); command != "" {
 		return command, "bash"
 	}
-	for _, candidate := range []string{parsed.Path, parsed.Regex, parsed.Query} {
-		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
-			return trimmed, ""
-		}
-	}
-	return "", ""
+	return firstNonEmptyString(parsed.Path, parsed.Regex, parsed.Query), ""
 }

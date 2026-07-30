@@ -117,13 +117,19 @@ type ToolUseResultPatchHunk struct {
 
 // ToolUseResultContent is the content member of a structured result. A tool
 // writes it either as the file text or as a list of content blocks, so both
-// forms are modeled and Raw keeps the original either way.
+// forms are modeled, and Raw holds the original whenever neither form captured
+// it.
 type ToolUseResultContent struct {
 	// Decode says whether the whole value matched one of the two modeled forms.
 	Decode FieldDecode
 	Text   string
 	Blocks []ToolUseResultBlock
-	Raw    json.RawMessage
+	// Raw holds the original JSON for a shape neither modeled form captured, and
+	// for a value whose shape was modeled but whose members would not decode. It
+	// is empty on the two successful paths, where Text or Blocks already carry
+	// everything. A tool result can be a whole file, and copying every one of
+	// them to a field nothing would read costs a second copy per tool call.
+	Raw json.RawMessage
 }
 
 // emptyToolUseResultContent returns the zero content value, written out so
@@ -142,22 +148,24 @@ func (content *ToolUseResultContent) UnmarshalJSON(data []byte) error {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil
 	}
-	content.Raw = append(json.RawMessage(nil), data...)
 	switch trimmed[0] {
 	case '"':
 		if err := json.Unmarshal(trimmed, &content.Text); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_content_text_failed", "concern", concern, "component", "claude", "err", err)
 			content.Decode = FieldDecodePartial
+			content.Raw = append(json.RawMessage(nil), data...)
 		}
 		return nil
 	case '[':
 		if err := json.Unmarshal(trimmed, &content.Blocks); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_content_blocks_failed", "concern", concern, "component", "claude", "err", err)
 			content.Decode = FieldDecodePartial
+			content.Raw = append(json.RawMessage(nil), data...)
 		}
 		return nil
 	default:
 		slog.Debug("providers.claude.parser.tool_use_result_content_unsupported", "concern", concern, "component", "claude", "shape", string(trimmed[:1]))
+		content.Raw = append(json.RawMessage(nil), data...)
 		return nil
 	}
 }

@@ -33,30 +33,28 @@ type claudeToolDisplayOption struct {
 	Description string `json:"description"`
 }
 
-// claudeOwnTools names the tools Claude Code itself defines. The key list below
-// is Claude's own vocabulary, so it may only be applied to a call Claude made.
+// foreignToolPrefix marks a tool some other server defined. Claude namespaces
+// every tool it loads from an MCP server as mcp__<server>__<tool>, so a name
+// carrying this prefix belongs to that server and its keys mean whatever that
+// server decided.
 //
-// Anything else is a tool some other server defined, and its keys mean whatever
-// that server decided. A key named plan or questions in a foreign schema is not
-// Claude's plan or Claude's questions, so reading it would be a guess dressed up
-// as knowledge.
-var claudeOwnTools = map[string]struct{}{
-	"Bash": {}, "BashOutput": {}, "Edit": {}, "ExitPlanMode": {}, "Glob": {},
-	"Grep": {}, "KillShell": {}, "NotebookEdit": {}, "Read": {}, "Task": {},
-	"TodoWrite": {}, "WebFetch": {}, "WebSearch": {}, "Write": {},
-	"AskUserQuestion": {}, "Skill": {}, "SlashCommand": {}, "ToolSearch": {},
-}
+// Testing for the foreign marker rather than listing Claude's own tools is what
+// keeps this right as Claude grows. Claude adds tools outside this repository,
+// so a list of its own names would misread every tool added after the list was
+// written and degrade a shape this parser handles into raw JSON. The marker runs
+// the other way: a new tool of Claude's is read, and a new server's tool is kept
+// whole.
+const foreignToolPrefix = "mcp__"
 
 // toolDisplayText is what the user saw for one tool call, and the language that
 // text is written in. The language is "bash" when the call ran a shell and empty
 // otherwise.
 //
-// A tool this parser does not own keeps its input exactly as it arrived. Those
-// keys belong to whoever defined the tool, so reading a foreign one through
-// Claude's vocabulary drops whatever does not match, and a question or an answer
-// the person read stops being searchable. Keeping the input keeps those words
-// reachable. A tool of Claude's whose input will not decode keeps its input for
-// the same reason.
+// A tool another server defined keeps its input exactly as it arrived. Those keys
+// belong to whoever defined the tool, so reading them through Claude's vocabulary
+// drops whatever does not match, and a question or an answer the person read
+// stops being searchable. Keeping the input keeps those words reachable. A tool
+// of Claude's whose input will not decode keeps its input for the same reason.
 //
 // A tool of Claude's that decodes but carries none of these keys stores its name
 // alone. Its shape is known and holds nothing a person read, so a gap here is a
@@ -70,7 +68,7 @@ func toolDisplayText(name string, input transcript.ToolInputJSON) (string, strin
 	if input.Len() == 0 {
 		return "", ""
 	}
-	if _, own := claudeOwnTools[strings.TrimSpace(name)]; !own {
+	if strings.HasPrefix(strings.TrimSpace(name), foreignToolPrefix) {
 		return string(input.Raw), ""
 	}
 	var parsed claudeToolDisplayInput

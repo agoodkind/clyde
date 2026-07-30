@@ -40,7 +40,7 @@ func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) 
 	if command := strings.TrimSpace(parsed.Cmd); command != "" {
 		return command, "bash"
 	}
-	for _, candidate := range []string{
+	return firstNonEmptyString(
 		parsed.RelativeWorkspacePath,
 		parsed.TargetFile,
 		parsed.Path,
@@ -48,10 +48,5 @@ func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) 
 		parsed.Description,
 		parsed.Query,
 		parsed.Pattern,
-	} {
-		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
-			return trimmed, ""
-		}
-	}
-	return "", ""
+	), ""
 }

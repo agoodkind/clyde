@@ -149,16 +149,15 @@ func TestAPlanAndAQuestionAreStored(t *testing.T) {
 	}
 }
 
-// TestAToolClaudeDoesNotOwnKeepsItsInput is the rule this parser runs under. The
-// key list is Claude's own vocabulary, so a call from some other server is not
-// read through it. Its input is kept instead, because the question a person read
-// and the answer they gave live in that input and nowhere else.
+// TestAToolAnotherServerDefinedKeepsItsInput is the rule this parser runs under.
+// The key list is Claude's own vocabulary, so a call from some other server is
+// not read through it. Its input is kept instead, because the question a person
+// read and the answer they gave live in that input and nowhere else.
 //
-// Eight rows in a live corpus held nothing but the tool's name before this,
-// because a third party question tool writes each choice as a bare string rather
-// than the object Claude writes, the decode failed on that difference, and the
-// whole payload went with it.
-func TestAToolClaudeDoesNotOwnKeepsItsInput(t *testing.T) {
+// A third party question tool writes each choice as a bare string rather than
+// the object Claude writes. Reading it through Claude's keys fails on that
+// difference and takes the whole payload with it.
+func TestAToolAnotherServerDefinedKeepsItsInput(t *testing.T) {
 	t.Parallel()
 
 	foreign := `{"questions":[{"question":"Which approach?","options":["Script belt","Simple belt"]}]}`
@@ -182,6 +181,34 @@ func TestAToolClaudeDoesNotOwnKeepsItsInput(t *testing.T) {
 	got, _ = toolDisplayText("AskUserQuestion", transcript.ToolInputJSON{Raw: []byte(own)})
 	if got != "Which approach?\nScript belt\nfewest false positives" {
 		t.Fatalf("Claude's own question was not read: %q", got)
+	}
+}
+
+// TestAToolClaudeAddedLaterIsStillRead pins why the foreign marker is tested
+// rather than Claude's own names enumerated. Claude adds tools outside this
+// repository, and each name below appears in real transcripts. Under a
+// hand-written list of Claude's own names, every one added after the list was
+// written reads as another server's tool and stores raw JSON. Monitor alone
+// accounts for 1,622 calls in the sampled corpus, and its command is what a
+// person would search for.
+func TestAToolClaudeAddedLaterIsStillRead(t *testing.T) {
+	t.Parallel()
+
+	got, gotLang := toolDisplayText("Monitor", transcript.ToolInputJSON{
+		Raw: []byte(`{"command":"until curl -sf localhost:8080; do sleep 2; done","timeout_ms":60000}`),
+	})
+	if got != "until curl -sf localhost:8080; do sleep 2; done" {
+		t.Fatalf("display = %q, want the command Monitor ran", got)
+	}
+	if gotLang != "bash" {
+		t.Fatalf("language = %q, want bash", gotLang)
+	}
+
+	for _, name := range []string{"TaskUpdate", "ScheduleWakeup", "SendMessage"} {
+		got, _ = toolDisplayText(name, transcript.ToolInputJSON{Raw: []byte(`{"prompt":"carry on"}`)})
+		if got != "carry on" {
+			t.Fatalf("%s display = %q, want the prompt read through Claude's keys", name, got)
+		}
 	}
 }
 
