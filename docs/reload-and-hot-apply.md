@@ -90,3 +90,11 @@ and the watcher falls back to the quiet-wait reload path.
 binary in isolated temp XDG roots on fake ports, with a preflight that refuses to
 run if a fake port is taken and a guard that asserts the production daemon is
 untouched. Run them with `go test -tags live ./test/live/`.
+
+Those scenarios boot `clyde daemon run`, so a supervisor spawns the worker and a
+reload or rebind can replace it. That is the shape they exist to test.
+
+`clyde daemon sandbox` is the other way to run a daemon by hand, and it has none
+of this: it runs the worker directly in one process, so there is no supervisor to
+ask for a replacement and no reload or rebind path. Reach for it when validating
+anything except reload itself. See [testing/overview.md](testing/overview.md).

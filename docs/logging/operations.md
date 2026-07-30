@@ -12,6 +12,11 @@ Use a deep scan when counts or largest files need exact filesystem confirmation.
 clyde logs inventory --deep --json
 ```
 
+Inventory reports whichever state root the environment points at, so a plain run
+finds the deployed daemon's logs even while a sandbox is running. To inspect a
+sandbox instead, prefix the command with the environment that sandbox printed at
+startup.
+
 Follow one request with shared identity fields. Prefer these fields when present:
 
 - `trace_id`

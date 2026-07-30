@@ -76,6 +76,15 @@ State, logs, caches, adapter records, and MITM captures follow Clyde's XDG path
 resolution. Use `clyde logs --help`, `docs/logging/`, and the config reference
 for current paths and retention behavior.
 
+Try a change against a real daemon without disturbing the deployed one:
+
+```bash
+clyde daemon sandbox
+```
+
+It runs one daemon on throwaway directories with every listener disabled, and
+ends when the command ends. See [docs/testing/overview.md](docs/testing/overview.md).
+
 ## Development
 
 Common checks and build steps are Makefile-owned. Start with:

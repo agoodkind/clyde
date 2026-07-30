@@ -127,6 +127,8 @@ Use the real Cursor client for final verification when the rendered chat output 
 
 Use `docs/testing/overview.md` for the live daemon test harness and its parallel-run port overrides.
 
+Run a daemon by hand with `clyde daemon sandbox`, never by launching a second `clyde daemon run`. The sandbox redirects every clyde-owned path into throwaway directories and runs one process that ends when the command does. A second `daemon run` competes with the deployed daemon for its state and socket, and its supervisor can leave a worker running after the launcher is gone.
+
 ## Adapter And Model Routing
 
 The adapter is a safety boundary. For model aliases, effort tiers, context budgets, request shaping, and provider-specific behavior, prefer config-driven and typed resolver paths over hard-coded facts.
