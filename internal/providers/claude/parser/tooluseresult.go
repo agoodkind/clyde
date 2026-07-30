@@ -182,7 +182,14 @@ type ToolUseResultBlock struct {
 	Server      string `json:"server"`
 }
 
-// SearchableText is the words a person read in this result.
+// SearchableText is the words a person read in this result, and whether the
+// value they came from decoded whole.
+//
+// The verdict is returned rather than left on the struct so a caller cannot read
+// the text without it. An empty string means "the tool returned nothing" only
+// when the verdict is complete; a partial verdict means this parser could not
+// read the value, which is clyde's defect and belongs in a log rather than in a
+// stored row that reads as real content.
 //
 // A string result is those words already. A list of blocks joins the text each
 // block carries, so a result of several blocks stays searchable by any of them;
@@ -190,10 +197,10 @@ type ToolUseResultBlock struct {
 // because its payload is bytes nobody could search for. A shape this parser does
 // not model returns the value as it arrived, since preserving what a tool
 // returned beats discarding it for not matching a form.
-func (content *ToolUseResultContent) SearchableText() string {
+func (content *ToolUseResultContent) SearchableText() (string, FieldDecode) {
 	switch {
 	case content.Text != "":
-		return content.Text
+		return content.Text, content.Decode
 	case content.Blocks != nil:
 		lines := make([]string, 0, len(content.Blocks))
 		for _, block := range content.Blocks {
@@ -201,9 +208,9 @@ func (content *ToolUseResultContent) SearchableText() string {
 				lines = append(lines, block.Text)
 			}
 		}
-		return strings.Join(lines, "\n")
+		return strings.Join(lines, "\n"), content.Decode
 	default:
-		return string(content.Raw)
+		return string(content.Raw), content.Decode
 	}
 }
 

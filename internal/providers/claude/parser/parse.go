@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -38,6 +39,11 @@ type rawMessage struct {
 	Content json.RawMessage `json:"content"`
 }
 
+// contentBlock is one block of a message's content array, for every block kind
+// a user or assistant entry carries. One type covers all of them because the
+// content array is decoded once per line: a second decoder over the same bytes
+// would read the file twice and would not reach the decode report the entry
+// tree keeps.
 type contentBlock struct {
 	Type     string                   `json:"type"`
 	Text     string                   `json:"text"`
@@ -45,6 +51,31 @@ type contentBlock struct {
 	ID       string                   `json:"id"`
 	Name     string                   `json:"name"`
 	Input    transcript.ToolInputJSON `json:"input"`
+
+	// tool_result blocks, which a user entry carries for the tools the
+	// assistant turn before it ran.
+	ToolUseID string               `json:"tool_use_id"`
+	Content   ToolUseResultContent `json:"content"`
+	IsError   bool                 `json:"is_error"`
+}
+
+// claudeToolResult is what one tool returned, keyed by the call it answers.
+type claudeToolResult struct {
+	ToolUseID string
+	Output    string
+	IsError   bool
+}
+
+// toolResult reads what a person saw in this tool_result block. A content shape
+// the parser could not read is logged and kept as it arrived, so it is visible
+// rather than resolving silently to nothing.
+func (block contentBlock) toolResult() claudeToolResult {
+	output, decode := block.Content.SearchableText()
+	if decode == FieldDecodePartial {
+		slog.Warn("providers.claude.parser.tool_result_content_partial",
+			"concern", concern, "component", "claude", "tool_use_id", block.ToolUseID)
+	}
+	return claudeToolResult{ToolUseID: block.ToolUseID, Output: output, IsError: block.IsError}
 }
 
 type rawClaudeBoundaryMetadata struct {
@@ -168,30 +199,35 @@ func emptyMessage() transcript.Message {
 	}
 }
 
-// parseLine decodes one transcript line into a message. The boolean is false
-// when the line is not a usable user, assistant, or opted-in system compaction
-// turn.
-func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
+// parseLine decodes one transcript line into a message and whatever tool
+// results it carried. The boolean is false when the line is not a usable user,
+// assistant, or opted-in system compaction turn.
+//
+// The results are returned even when the boolean is false, because a user entry
+// holding only tool results is not a turn while its results still answer the
+// assistant turn before it.
+func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeToolResult, bool) {
 	entry, err := DecodeTranscriptEntry(line)
 	if err != nil {
-		return emptyMessage(), false
+		return emptyMessage(), nil, false
 	}
 	if entry.Type == EntryTypeSystem {
 		if !opts.IncludeSystemMessages {
-			return emptyMessage(), false
+			return emptyMessage(), nil, false
 		}
-		return parseSystemEntry(entry)
+		systemMessage, ok := parseSystemEntry(entry)
+		return systemMessage, nil, ok
 	}
 	if entry.Type != EntryTypeUser && entry.Type != EntryTypeAssistant {
-		return emptyMessage(), false
+		return emptyMessage(), nil, false
 	}
 	if len(entry.Message) == 0 {
-		return emptyMessage(), false
+		return emptyMessage(), nil, false
 	}
 
 	var msg rawMessage
 	if err := json.Unmarshal(entry.Message, &msg); err != nil {
-		return emptyMessage(), false
+		return emptyMessage(), nil, false
 	}
 
 	m := transcript.Message{
@@ -209,11 +245,12 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	}
 
 	if entry.Type == EntryTypeUser {
-		text := extractUserText(msg.Content)
-		if text == "" {
-			// tool result entry, skip
-			return emptyMessage(), false
+		content := decodeUserContent(msg.Content)
+		if content.Text == "" {
+			// tool result entry, skip the turn and keep its results
+			return emptyMessage(), content.Results, false
 		}
+		text := content.Text
 		if !opts.PreserveSystemPrompts {
 			text = stripSystemTags(text)
 		}
@@ -226,7 +263,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 				m.Text,
 			)
 		}
-		return m, m.Text != ""
+		return m, content.Results, m.Text != ""
 	}
 
 	// Assistant: content is an array of blocks.
@@ -235,7 +272,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	// tool calls, or only a thinking block. Claude streams each content block as
 	// its own assistant record, so a thinking block often lands in an entry with
 	// no text and no tool_use; dropping it would lose the thinking from export.
-	return m, m.Text != "" || m.HasTools || m.Thinking != ""
+	return m, nil, m.Text != "" || m.HasTools || m.Thinking != ""
 }
 
 func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
@@ -531,41 +568,46 @@ func copyStringSlice(values []string) []string {
 	return append([]string(nil), values...)
 }
 
-// extractUserText gets the text from a user message's content field.
-// User messages have content as a string (older format) or an array of blocks (newer format).
-// Array content may contain text blocks (user-authored) or tool_result blocks (skip those).
-func extractUserText(raw json.RawMessage) string {
-	// Try string content first (older Claude Code format).
+// userContent is what one user entry's content field holds: the text the person
+// wrote, and what the tools the assistant ran before it returned.
+//
+// Both come out of one decode. An entry carrying only tool results has no text
+// and is not a turn, yet its results belong to the assistant turn that ran
+// those tools, so they are returned either way.
+type userContent struct {
+	Text    string
+	Results []claudeToolResult
+}
+
+// decodeUserContent reads a user message's content field, which is a string in
+// the older Claude Code format and an array of blocks in the newer one.
+func decodeUserContent(raw json.RawMessage) userContent {
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return strings.TrimSpace(s)
+		return userContent{Text: strings.TrimSpace(s), Results: nil}
 	}
-	// Try array content: extract text blocks, ignore tool_result blocks.
 	var blocks []contentBlock
 	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return ""
+		return userContent{Text: "", Results: nil}
 	}
-	hasText := false
-	var parts []string
+	content := userContent{Text: "", Results: nil}
+	parts := make([]string, 0, len(blocks))
 	for _, b := range blocks {
 		switch contentBlockType(b.Type) {
 		case contentBlockText:
 			if t := strings.TrimSpace(b.Text); t != "" {
 				parts = append(parts, t)
-				hasText = true
 			}
 		case contentBlockToolResult:
-			// tool results are not user-authored text, skip
+			content.Results = append(content.Results, b.toolResult())
 		case contentBlockThinking, contentBlockToolUse:
 			// User entries do not normally carry these block kinds,
 			// and the user-text aggregator ignores them when they
 			// appear.
 		}
 	}
-	if !hasText {
-		return "" // only tool results, skip the entry
-	}
-	return strings.Join(parts, "\n")
+	content.Text = strings.Join(parts, "\n")
+	return content
 }
 
 // parseAssistantBlocks extracts text, thinking, and tool calls from an assistant message.
