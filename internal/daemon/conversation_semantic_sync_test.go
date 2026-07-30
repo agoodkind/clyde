@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,56 +94,6 @@ func (idx *fakeConversationSemanticIndex) LoadMessagesWithOptions(record convers
 	return append([]transcript.Message(nil), messages...), nil
 }
 
-func TestDeriveToolCommandAndLang(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		toolName    string
-		input       transcript.ToolInputJSON
-		wantCommand string
-		wantLang    string
-	}{
-		{
-			name:        "Claude command key",
-			toolName:    "Bash",
-			input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"command":"go test ./..."}`)},
-			wantCommand: "go test ./...",
-			wantLang:    "bash",
-		},
-		{
-			name:        "Codex cmd key",
-			toolName:    "exec_command",
-			input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"cmd":"make check"}`)},
-			wantCommand: "make check",
-			wantLang:    "bash",
-		},
-		{
-			name:        "ExitPlanMode markdown",
-			toolName:    "ExitPlanMode",
-			input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"plan":"ship it"}`)},
-			wantCommand: "",
-			wantLang:    "markdown",
-		},
-		{
-			name:        "unknown JSON tool",
-			toolName:    "Read",
-			input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"file_path":"/tmp/x"}`)},
-			wantCommand: "",
-			wantLang:    "json",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			command, langHint := deriveToolCommandAndLang(tt.toolName, tt.input)
-			if command != tt.wantCommand || langHint != tt.wantLang {
-				t.Fatalf("deriveToolCommandAndLang() = (%q, %q), want (%q, %q)", command, langHint, tt.wantCommand, tt.wantLang)
-			}
-		})
-	}
-}
-
 // TestConversationSemanticSyncCarriesToolStructureIntoDocs proves a pass carries
 // a message's text and full tool structure into the delivered document, and that
 // the default content policy leaves the message's reasoning behind.
@@ -160,11 +111,22 @@ func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 					HasTools:  true,
 					Tools: []transcript.ToolCall{
 						{
-							ID:      "tool-1",
-							Name:    "exec_command",
-							Input:   transcript.ToolInputJSON{Raw: json.RawMessage(`{"cmd":"date"}`)},
-							Output:  "Mon Jul 6",
-							IsError: true,
+							ID:          "tool-1",
+							Name:        "shell",
+							Input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"cmd":"date"}`)},
+							Display:     "date",
+							DisplayLang: "bash",
+							Output:      "Mon Jul 6",
+							IsError:     true,
+						},
+						{
+							ID:          "tool-2",
+							Name:        "file reader",
+							Input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"file_path":"/repo/main.go"}`)},
+							Display:     "main.go",
+							DisplayLang: "",
+							Output:      "",
+							IsError:     false,
 						},
 					},
 				},
@@ -195,15 +157,24 @@ func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 	if doc.Thinking != "" {
 		t.Fatalf("doc thinking = %q, want empty; reasoning is not a default indexed class", doc.Thinking)
 	}
-	if len(doc.Tools) != 1 {
-		t.Fatalf("doc tools = %d, want 1", len(doc.Tools))
+	if len(doc.Tools) != 2 {
+		t.Fatalf("doc tools = %d, want 2", len(doc.Tools))
 	}
-	tool := doc.Tools[0]
-	if tool.Name != "exec_command" || tool.InputJSON != `{"cmd":"date"}` || tool.Command != "date" || tool.LangHint != "bash" || !tool.IsError {
-		t.Fatalf("tool = %+v, want structured exec_command with its command and error flag", tool)
+	shell := doc.Tools[0]
+	if shell.Name != "shell" || shell.Display != "date" || shell.LangHint != "bash" || !shell.IsError {
+		t.Fatalf("shell = %+v, want display text, bash hint, and error flag", shell)
 	}
-	if tool.Output != "" {
-		t.Fatalf("tool output = %q, want empty; tool_output is not a default indexed class", tool.Output)
+	fileRead := doc.Tools[1]
+	if fileRead.Name != "file reader" || fileRead.Display != "main.go" || fileRead.LangHint != "" {
+		t.Fatalf("file read = %+v, want display text and no language hint", fileRead)
+	}
+	for _, value := range []string{fileRead.Name, fileRead.Display, fileRead.LangHint, fileRead.Output} {
+		if strings.Contains(value, "file_path") {
+			t.Fatalf("projected field = %q contains raw input key", value)
+		}
+	}
+	if shell.Output != "" || fileRead.Output != "" {
+		t.Fatalf("tool outputs = %q, %q, want empty; tool_output is not a default indexed class", shell.Output, fileRead.Output)
 	}
 }
 

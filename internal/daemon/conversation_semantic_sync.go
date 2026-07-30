@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -746,15 +745,11 @@ func BuildSemanticConversationDocuments(
 //
 // The three tool kinds are nested rather than parallel, and
 // [conversation.NewContentKindSet] collapses them, so exactly one applies: the
-// summary level carries the tool's name alone, the call level adds the command
-// and the arguments, and the output level adds what the tool returned. Selecting
+// summary level carries the tool's name alone, the call level adds what the user
+// saw, and the output level adds what the tool returned. Selecting
 // no tool kind drops the calls entirely.
 //
-// The projection stays structured rather than rendering to text, because the
-// engine derives a separate chunk family from each field, including the distilled
-// row it builds by decomposing the command into program names and file paths.
-// Flattening the call into prose would collapse all of that into the message's
-// own row and lose the distilled one.
+// The projection stays structured so the engine can store each call separately.
 func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKindSet) []semsearch.SemToolCall {
 	summariesOnly := kinds.Has(conversation.ContentKindToolSummaries)
 	withArguments := kinds.Has(conversation.ContentKindToolCalls)
@@ -765,18 +760,19 @@ func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKi
 	out := make([]semsearch.SemToolCall, 0, len(tools))
 	for _, tool := range tools {
 		projected := semsearch.SemToolCall{
-			Name:      tool.Name,
-			InputJSON: "",
-			Command:   "",
-			LangHint:  "",
-			Output:    "",
-			IsError:   tool.IsError,
+			Name:     tool.Name,
+			Display:  "",
+			LangHint: "",
+			Output:   "",
+			IsError:  tool.IsError,
 		}
 		if withArguments || withOutput {
-			command, langHint := deriveToolCommandAndLang(tool.Name, tool.Input)
-			projected.Command = command
-			projected.LangHint = langHint
-			projected.InputJSON = string(tool.Input.Raw)
+			// The provider's parser rendered what the user saw and named the
+			// language it is written in. Re-deriving either here would put
+			// knowledge of every harness's tool shapes into a layer that must
+			// not hold it.
+			projected.Display = strings.ToValidUTF8(tool.Display, "")
+			projected.LangHint = tool.DisplayLang
 		}
 		if withOutput {
 			projected.Output = tool.Output
@@ -784,27 +780,6 @@ func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKi
 		out = append(out, projected)
 	}
 	return out
-}
-
-type semanticToolCommandInput struct {
-	Command string `json:"command"`
-	Cmd     string `json:"cmd"`
-}
-
-func deriveToolCommandAndLang(name string, input transcript.ToolInputJSON) (string, string) {
-	var parsed semanticToolCommandInput
-	if len(input.Raw) > 0 && json.Unmarshal(input.Raw, &parsed) == nil {
-		if strings.TrimSpace(parsed.Command) != "" {
-			return parsed.Command, "bash"
-		}
-		if strings.TrimSpace(parsed.Cmd) != "" {
-			return parsed.Cmd, "bash"
-		}
-	}
-	if name == "ExitPlanMode" {
-		return "", "markdown"
-	}
-	return "", "json"
 }
 
 func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) (SemanticConversationDocuments, error) {

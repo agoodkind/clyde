@@ -11,7 +11,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,22 +44,28 @@ type fakePorts struct {
 	MovedMITMPort int // 58724, the moved-to MITM port for the reload topology test
 }
 
+type fakeConversationSemanticConfig struct {
+	Enabled      bool
+	CollectionID string
+}
+
 // harness owns the temp state/config/runtime roots, the fake config, and the
 // booted daemon subprocess for one live test. All daemon I/O is redirected into
 // temp dirs via the XDG env vars so nothing lands in the operator's real clyde
 // state, and the daemon binds only the fake MITM port.
 type harness struct {
-	stateRoot    string
-	configRoot   string
-	runtimeRoot  string
-	cfg          fakePorts
-	binPath      string
-	configPath   string
-	daemonLog    string
-	prodPidsPre  map[int]bool
-	extraEnv     []string
-	requireToken string
-	cmd          *exec.Cmd
+	stateRoot            string
+	configRoot           string
+	runtimeRoot          string
+	cfg                  fakePorts
+	conversationSemantic fakeConversationSemanticConfig
+	binPath              string
+	configPath           string
+	daemonLog            string
+	prodPidsPre          map[int]bool
+	extraEnv             []string
+	requireToken         string
+	cmd                  *exec.Cmd
 }
 
 const (
@@ -96,6 +104,19 @@ func resolveFakePorts() fakePorts {
 	}
 }
 
+func resolveFakeConversationSemanticConfig(t *testing.T) fakeConversationSemanticConfig {
+	t.Helper()
+
+	collectionID := strings.TrimSpace(os.Getenv("CLYDE_TEST_COLLECTION_ID"))
+	if collectionID == "" {
+		collectionID = randomCollectionID(t)
+	}
+	return fakeConversationSemanticConfig{
+		Enabled:      envBoolOr("CLYDE_TEST_CONVERSATION_SEMANTIC", false),
+		CollectionID: collectionID,
+	}
+}
+
 // maxTCPPort is the highest valid TCP port, used to reject out-of-range overrides.
 const maxTCPPort = 65535
 
@@ -115,6 +136,36 @@ func envPortOr(name string, def int) int {
 	return val
 }
 
+func envBoolOr(name string, def bool) bool {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	val, err := strconv.ParseBool(raw)
+	if err != nil {
+		return def
+	}
+	return val
+}
+
+func envStringOr(name, def string) string {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	return raw
+}
+
+func randomCollectionID(t *testing.T) string {
+	t.Helper()
+
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		t.Fatalf("random collection id: %v", err)
+	}
+	return "clyde-live-" + hex.EncodeToString(raw[:])
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	// The runtime root holds the supervisor's Unix control socket, whose path
@@ -127,14 +178,15 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeRoot) })
 	h := &harness{
-		stateRoot:   t.TempDir(),
-		configRoot:  t.TempDir(),
-		runtimeRoot: runtimeRoot,
-		cfg:         resolveFakePorts(),
-		extraEnv:    nil,
-		binPath:     buildWorktreeBinary(t),
-		prodPidsPre: snapshotProductionPids(),
-		cmd:         nil,
+		stateRoot:            t.TempDir(),
+		configRoot:           t.TempDir(),
+		runtimeRoot:          runtimeRoot,
+		cfg:                  resolveFakePorts(),
+		conversationSemantic: resolveFakeConversationSemanticConfig(t),
+		extraEnv:             nil,
+		binPath:              buildWorktreeBinary(t),
+		prodPidsPre:          snapshotProductionPids(),
+		cmd:                  nil,
 	}
 	h.configPath = filepath.Join(h.configRoot, "clyde", "config.toml")
 	h.daemonLog = filepath.Join(h.stateRoot, "daemon-run.out")
@@ -247,7 +299,9 @@ func (h *harness) writeConfig(t *testing.T, mitmPort int, providers []string) {
 level = "debug"
 
 [conversation.semantic]
-enabled = false
+enabled = %t
+search_enabled = %t
+collection_id = %q
 
 [adapter]
 enabled = false
@@ -268,6 +322,9 @@ db_path = %q
 host = "localhost"
 port = %d
 `,
+		h.conversationSemantic.Enabled,
+		h.conversationSemantic.Enabled,
+		h.conversationSemantic.CollectionID,
 		captureDir, providerList,
 		filepath.Join(caDir, "ca.crt"), filepath.Join(caDir, "ca.key"),
 		filepath.Join(captureDir, "capture.db"), mitmPort)
@@ -347,7 +404,9 @@ port = %d
 level = "debug"
 
 [conversation.semantic]
-enabled = false
+enabled = %t
+search_enabled = %t
+collection_id = %q
 
 [adapter]
 enabled = true
@@ -389,7 +448,19 @@ cc_version = "0.0.0"
 cc_entrypoint = "test"
 
 %s
-%s`, adapterPort, h.cfg.CursorPort, requireToken, captureIngress, passthroughURL, passthroughURL, extra, mitmConfig)
+%s`,
+		h.conversationSemantic.Enabled,
+		h.conversationSemantic.Enabled,
+		h.conversationSemantic.CollectionID,
+		adapterPort,
+		h.cfg.CursorPort,
+		requireToken,
+		captureIngress,
+		passthroughURL,
+		passthroughURL,
+		extra,
+		mitmConfig,
+	)
 	if err := os.WriteFile(h.configPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("write fake adapter config: %v", err)
 	}

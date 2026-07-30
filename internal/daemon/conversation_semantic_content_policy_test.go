@@ -68,9 +68,11 @@ func policyTestMessages() []transcript.Message {
 			Text:      "",
 			HasTools:  true,
 			Tools: []transcript.ToolCall{{
-				Name:   "Bash",
-				Input:  transcript.ToolInputJSON{Raw: []byte(`{"command":"go test ./..."}`)},
-				Output: "ok\tgoodkind.io/clyde\t1.2s",
+				Name:        "shell",
+				Input:       transcript.ToolInputJSON{Raw: []byte(`{"command":"go test ./..."}`)},
+				Display:     "go test ./...",
+				DisplayLang: "bash",
+				Output:      "ok\tgoodkind.io/clyde\t1.2s",
 			}},
 		},
 		{Role: "assistant", Timestamp: time.Unix(1710000003, 0), Text: "shipped"},
@@ -108,8 +110,8 @@ func TestDefaultConfigSelectsChatAndToolCalls(t *testing.T) {
 			t.Fatalf("document %d carries reasoning %q under the default", doc.MessageIndex, doc.Thinking)
 		}
 		for _, tool := range doc.Tools {
-			if tool.Command != "go test ./..." {
-				t.Fatalf("tool command = %q, want the command the default indexes", tool.Command)
+			if tool.Display != "go test ./..." {
+				t.Fatalf("tool display = %q, want the display text the default indexes", tool.Display)
 			}
 			if tool.Output != "" {
 				t.Fatalf("tool output = %q, want empty; tool_outputs is not a default kind", tool.Output)
@@ -196,7 +198,7 @@ func projectedToolAt(t *testing.T, selector string) (int, string, string, string
 	for _, doc := range built.Docs {
 		if len(doc.Tools) > 0 {
 			tool := doc.Tools[0]
-			return built.PolicySkipped, tool.Name, tool.InputJSON, tool.Output, true
+			return built.PolicySkipped, tool.Name, tool.Display, tool.Output, true
 		}
 	}
 	return built.PolicySkipped, "", "", "", false
@@ -204,40 +206,40 @@ func projectedToolAt(t *testing.T, selector string) (int, string, string, string
 
 // TestToolKindsAreNestedLevels proves the three tool kinds behave as one nested
 // ladder rather than as parallel switches: summaries carry the name alone, calls
-// add the arguments, and outputs add the result. That is the property
+// add the display text, and outputs add the result. That is the property
 // collapseToolContentKinds encodes, applied to the projection.
 func TestToolKindsAreNestedLevels(t *testing.T) {
-	_, name, input, output, found := projectedToolAt(t, "tools")
+	_, name, display, output, found := projectedToolAt(t, "tools")
 	if !found {
 		t.Fatal("summaries level dropped the tool call entirely")
 	}
-	if name != "Bash" {
-		t.Fatalf("summaries level name = %q, want Bash", name)
+	if name != "shell" {
+		t.Fatalf("summaries level name = %q, want shell", name)
 	}
-	if input != "" || output != "" {
-		t.Fatalf("summaries level carried arguments %q or output %q", input, output)
+	if display != "" || output != "" {
+		t.Fatalf("summaries level carried display %q or output %q", display, output)
 	}
 
-	_, _, input, output, found = projectedToolAt(t, "tool_calls")
+	_, _, display, output, found = projectedToolAt(t, "tool_calls")
 	if !found {
 		t.Fatal("calls level dropped the tool call entirely")
 	}
-	if !strings.Contains(input, "go test") {
-		t.Fatalf("calls level arguments = %q, want the call arguments", input)
+	if !strings.Contains(display, "go test") {
+		t.Fatalf("calls level display = %q, want the call display", display)
 	}
 	if output != "" {
 		t.Fatalf("calls level output = %q, want empty", output)
 	}
 
-	_, _, input, output, found = projectedToolAt(t, "tool_outputs")
+	_, _, display, output, found = projectedToolAt(t, "tool_outputs")
 	if !found {
 		t.Fatal("outputs level dropped the tool call entirely")
 	}
 	if output == "" {
 		t.Fatal("outputs level did not carry the tool result")
 	}
-	if !strings.Contains(input, "go test") {
-		t.Fatal("outputs level dropped the arguments the calls level carries")
+	if !strings.Contains(display, "go test") {
+		t.Fatal("outputs level dropped the display text the calls level carries")
 	}
 }
 

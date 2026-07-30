@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"strings"
 )
 
 // ToolUseResultKind names the JSON shape Claude wrote for a transcript entry's
@@ -116,13 +117,19 @@ type ToolUseResultPatchHunk struct {
 
 // ToolUseResultContent is the content member of a structured result. A tool
 // writes it either as the file text or as a list of content blocks, so both
-// forms are modeled and Raw keeps the original either way.
+// forms are modeled, and Raw holds the original whenever neither form captured
+// it.
 type ToolUseResultContent struct {
 	// Decode says whether the whole value matched one of the two modeled forms.
 	Decode FieldDecode
 	Text   string
 	Blocks []ToolUseResultBlock
-	Raw    json.RawMessage
+	// Raw holds the original JSON for a shape neither modeled form captured, and
+	// for a value whose shape was modeled but whose members would not decode. It
+	// is empty on the two successful paths, where Text or Blocks already carry
+	// everything. A tool result can be a whole file, and copying every one of
+	// them to a field nothing would read costs a second copy per tool call.
+	Raw json.RawMessage
 }
 
 // emptyToolUseResultContent returns the zero content value, written out so
@@ -141,22 +148,24 @@ func (content *ToolUseResultContent) UnmarshalJSON(data []byte) error {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil
 	}
-	content.Raw = append(json.RawMessage(nil), data...)
 	switch trimmed[0] {
 	case '"':
 		if err := json.Unmarshal(trimmed, &content.Text); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_content_text_failed", "concern", concern, "component", "claude", "err", err)
 			content.Decode = FieldDecodePartial
+			content.Raw = append(json.RawMessage(nil), data...)
 		}
 		return nil
 	case '[':
 		if err := json.Unmarshal(trimmed, &content.Blocks); err != nil {
 			slog.Debug("providers.claude.parser.tool_use_result_content_blocks_failed", "concern", concern, "component", "claude", "err", err)
 			content.Decode = FieldDecodePartial
+			content.Raw = append(json.RawMessage(nil), data...)
 		}
 		return nil
 	default:
 		slog.Debug("providers.claude.parser.tool_use_result_content_unsupported", "concern", concern, "component", "claude", "shape", string(trimmed[:1]))
+		content.Raw = append(json.RawMessage(nil), data...)
 		return nil
 	}
 }
@@ -171,6 +180,31 @@ type ToolUseResultBlock struct {
 	MimeType    string `json:"mimeType"`
 	Description string `json:"description"`
 	Server      string `json:"server"`
+}
+
+// SearchableText is the words a person read in this result.
+//
+// A string result is those words already. A list of blocks joins the text each
+// block carries, so a result of several blocks stays searchable by any of them;
+// a block carrying no text, an image being the common one, contributes nothing,
+// because its payload is bytes nobody could search for. A shape this parser does
+// not model returns the value as it arrived, since preserving what a tool
+// returned beats discarding it for not matching a form.
+func (content *ToolUseResultContent) SearchableText() string {
+	switch {
+	case content.Text != "":
+		return content.Text
+	case content.Blocks != nil:
+		lines := make([]string, 0, len(content.Blocks))
+		for _, block := range content.Blocks {
+			if text := strings.TrimSpace(block.Text); text != "" {
+				lines = append(lines, block.Text)
+			}
+		}
+		return strings.Join(lines, "\n")
+	default:
+		return string(content.Raw)
+	}
 }
 
 // emptyToolUseResult returns the zero union value, written out so exhaustruct

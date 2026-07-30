@@ -36,8 +36,10 @@ func newToolAwareIndex(seen *[]LoadOptions) (*Index, Record) {
 					Input: transcript.ToolInputJSON{
 						Raw: json.RawMessage(`{"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`),
 					},
-					Output:  output,
-					IsError: false,
+					Display:     "",
+					DisplayLang: "",
+					Output:      output,
+					IsError:     false,
 				}},
 			}
 			yield(message, nil)
@@ -88,9 +90,10 @@ func TestExportToolDetailLevels(t *testing.T) {
 			content:         NewContentKindSet(ContentKindToolCalls),
 			wantLoadOutputs: false,
 			wantContains: []string{
-				`[tool: Bash] {"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`,
+				`[tool: Bash]`,
 			},
 			wantAbsent: []string{
+				`{"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`,
 				"[tool output]",
 				"sse bytes: 4096",
 			},
@@ -100,11 +103,13 @@ func TestExportToolDetailLevels(t *testing.T) {
 			content:         NewContentKindSet(ContentKindToolOutputs),
 			wantLoadOutputs: true,
 			wantContains: []string{
-				`[tool: Bash] {"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`,
+				`[tool: Bash]`,
 				"[tool output]",
 				"sse bytes: 4096",
 			},
-			wantAbsent: nil,
+			wantAbsent: []string{
+				`{"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`,
+			},
 		},
 	}
 	for _, tc := range cases {

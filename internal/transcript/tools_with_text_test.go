@@ -7,15 +7,24 @@ import (
 )
 
 // mixedTextAndToolsMessage is the shape any provider writes when one turn holds
-// both prose and tool calls.
+// both prose and tool calls. Each call carries the display text its provider's
+// parser rendered, which is what every consumer shows.
 func mixedTextAndToolsMessage() Message {
 	return Message{
 		Role:     "assistant",
 		Text:     "Checking the config now.",
 		HasTools: true,
 		Tools: []ToolCall{
-			{Name: "read_file", Input: ToolInputJSON{Raw: json.RawMessage(`{"path":"main.go"}`)}},
-			{Name: "edit_file", Input: ToolInputJSON{Raw: json.RawMessage(`{"path":"main.go"}`)}},
+			{
+				Name:    "read_file",
+				Input:   ToolInputJSON{Raw: json.RawMessage(`{"path":"main.go"}`)},
+				Display: "main.go",
+			},
+			{
+				Name:    "edit_file",
+				Input:   ToolInputJSON{Raw: json.RawMessage(`{"path":"main.go"}`)},
+				Display: "main.go",
+			},
 		},
 	}
 }
@@ -70,7 +79,9 @@ func TestShapeConversationDoesNotClaimToolsFollowedTheProse(t *testing.T) {
 }
 
 // TestShapeConversationRendersFullToolDetailAlongsideText covers the mode
-// `--content tools.calls` selects, where the tool input JSON is the point.
+// `--content tools.calls` selects, where what the tool did is the point. A call
+// renders the display text its provider's parser produced, so a person reading
+// an export sees what they saw rather than the harness's serialization.
 func TestShapeConversationRendersFullToolDetailAlongsideText(t *testing.T) {
 	turns := ShapeConversation(
 		[]Message{mixedTextAndToolsMessage()},
@@ -83,7 +94,7 @@ func TestShapeConversationRendersFullToolDetailAlongsideText(t *testing.T) {
 	if !strings.Contains(turns[0].Text, "Checking the config now.") {
 		t.Fatalf("text = %q, want the prose preserved", turns[0].Text)
 	}
-	for _, want := range []string{"[tool calls in this turn]", `[tool: read_file] {"path":"main.go"}`, `[tool: edit_file]`} {
+	for _, want := range []string{"[tool calls in this turn]", "[tool: read_file] main.go", "[tool: edit_file] main.go"} {
 		if !strings.Contains(turns[0].Text, want) {
 			t.Fatalf("text = %q, want it to contain %q", turns[0].Text, want)
 		}

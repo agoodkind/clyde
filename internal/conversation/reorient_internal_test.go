@@ -221,8 +221,10 @@ func TestCollapseRepeatedRunsKeepsDistinctToolCalls(t *testing.T) {
 			HasTools:  true,
 			Tools: []transcript.ToolCall{
 				{
-					Name:  "Bash",
-					Input: transcript.ToolInputJSON{Raw: []byte(`{"command":"` + command + `"}`)},
+					Name:        "Bash",
+					Input:       transcript.ToolInputJSON{Raw: []byte(`{"command":"` + command + `"}`)},
+					Display:     "",
+					DisplayLang: "",
 				},
 			},
 		}

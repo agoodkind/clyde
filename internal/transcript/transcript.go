@@ -119,11 +119,23 @@ func (j *ToolInputJSON) Len() int {
 
 // ToolCall represents a single tool invocation within an assistant message.
 type ToolCall struct {
-	ID      string        `json:"id"`       // tool_use_id (links to tool_result in next user message)
-	Name    string        `json:"name"`     // e.g. "Bash", "Edit", "Read"
-	Input   ToolInputJSON `json:"input"`    // opaque tool input payload, preserved verbatim
-	Output  string        `json:"output"`   // tool result text (loaded on demand, empty by default)
-	IsError bool          `json:"is_error"` // true if tool result was an error
+	ID    string        `json:"id"`    // tool_use_id (links to tool_result in next user message)
+	Name  string        `json:"name"`  // e.g. "Bash", "Edit", "Read"
+	Input ToolInputJSON `json:"input"` // opaque tool input payload, preserved verbatim
+	// Display is what the user saw for this call: a shell command, a file path,
+	// a search pattern. Each provider's parser fills it from its own harness's
+	// tool shapes. Anything that shows or stores a tool call reads this rather than
+	// re-deriving it from Input, which keeps the harness's serialization inside the
+	// provider package.
+	Display string `json:"display,omitempty"`
+	// DisplayLang names the language Display is written in, "bash" when the call
+	// ran a shell and empty otherwise. The same parser names the language from
+	// its own harness's tool shapes. Anything that shows or stores a tool call
+	// reads this rather than re-deriving it from Input, which keeps the harness's
+	// serialization inside the provider package.
+	DisplayLang string `json:"display_lang,omitempty"`
+	Output      string `json:"output"`   // tool result text (loaded on demand, empty by default)
+	IsError     bool   `json:"is_error"` // true if tool result was an error
 }
 
 // ToolNames returns the names of all tools used in this message.

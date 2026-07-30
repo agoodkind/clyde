@@ -56,12 +56,11 @@ type SemDoc struct {
 
 // SemToolCall is one structured tool call attached to a semantic document.
 type SemToolCall struct {
-	Name      string
-	InputJSON string
-	Command   string
-	LangHint  string
-	Output    string
-	IsError   bool
+	Name     string
+	Display  string
+	LangHint string
+	Output   string
+	IsError  bool
 }
 
 // Fingerprint pairs a conversation id with a content fingerprint that changes
@@ -459,8 +458,7 @@ func truncateSemDocForUpsert(doc SemDoc) SemDoc {
 	out := doc
 	out.Tools = append([]SemToolCall(nil), doc.Tools...)
 	out = truncateSemDocToolField(out, semToolStringOutput)
-	out = truncateSemDocToolField(out, semToolStringInputJSON)
-	out = truncateSemDocToolField(out, semToolStringCommand)
+	out = truncateSemDocToolField(out, semToolStringDisplay)
 	if semDocByteSize(out) > upsertStreamMaxBytesPerChunk {
 		// Non-shrinkable tool overhead can keep the document over budget after
 		// field truncation: a very high tool-call count, or long tool names and
@@ -482,8 +480,7 @@ type semToolStringField int
 
 const (
 	semToolStringOutput semToolStringField = iota
-	semToolStringInputJSON
-	semToolStringCommand
+	semToolStringDisplay
 )
 
 func truncateSemDocToolField(doc SemDoc, field semToolStringField) SemDoc {
@@ -496,10 +493,8 @@ func truncateSemDocToolField(doc SemDoc, field semToolStringField) SemDoc {
 		switch field {
 		case semToolStringOutput:
 			doc.Tools[index].Output = truncateSemDocStringField(doc.Tools[index].Output, requiredReduction)
-		case semToolStringInputJSON:
-			doc.Tools[index].InputJSON = truncateSemDocStringField(doc.Tools[index].InputJSON, requiredReduction)
-		case semToolStringCommand:
-			doc.Tools[index].Command = truncateSemDocStringField(doc.Tools[index].Command, requiredReduction)
+		case semToolStringDisplay:
+			doc.Tools[index].Display = truncateSemDocStringField(doc.Tools[index].Display, requiredReduction)
 		default:
 			return doc
 		}
@@ -515,10 +510,8 @@ func largestShrinkableToolStringIndex(tools []SemToolCall, field semToolStringFi
 		switch field {
 		case semToolStringOutput:
 			value = tool.Output
-		case semToolStringInputJSON:
-			value = tool.InputJSON
-		case semToolStringCommand:
-			value = tool.Command
+		case semToolStringDisplay:
+			value = tool.Display
 		default:
 			return -1
 		}
@@ -592,7 +585,7 @@ func semDocByteSize(doc SemDoc) int {
 	const semDocPerToolFramingBytes = 64
 	size := len(doc.Text) + len(doc.Thinking) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
 	for _, tool := range doc.Tools {
-		size += len(tool.Name) + len(tool.InputJSON) + len(tool.Command) + len(tool.LangHint) + len(tool.Output) + semDocPerToolFramingBytes
+		size += len(tool.Name) + len(tool.Display) + len(tool.LangHint) + len(tool.Output) + semDocPerToolFramingBytes
 	}
 	return size
 }
@@ -933,12 +926,11 @@ func conversationToolCalls(tools []SemToolCall) []*lmsemanticsearchv1.Conversati
 	out := make([]*lmsemanticsearchv1.ConversationToolCall, 0, len(tools))
 	for _, tool := range tools {
 		out = append(out, &lmsemanticsearchv1.ConversationToolCall{
-			Name:      strings.ToValidUTF8(tool.Name, ""),
-			InputJson: strings.ToValidUTF8(tool.InputJSON, ""),
-			Command:   strings.ToValidUTF8(tool.Command, ""),
-			LangHint:  strings.ToValidUTF8(tool.LangHint, ""),
-			Output:    strings.ToValidUTF8(tool.Output, ""),
-			IsError:   tool.IsError,
+			Name:     strings.ToValidUTF8(tool.Name, ""),
+			Display:  strings.ToValidUTF8(tool.Display, ""),
+			LangHint: strings.ToValidUTF8(tool.LangHint, ""),
+			Output:   strings.ToValidUTF8(tool.Output, ""),
+			IsError:  tool.IsError,
 		})
 	}
 	return out
