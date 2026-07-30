@@ -26,6 +26,12 @@ func TestToolDisplayText(t *testing.T) {
 		{name: "raw input", input: `"*** Begin Patch"`, wantText: "*** Begin Patch", wantLang: ""},
 		{name: "unknown", input: `{"other":"value"}`, wantText: "", wantLang: ""},
 		{name: "empty", input: "", wantText: "", wantLang: ""},
+		// A command written in neither of the two forms Codex uses reads as no
+		// command, and the keys beside it are still read. That is the whole point
+		// of the union deciding the shape without failing: a decoder that returned
+		// an error here would abort the rest of the tool input, so this call would
+		// lose its path as well as its command.
+		{name: "command in a third shape keeps the path beside it", input: `{"command":42,"path":"/repo/main.go"}`, wantText: "/repo/main.go", wantLang: ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

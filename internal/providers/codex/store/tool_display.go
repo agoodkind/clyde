@@ -1,18 +1,64 @@
 package codexstore
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"goodkind.io/clyde/internal/transcript"
 )
 
 type codexToolDisplayInput struct {
-	Command json.RawMessage `json:"command"`
-	Cmd     string          `json:"cmd"`
-	Path    string          `json:"path"`
-	Pattern string          `json:"pattern"`
-	Query   string          `json:"query"`
+	Command codexShellCommand `json:"command"`
+	Cmd     string            `json:"cmd"`
+	Path    string            `json:"path"`
+	Pattern string            `json:"pattern"`
+	Query   string            `json:"query"`
+}
+
+// codexShellCommand is a shell command as Codex writes it, which is either the
+// command line as one string or the argument vector it was split into. Text
+// holds the command line either way, so a caller reads one string rather than
+// deciding the shape again.
+type codexShellCommand struct {
+	Text string
+}
+
+// UnmarshalJSON reads whichever of the two forms Codex wrote, and reads a third
+// shape as no command.
+//
+// It returns no error in any case. A custom unmarshaler that returns one aborts
+// the surrounding decode at that key, so every later key of the tool input would
+// stay zero and a command this parser cannot read would cost the path, the
+// pattern, and the query beside it.
+func (command *codexShellCommand) UnmarshalJSON(data []byte) error {
+	*command = codexShellCommand{Text: ""}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return nil
+	}
+	switch trimmed[0] {
+	case '"':
+		var line string
+		if err := json.Unmarshal(trimmed, &line); err != nil {
+			slog.Debug("codex.store.tool_display.command_line_failed", "concern", "providers.codex.store", "err", err)
+		} else {
+			command.Text = strings.TrimSpace(line)
+		}
+		return nil
+	case '[':
+		var arguments []string
+		if err := json.Unmarshal(trimmed, &arguments); err != nil {
+			slog.Debug("codex.store.tool_display.command_arguments_failed", "concern", "providers.codex.store", "err", err)
+		} else {
+			command.Text = strings.TrimSpace(strings.Join(arguments, " "))
+		}
+		return nil
+	default:
+		slog.Debug("codex.store.tool_display.command_shape_unsupported", "concern", "providers.codex.store", "shape", string(trimmed[:1]))
+		return nil
+	}
 }
 
 // toolDisplayText is what the user saw for one tool call, and the language that
@@ -34,8 +80,8 @@ func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) 
 	if err := json.Unmarshal(input.Raw, &parsed); err != nil {
 		return "", ""
 	}
-	if command := codexCommandText(parsed.Command); command != "" {
-		return command, "bash"
+	if parsed.Command.Text != "" {
+		return parsed.Command.Text, "bash"
 	}
 	if command := strings.TrimSpace(parsed.Cmd); command != "" {
 		return command, "bash"
@@ -46,16 +92,4 @@ func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) 
 		}
 	}
 	return "", ""
-}
-
-func codexCommandText(raw json.RawMessage) string {
-	var command string
-	if err := json.Unmarshal(raw, &command); err == nil {
-		return strings.TrimSpace(command)
-	}
-	var arguments []string
-	if err := json.Unmarshal(raw, &arguments); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(strings.Join(arguments, " "))
 }

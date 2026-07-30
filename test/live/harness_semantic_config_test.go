@@ -5,8 +5,11 @@ package live
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 func TestResolveFakeConversationSemanticConfigDefaults(t *testing.T) {
@@ -103,16 +106,24 @@ func TestWriteConfigCarriesConversationSemanticSettings(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read config: %v", err)
 			}
-			text := string(body)
-			for _, want := range []string{
-				"[conversation.semantic]",
-				"enabled = true",
-				"search_enabled = true",
-				`collection_id = "test-collection"`,
-			} {
-				if !strings.Contains(text, want) {
-					t.Fatalf("config missing %q:\n%s", want, text)
-				}
+
+			// Decode the written file the way the daemon will rather than
+			// searching it for strings. A substring is satisfied by a value in
+			// the wrong section, and by a file whose syntax the daemon would
+			// reject, so it can pass for a config the daemon cannot boot on.
+			var written config.Config
+			if err := toml.Unmarshal(body, &written); err != nil {
+				t.Fatalf("parse config: %v\n%s", err, body)
+			}
+			semantic := written.Conversation.Semantic
+			if !semantic.FeedsEngine() {
+				t.Fatalf("FeedsEngine() = false, want true:\n%s", body)
+			}
+			if !semantic.AnswersSearch() {
+				t.Fatalf("AnswersSearch() = false, want true:\n%s", body)
+			}
+			if semantic.CollectionID != "test-collection" {
+				t.Fatalf("CollectionID = %q, want %q:\n%s", semantic.CollectionID, "test-collection", body)
 			}
 		})
 	}
