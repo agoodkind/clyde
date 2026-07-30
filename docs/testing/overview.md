@@ -37,12 +37,15 @@ concurrent runs distinct values to keep them apart.
 | `CLYDE_TEST_CURSOR_PORT` | 21435 | cursor ingress |
 | `CLYDE_TEST_TOPOLOGY_PORT` | 21436 | moved adapter port |
 | `CLYDE_TEST_MOVED_MITM_PORT` | MITM port plus one | moved MITM port |
+| `CLYDE_TEST_CONVERSATION_SEMANTIC` | false | conversation semantic enabled and search_enabled |
+| `CLYDE_TEST_COLLECTION_ID` | fresh random id per run | conversation semantic collection_id |
 
 A second run sets a disjoint set before it starts:
 
     CLYDE_TEST_ADAPTER_PORT=22434 CLYDE_TEST_MITM_PORT=59723 \
     CLYDE_TEST_CURSOR_PORT=22435 CLYDE_TEST_TOPOLOGY_PORT=22436 \
-    CLYDE_TEST_MOVED_MITM_PORT=59724 make live
+    CLYDE_TEST_MOVED_MITM_PORT=59724 CLYDE_TEST_CONVERSATION_SEMANTIC=true \
+    CLYDE_TEST_COLLECTION_ID=clyde-live-run-2 make live
 
 ## The production-untouched invariant
 
