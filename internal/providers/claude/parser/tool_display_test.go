@@ -87,3 +87,57 @@ func assertClaudeFixtureToolDisplay(t *testing.T, tools []transcript.ToolCall, w
 		t.Fatalf("fixture display coverage = %d/%d, want at least 90%%", withDisplay, withInput)
 	}
 }
+
+// TestAPlanAndAQuestionAreStored covers the two shapes whose text exists only
+// inside the tool call. Every ExitPlanMode call sampled from real transcripts
+// carried its plan with no assistant text beside it and no other copy in the
+// file, so a renderer that skipped the plan would put an approved document
+// beyond reach of any search.
+func TestAPlanAndAQuestionAreStored(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		input    string
+		want     string
+		wantLang string
+	}{
+		{
+			name:     "a plan is stored as the markdown it was written in",
+			input:    `{"plan":"# Fix CI\n\nTwo repos have red CI."}`,
+			want:     "# Fix CI\n\nTwo repos have red CI.",
+			wantLang: "markdown",
+		},
+		{
+			name:     "a question is stored with the choices offered beside it",
+			input:    `{"question":"Which split?","options":[{"label":"Broadest","description":"one PR"},{"label":"Stub","description":"two PRs"}]}`,
+			want:     "Which split?\nBroadest\none PR\nStub\ntwo PRs",
+			wantLang: "",
+		},
+		{
+			name:     "a file edit still stores its path alone",
+			input:    `{"file_path":"/tmp/a.go","old_string":"x","new_string":"y"}`,
+			want:     "/tmp/a.go",
+			wantLang: "",
+		},
+		{
+			name:     "a shell command still wins over everything else",
+			input:    `{"command":"ls -la","plan":"ignored"}`,
+			want:     "ls -la",
+			wantLang: "bash",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got, gotLang := toolDisplayText("", transcript.ToolInputJSON{Raw: []byte(testCase.input)})
+			if got != testCase.want {
+				t.Fatalf("display = %q, want %q", got, testCase.want)
+			}
+			if gotLang != testCase.wantLang {
+				t.Fatalf("language = %q, want %q", gotLang, testCase.wantLang)
+			}
+		})
+	}
+}
