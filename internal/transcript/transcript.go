@@ -123,13 +123,12 @@ type ToolCall struct {
 	Name  string        `json:"name"`  // e.g. "Bash", "Edit", "Read"
 	Input ToolInputJSON `json:"input"` // opaque tool input payload, preserved verbatim
 	// Display is what the user saw for this call: a shell command, a file path,
-	// a search pattern. It belongs to the provider's parser, which is the only
-	// layer that knows its own harness's tool shapes.
+	// a search pattern. Each provider's parser fills it from its own harness's
+	// tool shapes.
 	Display string `json:"display,omitempty"`
 	// DisplayLang names the language Display is written in, "bash" when the call
-	// ran a shell and empty otherwise. It belongs to the provider's parser for
-	// the same reason, since only that parser knows which of its harness's tools
-	// are shells.
+	// ran a shell and empty otherwise. The same parser names the language from
+	// its own harness's tool shapes.
 	DisplayLang string `json:"display_lang,omitempty"`
 	Output      string `json:"output"`   // tool result text (loaded on demand, empty by default)
 	IsError     bool   `json:"is_error"` // true if tool result was an error

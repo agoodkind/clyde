@@ -588,12 +588,13 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 			}
 		case contentBlockToolUse:
 			m.HasTools = true
+			display, displayLang := toolDisplayText(b.Name, b.Input)
 			m.Tools = append(m.Tools, transcript.ToolCall{
 				ID:          b.ID,
 				Name:        b.Name,
 				Input:       b.Input,
-				Display:     "",
-				DisplayLang: "",
+				Display:     display,
+				DisplayLang: displayLang,
 				Output:      "",
 				IsError:     false,
 			})

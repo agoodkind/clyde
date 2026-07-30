@@ -43,12 +43,14 @@ func mapJSONLMessage(
 				textParts = append(textParts, text)
 			}
 		case cursorjsonl.PartTypeToolUse:
+			input := transcript.ToolInputJSON{Raw: cloneRaw(part.ToolInput)}
+			display, displayLang := toolDisplayText(part.ToolName, input)
 			tools = append(tools, transcript.ToolCall{
 				ID:          "",
 				Name:        part.ToolName,
-				Input:       transcript.ToolInputJSON{Raw: cloneRaw(part.ToolInput)},
-				Display:     "",
-				DisplayLang: "",
+				Input:       input,
+				Display:     display,
+				DisplayLang: displayLang,
 				Output:      "",
 				IsError:     false,
 			})
@@ -118,12 +120,14 @@ func mapComposerBubble(
 		if opts.IncludeToolOutputs {
 			toolOutput = string(bubble.ToolCall.Result)
 		}
+		input := transcript.ToolInputJSON{Raw: rawArgsToJSON(bubble.ToolCall.RawArgs)}
+		display, displayLang := toolDisplayText(bubble.ToolCall.Name, input)
 		tools = append(tools, transcript.ToolCall{
 			ID:          "",
 			Name:        bubble.ToolCall.Name,
-			Input:       transcript.ToolInputJSON{Raw: rawArgsToJSON(bubble.ToolCall.RawArgs)},
-			Display:     "",
-			DisplayLang: "",
+			Input:       input,
+			Display:     display,
+			DisplayLang: displayLang,
 			Output:      toolOutput,
 			IsError:     toolErrored(bubble.ToolCall.Status),
 		})
