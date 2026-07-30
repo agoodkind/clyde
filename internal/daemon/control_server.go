@@ -554,18 +554,19 @@ func peerString(client *peer.Peer) string {
 // with no index refresh.
 func protoConversationRecord(ctx context.Context, idx *conversation.Index, record conversation.Record) *clydev1.ConversationRecord {
 	wire := &clydev1.ConversationRecord{
-		Id:            record.ID,
-		Provider:      protoProvider(record.Provider),
-		NativeId:      record.NativeID,
-		Title:         record.Title,
-		WorkspaceRoot: record.WorkspaceRoot,
-		ArtifactPath:  record.ArtifactPath,
-		ArtifactKind:  record.ArtifactKind,
-		Model:         record.Model,
-		CreatedAtUnix: record.CreatedAt.Unix(),
-		UpdatedAtUnix: record.UpdatedAt.Unix(),
-		SizeBytes:     record.SizeBytes,
-		Archived:      record.Archived,
+		Id:              record.ID,
+		Provider:        protoProvider(record.Provider),
+		NativeId:        record.NativeID,
+		Title:           record.Title,
+		WorkspaceRoot:   record.WorkspaceRoot,
+		ArtifactPath:    record.ArtifactPath,
+		ArtifactKind:    record.ArtifactKind,
+		Model:           record.Model,
+		CreatedAtUnix:   record.CreatedAt.Unix(),
+		UpdatedAtUnix:   record.UpdatedAt.Unix(),
+		SizeBytes:       record.SizeBytes,
+		Archived:        record.Archived,
+		LatestRequestId: record.LatestRequestID,
 	}
 	if record.Lineage != nil {
 		wire.Lineage = &clydev1.ConversationLineage{

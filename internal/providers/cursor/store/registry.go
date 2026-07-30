@@ -62,14 +62,14 @@ func DecodeAllComposersJSON(data []byte) (AllComposersDocument, error) {
 // by composer id. Individual unreadable workspace databases or descriptors are
 // skipped so one bad workspace does not prevent indexing the rest of the root.
 func BuildWorkspaceComposerIndex(ctx context.Context, root DataRoot) (map[string]WorkspaceComposerInfo, error) {
-	entries, err := root.ListWorkspaceEntries()
+	listing, err := root.ListWorkspaceEntries()
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.workspace_entries_list_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
 		return nil, fmt.Errorf("list cursor workspace entries in %s: %w", root.WorkspaceStorageDir, err)
 	}
 
 	index := make(map[string]WorkspaceComposerInfo)
-	for _, entry := range entries {
+	for _, entry := range listing.Entries {
 		addWorkspaceComposers(ctx, index, entry)
 	}
 	return index, nil
@@ -208,15 +208,21 @@ func addWorkspaceComposers(ctx context.Context, index map[string]WorkspaceCompos
 		return
 	}
 
-	// A workspace descriptor that cannot be read costs this workspace's composers
-	// their folder path and nothing else. Their names, subtitles, archived flags,
-	// and timestamps are in the registry already, and dropping them all because
-	// one adjacent file is unreadable would leave those chats untitled for a
-	// reason that has nothing to do with them.
-	cwd, err := ReadWorkspaceFolderPath(entry.WorkspaceJSONPath)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.workspace_folder_read_failed", "concern", concern, "path", entry.WorkspaceJSONPath, "workspace_hash", entry.WorkspaceHash, "err", err)
-		cwd = ""
+	// Neither a missing folder descriptor nor an unreadable one costs this
+	// workspace's composers anything but their folder path. A workspace with no
+	// descriptor is a window opened on no folder, so it has no working directory
+	// rather than an unreadable one, and neither case is a reason to drop the
+	// chats: their names, subtitles, archived flags, and timestamps are already in
+	// the registry, so dropping them would leave them untitled for a reason that
+	// has nothing to do with them.
+	cwd := ""
+	if entry.WorkspaceJSONPath != "" {
+		folderPath, folderErr := ReadWorkspaceFolderPath(entry.WorkspaceJSONPath)
+		if folderErr != nil {
+			slog.WarnContext(ctx, "providers.cursor.store.workspace_folder_read_failed", "concern", concern, "path", entry.WorkspaceJSONPath, "workspace_hash", entry.WorkspaceHash, "err", folderErr)
+		} else {
+			cwd = folderPath
+		}
 	}
 
 	for _, composer := range document.AllComposers {

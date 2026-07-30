@@ -16,6 +16,11 @@ service ClydeService {
   rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
   rpc GetConversationInfo(GetConversationInfoRequest) returns (GetConversationInfoResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
+  // ResolveConversationRequest maps one provider request id, such as the value
+  // Cursor's Copy Request ID action yields, to the conversation that issued it.
+  // The response names which path answered, because the index and the provider's
+  // live store are different sources that can disagree.
+  rpc ResolveConversationRequest(ResolveConversationRequestRequest) returns (ResolveConversationRequestResponse);
   // ReorientConversation resolves the post-fork, post-compaction recovery
   // context for one conversation and returns one bounded, cursor-paged page of
   // evidence. Each page stays small enough to render inline, so a caller loops
@@ -345,6 +350,54 @@ message GetConversationInfoResponse {
   repeated ConversationCompactionSegment segments = 4;
 }
 
+// RequestResolutionOrigin names which path answered a request-id lookup.
+enum RequestResolutionOrigin {
+  REQUEST_RESOLUTION_ORIGIN_UNSPECIFIED = 0;
+  // INDEX is Clyde's own conversation index, derived from artifact headers the
+  // scan already reads.
+  REQUEST_RESOLUTION_ORIGIN_INDEX = 1;
+  // LIVE is a bounded, indexed lookup against the provider's own store.
+  REQUEST_RESOLUTION_ORIGIN_LIVE = 2;
+  // FULL_SCAN is the opt-in exhaustive scan of the provider's store.
+  REQUEST_RESOLUTION_ORIGIN_FULL_SCAN = 3;
+}
+
+// RequestResolutionNotFoundReason explains why a request id resolved to nothing,
+// for the cases where the reason is knowable.
+enum RequestResolutionNotFoundReason {
+  REQUEST_RESOLUTION_NOT_FOUND_REASON_UNSPECIFIED = 0;
+  REQUEST_RESOLUTION_NOT_FOUND_REASON_NO_RESOLVER = 1;
+  // NOT_RETAINED means the provider no longer lists the request among its recent
+  // requests, which is what an id older than its retention window looks like.
+  REQUEST_RESOLUTION_NOT_FOUND_REASON_NOT_RETAINED = 2;
+  REQUEST_RESOLUTION_NOT_FOUND_REASON_NO_MATCHING_CONVERSATION = 3;
+  REQUEST_RESOLUTION_NOT_FOUND_REASON_UNINDEXED_CONVERSATION = 4;
+  // INCONCLUSIVE means part of the provider's store could not be read, so the
+  // miss proves nothing.
+  REQUEST_RESOLUTION_NOT_FOUND_REASON_INCONCLUSIVE = 5;
+  // AMBIGUOUS_CONVERSATION means several conversations carry the request, so no
+  // one of them is the answer. Duplicating a conversation copies the turns
+  // inside it, request ids included.
+  REQUEST_RESOLUTION_NOT_FOUND_REASON_AMBIGUOUS_CONVERSATION = 6;
+}
+
+message ResolveConversationRequestRequest {
+  string request_id = 1;
+  // allow_full_scan permits the exhaustive provider-store scan after the bounded
+  // paths miss. It costs tens of seconds, so the daemon runs it only when the
+  // caller asked for it.
+  bool allow_full_scan = 2;
+}
+
+message ResolveConversationRequestResponse {
+  string request_id = 1;
+  bool found = 2;
+  RequestResolutionOrigin origin = 3;
+  RequestResolutionNotFoundReason not_found_reason = 4;
+  // conversation is set only when found is true.
+  ConversationRecord conversation = 5;
+}
+
 message ReorientConversationRequest {
   // conversation_id selects the current conversation. Empty means the newest
   // conversation in workspace.
@@ -449,6 +502,10 @@ message ConversationRecord {
   // parent_conversation_id is the resolved derived id of this conversation's
   // fork parent when that parent is present in the index, and empty otherwise.
   string parent_conversation_id = 14;
+  // latest_request_id is the provider request id of the conversation's most
+  // recent turn, when the provider records one in the artifact header. Empty
+  // otherwise.
+  string latest_request_id = 15;
 }
 
 message ListConversationsResponse {

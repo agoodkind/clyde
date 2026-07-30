@@ -391,20 +391,21 @@ func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.
 		}
 	}
 	return conversation.Record{
-		ID:            wire.GetId(),
-		Provider:      providerFromProto(wire.GetProvider()),
-		NativeID:      wire.GetNativeId(),
-		Lineage:       lineage,
-		Origin:        conversation.OriginUnspecified,
-		Title:         wire.GetTitle(),
-		WorkspaceRoot: wire.GetWorkspaceRoot(),
-		ArtifactPath:  wire.GetArtifactPath(),
-		ArtifactKind:  wire.GetArtifactKind(),
-		Model:         wire.GetModel(),
-		CreatedAt:     time.Unix(wire.GetCreatedAtUnix(), 0),
-		UpdatedAt:     time.Unix(wire.GetUpdatedAtUnix(), 0),
-		SizeBytes:     wire.GetSizeBytes(),
-		Archived:      wire.GetArchived(),
+		ID:              wire.GetId(),
+		Provider:        providerFromProto(wire.GetProvider()),
+		NativeID:        wire.GetNativeId(),
+		Lineage:         lineage,
+		Origin:          conversation.OriginUnspecified,
+		Title:           wire.GetTitle(),
+		WorkspaceRoot:   wire.GetWorkspaceRoot(),
+		ArtifactPath:    wire.GetArtifactPath(),
+		ArtifactKind:    wire.GetArtifactKind(),
+		Model:           wire.GetModel(),
+		CreatedAt:       time.Unix(wire.GetCreatedAtUnix(), 0),
+		UpdatedAt:       time.Unix(wire.GetUpdatedAtUnix(), 0),
+		SizeBytes:       wire.GetSizeBytes(),
+		Archived:        wire.GetArchived(),
+		LatestRequestID: wire.GetLatestRequestId(),
 	}
 }
 

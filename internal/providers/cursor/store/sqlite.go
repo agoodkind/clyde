@@ -81,9 +81,13 @@ func readOnlyDatabaseDSN(path string) string {
 	}).String()
 }
 
-// tableExistsQuery is the one statement that answers whether a table is there,
-// so the pooled read and the snapshot read ask it the same way.
-const tableExistsQuery = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+// tableExistsQuery and tableColumnsQuery are the statements that answer what a
+// database's schema holds, written once so the pooled read and the snapshot read
+// ask them the same way.
+const (
+	tableExistsQuery  = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+	tableColumnsQuery = "SELECT name FROM pragma_table_info(?)"
+)
 
 // readSnapshot is one read transaction over a Cursor database, which pins a
 // single connection and a single view of the data for every statement inside it.
@@ -123,6 +127,19 @@ func (snapshot readSnapshot) rollback() {
 	_ = snapshot.tx.Rollback()
 }
 
+// tableColumns answers the same question as [readTableColumns] against this
+// snapshot.
+func (snapshot readSnapshot) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
+	rows, err := snapshot.tx.QueryContext(ctx, tableColumnsQuery, table)
+	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.table_columns_query_failed", "concern", concern, "table", table, "err", err)
+		return nil, fmt.Errorf("query cursor %s columns: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	return scanTableColumns(ctx, rows, table)
+}
+
 // tableExists answers the same question as [TableExists] against this snapshot.
 func (snapshot readSnapshot) tableExists(ctx context.Context, table string) (bool, error) {
 	var count int
@@ -155,14 +172,15 @@ func (snapshot readSnapshot) queryRange(
 	return rows, nil
 }
 
-// countRange counts the rows of one key range on this snapshot, from the key
-// index alone.
-func (snapshot readSnapshot) countRange(
-	ctx context.Context,
-	tableName KVTableName,
-	bounds keyRange,
-) (int, error) {
-	sqlTableName, err := tableName.sqlTableName()
+// countRange counts the rows of one `cursorDiskKV` key range on this snapshot,
+// from the key index alone.
+//
+// The table is named here rather than taken as an argument because counting a key
+// range is a `cursorDiskKV` operation. Cursor's other key-value table, `ItemTable`,
+// stores one row per exact item key and is only ever read by that key, so it has
+// no ranges to count.
+func (snapshot readSnapshot) countRange(ctx context.Context, bounds keyRange) (int, error) {
+	sqlTableName, err := KVTableCursorDiskKV.sqlTableName()
 	if err != nil {
 		return 0, err
 	}
@@ -174,7 +192,7 @@ func (snapshot readSnapshot) countRange(
 		return 0, nil
 	}
 
-	query := "SELECT count(*) FROM " + sqlTableName + keyRangePredicate(bounds)
+	query := "SELECT count(*) FROM " + sqlTableName + keyRangePredicate(bounds, "")
 	var count int
 	if bounds.HasUpper {
 		err = snapshot.tx.QueryRowContext(ctx, query, bounds.Lower, bounds.Upper).Scan(&count)
@@ -281,15 +299,11 @@ func readKVRowInKnownTable(
 // distinction is load bearing: Cursor's global `cursorDiskKV` table is tens of
 // gigabytes and its key index is the only index it has.
 func ReadKVRowsByPrefix(ctx context.Context, db *sql.DB, tableName KVTableName, keyPrefix string) ([]KVRow, error) {
-	out := make([]KVRow, 0)
-	err := forEachKVRowInKeyRange(ctx, db, tableName, keyRangeForPrefix(keyPrefix), func(row KVRow) error {
-		out = append(out, row)
-		return nil
-	})
+	rows, err := readKVRowsInKeyRange(ctx, db, tableName, keyRangeForPrefix(keyPrefix), "")
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return rows, nil
 }
 
 // keyRange is the half-open key interval `[Lower, Upper)` that selects one key
@@ -326,6 +340,31 @@ func keyPrefixUpperBound(keyPrefix string) (string, bool) {
 	return "", false
 }
 
+// readKVRowsInKeyRange reads the rows of one key range, optionally keeping only
+// the rows whose value contains valueSubstring as a raw byte sequence.
+//
+// The substring filter is a cheap prefilter, not a match: it runs inside SQLite
+// so a non-matching row is never transferred, and the caller still has to decode
+// the surviving rows and compare the field it cares about for exact equality.
+// Passing an empty valueSubstring disables the filter.
+func readKVRowsInKeyRange(
+	ctx context.Context,
+	db *sql.DB,
+	tableName KVTableName,
+	bounds keyRange,
+	valueSubstring string,
+) ([]KVRow, error) {
+	out := make([]KVRow, 0)
+	err := forEachKVRowInKeyRange(ctx, db, tableName, bounds, valueSubstring, func(row KVRow) error {
+		out = append(out, row)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // forEachKVRowInKeyRange streams the rows of one key range through visit, so a
 // caller that only needs a projection of each value never holds the whole range
 // in memory. Cursor's bubble payloads carry large attached context, and one
@@ -335,6 +374,7 @@ func forEachKVRowInKeyRange(
 	db *sql.DB,
 	tableName KVTableName,
 	bounds keyRange,
+	valueSubstring string,
 	visit func(KVRow) error,
 ) error {
 	if ctx == nil {
@@ -355,7 +395,11 @@ func forEachKVRowInKeyRange(
 		return nil
 	}
 
-	rows, err := queryKVRangeContext(ctx, db, selectRowsInKeyRangeQuery(sqlTableName, bounds), bounds, sqlTableName+" rows")
+	rows, err := queryKVRangeContext(
+		ctx, db,
+		selectRowsInKeyRangeQuery(sqlTableName, bounds, valueSubstring),
+		bounds, valueSubstring, sqlTableName+" rows",
+	)
 	if err != nil {
 		return err
 	}
@@ -380,40 +424,55 @@ func forEachKVRowInKeyRange(
 }
 
 // selectRowsInKeyRangeQuery builds the range query. Placeholders bind the range
-// bounds in that order, and the table name is a validated constant from
-// [KVTableName] rather than caller text. The rowid comes along because it is the
-// only record of write order these tables keep.
-func selectRowsInKeyRangeQuery(sqlTableName string, bounds keyRange) string {
-	return "SELECT rowid, key, value FROM " + sqlTableName + keyRangePredicate(bounds) + " ORDER BY key"
+// bounds and the substring in that order, and the table name is a validated
+// constant from [KVTableName] rather than caller text. The rowid comes along
+// because it is the only record of write order these tables keep.
+func selectRowsInKeyRangeQuery(sqlTableName string, bounds keyRange, valueSubstring string) string {
+	return "SELECT rowid, key, value FROM " + sqlTableName +
+		keyRangePredicate(bounds, valueSubstring) + " ORDER BY key"
 }
 
 // keyRangePredicate renders the half-open key predicate every range read shares,
-// so the bound placeholders are bound in one order by one piece of code.
-func keyRangePredicate(bounds keyRange) string {
+// plus the optional byte search that narrows it, so the placeholders are written
+// in one order by one piece of code and bound in that order by
+// [queryKVRangeContext].
+func keyRangePredicate(bounds keyRange, valueSubstring string) string {
 	var predicate strings.Builder
 	predicate.WriteString(" WHERE key >= ?")
 	if bounds.HasUpper {
 		predicate.WriteString(" AND key < ?")
 	}
+	if valueSubstring != "" {
+		// CAST both sides to BLOB so the search compares raw bytes whatever
+		// storage class Cursor wrote the value with.
+		predicate.WriteString(" AND instr(CAST(value AS BLOB), CAST(? AS BLOB)) > 0")
+	}
 	return predicate.String()
 }
 
 // queryKVRangeContext runs one statement over a key range, binding the range
-// bounds a [keyRange] carries. It exists so a caller adding its own projection
-// or predicate to a range read repeats neither the bound-arity branch nor the
-// failure report, and reads is what the read was for.
+// bounds and the optional byte search that [keyRangePredicate] wrote. It exists
+// so a caller adding its own projection to a range read repeats neither the
+// placeholder-arity branch nor the failure report, and reads is what the read was
+// for.
 func queryKVRangeContext(
 	ctx context.Context,
 	db *sql.DB,
 	query string,
 	bounds keyRange,
+	valueSubstring string,
 	reads string,
 ) (*sql.Rows, error) {
 	var rows *sql.Rows
 	var err error
-	if bounds.HasUpper {
+	switch {
+	case bounds.HasUpper && valueSubstring != "":
+		rows, err = db.QueryContext(ctx, query, bounds.Lower, bounds.Upper, valueSubstring)
+	case bounds.HasUpper:
 		rows, err = db.QueryContext(ctx, query, bounds.Lower, bounds.Upper)
-	} else {
+	case valueSubstring != "":
+		rows, err = db.QueryContext(ctx, query, bounds.Lower, valueSubstring)
+	default:
 		rows, err = db.QueryContext(ctx, query, bounds.Lower)
 	}
 	if err != nil {

@@ -24,6 +24,7 @@ func bubbleFixture(bubbleID string, bubbleType int, createdAt string, text strin
 		ToolCall:       nil,
 		CreatedAt:      createdAt,
 		ServerBubbleID: "",
+		RequestID:      "",
 	}
 }
 
@@ -51,6 +52,7 @@ func headerFixture(composerID string, bubbleIDs ...string) ComposerHeader {
 		Status:                      "",
 		UnifiedMode:                 "",
 		ForceMode:                   "",
+		LatestChatGenerationUUID:    "",
 		FullConversationHeadersOnly: refs,
 	}
 }
@@ -1006,7 +1008,7 @@ func TestReadSnapshotPinsBubbleCountAndProjectionToOneWALRevision(t *testing.T) 
 	}
 	t.Cleanup(snapshot.rollback)
 	bounds := keyRangeForPrefix("bubbleId:c:")
-	storedRows, err := snapshot.countRange(context.Background(), KVTableCursorDiskKV, bounds)
+	storedRows, err := snapshot.countRange(context.Background(), bounds)
 	if err != nil {
 		t.Fatalf("countRange returned error: %v", err)
 	}
