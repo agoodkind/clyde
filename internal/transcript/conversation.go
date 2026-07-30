@@ -288,15 +288,12 @@ func toolFullDetailText(tools []ToolCall) string {
 	}
 	lines := make([]string, 0, len(tools))
 	for _, tool := range tools {
-		// The call's input and its output are separate pieces of what the tool did,
-		// so a call with no readable input still renders whatever it returned.
-		// Skipping to the next tool on an absent or unmarshalable input dropped the
-		// output with it.
+		// The call's display text and its output are separate pieces of what the
+		// tool did, so a call whose shape the parser did not recognize still
+		// renders whatever it returned.
 		line := "[tool: " + tool.Name + "]"
-		if tool.Input.Len() > 0 {
-			if body, err := json.Marshal(&tool.Input); err == nil {
-				line = fmt.Sprintf("[tool: %s] %s", tool.Name, string(body))
-			}
+		if display := strings.TrimSpace(tool.Display); display != "" {
+			line += " " + display
 		}
 		if strings.TrimSpace(tool.Output) != "" {
 			line += "\n[tool output]\n" + strings.TrimSpace(tool.Output)
