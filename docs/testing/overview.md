@@ -19,10 +19,31 @@ The suite is opt-in and runs only when you ask for it.
 
 ## Isolation
 
-Each test gets its own state, config, and runtime directories under temp roots,
-reached through the XDG environment variables. The daemon's socket, capture database,
-and logs stay inside the sandbox, and it binds throwaway ports instead of the
-production defaults. The production binary and its daemon are never touched.
+Each test gets its own state, config, cache, and runtime directories under a temp
+root, reached through `XDG_STATE_HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and
+`XDG_RUNTIME_DIR`. The daemon's socket, capture database, and logs stay inside the
+sandbox, and it binds throwaway ports instead of the production defaults. The
+production binary and its daemon are never touched.
+
+`internal/sandbox` builds those roots and owns the temp-root check, and
+`clyde daemon sandbox` uses the same package, so a suite run and a hand-run
+sandbox cannot disagree about what isolation means. The ports below stay in the
+suite, which is the only caller that binds any.
+
+## Running a sandbox by hand
+
+    clyde daemon sandbox
+
+That runs one daemon on the same isolated roots, with every listener disabled, and
+prints the environment prefix for driving it from a second terminal. It is one
+process: ending the command ends the daemon, and it also stops if whatever
+launched it dies without signalling it. Pass `--keep` to leave the directories in
+place afterwards.
+
+It differs from the suite in one way that matters. The suite boots `clyde daemon
+run`, so it gets a supervisor and a worker, because reload and rebind are among
+the behaviors it tests. A sandbox never reloads, so it runs the worker directly
+and has no supervisor at all.
 
 ## Parallel runs
 
@@ -53,6 +74,12 @@ Each test records the running production daemons before it boots and confirms th
 survive the run. It counts only the installed daemon and skips test daemons under temp
 paths, so a parallel run cannot trip it by mistake. A failure means the harness
 touched a daemon it should not have.
+
+Teardown also kills anything still running the test binary by its temp path,
+because a reload- or rebind-spawned worker re-parents to init and escapes the
+supervisor's process group. That sweep matches only this run's daemon, never the
+installed binary. It stays because the suite boots a supervisor on purpose;
+`clyde daemon sandbox` has none and needs no equivalent.
 
 ## Preflight
 
