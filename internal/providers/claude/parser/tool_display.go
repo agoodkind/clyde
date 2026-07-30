@@ -8,19 +8,26 @@ import (
 )
 
 type claudeToolDisplayInput struct {
-	Command  string                    `json:"command"`
-	Plan     string                    `json:"plan"`
-	Question string                    `json:"question"`
-	Options  []claudeToolDisplayOption `json:"options"`
-	FilePath string                    `json:"file_path"`
-	Pattern  string                    `json:"pattern"`
-	Prompt   string                    `json:"prompt"`
-	URL      string                    `json:"url"`
-	Query    string                    `json:"query"`
+	Command   string                      `json:"command"`
+	Plan      string                      `json:"plan"`
+	Questions []claudeToolDisplayQuestion `json:"questions"`
+	FilePath  string                      `json:"file_path"`
+	Pattern   string                      `json:"pattern"`
+	Prompt    string                      `json:"prompt"`
+	URL       string                      `json:"url"`
+	Query     string                      `json:"query"`
 }
 
-// claudeToolDisplayOption is one choice offered alongside a question. Only the
-// label and description are read, because those are the words on the screen.
+// claudeToolDisplayQuestion is one question put to the person, with the choices
+// offered under it. A call carries a list of these, because one prompt can ask
+// several things at once.
+type claudeToolDisplayQuestion struct {
+	Question string                    `json:"question"`
+	Options  []claudeToolDisplayOption `json:"options"`
+}
+
+// claudeToolDisplayOption is one choice offered under a question. Only the label
+// and the description are read, because those are the words on the screen.
 type claudeToolDisplayOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description"`
@@ -63,22 +70,23 @@ func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) 
 	return "", ""
 }
 
-// claudeQuestionText renders a question and the choices offered with it as the
-// lines they appeared as on screen. It returns empty when there is no question,
-// so a call carrying only options falls through to the other fields.
+// claudeQuestionText renders every question a call asked, with the choices
+// offered under each, as the lines they appeared as on screen. It returns empty
+// when no question carries text, so a call whose shape does not match falls
+// through to the other fields.
 func claudeQuestionText(parsed claudeToolDisplayInput) string {
-	question := strings.TrimSpace(parsed.Question)
-	if question == "" {
-		return ""
-	}
-	lines := make([]string, 0, len(parsed.Options)*2+1)
-	lines = append(lines, question)
-	for _, option := range parsed.Options {
-		if label := strings.TrimSpace(option.Label); label != "" {
-			lines = append(lines, label)
+	lines := make([]string, 0, len(parsed.Questions)*4)
+	for _, question := range parsed.Questions {
+		if asked := strings.TrimSpace(question.Question); asked != "" {
+			lines = append(lines, asked)
 		}
-		if description := strings.TrimSpace(option.Description); description != "" {
-			lines = append(lines, description)
+		for _, option := range question.Options {
+			if label := strings.TrimSpace(option.Label); label != "" {
+				lines = append(lines, label)
+			}
+			if description := strings.TrimSpace(option.Description); description != "" {
+				lines = append(lines, description)
+			}
 		}
 	}
 	return strings.Join(lines, "\n")

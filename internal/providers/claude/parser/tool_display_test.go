@@ -109,8 +109,8 @@ func TestAPlanAndAQuestionAreStored(t *testing.T) {
 			wantLang: "markdown",
 		},
 		{
-			name:     "a question is stored with the choices offered beside it",
-			input:    `{"question":"Which split?","options":[{"label":"Broadest","description":"one PR"},{"label":"Stub","description":"two PRs"}]}`,
+			name:     "a question is stored with the choices offered under it",
+			input:    `{"questions":[{"question":"Which split?","options":[{"label":"Broadest","description":"one PR"},{"label":"Stub","description":"two PRs"}]}]}`,
 			want:     "Which split?\nBroadest\none PR\nStub\ntwo PRs",
 			wantLang: "",
 		},
