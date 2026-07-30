@@ -30,6 +30,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"goodkind.io/clyde/internal/sandbox"
 )
 
 // fakePorts holds the throwaway ports the live daemon binds. Every value differs
@@ -85,10 +86,12 @@ const (
 // resolveFakePorts reads each throwaway port from its CLYDE_TEST_*_PORT env var,
 // falling back to the package default when the var is unset. Each worktree or
 // terminal can export a distinct set so several isolated daemons run at once
-// without colliding, mirroring lmd's LMD_TEST_PORT. The moved MITM port defaults to
-// one above the resolved MITM port so an overridden base still gets a paired port,
-// stepping down when the MITM port is already at the maximum so the default stays a
-// valid port.
+// without colliding. The moved MITM port defaults to one above the resolved MITM
+// port so an overridden base still gets a paired port, stepping down when the
+// MITM port is already at the maximum so the default stays valid.
+//
+// Ports live here rather than in internal/sandbox because only this suite binds
+// them: the sandbox command disables every listener.
 func resolveFakePorts() fakePorts {
 	mitm := envPortOr("CLYDE_TEST_MITM_PORT", fakeMITMPort)
 	movedDefault := mitm + 1
@@ -166,21 +169,30 @@ func randomCollectionID(t *testing.T) string {
 	return "clyde-live-" + hex.EncodeToString(raw[:])
 }
 
+// portListening reports whether something already accepts on the loopback port.
+func portListening(port int) bool {
+	dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+	conn, err := dialer.DialContext(context.Background(), "tcp", fmt.Sprintf("[::1]:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	// The runtime root holds the supervisor's Unix control socket, whose path
-	// must fit macOS's ~104-char sun_path limit. t.TempDir() lives under a long
-	// /var/folders path that overflows it, so the runtime root gets a short
-	// /tmp dir instead; state and config can use the long temp dirs.
-	runtimeRoot, err := os.MkdirTemp("/tmp", "clyde-rt-")
+	// Roots come from the sandbox package, which puts them under /tmp so the
+	// daemon's socket path stays inside the platform's sun_path limit.
+	roots, err := sandbox.NewRoots()
 	if err != nil {
-		t.Fatalf("mkdir runtime root: %v", err)
+		t.Fatalf("create sandbox roots: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(runtimeRoot) })
+	t.Cleanup(func() { _ = os.RemoveAll(roots.Base) })
 	h := &harness{
-		stateRoot:            t.TempDir(),
-		configRoot:           t.TempDir(),
-		runtimeRoot:          runtimeRoot,
+		stateRoot:            roots.State,
+		configRoot:           roots.Config,
+		runtimeRoot:          roots.Runtime,
 		cfg:                  resolveFakePorts(),
 		conversationSemantic: resolveFakeConversationSemanticConfig(t),
 		extraEnv:             nil,
@@ -196,8 +208,9 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-// preflight fails when the fake MITM port is already listening or a temp root is
-// missing, so the suite aborts before booting instead of risking a collision.
+// preflight refuses to boot on a port collision or a root outside a temp
+// directory, through the same checks the sandbox command runs, so the suite
+// aborts before booting rather than colliding with another listener.
 func (h *harness) preflight() error {
 	seen := map[int]string{}
 	for _, p := range []struct {
@@ -219,40 +232,11 @@ func (h *harness) preflight() error {
 		}
 	}
 	for _, root := range []string{h.stateRoot, h.configRoot, h.runtimeRoot} {
-		if !underTempRoot(root) {
+		if !sandbox.UnderTempRoot(root) {
 			return fmt.Errorf("preflight: root %q is not a temp dir; refusing to run", root)
 		}
 	}
 	return nil
-}
-
-// underTempRoot reports whether path lives under a temp root. The live harness
-// puts every sandbox dir and its built binary under a temp path, so this
-// distinguishes a live-test artifact from a production one at a stable location
-// such as ~/.local/bin/clyde. It matches only on a path-segment boundary against
-// the OS temp dir and the explicit /tmp and /private roots macOS resolves it
-// through, so a production path that merely contains "tmp" as a substring, or one
-// under an unrelated /var directory, is not misclassified as a temp daemon.
-func underTempRoot(path string) bool {
-	clean := filepath.Clean(path)
-	for _, root := range tempRoots() {
-		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
-			return true
-		}
-	}
-	return false
-}
-
-// tempRoots returns the directories the live harness treats as temp: the OS temp
-// dir plus the explicit /tmp and /private roots macOS resolves it through. The OS
-// temp dir covers t.TempDir sandboxes and the built test binary; the /tmp roots
-// cover the short runtime dir the harness makes with os.MkdirTemp("/tmp", ...).
-func tempRoots() []string {
-	roots := []string{"/tmp", "/private/tmp", "/private/var/folders"}
-	if osTemp := filepath.Clean(os.TempDir()); osTemp != "" && osTemp != "." {
-		roots = append(roots, osTemp)
-	}
-	return roots
 }
 
 // occupyPort binds the fake port so a test can assert preflight rejects it.
@@ -263,15 +247,6 @@ func (h *harness) occupyPort(t *testing.T, port int) func() {
 		t.Fatalf("occupy port %d: %v", port, err)
 	}
 	return func() { _ = ln.Close() }
-}
-
-func portListening(port int) bool {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("[::1]:%d", port), 200*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 // writeConfig writes the fake MITM-only config. providers and the MITM port are
@@ -778,7 +753,7 @@ func isProductionDaemon(pid int) bool {
 	if idx := strings.IndexByte(command, ' '); idx >= 0 {
 		execPath = command[:idx]
 	}
-	return !underTempRoot(execPath)
+	return !sandbox.UnderTempRoot(execPath)
 }
 
 func buildWorktreeBinary(t *testing.T) string {

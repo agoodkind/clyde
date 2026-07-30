@@ -5,22 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
+	daemonsvc "goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/sandbox"
 )
-
-// sandboxRootPrefix names the temp directory holding a sandbox daemon's runtime
-// socket. The socket path must fit macOS's ~104-character sun_path limit, which
-// the usual long temp paths overflow, so the runtime root lives directly under
-// /tmp while the other roots may sit anywhere.
-const sandboxRootPrefix = "clyde-sandbox-"
 
 // sandboxCollectionID names the search-engine collection every sandbox writes
 // into. It is one fixed name rather than one per run, because clyde can ask the
@@ -91,33 +83,31 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 	return cmd
 }
 
-// sandboxRoots holds the throwaway directories one sandbox daemon runs against.
-type sandboxRoots struct {
-	base    string
-	state   string
-	config  string
-	cache   string
-	runtime string
-}
-
 // runSandbox prepares the throwaway roots, writes the listener-free config, and
-// runs the daemon in the foreground until the operator stops it.
+// runs the daemon in this process until the operator stops it.
+//
+// It runs the worker directly rather than starting `daemon run`, which would
+// spawn a supervisor that spawns a worker. Those extra processes have no job
+// here: a sandbox never reloads or rebinds, and a supervisor's replacement
+// worker escapes the process group, so a wrapper killed without a signal leaves
+// a daemon serving with nothing left to stop it. One process cannot.
 func runSandbox(ctx context.Context, f *cli.Factory, keep bool) error {
-	self, err := os.Executable()
+	roots, err := sandbox.NewRoots()
 	if err != nil {
-		slog.ErrorContext(ctx, "cli.daemon.sandbox.executable_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
-		return fmt.Errorf("resolve the running clyde binary: %w", err)
-	}
-
-	roots, err := newSandboxRoots()
-	if err != nil {
-		return err
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.root_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
+		return fmt.Errorf("prepare the sandbox directories: %w", err)
 	}
 	if !keep {
-		defer func() { _ = os.RemoveAll(roots.base) }()
+		defer func() { _ = os.RemoveAll(roots.Base) }()
+	}
+	// The roots are removed on exit, so verify they are throwaway paths before
+	// anything is written into them.
+	if err := sandbox.PreflightRoots(roots); err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.preflight_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
+		return fmt.Errorf("check the sandbox directories: %w", err)
 	}
 
-	configPath := filepath.Join(roots.config, "clyde", "config.toml")
+	configPath := filepath.Join(roots.Config, "clyde", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_dir_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
 		return fmt.Errorf("create the sandbox config directory %s: %w", filepath.Dir(configPath), err)
@@ -130,183 +120,49 @@ func runSandbox(ctx context.Context, f *cli.Factory, keep bool) error {
 
 	writeSandboxBanner(f, roots, configPath)
 
-	daemonCmd := exec.CommandContext(ctx, self, "daemon", "run")
-	daemonCmd.Env = append(sandboxParentEnv(), roots.env()...)
-	daemonCmd.Stdout = f.IOStreams.Out
-	daemonCmd.Stderr = f.IOStreams.Err
-	daemonCmd.Stdin = nil
-
-	// Registering the signals stops this process from dying on the first one, so
-	// it stays alive to wait for the daemon's shutdown and to clean up afterwards.
-	// A terminal delivers Ctrl-C to the whole foreground process group, so the
-	// daemon usually receives it too, but a sandbox started from a script or a
-	// supervisor may not share that group. Forwarding explicitly means the daemon
-	// is asked to stop in either case rather than being left running.
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(signals)
-
-	// Start before watching for signals, so the daemon's process handle exists by
-	// the time anything could forward one to it. Run would leave a window where a
-	// signal arriving early found no process to pass it to, and the wrapper would
-	// report a clean stop for a daemon that never received one.
-	if err := daemonCmd.Start(); err != nil {
-		slog.ErrorContext(ctx, "cli.daemon.sandbox.daemon_start_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
-		return fmt.Errorf("start the sandbox daemon: %w", err)
+	// The daemon reads these when it loads its config below, so they have to be
+	// set on this process rather than handed to a child.
+	if err := sandbox.Apply(roots); err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.env_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
+		return fmt.Errorf("point this process at the sandbox directories: %w", err)
 	}
 
-	stopped := make(chan struct{})
-	forwarded := make(chan struct{})
+	// A launcher that dies without signalling leaves nothing to stop the daemon,
+	// so watch for that too. RunContext returns when this context is cancelled.
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(ctx, "cli.daemon.sandbox.signal_forward_panic", "concern", "cmd.dispatch", "component", "cli", "err", fmt.Errorf("forwarding a stop signal panicked: %v", recovered))
+				slog.ErrorContext(ctx, "cli.daemon.sandbox.parent_watch_panic", "concern", "cmd.dispatch", "component", "cli", "err", fmt.Errorf("watching for the parent's exit panicked: %v", recovered))
 			}
 		}()
-		forwardSignalsToDaemon(ctx, signals, daemonCmd, stopped, forwarded)
+		sandbox.WatchParent(runCtx, stop)
 	}()
 
-	runErr := daemonCmd.Wait()
-	close(stopped)
-	if runErr == nil {
-		return nil
+	// RunContext installs its own SIGINT and SIGTERM handling and returns when
+	// one arrives, so Ctrl-C stops the daemon and unwinds to the cleanup above.
+	if err := daemonsvc.RunContext(runCtx, slog.Default().With("component", "daemon")); err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.daemon_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
+		return fmt.Errorf("run the sandbox daemon: %w", err)
 	}
-
-	// Whether a stop signal arrived is what separates the two ways this ends. An
-	// operator stopping the sandbox is success; the daemon exiting on its own is a
-	// failure they must see, because a sandbox that never started would otherwise
-	// look exactly like one they stopped.
-	select {
-	case <-forwarded:
-		slog.InfoContext(ctx, "cli.daemon.sandbox.stopped", "concern", "cmd.dispatch", "component", "cli", "err", runErr)
-		return nil
-	default:
-		slog.ErrorContext(ctx, "cli.daemon.sandbox.daemon_failed", "concern", "cmd.dispatch", "component", "cli", "err", runErr)
-		return fmt.Errorf("the sandbox daemon exited on its own, so it never became usable: %w", runErr)
-	}
-}
-
-// forwardSignalsToDaemon passes a stop signal on to the sandbox daemon and
-// closes forwarded to record that one arrived. It returns when the daemon exits.
-func forwardSignalsToDaemon(
-	ctx context.Context,
-	signals <-chan os.Signal,
-	daemonCmd *exec.Cmd,
-	stopped <-chan struct{},
-	forwarded chan<- struct{},
-) {
-	select {
-	case received := <-signals:
-		close(forwarded)
-		if daemonCmd.Process == nil {
-			return
-		}
-		if err := daemonCmd.Process.Signal(received); err != nil {
-			slog.WarnContext(ctx, "cli.daemon.sandbox.signal_forward_failed", "concern", "cmd.dispatch", "component", "cli", "signal", received.String(), "err", err)
-		}
-	case <-stopped:
-	}
-}
-
-// newSandboxRoots creates the throwaway directory set. The runtime root sits
-// directly under /tmp so the daemon's Unix socket path stays within macOS's
-// sun_path limit.
-func newSandboxRoots() (sandboxRoots, error) {
-	var empty sandboxRoots
-	base, err := os.MkdirTemp("/tmp", sandboxRootPrefix)
-	if err != nil {
-		slog.Error("cli.daemon.sandbox.root_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
-		return empty, fmt.Errorf("create the sandbox root directory: %w", err)
-	}
-	roots := sandboxRoots{
-		base:    base,
-		state:   filepath.Join(base, "state"),
-		config:  filepath.Join(base, "config"),
-		cache:   filepath.Join(base, "cache"),
-		runtime: filepath.Join(base, "run"),
-	}
-	for _, dir := range []string{roots.state, roots.config, roots.cache, roots.runtime} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			slog.Error("cli.daemon.sandbox.dir_failed", "concern", "cmd.dispatch", "component", "cli", "path", dir, "err", err)
-			return empty, fmt.Errorf("create the sandbox directory %s: %w", dir, err)
-		}
-	}
-	return roots, nil
-}
-
-// clydeOwnedPathVars name the environment variables that point clyde at a file
-// or directory it owns. Each one overrides a path the XDG redirections would
-// otherwise place inside the sandbox, so an operator who has any of them set
-// would get a sandbox writing into their deployed daemon's logs or state. They
-// are dropped from the child's environment rather than redirected, so the
-// sandbox falls back to its own roots.
-//
-// Variables naming a provider's own data are deliberately absent from this list.
-// Reading the operator's real conversations is the point of the sandbox, so
-// CLYDE_CURSOR_DATA_DIRS and its siblings pass through untouched.
-var clydeOwnedPathVars = []string{
-	"CLYDE_ANTHROPIC_LOG_PATH",
-	"CLYDE_CODEX_LOG_PATH",
-	"CLYDE_SLOG_PATH",
-	"CLYDE_DAEMON_INHERITED_LISTENERS",
-	"CLYDE_DAEMON_READY_FD",
-	"CLYDE_DAEMON_RELOAD_CHILD",
-	"CLYDE_DAEMON_SUPERVISOR_SOCKET",
-	"CLYDE_DEBUG_PPROF_ADDR",
-}
-
-// sandboxParentEnv copies the parent environment without the clyde-owned path
-// overrides, so nothing the operator exported can pull the sandbox back onto the
-// deployed daemon's files.
-func sandboxParentEnv() []string {
-	drop := make(map[string]bool, len(clydeOwnedPathVars))
-	for _, name := range clydeOwnedPathVars {
-		drop[name] = true
-	}
-	parent := os.Environ()
-	kept := make([]string, 0, len(parent))
-	for _, entry := range parent {
-		name, _, found := strings.Cut(entry, "=")
-		if found && drop[name] {
-			continue
-		}
-		kept = append(kept, entry)
-	}
-	return kept
-}
-
-// env returns the redirections that move every clyde-owned path into the
-// sandbox. A CLI invocation carrying the same values talks to the sandbox
-// daemon rather than the deployed one, because both resolve the socket from
-// these directories.
-func (r sandboxRoots) env() []string {
-	return []string{
-		"XDG_STATE_HOME=" + r.state,
-		"XDG_CONFIG_HOME=" + r.config,
-		"XDG_CACHE_HOME=" + r.cache,
-		"XDG_RUNTIME_DIR=" + r.runtime,
-	}
-}
-
-// exportLine renders the redirections as one shell prefix the operator can paste
-// in front of a clyde command.
-func (r sandboxRoots) exportLine() string {
-	return strings.Join(r.env(), " ")
+	return nil
 }
 
 // writeSandboxBanner prints what the sandbox is and how to drive it, so the
 // operator does not have to derive the environment from the source.
-func writeSandboxBanner(f *cli.Factory, roots sandboxRoots, configPath string) {
+func writeSandboxBanner(f *cli.Factory, roots sandbox.Roots, configPath string) {
 	out := f.IOStreams.Out
 	_, _ = fmt.Fprintln(out, "sandbox daemon")
-	_, _ = fmt.Fprintf(out, "  root:   %s\n", roots.base)
+	_, _ = fmt.Fprintf(out, "  root:   %s\n", roots.Base)
 	_, _ = fmt.Fprintf(out, "  config: %s\n", configPath)
 	_, _ = fmt.Fprintln(out, "  reads:  the real provider conversation stores, with an empty cache")
 	_, _ = fmt.Fprintf(out, "  embeds: into the live search engine, collection %q\n", sandboxCollectionID)
 	_, _ = fmt.Fprintln(out, "  binds:  nothing, every listener is disabled")
+	_, _ = fmt.Fprintln(out, "  runs:   in this process, with no supervisor and no worker to outlive it")
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "drive it from another terminal with this prefix:")
-	_, _ = fmt.Fprintf(out, "  %s clyde conversation list\n", roots.exportLine())
+	_, _ = fmt.Fprintf(out, "  %s clyde conversation list\n", sandbox.ExportLine(roots))
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Ctrl-C stops it.")
 	_, _ = fmt.Fprintln(out, "")
