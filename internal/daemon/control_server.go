@@ -47,8 +47,7 @@ type controlServer struct {
 	// it; nil when MITM is disabled.
 	captureStore *capture.Store
 	// exportTokens configures the --max-tokens export cap: the local estimator
-	// tuning and the endpoints for the exact provider count APIs. API keys are
-	// read from the environment at request time, never stored here.
+	// tuning, credentials, and endpoints for the exact provider count APIs.
 	exportTokens exportTokenConfig
 }
 

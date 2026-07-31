@@ -61,6 +61,12 @@ type ExportConfig struct {
 	// present. Nil (unset) defaults to enabled; set false to force the local
 	// estimator even when a key is configured.
 	ExactTokenCount *bool `json:"exact_token_count" toml:"exact_token_count"`
+	// AnthropicAPIKeyFile names a file containing the Anthropic API key used for
+	// exact Claude token counts. The environment override remains authoritative.
+	AnthropicAPIKeyFile string `json:"anthropic_api_key_file" toml:"anthropic_api_key_file"`
+	// OpenAIAPIKeyFile names a file containing the OpenAI API key used for exact
+	// GPT token counts. The environment override remains authoritative.
+	OpenAIAPIKeyFile string `json:"openai_api_key_file" toml:"openai_api_key_file"`
 }
 
 // AdapterConfig configures the OpenAI compatible HTTP server folded

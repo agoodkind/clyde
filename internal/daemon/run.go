@@ -85,16 +85,30 @@ func RunCommandContext(ctx context.Context, log *slog.Logger, _ ...ExtraLoop) er
 	}
 }
 
+func loadDaemonStartupConfig(ctx context.Context, log *slog.Logger) (*config.Config, exportTokenConfig, error) {
+	var empty exportTokenConfig
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		log.WarnContext(ctx, "daemon.config.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		return nil, empty, fmt.Errorf("load daemon config: %w", err)
+	}
+	exportTokens, err := newExportTokenConfig(cfg)
+	if err != nil {
+		log.WarnContext(ctx, "daemon.export.api_keys_load_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		return nil, empty, fmt.Errorf("load export API keys: %w", err)
+	}
+	return cfg, exportTokens, nil
+}
+
 // RunContext starts the daemon worker process using ctx as the parent context
 // for shutdown and child loops.
 func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	cfg, err := config.LoadGlobalOrDefault()
+	cfg, exportTokens, err := loadDaemonStartupConfig(parent, log)
 	if err != nil {
-		log.WarnContext(parent, "daemon.config.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
-		return fmt.Errorf("load daemon config: %w", err)
+		return err
 	}
 	// Hash the config now, before any reload child could re-trigger on the
 	// content it just loaded. The watcher started below skips a change whose
@@ -138,7 +152,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
 		grpc.MaxSendMsgSize(controlMaxMessageBytes),
 	)
-	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, semanticFreshness.snapshot, grpcServer, runtime))
+	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, semanticFreshness.snapshot, grpcServer, runtime, exportTokens))
 	registerConversationContextService(grpcServer, conversationIndex)
 	grpcDone := make(chan error, 1)
 	go func() {
@@ -294,6 +308,7 @@ func newControlServer(
 	freshness func() conversation.SearchFreshness,
 	grpcServer *grpc.Server,
 	runtime *runtimeServices,
+	exportTokens exportTokenConfig,
 ) *controlServer {
 	semanticSearch := func() conversationSemanticSearchClient {
 		if !cfg.Conversation.Semantic.AnswersSearch() || runtime.semantic == nil {
@@ -327,7 +342,7 @@ func newControlServer(
 		searchSource: searchSource,
 		captureStore: runtime.captureStore,
 		freshness:    freshness,
-		exportTokens: newExportTokenConfig(cfg),
+		exportTokens: exportTokens,
 	}
 }
 
