@@ -3,9 +3,32 @@ package runtime
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/gklog/correlation"
 )
+
+type executionIDContextKey struct{}
+
+// WithExecutionID binds the internal execution identity to every lifecycle log.
+func WithExecutionID(ctx context.Context, executionID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(executionID) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, executionIDContextKey{}, strings.TrimSpace(executionID))
+}
+
+// ExecutionIDFromContext returns the internal execution identity, when present.
+func ExecutionIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	executionID, _ := ctx.Value(executionIDContextKey{}).(string)
+	return strings.TrimSpace(executionID)
+}
 
 // RequestStage is part of Clyde's typed adapter surface.
 type RequestStage string
@@ -29,6 +52,7 @@ type RequestEvent struct {
 	Provider                   string
 	Backend                    string
 	RequestID                  string
+	ExecutionID                string
 	Alias                      string
 	ModelID                    string
 	Stream                     bool
@@ -53,6 +77,7 @@ type RequestEventSink func(context.Context, RequestEvent)
 type CompletedAttrs struct {
 	Backend                    string
 	RequestID                  string
+	ExecutionID                string
 	Alias                      string
 	ModelID                    string
 	FinishReason               string
@@ -95,6 +120,7 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 		slog.String("path", attrs.Path),
 		slog.String("session_id", attrs.SessionID),
 		slog.String("request_id", attrs.RequestID),
+		slog.String("execution_id", executionID(attrs.ExecutionID, ctx)),
 		slog.String("alias", attrs.Alias),
 		slog.String("model_id", attrs.ModelID),
 		slog.String("finish_reason", attrs.FinishReason),
@@ -119,12 +145,13 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 
 // StartedAttrs is part of Clyde's typed adapter surface.
 type StartedAttrs struct {
-	Provider  string
-	Backend   string
-	RequestID string
-	Alias     string
-	ModelID   string
-	Stream    bool
+	Provider    string
+	Backend     string
+	RequestID   string
+	ExecutionID string
+	Alias       string
+	ModelID     string
+	Stream      bool
 	// Ingress names the adapter listener the request arrived on
 	// ("openai" or "cursor"); empty when the split is not configured.
 	Ingress     string
@@ -144,6 +171,7 @@ func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, at
 		slog.String("provider", attrs.Provider),
 		slog.String("backend", attrs.Backend),
 		slog.String("request_id", attrs.RequestID),
+		slog.String("execution_id", executionID(attrs.ExecutionID, ctx)),
 		slog.String("alias", attrs.Alias),
 		slog.String("model", attrs.ModelID),
 		slog.Bool("stream", attrs.Stream),
@@ -157,6 +185,7 @@ func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, at
 			Provider:    attrs.Provider,
 			Backend:     attrs.Backend,
 			RequestID:   attrs.RequestID,
+			ExecutionID: executionID(attrs.ExecutionID, ctx),
 			Alias:       attrs.Alias,
 			ModelID:     attrs.ModelID,
 			Stream:      attrs.Stream,
@@ -170,12 +199,13 @@ func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, at
 
 // StreamOpenedAttrs is part of Clyde's typed adapter surface.
 type StreamOpenedAttrs struct {
-	Provider  string
-	Backend   string
-	RequestID string
-	Alias     string
-	ModelID   string
-	Stream    bool
+	Provider    string
+	Backend     string
+	RequestID   string
+	ExecutionID string
+	Alias       string
+	ModelID     string
+	Stream      bool
 	// Ingress names the adapter listener the request arrived on
 	// ("openai" or "cursor"); empty when the split is not configured.
 	Ingress     string
@@ -195,6 +225,7 @@ func LogStreamOpened(log *slog.Logger, ctx context.Context, sink RequestEventSin
 		slog.String("provider", attrs.Provider),
 		slog.String("backend", attrs.Backend),
 		slog.String("request_id", attrs.RequestID),
+		slog.String("execution_id", executionID(attrs.ExecutionID, ctx)),
 		slog.String("alias", attrs.Alias),
 		slog.String("model", attrs.ModelID),
 		slog.Bool("stream", attrs.Stream),
@@ -208,6 +239,7 @@ func LogStreamOpened(log *slog.Logger, ctx context.Context, sink RequestEventSin
 			Provider:    attrs.Provider,
 			Backend:     attrs.Backend,
 			RequestID:   attrs.RequestID,
+			ExecutionID: executionID(attrs.ExecutionID, ctx),
 			Alias:       attrs.Alias,
 			ModelID:     attrs.ModelID,
 			Stream:      attrs.Stream,
@@ -244,6 +276,7 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 		slog.String("provider", ev.Provider),
 		slog.String("backend", ev.Backend),
 		slog.String("request_id", ev.RequestID),
+		slog.String("execution_id", executionID(ev.ExecutionID, ctx)),
 		slog.String("alias", ev.Alias),
 		slog.String("model", ev.ModelID),
 		slog.Bool("stream", ev.Stream),
@@ -263,6 +296,14 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 	log.LogAttrs(ctx, level, msg, logAttrs...)
 	if sink != nil {
 		ev.Correlation = corr
+		ev.ExecutionID = executionID(ev.ExecutionID, ctx)
 		sink(ctx, ev)
 	}
+}
+
+func executionID(explicit string, ctx context.Context) string {
+	if value := strings.TrimSpace(explicit); value != "" {
+		return value
+	}
+	return ExecutionIDFromContext(ctx)
 }

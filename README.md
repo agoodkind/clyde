@@ -76,6 +76,8 @@ State, logs, caches, adapter records, and MITM captures follow Clyde's XDG path
 resolution. Use `clyde logs --help`, `docs/logging/`, and the config reference
 for current paths and retention behavior.
 
+Use [daemon metrics history](docs/logging/metrics.md) to inspect retained adapter activity with `clyde daemon status --since 1h`.
+
 Try a change against a real daemon without disturbing the deployed one:
 
 ```bash

@@ -17,3 +17,4 @@ Start here, then use these references:
 - `layout.md` for stable on-disk layout classes.
 - `rotation-cleanup.md` for cleanup behavior.
 - `operations.md` for following a request by ID.
+- `metrics.md` for retained daemon metrics history.

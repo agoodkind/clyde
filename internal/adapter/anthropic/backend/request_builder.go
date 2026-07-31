@@ -26,14 +26,6 @@ func requestAlias(resolved *adapterresolver.ResolvedRequest) string {
 	return strings.TrimSpace(resolved.OpenAI.Model)
 }
 
-// anthropicBackendName is the backend label the Anthropic backend
-// reports in completion telemetry. Both the OpenAI ingress and native
-// ingress prepared requests resolve to the anthropic backend, so the
-// label is constant; it stays a function so callers read it uniformly.
-func anthropicBackendName(_ *adapterresolver.ResolvedRequest) string {
-	return "anthropic"
-}
-
 // FineGrainedToolStreamingBeta is part of Clyde's typed adapter surface.
 const FineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14"
 

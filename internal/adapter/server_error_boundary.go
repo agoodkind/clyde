@@ -17,6 +17,7 @@ import (
 type adapterRecoveryWriter struct {
 	http.ResponseWriter
 	wroteHeader bool
+	bytesOut    int64
 }
 
 func (w *adapterRecoveryWriter) WriteHeader(statusCode int) {
@@ -29,6 +30,7 @@ func (w *adapterRecoveryWriter) Write(body []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	n, err := w.ResponseWriter.Write(body)
+	w.bytesOut += int64(n)
 	if err != nil {
 		return n, fmt.Errorf("adapter recovery write: %w", err)
 	}

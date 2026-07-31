@@ -100,6 +100,66 @@ func WriteStatusReport(out io.Writer, report daemonsvc.StatusReport) {
 	_, _ = fmt.Fprintln(out, "worker: none")
 }
 
+// WriteMetricsHistoryReport appends a concise retained-log metrics report.
+func WriteMetricsHistoryReport(out io.Writer, report daemonsvc.MetricsHistoryReport) {
+	_, _ = fmt.Fprintf(out, "metrics_window: since=%s until=%s\n", report.Window.Since.Format(time.RFC3339), report.Window.Until.Format(time.RFC3339))
+	_, _ = fmt.Fprintf(out, "metrics_coverage: complete=%t\n", report.Coverage.Complete)
+	writeMetricCounter(out, "requests", report.Metrics.Requests)
+	writeMetricCounter(out, "completed", report.Metrics.Completed)
+	writeMetricCounter(out, "failed", report.Metrics.Failed)
+	writeMetricCounter(out, "cancelled", report.Metrics.Cancelled)
+	writeMetricCounter(out, "bytes_in", report.Metrics.BytesIn)
+	writeMetricCounter(out, "bytes_out", report.Metrics.BytesOut)
+	writeMetricCounter(out, "input_tokens", report.Metrics.InputTokens)
+	writeMetricCounter(out, "output_tokens", report.Metrics.OutputTokens)
+	writeMetricCounter(out, "cache_tokens", report.Metrics.CacheTokens)
+	writeMetricCounter(out, "cost_microcents", report.Metrics.CostMicrocents)
+	writeMetricGauge(out, "inflight", report.Metrics.Inflight)
+	writeMetricGauge(out, "streaming", report.Metrics.Streaming)
+	writeMetricDuration(out, "time_total", "", report.TimeBreakdown.Total)
+	for _, stage := range report.TimeBreakdown.Stages {
+		writeMetricDuration(out, "time_stage", stage.Name, stage.MetricsDuration)
+	}
+	_, _ = fmt.Fprintf(out, "unattributed_duration_ms: %s\n", formatMetricInt(report.UnattributedDurationMS))
+	for _, warning := range report.Warnings {
+		_, _ = fmt.Fprintf(out, "warning: %s\n", warning)
+	}
+}
+
+func writeMetricCounter(out io.Writer, name string, counter daemonsvc.MetricsCounter) {
+	_, _ = fmt.Fprintf(out, "%s: current=%s delta=%s rate_per_second=%s\n", name,
+		formatMetricInt(counter.Current), formatMetricInt(counter.Delta), formatMetricFloat(counter.RatePerSecond))
+}
+
+func writeMetricGauge(out io.Writer, name string, gauge daemonsvc.MetricsGauge) {
+	_, _ = fmt.Fprintf(out, "%s: current=%s min=%s mean=%s max=%s\n", name,
+		formatMetricInt(gauge.Current), formatMetricInt(gauge.Min), formatMetricFloat(gauge.Mean), formatMetricInt(gauge.Max))
+}
+
+func writeMetricDuration(out io.Writer, label string, name string, duration daemonsvc.MetricsDuration) {
+	nameField := ""
+	if name != "" {
+		nameField = " name=" + name
+	}
+	_, _ = fmt.Fprintf(out, "%s:%s total_ms=%s calls=%s mean_ms=%s p50_ms=%s p95_ms=%s max_ms=%s\n",
+		label, nameField, formatMetricInt(duration.TotalMS), formatMetricInt(duration.Calls),
+		formatMetricFloat(duration.MeanMS), formatMetricInt(duration.P50MS), formatMetricInt(duration.P95MS), formatMetricInt(duration.MaxMS))
+}
+
+func formatMetricInt(value *int64) string {
+	if value == nil {
+		return "n/a"
+	}
+	return strconv.FormatInt(*value, 10)
+}
+
+func formatMetricFloat(value *float64) string {
+	if value == nil {
+		return "n/a"
+	}
+	return strconv.FormatFloat(*value, 'f', 2, 64)
+}
+
 func joinPIDs(pids []int) string {
 	parts := make([]string, 0, len(pids))
 	for _, pid := range pids {

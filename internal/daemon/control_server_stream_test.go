@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -77,6 +78,63 @@ func (r *replayExportClient) Recv() (*clydev1.ExportChunk, error) {
 }
 
 func (r *replayExportClient) Context() context.Context { return context.Background() }
+
+type recordingProviderStatsStream struct {
+	grpc.ServerStreamingServer[clydev1.ProviderStatsEvent]
+	ctx    context.Context
+	cancel context.CancelFunc
+	events []*clydev1.ProviderStatsEvent
+}
+
+func (r *recordingProviderStatsStream) Send(event *clydev1.ProviderStatsEvent) error {
+	r.events = append(r.events, event)
+	if len(r.events) == 2 {
+		r.cancel()
+	}
+	return nil
+}
+
+func (r *recordingProviderStatsStream) Context() context.Context { return r.ctx }
+
+func TestSubscribeProviderStatsUsesEmissionTime(t *testing.T) {
+	generationStartedAt := time.Unix(100, 0)
+	recorder := &providerStatsRecorder{
+		stats:               map[string]ProviderStats{"codex": {ProviderDetail: "codex"}},
+		generationStartedAt: generationStartedAt,
+		now:                 func() time.Time { return generationStartedAt },
+	}
+	emissionTimes := []time.Time{time.Unix(200, 0), time.Unix(300, 0)}
+	emissionIndex := 0
+	ticks := make(chan time.Time, 1)
+	ticks <- emissionTimes[1]
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &recordingProviderStatsStream{ctx: ctx, cancel: cancel}
+	server := &controlServer{
+		stats: recorder,
+		providerStatsNow: func() time.Time {
+			result := emissionTimes[emissionIndex]
+			emissionIndex++
+			return result
+		},
+		providerStatsTicks: ticks,
+	}
+
+	err := server.SubscribeProviderStats(&clydev1.SubscribeProviderStatsRequest{}, stream)
+	if err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("SubscribeProviderStats() error = %v, want context canceled", err)
+	}
+	if len(stream.events) != 2 {
+		t.Fatalf("event count = %d, want 2", len(stream.events))
+	}
+	for i, event := range stream.events {
+		if event.GetEmittedAtUnix() != emissionTimes[i].Unix() {
+			t.Fatalf("event %d emitted_at_unix = %d, want %d", i, event.GetEmittedAtUnix(), emissionTimes[i].Unix())
+		}
+		if event.GetEmittedAtUnix() == generationStartedAt.Unix() {
+			t.Fatalf("event %d reused generation start", i)
+		}
+	}
+}
 
 func TestStreamTextChunksRoundTrips(t *testing.T) {
 	t.Parallel()

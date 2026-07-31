@@ -216,10 +216,10 @@ type anthropicExecutionFinalize struct {
 	Stream       bool
 }
 
-// finalizeAnthropicExecution emits the two terminal log events that
-// follow every Anthropic backend turn: adapter.request.completed via
-// runtime.LogCompleted and the runtime RequestEvent terminal record
-// carrying the recorded token and cache counts. Dollar cost is no
+// finalizeAnthropicExecution emits adapter.chat.completed for every
+// Anthropic backend turn. The ingress handler owns the RequestEvent
+// lifecycle so native, chat, and Responses executions use one boundary.
+// Dollar cost is no
 // longer precomputed here; the daemon provider-stats aggregator prices
 // the recorded tokens at read time from the config pricing table. Cache
 // token fields are carried on adapter.chat.completed directly (Phase
@@ -235,6 +235,7 @@ func finalizeAnthropicExecution(rt ExecutionRuntime, ctx context.Context, args a
 		Path:                  "oauth",
 		SessionID:             args.ReqID,
 		RequestID:             args.ReqID,
+		ExecutionID:           adapterruntime.ExecutionIDFromContext(ctx),
 		Alias:                 requestAlias(args.Resolved),
 		ModelID:               args.Req.Model,
 		FinishReason:          args.FinishReason,
@@ -246,22 +247,6 @@ func finalizeAnthropicExecution(rt ExecutionRuntime, ctx context.Context, args a
 		CacheTTL:              rt.CacheTTL(),
 		DurationMs:            durationMs,
 		Stream:                args.Stream, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Correlation: correlation.
-					Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
-	})
-	rt.LogTerminal(ctx, adapterruntime.RequestEvent{
-		Stage:               adapterruntime.RequestStageCompleted,
-		Provider:            "anthropic-oauth",
-		Backend:             anthropicBackendName(args.Resolved),
-		RequestID:           args.ReqID,
-		Alias:               requestAlias(args.Resolved),
-		ModelID:             args.Req.Model,
-		Stream:              args.Stream,
-		FinishReason:        args.FinishReason,
-		TokensIn:            args.Usage.PromptTokens,
-		TokensOut:           args.Usage.CompletionTokens,
-		CacheReadTokens:     args.AnthUsage.CacheReadInputTokens,
-		CacheCreationTokens: args.AnthUsage.CacheCreationInputTokens,
-		DurationMs:          durationMs, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Err: "", Correlation: correlation.
 					Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
 }

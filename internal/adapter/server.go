@@ -432,6 +432,10 @@ func newRequestID() string {
 	return "chatcmpl-" + hex.EncodeToString(b[:])
 }
 
+func newExecutionID() string {
+	return strings.Replace(newRequestID(), "chatcmpl-", "exec-", 1)
+}
+
 // writeJSON writes a pre-marshaled JSON body to the response writer
 // with HTTP 200. Callers marshal their concrete typed response shape
 // with [json.Marshal] and hand the resulting [json.RawMessage] in, so

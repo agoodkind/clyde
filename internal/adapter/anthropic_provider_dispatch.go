@@ -33,7 +33,7 @@ func (s *Server) dispatchAnthropicProvider(
 	if resolvedReq.OpenAI.Stream {
 		err = s.dispatchAnthropicProviderStream(ctx, w, reqID, resolvedReq)
 	} else {
-		err = s.dispatchAnthropicProviderCollect(ctx, w, effort, resolvedReq)
+		err = s.dispatchAnthropicProviderCollect(ctx, w, effort, reqID, resolvedReq)
 	}
 	if err != nil {
 		s.respondAdapterError(w, r, err)
@@ -44,10 +44,13 @@ func (s *Server) dispatchAnthropicProviderCollect(
 	ctx context.Context,
 	w http.ResponseWriter,
 	_ string,
+	reqID string,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) error {
 	collector := newProviderCollectorWriter()
+	ctx, lifecycle := s.beginProviderRequestLifecycle(ctx, &resolvedReq, "oauth", reqID, resolvedReq.Model, false)
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, collector)
+	lifecycle.terminal(ctx, result, runErr)
 	if runErr != nil {
 		return anthropicProviderAdapterError(runErr)
 	}
@@ -85,8 +88,10 @@ func (s *Server) dispatchAnthropicProviderStream(
 	if err != nil {
 		return adapterErrInternal(err.Error(), err)
 	}
-	s.emitRequestStreamOpened(ctx, &resolvedReq, "oauth", reqID, resolvedReq.Model)
+	ctx, lifecycle := s.beginProviderRequestLifecycle(ctx, &resolvedReq, "oauth", reqID, resolvedReq.Model, true)
+	streamWriter.onStreamOpened = func() { lifecycle.streamOpened(ctx) }
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
+	lifecycle.terminal(ctx, result, runErr)
 	includeUsage := resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage
 	// Anthropic streams sometimes end with a non-nil runErr after the
 	// answer text has fully streamed (a late SSE error frame, a
