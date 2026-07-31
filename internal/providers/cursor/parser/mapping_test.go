@@ -748,3 +748,67 @@ func TestMapJSONLMessageUserRoleNeverStripped(t *testing.T) {
 		t.Fatalf("assistant include = true, want false: the same text as an assistant role is only an envelope and must collapse to empty")
 	}
 }
+
+// TestMapJSONLMessageUnwrapsUserEnvelope covers what a reader gets for a user
+// turn as Cursor stores it: the text the person typed, and the turn's time in
+// the field made for it rather than inside the text.
+func TestMapJSONLMessageUnwrapsUserEnvelope(t *testing.T) {
+	t.Parallel()
+
+	message, include := mapJSONLMessage(cursorjsonl.TranscriptMessage{
+		Role: cursorjsonl.RoleUser,
+		Parts: []cursorjsonl.ContentPart{{
+			Type: cursorjsonl.PartTypeText,
+			Text: "<timestamp>Wednesday, Jul 29, 2026, 10:27 PM (UTC+2)</timestamp>\n\n" +
+				"<user_query>fix the failing build</user_query>",
+			ToolName: "", ToolInput: nil,
+		}},
+	}, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	})
+	if !include {
+		t.Fatal("include = false, want true")
+	}
+	if message.Text != "fix the failing build" {
+		t.Fatalf("Text = %q, want the envelope removed", message.Text)
+	}
+	if message.Timestamp.UTC().Format(time.RFC3339) != "2026-07-29T20:27:00Z" {
+		t.Fatalf("Timestamp = %v, want the turn time lifted out of the text", message.Timestamp)
+	}
+	if message.Visibility != transcript.MessageVisibilityVisible {
+		t.Fatalf("Visibility = %q, want a message a person wrote to stay visible", message.Visibility)
+	}
+}
+
+// TestMapJSONLMessageMarksCursorsOwnPromptMetaOnly pins the reason the
+// visibility exists: Cursor's injected prompt keeps its text so a transcript
+// shows what the model answered, while every surface that wants only what a
+// person said can tell it apart.
+func TestMapJSONLMessageMarksCursorsOwnPromptMetaOnly(t *testing.T) {
+	t.Parallel()
+
+	injected := "Briefly inform the user about the task result and perform any follow-up actions (if needed)."
+	message, include := mapJSONLMessage(cursorjsonl.TranscriptMessage{
+		Role: cursorjsonl.RoleUser,
+		Parts: []cursorjsonl.ContentPart{{
+			Type:     cursorjsonl.PartTypeText,
+			Text:     "<user_query>" + injected + "</user_query>",
+			ToolName: "", ToolInput: nil,
+		}},
+	}, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	})
+	if !include {
+		t.Fatal("include = false, want true: the message stays so its answer still has a question")
+	}
+	if message.Text != injected {
+		t.Fatalf("Text = %q, want the prompt kept verbatim", message.Text)
+	}
+	if message.Visibility != transcript.MessageVisibilityMetaOnly {
+		t.Fatalf("Visibility = %q, want meta_only", message.Visibility)
+	}
+}
