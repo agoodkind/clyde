@@ -45,6 +45,7 @@ func loadConfig(dir string) (*Config, error) {
 		)
 		return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
 	}
+	resolveExportAPIKeyFiles(&cfg.Export, filepath.Dir(tomlPath))
 	pruneEmptyModelDeclarations(&cfg.Adapter)
 	warnRemovedLoggingConfig(data, tomlPath, log)
 	if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
@@ -186,13 +187,9 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 }
 
 func loadInstructionFile(configDir string, configuredPath string) (string, error) {
-	trimmedPath := strings.TrimSpace(configuredPath)
-	if trimmedPath == "" {
+	resolvedPath := resolveConfiguredFilePath(configDir, configuredPath)
+	if resolvedPath == "" {
 		return "", nil
-	}
-	resolvedPath := cleanExpandedPath(trimmedPath)
-	if !filepath.IsAbs(resolvedPath) {
-		resolvedPath = filepath.Join(configDir, resolvedPath)
 	}
 	contents, err := os.ReadFile(resolvedPath)
 	if err != nil {

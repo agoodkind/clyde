@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -126,7 +127,7 @@ func (s *controlServer) StreamExportTranscript(req *clydev1.ExportTranscriptRequ
 }
 
 // Names of the environment variables holding the provider count-API keys, plus
-// endpoints. The values are read at request time and never stored in the daemon.
+// endpoints. Environment values override configured key files.
 const (
 	envAnthropic      = "CLYDE_ANTHROPIC_API_KEY"
 	envOpenAI         = "CLYDE_OPENAI_API_KEY"
@@ -143,13 +144,23 @@ type exportTokenConfig struct {
 	anthropicVersion string
 	openAIURL        string
 	exactEnabled     bool
+	anthropicAPIKey  string
+	openAIAPIKey     string
 	settings         tokencount.Settings
 }
 
 // newExportTokenConfig derives the export token-cap configuration from the
 // daemon config. The Anthropic count endpoint is the sibling of the adapter's
 // messages URL.
-func newExportTokenConfig(cfg *config.Config) exportTokenConfig {
+func newExportTokenConfig(cfg *config.Config) (exportTokenConfig, error) {
+	anthropicAPIKey, err := readExportAPIKey(envAnthropic, "export.anthropic_api_key_file", cfg.Export.AnthropicAPIKeyFile)
+	if err != nil {
+		return exportTokenConfig{}, err
+	}
+	openAIAPIKey, err := readExportAPIKey(envOpenAI, "export.openai_api_key_file", cfg.Export.OpenAIAPIKeyFile)
+	if err != nil {
+		return exportTokenConfig{}, err
+	}
 	anthropicURL := ""
 	if messagesURL := cfg.Adapter.Anthropic.OAuth.MessagesURL; messagesURL != "" {
 		anthropicURL = messagesURL + "/count_tokens"
@@ -172,11 +183,31 @@ func newExportTokenConfig(cfg *config.Config) exportTokenConfig {
 		anthropicVersion: cfg.Adapter.Anthropic.OAuth.AnthropicVersion,
 		openAIURL:        openAICountURL,
 		exactEnabled:     exactEnabled,
+		anthropicAPIKey:  anthropicAPIKey,
+		openAIAPIKey:     openAIAPIKey,
 		settings: tokencount.Settings{
 			SafetyFactor:  safety,
 			CharsPerToken: charsPerToken,
 		},
+	}, nil
+}
+
+func readExportAPIKey(environmentName string, fieldName string, configuredPath string) (string, error) {
+	if value := os.Getenv(environmentName); value != "" {
+		return value, nil
 	}
+	if configuredPath == "" {
+		return "", nil
+	}
+	contents, err := os.ReadFile(configuredPath)
+	if err != nil {
+		return "", fmt.Errorf("read %s: configured file is unavailable", fieldName)
+	}
+	value := strings.TrimSpace(string(contents))
+	if value == "" {
+		return "", fmt.Errorf("read %s: configured file is empty", fieldName)
+	}
+	return value, nil
 }
 
 // capExportBodyTokens caps a rendered export body to the max_tokens budget,
@@ -240,22 +271,21 @@ func capExportBodyTokens(
 }
 
 // buildExactCounter returns the authoritative count client for a tokenizer
-// family, or nil when exact counting is disabled or no API key is set. Keys come
-// from the environment and are never persisted; the Anthropic path uses x-api-key
-// auth isolated from the subscription OAuth token.
+// family, or nil when exact counting is disabled or no API key is set. The
+// Anthropic path uses x-api-key auth isolated from the subscription OAuth token.
 func (s *controlServer) buildExactCounter(family tokencount.Family) tokencount.ExactCounter {
 	if !s.exportTokens.exactEnabled {
 		return nil
 	}
 	switch family {
 	case tokencount.FamilyClaude:
-		key := os.Getenv(envAnthropic)
+		key := s.exportTokens.anthropicAPIKey
 		if key == "" || s.exportTokens.anthropicURL == "" {
 			return nil
 		}
 		return tokencount.NewAnthropicExactCounter(s.exportTokens.httpClient, key, s.exportTokens.anthropicURL, s.exportTokens.anthropicVersion)
 	case tokencount.FamilyGPT:
-		key := os.Getenv(envOpenAI)
+		key := s.exportTokens.openAIAPIKey
 		if key == "" {
 			return nil
 		}

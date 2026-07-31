@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -19,4 +20,24 @@ func GlobalConfigPath() string {
 // Respects $XDG_CACHE_HOME if set, otherwise uses ~/.cache/clyde.
 func GlobalCacheDir() string {
 	return defaultXDGResolver.cacheRoot()
+}
+
+func resolveExportAPIKeyFiles(cfg *ExportConfig, configDir string) {
+	if cfg == nil {
+		return
+	}
+	cfg.AnthropicAPIKeyFile = resolveConfiguredFilePath(configDir, cfg.AnthropicAPIKeyFile)
+	cfg.OpenAIAPIKeyFile = resolveConfiguredFilePath(configDir, cfg.OpenAIAPIKeyFile)
+}
+
+func resolveConfiguredFilePath(configDir string, configuredPath string) string {
+	trimmedPath := strings.TrimSpace(configuredPath)
+	if trimmedPath == "" {
+		return ""
+	}
+	resolvedPath := cleanExpandedPath(trimmedPath)
+	if filepath.IsAbs(resolvedPath) {
+		return resolvedPath
+	}
+	return filepath.Join(configDir, resolvedPath)
 }

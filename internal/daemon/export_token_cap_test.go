@@ -13,7 +13,10 @@ import (
 
 func TestNewExportTokenConfigDefaults(t *testing.T) {
 	t.Parallel()
-	got := newExportTokenConfig(config.NewConfigWithDefaults())
+	got, err := newExportTokenConfig(config.NewConfigWithDefaults())
+	if err != nil {
+		t.Fatalf("newExportTokenConfig: %v", err)
+	}
 	if !got.exactEnabled {
 		t.Errorf("exactEnabled = false, want true by default")
 	}
@@ -32,7 +35,10 @@ func TestNewExportTokenConfigReadsKnobs(t *testing.T) {
 	cfg.Export.HeuristicCharsPerToken = 5.0
 	disabled := false
 	cfg.Export.ExactTokenCount = &disabled
-	got := newExportTokenConfig(cfg)
+	got, err := newExportTokenConfig(cfg)
+	if err != nil {
+		t.Fatalf("newExportTokenConfig: %v", err)
+	}
 	if got.exactEnabled {
 		t.Errorf("exactEnabled = true, want false when exact_token_count=false")
 	}
@@ -51,6 +57,8 @@ func testTokenConfig() exportTokenConfig {
 		anthropicVersion: "",
 		openAIURL:        "",
 		exactEnabled:     false,
+		anthropicAPIKey:  "",
+		openAIAPIKey:     "",
 		settings:         tokencount.Settings{SafetyFactor: 1.3, CharsPerToken: 3.5},
 	}
 }
