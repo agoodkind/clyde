@@ -31,37 +31,7 @@ func (a FileStamp) Fingerprint() string {
 	return fmt.Sprintf("%d:%d", a.Size, a.Mtime.UnixNano())
 }
 
-// readerGeneration counts the times a provider's reader has changed what it
-// produces from bytes that did not change.
-//
-// A conversation's message index is a position the search path feeds back into
-// the loader, so a reader change that renumbers messages leaves every stored
-// index pointing at a different turn. The artifact itself does not change, so
-// the file stamp cannot notice, and a finished transcript would never be re-fed.
-//
-// Including the generation in the advertised fingerprint re-advertises every
-// conversation of that provider exactly once. The engine then asks for those
-// conversations through the ordinary additive sync and clyde delivers their
-// documents again. Nothing here rewrites or deletes a stored row, so this is a
-// re-feed rather than a backfill.
-//
-// It is keyed by artifact kind rather than by provider, because a provider can
-// read several unrelated stores and only one of them may have changed. Bump an
-// artifact kind's entry when its reader changes which messages it yields, or
-// their positions, for an unchanged artifact. A kind absent from the map is at
-// generation zero and keeps the bare stamp fingerprint, so a store whose reader
-// did not change is never re-embedded.
-var readerGeneration = map[ArtifactKind]int{
-	// Cursor turn reconstruction groups each turn's records into one message,
-	// which renumbers every message after the first multi-record turn. It changed
-	// the JSONL transcript reader alone: Cursor's composer and legacy-chat stores
-	// have their own readers and their numbering is untouched.
-	ArtifactKindCursorAgentTranscript: 1,
-}
-
-// ArtifactKind names the store an artifact came from, which decides both which
-// reader produced its messages and, through [readerGeneration], whether that
-// reader has changed what it yields.
+// ArtifactKind names the store an artifact came from.
 //
 // [Record.ArtifactKind] is still a plain string because it crosses the daemon's
 // wire format, where changing it reaches every provider and both RPC surfaces.
@@ -70,24 +40,29 @@ var readerGeneration = map[ArtifactKind]int{
 type ArtifactKind string
 
 // ArtifactKindCursorAgentTranscript names Cursor's modern JSONL transcript. It
-// is declared here because [readerGeneration] keys on it and this package cannot
-// import a provider package.
+// is declared here so generic fingerprinting can recognize it without importing
+// a provider package.
 const ArtifactKindCursorAgentTranscript ArtifactKind = "cursor_agent_transcript"
 
+// cursorAgentTranscriptCompatibilitySuffix preserves the fingerprint bytes
+// already advertised after Cursor turn reconstruction changed. It is fixed so a
+// later parser change cannot trigger an automatic corpus re-feed.
+const cursorAgentTranscriptCompatibilitySuffix = ":r1"
+
 // ContentFingerprint is the value a conversation manifest advertises for one
-// conversation. It changes when the artifact changes, and when the reader for
-// that artifact kind changes what it produces from an unchanged artifact.
+// conversation. It changes only when the artifact stamp changes. Cursor's JSONL
+// transcript keeps its historical compatibility suffix without making parser
+// revisions part of the fingerprint contract.
 //
 // Every caller that builds a manifest uses this, so the daemon sync and the
 // operator backfill state the same value for the same conversation. Two
 // implementations would report every conversation as needed on each alternation
 // between them, re-embedding the corpus once per run.
 func ContentFingerprint(record Record, stamp FileStamp) string {
-	generation := readerGeneration[ArtifactKind(record.ArtifactKind)]
-	if generation == 0 {
-		return stamp.Fingerprint()
+	if ArtifactKind(record.ArtifactKind) == ArtifactKindCursorAgentTranscript {
+		return stamp.Fingerprint() + cursorAgentTranscriptCompatibilitySuffix
 	}
-	return fmt.Sprintf("%s:r%d", stamp.Fingerprint(), generation)
+	return stamp.Fingerprint()
 }
 
 // ScanCandidate is one artifact a provider's [Parser.Discover] surfaced for the

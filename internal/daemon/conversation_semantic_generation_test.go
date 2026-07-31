@@ -9,9 +9,8 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// cursorTranscriptRecord is a Cursor JSONL transcript record, the artifact kind
-// whose reader generation is bumped. The existing manifest test uses a Codex
-// record, which carries no generation, so it cannot see this wiring at all.
+// cursorTranscriptRecord is a Cursor JSONL transcript record, whose fingerprint
+// carries the fixed compatibility suffix.
 func cursorTranscriptRecord(conversationID string) conversation.Record {
 	record := semanticTestRecord(conversationID)
 	record.Provider = conversation.ProviderCursor
@@ -19,11 +18,7 @@ func cursorTranscriptRecord(conversationID string) conversation.Record {
 	return record
 }
 
-// TestManifestAdvertisesTheReaderGeneration covers the line that wires the
-// generation into the manifest. Without it the daemon advertises the bare stamp,
-// the engine keeps the indexes built by the old reader, and every stored Cursor
-// message index goes on pointing at a different turn.
-func TestManifestAdvertisesTheReaderGeneration(t *testing.T) {
+func TestManifestPreservesTheCursorCompatibilitySuffix(t *testing.T) {
 	conversationID := "cursor:generation"
 	stamp := semanticTestStamp(20, 200)
 	index := &fakeConversationSemanticIndex{
@@ -48,8 +43,8 @@ func TestManifestAdvertisesTheReaderGeneration(t *testing.T) {
 	if advertised != want {
 		t.Fatalf("advertised fingerprint = %q, want %q", advertised, want)
 	}
-	if advertised == stamp.Fingerprint() {
-		t.Fatalf("advertised fingerprint = %q, the bare stamp; the reader generation is not wired in", advertised)
+	if advertised != stamp.Fingerprint()+":r1" {
+		t.Fatalf("advertised fingerprint = %q, want the fixed Cursor suffix", advertised)
 	}
 }
 

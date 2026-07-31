@@ -1,16 +1,15 @@
 package conversation
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
 
-func generationTestStamp() FileStamp {
+func fingerprintTestStamp() FileStamp {
 	return FileStamp{Size: 4096, Mtime: time.Unix(1710000000, 0)}
 }
 
-func generationTestRecord(artifactKind string) Record {
+func fingerprintTestRecord(artifactKind string) Record {
 	return Record{
 		ID:           "cursor:one",
 		Provider:     ProviderCursor,
@@ -18,33 +17,21 @@ func generationTestRecord(artifactKind string) Record {
 	}
 }
 
-// TestContentFingerprintChangesWhenAReaderRenumbersMessages is the stale-index
-// fix. A reader change that renumbers a conversation's messages leaves every
-// stored message index pointing at a different turn, and the artifact's bytes do
-// not change, so the file stamp alone would never re-advertise it and a finished
-// transcript would never be re-fed.
-func TestContentFingerprintChangesWhenAReaderRenumbersMessages(t *testing.T) {
+func TestContentFingerprintPreservesCursorCompatibilitySuffix(t *testing.T) {
 	t.Parallel()
 
-	stamp := generationTestStamp()
-	got := ContentFingerprint(generationTestRecord(string(ArtifactKindCursorAgentTranscript)), stamp)
-
-	if got == stamp.Fingerprint() {
-		t.Fatalf("fingerprint = %q, want it to differ from the bare stamp %q", got, stamp.Fingerprint())
-	}
-	if !strings.HasPrefix(got, stamp.Fingerprint()) {
-		t.Fatalf("fingerprint = %q, want it to still carry the stamp", got)
+	stamp := fingerprintTestStamp()
+	got := ContentFingerprint(fingerprintTestRecord(string(ArtifactKindCursorAgentTranscript)), stamp)
+	want := stamp.Fingerprint() + ":r1"
+	if got != want {
+		t.Fatalf("fingerprint = %q, want %q", got, want)
 	}
 }
 
-// TestContentFingerprintLeavesUnchangedReadersAlone proves the re-feed is
-// targeted at the one store whose reader changed. Cursor's composer and
-// legacy-chat stores have their own readers and untouched numbering, so keying
-// the generation by provider would re-embed them for nothing.
-func TestContentFingerprintLeavesUnchangedReadersAlone(t *testing.T) {
+func TestContentFingerprintLeavesOtherArtifactKindsUnchanged(t *testing.T) {
 	t.Parallel()
 
-	stamp := generationTestStamp()
+	stamp := fingerprintTestStamp()
 	unchanged := []string{
 		"cursor_composer",
 		"cursor_background_composer",
@@ -53,19 +40,19 @@ func TestContentFingerprintLeavesUnchangedReadersAlone(t *testing.T) {
 		"rollout",
 	}
 	for _, artifactKind := range unchanged {
-		if got := ContentFingerprint(generationTestRecord(artifactKind), stamp); got != stamp.Fingerprint() {
+		if got := ContentFingerprint(fingerprintTestRecord(artifactKind), stamp); got != stamp.Fingerprint() {
 			t.Fatalf("%s fingerprint = %q, want the bare stamp %q", artifactKind, got, stamp.Fingerprint())
 		}
 	}
 }
 
-// TestContentFingerprintStillTracksTheArtifact proves the generation does not
-// replace the stamp: a conversation that grows is still re-advertised.
+// TestContentFingerprintStillTracksTheArtifact proves the compatibility suffix
+// does not replace the stamp: a conversation that grows is re-advertised.
 func TestContentFingerprintStillTracksTheArtifact(t *testing.T) {
 	t.Parallel()
 
-	record := generationTestRecord(string(ArtifactKindCursorAgentTranscript))
-	before := ContentFingerprint(record, generationTestStamp())
+	record := fingerprintTestRecord(string(ArtifactKindCursorAgentTranscript))
+	before := ContentFingerprint(record, fingerprintTestStamp())
 	grown := ContentFingerprint(record, FileStamp{Size: 8192, Mtime: time.Unix(1710000600, 0)})
 
 	if before == grown {
