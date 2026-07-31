@@ -21,10 +21,17 @@ import (
 // as distinct content: one prompt appeared 576 times across 45 transcripts as
 // 58 distinct strings, so nothing downstream could see them as one message.
 var (
-	// userEnvelopeTimestampRe matches the leading timestamp line and the blank
-	// line after it. It is anchored so a `<timestamp>` the user typed further
-	// into their message stays where they put it.
-	userEnvelopeTimestampRe = regexp.MustCompile(`\A\s*<timestamp>([^<]*)</timestamp>\s*`)
+	// userEnvelopeTimestampRe matches one timestamp element and the blank line
+	// Cursor pads it with. It is not anchored: Cursor writes the stamp first
+	// on most turns, but on a turn carrying attachments it writes them first
+	// and the stamp after, which is 516 of 5,240 stamped turns on this machine.
+	// What keeps a `<timestamp>` the user typed themselves in place is that
+	// only a value which parses as one of Cursor's own formats is removed.
+	// It takes the element and the newlines Cursor pads after it, at most the
+	// blank line it writes before the query, and never anything before it. A
+	// pattern that also ate the preceding newline would join the line above to
+	// the line below on a turn whose stamp sits between two attachment blocks.
+	userEnvelopeTimestampRe = regexp.MustCompile(`<timestamp>([^<]*)</timestamp>[ \t]*\n{0,2}`)
 	// userEnvelopeQueryOpenRe and userEnvelopeQueryCloseRe match the markers
 	// and the padding Cursor writes against them. Everything between and
 	// around the markers is kept, so an attachment tag Cursor wrote beside the
@@ -62,9 +69,14 @@ var userEnvelopeWallLayouts = []string{
 func UnwrapUserEnvelope(text string) (string, time.Time) {
 	stamped := time.Time{}
 	remaining := text
-	if match := userEnvelopeTimestampRe.FindStringSubmatch(remaining); match != nil {
-		stamped = parseUserEnvelopeTimestamp(match[1])
-		remaining = remaining[len(match[0]):]
+	// Only a value Cursor could have written comes out. A `<timestamp>` the
+	// user typed carries something else between the tags, so it fails to parse
+	// and stays exactly where they put it, text and tags alike.
+	if match := userEnvelopeTimestampRe.FindStringSubmatchIndex(remaining); match != nil {
+		if parsed := parseUserEnvelopeTimestamp(remaining[match[2]:match[3]]); !parsed.IsZero() {
+			stamped = parsed
+			remaining = remaining[:match[0]] + remaining[match[1]:]
+		}
 	}
 	// A query marker without its partner means the envelope is not the shape
 	// this understands, so the text is left alone rather than half-unwrapped.

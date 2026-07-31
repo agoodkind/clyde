@@ -37,6 +37,21 @@ func TestUnwrapUserEnvelopeKeepsWhatTheUserTyped(t *testing.T) {
 			want:   "plain text the user typed",
 		},
 		{
+			// Cursor writes the stamp after the attachments on a turn that
+			// carries them, which is 516 of 5,240 stamped turns on the
+			// machine this was measured on.
+			name: "timestamp after an attachment block",
+			stored: "<user_query>\n<attached_files>main.go</attached_files>\n" +
+				"<timestamp>Tuesday, Jul 21, 2026, 8:05 PM (UTC-7)</timestamp>\n/pr for both</user_query>",
+			want:    "<attached_files>main.go</attached_files>\n/pr for both",
+			wantUTC: "2026-07-22T03:05:00Z",
+		},
+		{
+			name:   "a timestamp the user typed stays put",
+			stored: "<user_query>the tag is <timestamp>whenever</timestamp> in their format</user_query>",
+			want:   "the tag is <timestamp>whenever</timestamp> in their format",
+		},
+		{
 			// The composer store learned this in
 			// TestMapComposerBubbleIndentedCodeAfterEnvelopeSurvives: a paste
 			// that opens on an indented line loses its shape if the unwrap
