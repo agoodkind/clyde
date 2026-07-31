@@ -36,6 +36,15 @@ func TestUnwrapUserEnvelopeKeepsWhatTheUserTyped(t *testing.T) {
 			stored: "plain text the user typed",
 			want:   "plain text the user typed",
 		},
+		{
+			// The composer store learned this in
+			// TestMapComposerBubbleIndentedCodeAfterEnvelopeSurvives: a paste
+			// that opens on an indented line loses its shape if the unwrap
+			// trims past the envelope's own newlines.
+			name:   "pasted code keeps its indentation",
+			stored: "<user_query>\n    func main() {\n        return\n    }\n</user_query>",
+			want:   "    func main() {\n        return\n    }",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

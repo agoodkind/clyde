@@ -694,6 +694,15 @@ func BuildSemanticConversationDocuments(
 			return SemanticConversationDocuments{Docs: nil, PolicySkipped: 0},
 				fmt.Errorf("message index %d exceeds semantic search int32 limit", i)
 		}
+		// A control record is the harness talking to itself rather than
+		// anything a person wrote or read, so embedding it spends the same
+		// work as a real message and returns a result nobody searched for.
+		// Reading already withholds these, in messageCountsForLastN and in
+		// conversation info, and this is that judgement applied to the feed.
+		if message.Visibility == transcript.MessageVisibilityMetaOnly {
+			built.PolicySkipped++
+			continue
+		}
 		text := ""
 		if kinds.Has(conversation.ContentKindChat) {
 			// Replace invalid UTF-8 so the protobuf upsert never fails to marshal

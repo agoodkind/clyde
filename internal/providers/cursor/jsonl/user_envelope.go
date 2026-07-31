@@ -26,11 +26,16 @@ var (
 	// into their message stays where they put it.
 	userEnvelopeTimestampRe = regexp.MustCompile(`\A\s*<timestamp>([^<]*)</timestamp>\s*`)
 	// userEnvelopeQueryOpenRe and userEnvelopeQueryCloseRe match the markers
-	// alone. Only the markers are removed and everything between and around
-	// them is kept, so an attachment tag Cursor wrote beside the query, and any
-	// text the user typed outside it, survive unchanged.
-	userEnvelopeQueryOpenRe  = regexp.MustCompile(`(?s)<user_query>\n?`)
-	userEnvelopeQueryCloseRe = regexp.MustCompile(`(?s)\n?</user_query>`)
+	// and the padding Cursor writes against them. Everything between and
+	// around the markers is kept, so an attachment tag Cursor wrote beside the
+	// query, and any text the user typed outside it, survive unchanged.
+	//
+	// The open pattern takes at most the one newline after the marker, never
+	// the spaces after that: a paste beginning on an indented line keeps its
+	// shape. The close pattern takes the whitespace before it, which is the
+	// blank line Cursor pads with rather than anything the user can see.
+	userEnvelopeQueryOpenRe  = regexp.MustCompile(`<user_query>\n?`)
+	userEnvelopeQueryCloseRe = regexp.MustCompile(`(?s)\s*</user_query>`)
 )
 
 // userEnvelopeZoneRe splits Cursor's trailing zone off the timestamp value.
@@ -57,11 +62,9 @@ var userEnvelopeWallLayouts = []string{
 func UnwrapUserEnvelope(text string) (string, time.Time) {
 	stamped := time.Time{}
 	remaining := text
-	unwrapped := false
 	if match := userEnvelopeTimestampRe.FindStringSubmatch(remaining); match != nil {
 		stamped = parseUserEnvelopeTimestamp(match[1])
 		remaining = remaining[len(match[0]):]
-		unwrapped = true
 	}
 	// A query marker without its partner means the envelope is not the shape
 	// this understands, so the text is left alone rather than half-unwrapped.
@@ -70,18 +73,20 @@ func UnwrapUserEnvelope(text string) (string, time.Time) {
 	opens := userEnvelopeQueryOpenRe.FindAllStringIndex(remaining, -1)
 	closes := userEnvelopeQueryCloseRe.FindAllStringIndex(remaining, -1)
 	if len(opens) == 1 && len(closes) == 1 && opens[0][0] < closes[0][0] {
-		remaining = userEnvelopeQueryCloseRe.ReplaceAllString(remaining, "")
-		remaining = userEnvelopeQueryOpenRe.ReplaceAllString(remaining, "")
-		unwrapped = true
+		// The two matches are already located, so the markers come out by
+		// slicing around them. Replacing instead would scan the whole message
+		// twice more to find the same positions, on a path that runs for
+		// nearly every user turn in every conversation.
+		open, closed := opens[0], closes[0]
+		remaining = remaining[:open[0]] + remaining[open[1]:closed[0]] + remaining[closed[1]:]
 	}
-	// Text carrying no envelope comes back byte-identical. Trimming it would
-	// edit a message Cursor stored exactly as the user typed it, and a user
-	// who pastes marker syntax into their own message must keep every byte:
-	// see TestMapJSONLMessageUserRoleNeverStripped.
-	if !unwrapped {
-		return text, stamped
-	}
-	return strings.TrimSpace(remaining), stamped
+	// What is left is the user's, so it is returned as it stands. The patterns
+	// above consume the envelope's own newlines, and trimming further would
+	// take the leading indentation off a pasted code block: the composer store
+	// learned that in TestMapComposerBubbleIndentedCodeAfterEnvelopeSurvives.
+	// Text carrying no envelope is likewise byte-identical, which
+	// TestMapJSONLMessageUserRoleNeverStripped requires.
+	return remaining, stamped
 }
 
 // parseUserEnvelopeTimestamp reads one `<timestamp>` value, returning the zero
@@ -110,18 +115,14 @@ func parseUserEnvelopeTimestamp(value string) time.Time {
 // userEnvelopeZone builds the location for one parsed "(UTC+2)" suffix. The
 // sign and hour always appear; the minutes appear only in zones that need
 // them, so an absent minutes group counts as zero.
+//
+// Both numbers come from digit-only capture groups in [userEnvelopeZoneRe],
+// so neither conversion can fail and neither error is checked.
 func userEnvelopeZone(sign, hours, minutes string) *time.Location {
-	offsetHours, err := strconv.Atoi(hours)
-	if err != nil {
-		return time.UTC
-	}
+	offsetHours, _ := strconv.Atoi(hours)
 	offsetMinutes := 0
 	if minutes != "" {
-		parsedMinutes, minutesErr := strconv.Atoi(minutes)
-		if minutesErr != nil {
-			return time.UTC
-		}
-		offsetMinutes = parsedMinutes
+		offsetMinutes, _ = strconv.Atoi(minutes)
 	}
 	seconds := offsetHours*3600 + offsetMinutes*60
 	if sign == "-" {

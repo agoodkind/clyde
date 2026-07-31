@@ -28,6 +28,7 @@ func mapJSONLMessage(
 	textParts := make([]string, 0)
 	tools := make([]transcript.ToolCall, 0)
 	stamped := time.Time{}
+	injected := false
 	for _, part := range message.Parts {
 		switch part.Type {
 		case cursorjsonl.PartTypeText:
@@ -51,6 +52,13 @@ func mapJSONLMessage(
 				if stamped.IsZero() {
 					stamped = partStamp
 				}
+				// Cursor writes prompts of its own into the user role. The
+				// text stays, so a transcript still shows what the model was
+				// answering, and the visibility below is what keeps it out of
+				// the surfaces that only want what a person said.
+				if cursorjsonl.IsInjectedUserPrompt(text) {
+					injected = true
+				}
 			}
 			if strings.TrimSpace(text) != "" {
 				textParts = append(textParts, text)
@@ -68,6 +76,15 @@ func mapJSONLMessage(
 				IsError:     false,
 			})
 		}
+	}
+	// A prompt Cursor wrote into the user role is a control record: the model
+	// answered it, so the answer is conversation, but the prompt is the
+	// harness talking to itself. Marking it is what every consumer already
+	// reads to tell those apart, and it keeps the message rather than dropping
+	// it, so its answer still has a question.
+	visibility := transcript.MessageVisibilityVisible
+	if injected {
+		visibility = transcript.MessageVisibilityMetaOnly
 	}
 	text := strings.Join(textParts, "\n")
 	// A turn Cursor recorded as failed or aborted, or one that ended at a boundary
@@ -89,7 +106,7 @@ func mapJSONLMessage(
 		ParentUUID:        "",
 		LogicalParentUUID: "",
 		Role:              message.Role,
-		Visibility:        transcript.MessageVisibilityVisible,
+		Visibility:        visibility,
 		Compaction:        nil,
 		Timestamp:         stamped,
 		Text:              text,
