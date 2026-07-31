@@ -47,7 +47,6 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 		s.respondAdapterError(w, r, targetErr)
 		return
 	}
-
 	rawReq, jsonSpec, body, streamRequested := mutatePassthroughOverrideRequestBody(
 		body,
 		modelOverride,
@@ -130,6 +129,9 @@ func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 	clydeingress.SetHTTPHeaders(corr, w.Header())
 	ctx := correlation.WithContext(r.Context(), corr)
+	if adapterruntime.ExecutionIDFromContext(ctx) == "" {
+		ctx = adapterruntime.WithExecutionID(ctx, newExecutionID())
+	}
 	r = r.WithContext(ctx)
 	alias := resolvedRequestAlias(req)
 	s.emitRequestStarted(ctx, req, "", options.requestID, alias, options.streamRequested)
@@ -475,15 +477,16 @@ func (s *Server) respondPassthroughOverrideTransportError(
 ) {
 	alias := resolvedRequestAlias(req)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-		Stage:      adapterruntime.RequestStageFailed,
-		Provider:   providerName(req, ""),
-		Backend:    req.Provider.String(),
-		RequestID:  reqID,
-		Alias:      alias,
-		ModelID:    alias,
-		Stream:     streamRequested,
-		DurationMs: clock.Since(started).Milliseconds(),
-		Err:        err.Error(), FinishReason: "", TokensIn: 0, TokensOut: 0, CacheReadTokens: 0, CacheCreationTokens: 0, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Correlation: correlation.
+		Stage:       adapterruntime.RequestStageFailed,
+		Provider:    providerName(req, ""),
+		Backend:     req.Provider.String(),
+		RequestID:   reqID,
+		ExecutionID: adapterruntime.ExecutionIDFromContext(ctx),
+		Alias:       alias,
+		ModelID:     alias,
+		Stream:      streamRequested,
+		DurationMs:  clock.Since(started).Milliseconds(),
+		Err:         err.Error(), FinishReason: "", TokensIn: 0, TokensOut: 0, CacheReadTokens: 0, CacheCreationTokens: 0, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Correlation: correlation.
 				Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
 	aerr := newAdapterError(adapterErrorUpstreamUnavailable, err.Error())
@@ -510,7 +513,7 @@ func (s *Server) logPassthroughOverrideFailure(ctx context.Context, req *adapter
 	alias := resolvedRequestAlias(req)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage: adapterruntime.RequestStageFailed, Provider: providerName(req, ""), Backend: req.Provider.String(),
-		RequestID: reqID, Alias: alias, ModelID: alias, Stream: stream,
+		RequestID: reqID, ExecutionID: adapterruntime.ExecutionIDFromContext(ctx), Alias: alias, ModelID: alias, Stream: stream,
 		DurationMs: clock.Since(started).Milliseconds(), Err: err.Error(), FinishReason: "", TokensIn: 0,
 		TokensOut: 0, CacheReadTokens: 0, CacheCreationTokens: 0, DerivedCacheCreationTokens: 0,
 		ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Correlation: correlation.Context{},
@@ -554,6 +557,7 @@ func (s *Server) logPassthroughOverrideTerminal(
 		Provider:            providerName(req, ""),
 		Backend:             req.Provider.String(),
 		RequestID:           reqID,
+		ExecutionID:         adapterruntime.ExecutionIDFromContext(ctx),
 		Alias:               alias,
 		ModelID:             alias,
 		Stream:              streamRequested || strings.Contains(contentType, "text/event-stream"),
@@ -661,6 +665,7 @@ func (s *Server) respondPassthroughOverrideError(
 		Provider:     providerName(req, ""),
 		Backend:      req.Provider.String(),
 		RequestID:    reqID,
+		ExecutionID:  adapterruntime.ExecutionIDFromContext(ctx),
 		Alias:        alias,
 		ModelID:      alias,
 		Stream:       streamRequested || strings.Contains(contentType, "text/event-stream"),

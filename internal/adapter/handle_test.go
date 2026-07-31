@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,6 +40,37 @@ func TestAdapterHandleAdapterErrorEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(out.Error.Message, "missing field foo") {
 		t.Fatalf("message=%q", out.Error.Message)
+	}
+}
+
+func TestAdapterHandleLogsActualRequestAndResponseBytes(t *testing.T) {
+	t.Parallel()
+	srv, buffer := newLoggingServer(t, config.LoggingConfig{})
+	handler := srv.handle(adapterRouteOpenAI, func(_ context.Context, handlerContext *handlerCtx) error {
+		body, err := io.ReadAll(handlerContext.Request.Body)
+		if err != nil {
+			return err
+		}
+		if string(body) != "hello" {
+			return errors.New("unexpected request body")
+		}
+		_, err = handlerContext.Writer.Write([]byte("reply"))
+		flusher, ok := handlerContext.Writer.(http.Flusher)
+		if !ok {
+			return errors.New("response writer does not preserve flush")
+		}
+		flusher.Flush()
+		return err
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("hello"))
+	response := httptest.NewRecorder()
+	handler(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "reply" || !response.Flushed {
+		t.Fatalf("response = status %d body %q flushed %t", response.Code, response.Body.String(), response.Flushed)
+	}
+	event := findLogEvent(t, buffer, "adapter.request.io")
+	if event == nil || event["bytes_in"] != float64(5) || event["bytes_out"] != float64(5) {
+		t.Fatalf("io event = %+v, want five bytes in and out", event)
 	}
 }
 

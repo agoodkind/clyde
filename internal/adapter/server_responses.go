@@ -276,7 +276,17 @@ func (s *Server) dispatchResponsesStream(
 		)
 		return
 	}
+	ctx, lifecycle := s.beginProviderRequestLifecycle(
+		ctx,
+		&resolvedReq,
+		responsesProviderPath(prepared.provider),
+		resolvedReq.RequestID,
+		resolvedReq.Model,
+		true,
+	)
+	lifecycle.streamOpened(ctx)
 	result, runErr := prepared.Execute(ctx, writer, s)
+	lifecycle.terminal(ctx, result, runErr)
 	if runErr != nil {
 		mappedErr := responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr)
 		if failErr := writer.fail(mappedErr); failErr != nil {
@@ -309,7 +319,16 @@ func (s *Server) dispatchResponsesCollect(
 ) {
 	ctx := responsesProviderContext(r.Context(), resolvedReq)
 	collector := newProviderCollectorWriter()
+	ctx, lifecycle := s.beginProviderRequestLifecycle(
+		ctx,
+		&resolvedReq,
+		responsesProviderPath(prepared.provider),
+		resolvedReq.RequestID,
+		resolvedReq.Model,
+		false,
+	)
 	result, runErr := prepared.Execute(ctx, collector, s)
+	lifecycle.terminal(ctx, result, runErr)
 	if runErr != nil {
 		mappedErr := responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr)
 		mappedErr.Warnings = warnings

@@ -339,10 +339,12 @@ func newControlServer(
 		rebind: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return rebindDaemonWorker(ctx, log, grpcServer, runtime)
 		},
-		searchSource: searchSource,
-		captureStore: runtime.captureStore,
-		freshness:    freshness,
-		exportTokens: exportTokens,
+		searchSource:       searchSource,
+		captureStore:       runtime.captureStore,
+		freshness:          freshness,
+		exportTokens:       exportTokens,
+		providerStatsNow:   nil,
+		providerStatsTicks: nil,
 	}
 }
 

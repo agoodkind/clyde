@@ -4,11 +4,35 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/gklog/correlation"
 )
+
+func TestProviderStatsGenerationStartStaysFixedAcrossSnapshots(t *testing.T) {
+	t.Parallel()
+	generationStart := time.Date(2026, 7, 31, 9, 0, 0, 0, time.UTC)
+	currentTime := generationStart
+	recorder := newProviderStatsRecorder(adapterruntime.NewPricingTable(nil))
+	recorder.generationStartedAt = generationStart
+	recorder.now = func() time.Time { return currentTime }
+
+	_, firstLoadedAt := recorder.snapshot()
+	currentTime = generationStart.Add(time.Hour)
+	_, secondLoadedAt := recorder.snapshot()
+	currentTime = generationStart.Add(2 * time.Hour)
+	recorder.record(context.Background(), completedEvent("codex", "unpriced", 0, 0, 0, 0))
+	stats, thirdLoadedAt := recorder.snapshot()
+
+	if !firstLoadedAt.Equal(generationStart) || !secondLoadedAt.Equal(generationStart) || !thirdLoadedAt.Equal(generationStart) {
+		t.Fatalf("loaded times = %s, %s, %s; want fixed %s", firstLoadedAt, secondLoadedAt, thirdLoadedAt, generationStart)
+	}
+	if len(stats) != 1 || stats[0].LastSeenUnix != currentTime.Unix() {
+		t.Fatalf("stats = %+v, want LastSeenUnix %d", stats, currentTime.Unix())
+	}
+}
 
 // completedEvent builds a minimal terminal RequestEvent for the
 // read-time aggregation tests. The aggregator prices ModelID plus the

@@ -84,21 +84,40 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 
 		IncludeUsage: false,
 	}
+	return s.executeAnthropicNativePrepared(ctx, w, r, reqID, resolved, prepared)
+}
+
+func (s *Server) executeAnthropicNativePrepared(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	reqID string,
+	resolved adapterresolver.ResolvedRequest,
+	prepared anthropic.PreparedRequest,
+) error {
+	req := prepared.Request
 	execCtx := anthropic.WithRequestID(ctx, reqID)
 	if req.Stream {
 		streamWriter, streamErr := newNativeAnthropicStreamWriter(w)
 		if streamErr != nil {
 			return adapterErrInternal(streamErr.Error(), streamErr)
 		}
-		if _, err := s.anthropicProvider.ExecutePrepared(execCtx, prepared, streamWriter); err != nil {
-			s.writeAnthropicIngressProviderError(w, r, err)
+		execCtx, lifecycle := s.beginProviderRequestLifecycle(execCtx, &resolved, "oauth", reqID, req.Model, true)
+		streamWriter.onStreamOpened = func() { lifecycle.streamOpened(execCtx) }
+		result, executeErr := s.anthropicProvider.ExecutePrepared(execCtx, prepared, streamWriter)
+		lifecycle.terminal(execCtx, result, executeErr)
+		if executeErr != nil {
+			s.writeAnthropicIngressProviderError(w, r, executeErr)
 		}
 		return nil
 	}
 
 	collector := newNativeAnthropicJSONWriter()
-	if _, err := s.anthropicProvider.ExecutePrepared(execCtx, prepared, collector); err != nil {
-		s.writeAnthropicIngressProviderError(w, r, err)
+	execCtx, lifecycle := s.beginProviderRequestLifecycle(execCtx, &resolved, "oauth", reqID, req.Model, false)
+	result, executeErr := s.anthropicProvider.ExecutePrepared(execCtx, prepared, collector)
+	lifecycle.terminal(execCtx, result, executeErr)
+	if executeErr != nil {
+		s.writeAnthropicIngressProviderError(w, r, executeErr)
 		return nil
 	}
 	if collector.empty() {
@@ -408,9 +427,10 @@ func (w *nativeAnthropicJSONWriter) writeTo(dst http.ResponseWriter) {
 }
 
 type nativeAnthropicStreamWriter struct {
-	w         http.ResponseWriter
-	flusher   http.Flusher
-	committed bool
+	w              http.ResponseWriter
+	flusher        http.Flusher
+	committed      bool
+	onStreamOpened func()
 }
 
 func newNativeAnthropicStreamWriter(w http.ResponseWriter) (*nativeAnthropicStreamWriter, error) {
@@ -420,7 +440,7 @@ func newNativeAnthropicStreamWriter(w http.ResponseWriter) (*nativeAnthropicStre
 	}
 	return &nativeAnthropicStreamWriter{
 		w:       w,
-		flusher: flusher, committed: false,
+		flusher: flusher, committed: false, onStreamOpened: nil,
 	}, nil
 }
 
@@ -449,6 +469,9 @@ func (w *nativeAnthropicStreamWriter) commit(header http.Header) {
 	}
 	w.w.WriteHeader(http.StatusOK)
 	w.committed = true
+	if w.onStreamOpened != nil {
+		w.onStreamOpened()
+	}
 	if w.flusher != nil {
 		w.flusher.Flush()
 	}

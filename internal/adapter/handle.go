@@ -2,12 +2,15 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"strings"
 
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/gklog/correlation"
@@ -19,6 +22,23 @@ import (
 // an error routes through respondAdapterError; returning nil without writing
 // anything triggers a synthesized catch-all error envelope.
 type adapterHandler func(ctx context.Context, hctx *handlerCtx) error
+
+type countingReadCloser struct {
+	io.ReadCloser
+	bytesIn int64
+}
+
+func (r *countingReadCloser) Read(body []byte) (int, error) {
+	n, err := r.ReadCloser.Read(body)
+	r.bytesIn += int64(n)
+	if err == nil {
+		return n, nil
+	}
+	if errors.Is(err, io.EOF) {
+		return n, io.EOF
+	}
+	return n, fmt.Errorf("read adapter request body: %w", err)
+}
 
 // handlerCtx is the per-request value passed to adapterHandler. The Writer
 // and Request fields hold the same plumbing the wrapper sees so handlers do
@@ -62,7 +82,8 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 		}
 		clydeingress.SetHTTPHeaders(corr, r.Header)
 		clydeingress.SetHTTPHeaders(corr, w.Header())
-		ctx, ingressCancel := context.WithCancel(correlation.WithContext(r.Context(), corr))
+		ctx := adapterruntime.WithExecutionID(correlation.WithContext(r.Context(), corr), newExecutionID())
+		ctx, ingressCancel := context.WithCancel(ctx)
 		defer ingressCancel()
 		ctx = context.WithValue(ctx, ingressCancelKey{}, ingressCancel)
 		r = r.WithContext(ctx)
@@ -76,7 +97,9 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 		}
 		defer s.releaseIngressSession(ctx, ingressSess)
 
-		rw := &adapterRecoveryWriter{ResponseWriter: w, wroteHeader: false}
+		rw := &adapterRecoveryWriter{ResponseWriter: w, wroteHeader: false, bytesOut: 0}
+		body := &countingReadCloser{ReadCloser: r.Body, bytesIn: 0}
+		r.Body = body
 		hctx := &handlerCtx{
 			Writer:      rw,
 			Request:     r,
@@ -85,6 +108,18 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 			Correlation: corr,
 		}
 		s.dispatchHandler(ctx, w, r, rw, hctx, corr, family, fn)
+		s.adapterChatDispatchLog().InfoContext(
+			ctx,
+			"adapter.request.io",
+			"request_id",
+			reqID,
+			"execution_id",
+			adapterruntime.ExecutionIDFromContext(ctx),
+			"bytes_in",
+			body.bytesIn,
+			"bytes_out",
+			rw.bytesOut,
+		)
 	}
 }
 

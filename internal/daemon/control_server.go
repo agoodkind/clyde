@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
@@ -48,7 +49,9 @@ type controlServer struct {
 	captureStore *capture.Store
 	// exportTokens configures the --max-tokens export cap: the local estimator
 	// tuning, credentials, and endpoints for the exact provider count APIs.
-	exportTokens exportTokenConfig
+	exportTokens       exportTokenConfig
+	providerStatsNow   func() time.Time
+	providerStatsTicks <-chan time.Time
 }
 
 // conversationSemanticSearchClient is the vector engine client adapted by
@@ -472,14 +475,25 @@ func (s *controlServer) LogsInventory(ctx context.Context, req *clydev1.LogsInve
 }
 
 func (s *controlServer) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest, stream grpc.ServerStreamingServer[clydev1.ProviderStatsEvent]) error {
-	ticker := time.NewTicker(providerStatsStreamInterval)
-	defer ticker.Stop()
+	now := s.providerStatsNow
+	if now == nil {
+		now = clock.Now
+	}
+	ticks := s.providerStatsTicks
+	stop := func() {}
+	if ticks == nil {
+		ticker := time.NewTicker(providerStatsStreamInterval)
+		ticks = ticker.C
+		stop = ticker.Stop
+	}
+	defer stop()
 	for {
 		response := providerStatsResponse(s.stats)
+		emittedAtUnix := now().Unix()
 		for _, stats := range response.GetProviders() {
 			event := &clydev1.ProviderStatsEvent{
 				Stats:         stats,
-				EmittedAtUnix: response.GetLoadedAtUnix(),
+				EmittedAtUnix: emittedAtUnix,
 			}
 			if err := stream.Send(event); err != nil {
 				slog.WarnContext(stream.Context(), "daemon.provider_stats.stream_send_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
@@ -494,7 +508,7 @@ func (s *controlServer) SubscribeProviderStats(_ *clydev1.SubscribeProviderStats
 				"err", stream.Context().Err(),
 			)
 			return fmt.Errorf("provider stats stream context: %w", stream.Context().Err())
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
 }

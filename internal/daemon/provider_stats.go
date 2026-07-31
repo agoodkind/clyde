@@ -7,6 +7,7 @@ import (
 	"time"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/providerid"
 )
 
@@ -29,9 +30,10 @@ type ProviderStats struct {
 }
 
 type providerStatsRecorder struct {
-	mu       sync.Mutex
-	stats    map[string]ProviderStats
-	loadedAt func() time.Time
+	mu                  sync.Mutex
+	stats               map[string]ProviderStats
+	generationStartedAt time.Time
+	now                 func() time.Time
 	// pricing prices each terminal event's recorded token counts into an
 	// estimated dollar cost at read time. It is the single source of
 	// dollar cost: precompute at request time was removed so the codex
@@ -41,10 +43,11 @@ type providerStatsRecorder struct {
 
 func newProviderStatsRecorder(pricing adapterruntime.PricingTable) *providerStatsRecorder {
 	return &providerStatsRecorder{
-		mu:       sync.Mutex{},
-		stats:    make(map[string]ProviderStats),
-		loadedAt: time.Now,
-		pricing:  pricing,
+		mu:                  sync.Mutex{},
+		stats:               make(map[string]ProviderStats),
+		generationStartedAt: clock.Now(),
+		now:                 clock.Now,
+		pricing:             pricing,
 	}
 }
 
@@ -79,7 +82,7 @@ func (r *providerStatsRecorder) snapshot() ([]ProviderStats, time.Time) {
 		}
 		return 0
 	})
-	return out, r.loadedAt()
+	return out, r.generationStartedAt
 }
 
 func (r *providerStatsRecorder) record(ctx context.Context, ev adapterruntime.RequestEvent) {
@@ -100,7 +103,7 @@ func (r *providerStatsRecorder) record(ctx context.Context, ev adapterruntime.Re
 	stats := r.stats[providerDetail]
 	stats.Provider = provider
 	stats.ProviderDetail = providerDetail
-	stats.LastSeenUnix = r.loadedAt().Unix()
+	stats.LastSeenUnix = r.now().Unix()
 	switch ev.Stage {
 	case adapterruntime.RequestStageStarted:
 		stats.Requests++

@@ -19,6 +19,13 @@ type preparedResponsesProvider struct {
 	anthropic *anthropic.PreparedRequest
 }
 
+func responsesProviderPath(provider adapterresolver.ProviderID) string {
+	if provider == adapterresolver.ProviderAnthropic {
+		return "oauth"
+	}
+	return "direct"
+}
+
 func responsesProviderContext(ctx context.Context, resolved adapterresolver.ResolvedRequest) context.Context {
 	if resolved.Provider == adapterresolver.ProviderAnthropic {
 		return anthropic.WithRequestID(ctx, resolved.RequestID)

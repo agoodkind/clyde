@@ -57,13 +57,14 @@ func (s *Server) emitRequestStarted(ctx context.Context, req *adapterresolver.Re
 		backend = req.Provider.String()
 	}
 	adapterruntime.LogStarted(s.log, ctx, s.deps.RequestEvents, adapterruntime.StartedAttrs{
-		Provider:  providerName(req, path),
-		Backend:   backend,
-		RequestID: reqID,
-		Alias:     resolvedRequestAlias(req),
-		ModelID:   modelID,
-		Ingress:   ingressLabelFromContext(ctx),
-		Stream:    stream, Correlation: correlation.
+		Provider:    providerName(req, path),
+		Backend:     backend,
+		RequestID:   reqID,
+		ExecutionID: adapterruntime.ExecutionIDFromContext(ctx),
+		Alias:       resolvedRequestAlias(req),
+		ModelID:     modelID,
+		Ingress:     ingressLabelFromContext(ctx),
+		Stream:      stream, Correlation: correlation.
 				Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
 }
@@ -74,13 +75,14 @@ func (s *Server) emitRequestStreamOpened(ctx context.Context, req *adapterresolv
 		backend = req.Provider.String()
 	}
 	adapterruntime.LogStreamOpened(s.log, ctx, s.deps.RequestEvents, adapterruntime.StreamOpenedAttrs{
-		Provider:  providerName(req, path),
-		Backend:   backend,
-		RequestID: reqID,
-		Alias:     resolvedRequestAlias(req),
-		ModelID:   modelID,
-		Ingress:   ingressLabelFromContext(ctx),
-		Stream:    true, Correlation: correlation.
+		Provider:    providerName(req, path),
+		Backend:     backend,
+		RequestID:   reqID,
+		ExecutionID: adapterruntime.ExecutionIDFromContext(ctx),
+		Alias:       resolvedRequestAlias(req),
+		ModelID:     modelID,
+		Ingress:     ingressLabelFromContext(ctx),
+		Stream:      true, Correlation: correlation.
 				Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
 }

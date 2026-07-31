@@ -124,13 +124,17 @@ func (s *Server) dispatchCodexProvider(
 	_ = ingressCtx // resolvedReq.Cursor carries the same value; keep parameter for future hooks.
 
 	alias := resolvedRequestAlias(&resolvedReq)
-	s.emitRequestStarted(r.Context(), &resolvedReq, "direct", reqID, alias, req.Stream)
+	ctx := r.Context()
+	if adapterruntime.ExecutionIDFromContext(ctx) == "" {
+		ctx = adapterruntime.WithExecutionID(ctx, newExecutionID())
+	}
+	s.emitRequestStarted(ctx, &resolvedReq, "direct", reqID, alias, req.Stream)
 
 	if req.Stream {
-		s.dispatchCodexProviderStream(r.Context(), w, r, req, reqID, started, resolvedReq)
+		s.dispatchCodexProviderStream(ctx, w, r, req, reqID, started, resolvedReq)
 		return
 	}
-	s.dispatchCodexProviderCollect(r.Context(), w, r, req, reqID, started, resolvedReq)
+	s.dispatchCodexProviderCollect(ctx, w, r, req, reqID, started, resolvedReq)
 }
 
 func (s *Server) dispatchCodexProviderStream(
@@ -194,6 +198,7 @@ func (s *Server) dispatchCodexProviderStream(
 		Provider:                   "codex_direct",
 		Backend:                    resolvedReq.Provider.String(),
 		RequestID:                  reqID,
+		ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
 		Alias:                      alias,
 		ModelID:                    alias,
 		Stream:                     true,
@@ -320,6 +325,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		Provider:                   "codex_direct",
 		Backend:                    resolvedReq.Provider.String(),
 		RequestID:                  reqID,
+		ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
 		Alias:                      alias,
 		ModelID:                    alias,
 		Stream:                     false,
@@ -358,15 +364,16 @@ func (s *Server) logCodexProviderTerminalFailure(
 ) {
 	alias := resolvedRequestAlias(&resolvedReq)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-		Stage:      adapterruntime.RequestStageFailed,
-		Provider:   "codex_direct",
-		Backend:    resolvedReq.Provider.String(),
-		RequestID:  reqID,
-		Alias:      alias,
-		ModelID:    alias,
-		Stream:     stream,
-		DurationMs: clock.Since(started).Milliseconds(),
-		Err:        runErr.Error(), FinishReason:
+		Stage:       adapterruntime.RequestStageFailed,
+		Provider:    "codex_direct",
+		Backend:     resolvedReq.Provider.String(),
+		RequestID:   reqID,
+		ExecutionID: adapterruntime.ExecutionIDFromContext(ctx),
+		Alias:       alias,
+		ModelID:     alias,
+		Stream:      stream,
+		DurationMs:  clock.Since(started).Milliseconds(),
+		Err:         runErr.Error(), FinishReason:
 
 		// codexProviderAdapterError maps a codex provider error to the
 		// Cursor-safe adapterError shape. Codex must never surface

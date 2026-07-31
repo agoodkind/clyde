@@ -9,18 +9,21 @@ import (
 	"time"
 
 	daemoncmd "goodkind.io/clyde/internal/cli/daemon"
+	"goodkind.io/clyde/internal/clock"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/deploy"
 )
 
 type daemonStatusInput struct {
 	TimeoutSeconds int
+	Since          string
 }
 
 func (daemonStatusInput) isClispecInput() {}
 
 type daemonStatusPayload struct {
 	Timeout time.Duration
+	Since   time.Duration
 }
 
 func (daemonStatusPayload) isClispecPrepared() {}
@@ -38,23 +41,40 @@ type daemonFingerprintPayload struct {
 func (daemonFingerprintPayload) isClispecPrepared() {}
 
 type daemonStatusOutput struct {
-	LaunchdTarget          string `json:"launchd_target"`
-	LaunchdError           string `json:"launchd_error,omitempty"`
-	SupervisorPID          int    `json:"supervisor_pid"`
-	DaemonSocketPath       string `json:"daemon_socket_path"`
-	DaemonSocketExists     bool   `json:"daemon_socket_exists"`
-	DaemonResponding       bool   `json:"daemon_responding"`
-	DaemonError            string `json:"daemon_error,omitempty"`
-	SupervisorSocketPath   string `json:"supervisor_socket_path"`
-	SupervisorSocketExists bool   `json:"supervisor_socket_exists"`
-	SupervisorResponding   bool   `json:"supervisor_responding"`
-	SupervisorError        string `json:"supervisor_error,omitempty"`
-	SupervisorFingerprint  string `json:"supervisor_fingerprint,omitempty"`
-	WorkerPIDs             []int  `json:"worker_pids,omitempty"`
-	WorkerError            string `json:"worker_error,omitempty"`
+	LaunchdTarget          string                          `json:"launchd_target"`
+	LaunchdError           string                          `json:"launchd_error,omitempty"`
+	SupervisorPID          int                             `json:"supervisor_pid"`
+	DaemonSocketPath       string                          `json:"daemon_socket_path"`
+	DaemonSocketExists     bool                            `json:"daemon_socket_exists"`
+	DaemonResponding       bool                            `json:"daemon_responding"`
+	DaemonError            string                          `json:"daemon_error,omitempty"`
+	SupervisorSocketPath   string                          `json:"supervisor_socket_path"`
+	SupervisorSocketExists bool                            `json:"supervisor_socket_exists"`
+	SupervisorResponding   bool                            `json:"supervisor_responding"`
+	SupervisorError        string                          `json:"supervisor_error,omitempty"`
+	SupervisorFingerprint  string                          `json:"supervisor_fingerprint,omitempty"`
+	WorkerPIDs             []int                           `json:"worker_pids,omitempty"`
+	WorkerError            string                          `json:"worker_error,omitempty"`
+	Window                 *daemonsvc.MetricsWindow        `json:"window,omitempty"`
+	Coverage               *daemonsvc.MetricsCoverage      `json:"coverage,omitempty"`
+	Metrics                *daemonsvc.MetricsValues        `json:"metrics,omitempty"`
+	TimeBreakdown          *daemonsvc.MetricsTimeBreakdown `json:"time_breakdown,omitempty"`
+	UnattributedDurationMS *int64                          `json:"unattributed_duration_ms,omitempty"`
+	Warnings               []string                        `json:"warnings,omitempty"`
 }
 
 func (daemonStatusOutput) isClispecStructuredPayload() {}
+
+type daemonMetricsStatusOutput struct {
+	Window                 daemonsvc.MetricsWindow        `json:"window"`
+	Coverage               daemonsvc.MetricsCoverage      `json:"coverage"`
+	Metrics                daemonsvc.MetricsValues        `json:"metrics"`
+	TimeBreakdown          daemonsvc.MetricsTimeBreakdown `json:"time_breakdown"`
+	UnattributedDurationMS *int64                         `json:"unattributed_duration_ms"`
+	Warnings               []string                       `json:"warnings"`
+}
+
+func (daemonMetricsStatusOutput) isClispecStructuredPayload() {}
 
 type daemonFingerprintOutput struct {
 	Built       bool   `json:"built"`
@@ -128,18 +148,30 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 		outputKind: resultKindValue,
 		Short:      "Report daemon supervisor and worker status",
 		Long:       "Report whether the launch agent, the supervisor, and the worker are reachable, including the control socket paths the CLI uses to reach them.",
-		Examples:   []string{"clyde daemon status"},
+		Examples:   []string{"clyde daemon status", "clyde daemon status --since 1h"},
 		Args:       nil,
-		Params:     nil,
+		Params: []Param[daemonStatusInput]{
+			StringParam("since", "Report retained daemon metrics for this duration.", "", false,
+				func(in *daemonStatusInput, value string) { in.Since = value }),
+		},
 		New: func() daemonStatusInput {
-			return daemonStatusInput{TimeoutSeconds: 3}
+			return daemonStatusInput{TimeoutSeconds: 3, Since: ""}
 		},
 		Children:       nil,
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
 		Prepare: func(in daemonStatusInput) (daemonStatusPayload, error) {
-			return daemonStatusPayload{Timeout: time.Duration(in.TimeoutSeconds) * time.Second}, nil
+			payload := daemonStatusPayload{Timeout: time.Duration(in.TimeoutSeconds) * time.Second, Since: 0}
+			if in.Since == "" {
+				return payload, nil
+			}
+			since, err := time.ParseDuration(in.Since)
+			if err != nil || since <= 0 {
+				return daemonStatusPayload{}, fmt.Errorf("since must be a positive duration")
+			}
+			payload.Since = since
+			return payload, nil
 		},
 		Run: nil,
 		runResult: func(ctx context.Context, payload daemonStatusPayload) (Result, error) {
@@ -148,25 +180,51 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 			report := daemonsvc.InspectStatus(statusCtx)
 			var body bytes.Buffer
 			daemoncmd.WriteStatusReport(&body, report)
-			return valueResult{
-				Payload: daemonStatusOutput{
-					LaunchdTarget:          report.LaunchdTarget,
-					LaunchdError:           report.LaunchdError,
-					SupervisorPID:          report.SupervisorPID,
-					DaemonSocketPath:       report.DaemonSocketPath,
-					DaemonSocketExists:     report.DaemonSocketExists,
-					DaemonResponding:       report.DaemonResponding,
-					DaemonError:            report.DaemonError,
-					SupervisorSocketPath:   report.SupervisorSocketPath,
-					SupervisorSocketExists: report.SupervisorSocketExists,
-					SupervisorResponding:   report.SupervisorResponding,
-					SupervisorError:        report.SupervisorError,
-					SupervisorFingerprint:  report.SupervisorFingerprint,
-					WorkerPIDs:             report.WorkerPIDs,
-					WorkerError:            report.WorkerError,
-				},
-				Text: body.String(),
-			}, nil
+			output := daemonStatusOutput{
+				LaunchdTarget:          report.LaunchdTarget,
+				LaunchdError:           report.LaunchdError,
+				SupervisorPID:          report.SupervisorPID,
+				DaemonSocketPath:       report.DaemonSocketPath,
+				DaemonSocketExists:     report.DaemonSocketExists,
+				DaemonResponding:       report.DaemonResponding,
+				DaemonError:            report.DaemonError,
+				SupervisorSocketPath:   report.SupervisorSocketPath,
+				SupervisorSocketExists: report.SupervisorSocketExists,
+				SupervisorResponding:   report.SupervisorResponding,
+				SupervisorError:        report.SupervisorError,
+				SupervisorFingerprint:  report.SupervisorFingerprint,
+				WorkerPIDs:             report.WorkerPIDs,
+				WorkerError:            report.WorkerError,
+				Window:                 nil,
+				Coverage:               nil,
+				Metrics:                nil,
+				TimeBreakdown:          nil,
+				UnattributedDurationMS: nil,
+				Warnings:               nil,
+			}
+			if payload.Since > 0 {
+				metrics := daemonsvc.MetricsHistoryFromConfig(payload.Since, clock.Now())
+				snapshot, err := daemonsvc.CurrentProviderStats(statusCtx)
+				if err != nil {
+					metrics.Coverage.Complete = false
+					metrics.Warnings = append(metrics.Warnings, "live provider statistics unavailable")
+				} else {
+					daemonsvc.ApplyCurrentProviderSnapshot(&metrics, snapshot.Providers, time.Unix(snapshot.LoadedAtUnix, 0))
+				}
+				output.Window = &metrics.Window
+				output.Coverage = &metrics.Coverage
+				output.Metrics = &metrics.Metrics
+				output.TimeBreakdown = &metrics.TimeBreakdown
+				output.UnattributedDurationMS = metrics.UnattributedDurationMS
+				output.Warnings = metrics.Warnings
+				daemoncmd.WriteMetricsHistoryReport(&body, metrics)
+				return valueResult{Payload: daemonMetricsStatusOutput{
+					Window: metrics.Window, Coverage: metrics.Coverage, Metrics: metrics.Metrics,
+					TimeBreakdown: metrics.TimeBreakdown, UnattributedDurationMS: metrics.UnattributedDurationMS,
+					Warnings: metrics.Warnings,
+				}, Text: body.String()}, nil
+			}
+			return valueResult{Payload: output, Text: body.String()}, nil
 		},
 	}
 }

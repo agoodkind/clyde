@@ -33,6 +33,7 @@ type providerStreamWriter struct {
 	log               *slog.Logger
 	server            *Server
 	streamChunkSeq    int
+	onStreamOpened    func()
 }
 
 func newProviderStreamWriter(
@@ -71,7 +72,7 @@ func newProviderStreamWriterWithOptions(
 		modelAlias:        modelAlias,
 		logContext:        func() context.Context { return ctx },
 		log:               slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPEgress),
-		server:            s, headersWritten: false, streamChunkSeq: 0,
+		server:            s, headersWritten: false, streamChunkSeq: 0, onStreamOpened: nil,
 	}, nil
 }
 
@@ -83,6 +84,9 @@ func (p *providerStreamWriter) writeRenderedChunk(ctx context.Context, chunk ada
 	if !p.headersWritten {
 		p.sse.WriteSSEHeaders()
 		p.headersWritten = true
+		if p.onStreamOpened != nil {
+			p.onStreamOpened()
+		}
 	}
 	if err := p.sse.EmitStreamChunk(p.systemFingerprint, chunk); err != nil {
 		p.log.WarnContext(ctx, "adapter.provider_writer.emit_chunk_failed", "concern", "adapter.chat.render", "request_id", p.reqID, "model", p.modelAlias, "err", err)
