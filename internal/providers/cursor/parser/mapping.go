@@ -27,6 +27,7 @@ func mapJSONLMessage(
 ) (transcript.Message, bool) {
 	textParts := make([]string, 0)
 	tools := make([]transcript.ToolCall, 0)
+	stamped := time.Time{}
 	for _, part := range message.Parts {
 		switch part.Type {
 		case cursorjsonl.PartTypeText:
@@ -38,6 +39,18 @@ func mapJSONLMessage(
 			// happens to quote the marker syntax.
 			if message.Role == cursorjsonl.RoleAssistant {
 				text = stripClydeSyntheticEnvelopes(text)
+			}
+			// Cursor frames a user turn in its own envelope, so the stored
+			// text holds markup the user never wrote and never saw. Lifting
+			// the turn's time out of that markup is what lets two identical
+			// turns read as identical, which they cannot while the time sits
+			// inside the text being compared.
+			if message.Role == cursorjsonl.RoleUser {
+				unwrapped, partStamp := cursorjsonl.UnwrapUserEnvelope(text)
+				text = unwrapped
+				if stamped.IsZero() {
+					stamped = partStamp
+				}
 			}
 			if strings.TrimSpace(text) != "" {
 				textParts = append(textParts, text)
@@ -78,7 +91,7 @@ func mapJSONLMessage(
 		Role:              message.Role,
 		Visibility:        transcript.MessageVisibilityVisible,
 		Compaction:        nil,
-		Timestamp:         time.Time{},
+		Timestamp:         stamped,
 		Text:              text,
 		Thinking:          "",
 		HasTools:          len(tools) > 0,
