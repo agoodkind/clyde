@@ -425,9 +425,8 @@ func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversa
 			continue
 		}
 		seen[conversationID] = true
-		// The advertised fingerprint carries the provider's reader generation as
-		// well as the file stamp, so a reader change that renumbers messages
-		// re-advertises the conversation once even though its bytes never changed.
+		// ContentFingerprint preserves any compatibility bytes already advertised
+		// for this artifact kind while changing only with its file stamp.
 		fingerprint := conversation.ContentFingerprint(stampedRecord.Record, stampedRecord.Stamp)
 		if priorFingerprint, delivered := w.emptyDelivered[conversationID]; delivered {
 			if priorFingerprint == fingerprint {
