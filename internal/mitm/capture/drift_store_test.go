@@ -123,7 +123,10 @@ func TestShapesForUpstreamReturnsSeenCount(t *testing.T) {
 	ts := time.Unix(1700000000, 0)
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts))
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts.Add(time.Minute)))
-	waitForShapeCount(t, store, "claude-code", 1)
+	// Wait for the dedup count rather than the row: both upserts share one
+	// fingerprint, so the row exists once the first commits and the assertion
+	// below would race the second.
+	waitForShapeSeenCount(t, store, "claude-code", "fp-1", 2)
 
 	shapes, err := store.ShapesForUpstream(context.Background(), "claude-code", time.Unix(0, 0))
 	if err != nil {
