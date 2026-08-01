@@ -62,9 +62,8 @@ var whitespaceValues = []string{
 }
 
 func exportParams() []Param[exportInput] {
-	outputPathParam := StringParam("output", "Write output to path, or use - for stdout.", "", false,
+	outputPathParam := StringParam("output", "Write output to path. MCP requires an absolute path. Use - for terminal stdout.", "", false,
 		func(in *exportInput, v string) { in.OutputPath = v })
-	outputPathParam.CLIOnly = true
 
 	stdoutParam := BoolParam("stdout", "Write the export body directly to stdout. Equivalent to --output -.", false,
 		func(in *exportInput, v bool) { in.Stdout = v })
@@ -146,7 +145,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindArtifact,
 		Short:      "Export a conversation transcript.",
-		Long:       "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, with no destination and no --copy, export writes the default artifact file; pass --output PATH to write a file, or --stdout or --output - to write the export body to stdout. The global --copy flag copies the body to the clipboard and, on its own, replaces the default file write, so --copy alone copies without writing a file; combine --copy with --output to also write a file. Clipboard copy matches the selected format, is macOS only for now, and errors on other platforms. The MCP tool writes the default artifact into the caller working directory, returns its absolute path in metadata, and retains the body as text fallback.",
+		Long:       "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, with no destination and no --copy, export writes the default artifact file; pass --output PATH to write a file, or --stdout or --output - to write the export body to stdout. The global --copy flag copies the body to the clipboard and, on its own, replaces the default file write, so --copy alone copies without writing a file; combine --copy with --output to also write a file. Clipboard copy matches the selected format, is macOS only for now, and errors on other platforms. The MCP tool returns the transcript body unless output names an absolute file path.",
 		Examples: []string{
 			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
 			"clyde conversation export claude:1a2b3c --only chat --include-compactions 0 --stdout",
@@ -235,6 +234,15 @@ func newExportInput() exportInput {
 // either of those replaces the implicit file, so --copy alone copies without
 // writing a file.
 func exportDestinationPath(ctx context.Context, p exportPayload) (string, error) {
+	if surfaceFromContext(ctx) == SurfaceMCP {
+		if p.OutputPath == "" {
+			return "", nil
+		}
+		if !filepath.IsAbs(p.OutputPath) {
+			return "", fmt.Errorf("MCP output path must be absolute")
+		}
+		return filepath.Clean(p.OutputPath), nil
+	}
 	if p.OutputPath != "" {
 		return absoluteExportPath(ctx, p.OutputPath)
 	}
@@ -261,16 +269,6 @@ func absoluteExportPath(ctx context.Context, path string) (string, error) {
 }
 
 func exportWorkingDirectory(ctx context.Context) (string, error) {
-	if surfaceFromContext(ctx) == SurfaceMCP {
-		result, ok := mcpCallerWorkingDirectoryResultFromContext(ctx)
-		if !ok {
-			return "", fmt.Errorf("MCP caller cwd is required")
-		}
-		if result.Err != nil {
-			return "", result.Err
-		}
-		return result.Directory, nil
-	}
 	directory, err := os.Getwd()
 	if err != nil {
 		slog.WarnContext(ctx, "clispec.export_cli_cwd_failed", "concern", "cli.conversation", "component", "clispec", "err", err)

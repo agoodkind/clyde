@@ -43,8 +43,7 @@ type Param[I Input] struct {
 	Kind        ParamKind
 	Required    bool
 	Description string
-	// CLIOnly keeps a parameter off the MCP surface. The export file path
-	// flag uses this: the terminal writes a file, the MCP tool returns text.
+	// CLIOnly keeps a parameter off the MCP surface.
 	CLIOnly bool
 	// Values lists the accepted words for KindEnum. It is empty otherwise.
 	Values []string

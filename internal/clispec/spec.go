@@ -53,22 +53,6 @@ func surfaceFromContext(ctx context.Context) Surface {
 	return surface
 }
 
-type mcpCallerWorkingDirectoryResult struct {
-	Directory string
-	Err       error
-}
-
-type mcpCallerWorkingDirectoryResultContextKey struct{}
-
-func withMCPCallerWorkingDirectoryResult(ctx context.Context, result mcpCallerWorkingDirectoryResult) context.Context {
-	return context.WithValue(ctx, mcpCallerWorkingDirectoryResultContextKey{}, result)
-}
-
-func mcpCallerWorkingDirectoryResultFromContext(ctx context.Context) (mcpCallerWorkingDirectoryResult, bool) {
-	result, ok := ctx.Value(mcpCallerWorkingDirectoryResultContextKey{}).(mcpCallerWorkingDirectoryResult)
-	return result, ok
-}
-
 type copyContextKey struct{}
 
 // withCopy stashes the global --copy flag so the shared result renderer can

@@ -107,7 +107,6 @@ func TestExportMCPHandlerRejectsEmptyOnly(t *testing.T) {
 	_, handler := exportTranscriptOp().mcpTool()
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"conversation_id": "claude:abc"}
-	req.Params.Meta = &mcp.Meta{AdditionalFields: map[string]any{"cwd": t.TempDir()}}
 	result, err := handler(context.Background(), req)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -115,23 +114,6 @@ func TestExportMCPHandlerRejectsEmptyOnly(t *testing.T) {
 	text := textOf(t, result)
 	if !strings.Contains(text, "no content kinds selected") {
 		t.Errorf("expected the no-content-kinds error in tool text, got: %q", text)
-	}
-}
-
-func TestExportMCPHandlerRejectsMissingCallerWorkingDirectory(t *testing.T) {
-	t.Parallel()
-	_, handler := exportTranscriptOp().mcpTool()
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{
-		"conversation_id": "claude:abc",
-		"only":            []any{"chat"},
-	}
-	result, err := handler(context.Background(), req)
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if got := textOf(t, result); !strings.Contains(got, "MCP caller cwd is required") {
-		t.Fatalf("missing caller cwd result = %q", got)
 	}
 }
 
