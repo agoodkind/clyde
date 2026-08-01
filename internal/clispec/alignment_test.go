@@ -17,7 +17,6 @@ import (
 var cliOnlyFlags = map[string]bool{
 	"all":    true,
 	"copy":   true,
-	"output": true,
 	"stdout": true,
 	// export whitespace shortcut flags: CLI sugar for the shared whitespace enum.
 	"preserve": true,

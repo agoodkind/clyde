@@ -3,9 +3,6 @@ package clispec
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -44,11 +41,6 @@ func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 	tool := mcp.NewTool(op.Name.MCP(), op.mcpToolOptions()...)
 
 	handler := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		var callerDirectoryErr error
-		ctx, callerDirectoryErr = withMCPCallerWorkingDirectory(ctx, req)
-		if callerDirectoryErr != nil && op.Name.Canonical == "export_transcript" {
-			return newMCPTextResult(ctx, callerDirectoryErr.Error()), nil
-		}
 		in := op.New()
 		missingArg := bindMCPArgs(&in, op.Args, req)
 		if missingArg != "" {
@@ -75,53 +67,6 @@ func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 		return runMCPLegacyOperation(ctx, req, op, prepared), nil
 	}
 	return tool, handler
-}
-
-func withMCPCallerWorkingDirectory(ctx context.Context, req mcp.CallToolRequest) (context.Context, error) {
-	directory, err := mcpCallerWorkingDirectory(req)
-	ctx = withMCPCallerWorkingDirectoryResult(ctx, mcpCallerWorkingDirectoryResult{
-		Directory: directory,
-		Err:       err,
-	})
-	if err != nil {
-		return ctx, err
-	}
-	return ctx, nil
-}
-
-// mcpCallerWorkingDirectory reads the client-owned working directory from the
-// request metadata. The generic cwd spelling is preferred, while codex_cwd
-// keeps compatibility with the Codex MCP client.
-func mcpCallerWorkingDirectory(req mcp.CallToolRequest) (string, error) {
-	if req.Params.Meta == nil {
-		return "", fmt.Errorf("MCP caller cwd is required")
-	}
-	for _, name := range []string{"cwd", "codex_cwd"} {
-		raw, present := req.Params.Meta.AdditionalFields[name]
-		if !present {
-			continue
-		}
-		directory, ok := raw.(string)
-		if !ok {
-			return "", fmt.Errorf("MCP caller %s must be a string", name)
-		}
-		if strings.TrimSpace(directory) == "" {
-			return "", fmt.Errorf("MCP caller %s must not be empty", name)
-		}
-		if !filepath.IsAbs(directory) {
-			return "", fmt.Errorf("MCP caller %s must be an absolute path", name)
-		}
-		info, statErr := os.Stat(directory)
-		if statErr != nil {
-			slog.Warn("mcp.caller_cwd_stat_failed", "concern", "mcp.server.context", "component", "clispec", "path", directory, "err", statErr)
-			return "", fmt.Errorf("read MCP caller %s %q: %w", name, directory, statErr)
-		}
-		if !info.IsDir() {
-			return "", fmt.Errorf("MCP caller %s %q is not a directory", name, directory)
-		}
-		return directory, nil
-	}
-	return "", fmt.Errorf("MCP caller cwd is required")
 }
 
 func (op Operation[I, P]) mcpToolOptions() []mcp.ToolOption {

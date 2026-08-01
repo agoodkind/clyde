@@ -1121,68 +1121,9 @@ func TestExportDestinationPath(t *testing.T) {
 	}
 }
 
-func TestMCPCallerWorkingDirectory(t *testing.T) {
+func TestExportDestinationPathReturnsInlineForMCP(t *testing.T) {
 	t.Parallel()
-	directory := t.TempDir()
-	file := filepath.Join(directory, "file.txt")
-	if err := os.WriteFile(file, []byte("body"), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	spacedDirectory := filepath.Join(directory, "caller cwd ")
-	if err := os.Mkdir(spacedDirectory, 0o700); err != nil {
-		t.Fatalf("create spaced directory: %v", err)
-	}
-	_, err := withMCPCallerWorkingDirectory(context.Background(), mcp.CallToolRequest{})
-	if err == nil || !strings.Contains(err.Error(), "required") {
-		t.Fatalf("missing metadata error = %v, want required cwd error", err)
-	}
-	cases := []struct {
-		name string
-		meta map[string]any
-		want string
-		err  string
-	}{
-		{name: "cwd", meta: map[string]any{"cwd": directory}, want: directory},
-		{name: "cwd with trailing space", meta: map[string]any{"cwd": spacedDirectory}, want: spacedDirectory},
-		{name: "codex cwd", meta: map[string]any{"codex_cwd": directory}, want: directory},
-		{name: "cwd takes precedence", meta: map[string]any{"cwd": directory, "codex_cwd": "/missing"}, want: directory},
-		{name: "missing", meta: nil, err: "required"},
-		{name: "non string", meta: map[string]any{"cwd": 3}, err: "must be a string"},
-		{name: "empty", meta: map[string]any{"cwd": " "}, err: "must not be empty"},
-		{name: "relative", meta: map[string]any{"cwd": "relative"}, err: "must be an absolute path"},
-		{name: "file", meta: map[string]any{"cwd": file}, err: "is not a directory"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			req := mcp.CallToolRequest{Params: mcp.CallToolParams{Meta: &mcp.Meta{AdditionalFields: tc.meta}}}
-			ctx, err := withMCPCallerWorkingDirectory(context.Background(), req)
-			if tc.err != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.err) {
-					t.Fatalf("withMCPCallerWorkingDirectory() error = %v, want %q", err, tc.err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("withMCPCallerWorkingDirectory: %v", err)
-			}
-			result, ok := mcpCallerWorkingDirectoryResultFromContext(ctx)
-			if !ok || result.Directory != tc.want || result.Err != nil {
-				t.Fatalf("caller working directory result = %#v, %t, want %q without error", result, ok, tc.want)
-			}
-		})
-	}
-}
-
-func TestExportDestinationPathUsesMCPCallerWorkingDirectory(t *testing.T) {
-	t.Parallel()
-	callerDirectory := t.TempDir()
-	req := mcp.CallToolRequest{Params: mcp.CallToolParams{Meta: &mcp.Meta{AdditionalFields: map[string]any{"cwd": callerDirectory}}}}
-	ctx, err := withMCPCallerWorkingDirectory(context.Background(), req)
-	if err != nil {
-		t.Fatalf("withMCPCallerWorkingDirectory: %v", err)
-	}
-	ctx = withSurface(ctx, SurfaceMCP)
+	ctx := withSurface(context.Background(), SurfaceMCP)
 	path, err := exportDestinationPath(ctx, exportPayload{
 		ConversationID: "claude:probe",
 		Options: conv.ExportOptions{
@@ -1192,9 +1133,27 @@ func TestExportDestinationPathUsesMCPCallerWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exportDestinationPath: %v", err)
 	}
-	want := filepath.Join(callerDirectory, "claude-probe.txt")
+	if path != "" {
+		t.Fatalf("MCP export path = %q, want inline output", path)
+	}
+}
+
+func TestExportDestinationPathUsesExplicitMCPOutput(t *testing.T) {
+	t.Parallel()
+	want := filepath.Join(t.TempDir(), "transcript.txt")
+	ctx := withSurface(context.Background(), SurfaceMCP)
+	path, err := exportDestinationPath(ctx, exportPayload{
+		ConversationID: "claude:probe",
+		Options: conv.ExportOptions{
+			Format: conv.ExportFormatPlainText,
+		},
+		OutputPath: want,
+	})
+	if err != nil {
+		t.Fatalf("exportDestinationPath: %v", err)
+	}
 	if path != want {
-		t.Fatalf("MCP export path = %q, want caller path %q", path, want)
+		t.Fatalf("MCP export path = %q, want %q", path, want)
 	}
 }
 
