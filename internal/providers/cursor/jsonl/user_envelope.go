@@ -90,7 +90,18 @@ func UnwrapUserEnvelope(text string) (string, time.Time) {
 		// twice more to find the same positions, on a path that runs for
 		// nearly every user turn in every conversation.
 		open, closed := opens[0], closes[0]
-		remaining = remaining[:open[0]] + remaining[open[1]:closed[0]] + remaining[closed[1]:]
+		// The two patterns overlap on the newline after the open marker: the
+		// open pattern claims it, and the close pattern's leading `\s*` starts
+		// on it. A turn whose query is empty has nothing else between them, so
+		// the open match ends past where the close match starts and the body
+		// span runs backwards. An empty query has no body, so the span
+		// collapses instead. Cursor writes this shape whenever the user
+		// attaches context and types nothing.
+		bodyStart, bodyEnd := open[1], closed[0]
+		if bodyEnd < bodyStart {
+			bodyEnd = bodyStart
+		}
+		remaining = remaining[:open[0]] + remaining[bodyStart:bodyEnd] + remaining[closed[1]:]
 	}
 	// What is left is the user's, so it is returned as it stands. The patterns
 	// above consume the envelope's own newlines, and trimming further would
