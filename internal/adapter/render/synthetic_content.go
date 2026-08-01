@@ -482,11 +482,23 @@ func pairKindMatches(text string, kind SyntheticContentKind, spec *syntheticCont
 		if pending == nil {
 			continue
 		}
+		// An open marker's optional attribute values match any byte but a
+		// double quote, so a value holding a literal close marker makes the
+		// open match span that close. collectMarkerOccurrences orders on start
+		// alone, so the spanning open is still pending when the swallowed close
+		// arrives, and the body between them runs backwards. The pair carries
+		// no body in that case, which is what the close being inside the open
+		// already means. spliceSyntheticParts guards the same invariant for
+		// overlapping matches.
+		bodyStart, bodyEnd := pending.end, occ.start
+		if bodyEnd < bodyStart {
+			bodyEnd = bodyStart
+		}
 		matches = append(matches, syntheticMatch{
 			kind:      kind,
 			start:     pending.start,
 			end:       consumeTrailingNewlines(text, occ.end),
-			bodyTrim:  stripDecoration(spec, text[pending.end:occ.start]),
+			bodyTrim:  stripDecoration(spec, text[bodyStart:bodyEnd]),
 			ref:       pending.ref,
 			origin:    pending.origin,
 			encrypted: occ.encrypted,

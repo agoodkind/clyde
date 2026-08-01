@@ -25,6 +25,7 @@ func mapJSONLMessage(
 	message cursorjsonl.TranscriptMessage,
 	_ conversation.LoadOptions,
 ) (transcript.Message, bool) {
+	defer transcript.ContainMappingPanic()
 	textParts := make([]string, 0)
 	tools := make([]transcript.ToolCall, 0)
 	stamped := time.Time{}
@@ -140,6 +141,7 @@ func mapComposerBubble(
 	bubble cursorstore.Bubble,
 	opts conversation.LoadOptions,
 ) (transcript.Message, bool) {
+	defer transcript.ContainMappingPanic()
 	role := "assistant"
 	if bubble.Type == cursorstore.BubbleTypeUser {
 		role = "user"
@@ -230,6 +232,7 @@ func mapLegacyBubble(
 	bubble cursorstore.LegacyChatBubble,
 	_ conversation.LoadOptions,
 ) (transcript.Message, bool) {
+	defer transcript.ContainMappingPanic()
 	var role string
 	switch bubble.Type {
 	case cursorstore.LegacyChatRoleUser:
