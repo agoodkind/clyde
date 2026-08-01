@@ -539,6 +539,7 @@ func latestNonZeroTime(values ...time.Time) time.Time {
 }
 
 func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMessage, opts conversation.LoadOptions) (transcript.Message, bool) {
+	defer transcript.ContainMappingPanic()
 	switch message.Kind {
 	case zedstore.ThreadMessageKindUser:
 		if message.User == nil {

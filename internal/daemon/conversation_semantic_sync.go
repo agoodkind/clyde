@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -286,7 +287,33 @@ func (w *conversationSemanticSyncWorker) run(ctx context.Context) {
 	}
 }
 
+// runPassAndLog runs one pass and contains a panic to that pass, so the ticker
+// in run keeps its cadence and the next pass still happens. Without this a
+// panic anywhere in a pass unwinds past the ticker, and the feeder stops for
+// the life of the daemon generation, returning only on a reload.
+//
+// This is the outer bound rather than the working one. A defect in a provider's
+// per-record mapping is contained by transcript.ContainMappingPanic and costs
+// one message, which is the case that fired in production. A defect elsewhere
+// in a provider is contained by conversation.CollectMessages and fails that one
+// conversation: the load returns an error, this pass counts it in failed and
+// moves to the next conversation, and because the conversation delivered
+// nothing the engine keeps listing it as needed, so later passes retry it.
+// Reaching here means something panicked outside a reader, such as the index
+// scan, the manifest build, the document projection, or the upsert.
 func (w *conversationSemanticSyncWorker) runPassAndLog(ctx context.Context) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		w.log.ErrorContext(ctx, "daemon.conversation_semantic_sync.pass_panic",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"err", fmt.Sprintf("panic: %v", recovered),
+			"stack", string(debug.Stack()),
+		)
+	}()
 	if err := w.runPass(ctx); err != nil && ctx.Err() == nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.pass_failed",
 			"concern", "conversation.semantic",

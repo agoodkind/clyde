@@ -9,6 +9,7 @@ func codexTranscriptMessage(
 	msg codexstore.HistoryMessage,
 	includeSystemMessages bool,
 ) (transcript.Message, bool) {
+	defer transcript.ContainMappingPanic()
 	if msg.Role == "system" {
 		if !includeSystemMessages {
 			return emptyMessage(), false

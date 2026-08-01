@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"goodkind.io/clyde/internal/providerid"
+	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -104,13 +107,44 @@ type Parser interface {
 
 // CollectMessages folds a streaming parse into a full slice. Use it only where a
 // caller needs the whole conversation at once, such as export or full render.
-func CollectMessages(stream iter.Seq2[transcript.Message, error]) ([]transcript.Message, error) {
-	var out []transcript.Message
-	for message, err := range stream {
-		if err != nil {
-			return out, err
+//
+// A provider defect that panics part way through an artifact becomes an error
+// here rather than unwinding into the caller, so a defect in one reader cannot
+// take down whichever surface was reading. The messages collected before the
+// panic are returned alongside the error, matching how a stream error already
+// reports. Callers that treat any error as fatal, which is all of them today,
+// discard them.
+//
+// Every caller that needs a whole conversation folds through here, so one
+// recover covers export, reorient, search, and the ingestion feeder. A caller
+// that ranges the parser stream itself, rather than folding it, is not covered.
+//
+// This is the outer bound, not the working one. A push iterator dies where it
+// panics and cannot be resumed, so recovering here loses the rest of the
+// artifact. [transcript.ContainMappingPanic] sits inside each provider's
+// per-record mapping function and costs one record instead, and it is what
+// handles a mapping defect in practice. This catches what panics between those
+// functions: the read loop, the decode, and the turn assembly.
+func CollectMessages(stream iter.Seq2[transcript.Message, error]) (collected []transcript.Message, err error) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
 		}
-		out = append(out, message)
+		err = fmt.Errorf("collect conversation messages: parser panicked: %v", recovered)
+		slog.Error("conversation.collect_panic",
+			"concern", slogger.ConcernConversationLoad,
+			"component", "conversation",
+			"collected", len(collected),
+			"err", err,
+			"stack", string(debug.Stack()),
+		)
+	}()
+	for message, streamErr := range stream {
+		if streamErr != nil {
+			return collected, streamErr
+		}
+		collected = append(collected, message)
 	}
-	return out, nil
+	return collected, nil
 }

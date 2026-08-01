@@ -207,6 +207,7 @@ func emptyMessage() transcript.Message {
 // holding only tool results is not a turn while its results still answer the
 // assistant turn before it.
 func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeToolResult, bool) {
+	defer transcript.ContainMappingPanic()
 	entry, err := DecodeTranscriptEntry(line)
 	if err != nil {
 		return emptyMessage(), nil, false
