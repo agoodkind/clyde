@@ -35,10 +35,10 @@ import (
 // Containment sits at the mapping function rather than at its caller because a
 // provider yields messages through a push iterator. The producer owns the
 // stack, so a panic that reaches the consumer has already killed the iterator
-// and it cannot be resumed. Recovering there would lose every later message in
-// the conversation, and a conversation that delivers nothing is never marked
-// satisfied by the engine, so it stays on the needed list and the daemon reads
-// and fails it again on every pass. Recovering here costs one record.
+// and it cannot be resumed. Recovering there fails the whole conversation: the
+// feeder retries it and, after repeated failures at unchanged bytes, drops it
+// from the index until its transcript changes. Recovering here costs one
+// record and the conversation still delivers.
 //
 // The stack is the finding. It names the mapping function, its file, and the
 // line that raised, so nothing else needs to be passed in to say where to look.
