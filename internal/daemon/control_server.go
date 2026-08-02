@@ -382,6 +382,9 @@ func contentKindSetFromExportRequest(req *clydev1.ExportTranscriptRequest) conve
 	if req.GetIncludeSystemMessages() {
 		kinds = append(kinds, conversation.ContentKindSystemMessages)
 	}
+	if req.GetIncludeInjected() {
+		kinds = append(kinds, conversation.ContentKindInjected)
+	}
 	if req.GetIncludeRawJsonMetadata() {
 		kinds = append(kinds, conversation.ContentKindRawJSONMetadata)
 	}

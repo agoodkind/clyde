@@ -771,6 +771,7 @@ func exportTranscriptRequest(conversationID string, options conversation.ExportO
 		IncludeToolSummaries:   options.Content.Has(conversation.ContentKindToolSummaries),
 		IncludeToolCalls:       options.Content.Has(conversation.ContentKindToolCalls),
 		IncludeChat:            options.Content.Has(conversation.ContentKindChat),
+		IncludeInjected:        options.Content.Has(conversation.ContentKindInjected),
 		IncludeCompactions:     options.Compaction.IncludeSelector,
 		FullHistory:            options.Compaction.FullHistory,
 	}
