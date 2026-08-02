@@ -29,6 +29,7 @@ var cliOnlyFlags = map[string]bool{
 	"tool_outputs":      true,
 	"system_prompts":    true,
 	"system_messages":   true,
+	"injected":          true,
 	"raw_json_metadata": true,
 	"tools":             true,
 }

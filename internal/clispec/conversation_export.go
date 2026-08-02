@@ -70,7 +70,7 @@ func exportParams() []Param[exportInput] {
 	stdoutParam.CLIOnly = true
 
 	onlyParam := EnumListParam("only",
-		"Content kinds to export, comma-separated: chat, thinking, tools, tool_calls, tool_outputs, system_prompts, system_messages, raw_json_metadata, plus all.",
+		"Content kinds to export, comma-separated: chat, thinking, tools, tool_calls, tool_outputs, system_prompts, system_messages, injected, raw_json_metadata, plus all.",
 		conv.ContentKindSelectorValues(), true,
 		func(in *exportInput, v []string) { in.Kinds = append(in.Kinds, v...) })
 
@@ -132,6 +132,7 @@ func exportParams() []Param[exportInput] {
 		shortcut("tool_outputs", "tool_outputs", "Include tool result bodies."),
 		shortcut("system_prompts", "system_prompts", "Include system-injected prompts."),
 		shortcut("system_messages", "system_messages", "Include provider system transcript records."),
+		shortcut("injected", "injected", "Include hook-pushed context inside user messages."),
 		shortcut("raw_json_metadata", "raw_json_metadata", "Include JSON metadata fields."),
 		shortcut("tools", "tools", "Include summary-only tool lines."),
 		shortcut("all", "all", "Include every non-tool kind plus tool outputs."),

@@ -320,7 +320,7 @@ func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tra
 		return p.streamWithToolOutputs(path, opts)
 	}
 	return func(yield func(transcript.Message, error) bool) {
-		file, err := os.Open(path)
+		file, err := os.Open(filepath.Clean(path))
 		if err != nil {
 			slog.Warn("providers.claude.parser.open_failed", "concern", concern, "component", "claude", "path", path, "err", err)
 			yield(emptyMessage(), fmt.Errorf("open transcript: %w", err))
@@ -330,6 +330,7 @@ func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tra
 		parseOpts := parseOptions{
 			PreserveSystemPrompts: opts.IncludeSystemPrompts,
 			IncludeSystemMessages: opts.IncludeSystemMessages,
+			IncludeInjected:       opts.IncludeInjected,
 		}
 		reader := bufio.NewReader(file)
 		for {
@@ -390,7 +391,7 @@ func (p Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions
 // and every tool result the file carried. A result arrives on a later line than
 // the call it answers, which is why the turns are buffered rather than streamed.
 func collectWithToolResults(path string, opts conversation.LoadOptions) ([]transcript.Message, []claudeToolResult, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		slog.Warn("providers.claude.parser.open_failed", "concern", concern, "component", "claude", "path", path, "err", err)
 		return nil, nil, fmt.Errorf("open transcript: %w", err)
@@ -400,6 +401,7 @@ func collectWithToolResults(path string, opts conversation.LoadOptions) ([]trans
 	parseOpts := parseOptions{
 		PreserveSystemPrompts: opts.IncludeSystemPrompts,
 		IncludeSystemMessages: opts.IncludeSystemMessages,
+		IncludeInjected:       opts.IncludeInjected,
 	}
 	messages := make([]transcript.Message, 0)
 	results := make([]claudeToolResult, 0)

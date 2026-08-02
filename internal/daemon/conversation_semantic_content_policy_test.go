@@ -282,7 +282,7 @@ func TestUnknownContentKindFailsResolution(t *testing.T) {
 }
 
 // TestExcludedKindsNeverReachTheParser proves the gate pushes down into
-// LoadOptions for the three kinds that have a field, so content nobody selected
+// LoadOptions for the four kinds that have a field, so content nobody selected
 // is never parsed rather than parsed and discarded.
 func TestExcludedKindsNeverReachTheParser(t *testing.T) {
 	defaultKinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
@@ -290,16 +290,16 @@ func TestExcludedKindsNeverReachTheParser(t *testing.T) {
 		t.Fatalf("load default config: %v", err)
 	}
 	defaultOptions := SemanticConversationLoadOptions(defaultKinds)
-	if defaultOptions.IncludeSystemPrompts || defaultOptions.IncludeSystemMessages || defaultOptions.IncludeToolOutputs {
+	if defaultOptions.IncludeSystemPrompts || defaultOptions.IncludeSystemMessages || defaultOptions.IncludeToolOutputs || defaultOptions.IncludeInjected {
 		t.Fatalf("default load options = %+v, want every gated kind off", defaultOptions)
 	}
 
-	optedIn, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \"system_messages\", \"system_prompts\", \"tool_outputs\"]\n")
+	optedIn, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \"system_messages\", \"system_prompts\", \"tool_outputs\", \"injected\"]\n")
 	if err != nil {
 		t.Fatalf("load opted-in config: %v", err)
 	}
 	optedInOptions := SemanticConversationLoadOptions(optedIn)
-	if !optedInOptions.IncludeSystemPrompts || !optedInOptions.IncludeSystemMessages || !optedInOptions.IncludeToolOutputs {
+	if !optedInOptions.IncludeSystemPrompts || !optedInOptions.IncludeSystemMessages || !optedInOptions.IncludeToolOutputs || !optedInOptions.IncludeInjected {
 		t.Fatalf("opted-in load options = %+v, want every gated kind on", optedInOptions)
 	}
 }
