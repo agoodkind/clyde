@@ -14,6 +14,10 @@ import (
 type parseOptions struct {
 	PreserveSystemPrompts bool
 	IncludeSystemMessages bool
+	// IncludeInjected keeps hook-pushed text inside user messages: the hook
+	// additional-context blocks Claude Code splices after the typed prompt,
+	// hook feedback lines, and the legacy user-prompt-submit-hook tag.
+	IncludeInjected bool
 }
 
 // contentBlockType enumerates the content-block "type" strings the Claude
@@ -166,12 +170,48 @@ var (
 		"local-command-stderr",
 		"local-command-caveat",
 		"system-reminder",
-		"user-prompt-submit-hook",
 		"task-notification",
+		"bash-input",
 		"bash-stdout",
 		"bash-stderr",
 	}
 )
+
+// injectedTags are the hook-carrier tags: Claude Code wrapped UserPromptSubmit
+// output in this element before it switched to splicing plain text.
+var injectedTags = []string{
+	"user-prompt-submit-hook",
+}
+
+var injectedPatterns = func() []*regexp.Regexp {
+	out := make([]*regexp.Regexp, 0, len(injectedTags))
+	for _, t := range injectedTags {
+		out = append(out, regexp.MustCompile(`(?is)<`+t+`\b[^>]*>.*?</`+t+`>`))
+	}
+	return out
+}()
+
+// injectedContextHeadings mark where Claude Code splices hook additional
+// context into the user message body. The harness always appends the block
+// after the typed prompt and nothing user-typed follows it, verified across
+// every occurrence in the local corpus, so the strip cuts from the heading to
+// the end of the message. "Stop hook feedback:" is deliberately absent: its
+// body quotes the user's own goal text, so cutting to end-of-message there
+// would delete user-authored content.
+var injectedContextHeadings = []string{
+	"UserPromptSubmit hook additional context:",
+	"SessionStart hook additional context:",
+}
+
+// injectedFeedbackLinePrefixes mark single hook-output lines the harness
+// splices into the body. They are dropped line by line, never to end of
+// message, because surrounding lines can be user text.
+var injectedFeedbackLinePrefixes = []string{
+	"Stop hook feedback:",
+	"PreToolUse hook feedback:",
+	"PostToolUse hook feedback:",
+	"UserPromptSubmit hook feedback:",
+}
 
 var noisePatterns = func() []*regexp.Regexp {
 	out := make([]*regexp.Regexp, 0, len(noiseTags))
@@ -196,6 +236,7 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}
 }
 
@@ -243,6 +284,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}
 
 	if entry.Type == EntryTypeUser {
@@ -252,8 +294,15 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 			return emptyMessage(), content.Results, false
 		}
 		text := content.Text
+		if !opts.IncludeInjected {
+			stripped, injected := stripInjectedText(text)
+			text = stripped
+			m.HarnessStrips.Injected = injected
+		}
 		if !opts.PreserveSystemPrompts {
-			text = stripSystemTags(text)
+			stripped, system := stripSystemTags(text)
+			text = stripped
+			m.HarnessStrips.System = system
 		}
 		m.Text = strings.TrimSpace(text)
 		if entry.IsCompactSummary {
@@ -316,6 +365,7 @@ func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}, true
 }
 
@@ -649,30 +699,60 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 	m.Text = strings.Join(textParts, "\n\n")
 }
 
-// stripSystemTags removes system-injected tags from user messages.
-func stripSystemTags(s string) string {
+// stripSystemTags removes system-injected tags from user messages. The count
+// reports how many tag blocks were removed.
+func stripSystemTags(s string) (string, int) {
+	count := len(systemTagRe.FindAllStringIndex(s, -1))
 	s = systemTagRe.ReplaceAllString(s, "")
 	for _, re := range noisePatterns {
+		count += len(re.FindAllStringIndex(s, -1))
 		s = re.ReplaceAllString(s, "")
 	}
 	if idx := strings.Index(s, "<"); idx == 0 {
 		if end := strings.Index(s, ">"); end > 0 && end < 80 {
 			s = s[end+1:]
+			count++
+		}
+	}
+	return strings.TrimSpace(s), count
+}
+
+// stripInjectedText removes hook-pushed content from a user message: the
+// legacy hook-carrier tag, hook feedback lines, and the hook additional
+// context block spliced after the typed prompt. The count reports how many
+// pieces were removed.
+func stripInjectedText(s string) (string, int) {
+	count := 0
+	for _, re := range injectedPatterns {
+		count += len(re.FindAllStringIndex(s, -1))
+		s = re.ReplaceAllString(s, "")
+	}
+	for _, heading := range injectedContextHeadings {
+		if idx := strings.Index(s, heading); idx >= 0 {
+			s = s[:idx]
+			count++
 		}
 	}
 	if strings.Contains(s, "hook feedback:") {
 		var keep []string
 		for line := range strings.SplitSeq(s, "\n") {
 			t := strings.TrimSpace(line)
-			if strings.HasPrefix(t, "Stop hook feedback:") ||
-				strings.HasPrefix(t, "PreToolUse hook feedback:") ||
-				strings.HasPrefix(t, "PostToolUse hook feedback:") ||
-				strings.HasPrefix(t, "UserPromptSubmit hook feedback:") {
+			if hasInjectedFeedbackPrefix(t) {
+				count++
 				continue
 			}
 			keep = append(keep, line)
 		}
 		s = strings.Join(keep, "\n")
 	}
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(s), count
+}
+
+func hasInjectedFeedbackPrefix(line string) bool {
+	for _, prefix := range injectedFeedbackLinePrefixes {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
 }

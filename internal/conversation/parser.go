@@ -81,6 +81,10 @@ type LoadOptions struct {
 	IncludeSystemPrompts  bool
 	IncludeSystemMessages bool
 	IncludeToolOutputs    bool
+	// IncludeInjected keeps text that hooks and user tooling pushed into user
+	// messages. When false, each provider parser removes the injected content
+	// it recognizes; the markers stay provider-owned behind this generic bit.
+	IncludeInjected bool
 }
 
 // Parser reads one provider's raw conversation artifacts. Each provider

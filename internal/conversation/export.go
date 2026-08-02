@@ -20,6 +20,7 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 		IncludeSystemPrompts:  options.Content.Has(ContentKindSystemPrompts),
 		IncludeSystemMessages: true,
 		IncludeToolOutputs:    options.Content.Has(ContentKindToolOutputs),
+		IncludeInjected:       options.Content.Has(ContentKindInjected),
 	})
 	if err != nil {
 		return nil, err

@@ -26,6 +26,7 @@ func codexTranscriptMessage(
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
+			HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 		}, true
 	}
 
@@ -45,5 +46,6 @@ func codexTranscriptMessage(
 		Thinking:          msg.Thinking,
 		HasTools:          msg.HasTools,
 		Tools:             msg.Tools,
+		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}, true
 }

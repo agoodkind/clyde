@@ -156,12 +156,16 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 }
 
 // HistoryOptions controls which non-conversational records StreamMessages
-// surfaces. System messages are the compaction boundaries; system prompts are
-// the session base instructions and the developer-role guidance messages. Both
-// default off so a plain history stays to user and assistant turns plus tools.
+// surfaces. System messages are the compaction boundaries and the harness
+// frames codex writes into the user role; system prompts are the session base
+// instructions, the developer-role guidance messages, and the AGENTS.md
+// instruction messages; injected content is what user tooling pushes into the
+// user role, such as automation heartbeats and goal context. All default off
+// so a plain history stays to user and assistant turns plus tools.
 type HistoryOptions struct {
 	IncludeSystemMessages bool
 	IncludeSystemPrompts  bool
+	IncludeInjected       bool
 }
 
 // StreamMessages yields normalized Codex rollout messages as each JSONL envelope
@@ -323,9 +327,9 @@ func streamMessageFromEnvelope(envelope historyLine, opts HistoryOptions) (Histo
 	lineTime := parseCodexTime(envelope.Timestamp)
 	switch historyEnvelopeType(envelope.Type) {
 	case historyEnvelopeResponseItem:
-		return responseItemMessage(envelope.Payload, lineTime, opts.IncludeSystemPrompts)
+		return responseItemMessage(envelope.Payload, lineTime, opts)
 	case historyEnvelopeEventMsg:
-		return eventMessage(envelope.Payload, lineTime)
+		return eventMessage(envelope.Payload, lineTime, opts)
 	case historyEnvelopeCompacted:
 		if !opts.IncludeSystemMessages {
 			return emptyHistoryMessage(), false

@@ -330,6 +330,7 @@ func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tra
 		parseOpts := parseOptions{
 			PreserveSystemPrompts: opts.IncludeSystemPrompts,
 			IncludeSystemMessages: opts.IncludeSystemMessages,
+			IncludeInjected:       opts.IncludeInjected,
 		}
 		reader := bufio.NewReader(file)
 		for {
@@ -400,6 +401,7 @@ func collectWithToolResults(path string, opts conversation.LoadOptions) ([]trans
 	parseOpts := parseOptions{
 		PreserveSystemPrompts: opts.IncludeSystemPrompts,
 		IncludeSystemMessages: opts.IncludeSystemMessages,
+		IncludeInjected:       opts.IncludeInjected,
 	}
 	messages := make([]transcript.Message, 0)
 	results := make([]claudeToolResult, 0)

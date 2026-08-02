@@ -214,6 +214,12 @@ type conversationSemanticSyncStats struct {
 	// indexed class was empty for them. It is deliberate, so it is reported
 	// beside failed rather than inside it.
 	policySkipped int
+	// injectedStripped and systemStripped total what the provider parsers
+	// removed from offered message text this pass: injected spans are
+	// hook-pushed context, system spans are harness-native tags. Both are the
+	// policy working, reported so a live pass proves stripping ran.
+	injectedStripped int
+	systemStripped   int
 }
 
 // installConversationSemanticSyncStop creates the feeder's worker context and
@@ -426,6 +432,8 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		failed:            0,
 		failedSuppressed:  failedSuppressed,
 		policySkipped:     0,
+		injectedStripped:  0,
+		systemStripped:    0,
 	}
 	// An empty manifest still syncs when this pass omitted anything, because
 	// the engine's copy of the manifest is whatever the last sync stated.
@@ -660,6 +668,8 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 		// A message the content policy withheld is counted apart from failed and
 		// deferred, because it is the policy working rather than content lost.
 		stats.policySkipped += built.PolicySkipped
+		stats.injectedStripped += built.InjectedStripped
+		stats.systemStripped += built.SystemStripped
 		if len(built.Docs) == 0 {
 			// The conversation rendered no deliverable documents, so the engine
 			// can never mark it satisfied and would keep listing it as needed.
@@ -784,6 +794,8 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 			"failed", stats.failed,
 			"failed_suppressed", stats.failedSuppressed,
 			"policy_skipped", stats.policySkipped,
+			"injected_stripped", stats.injectedStripped,
+			"system_stripped", stats.systemStripped,
 		)
 		return
 	}
@@ -796,162 +808,8 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 	)
 }
 
-// SemanticConversationLoadOptions maps the selected content kinds onto the
-// parser's load gate, so a kind nobody selected is never parsed rather than
-// parsed and discarded. Three of the eight kinds have a matching field; the rest
-// are applied when the documents are projected.
-func SemanticConversationLoadOptions(kinds conversation.ContentKindSet) conversation.LoadOptions {
-	return conversation.LoadOptions{
-		IncludeSystemPrompts:  kinds.Has(conversation.ContentKindSystemPrompts),
-		IncludeSystemMessages: kinds.Has(conversation.ContentKindSystemMessages),
-		IncludeToolOutputs:    kinds.Has(conversation.ContentKindToolOutputs),
-	}
-}
-
-// SemanticConversationDocuments is one conversation's projection: the documents
-// offered to the engine, and how many messages the content policy withheld.
-//
-// The two counts stay separate all the way to the caller because they mean
-// opposite things. A withheld message is the policy working, while a conversation
-// that fails to load is content lost, and a counter that mixed them would hide
-// real loss behind routine policy.
-type SemanticConversationDocuments struct {
-	Docs          []semsearch.SemDoc
-	PolicySkipped int
-}
-
-// BuildSemanticConversationDocuments projects loaded transcript messages into
-// the document shape sent to lm-semantic-search, keeping only the content the
-// policy names.
-//
-// A message whose every indexed class is empty is not offered at all. That rule
-// is derived rather than configured: there is nothing to retrieve, so there is
-// no setting under which offering it would be right. It is deliberately not the
-// same as "the text is empty", because a turn carrying only a tool call or only
-// reasoning has no text and still has content, and skipping on empty text would
-// discard it.
-//
-// A skipped message keeps its index rather than renumbering the ones after it.
-// The message index is a position in this same loaded slice, and the search path
-// feeds an engine hit's index back into the loader as a position, so renumbering
-// would silently shift every later hit's context window.
-func BuildSemanticConversationDocuments(
-	record conversation.Record,
-	messages []transcript.Message,
-	kinds conversation.ContentKindSet,
-) (SemanticConversationDocuments, error) {
-	parentConversationID := ""
-	if derivedParentID, ok := conversation.ParentConversationID(record); ok {
-		parentConversationID = derivedParentID
-	}
-	built := SemanticConversationDocuments{
-		Docs:          make([]semsearch.SemDoc, 0, len(messages)),
-		PolicySkipped: 0,
-	}
-	for i, message := range messages {
-		if i > int(maxSemanticMessageIndex) {
-			return SemanticConversationDocuments{Docs: nil, PolicySkipped: 0},
-				fmt.Errorf("message index %d exceeds semantic search int32 limit", i)
-		}
-		// A control record is the harness talking to itself rather than
-		// anything a person wrote or read, so embedding it spends the same
-		// work as a real message and returns a result nobody searched for.
-		// Reading already withholds these, in messageCountsForLastN and in
-		// conversation info, and this is that judgement applied to the feed.
-		if message.Visibility == transcript.MessageVisibilityMetaOnly {
-			built.PolicySkipped++
-			continue
-		}
-		text := ""
-		if kinds.Has(conversation.ContentKindChat) {
-			// Replace invalid UTF-8 so the protobuf upsert never fails to marshal
-			// on a transcript byte sequence the encoder rejects (one codex doc
-			// with invalid UTF-8 used to break the whole batch).
-			text = strings.ToValidUTF8(message.Text, "")
-			// Text that holds only spacing carries nothing a search could return,
-			// so offer it as no text at all. The receiving contract carries text
-			// as a plain string, where an unset field and an empty one are the
-			// same bytes, so absence is expressible only as empty, and a single
-			// space is content on the wire that would be stored as an
-			// unreturnable row.
-			//
-			// Only text that is entirely spacing is replaced. Trimming text that
-			// has content would make every already-stored message differ from its
-			// newly offered form, and the receiver re-embeds a message whose text
-			// changed, so the whole collection would be embedded again for no
-			// gain.
-			if strings.TrimSpace(text) == "" {
-				text = ""
-			}
-		}
-		thinking := ""
-		if kinds.Has(conversation.ContentKindThinking) {
-			thinking = strings.ToValidUTF8(message.Thinking, "")
-		}
-		tools := semanticToolCalls(message.Tools, kinds)
-		if text == "" && thinking == "" && len(tools) == 0 {
-			built.PolicySkipped++
-			continue
-		}
-		built.Docs = append(built.Docs, semsearch.SemDoc{
-			ConversationID:       record.ID,
-			ParentConversationID: parentConversationID,
-			MessageIndex:         int32(i),
-			Role:                 message.Role,
-			TimestampUnix:        message.Timestamp.Unix(),
-			Text:                 text,
-			Tools:                tools,
-			Thinking:             thinking,
-			WorkspaceRoot:        record.WorkspaceRoot,
-			Archived:             record.Archived,
-		})
-	}
-	return built, nil
-}
-
-// semanticToolCalls projects a message's tool calls at the selected detail level.
-//
-// The three tool kinds are nested rather than parallel, and
-// [conversation.NewContentKindSet] collapses them, so exactly one applies: the
-// summary level carries the tool's name alone, the call level adds what the user
-// saw, and the output level adds what the tool returned. Selecting
-// no tool kind drops the calls entirely.
-//
-// The projection stays structured so the engine can store each call separately.
-func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKindSet) []semsearch.SemToolCall {
-	summariesOnly := kinds.Has(conversation.ContentKindToolSummaries)
-	withArguments := kinds.Has(conversation.ContentKindToolCalls)
-	withOutput := kinds.Has(conversation.ContentKindToolOutputs)
-	if !summariesOnly && !withArguments && !withOutput {
-		return nil
-	}
-	out := make([]semsearch.SemToolCall, 0, len(tools))
-	for _, tool := range tools {
-		projected := semsearch.SemToolCall{
-			Name:     tool.Name,
-			Display:  "",
-			LangHint: "",
-			Output:   "",
-			IsError:  tool.IsError,
-		}
-		if withArguments || withOutput {
-			// The provider's parser rendered what the user saw and named the
-			// language it is written in. Re-deriving either here would put
-			// knowledge of every harness's tool shapes into a layer that must
-			// not hold it.
-			projected.Display = strings.ToValidUTF8(tool.Display, "")
-			projected.LangHint = tool.DisplayLang
-		}
-		if withOutput {
-			projected.Output = tool.Output
-		}
-		out = append(out, projected)
-	}
-	return out
-}
-
 func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) (SemanticConversationDocuments, error) {
-	empty := SemanticConversationDocuments{Docs: nil, PolicySkipped: 0}
+	empty := SemanticConversationDocuments{Docs: nil, PolicySkipped: 0, InjectedStripped: 0, SystemStripped: 0}
 	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentKinds))
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
