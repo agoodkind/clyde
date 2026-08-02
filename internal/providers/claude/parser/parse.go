@@ -202,6 +202,13 @@ var injectedPatterns = func() []*regexp.Regexp {
 // trailing splice is removed. "Stop hook feedback:" is deliberately absent:
 // its body quotes the user's own goal text, so cutting to end-of-message there
 // would delete user-authored content.
+//
+// Accepted residual: a lone line-start heading typed by a person, with no
+// genuine splice after it, is byte-indistinguishable from a real splice, and
+// the cut would remove their trailing text. The local corpus holds zero such
+// messages (every line-start occurrence in a visible message is a genuine
+// trailing splice), and whenever the hooks are active a genuine splice
+// follows the quote and anchors the cut safely past it.
 var injectedContextHeadingRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?m)^UserPromptSubmit hook additional context:`),
 	regexp.MustCompile(`(?m)^SessionStart hook additional context:`),
