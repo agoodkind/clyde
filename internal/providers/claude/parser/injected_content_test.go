@@ -131,6 +131,25 @@ func TestStreamKeepsAQuotedHookHeadingBeforeTheRealSplice(t *testing.T) {
 	}
 }
 
+// TestStreamKeepsAQuotedHeadingOfTheOtherType pins the cross-type collision:
+// a person quotes one heading at line start and the genuine splice that
+// follows is the OTHER heading type. The cut anchors at the last match across
+// every type, so the person's text between the quote and the splice survives.
+func TestStreamKeepsAQuotedHeadingOfTheOtherType(t *testing.T) {
+	t.Parallel()
+	path := writeInjectedFixture(t,
+		`"my logs show this line:\nUserPromptSubmit hook additional context: something\nis that expected?\n\nSessionStart hook additional context: reorient text"`)
+
+	texts := streamInjectedFixture(t, path, false)
+	if len(texts) != 1 {
+		t.Fatalf("messages=%d want 1", len(texts))
+	}
+	want := "my logs show this line:\nUserPromptSubmit hook additional context: something\nis that expected?"
+	if texts[0] != want {
+		t.Fatalf("text=%q want the typed prompt with its quoted heading kept", texts[0])
+	}
+}
+
 // TestStreamKeepsAnInlineHeadingMention pins the line-anchor guard: a heading
 // mentioned mid-line is a person's sentence, not a splice, and the message is
 // untouched.

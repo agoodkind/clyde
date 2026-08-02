@@ -731,12 +731,23 @@ func stripInjectedText(s string) (string, int) {
 		count += len(re.FindAllStringIndex(s, -1))
 		s = re.ReplaceAllString(s, "")
 	}
+	// One cut at the last heading match across every heading type. Cutting
+	// per type would let an earlier quoted heading of one type delete the
+	// user text between it and a later genuine splice of the other type. When
+	// a message carries two genuine splices of different types, cutting at
+	// the later one retains the earlier block, which is the safe direction:
+	// retained harness text costs a junk row, a wrong cut costs a person's
+	// words.
+	lastHeading := -1
 	for _, headingRe := range injectedContextHeadingRes {
-		matches := headingRe.FindAllStringIndex(s, -1)
-		if len(matches) == 0 {
-			continue
+		for _, match := range headingRe.FindAllStringIndex(s, -1) {
+			if match[0] > lastHeading {
+				lastHeading = match[0]
+			}
 		}
-		s = s[:matches[len(matches)-1][0]]
+	}
+	if lastHeading >= 0 {
+		s = s[:lastHeading]
 		count++
 	}
 	if strings.Contains(s, "hook feedback:") {
