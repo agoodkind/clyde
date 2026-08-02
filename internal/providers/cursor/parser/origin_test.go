@@ -325,3 +325,110 @@ func cursorRecordIDs(records map[string]conversation.Record) []string {
 	}
 	return out
 }
+
+// scanCursorRecordsByPath discovers and scans every Cursor candidate, returning
+// the records keyed by artifact path so twin transcripts that share a native id
+// stay separately visible.
+func scanCursorRecordsByPath(t *testing.T) map[string]conversation.Record {
+	t.Helper()
+	parser := New()
+	candidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	records := make(map[string]conversation.Record, len(candidates))
+	for _, candidate := range candidates {
+		record, ok := parser.ScanRecord(candidate.Path, candidate.Stamp)
+		if !ok {
+			continue
+		}
+		records[candidate.Path] = record
+	}
+	return records
+}
+
+// TestTopLevelTwinOfASubagentTranscriptClassifiesSubagent closes the twin-file
+// leak. Cursor writes a dispatched conversation's transcript twice, and the
+// top-level copy carries no marker of any kind, so the subagents/ copy is what
+// says the uuid was dispatched. Both copies must classify as the subagent
+// conversation, or the twin is listed and fed as the person's own work.
+func TestTopLevelTwinOfASubagentTranscriptClassifiesSubagent(t *testing.T) {
+	root := writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+		"proj/agent-transcripts/" + cursorSubagentConversationID + "/" + cursorSubagentConversationID + ".jsonl":         cursorTranscriptBody("dispatched work"),
+	})
+
+	records := scanCursorRecordsByPath(t)
+
+	twinPath := filepath.Join(root, filepath.FromSlash(
+		"proj/agent-transcripts/"+cursorSubagentConversationID+"/"+cursorSubagentConversationID+".jsonl"))
+	twin, ok := records[twinPath]
+	if !ok {
+		t.Fatalf("twin transcript missing from scanned records")
+	}
+	if twin.Origin != conversation.OriginSubagent {
+		t.Fatalf("twin origin = %q, want %q; the subagents/ copy says this uuid was dispatched", twin.Origin, conversation.OriginSubagent)
+	}
+	if twin.Lineage == nil || twin.Lineage.ParentNativeID != cursorParentConversationID {
+		t.Fatalf("twin lineage = %#v, want the dispatching conversation as the parent", twin.Lineage)
+	}
+	parentPath := filepath.Join(root, filepath.FromSlash(
+		"proj/agent-transcripts/"+cursorParentConversationID+"/"+cursorParentConversationID+".jsonl"))
+	if parent := records[parentPath]; parent.Origin != conversation.OriginUser {
+		t.Fatalf("parent origin = %q, want %q; the twin rule must not reach the dispatching conversation", parent.Origin, conversation.OriginUser)
+	}
+}
+
+// TestTwinRuleIsScopedToOneProject pins the scope: a uuid coincidence across
+// projects must not reclassify an unrelated conversation, because the
+// subagents/ copy and its twin always sit in the same project directory.
+func TestTwinRuleIsScopedToOneProject(t *testing.T) {
+	root := writeCursorProject(t, map[string]string{
+		"projA/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"projA/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+		"projB/agent-transcripts/" + cursorSubagentConversationID + "/" + cursorSubagentConversationID + ".jsonl":         cursorTranscriptBody("an unrelated conversation"),
+	})
+
+	records := scanCursorRecordsByPath(t)
+
+	otherProjectPath := filepath.Join(root, filepath.FromSlash(
+		"projB/agent-transcripts/"+cursorSubagentConversationID+"/"+cursorSubagentConversationID+".jsonl"))
+	other, ok := records[otherProjectPath]
+	if !ok {
+		t.Fatalf("other-project transcript missing from scanned records")
+	}
+	if other.Origin != conversation.OriginUser {
+		t.Fatalf("other-project origin = %q, want %q; a twin in another project proves nothing about this uuid", other.Origin, conversation.OriginUser)
+	}
+}
+
+// TestScanRecordWithoutDiscoverClassifiesTheTwinBySubagentSibling covers the
+// direct resolve, which classifies one path with no discovery walk. The twin
+// rule must hold there too, or a resolve-first code path would serve the twin
+// as the person's own conversation.
+func TestScanRecordWithoutDiscoverClassifiesTheTwinBySubagentSibling(t *testing.T) {
+	relative := "proj/agent-transcripts/" + cursorSubagentConversationID + "/" + cursorSubagentConversationID + ".jsonl"
+	root := writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+		relative: cursorTranscriptBody("dispatched work"),
+	})
+	path := filepath.Join(root, filepath.FromSlash(relative))
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat twin transcript: %v", err)
+	}
+
+	record, ok := New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
+	if !ok {
+		t.Fatalf("ScanRecord returned ok=false for %s", path)
+	}
+
+	if record.Origin != conversation.OriginSubagent {
+		t.Fatalf("origin = %q, want %q from the subagents/ twin", record.Origin, conversation.OriginSubagent)
+	}
+	if record.Lineage == nil || record.Lineage.ParentNativeID != cursorParentConversationID {
+		t.Fatalf("lineage = %#v, want the dispatching conversation as the parent", record.Lineage)
+	}
+}
