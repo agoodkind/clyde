@@ -256,3 +256,62 @@ func TestFailedSuppressionIsBounded(t *testing.T) {
 		t.Fatalf("failedLoad size = %d, want 0 once the conversation left the scan", len(worker.failedLoad))
 	}
 }
+
+// TestSuppressionOfWholeCorpusStillSyncsEmptyManifest pins the wire contract
+// for the last conversation standing. The engine's copy of the manifest is
+// whatever the last sync stated, so a pass whose suppression empties the
+// manifest must still sync that empty manifest; skipping it would leave the
+// suppressed conversation in the engine's needed set forever. Absence is
+// retain-only on the wire, so the empty sync removes nothing from the store.
+func TestSuppressionOfWholeCorpusStillSyncsEmptyManifest(t *testing.T) {
+	failingID := "cursor:broken"
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(failingID), Stamp: semanticTestStamp(0, 200)},
+		},
+		messagesByID: map[string][]transcript.Message{},
+		loadOptions:  nil,
+	}
+	client := &fakeConversationSemanticClient{needed: []string{failingID}}
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+
+	runPasses(t, worker, failedLoadSuppressThreshold)
+	runPasses(t, worker, 1)
+
+	suppressingSync := len(client.syncCalls) - 1
+	if suppressingSync != failedLoadSuppressThreshold {
+		t.Fatalf("sync calls = %d, want %d: the suppressing pass must still sync", len(client.syncCalls), failedLoadSuppressThreshold+1)
+	}
+	if len(client.syncCalls[suppressingSync].Manifest) != 0 {
+		t.Fatalf("suppressing sync manifest = %+v, want empty", client.syncCalls[suppressingSync].Manifest)
+	}
+}
+
+// TestZeroDocumentSuppressionOfWholeCorpusStillSyncsEmptyManifest pins the
+// same wire contract for the zero-document path. A conversation that delivers
+// no documents enters emptyDelivered and leaves the next manifest; when it was
+// the whole corpus, that pass must still sync the empty manifest so the engine
+// stops listing it as needed.
+func TestZeroDocumentSuppressionOfWholeCorpusStillSyncsEmptyManifest(t *testing.T) {
+	emptyID := "cursor:empty"
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(emptyID), Stamp: semanticTestStamp(0, 200)},
+		},
+		messagesByID: map[string][]transcript.Message{emptyID: {}},
+		loadOptions:  nil,
+	}
+	client := &fakeConversationSemanticClient{needed: []string{emptyID}}
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+
+	// Pass one advertises, delivers nothing, and records the zero-document
+	// suppression. Pass two omits the conversation, emptying the manifest.
+	runPasses(t, worker, 2)
+
+	if len(client.syncCalls) != 2 {
+		t.Fatalf("sync calls = %d, want 2: the suppressing pass must still sync", len(client.syncCalls))
+	}
+	if len(client.syncCalls[1].Manifest) != 0 {
+		t.Fatalf("suppressing sync manifest = %+v, want empty", client.syncCalls[1].Manifest)
+	}
+}
