@@ -476,6 +476,10 @@ message ExportTranscriptRequest {
   // token_model overrides the model whose tokenizer counts max_tokens. Empty
   // derives the tokenizer from the conversation's provider and model.
   string token_model = 18;
+  // include_injected keeps hook-pushed text inside user messages: hook
+  // additional context and hook feedback the harness spliced into the prompt
+  // body.
+  bool include_injected = 19;
 }
 
 message ConversationLineage {
