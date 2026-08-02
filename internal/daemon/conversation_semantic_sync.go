@@ -51,21 +51,28 @@ func (f *conversationSemanticFreshness) snapshot() conversation.SearchFreshness 
 }
 
 // publish records one pass's stats as the latest freshness. embedded is the
-// cumulative conversation coverage (manifest minus the conversations the engine
-// still needs), pending is the conversations the engine still needs that this
-// pass did not cover, and last_sync is the pass completion time on the repo
+// cumulative conversation coverage (advertised manifest minus the conversations
+// the engine still needs), pending is the conversations whose content the store
+// does not hold yet, and last_sync is the pass completion time on the repo
 // clock. embedded is conversations, not the per-pass document count, so
-// embedded + needed == manifest and the number tracks real coverage.
+// embedded + needed + failedSuppressed == manifest and the number tracks real
+// coverage.
+//
+// A conversation suppressed after repeated load failures is counted back into
+// manifest and pending. It left the advertised manifest, but its content is
+// still missing from the store, and freshness exists so a thin search result
+// reads as a cold index rather than a true miss. Without this a suppressed
+// conversation would read as fully indexed.
 func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncStats) {
 	if f == nil {
 		return
 	}
-	pending := max(stats.needed-stats.sentConversations, 0)
+	pending := max(stats.needed-stats.sentConversations, 0) + stats.failedSuppressed
 	embedded := max(stats.manifest-stats.needed, 0)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.freshness = conversation.SearchFreshness{
-		Manifest:     stats.manifest,
+		Manifest:     stats.manifest + stats.failedSuppressed,
 		Needed:       stats.needed,
 		Embedded:     embedded,
 		Pending:      pending,
@@ -76,7 +83,20 @@ func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncSt
 const (
 	conversationSemanticSyncInterval = time.Minute
 	maxSemanticMessageIndex          = int32(1<<31 - 1)
+	// failedLoadSuppressThreshold is how many consecutive load failures at one
+	// fingerprint a conversation gets before the manifest stops advertising it.
+	// Passes run a minute apart, so a transient failure such as a busy Cursor
+	// SQLite store has minutes to clear before its conversation is suppressed.
+	failedLoadSuppressThreshold = 3
 )
+
+// failedLoadRecord is one conversation's consecutive load-failure history at a
+// single fingerprint. A failure at a different fingerprint restarts the count,
+// because the new bytes have not been tried yet.
+type failedLoadRecord struct {
+	fingerprint string
+	failures    int
+}
 
 type conversationSemanticIndex interface {
 	ListWithStamps(context.Context) ([]conversation.StampedRecord, error)
@@ -136,6 +156,34 @@ type conversationSemanticSyncWorker struct {
 	// re-includes it once its content, and therefore its fingerprint, changes.
 	// The worker runs in a single goroutine, so the map needs no lock.
 	emptyDelivered map[string]string
+	// failedLoad maps a conversation id to its consecutive load failures at one
+	// fingerprint. A conversation that yields no document is never marked
+	// satisfied by the engine, so without this a permanently failing
+	// conversation is read and re-read on every pass forever: the daemon never
+	// goes idle, the log grows without bound, and the pass never reports itself
+	// caught up.
+	//
+	// Suppression waits for failedLoadSuppressThreshold consecutive failures at
+	// the same fingerprint, because a load failure can be transient. Cursor's
+	// live SQLite store can be busy while Cursor checkpoints, and a single busy
+	// read must not take a finished conversation out of the index for the life
+	// of the daemon. A transient failure therefore retries on the next passes
+	// and a successful load clears its entry; only a failure that repeats at
+	// unchanged bytes is suppressed.
+	//
+	// It is deliberately separate from emptyDelivered. That map means the
+	// conversation has nothing to index, so dropping it from the manifest is
+	// the truth. This one means the conversation has content the reader could
+	// not produce, so dropping it from the manifest hides a real loss. Sharing
+	// one map would let the second meaning inherit the first's silence, which
+	// is what the failed counter's contract forbids. Suppression here is
+	// therefore always reported: see failedSuppressed.
+	//
+	// A failure is keyed by fingerprint like an empty delivery, so a
+	// transcript that grows lifts its own suppression and the conversation is
+	// retried against the new bytes. The worker runs in a single goroutine, so
+	// the map needs no lock.
+	failedLoad map[string]failedLoadRecord
 	// now returns the wall clock; tests override it to pin deferral decisions.
 	now func() time.Time
 	// freshness receives the latest pass stats so the control server can report
@@ -156,6 +204,12 @@ type conversationSemanticSyncStats struct {
 	// failed counts conversations whose transcript could not be loaded or
 	// projected. It is content lost, so nothing else may be folded into it.
 	failed int
+	// failedSuppressed counts conversations this pass left out of the manifest
+	// because an earlier pass failed to load them and their transcript has not
+	// changed since. They are content the store does not hold, so the number is
+	// reported rather than folded into any other count: a manifest that shrinks
+	// silently would read as a corpus that is fully indexed.
+	failedSuppressed int
 	// policySkipped counts messages the content policy withheld because every
 	// indexed class was empty for them. It is deliberate, so it is reported
 	// beside failed rather than inside it.
@@ -267,6 +321,7 @@ func newConversationSemanticSyncWorker(
 		activeJobID:    "",
 		deliveryCursor: "",
 		emptyDelivered: make(map[string]string),
+		failedLoad:     make(map[string]failedLoadRecord),
 		now:            time.Now,
 		freshness:      nil,
 		contentKinds:   contentKinds,
@@ -297,10 +352,11 @@ func (w *conversationSemanticSyncWorker) run(ctx context.Context) {
 // one message, which is the case that fired in production. A defect elsewhere
 // in a provider is contained by conversation.CollectMessages and fails that one
 // conversation: the load returns an error, this pass counts it in failed and
-// moves to the next conversation, and because the conversation delivered
-// nothing the engine keeps listing it as needed, so later passes retry it.
-// Reaching here means something panicked outside a reader, such as the index
-// scan, the manifest build, the document projection, or the upsert.
+// moves to the next conversation. Later passes retry the failed conversation
+// and, after repeated failures at unchanged bytes, suppress it from the
+// manifest until its transcript changes; see failedLoad. Reaching here means
+// something panicked outside a reader, such as the index scan, the manifest
+// build, the document projection, or the upsert.
 func (w *conversationSemanticSyncWorker) runPassAndLog(ctx context.Context) {
 	defer func() {
 		recovered := recover()
@@ -360,8 +416,17 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return fmt.Errorf("list conversation records with stamps: %w", err)
 	}
 
-	manifest, recordsByID, stampsByID := w.buildManifest(stampedRecords)
-	stats := conversationSemanticSyncStats{manifest: len(manifest), needed: 0, sentConversations: 0, documents: 0, deferred: 0, failed: 0, policySkipped: 0}
+	manifest, recordsByID, stampsByID, failedSuppressed := w.buildManifest(stampedRecords)
+	stats := conversationSemanticSyncStats{
+		manifest:          len(manifest),
+		needed:            0,
+		sentConversations: 0,
+		documents:         0,
+		deferred:          0,
+		failed:            0,
+		failedSuppressed:  failedSuppressed,
+		policySkipped:     0,
+	}
 	if len(manifest) == 0 {
 		w.logPass(ctx, stats)
 		return nil
@@ -438,11 +503,14 @@ func isEngineJobActive(state string) bool {
 // buildManifest renders the current conversation set as a fingerprint list, a
 // lookup from conversation id to its record, and a lookup to its file stamp,
 // skipping records with no id.
-func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversation.StampedRecord) ([]semsearch.Fingerprint, map[string]conversation.Record, map[string]conversation.FileStamp) {
+func (w *conversationSemanticSyncWorker) buildManifest(
+	stampedRecords []conversation.StampedRecord,
+) ([]semsearch.Fingerprint, map[string]conversation.Record, map[string]conversation.FileStamp, int) {
 	manifest := make([]semsearch.Fingerprint, 0, len(stampedRecords))
 	recordsByID := make(map[string]conversation.Record, len(stampedRecords))
 	stampsByID := make(map[string]conversation.FileStamp, len(stampedRecords))
 	seen := make(map[string]bool, len(stampedRecords))
+	suppressed := 0
 	for _, stampedRecord := range stampedRecords {
 		conversationID := strings.TrimSpace(stampedRecord.Record.ID)
 		if conversationID == "" {
@@ -461,6 +529,23 @@ func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversa
 			}
 			delete(w.emptyDelivered, conversationID)
 		}
+		// A conversation whose transcript repeatedly failed to load stays out
+		// of the manifest until its bytes change, so the engine stops asking
+		// for it and the pass stops reading it. Below the threshold it stays
+		// advertised, because a single failure can be a transient one such as
+		// a busy Cursor store, and the next pass retries it. The suppression
+		// is counted rather than silent, because unlike a zero-document
+		// conversation this one holds content the store does not have.
+		if record, failed := w.failedLoad[conversationID]; failed {
+			if record.fingerprint == fingerprint {
+				if record.failures >= failedLoadSuppressThreshold {
+					suppressed++
+					continue
+				}
+			} else {
+				delete(w.failedLoad, conversationID)
+			}
+		}
 		recordsByID[conversationID] = stampedRecord.Record
 		stampsByID[conversationID] = stampedRecord.Stamp
 		manifest = append(manifest, semsearch.Fingerprint{
@@ -469,7 +554,19 @@ func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversa
 		})
 	}
 	w.pruneEmptyDelivered(seen)
-	return manifest, recordsByID, stampsByID
+	w.pruneFailedLoad(seen)
+	return manifest, recordsByID, stampsByID, suppressed
+}
+
+// pruneFailedLoad drops suppression entries for conversations that no longer
+// appear in the scanned set, so the map stays bounded by the current
+// conversation count rather than growing across the daemon's lifetime.
+func (w *conversationSemanticSyncWorker) pruneFailedLoad(seen map[string]bool) {
+	for conversationID := range w.failedLoad {
+		if !seen[conversationID] {
+			delete(w.failedLoad, conversationID)
+		}
+	}
 }
 
 // pruneEmptyDelivered drops zero-document entries for conversations that no
@@ -528,8 +625,29 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 		built, loadErr := w.loadDocs(ctx, record)
 		if loadErr != nil {
 			stats.failed++
+			// The conversation delivers no document, so the engine will keep
+			// listing it as needed and every later pass would read and fail it
+			// again. Count the failure against the fingerprint that failed; the
+			// manifest suppresses the conversation once the count reaches the
+			// threshold, and a transcript that grows lifts that on its own. A
+			// failure at a new fingerprint restarts the count, because the new
+			// bytes have not been tried yet.
+			if stamp, stamped := stampsByID[conversationID]; stamped {
+				fingerprint := conversation.ContentFingerprint(record, stamp)
+				failureRecord := w.failedLoad[conversationID]
+				if failureRecord.fingerprint == fingerprint {
+					failureRecord.failures++
+				} else {
+					failureRecord = failedLoadRecord{fingerprint: fingerprint, failures: 1}
+				}
+				w.failedLoad[conversationID] = failureRecord
+			}
 			continue
 		}
+		// A load that succeeds clears the conversation's failure history, so a
+		// transient failure such as a busy Cursor store costs the passes it
+		// spanned and nothing after.
+		delete(w.failedLoad, conversationID)
 		// A message the content policy withheld is counted apart from failed and
 		// deferred, because it is the policy working rather than content lost.
 		stats.policySkipped += built.PolicySkipped
@@ -635,12 +753,17 @@ func isConflictingActiveJob(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "conflicting active job")
 }
 
-// logPass records one pass. policy_skipped is reported beside failed rather than
-// folded into it, and a pass that withheld anything is logged at Info, so a
-// feeder skipping most of a corpus is visible rather than buried at Debug.
+// logPass records one pass. policy_skipped and failed_suppressed are reported
+// beside failed rather than folded into it, and a pass that withheld anything is
+// logged at Info, so a feeder skipping most of a corpus is visible rather than
+// buried at Debug.
+//
+// failed_suppressed keeps a shrinking manifest honest. A conversation left out
+// because it failed earlier is content the store does not hold, so a pass that
+// suppresses any is reported at Info even when it did nothing else.
 func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conversationSemanticSyncStats) {
 	w.freshness.publish(stats)
-	if stats.sentConversations > 0 || stats.failed > 0 || stats.policySkipped > 0 {
+	if stats.sentConversations > 0 || stats.failed > 0 || stats.policySkipped > 0 || stats.failedSuppressed > 0 {
 		w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -650,6 +773,7 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 			"documents", stats.documents,
 			"deferred", stats.deferred,
 			"failed", stats.failed,
+			"failed_suppressed", stats.failedSuppressed,
 			"policy_skipped", stats.policySkipped,
 		)
 		return
