@@ -140,3 +140,19 @@ func TestStreamKeepsAPersonQuotingAHarnessHead(t *testing.T) {
 		t.Fatalf("texts=%q want the quoted message kept byte for byte", texts)
 	}
 }
+
+// TestStreamKeepsAPersonAskingAboutAgentsInstructions pins the fix for the
+// review's second finding: a typed question that happens to open with the
+// AGENTS.md words is a person's message. The generated instruction message
+// always reads "# AGENTS.md instructions for <path>" and carries the
+// INSTRUCTIONS block; a question carries neither, so it stays.
+func TestStreamKeepsAPersonAskingAboutAgentsInstructions(t *testing.T) {
+	t.Parallel()
+	question := "# AGENTS.md instructions are not being applied; why?"
+	path := writeHarnessRollout(t, question)
+
+	texts := collectHarnessTexts(t, path, defaultHarnessOptions())
+	if len(texts) != 1 || texts[0] != question {
+		t.Fatalf("texts=%q want the question kept byte for byte", texts)
+	}
+}

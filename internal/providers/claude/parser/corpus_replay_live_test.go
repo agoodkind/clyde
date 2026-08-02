@@ -18,15 +18,22 @@ const corpusReplayEnv = "CLYDE_CORPUS_REPLAY"
 // claudeCorpusMarkers are every marker the claude parser strips in any class.
 // The replay uses them only to partition messages: a message containing none
 // of them must come through the stripping path byte-identical.
+// replayContextHeadings are the literal heading texts behind
+// injectedContextHeadingRes, used only to partition messages.
+var replayContextHeadings = []string{
+	"UserPromptSubmit hook additional context:",
+	"SessionStart hook additional context:",
+}
+
 var claudeCorpusMarkers = func() []string {
-	markers := make([]string, 0, len(noiseTags)+len(injectedTags)+len(injectedContextHeadings)+len(injectedFeedbackLinePrefixes)+1)
+	markers := make([]string, 0, len(noiseTags)+len(injectedTags)+len(replayContextHeadings)+len(injectedFeedbackLinePrefixes)+1)
 	for _, tag := range noiseTags {
 		markers = append(markers, "<"+tag)
 	}
 	for _, tag := range injectedTags {
 		markers = append(markers, "<"+tag)
 	}
-	markers = append(markers, injectedContextHeadings...)
+	markers = append(markers, replayContextHeadings...)
 	markers = append(markers, injectedFeedbackLinePrefixes...)
 	// stripSystemTags also trims one unmatched leading tag, so any message
 	// opening with a tag is marker-carrying for partition purposes.
@@ -101,6 +108,13 @@ func TestLiveClaudeCorpusReplayNoUserTextLoss(t *testing.T) {
 			if message.Role != "user" || message.UUID == "" {
 				continue
 			}
+			// Meta-only and transcript-only records never reach the feed (the
+			// projection withholds both), and compact summaries quote many
+			// turns with many genuine splices, so the single-splice guarantees
+			// below hold only for the visible messages the feed offers.
+			if message.Visibility != transcript.MessageVisibilityVisible {
+				continue
+			}
 			messagesSeen++
 			after, ok := strippedByUUID[message.UUID]
 			if containsAnyClaudeMarker(message.Text) {
@@ -108,9 +122,9 @@ func TestLiveClaudeCorpusReplayNoUserTextLoss(t *testing.T) {
 					strippedChanged++
 				}
 				if ok {
-					for _, heading := range injectedContextHeadings {
-						if strings.Contains(after.Text, heading) {
-							t.Fatalf("%s: stripped message %s still carries %q", path, message.UUID, heading)
+					for _, headingRe := range injectedContextHeadingRes {
+						if headingRe.MatchString(after.Text) {
+							t.Fatalf("%s: stripped message %s still carries a line-start hook heading", path, message.UUID)
 						}
 					}
 				}

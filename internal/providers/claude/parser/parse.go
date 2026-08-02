@@ -191,16 +191,20 @@ var injectedPatterns = func() []*regexp.Regexp {
 	return out
 }()
 
-// injectedContextHeadings mark where Claude Code splices hook additional
+// injectedContextHeadingRes mark where Claude Code splices hook additional
 // context into the user message body. The harness always appends the block
 // after the typed prompt and nothing user-typed follows it, verified across
 // every occurrence in the local corpus, so the strip cuts from the heading to
-// the end of the message. "Stop hook feedback:" is deliberately absent: its
-// body quotes the user's own goal text, so cutting to end-of-message there
+// the end of the message. Two guards keep a person's own words safe: the
+// heading only matches at the start of a line, because the splice always
+// begins one, and the cut anchors at the LAST match, so a person quoting the
+// heading earlier in their prompt keeps their text and only the genuine
+// trailing splice is removed. "Stop hook feedback:" is deliberately absent:
+// its body quotes the user's own goal text, so cutting to end-of-message there
 // would delete user-authored content.
-var injectedContextHeadings = []string{
-	"UserPromptSubmit hook additional context:",
-	"SessionStart hook additional context:",
+var injectedContextHeadingRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?m)^UserPromptSubmit hook additional context:`),
+	regexp.MustCompile(`(?m)^SessionStart hook additional context:`),
 }
 
 // injectedFeedbackLinePrefixes mark single hook-output lines the harness
@@ -727,11 +731,13 @@ func stripInjectedText(s string) (string, int) {
 		count += len(re.FindAllStringIndex(s, -1))
 		s = re.ReplaceAllString(s, "")
 	}
-	for _, heading := range injectedContextHeadings {
-		if idx := strings.Index(s, heading); idx >= 0 {
-			s = s[:idx]
-			count++
+	for _, headingRe := range injectedContextHeadingRes {
+		matches := headingRe.FindAllStringIndex(s, -1)
+		if len(matches) == 0 {
+			continue
 		}
+		s = s[:matches[len(matches)-1][0]]
+		count++
 	}
 	if strings.Contains(s, "hook feedback:") {
 		var keep []string

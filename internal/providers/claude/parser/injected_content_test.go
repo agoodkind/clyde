@@ -111,6 +111,44 @@ func TestStreamDropsHookFeedbackLinesOnly(t *testing.T) {
 	}
 }
 
+// TestStreamKeepsAQuotedHookHeadingBeforeTheRealSplice pins the collision the
+// review found: a person asking about the hook by name quotes the heading in
+// their prompt, and the genuine splice still follows at the end. The cut
+// anchors at the last line-start match, so the person's words, including the
+// quoted heading, survive and only the trailing splice is removed.
+func TestStreamKeepsAQuotedHookHeadingBeforeTheRealSplice(t *testing.T) {
+	t.Parallel()
+	path := writeInjectedFixture(t,
+		`"why does every message contain\nUserPromptSubmit hook additional context: markers?\nplease investigate\n\nUserPromptSubmit hook additional context: # Rules\n\nrule text"`)
+
+	texts := streamInjectedFixture(t, path, false)
+	if len(texts) != 1 {
+		t.Fatalf("messages=%d want 1", len(texts))
+	}
+	want := "why does every message contain\nUserPromptSubmit hook additional context: markers?\nplease investigate"
+	if texts[0] != want {
+		t.Fatalf("text=%q want the typed prompt with its quoted heading kept", texts[0])
+	}
+}
+
+// TestStreamKeepsAnInlineHeadingMention pins the line-anchor guard: a heading
+// mentioned mid-line is a person's sentence, not a splice, and the message is
+// untouched.
+func TestStreamKeepsAnInlineHeadingMention(t *testing.T) {
+	t.Parallel()
+	body := "the string UserPromptSubmit hook additional context: appears in my logs, why?"
+	path := writeInjectedFixture(t,
+		`"the string UserPromptSubmit hook additional context: appears in my logs, why?"`)
+
+	texts := streamInjectedFixture(t, path, false)
+	if len(texts) != 1 {
+		t.Fatalf("messages=%d want 1", len(texts))
+	}
+	if texts[0] != body {
+		t.Fatalf("text=%q want the message untouched", texts[0])
+	}
+}
+
 // TestStreamStripsLegacyHookCarrierTag covers the tag Claude Code used before
 // it switched to splicing plain text.
 func TestStreamStripsLegacyHookCarrierTag(t *testing.T) {

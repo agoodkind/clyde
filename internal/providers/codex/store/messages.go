@@ -116,12 +116,19 @@ var codexInjectedHeads = []string{
 	"<objective>",
 }
 
-// codexSystemPromptHead opens the AGENTS.md instruction message, which carries
-// the project instructions plus the <INSTRUCTIONS> block.
-const codexSystemPromptHead = "# AGENTS.md instructions"
+// codexSystemPromptHead opens the AGENTS.md instruction message the harness
+// writes into the user role: "# AGENTS.md instructions for <path>" followed by
+// the <INSTRUCTIONS> block. Both parts are required so a person ASKING about
+// AGENTS.md instructions ("# AGENTS.md instructions are not being applied")
+// keeps their message: every generated instance in the local corpus carries
+// the "for " continuation and the block, and a typed question carries neither.
+const (
+	codexSystemPromptHead = "# AGENTS.md instructions for "
+	codexSystemPromptBody = "<INSTRUCTIONS>"
+)
 
 func classifyCodexUserText(text string) codexUserTextClass {
-	if strings.HasPrefix(text, codexSystemPromptHead) {
+	if strings.HasPrefix(text, codexSystemPromptHead) && strings.Contains(text, codexSystemPromptBody) {
 		return codexUserTextSystemPrompt
 	}
 	for _, head := range codexSystemMessageHeads {
