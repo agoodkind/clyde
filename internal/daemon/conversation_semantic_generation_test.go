@@ -76,9 +76,14 @@ func TestZeroDocumentSuppressionUsesTheAdvertisedFingerprint(t *testing.T) {
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("second runPass returned error: %v", err)
 	}
-	// The only conversation is suppressed, so the manifest is empty and the pass
-	// returns before it reaches the engine at all.
-	if len(client.syncCalls) != 1 {
-		t.Fatalf("sync calls = %d, want 1; the suppressed conversation must not be re-advertised", len(client.syncCalls))
+	// The only conversation is suppressed, so the manifest is empty. The pass
+	// still syncs that empty manifest, because the engine's copy of the
+	// manifest is whatever the last sync stated; what must not happen is the
+	// suppressed conversation being advertised again.
+	if len(client.syncCalls) != 2 {
+		t.Fatalf("sync calls = %d, want 2; the suppressing pass still states the empty manifest", len(client.syncCalls))
+	}
+	if len(client.syncCalls[1].Manifest) != 0 {
+		t.Fatalf("second manifest = %+v, want empty; the suppressed conversation must not be re-advertised", client.syncCalls[1].Manifest)
 	}
 }

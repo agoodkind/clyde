@@ -427,7 +427,16 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		failedSuppressed:  failedSuppressed,
 		policySkipped:     0,
 	}
-	if len(manifest) == 0 {
+	// An empty manifest still syncs when this pass omitted anything, because
+	// the engine's copy of the manifest is whatever the last sync stated.
+	// Skipping the sync would leave an omitted conversation in the engine's
+	// needed set forever. Both omission paths count: failed-load suppression,
+	// and zero-document suppression, whose map buildManifest has just pruned
+	// to exactly the conversations it omitted this pass. Absence is
+	// retain-only on the wire, so an empty-manifest sync removes nothing from
+	// the store. Only a corpus with nothing to state at all skips the round
+	// trip.
+	if len(manifest) == 0 && failedSuppressed == 0 && len(w.emptyDelivered) == 0 {
 		w.logPass(ctx, stats)
 		return nil
 	}
