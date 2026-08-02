@@ -10,6 +10,7 @@ import (
 	"iter"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -95,7 +96,7 @@ const headerLineCap = 64
 // ReadHeader returns a Codex rollout thread summary from the header JSONL
 // entries without reading message history.
 func ReadHeader(path string, archived bool) (ThreadSummary, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
 		return ThreadSummary{}, fmt.Errorf("open codex rollout %s: %w", path, err)
@@ -173,7 +174,7 @@ type HistoryOptions struct {
 // before decoding so replacement_history stays untouched.
 func StreamMessages(path string, opts HistoryOptions) iter.Seq2[HistoryMessage, error] {
 	return func(yield func(HistoryMessage, error) bool) {
-		f, err := os.Open(path)
+		f, err := os.Open(filepath.Clean(path))
 		if err != nil {
 			slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
 			yield(emptyHistoryMessage(), fmt.Errorf("open codex rollout %s: %w", path, err))
