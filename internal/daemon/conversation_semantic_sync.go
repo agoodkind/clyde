@@ -98,6 +98,16 @@ type failedLoadRecord struct {
 	failures    int
 }
 
+// deliveredContentRecord remembers one conversation's last successful delivery:
+// the manifest fingerprint advertised that pass and the hash of the projected
+// document bytes. A later pass that projects the same bytes under a different
+// fingerprint has found an artifact whose stamp moved without a content change,
+// which is the hourly-toucher shape CLYDE-640 measured.
+type deliveredContentRecord struct {
+	fingerprint    string
+	projectionHash string
+}
+
 type conversationSemanticIndex interface {
 	ListWithStamps(context.Context) ([]conversation.StampedRecord, error)
 	LoadMessagesWithOptions(conversation.Record, conversation.LoadOptions) ([]transcript.Message, error)
@@ -184,6 +194,13 @@ type conversationSemanticSyncWorker struct {
 	// retried against the new bytes. The worker runs in a single goroutine, so
 	// the map needs no lock.
 	failedLoad map[string]failedLoadRecord
+	// deliveredContent maps a conversation id to its last successful delivery:
+	// the fingerprint advertised and the projection hash sent. It exists so a
+	// stamp change without a content change can be recognized instead of
+	// re-delivered forever. In-memory only: after a daemon restart the first
+	// touch re-delivers once and repopulates it, which is bounded and correct.
+	// The worker runs in a single goroutine, so the map needs no lock.
+	deliveredContent map[string]deliveredContentRecord
 	// now returns the wall clock; tests override it to pin deferral decisions.
 	now func() time.Time
 	// freshness receives the latest pass stats so the control server can report
@@ -338,18 +355,19 @@ func newConversationSemanticSyncWorker(
 		log = slog.Default()
 	}
 	return &conversationSemanticSyncWorker{
-		index:          index,
-		resolveClient:  resolveClient,
-		collectionID:   strings.TrimSpace(collectionID),
-		log:            log,
-		interval:       conversationSemanticSyncInterval,
-		activeJobID:    "",
-		deliveryCursor: "",
-		emptyDelivered: make(map[string]string),
-		failedLoad:     make(map[string]failedLoadRecord),
-		now:            time.Now,
-		freshness:      nil,
-		contentKinds:   contentKinds,
+		index:            index,
+		resolveClient:    resolveClient,
+		collectionID:     strings.TrimSpace(collectionID),
+		log:              log,
+		interval:         conversationSemanticSyncInterval,
+		activeJobID:      "",
+		deliveryCursor:   "",
+		emptyDelivered:   make(map[string]string),
+		failedLoad:       make(map[string]failedLoadRecord),
+		deliveredContent: make(map[string]deliveredContentRecord),
+		now:              time.Now,
+		freshness:        nil,
+		contentKinds:     contentKinds,
 	}
 }
 
@@ -479,7 +497,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return nil
 	}
 
-	docs, sentIDs := w.collectNeededDocuments(ctx, needed, recordsByID, stampsByID, &stats)
+	docs, sent := w.collectNeededDocuments(ctx, needed, recordsByID, stampsByID, &stats)
 	if len(docs) == 0 {
 		w.logPass(ctx, stats)
 		return nil
@@ -488,7 +506,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return nil
 	}
 
-	w.sendDocuments(ctx, client, docs, manifest, sentIDs, &stats)
+	w.sendDocuments(ctx, client, docs, manifest, sent, &stats)
 	w.logPass(ctx, stats)
 	return nil
 }
@@ -615,6 +633,21 @@ func (w *conversationSemanticSyncWorker) pruneEmptyDelivered(seen map[string]boo
 			delete(w.emptyDelivered, conversationID)
 		}
 	}
+	for conversationID := range w.deliveredContent {
+		if !seen[conversationID] {
+			delete(w.deliveredContent, conversationID)
+		}
+	}
+}
+
+// deliveredConversation is one conversation a pass is about to deliver: its
+// id, the manifest fingerprint it was advertised under, and the hash of its
+// projected documents. sendDocuments records these into deliveredContent once
+// the engine accepts the upsert.
+type deliveredConversation struct {
+	id             string
+	fingerprint    string
+	projectionHash string
 }
 
 // collectNeededDocuments loads the documents for the conversations the engine
@@ -624,15 +657,15 @@ func (w *conversationSemanticSyncWorker) pruneEmptyDelivered(seen map[string]boo
 // the last interval is deferred: it is still being appended to, and delivering
 // it now would re-send a growing transcript on every pass. The remaining
 // needed conversations are picked up on later passes, when the engine reports
-// them still needed. It returns the documents and the ids of the conversations
-// covered.
+// them still needed. It returns the documents and one delivery record per
+// conversation covered.
 func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	ctx context.Context,
 	needed []string,
 	recordsByID map[string]conversation.Record,
 	stampsByID map[string]conversation.FileStamp,
 	stats *conversationSemanticSyncStats,
-) ([]semsearch.SemDoc, []string) {
+) ([]semsearch.SemDoc, []deliveredConversation) {
 	ordered := make([]string, len(needed))
 	copy(ordered, needed)
 	sort.Strings(ordered)
@@ -643,7 +676,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	// pass collects every needed conversation rather than splitting by a byte
 	// budget. The stream client frames the documents and the manifest into
 	// bounded chunks on the wire.
-	sentIDs := make([]string, 0)
+	sent := make([]deliveredConversation, 0)
 	for _, conversationID := range ordered {
 		if semanticSyncContextDone(ctx) {
 			break
@@ -706,10 +739,18 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			continue
 		}
 		docs = append(docs, built.Docs...)
-		sentIDs = append(sentIDs, conversationID)
+		fingerprint := ""
+		if stamp, stamped := stampsByID[conversationID]; stamped {
+			fingerprint = conversation.ContentFingerprint(record, stamp)
+		}
+		sent = append(sent, deliveredConversation{
+			id:             conversationID,
+			fingerprint:    fingerprint,
+			projectionHash: SemanticProjectionHash(built.Docs),
+		})
 		w.deliveryCursor = conversationID
 	}
-	return docs, sentIDs
+	return docs, sent
 }
 
 // isActivelyGrowing reports whether a conversation's transcript changed within
@@ -750,7 +791,7 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 	client conversationSemanticClient,
 	docs []semsearch.SemDoc,
 	manifest []semsearch.Fingerprint,
-	sentIDs []string,
+	sent []deliveredConversation,
 	stats *conversationSemanticSyncStats,
 ) {
 	jobID, upsertErr := client.UpsertConversationDocuments(ctx, w.collectionID, docs, manifest)
@@ -759,29 +800,40 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 			w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.engine_busy",
 				"concern", "conversation.semantic",
 				"component", "daemon",
-				"conversations", len(sentIDs),
+				"conversations", len(sent),
 				"documents", len(docs),
 			)
 			return
 		}
-		stats.failed += len(sentIDs)
+		stats.failed += len(sent)
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
-			"conversations", len(sentIDs),
+			"conversations", len(sent),
 			"documents", len(docs),
 			"err", upsertErr,
 		)
 		return
 	}
-	stats.sentConversations = len(sentIDs)
+	sentIDs := make([]string, 0, len(sent))
+	for _, delivery := range sent {
+		sentIDs = append(sentIDs, delivery.id)
+		if delivery.fingerprint == "" {
+			continue
+		}
+		w.deliveredContent[delivery.id] = deliveredContentRecord{
+			fingerprint:    delivery.fingerprint,
+			projectionHash: delivery.projectionHash,
+		}
+	}
+	stats.sentConversations = len(sent)
 	stats.sentConversationIDs = sentIDs
 	stats.documents = len(docs)
 	w.activeJobID = jobID
 	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_started",
 		"concern", "conversation.semantic",
 		"component", "daemon",
-		"conversations", len(sentIDs),
+		"conversations", len(sent),
 		"documents", len(docs),
 		"job_id", jobID,
 	)
