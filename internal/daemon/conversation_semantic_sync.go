@@ -108,6 +108,18 @@ type deliveredContentRecord struct {
 	projectionHash string
 }
 
+// pinnedFingerprintRecord holds one verified stamp-moved-content-unchanged
+// finding: while the artifact's fingerprint still reads observed, the manifest
+// advertises advertise, the fingerprint the engine's checkpoint already holds.
+// The engine's diff then reports the conversation unchanged and stops listing
+// it as needed, which ends the re-offer cycle for touch-without-change. Any
+// further stamp movement invalidates the pin, because the new bytes have not
+// been compared yet.
+type pinnedFingerprintRecord struct {
+	observed  string
+	advertise string
+}
+
 type conversationSemanticIndex interface {
 	ListWithStamps(context.Context) ([]conversation.StampedRecord, error)
 	LoadMessagesWithOptions(conversation.Record, conversation.LoadOptions) ([]transcript.Message, error)
@@ -201,6 +213,11 @@ type conversationSemanticSyncWorker struct {
 	// touch re-delivers once and repopulates it, which is bounded and correct.
 	// The worker runs in a single goroutine, so the map needs no lock.
 	deliveredContent map[string]deliveredContentRecord
+	// pinnedFingerprints maps a conversation id to its verified
+	// touch-without-change finding: while the artifact fingerprint still reads
+	// observed, the manifest advertises the checkpointed fingerprint instead.
+	// In-memory like deliveredContent, and pruned with the scanned set.
+	pinnedFingerprints map[string]pinnedFingerprintRecord
 	// now returns the wall clock; tests override it to pin deferral decisions.
 	now func() time.Time
 	// freshness receives the latest pass stats so the control server can report
@@ -241,6 +258,11 @@ type conversationSemanticSyncStats struct {
 	// pass in the log can be attributed to specific conversations. The log line
 	// bounds the list; the full slice stays here for the freshness snapshot.
 	sentConversationIDs []string
+	// unchangedPinned counts conversations this pass recognized as touched
+	// without a content change: their stamp moved, their projected bytes did
+	// not, so nothing was delivered and the manifest pins the checkpointed
+	// fingerprint from the next pass on.
+	unchangedPinned int
 }
 
 // maxLoggedConversationIDs bounds the id list on the pass log line. A backlog
@@ -355,19 +377,20 @@ func newConversationSemanticSyncWorker(
 		log = slog.Default()
 	}
 	return &conversationSemanticSyncWorker{
-		index:            index,
-		resolveClient:    resolveClient,
-		collectionID:     strings.TrimSpace(collectionID),
-		log:              log,
-		interval:         conversationSemanticSyncInterval,
-		activeJobID:      "",
-		deliveryCursor:   "",
-		emptyDelivered:   make(map[string]string),
-		failedLoad:       make(map[string]failedLoadRecord),
-		deliveredContent: make(map[string]deliveredContentRecord),
-		now:              time.Now,
-		freshness:        nil,
-		contentKinds:     contentKinds,
+		index:              index,
+		resolveClient:      resolveClient,
+		collectionID:       strings.TrimSpace(collectionID),
+		log:                log,
+		interval:           conversationSemanticSyncInterval,
+		activeJobID:        "",
+		deliveryCursor:     "",
+		emptyDelivered:     make(map[string]string),
+		failedLoad:         make(map[string]failedLoadRecord),
+		deliveredContent:   make(map[string]deliveredContentRecord),
+		pinnedFingerprints: make(map[string]pinnedFingerprintRecord),
+		now:                time.Now,
+		freshness:          nil,
+		contentKinds:       contentKinds,
 	}
 }
 
@@ -472,6 +495,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		injectedStripped:    0,
 		systemStripped:      0,
 		sentConversationIDs: nil,
+		unchangedPinned:     0,
 	}
 	// An empty manifest still syncs when this pass omitted anything, because
 	// the engine's copy of the manifest is whatever the last sync stated.
@@ -578,6 +602,18 @@ func (w *conversationSemanticSyncWorker) buildManifest(
 		// ContentFingerprint preserves any compatibility bytes already advertised
 		// for this artifact kind while changing only with its file stamp.
 		fingerprint := conversation.ContentFingerprint(stampedRecord.Record, stampedRecord.Stamp)
+		// A pinned conversation was verified touched-without-change at exactly
+		// this fingerprint, so the manifest advertises the fingerprint the
+		// engine's checkpoint already holds and the engine stops asking for it.
+		// A fingerprint the pin has not seen means the artifact moved again;
+		// the pin drops and the normal needed cycle re-verifies the new bytes.
+		if pin, pinned := w.pinnedFingerprints[conversationID]; pinned {
+			if pin.observed == fingerprint {
+				fingerprint = pin.advertise
+			} else {
+				delete(w.pinnedFingerprints, conversationID)
+			}
+		}
 		if priorFingerprint, delivered := w.emptyDelivered[conversationID]; delivered {
 			if priorFingerprint == fingerprint {
 				continue
@@ -636,6 +672,11 @@ func (w *conversationSemanticSyncWorker) pruneEmptyDelivered(seen map[string]boo
 	for conversationID := range w.deliveredContent {
 		if !seen[conversationID] {
 			delete(w.deliveredContent, conversationID)
+		}
+	}
+	for conversationID := range w.pinnedFingerprints {
+		if !seen[conversationID] {
+			delete(w.pinnedFingerprints, conversationID)
 		}
 	}
 }
@@ -738,15 +779,34 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			}
 			continue
 		}
-		docs = append(docs, built.Docs...)
 		fingerprint := ""
 		if stamp, stamped := stampsByID[conversationID]; stamped {
 			fingerprint = conversation.ContentFingerprint(record, stamp)
 		}
+		projectionHash := SemanticProjectionHash(built.Docs)
+		// The engine asked for this conversation because its stamp moved, but
+		// the projected bytes match the last accepted delivery, so nothing new
+		// exists to store. Deliver nothing and pin the manifest to the
+		// checkpointed fingerprint instead; the engine drops the conversation
+		// from its needed set on the next sync. This is the touch-without-
+		// change cycle CLYDE-640 measured, ended at its source.
+		if memo, delivered := w.deliveredContent[conversationID]; delivered &&
+			fingerprint != "" &&
+			memo.projectionHash == projectionHash &&
+			memo.fingerprint != fingerprint {
+			w.pinnedFingerprints[conversationID] = pinnedFingerprintRecord{
+				observed:  fingerprint,
+				advertise: memo.fingerprint,
+			}
+			stats.unchangedPinned++
+			w.deliveryCursor = conversationID
+			continue
+		}
+		docs = append(docs, built.Docs...)
 		sent = append(sent, deliveredConversation{
 			id:             conversationID,
 			fingerprint:    fingerprint,
-			projectionHash: SemanticProjectionHash(built.Docs),
+			projectionHash: projectionHash,
 		})
 		w.deliveryCursor = conversationID
 	}
@@ -855,7 +915,7 @@ func isConflictingActiveJob(err error) bool {
 // suppresses any is reported at Info even when it did nothing else.
 func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conversationSemanticSyncStats) {
 	w.freshness.publish(stats)
-	if stats.sentConversations > 0 || stats.failed > 0 || stats.policySkipped > 0 || stats.failedSuppressed > 0 {
+	if stats.sentConversations > 0 || stats.failed > 0 || stats.policySkipped > 0 || stats.failedSuppressed > 0 || stats.unchangedPinned > 0 {
 		w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -870,6 +930,7 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 			"injected_stripped", stats.injectedStripped,
 			"system_stripped", stats.systemStripped,
 			"sent_conversation_ids", boundedConversationIDs(stats.sentConversationIDs),
+			"unchanged_pinned", stats.unchangedPinned,
 		)
 		return
 	}
