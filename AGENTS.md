@@ -25,7 +25,7 @@ Prefer code and tests over this file for exact behavior.
 
 - Use `cmd/clyde/main.go` for current CLI routing.
 - Use `internal/conversation/` for raw provider artifact indexing, loading, search, and export boundaries.
-- Use `docs/conversations.md` for durable conversation model, compaction segment, and export selector terminology.
+- Use `docs/conversations.md` for durable conversation model, compaction segment, and export selector terminology, and `docs/conversations/debugging.md` for the conversation ingest debugging surface inventory.
 - Use `internal/mcpserver/` for MCP tool names and argument contracts.
 - Use `internal/config/` for supported config file formats and fields.
 - Use `internal/daemon/` for daemon startup, adapter/MITM listener ownership, reload, and background conversation-index refresh.
