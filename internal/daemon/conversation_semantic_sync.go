@@ -220,6 +220,25 @@ type conversationSemanticSyncStats struct {
 	// policy working, reported so a live pass proves stripping ran.
 	injectedStripped int
 	systemStripped   int
+	// sentConversationIDs names the conversations this pass delivered, so a
+	// pass in the log can be attributed to specific conversations. The log line
+	// bounds the list; the full slice stays here for the freshness snapshot.
+	sentConversationIDs []string
+}
+
+// maxLoggedConversationIDs bounds the id list on the pass log line. A backlog
+// pass delivers hundreds of conversations, and naming them all would make the
+// line unreadable; the first few plus the existing sent_conversations count
+// carry the attribution.
+const maxLoggedConversationIDs = 10
+
+// boundedConversationIDs returns at most maxLoggedConversationIDs ids for the
+// pass log line, keeping delivery order so the ids match the batch head.
+func boundedConversationIDs(ids []string) []string {
+	if len(ids) <= maxLoggedConversationIDs {
+		return ids
+	}
+	return ids[:maxLoggedConversationIDs]
 }
 
 // installConversationSemanticSyncStop creates the feeder's worker context and
@@ -424,16 +443,17 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 
 	manifest, recordsByID, stampsByID, failedSuppressed := w.buildManifest(stampedRecords)
 	stats := conversationSemanticSyncStats{
-		manifest:          len(manifest),
-		needed:            0,
-		sentConversations: 0,
-		documents:         0,
-		deferred:          0,
-		failed:            0,
-		failedSuppressed:  failedSuppressed,
-		policySkipped:     0,
-		injectedStripped:  0,
-		systemStripped:    0,
+		manifest:            len(manifest),
+		needed:              0,
+		sentConversations:   0,
+		documents:           0,
+		deferred:            0,
+		failed:              0,
+		failedSuppressed:    failedSuppressed,
+		policySkipped:       0,
+		injectedStripped:    0,
+		systemStripped:      0,
+		sentConversationIDs: nil,
 	}
 	// An empty manifest still syncs when this pass omitted anything, because
 	// the engine's copy of the manifest is whatever the last sync stated.
@@ -459,7 +479,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return nil
 	}
 
-	docs, sentConversations := w.collectNeededDocuments(ctx, needed, recordsByID, stampsByID, &stats)
+	docs, sentIDs := w.collectNeededDocuments(ctx, needed, recordsByID, stampsByID, &stats)
 	if len(docs) == 0 {
 		w.logPass(ctx, stats)
 		return nil
@@ -468,7 +488,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return nil
 	}
 
-	w.sendDocuments(ctx, client, docs, manifest, sentConversations, &stats)
+	w.sendDocuments(ctx, client, docs, manifest, sentIDs, &stats)
 	w.logPass(ctx, stats)
 	return nil
 }
@@ -604,7 +624,7 @@ func (w *conversationSemanticSyncWorker) pruneEmptyDelivered(seen map[string]boo
 // the last interval is deferred: it is still being appended to, and delivering
 // it now would re-send a growing transcript on every pass. The remaining
 // needed conversations are picked up on later passes, when the engine reports
-// them still needed. It returns the documents and the count of conversations
+// them still needed. It returns the documents and the ids of the conversations
 // covered.
 func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	ctx context.Context,
@@ -612,7 +632,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	recordsByID map[string]conversation.Record,
 	stampsByID map[string]conversation.FileStamp,
 	stats *conversationSemanticSyncStats,
-) ([]semsearch.SemDoc, int) {
+) ([]semsearch.SemDoc, []string) {
 	ordered := make([]string, len(needed))
 	copy(ordered, needed)
 	sort.Strings(ordered)
@@ -623,7 +643,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	// pass collects every needed conversation rather than splitting by a byte
 	// budget. The stream client frames the documents and the manifest into
 	// bounded chunks on the wire.
-	sentConversations := 0
+	sentIDs := make([]string, 0)
 	for _, conversationID := range ordered {
 		if semanticSyncContextDone(ctx) {
 			break
@@ -686,10 +706,10 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			continue
 		}
 		docs = append(docs, built.Docs...)
-		sentConversations++
+		sentIDs = append(sentIDs, conversationID)
 		w.deliveryCursor = conversationID
 	}
-	return docs, sentConversations
+	return docs, sentIDs
 }
 
 // isActivelyGrowing reports whether a conversation's transcript changed within
@@ -730,7 +750,7 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 	client conversationSemanticClient,
 	docs []semsearch.SemDoc,
 	manifest []semsearch.Fingerprint,
-	sentConversations int,
+	sentIDs []string,
 	stats *conversationSemanticSyncStats,
 ) {
 	jobID, upsertErr := client.UpsertConversationDocuments(ctx, w.collectionID, docs, manifest)
@@ -739,28 +759,29 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 			w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.engine_busy",
 				"concern", "conversation.semantic",
 				"component", "daemon",
-				"conversations", sentConversations,
+				"conversations", len(sentIDs),
 				"documents", len(docs),
 			)
 			return
 		}
-		stats.failed += sentConversations
+		stats.failed += len(sentIDs)
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
-			"conversations", sentConversations,
+			"conversations", len(sentIDs),
 			"documents", len(docs),
 			"err", upsertErr,
 		)
 		return
 	}
-	stats.sentConversations = sentConversations
+	stats.sentConversations = len(sentIDs)
+	stats.sentConversationIDs = sentIDs
 	stats.documents = len(docs)
 	w.activeJobID = jobID
 	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_started",
 		"concern", "conversation.semantic",
 		"component", "daemon",
-		"conversations", sentConversations,
+		"conversations", len(sentIDs),
 		"documents", len(docs),
 		"job_id", jobID,
 	)
@@ -796,6 +817,7 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 			"policy_skipped", stats.policySkipped,
 			"injected_stripped", stats.injectedStripped,
 			"system_stripped", stats.systemStripped,
+			"sent_conversation_ids", boundedConversationIDs(stats.sentConversationIDs),
 		)
 		return
 	}
