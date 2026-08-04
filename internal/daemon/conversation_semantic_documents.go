@@ -51,6 +51,7 @@ func SemanticConversationLoadOptions(kinds conversation.ContentKindSet) conversa
 		IncludeSystemMessages: kinds.Has(conversation.ContentKindSystemMessages),
 		IncludeToolOutputs:    kinds.Has(conversation.ContentKindToolOutputs),
 		IncludeInjected:       kinds.Has(conversation.ContentKindInjected),
+		HarnessTally:          nil,
 	}
 }
 
@@ -65,10 +66,9 @@ type SemanticConversationDocuments struct {
 	Docs          []semsearch.SemDoc
 	PolicySkipped int
 	// InjectedStripped and SystemStripped total what the provider parsers
-	// removed from the offered messages' text under the load options: injected
-	// spans are hook-pushed context, system spans are harness-native tags. They
-	// exist so a pass can report that stripping ran without the generic layer
-	// knowing any provider's markers.
+	// removed or withheld while loading this conversation, taken from the load
+	// tally rather than from surviving messages, so a record removed entirely
+	// still counts. The loader fills them; the projection does not.
 	InjectedStripped int
 	SystemStripped   int
 }
@@ -123,8 +123,6 @@ func BuildSemanticConversationDocuments(
 			built.PolicySkipped++
 			continue
 		}
-		built.InjectedStripped += message.HarnessStrips.Injected
-		built.SystemStripped += message.HarnessStrips.System
 		text := ""
 		if kinds.Has(conversation.ContentKindChat) {
 			// Replace invalid UTF-8 so the protobuf upsert never fails to marshal

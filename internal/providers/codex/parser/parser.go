@@ -93,7 +93,6 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}
 }
 
@@ -258,6 +257,7 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 			IncludeSystemMessages: opts.IncludeSystemMessages,
 			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
 			IncludeInjected:       opts.IncludeInjected,
+			Tally:                 opts.HarnessTally,
 		}
 		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {
@@ -284,6 +284,7 @@ func (p *Parser) streamWithToolOutputs(path string, opts conversation.LoadOption
 			IncludeSystemMessages: opts.IncludeSystemMessages,
 			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
 			IncludeInjected:       opts.IncludeInjected,
+			Tally:                 opts.HarnessTally,
 		}
 		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {

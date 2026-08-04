@@ -21,6 +21,7 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 		IncludeSystemMessages: true,
 		IncludeToolOutputs:    options.Content.Has(ContentKindToolOutputs),
 		IncludeInjected:       options.Content.Has(ContentKindInjected),
+		HarnessTally:          nil,
 	})
 	if err != nil {
 		return nil, err

@@ -167,6 +167,11 @@ type HistoryOptions struct {
 	IncludeSystemMessages bool
 	IncludeSystemPrompts  bool
 	IncludeInjected       bool
+	// Tally, when non-nil, counts the user-role harness records the options
+	// above withheld, so a caller can report exclusions that never became
+	// messages. Injected records count as Injected; system-message and
+	// system-prompt records count as System.
+	Tally *transcript.HarnessStrips
 }
 
 // StreamMessages yields normalized Codex rollout messages as each JSONL envelope
