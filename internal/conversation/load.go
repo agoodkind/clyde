@@ -33,6 +33,7 @@ func (idx *Index) LoadMessages(record Record, includeSystemPrompts bool, include
 		// read conversations for people or models, where hook-pushed context is
 		// noise, so injected content stays stripped.
 		IncludeInjected: false,
+		HarnessTally:    nil,
 	})
 }
 

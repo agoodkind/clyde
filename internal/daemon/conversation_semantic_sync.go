@@ -945,7 +945,12 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 
 func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) (SemanticConversationDocuments, error) {
 	empty := SemanticConversationDocuments{Docs: nil, PolicySkipped: 0, InjectedStripped: 0, SystemStripped: 0}
-	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentKinds))
+	// The tally counts what the parsers removed or withheld during this load,
+	// including records dropped entirely, which per-message counting loses.
+	var tally transcript.HarnessStrips
+	options := SemanticConversationLoadOptions(w.contentKinds)
+	options.HarnessTally = &tally
+	messages, err := w.index.LoadMessagesWithOptions(record, options)
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
 			"concern", "conversation.semantic",
@@ -960,6 +965,8 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 	if err != nil {
 		return empty, err
 	}
+	built.InjectedStripped = tally.Injected
+	built.SystemStripped = tally.System
 	return built, nil
 }
 

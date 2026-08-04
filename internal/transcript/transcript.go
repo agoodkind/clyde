@@ -20,16 +20,14 @@ type Message struct {
 	Thinking          string              `json:"thinking"`             // thinking block text (for HTML export)
 	HasTools          bool                `json:"has_tools"`            // true if assistant message contained tool_use blocks
 	Tools             []ToolCall          `json:"tools,omitempty"`      // parsed tool calls with inputs
-	// HarnessStrips counts what the provider parser removed from Text under the
-	// load options, so a consumer can report stripping without knowing any
-	// provider's markers. It never serializes: it describes this parse, not the
-	// conversation.
-	HarnessStrips HarnessStrips `json:"-"`
 }
 
-// HarnessStrips counts harness-written content a parser removed from one
-// message's text: injected spans (hook-pushed context) and system spans
-// (harness-native tags). Zero values mean nothing was removed.
+// HarnessStrips accumulates harness-written content a parser removed or
+// withheld across one load: injected pieces (hook-pushed context) and system
+// pieces (harness-native tags and frames). It lives on the load options rather
+// than on individual messages so a record removed entirely still counts; a
+// per-message count dies with the record it described. Zero values mean
+// nothing was removed.
 type HarnessStrips struct {
 	Injected int
 	System   int
