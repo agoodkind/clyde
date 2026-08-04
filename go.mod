@@ -22,7 +22,7 @@ require (
 	golang.org/x/sys v0.47.0
 	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
 	goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910
-	goodkind.io/lm-semantic-search v0.0.0-20260730155241-1a5c539fd49b
+	goodkind.io/lm-semantic-search v0.0.0-20260804020814-eac65ecd98c6
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11
 )
