@@ -14,6 +14,13 @@ import (
 type parseOptions struct {
 	PreserveSystemPrompts bool
 	IncludeSystemMessages bool
+	// IncludeInjected keeps hook-pushed text inside user messages: the hook
+	// additional-context blocks Claude Code splices after the typed prompt,
+	// hook feedback lines, and the legacy user-prompt-submit-hook tag.
+	IncludeInjected bool
+	// Tally, when non-nil, accumulates the strip counts across the whole
+	// parse, including records dropped because stripping emptied them.
+	Tally *transcript.HarnessStrips
 }
 
 // contentBlockType enumerates the content-block "type" strings the Claude
@@ -166,12 +173,59 @@ var (
 		"local-command-stderr",
 		"local-command-caveat",
 		"system-reminder",
-		"user-prompt-submit-hook",
 		"task-notification",
+		"bash-input",
 		"bash-stdout",
 		"bash-stderr",
 	}
 )
+
+// injectedTags are the hook-carrier tags: Claude Code wrapped UserPromptSubmit
+// output in this element before it switched to splicing plain text.
+var injectedTags = []string{
+	"user-prompt-submit-hook",
+}
+
+var injectedPatterns = func() []*regexp.Regexp {
+	out := make([]*regexp.Regexp, 0, len(injectedTags))
+	for _, t := range injectedTags {
+		out = append(out, regexp.MustCompile(`(?is)<`+t+`\b[^>]*>.*?</`+t+`>`))
+	}
+	return out
+}()
+
+// injectedContextHeadingRes mark where Claude Code splices hook additional
+// context into the user message body. The harness always appends the block
+// after the typed prompt and nothing user-typed follows it, verified across
+// every occurrence in the local corpus, so the strip cuts from the heading to
+// the end of the message. Two guards keep a person's own words safe: the
+// heading only matches at the start of a line, because the splice always
+// begins one, and the cut anchors at the LAST match, so a person quoting the
+// heading earlier in their prompt keeps their text and only the genuine
+// trailing splice is removed. "Stop hook feedback:" is deliberately absent:
+// its body quotes the user's own goal text, so cutting to end-of-message there
+// would delete user-authored content.
+//
+// Accepted residual: a lone line-start heading typed by a person, with no
+// genuine splice after it, is byte-indistinguishable from a real splice, and
+// the cut would remove their trailing text. The local corpus holds zero such
+// messages (every line-start occurrence in a visible message is a genuine
+// trailing splice), and whenever the hooks are active a genuine splice
+// follows the quote and anchors the cut safely past it.
+var injectedContextHeadingRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?m)^UserPromptSubmit hook additional context:`),
+	regexp.MustCompile(`(?m)^SessionStart hook additional context:`),
+}
+
+// injectedFeedbackLinePrefixes mark single hook-output lines the harness
+// splices into the body. They are dropped line by line, never to end of
+// message, because surrounding lines can be user text.
+var injectedFeedbackLinePrefixes = []string{
+	"Stop hook feedback:",
+	"PreToolUse hook feedback:",
+	"PostToolUse hook feedback:",
+	"UserPromptSubmit hook feedback:",
+}
 
 var noisePatterns = func() []*regexp.Regexp {
 	out := make([]*regexp.Regexp, 0, len(noiseTags))
@@ -251,11 +305,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 			// tool result entry, skip the turn and keep its results
 			return emptyMessage(), content.Results, false
 		}
-		text := content.Text
-		if !opts.PreserveSystemPrompts {
-			text = stripSystemTags(text)
-		}
-		m.Text = strings.TrimSpace(text)
+		m.Text = strings.TrimSpace(stripUserText(content.Text, opts))
 		if entry.IsCompactSummary {
 			m.Compaction = claudeSummaryMetadata(
 				entry.SummarizeMetadata,
@@ -274,6 +324,27 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 	// its own assistant record, so a thinking block often lands in an entry with
 	// no text and no tool_use; dropping it would lose the thinking from export.
 	return m, nil, m.Text != "" || m.HasTools || m.Thinking != ""
+}
+
+// stripUserText removes the harness content the options exclude from one user
+// message's text. Strips tally at the point of removal, so a record that
+// empties out entirely, and is therefore dropped by the caller, still counts.
+func stripUserText(text string, opts parseOptions) string {
+	if !opts.IncludeInjected {
+		stripped, injected := stripInjectedText(text)
+		text = stripped
+		if opts.Tally != nil {
+			opts.Tally.Injected += injected
+		}
+	}
+	if !opts.PreserveSystemPrompts {
+		stripped, system := stripSystemTags(text)
+		text = stripped
+		if opts.Tally != nil {
+			opts.Tally.System += system
+		}
+	}
+	return text
 }
 
 func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
@@ -649,30 +720,73 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 	m.Text = strings.Join(textParts, "\n\n")
 }
 
-// stripSystemTags removes system-injected tags from user messages.
-func stripSystemTags(s string) string {
+// stripSystemTags removes system-injected tags from user messages. The count
+// reports how many tag blocks were removed.
+func stripSystemTags(s string) (string, int) {
+	count := len(systemTagRe.FindAllStringIndex(s, -1))
 	s = systemTagRe.ReplaceAllString(s, "")
 	for _, re := range noisePatterns {
+		count += len(re.FindAllStringIndex(s, -1))
 		s = re.ReplaceAllString(s, "")
 	}
 	if idx := strings.Index(s, "<"); idx == 0 {
 		if end := strings.Index(s, ">"); end > 0 && end < 80 {
 			s = s[end+1:]
+			count++
 		}
+	}
+	return strings.TrimSpace(s), count
+}
+
+// stripInjectedText removes hook-pushed content from a user message: the
+// legacy hook-carrier tag, hook feedback lines, and the hook additional
+// context block spliced after the typed prompt. The count reports how many
+// pieces were removed.
+func stripInjectedText(s string) (string, int) {
+	count := 0
+	for _, re := range injectedPatterns {
+		count += len(re.FindAllStringIndex(s, -1))
+		s = re.ReplaceAllString(s, "")
+	}
+	// One cut at the last heading match across every heading type. Cutting
+	// per type would let an earlier quoted heading of one type delete the
+	// user text between it and a later genuine splice of the other type. When
+	// a message carries two genuine splices of different types, cutting at
+	// the later one retains the earlier block, which is the safe direction:
+	// retained harness text costs a junk row, a wrong cut costs a person's
+	// words.
+	lastHeading := -1
+	for _, headingRe := range injectedContextHeadingRes {
+		for _, match := range headingRe.FindAllStringIndex(s, -1) {
+			if match[0] > lastHeading {
+				lastHeading = match[0]
+			}
+		}
+	}
+	if lastHeading >= 0 {
+		s = s[:lastHeading]
+		count++
 	}
 	if strings.Contains(s, "hook feedback:") {
 		var keep []string
 		for line := range strings.SplitSeq(s, "\n") {
 			t := strings.TrimSpace(line)
-			if strings.HasPrefix(t, "Stop hook feedback:") ||
-				strings.HasPrefix(t, "PreToolUse hook feedback:") ||
-				strings.HasPrefix(t, "PostToolUse hook feedback:") ||
-				strings.HasPrefix(t, "UserPromptSubmit hook feedback:") {
+			if hasInjectedFeedbackPrefix(t) {
+				count++
 				continue
 			}
 			keep = append(keep, line)
 		}
 		s = strings.Join(keep, "\n")
 	}
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(s), count
+}
+
+func hasInjectedFeedbackPrefix(line string) bool {
+	for _, prefix := range injectedFeedbackLinePrefixes {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -153,9 +153,13 @@ func (p *Parser) Discover(ctx context.Context, prior map[string]conversation.Rec
 // Cursor writes no origin marker inside a transcript: a subagent transcript
 // carries the same top-level keys as its parent and names neither an agent nor a
 // parent. Classification therefore rests on path shape, corroborated by the
-// resume link where one exists. A future Cursor layout change would silently
-// reclassify these as user conversations, which is why an unexpected resume link
-// is logged during Discover.
+// resume link where one exists. Cursor also writes a dispatched conversation's
+// transcript twice, once under the dispatching conversation's subagents/
+// directory and once as a top-level twin named by the same uuid, so a top-level
+// transcript whose uuid has a subagents/ twin in the same project is the
+// dispatched conversation itself and classifies as a subagent. A future Cursor
+// layout change would silently reclassify these as user conversations, which is
+// why an unexpected resume link is logged during Discover.
 //
 // IsBackground is deliberately not read as an origin: a background composer is an
 // agent the person started, not one a conversation dispatched.
@@ -352,14 +356,16 @@ func (p *Parser) discoverJSONL(
 				Mtime: info.ModTime(),
 			},
 		})
-		// The path shape decides whether a transcript is a subagent conversation.
-		// The resume link corroborates that call and supplies the parent reference
-		// when it exists, because the provider stated that link outright. A resume
-		// link that disagrees with the path is logged and otherwise ignored: acting
-		// on it alone would hide a conversation the layout says is the user's own,
-		// which is the loss this classification exists to prevent.
+		// The path shape decides whether a transcript is a subagent conversation:
+		// its own place under a subagents/ directory, or a top-level twin whose
+		// uuid appears under one in the same project. The resume link corroborates
+		// that call and supplies the parent reference when it exists, because the
+		// provider stated that link outright. A resume link that disagrees with
+		// the path is logged and otherwise ignored: acting on it alone would hide
+		// a conversation the layout says is the user's own, which is the loss this
+		// classification exists to prevent.
 		resumeParentID, resumedByAConversation := resumeLinks.parentOf(file.ConversationID)
-		parentConversationID := file.ParentConversationID
+		parentConversationID := firstNonEmptyString(file.ParentConversationID, file.TwinSubagentParentID)
 		origin := originFromParentConversationID(parentConversationID)
 		switch {
 		case origin == conversation.OriginSubagent && resumedByAConversation:
@@ -648,16 +654,18 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 		return emptyDiscoveredArtifact(), fmt.Errorf("cursor transcript path not discovered: %s", path)
 	}
 	// The direct resolve has no resume-link index, which Discover builds over
-	// every parent transcript. The path shape is the classifier either way, so
-	// this record carries the same origin and parent Discover would have given it
-	// rather than an unspecified origin that would bypass the setting.
+	// every parent transcript. The path shape is the classifier either way,
+	// including the subagents/ twin of a top-level uuid, so this record carries
+	// the same origin and parent Discover would have given it rather than an
+	// unspecified origin that would bypass the setting.
+	parentConversationID := firstNonEmptyString(file.ParentConversationID, file.TwinSubagentParentID)
 	var artifact discoveredArtifact
 	artifact.Kind = discoveredKindJSONL
 	artifact.Path = file.Path
 	artifact.ConversationID = file.ConversationID
 	artifact.ProjectKey = file.ProjectKey
-	artifact.Origin = originFromParentConversationID(file.ParentConversationID)
-	artifact.ParentConversationID = file.ParentConversationID
+	artifact.Origin = originFromParentConversationID(parentConversationID)
+	artifact.ParentConversationID = parentConversationID
 	return artifact, nil
 }
 

@@ -256,6 +256,8 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 		streamOpts := codexstore.HistoryOptions{
 			IncludeSystemMessages: opts.IncludeSystemMessages,
 			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
+			IncludeInjected:       opts.IncludeInjected,
+			Tally:                 opts.HarnessTally,
 		}
 		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {
@@ -281,6 +283,8 @@ func (p *Parser) streamWithToolOutputs(path string, opts conversation.LoadOption
 		streamOpts := codexstore.HistoryOptions{
 			IncludeSystemMessages: opts.IncludeSystemMessages,
 			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
+			IncludeInjected:       opts.IncludeInjected,
+			Tally:                 opts.HarnessTally,
 		}
 		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {

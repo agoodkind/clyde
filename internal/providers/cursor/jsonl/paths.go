@@ -38,6 +38,15 @@ type TranscriptFile struct {
 	// the parent conversation's id. It is empty for a conversation's own
 	// transcript.
 	ParentConversationID string
+	// TwinSubagentParentID names the conversation that dispatched this uuid when
+	// this is the top-level twin of a subagent transcript. Cursor writes a
+	// dispatched conversation's transcript twice: under the dispatching
+	// conversation's subagents/ directory and again as a top-level
+	// <uuid>/<uuid>.jsonl in the same project, and the twin carries no marker of
+	// its own, so the subagents/ copy is what says the uuid was dispatched. It is
+	// empty for a subagent transcript itself and for a top-level transcript with
+	// no subagents/ twin in the project.
+	TwinSubagentParentID string
 }
 
 // ResolveProjectRoots resolves the Cursor modern transcript roots from
@@ -87,6 +96,9 @@ func MatchTranscriptFile(path string) (TranscriptFile, bool, error) {
 	for _, root := range roots {
 		file, ok := transcriptFileFromPath(root.Path, path)
 		if ok {
+			if file.ParentConversationID == "" {
+				file.TwinSubagentParentID = findSubagentTwinParent(file.Path, file.ConversationID)
+			}
 			return file, true, nil
 		}
 	}
@@ -127,7 +139,57 @@ func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {
 	sort.SliceStable(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
+	fillTwinSubagentParents(files)
 	return files, nil
+}
+
+// projectConversationKey scopes a conversation uuid to the project it was
+// discovered in, because the subagents/ copy and its top-level twin always sit
+// in the same project directory and a uuid coincidence across projects must not
+// reclassify an unrelated conversation.
+type projectConversationKey struct {
+	ProjectKey     string
+	ConversationID string
+}
+
+// fillTwinSubagentParents marks each top-level transcript whose uuid also
+// appears under a subagents/ directory in the same project, carrying the
+// dispatching conversation's id onto the twin.
+func fillTwinSubagentParents(files []TranscriptFile) {
+	subagentParentByKey := make(map[projectConversationKey]string)
+	for _, file := range files {
+		if file.ParentConversationID == "" {
+			continue
+		}
+		key := projectConversationKey{ProjectKey: file.ProjectKey, ConversationID: file.ConversationID}
+		if _, exists := subagentParentByKey[key]; !exists {
+			subagentParentByKey[key] = file.ParentConversationID
+		}
+	}
+	if len(subagentParentByKey) == 0 {
+		return
+	}
+	for i := range files {
+		if files[i].ParentConversationID != "" {
+			continue
+		}
+		key := projectConversationKey{ProjectKey: files[i].ProjectKey, ConversationID: files[i].ConversationID}
+		files[i].TwinSubagentParentID = subagentParentByKey[key]
+	}
+}
+
+// findSubagentTwinParent answers the same question as fillTwinSubagentParents
+// for one path resolved outside a discovery walk: it looks for this uuid under
+// a sibling conversation's subagents/ directory in the same project and returns
+// that conversation's id, or an empty string when no twin exists.
+func findSubagentTwinParent(topLevelPath string, conversationID string) string {
+	agentTranscriptsDir := filepath.Dir(filepath.Dir(topLevelPath))
+	pattern := filepath.Join(agentTranscriptsDir, "*", subagentsDirName, conversationID+jsonlExtension)
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	return filepath.Base(filepath.Dir(filepath.Dir(matches[0])))
 }
 
 // WorkspacePathFromProjectKey returns a lossy filesystem-path display hint from
@@ -175,6 +237,9 @@ func transcriptFileFromPath(rootPath string, path string) (TranscriptFile, bool)
 			ConversationID:       conversationDirName,
 			ProjectKey:           projectKey,
 			ParentConversationID: "",
+			// The twin check needs the sibling files, so DiscoverTranscriptFiles and
+			// MatchTranscriptFile fill this after the path is matched.
+			TwinSubagentParentID: "",
 		}, true
 	}
 
@@ -195,6 +260,9 @@ func transcriptFileFromPath(rootPath string, path string) (TranscriptFile, bool)
 		ConversationID:       subagentID,
 		ProjectKey:           projectKey,
 		ParentConversationID: conversationDirName,
+		// A subagent transcript is its own marker; the twin field is only ever
+		// set on a top-level transcript.
+		TwinSubagentParentID: "",
 	}, true
 }
 

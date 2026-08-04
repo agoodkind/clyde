@@ -29,6 +29,11 @@ func (idx *Index) LoadMessages(record Record, includeSystemPrompts bool, include
 		IncludeSystemPrompts:  includeSystemPrompts,
 		IncludeSystemMessages: false,
 		IncludeToolOutputs:    includeToolOutputs,
+		// The legacy two-flag signature predates the injected kind; its callers
+		// read conversations for people or models, where hook-pushed context is
+		// noise, so injected content stays stripped.
+		IncludeInjected: false,
+		HarnessTally:    nil,
 	})
 }
 

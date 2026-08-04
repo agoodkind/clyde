@@ -141,6 +141,8 @@ func (idx *Index) renderReorientSnapshot(current Record, options ReorientOptions
 		IncludeSystemPrompts:  false,
 		IncludeSystemMessages: true,
 		IncludeToolOutputs:    content.Has(ContentKindToolOutputs),
+		IncludeInjected:       false,
+		HarnessTally:          nil,
 	})
 	if err != nil {
 		return reorientSnapshot{}, err

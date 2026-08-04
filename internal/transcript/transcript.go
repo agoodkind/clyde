@@ -22,6 +22,17 @@ type Message struct {
 	Tools             []ToolCall          `json:"tools,omitempty"`      // parsed tool calls with inputs
 }
 
+// HarnessStrips accumulates harness-written content a parser removed or
+// withheld across one load: injected pieces (hook-pushed context) and system
+// pieces (harness-native tags and frames). It lives on the load options rather
+// than on individual messages so a record removed entirely still counts; a
+// per-message count dies with the record it described. Zero values mean
+// nothing was removed.
+type HarnessStrips struct {
+	Injected int
+	System   int
+}
+
 // MessageVisibility is part of Clyde's typed adapter surface.
 type MessageVisibility string
 

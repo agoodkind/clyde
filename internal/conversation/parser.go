@@ -81,6 +81,16 @@ type LoadOptions struct {
 	IncludeSystemPrompts  bool
 	IncludeSystemMessages bool
 	IncludeToolOutputs    bool
+	// IncludeInjected keeps text that hooks and user tooling pushed into user
+	// messages. When false, each provider parser removes the injected content
+	// it recognizes; the markers stay provider-owned behind this generic bit.
+	IncludeInjected bool
+	// HarnessTally, when non-nil, accumulates what the parser removed or
+	// withheld under the options above: injected content and harness system
+	// content. It counts at the point of removal, so a record dropped entirely
+	// because stripping emptied it, or withheld whole by an exclusion gate,
+	// still counts. Nil disables tallying.
+	HarnessTally *transcript.HarnessStrips
 }
 
 // Parser reads one provider's raw conversation artifacts. Each provider

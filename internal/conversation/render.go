@@ -77,6 +77,8 @@ func (idx *Index) contextWindowByIndex(record Record, messageIndex, before, afte
 		IncludeSystemPrompts:  false,
 		IncludeSystemMessages: false,
 		IncludeToolOutputs:    false,
+		IncludeInjected:       false,
+		HarnessTally:          nil,
 	})
 	if err != nil {
 		return "", err

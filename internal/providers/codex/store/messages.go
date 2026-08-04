@@ -37,7 +37,7 @@ func sessionPromptMessage(raw json.RawMessage, timestamp time.Time) (HistoryMess
 	return textHistoryMessage(roleDeveloper, text, timestamp, ""), true
 }
 
-func responseItemMessage(raw json.RawMessage, timestamp time.Time, includeSystemPrompts bool) (HistoryMessage, bool) {
+func responseItemMessage(raw json.RawMessage, timestamp time.Time, opts HistoryOptions) (HistoryMessage, bool) {
 	var payload responsePayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
@@ -53,10 +53,13 @@ func responseItemMessage(raw json.RawMessage, timestamp time.Time, includeSystem
 		// gated behind IncludeSystemPrompts and normalized to the developer role
 		// so the system role stays reserved for compaction boundaries.
 		if isSystemPromptRole(payload.Role) {
-			if !includeSystemPrompts {
+			if !opts.IncludeSystemPrompts {
 				return emptyHistoryMessage(), false
 			}
 			return textHistoryMessage(roleDeveloper, text, timestamp, payload.Phase), true
+		}
+		if payload.Role == "user" {
+			return userTextMessage(text, timestamp, payload.Phase, opts)
 		}
 		return textHistoryMessage(payload.Role, text, timestamp, payload.Phase), true
 	case responseItemFunctionCall:
@@ -75,7 +78,106 @@ func responseItemMessage(raw json.RawMessage, timestamp time.Time, includeSystem
 	}
 }
 
-func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
+// codexUserTextClass names what a user-role text actually is: a person's turn,
+// or one of the harness shapes codex and user tooling write into the user role.
+type codexUserTextClass string
+
+const (
+	codexUserTextConversation  codexUserTextClass = "conversation"
+	codexUserTextSystemPrompt  codexUserTextClass = "system_prompt"
+	codexUserTextSystemMessage codexUserTextClass = "system_message"
+	codexUserTextInjected      codexUserTextClass = "injected"
+)
+
+// codexSystemMessageHeads open the harness frames codex writes into the user
+// role: the sandbox environment block, aborted-turn markers, the approval
+// request frame, and the transcript delta frame. Matching is head-anchored and
+// exact, so a person quoting one of these lines mid-message keeps their
+// message.
+var codexSystemMessageHeads = []string{
+	"<environment_context>",
+	"<turn_aborted>",
+	">>> APPROVAL REQUEST START",
+	">>> APPROVAL REQUEST END",
+	">>> TRANSCRIPT DELTA START",
+	">>> TRANSCRIPT DELTA END",
+	"The Codex agent has requested the following",
+	"Assess the exact planned action below.",
+	"Planned action JSON:",
+	"The following is the Codex agent history",
+}
+
+// codexInjectedHeads open the messages user tooling pushes into the user role:
+// automation heartbeats, goal context, and injected internal context.
+var codexInjectedHeads = []string{
+	"<codex_internal_context",
+	"<heartbeat>",
+	"<automation_id>",
+	"<objective>",
+}
+
+// codexSystemPromptHead opens the AGENTS.md instruction message the harness
+// writes into the user role: "# AGENTS.md instructions for <path>" followed by
+// the <INSTRUCTIONS> block. Both parts are required so a person ASKING about
+// AGENTS.md instructions ("# AGENTS.md instructions are not being applied")
+// keeps their message: every generated instance in the local corpus carries
+// the "for " continuation and the block, and a typed question carries neither.
+const (
+	codexSystemPromptHead = "# AGENTS.md instructions for "
+	codexSystemPromptBody = "<INSTRUCTIONS>"
+)
+
+func classifyCodexUserText(text string) codexUserTextClass {
+	if strings.HasPrefix(text, codexSystemPromptHead) && strings.Contains(text, codexSystemPromptBody) {
+		return codexUserTextSystemPrompt
+	}
+	for _, head := range codexSystemMessageHeads {
+		if strings.HasPrefix(text, head) {
+			return codexUserTextSystemMessage
+		}
+	}
+	for _, head := range codexInjectedHeads {
+		if strings.HasPrefix(text, head) {
+			return codexUserTextInjected
+		}
+	}
+	return codexUserTextConversation
+}
+
+// userTextMessage gates one user-role text by what it actually is. A harness
+// frame follows the matching include option; an AGENTS.md instruction message
+// renders as developer-role system-prompt content so it gates and displays with
+// the rest of that class; a person's turn passes through unchanged.
+func userTextMessage(text string, timestamp time.Time, phase string, opts HistoryOptions) (HistoryMessage, bool) {
+	switch classifyCodexUserText(text) {
+	case codexUserTextSystemPrompt:
+		if !opts.IncludeSystemPrompts {
+			if opts.Tally != nil {
+				opts.Tally.System++
+			}
+			return emptyHistoryMessage(), false
+		}
+		return textHistoryMessage(roleDeveloper, text, timestamp, phase), true
+	case codexUserTextSystemMessage:
+		if !opts.IncludeSystemMessages {
+			if opts.Tally != nil {
+				opts.Tally.System++
+			}
+			return emptyHistoryMessage(), false
+		}
+	case codexUserTextInjected:
+		if !opts.IncludeInjected {
+			if opts.Tally != nil {
+				opts.Tally.Injected++
+			}
+			return emptyHistoryMessage(), false
+		}
+	case codexUserTextConversation:
+	}
+	return textHistoryMessage("user", text, timestamp, phase), true
+}
+
+func eventMessage(raw json.RawMessage, timestamp time.Time, opts HistoryOptions) (HistoryMessage, bool) {
 	var payload eventPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
@@ -86,7 +188,7 @@ func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, boo
 		if text == "" {
 			return emptyHistoryMessage(), false
 		}
-		return textHistoryMessage("user", text, timestamp, payload.Phase), true
+		return userTextMessage(text, timestamp, payload.Phase, opts)
 	case eventMessageTypeAgent:
 		text := strings.TrimSpace(payload.Message)
 		if text == "" {

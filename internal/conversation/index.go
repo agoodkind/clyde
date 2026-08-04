@@ -43,7 +43,14 @@ const (
 	// Record.LatestRequestID is derived the same way: without the raise, an artifact
 	// whose stamp is unchanged keeps its version 1 record and never gains the field,
 	// so every conversation not written to since the upgrade resolves no request id.
-	cacheFormatVersion = 2
+	//
+	// Version 3 covers the subagents/ twin rule: a top-level Cursor transcript
+	// whose uuid appears under a sibling conversation's subagents/ directory now
+	// derives subagent origin from that twin. A dispatched conversation's twin
+	// file is finished and never changes again, so without the raise every twin
+	// cached by version 2 keeps its user-origin record forever and stays in the
+	// index and the semantic feed.
+	cacheFormatVersion = 3
 )
 
 // Index owns the derived raw conversation cache. It resolves each artifact's

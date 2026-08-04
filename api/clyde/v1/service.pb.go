@@ -3333,9 +3333,13 @@ type ExportTranscriptRequest struct {
 	MaxTokens string `protobuf:"bytes,17,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
 	// token_model overrides the model whose tokenizer counts max_tokens. Empty
 	// derives the tokenizer from the conversation's provider and model.
-	TokenModel    string `protobuf:"bytes,18,opt,name=token_model,json=tokenModel,proto3" json:"token_model,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	TokenModel string `protobuf:"bytes,18,opt,name=token_model,json=tokenModel,proto3" json:"token_model,omitempty"`
+	// include_injected keeps hook-pushed text inside user messages: hook
+	// additional context and hook feedback the harness spliced into the prompt
+	// body.
+	IncludeInjected bool `protobuf:"varint,19,opt,name=include_injected,json=includeInjected,proto3" json:"include_injected,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ExportTranscriptRequest) Reset() {
@@ -3492,6 +3496,13 @@ func (x *ExportTranscriptRequest) GetTokenModel() string {
 		return x.TokenModel
 	}
 	return ""
+}
+
+func (x *ExportTranscriptRequest) GetIncludeInjected() bool {
+	if x != nil {
+		return x.IncludeInjected
+	}
+	return false
 }
 
 type ConversationLineage struct {
@@ -4102,7 +4113,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\ttruncated\x18\b \x01(\bR\ttruncated\x12\x18\n" +
 	"\arestart\x18\t \x01(\bR\arestart\x12\x1a\n" +
 	"\bwarnings\x18\n" +
-	" \x03(\tR\bwarnings\"\xf4\x05\n" +
+	" \x03(\tR\bwarnings\"\x9f\x06\n" +
 	"\x17ExportTranscriptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x16\n" +
 	"\x06format\x18\x02 \x01(\tR\x06format\x12\x1e\n" +
@@ -4126,7 +4137,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\n" +
 	"max_tokens\x18\x11 \x01(\tR\tmaxTokens\x12\x1f\n" +
 	"\vtoken_model\x18\x12 \x01(\tR\n" +
-	"tokenModel\"\xc0\x01\n" +
+	"tokenModel\x12)\n" +
+	"\x10include_injected\x18\x13 \x01(\bR\x0fincludeInjected\"\xc0\x01\n" +
 	"\x13ConversationLineage\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12;\n" +
 	"\x0fparent_provider\x18\x02 \x01(\x0e2\x12.clyde.v1.ProviderR\x0eparentProvider\x12(\n" +

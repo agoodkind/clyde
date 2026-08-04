@@ -10,6 +10,7 @@ import (
 	"iter"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -95,7 +96,7 @@ const headerLineCap = 64
 // ReadHeader returns a Codex rollout thread summary from the header JSONL
 // entries without reading message history.
 func ReadHeader(path string, archived bool) (ThreadSummary, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
 		return ThreadSummary{}, fmt.Errorf("open codex rollout %s: %w", path, err)
@@ -156,12 +157,21 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 }
 
 // HistoryOptions controls which non-conversational records StreamMessages
-// surfaces. System messages are the compaction boundaries; system prompts are
-// the session base instructions and the developer-role guidance messages. Both
-// default off so a plain history stays to user and assistant turns plus tools.
+// surfaces. System messages are the compaction boundaries and the harness
+// frames codex writes into the user role; system prompts are the session base
+// instructions, the developer-role guidance messages, and the AGENTS.md
+// instruction messages; injected content is what user tooling pushes into the
+// user role, such as automation heartbeats and goal context. All default off
+// so a plain history stays to user and assistant turns plus tools.
 type HistoryOptions struct {
 	IncludeSystemMessages bool
 	IncludeSystemPrompts  bool
+	IncludeInjected       bool
+	// Tally, when non-nil, counts the user-role harness records the options
+	// above withheld, so a caller can report exclusions that never became
+	// messages. Injected records count as Injected; system-message and
+	// system-prompt records count as System.
+	Tally *transcript.HarnessStrips
 }
 
 // StreamMessages yields normalized Codex rollout messages as each JSONL envelope
@@ -169,7 +179,7 @@ type HistoryOptions struct {
 // before decoding so replacement_history stays untouched.
 func StreamMessages(path string, opts HistoryOptions) iter.Seq2[HistoryMessage, error] {
 	return func(yield func(HistoryMessage, error) bool) {
-		f, err := os.Open(path)
+		f, err := os.Open(filepath.Clean(path))
 		if err != nil {
 			slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
 			yield(emptyHistoryMessage(), fmt.Errorf("open codex rollout %s: %w", path, err))
@@ -323,9 +333,9 @@ func streamMessageFromEnvelope(envelope historyLine, opts HistoryOptions) (Histo
 	lineTime := parseCodexTime(envelope.Timestamp)
 	switch historyEnvelopeType(envelope.Type) {
 	case historyEnvelopeResponseItem:
-		return responseItemMessage(envelope.Payload, lineTime, opts.IncludeSystemPrompts)
+		return responseItemMessage(envelope.Payload, lineTime, opts)
 	case historyEnvelopeEventMsg:
-		return eventMessage(envelope.Payload, lineTime)
+		return eventMessage(envelope.Payload, lineTime, opts)
 	case historyEnvelopeCompacted:
 		if !opts.IncludeSystemMessages {
 			return emptyHistoryMessage(), false

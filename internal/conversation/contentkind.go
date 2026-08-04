@@ -23,6 +23,12 @@ const (
 	ContentKindSystemPrompts ContentKind = "system_prompts"
 	// ContentKindSystemMessages is provider system transcript records.
 	ContentKindSystemMessages ContentKind = "system_messages"
+	// ContentKindInjected is text that hooks and user tooling pushed into user
+	// messages: hook additional context and hook feedback the harness spliced
+	// into the prompt body. It is distinct from the system kinds, which cover
+	// what the harness itself writes; each provider parser owns the markers
+	// that identify its injected content.
+	ContentKindInjected ContentKind = "injected"
 	// ContentKindRawJSONMetadata is JSON metadata fields.
 	ContentKindRawJSONMetadata ContentKind = "raw_json_metadata"
 )
@@ -36,6 +42,7 @@ var AllContentKinds = []ContentKind{
 	ContentKindToolOutputs,
 	ContentKindSystemPrompts,
 	ContentKindSystemMessages,
+	ContentKindInjected,
 	ContentKindRawJSONMetadata,
 }
 
@@ -83,6 +90,7 @@ func allSelectorContentKinds() []ContentKind {
 			ContentKindToolOutputs,
 			ContentKindSystemPrompts,
 			ContentKindSystemMessages,
+			ContentKindInjected,
 			ContentKindRawJSONMetadata:
 			values = append(values, kind)
 		}

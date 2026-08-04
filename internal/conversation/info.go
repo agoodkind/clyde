@@ -39,6 +39,8 @@ func (idx *Index) ConversationInfo(record Record) (Info, error) {
 		IncludeSystemPrompts:  false,
 		IncludeSystemMessages: true,
 		IncludeToolOutputs:    true,
+		IncludeInjected:       false,
+		HarnessTally:          nil,
 	})
 	if err != nil {
 		return Info{}, err
