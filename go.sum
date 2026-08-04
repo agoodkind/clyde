@@ -267,8 +267,6 @@ github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 h1:P6pPBnrTSX3DEVR4fDembhR
 github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0/go.mod h1:vmVJ0l/dxyfGW6FmdpVm2joNMFikkuWg0EoCKLGUMNw=
 github.com/letsencrypt/boulder v0.20260309.0 h1:kZynrxK3QfqLGx6hhoz+Rfs3hgltJs1p9Mp+4+VwnY0=
 github.com/letsencrypt/boulder v0.20260309.0/go.mod h1:yG8lj8pNPZ8taq3oNdTpfBS+eC74IaEuiewqzVpXiWE=
-github.com/mark3labs/mcp-go v0.56.0 h1:7aCj2wODCskMi08f923ADG+EfELZBdiKILny415cIS8=
-github.com/mark3labs/mcp-go v0.56.0/go.mod h1:+8WclSK1ZUweCP3hvktSji8n8ABG/95QaEkeVE/Uwas=
 github.com/mark3labs/mcp-go v0.57.0 h1:jzWKyCzdWnwnZt05cvcQQ+ngiUl2RnixXJa7Kj4qP1E=
 github.com/mark3labs/mcp-go v0.57.0/go.mod h1:+8WclSK1ZUweCP3hvktSji8n8ABG/95QaEkeVE/Uwas=
 github.com/maruel/natural v1.1.1 h1:Hja7XhhmvEFhcByqDoHz9QZbkWey+COd9xWfCfn1ioo=
@@ -453,10 +451,8 @@ goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e h1:rc0g9PskdABDDhsXsL9rlf
 goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e/go.mod h1:6QHBKQ4ylZgScAMpaQkDaPvHHh41UYlVUXPUDgxlQFU=
 goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910 h1:7OfAcfvwE+Pn0Ia82Q6zN01WqQc1gbblLN+z6r+gG+U=
 goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910/go.mod h1:HPxYSE2TKo9ORrGXkfLoOvaSd/r4OnWeUDlTKXR5Zns=
-goodkind.io/lm-semantic-search v0.0.0-20260712044805-e01dfc5ddeff h1:+Qig3cf6V6rN9FG3npLGlz2tDyfLOmQJbZ85LLoPwRM=
-goodkind.io/lm-semantic-search v0.0.0-20260712044805-e01dfc5ddeff/go.mod h1:2xqPjeZrVPUo/nws2lgiGNPkzFYxjAs9o9WjzigVpSc=
-goodkind.io/lm-semantic-search v0.0.0-20260730155241-1a5c539fd49b h1:/MxlcDBubiNV9mdRHReMh/5oNVtTAVzKgD/oKcBT15Y=
-goodkind.io/lm-semantic-search v0.0.0-20260730155241-1a5c539fd49b/go.mod h1:477/YnmaTBSqtTa1Pep+xnLZDfLp4bUWHbqyeuuZsOk=
+goodkind.io/lm-semantic-search v0.0.0-20260804020814-eac65ecd98c6 h1:iqyWjoly+53KpGSgZckWS0RKqx9QIjVA9OdowxcUgWA=
+goodkind.io/lm-semantic-search v0.0.0-20260804020814-eac65ecd98c6/go.mod h1:477/YnmaTBSqtTa1Pep+xnLZDfLp4bUWHbqyeuuZsOk=
 google.golang.org/api v0.280.0 h1:F4OfEHZhZh6a7uTufJAXXVd/2TQ8EjM4vZH+jX/vFYk=
 google.golang.org/api v0.280.0/go.mod h1:oGKmPZRDoD3vdkf6MA7F4VNkR1rxCiuaPSkhsf3EolU=
 google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 h1:XzmzkmB14QhVhgnawEVsOn6OFsnpyxNPRY9QV01dNB0=
@@ -465,8 +461,6 @@ google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa h1:
 google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa/go.mod h1:q4lMZS6kskjT5HvCPrnnypcDPVJqT/f4nfxmkE7gryY=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa h1:mZHHdPZl0dbGHCflZgAq/Q468DWVFcU2whhB2KAo8fk=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa/go.mod h1:4Hqkh8ycfw05ld/3BWL7rJOSfebL2Q+DVDeRgYgxUU8=
-google.golang.org/grpc v1.82.1 h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE=
-google.golang.org/grpc v1.82.1/go.mod h1:yzTZ1TB1Z3SG+LIYaI+WiE8D5+PZ3ArnrSp8zF3+/ZA=
 google.golang.org/grpc v1.83.0 h1:JeNZEKJFbQxArAMl+hiytHauacDNqJUllNfmIMmpqnQ=
 google.golang.org/grpc v1.83.0/go.mod h1:kDyl6SKsiHKt0uylY5gtn5cEjkrIOhQOGDgIc4JGwzQ=
 google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.6.1 h1:/WILD1UcXj/ujCxgoL/DvRgt2CP3txG8+FwkUbb9110=

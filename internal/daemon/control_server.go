@@ -289,6 +289,7 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 			Snippet:       match.Snippet,
 			Score:         match.Score,
 			ContextWindow: match.ContextWindow,
+			LoadRules:     match.LoadRules,
 		})
 	}
 	return &clydev1.SearchConversationsResponse{

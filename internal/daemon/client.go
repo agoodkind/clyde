@@ -186,8 +186,10 @@ func GetConversationInfo(ctx context.Context, conversationID string) (conversati
 }
 
 // GetConversationContext asks the daemon for the messages around a center point
-// rendered as plain text.
-func GetConversationContext(ctx context.Context, conversationID, timestamp string, messageIndex, before, after int) (string, error) {
+// rendered as plain text. loadRules is the loading-rules tag a search hit
+// carried for the row that produced messageIndex; empty means the default
+// rules.
+func GetConversationContext(ctx context.Context, conversationID, timestamp string, messageIndex, before, after int, loadRules string) (string, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
 		return "", err
@@ -202,6 +204,7 @@ func GetConversationContext(ctx context.Context, conversationID, timestamp strin
 		MessageIndex:   int64(messageIndex),
 		Before:         int64(before),
 		After:          int64(after),
+		LoadRules:      loadRules,
 	})
 	if err != nil {
 		return "", daemonRPCError(rpcCtx, "get conversation context", err)
@@ -253,6 +256,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 			Snippet:       wire.GetSnippet(),
 			Score:         wire.GetScore(),
 			ContextWindow: wire.GetContextWindow(),
+			LoadRules:     wire.GetLoadRules(),
 		})
 	}
 	return conversation.SearchConversationsResult{

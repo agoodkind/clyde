@@ -1873,8 +1873,14 @@ type GetConversationContextRequest struct {
 	MessageIndex   int64                  `protobuf:"varint,3,opt,name=message_index,json=messageIndex,proto3" json:"message_index,omitempty"`
 	Before         int64                  `protobuf:"varint,4,opt,name=before,proto3" json:"before,omitempty"`
 	After          int64                  `protobuf:"varint,5,opt,name=after,proto3" json:"after,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// load_rules is the loading-rules tag a search hit carried for the row that
+	// produced message_index. The reader counts the window over the message
+	// sequence those rules load, so the index lands on the same message the
+	// search stored. Empty means the default rules, which every row written
+	// before tagging was numbered under.
+	LoadRules     string `protobuf:"bytes,6,opt,name=load_rules,json=loadRules,proto3" json:"load_rules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetConversationContextRequest) Reset() {
@@ -1940,6 +1946,13 @@ func (x *GetConversationContextRequest) GetAfter() int64 {
 		return x.After
 	}
 	return 0
+}
+
+func (x *GetConversationContextRequest) GetLoadRules() string {
+	if x != nil {
+		return x.LoadRules
+	}
+	return ""
 }
 
 type SearchConversationsRequest struct {
@@ -2101,6 +2114,11 @@ type ConversationSearchMatch struct {
 	// context_window is the rendered messages surrounding this hit, so the caller
 	// rarely needs a second read call.
 	ContextWindow string `protobuf:"bytes,7,opt,name=context_window,json=contextWindow,proto3" json:"context_window,omitempty"`
+	// load_rules is the loading-rules tag stored with the matched row. Pass it
+	// back on GetConversationContextRequest so the window is counted over the
+	// same message sequence message_index refers to. Empty on rows written
+	// before tagging existed.
+	LoadRules     string `protobuf:"bytes,8,opt,name=load_rules,json=loadRules,proto3" json:"load_rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2180,6 +2198,13 @@ func (x *ConversationSearchMatch) GetScore() float64 {
 func (x *ConversationSearchMatch) GetContextWindow() string {
 	if x != nil {
 		return x.ContextWindow
+	}
+	return ""
+}
+
+func (x *ConversationSearchMatch) GetLoadRules() string {
+	if x != nil {
+		return x.LoadRules
 	}
 	return ""
 }
@@ -3984,13 +4009,15 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x11ConversationChunk\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\fR\x04text\"!\n" +
 	"\vExportChunk\x12\x12\n" +
-	"\x04body\x18\x01 \x01(\fR\x04body\"\xb9\x01\n" +
+	"\x04body\x18\x01 \x01(\fR\x04body\"\xd8\x01\n" +
 	"\x1dGetConversationContextRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\tR\ttimestamp\x12#\n" +
 	"\rmessage_index\x18\x03 \x01(\x03R\fmessageIndex\x12\x16\n" +
 	"\x06before\x18\x04 \x01(\x03R\x06before\x12\x14\n" +
-	"\x05after\x18\x05 \x01(\x03R\x05after\"\xce\x03\n" +
+	"\x05after\x18\x05 \x01(\x03R\x05after\x12\x1d\n" +
+	"\n" +
+	"load_rules\x18\x06 \x01(\tR\tloadRules\"\xce\x03\n" +
 	"\x1aSearchConversationsRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x03R\x05limit\x12.\n" +
@@ -4006,7 +4033,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	" \x01(\x03R\x14perConversationLimit\x12'\n" +
 	"\x0fconversation_id\x18\v \x01(\tR\x0econversationId\x12%\n" +
 	"\x0econtext_window\x18\f \x01(\x03R\rcontextWindow\x12\x16\n" +
-	"\x06offset\x18\r \x01(\x03R\x06offset\"\x92\x02\n" +
+	"\x06offset\x18\r \x01(\x03R\x06offset\"\xb1\x02\n" +
 	"\x17ConversationSearchMatch\x12@\n" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.clyde.v1.ConversationRecordR\fconversation\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x03R\fmessageIndex\x12\x12\n" +
@@ -4014,7 +4041,9 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x18\n" +
 	"\asnippet\x18\x05 \x01(\tR\asnippet\x12\x14\n" +
 	"\x05score\x18\x06 \x01(\x01R\x05score\x12%\n" +
-	"\x0econtext_window\x18\a \x01(\tR\rcontextWindow\">\n" +
+	"\x0econtext_window\x18\a \x01(\tR\rcontextWindow\x12\x1d\n" +
+	"\n" +
+	"load_rules\x18\b \x01(\tR\tloadRules\">\n" +
 	"\x10SearchFacetCount\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\tR\x05value\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x03R\x05count\"\xb8\x01\n" +

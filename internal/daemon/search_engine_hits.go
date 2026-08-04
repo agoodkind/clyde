@@ -276,6 +276,7 @@ func resolveEngineHits(
 			// byte-bounded so the ranked list stays small. The full surrounding
 			// window is a separate windowed read; search never inlines it.
 			ContextWindow: conversation.Excerpt(hit.Content),
+			LoadRules:     hit.LoadRules,
 		})
 		seenMatches++
 		if limit > 0 && len(matches) >= limit {

@@ -223,6 +223,12 @@ message GetConversationContextRequest {
   int64 message_index = 3;
   int64 before = 4;
   int64 after = 5;
+  // load_rules is the loading-rules tag a search hit carried for the row that
+  // produced message_index. The reader counts the window over the message
+  // sequence those rules load, so the index lands on the same message the
+  // search stored. Empty means the default rules, which every row written
+  // before tagging was numbered under.
+  string load_rules = 6;
 }
 
 message SearchConversationsRequest {
@@ -267,6 +273,11 @@ message ConversationSearchMatch {
   // context_window is the rendered messages surrounding this hit, so the caller
   // rarely needs a second read call.
   string context_window = 7;
+  // load_rules is the loading-rules tag stored with the matched row. Pass it
+  // back on GetConversationContextRequest so the window is counted over the
+  // same message sequence message_index refers to. Empty on rows written
+  // before tagging existed.
+  string load_rules = 8;
 }
 
 // SearchFacetCount is one facet value and how many matched conversations carry

@@ -188,7 +188,7 @@ func TestContextWindowTextDoesNotOptIntoSystemMessages(t *testing.T) {
 	t.Parallel()
 	idx, record := newOptionAwareIndex()
 
-	text, err := idx.ContextWindowText(record, "", 0, 0, 0)
+	text, err := idx.ContextWindowText(record, "", 0, 0, 0, "")
 	if err != nil {
 		t.Fatalf("ContextWindowText returned error: %v", err)
 	}
