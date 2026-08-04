@@ -1,13 +1,45 @@
 package daemon
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/transcript"
 )
+
+// SemanticProjectionHash hashes one conversation's projected documents: every
+// byte the engine would store, in delivery order. Two projections hash equal
+// exactly when the engine would receive identical content, so the feeder can
+// tell a real content change from an artifact whose stamp moved with unchanged
+// bytes. Field and document boundaries are length-prefixed so concatenation
+// ambiguity cannot collide two different projections.
+func SemanticProjectionHash(docs []semsearch.SemDoc) string {
+	hasher := sha256.New()
+	writeField := func(value string) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		hasher.Write(length[:])
+		hasher.Write([]byte(value))
+	}
+	for _, doc := range docs {
+		writeField(strconv.Itoa(int(doc.MessageIndex)))
+		writeField(doc.Role)
+		writeField(doc.Text)
+		writeField(doc.Thinking)
+		for _, tool := range doc.Tools {
+			writeField(tool.Name)
+			writeField(tool.Display)
+			writeField(tool.Output)
+		}
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
+}
 
 // SemanticConversationLoadOptions maps the selected content kinds onto the
 // parser's load gate, so a kind nobody selected is never parsed rather than
