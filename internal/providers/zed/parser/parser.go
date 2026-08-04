@@ -220,7 +220,6 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 				Thinking:          "",
 				HasTools:          false,
 				Tools:             nil,
-				HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 			}, nil)
 			return
 		}
@@ -255,7 +254,6 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}
 }
 
@@ -563,7 +561,6 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 		}, true
 	case zedstore.ThreadMessageKindAgent:
 		if message.Agent == nil {
@@ -585,7 +582,6 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          thinking,
 			HasTools:          len(tools) > 0,
 			Tools:             tools,
-			HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 		}, true
 	case zedstore.ThreadMessageKindResume:
 		return transcript.Message{
@@ -600,7 +596,6 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 		}, true
 	case zedstore.ThreadMessageKindCompaction:
 		if !opts.IncludeSystemMessages || message.Compaction == nil {
@@ -622,7 +617,6 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 		}, true
 	default:
 		return emptyMessage(), false

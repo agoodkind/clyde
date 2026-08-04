@@ -79,6 +79,9 @@ type fakeConversationSemanticIndex struct {
 	records      []conversation.StampedRecord
 	messagesByID map[string][]transcript.Message
 	loadOptions  []conversation.LoadOptions
+	// tally is added into opts.HarnessTally on each load, standing in for what
+	// a real parser would count as removed or withheld.
+	tally transcript.HarnessStrips
 }
 
 func (idx *fakeConversationSemanticIndex) ListWithStamps(_ context.Context) ([]conversation.StampedRecord, error) {
@@ -87,6 +90,10 @@ func (idx *fakeConversationSemanticIndex) ListWithStamps(_ context.Context) ([]c
 
 func (idx *fakeConversationSemanticIndex) LoadMessagesWithOptions(record conversation.Record, opts conversation.LoadOptions) ([]transcript.Message, error) {
 	idx.loadOptions = append(idx.loadOptions, opts)
+	if opts.HarnessTally != nil {
+		opts.HarnessTally.Injected += idx.tally.Injected
+		opts.HarnessTally.System += idx.tally.System
+	}
 	messages, ok := idx.messagesByID[record.ID]
 	if !ok {
 		return nil, fmt.Errorf("messages for %s not found", record.ID)

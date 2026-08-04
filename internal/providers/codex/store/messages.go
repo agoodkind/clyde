@@ -152,15 +152,24 @@ func userTextMessage(text string, timestamp time.Time, phase string, opts Histor
 	switch classifyCodexUserText(text) {
 	case codexUserTextSystemPrompt:
 		if !opts.IncludeSystemPrompts {
+			if opts.Tally != nil {
+				opts.Tally.System++
+			}
 			return emptyHistoryMessage(), false
 		}
 		return textHistoryMessage(roleDeveloper, text, timestamp, phase), true
 	case codexUserTextSystemMessage:
 		if !opts.IncludeSystemMessages {
+			if opts.Tally != nil {
+				opts.Tally.System++
+			}
 			return emptyHistoryMessage(), false
 		}
 	case codexUserTextInjected:
 		if !opts.IncludeInjected {
+			if opts.Tally != nil {
+				opts.Tally.Injected++
+			}
 			return emptyHistoryMessage(), false
 		}
 	case codexUserTextConversation:

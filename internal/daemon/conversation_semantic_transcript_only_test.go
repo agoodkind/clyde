@@ -1,9 +1,12 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -46,38 +49,34 @@ func TestTranscriptOnlyRecordsAreNotOffered(t *testing.T) {
 	}
 }
 
-// TestBuildSumsHarnessStripCounts proves the projection carries the parsers'
-// strip counts through to the caller, so a pass log can state that stripping
-// ran without the generic layer knowing any provider's markers.
-func TestBuildSumsHarnessStripCounts(t *testing.T) {
+// TestLoadDocsReportsTheLoadTally proves the feeder attaches a tally to the
+// load and reports it on the projection, so a pass log states what the parsers
+// removed or withheld, including records dropped entirely, without the generic
+// layer knowing any provider's markers.
+func TestLoadDocsReportsTheLoadTally(t *testing.T) {
 	t.Parallel()
 
-	kinds := blankTextKinds(t)
-	messages := []transcript.Message{
-		{
-			Role:          "user",
-			Visibility:    transcript.MessageVisibilityVisible,
-			Timestamp:     time.Unix(1710000000, 0),
-			Text:          "typed prompt",
-			HarnessStrips: transcript.HarnessStrips{Injected: 2, System: 1},
+	conversationID := "codex:tally-report"
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(20, 200)}},
+		messagesByID: map[string][]transcript.Message{
+			conversationID: {
+				{Role: "user", Visibility: transcript.MessageVisibilityVisible, Timestamp: time.Unix(1710000000, 0), Text: "typed prompt"},
+			},
 		},
-		{
-			Role:          "user",
-			Visibility:    transcript.MessageVisibilityVisible,
-			Timestamp:     time.Unix(1710000060, 0),
-			Text:          "second prompt",
-			HarnessStrips: transcript.HarnessStrips{Injected: 1, System: 0},
-		},
+		loadOptions: nil,
+		tally:       transcript.HarnessStrips{Injected: 3, System: 2},
 	}
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(&fakeConversationSemanticClient{needed: []string{conversationID}}), "collection-test", semanticTestLogger(), semanticTestContentKinds())
 
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), messages, kinds)
+	built, err := worker.loadDocs(context.Background(), conversation.Record{ID: conversationID, Provider: providerid.ProviderCodex})
 	if err != nil {
-		t.Fatalf("BuildSemanticConversationDocuments returned error: %v", err)
+		t.Fatalf("loadDocs returned error: %v", err)
 	}
 	if built.InjectedStripped != 3 {
-		t.Fatalf("InjectedStripped = %d, want 3", built.InjectedStripped)
+		t.Fatalf("InjectedStripped = %d, want the tally's 3", built.InjectedStripped)
 	}
-	if built.SystemStripped != 1 {
-		t.Fatalf("SystemStripped = %d, want 1", built.SystemStripped)
+	if built.SystemStripped != 2 {
+		t.Fatalf("SystemStripped = %d, want the tally's 2", built.SystemStripped)
 	}
 }

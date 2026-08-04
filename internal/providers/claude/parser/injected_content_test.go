@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 // writeInjectedFixture writes one transcript line whose user message carries
@@ -184,19 +185,21 @@ func TestStreamStripsLegacyHookCarrierTag(t *testing.T) {
 	}
 }
 
-// TestStreamCountsWhatItStripped pins the observability contract: the parser
-// reports how many injected and system pieces it removed, so the feed can log
-// that stripping ran without knowing any marker.
+// TestStreamCountsWhatItStripped pins the observability contract: the load
+// tally reports how many injected and system pieces the parse removed, so the
+// feed can log that stripping ran without knowing any marker.
 func TestStreamCountsWhatItStripped(t *testing.T) {
 	t.Parallel()
 	path := writeInjectedFixture(t,
 		`"typed prompt\n<system-reminder>reminder</system-reminder>\n\nUserPromptSubmit hook additional context: rules"`)
 
+	var tally transcript.HarnessStrips
 	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
 		IncludeSystemPrompts:  false,
 		IncludeSystemMessages: false,
 		IncludeToolOutputs:    false,
 		IncludeInjected:       false,
+		HarnessTally:          &tally,
 	}))
 	if err != nil {
 		t.Fatalf("collect messages: %v", err)
@@ -204,11 +207,40 @@ func TestStreamCountsWhatItStripped(t *testing.T) {
 	if len(messages) != 1 {
 		t.Fatalf("messages=%d want 1", len(messages))
 	}
-	if messages[0].HarnessStrips.Injected != 1 {
-		t.Fatalf("injected strips=%d want 1", messages[0].HarnessStrips.Injected)
+	if tally.Injected != 1 {
+		t.Fatalf("injected tally=%d want 1", tally.Injected)
 	}
-	if messages[0].HarnessStrips.System != 1 {
-		t.Fatalf("system strips=%d want 1", messages[0].HarnessStrips.System)
+	if tally.System != 1 {
+		t.Fatalf("system tally=%d want 1", tally.System)
+	}
+}
+
+// TestStreamTallyCountsFullyStrippedRecords pins the CLYDE-639 fix: a user
+// record that is entirely harness content strips to empty and is dropped, and
+// the tally still counts it. Per-message counting lost exactly these, which
+// made the feed's strip counters read near zero while thousands of exclusions
+// happened.
+func TestStreamTallyCountsFullyStrippedRecords(t *testing.T) {
+	t.Parallel()
+	path := writeInjectedFixture(t,
+		`"<task-notification>agent finished</task-notification>"`)
+
+	var tally transcript.HarnessStrips
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+		IncludeInjected:       false,
+		HarnessTally:          &tally,
+	}))
+	if err != nil {
+		t.Fatalf("collect messages: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("messages=%d want 0: the record is entirely harness content", len(messages))
+	}
+	if tally.System != 1 {
+		t.Fatalf("system tally=%d want 1: the dropped record must still count", tally.System)
 	}
 }
 

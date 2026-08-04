@@ -114,7 +114,6 @@ func mapJSONLMessage(
 		Thinking:          "",
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}, true
 }
 
@@ -197,7 +196,6 @@ func mapComposerBubble(
 		Thinking:          bubble.Thinking.Text,
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}, true
 }
 
@@ -265,7 +263,6 @@ func mapLegacyBubble(
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}, true
 }
 
@@ -282,7 +279,6 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}
 }
 

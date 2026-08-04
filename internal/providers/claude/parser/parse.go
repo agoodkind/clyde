@@ -18,6 +18,9 @@ type parseOptions struct {
 	// additional-context blocks Claude Code splices after the typed prompt,
 	// hook feedback lines, and the legacy user-prompt-submit-hook tag.
 	IncludeInjected bool
+	// Tally, when non-nil, accumulates the strip counts across the whole
+	// parse, including records dropped because stripping emptied them.
+	Tally *transcript.HarnessStrips
 }
 
 // contentBlockType enumerates the content-block "type" strings the Claude
@@ -247,7 +250,6 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}
 }
 
@@ -295,7 +297,6 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}
 
 	if entry.Type == EntryTypeUser {
@@ -304,18 +305,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 			// tool result entry, skip the turn and keep its results
 			return emptyMessage(), content.Results, false
 		}
-		text := content.Text
-		if !opts.IncludeInjected {
-			stripped, injected := stripInjectedText(text)
-			text = stripped
-			m.HarnessStrips.Injected = injected
-		}
-		if !opts.PreserveSystemPrompts {
-			stripped, system := stripSystemTags(text)
-			text = stripped
-			m.HarnessStrips.System = system
-		}
-		m.Text = strings.TrimSpace(text)
+		m.Text = strings.TrimSpace(stripUserText(content.Text, opts))
 		if entry.IsCompactSummary {
 			m.Compaction = claudeSummaryMetadata(
 				entry.SummarizeMetadata,
@@ -334,6 +324,27 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 	// its own assistant record, so a thinking block often lands in an entry with
 	// no text and no tool_use; dropping it would lose the thinking from export.
 	return m, nil, m.Text != "" || m.HasTools || m.Thinking != ""
+}
+
+// stripUserText removes the harness content the options exclude from one user
+// message's text. Strips tally at the point of removal, so a record that
+// empties out entirely, and is therefore dropped by the caller, still counts.
+func stripUserText(text string, opts parseOptions) string {
+	if !opts.IncludeInjected {
+		stripped, injected := stripInjectedText(text)
+		text = stripped
+		if opts.Tally != nil {
+			opts.Tally.Injected += injected
+		}
+	}
+	if !opts.PreserveSystemPrompts {
+		stripped, system := stripSystemTags(text)
+		text = stripped
+		if opts.Tally != nil {
+			opts.Tally.System += system
+		}
+	}
+	return text
 }
 
 func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
@@ -376,7 +387,6 @@ func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		HarnessStrips:     transcript.HarnessStrips{Injected: 0, System: 0},
 	}, true
 }
 
