@@ -31,6 +31,7 @@ type searchInput struct {
 	Offset          int
 	Around          int
 	Window          int
+	LoadRules       string
 	MinScore        float64
 	IncludeArchived bool
 }
@@ -72,6 +73,10 @@ type searchPayload struct {
 	Conversation string
 	Around       int
 	Window       int
+	// LoadRules is the loading-rules tag passed back from a search hit for a
+	// window read, so the context counts over the sequence the hit's index
+	// refers to.
+	LoadRules string
 }
 
 func (searchPayload) isClispecPrepared() {}
@@ -157,6 +162,8 @@ func searchParams() []Param[searchInput] {
 			func(in *searchInput, v int) { in.Around = v }),
 		IntParam("window", "Messages before and after for a context window.", 5,
 			func(in *searchInput, v int) { in.Window = v }),
+		StringParam("load_rules", "Loading-rules tag from the search hit being read around, so the window counts over the same message sequence its message index refers to. Leave empty for hits without one.", "", false,
+			func(in *searchInput, v string) { in.LoadRules = v }),
 		FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
 			func(in *searchInput, v float64) { in.MinScore = v }),
 		BoolParam("include_archived", "Include archived conversations.", false,
@@ -177,6 +184,7 @@ func newSearchInput() searchInput {
 		Offset:          0,
 		Around:          -1,
 		Window:          5,
+		LoadRules:       "",
 		MinScore:        0,
 		IncludeArchived: false,
 	}
@@ -238,6 +246,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 			Conversation: conversation,
 			Around:       in.Around,
 			Window:       in.Window,
+			LoadRules:    strings.TrimSpace(in.LoadRules),
 		}, nil
 	case conversation != "":
 		mode := searchModeReadConversation
@@ -251,6 +260,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 			Conversation: conversation,
 			Around:       in.Around,
 			Window:       in.Window,
+			LoadRules:    strings.TrimSpace(in.LoadRules),
 		}, nil
 	default:
 		opts, err := listOptionsFromInput(in)
@@ -264,6 +274,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 			Conversation: "",
 			Around:       in.Around,
 			Window:       in.Window,
+			LoadRules:    strings.TrimSpace(in.LoadRules),
 		}, nil
 	}
 }
@@ -280,7 +291,7 @@ func runSearchResult(ctx context.Context, p searchPayload) (Result, error) {
 			Text:    formatSearchConversationsResult(result, p.SearchOpts.Query),
 		}, nil
 	case searchModeReadWindow:
-		text, err := daemon.GetConversationContext(ctx, p.Conversation, "", p.Around, p.Window, p.Window)
+		text, err := daemon.GetConversationContext(ctx, p.Conversation, "", p.Around, p.Window, p.Window, p.LoadRules)
 		if err != nil {
 			return nil, logOperationError(ctx, "get conversation context", err)
 		}

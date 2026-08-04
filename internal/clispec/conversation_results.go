@@ -83,6 +83,10 @@ type searchConversationsMatchOutput struct {
 	Snippet       string      `json:"snippet"`
 	Score         float64     `json:"score"`
 	ContextWindow string      `json:"context_window,omitempty"`
+	// LoadRules is the loading-rules tag stored with the matched row; pass it
+	// back as load_rules on an around read so the window counts over the same
+	// message sequence message_index refers to.
+	LoadRules string `json:"load_rules,omitempty"`
 }
 
 type searchFacetsOutput struct {
@@ -214,6 +218,7 @@ func searchConversationsOutputFromDomain(result conv.SearchConversationsResult) 
 			Snippet:       match.Snippet,
 			Score:         match.Score,
 			ContextWindow: match.ContextWindow,
+			LoadRules:     match.LoadRules,
 		})
 	}
 	return searchConversationsOutput{

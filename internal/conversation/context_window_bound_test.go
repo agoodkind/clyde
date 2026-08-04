@@ -67,7 +67,7 @@ func TestContextWindowRenderIsBounded(t *testing.T) {
 	idx := newTestIndex(registry)
 
 	// The index-centered path, which a search hit and --message-index both use.
-	byIndex, err := idx.ContextWindowText(hugeTurnRecord(), "", 2, 2, 2)
+	byIndex, err := idx.ContextWindowText(hugeTurnRecord(), "", 2, 2, 2, "")
 	if err != nil {
 		t.Fatalf("ContextWindowText by index returned error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestContextWindowRenderIsBounded(t *testing.T) {
 	}
 
 	// The timestamp-centered path, which renders from a materialized slice.
-	byTimestamp, err := idx.ContextWindowText(hugeTurnRecord(), time.Unix(2, 0).Format(time.RFC3339), -1, 2, 2)
+	byTimestamp, err := idx.ContextWindowText(hugeTurnRecord(), time.Unix(2, 0).Format(time.RFC3339), -1, 2, 2, "")
 	if err != nil {
 		t.Fatalf("ContextWindowText by timestamp returned error: %v", err)
 	}

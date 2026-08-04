@@ -96,7 +96,7 @@ func TestContextWindowByIndexStopsAtWindowEnd(t *testing.T) {
 	before := 2
 	after := 3
 	center := 10
-	text, err := idx.ContextWindowText(record, "", center, before, after)
+	text, err := idx.ContextWindowText(record, "", center, before, after, "")
 	if err != nil {
 		t.Fatalf("context window: %v", err)
 	}

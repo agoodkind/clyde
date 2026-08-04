@@ -78,6 +78,10 @@ type SearchMatch struct {
 	Score float64
 	// ContextWindow is the rendered messages surrounding this hit.
 	ContextWindow string
+	// LoadRules is the loading-rules tag stored with the matched row. A window
+	// read passes it back so the context is counted over the same message
+	// sequence MessageIndex refers to. Empty on rows written before tagging.
+	LoadRules string
 }
 
 // SearchConversationsResult is a bounded set of candidate conversations.
