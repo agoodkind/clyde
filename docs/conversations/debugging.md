@@ -9,6 +9,13 @@ The pipeline: provider artifacts → clyde parser and index → feeder projectio
 engine needed-set and jobs → embedding host → Milvus rows. A conclusion drawn
 from one surface is a hypothesis until a second surface agrees.
 
+**The store is append-only, ever.** A re-ingest appends new rows beside the old
+ones; it never replaces, corrects, or re-numbers anything, and stored rows
+never converge toward current behavior. Never recommend or design around a
+self-heal re-index: for a finished conversation the re-ingest never comes, and
+even when one happens the old rows remain exactly as written. A fix for how
+stored data is interpreted must make old rows correct as they are.
+
 ## Method
 
 Apply these to every reading, on every surface.
@@ -85,8 +92,10 @@ survives.
   messages leave gaps; nothing renumbers. An index loaded under a different
   kind set can point at a different message (CLYDE-638).
 - Any rendering change alters chunk bytes, and reuse is keyed on exact bytes,
-  so history re-embeds on each conversation's next natural change. This is the
-  mechanism behind "why is the engine re-embedding everything".
+  so a conversation that changes after a rendering change re-embeds in full.
+  This is the mechanism behind "why is the engine re-embedding everything". The
+  new rows append beside the old ones per the append-only contract above; a
+  rendering change never corrects anything already stored.
 
 ### Feeder
 
