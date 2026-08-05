@@ -1,0 +1,19 @@
+[logging]
+level = "debug"
+
+[conversation.semantic]
+enabled = {{.Enabled}}
+search_enabled = {{.Enabled}}
+collection_id = {{printf "%q" .CollectionID}}
+{{- if .SocketPath}}
+socket_path = {{printf "%q" .SocketPath}}
+{{- end}}
+{{- if .IndexedContent}}
+indexed_content = [{{range $i, $kind := .IndexedContent}}{{if $i}}, {{end}}{{printf "%q" $kind}}{{end}}]
+{{- end}}
+
+[adapter]
+enabled = false
+
+[mitm]
+enabled_default = false
