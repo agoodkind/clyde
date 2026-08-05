@@ -69,7 +69,7 @@ func (s *controlServer) StreamConversationContext(req *clydev1.GetConversationCo
 		)
 		return status.Errorf(codes.NotFound, "resolve conversation: %v", err)
 	}
-	text, err := s.index.ContextWindowText(record, req.GetTimestamp(), int(req.GetMessageIndex()), int(req.GetBefore()), int(req.GetAfter()))
+	text, err := s.index.ContextWindowText(record, req.GetTimestamp(), int(req.GetMessageIndex()), int(req.GetBefore()), int(req.GetAfter()), req.GetLoadRules())
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.stream_context.render_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),

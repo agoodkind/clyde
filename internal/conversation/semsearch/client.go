@@ -52,6 +52,10 @@ type SemDoc struct {
 	// it as a filterable scalar column. The same for every message of one
 	// conversation.
 	Archived bool
+	// LoadRules is the opaque loading-rules tag naming the rules that produced
+	// MessageIndex, stored per row so a reader can rebuild the same message
+	// sequence. The same for every document of one delivery.
+	LoadRules string
 }
 
 // SemToolCall is one structured tool call attached to a semantic document.
@@ -95,6 +99,10 @@ type SemHit struct {
 	Content              string
 	// Score is the engine's retrieval relevance.
 	Score float64
+	// LoadRules is the loading-rules tag stored with the matched row. Empty on
+	// rows written before tagging existed, which readers treat as the default
+	// rules.
+	LoadRules string
 }
 
 // SearchFilter narrows conversation retrieval by row attributes. Every field
@@ -583,7 +591,7 @@ func semDocByteSize(doc SemDoc) int {
 	// with many small tool calls does not under-estimate its encoded size and slip
 	// past the per-chunk budget into a gRPC message-size failure.
 	const semDocPerToolFramingBytes = 64
-	size := len(doc.Text) + len(doc.Thinking) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
+	size := len(doc.Text) + len(doc.Thinking) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + len(doc.LoadRules) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
 	for _, tool := range doc.Tools {
 		size += len(tool.Name) + len(tool.Display) + len(tool.LangHint) + len(tool.Output) + semDocPerToolFramingBytes
 	}
@@ -887,6 +895,7 @@ func conversationSearchHits(results []*lmsemanticsearchv1.ConversationSearchResu
 			TimestampUnix:        result.GetTimestampUnix(),
 			Content:              result.GetContent(),
 			Score:                result.GetScore(),
+			LoadRules:            result.GetLoadRules(),
 		})
 	}
 	return out
@@ -917,6 +926,7 @@ func conversationDocuments(docs []SemDoc) []*lmsemanticsearchv1.ConversationDocu
 			Thinking:             strings.ToValidUTF8(doc.Thinking, ""),
 			WorkspaceRoot:        doc.WorkspaceRoot,
 			Archived:             doc.Archived,
+			LoadRules:            doc.LoadRules,
 		})
 	}
 	return out

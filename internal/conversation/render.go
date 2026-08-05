@@ -34,9 +34,15 @@ func (idx *Index) RenderPlainText(record Record, lastN int) (string, error) {
 // end instead of consuming the whole artifact; the timestamp path reads further
 // because the nearest match can lie anywhere. It returns a guidance sentinel
 // when no center can be chosen.
-func (idx *Index) ContextWindowText(record Record, timestamp string, messageIndex, before, after int) (string, error) {
+//
+// loadRules is the loading-rules tag stored with the search row that produced
+// messageIndex, so the window is counted over the same message sequence the
+// index refers to. Empty means the row predates tagging and was written under
+// the default rules. The tag only applies to the index-centered path; a
+// timestamp center does not depend on positions.
+func (idx *Index) ContextWindowText(record Record, timestamp string, messageIndex, before, after int, loadRules string) (string, error) {
 	if timestamp == "" && messageIndex >= 0 {
-		return idx.contextWindowByIndex(record, messageIndex, before, after)
+		return idx.contextWindowByIndex(record, messageIndex, before, after, loadRules)
 	}
 	messages, err := idx.LoadMessages(record, false, false)
 	if err != nil {
@@ -61,9 +67,9 @@ func (idx *Index) ContextWindowText(record Record, timestamp string, messageInde
 // HitContextWindow renders the messages around messageIndex as plain text, for
 // inlining a small window beside a search hit. It wraps the index-centered
 // reader, so it stops pulling the stream at the window end instead of reading
-// the whole artifact.
-func (idx *Index) HitContextWindow(record Record, messageIndex, before, after int) (string, error) {
-	return idx.contextWindowByIndex(record, messageIndex, before, after)
+// the whole artifact. loadRules is the hit row's stored loading-rules tag.
+func (idx *Index) HitContextWindow(record Record, messageIndex, before, after int, loadRules string) (string, error) {
+	return idx.contextWindowByIndex(record, messageIndex, before, after, loadRules)
 }
 
 // contextWindowByIndex renders the window around messageIndex by pulling the
@@ -72,14 +78,22 @@ func (idx *Index) HitContextWindow(record Record, messageIndex, before, after in
 // messages plus the running index it has seen, never the whole conversation.
 // The header reports the highest index reached rather than the absolute total,
 // because computing the total would defeat the early stop.
-func (idx *Index) contextWindowByIndex(record Record, messageIndex, before, after int) (string, error) {
-	stream, err := idx.resolveStream(record, LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-		IncludeInjected:       false,
-		HarnessTally:          nil,
-	})
+//
+// The stream loads under the rules named by loadRules, the tag stored with the
+// search row that produced messageIndex, so position counting here matches the
+// sequence the writer numbered. A tag from a newer version than this build
+// falls back to the default rules with a warning rather than failing the read.
+func (idx *Index) contextWindowByIndex(record Record, messageIndex, before, after int, loadRules string) (string, error) {
+	options, known := LoadOptionsForRules(loadRules)
+	if !known {
+		slog.Warn("conversation.render.load_rules_unknown",
+			"concern", "conversation.render",
+			"component", "conversation",
+			"conversation_id", record.ID,
+			"load_rules", loadRules,
+		)
+	}
+	stream, err := idx.resolveStream(record, options)
 	if err != nil {
 		return "", err
 	}

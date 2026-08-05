@@ -97,6 +97,7 @@ func BuildSemanticConversationDocuments(
 	if derivedParentID, ok := conversation.ParentConversationID(record); ok {
 		parentConversationID = derivedParentID
 	}
+	loadRules := conversation.LoadRulesTag(kinds)
 	built := SemanticConversationDocuments{
 		Docs:             make([]semsearch.SemDoc, 0, len(messages)),
 		PolicySkipped:    0,
@@ -165,6 +166,7 @@ func BuildSemanticConversationDocuments(
 			Thinking:             thinking,
 			WorkspaceRoot:        record.WorkspaceRoot,
 			Archived:             record.Archived,
+			LoadRules:            loadRules,
 		})
 	}
 	return built, nil
