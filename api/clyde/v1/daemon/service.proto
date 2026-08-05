@@ -38,6 +38,19 @@ service ClydeService {
   rpc ShowCapture(ShowCaptureRequest) returns (ShowCaptureResponse);
   rpc SeedBaseline(SeedBaselineRequest) returns (SeedBaselineResponse);
   rpc LogsInventory(LogsInventoryRequest) returns (LogsInventoryResponse);
+  // GetSearchFreshness returns the conversation feeder's latest sync snapshot,
+  // the same freshness that rides each search response, so a status view can
+  // read it without running a search.
+  rpc GetSearchFreshness(GetSearchFreshnessRequest) returns (GetSearchFreshnessResponse);
+}
+
+message GetSearchFreshnessRequest {
+  // Reserved for future scoping; the daemon serves one feeder snapshot today.
+  reserved 1;
+}
+
+message GetSearchFreshnessResponse {
+  SearchFreshness freshness = 1;
 }
 
 message LogsInventoryRequest {

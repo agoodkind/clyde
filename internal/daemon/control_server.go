@@ -225,6 +225,15 @@ func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.R
 	return protoReorientPage(page), nil
 }
 
+// GetSearchFreshness returns the feeder's latest sync snapshot, the same
+// freshness each search response carries, so a status view reads it without
+// running a search.
+func (s *controlServer) GetSearchFreshness(_ context.Context, _ *clydev1.GetSearchFreshnessRequest) (*clydev1.GetSearchFreshnessResponse, error) {
+	return &clydev1.GetSearchFreshnessResponse{
+		Freshness: protoSearchFreshness(s.freshnessSnapshot()),
+	}, nil
+}
+
 // freshnessSnapshot reads the conversation-index sync snapshot, returning the
 // zero value when no freshness source is wired.
 func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
