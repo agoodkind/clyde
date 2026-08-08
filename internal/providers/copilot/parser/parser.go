@@ -403,7 +403,8 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 			tool := transcript.ToolCall{ID: call.ToolCallID, Name: call.Name, Input: transcript.ToolInputJSON{Raw: append([]byte(nil), call.Input...)}, Display: "", DisplayLang: "", Output: "", IsError: false, Attachments: nil}
 			calls = append(calls, tool)
 		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: thinking, HasTools: len(calls) > 0, Tools: calls, Attachments: mapAttachments(item.Data)}, text != "" || thinking != "" || len(calls) > 0 || len(mapAttachments(item.Data)) > 0
+		attachments := mapAttachments(item.Data)
+		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: thinking, HasTools: len(calls) > 0, Tools: calls, Attachments: attachments}, text != "" || thinking != "" || len(calls) > 0 || len(attachments) > 0
 	case eventAssistantReasoning:
 		text := firstNonEmpty(stringField(item.Data, stringFieldContent), stringField(item.Data, stringFieldText))
 		if text == "" {

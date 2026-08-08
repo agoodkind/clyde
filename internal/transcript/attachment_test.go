@@ -21,6 +21,10 @@ func TestAttachmentMetadataRendersWithoutPayload(t *testing.T) {
 	if !strings.Contains(markdown, "[attachment: image/png, 42 bytes, diagram, asset-1]") {
 		t.Fatalf("markdown attachment placeholder = %q", markdown)
 	}
+	html := RenderHTMLConversation(ShapeConversation([]Message{message}, DefaultShapeOptions()))
+	if !strings.Contains(html, "attachment: image/png, 42 bytes, diagram, asset-1") {
+		t.Fatalf("HTML attachment placeholder = %q", html)
+	}
 	body, err := RenderJSONWithOptions([]Message{message}, DefaultShapeOptions())
 	if err != nil {
 		t.Fatal(err)
