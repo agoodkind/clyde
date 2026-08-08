@@ -44,14 +44,15 @@ var (
 
 // ConversationTurn is part of Clyde's typed adapter surface.
 type ConversationTurn struct {
-	UUID       string    `json:"uuid,omitempty"`
-	Role       string    `json:"role"`
-	Timestamp  time.Time `json:"timestamp,omitzero"`
-	Text       string    `json:"text"`
-	Thinking   string    `json:"thinking,omitempty"`
-	ToolNames  []string  `json:"tool_names,omitempty"`
-	HasTools   bool      `json:"has_tools,omitempty"`
-	IsToolOnly bool      `json:"is_tool_only,omitempty"`
+	UUID        string       `json:"uuid,omitempty"`
+	Role        string       `json:"role"`
+	Timestamp   time.Time    `json:"timestamp,omitzero"`
+	Text        string       `json:"text"`
+	Thinking    string       `json:"thinking,omitempty"`
+	ToolNames   []string     `json:"tool_names,omitempty"`
+	HasTools    bool         `json:"has_tools,omitempty"`
+	IsToolOnly  bool         `json:"is_tool_only,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // DefaultShapeOptions is part of Clyde's typed adapter surface.
@@ -93,6 +94,7 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 			Role:      msg.Role,
 			Timestamp: msg.Timestamp,
 			HasTools:  msg.HasTools, Text: "", Thinking: "", ToolNames: nil, IsToolOnly: false,
+			Attachments: append([]Attachment(nil), msg.Attachments...),
 		}
 		// The cap bounds the prose, which is the part that grows without limit now
 		// that one message is a whole turn. The tool block is appended after it and
@@ -110,10 +112,10 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 		}
 		turn.IsToolOnly = msg.HasTools && text == ""
 		text, keepTurn := textWithTools(text, turn.ToolNames, msg, opts)
-		if !keepTurn {
+		if !keepTurn && len(turn.Attachments) == 0 {
 			continue
 		}
-		if text == "" && thinking == "" {
+		if text == "" && thinking == "" && len(turn.Attachments) == 0 {
 			continue
 		}
 		turn.Text = text
@@ -298,9 +300,55 @@ func toolFullDetailText(tools []ToolCall) string {
 		if strings.TrimSpace(tool.Output) != "" {
 			line += "\n[tool output]\n" + strings.TrimSpace(tool.Output)
 		}
+		line += attachmentPlaceholders(tool.Attachments)
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func attachmentPlaceholders(attachments []Attachment) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		parts := make([]string, 0, 10)
+		if attachment.Kind != "" {
+			parts = append(parts, attachment.Kind)
+		}
+		if attachment.DisplayName != "" {
+			parts = append(parts, attachment.DisplayName)
+		}
+		if attachment.Path != "" {
+			parts = append(parts, attachment.Path)
+		}
+		if attachment.URL != "" {
+			parts = append(parts, attachment.URL)
+		}
+		if attachment.MIMEType != "" {
+			parts = append(parts, attachment.MIMEType)
+		}
+		if attachment.SizeBytes > 0 {
+			parts = append(parts, fmt.Sprintf("%d bytes", attachment.SizeBytes))
+		}
+		if attachment.Description != "" {
+			parts = append(parts, attachment.Description)
+		}
+		if attachment.AssetReference != "" {
+			parts = append(parts, attachment.AssetReference)
+		}
+		if attachment.OmittedReason != "" {
+			parts = append(parts, attachment.OmittedReason)
+		}
+		if attachment.Text != "" {
+			parts = append(parts, attachment.Text)
+		}
+		if len(parts) == 0 {
+			parts = append(parts, "metadata unavailable")
+		}
+		lines = append(lines, "[attachment: "+strings.Join(parts, ", ")+"]")
+	}
+	return "\n" + strings.Join(lines, "\n")
 }
 
 // RenderMarkdownConversation is part of Clyde's typed adapter surface.
@@ -327,6 +375,10 @@ func RenderMarkdownConversation(turns []ConversationTurn) string {
 			}
 			b.WriteString("\n")
 		}
+		if placeholders := attachmentPlaceholders(turn.Attachments); placeholders != "" {
+			b.WriteString(strings.TrimPrefix(placeholders, "\n"))
+			b.WriteString("\n\n")
+		}
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -351,6 +403,9 @@ func RenderHTMLConversation(turns []ConversationTurn) string {
 		}
 		if turn.Thinking != "" {
 			b.WriteString("<blockquote><strong>Thinking</strong><br>" + strings.ReplaceAll(html.EscapeString(turn.Thinking), "\n", "<br>") + "</blockquote>\n")
+		}
+		for _, attachment := range turn.Attachments {
+			b.WriteString("<p>" + html.EscapeString(strings.TrimSpace(attachmentPlaceholders([]Attachment{attachment}))) + "</p>\n")
 		}
 		b.WriteString("</section>\n")
 	}

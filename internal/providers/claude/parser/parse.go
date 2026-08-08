@@ -250,6 +250,7 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		Attachments:       nil,
 	}
 }
 
@@ -297,6 +298,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		Attachments:       nil,
 	}
 
 	if entry.Type == EntryTypeUser {
@@ -387,6 +389,7 @@ func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		Attachments:       nil,
 	}, true
 }
 
@@ -711,6 +714,7 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 				DisplayLang: displayLang,
 				Output:      "",
 				IsError:     false,
+				Attachments: nil,
 			})
 		case contentBlockToolResult:
 			// Assistant entries should not carry tool results; the

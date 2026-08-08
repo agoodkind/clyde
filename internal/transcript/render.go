@@ -48,6 +48,10 @@ func renderConversationMessages(messages []ConversationTurn, startIndex int) str
 			b.WriteString(m.Thinking)
 			b.WriteString("\n")
 		}
+		if placeholders := attachmentPlaceholders(m.Attachments); placeholders != "" {
+			b.WriteString(strings.TrimPrefix(placeholders, "\n"))
+			b.WriteString("\n")
+		}
 		b.WriteString("\n")
 	}
 	return b.String()

@@ -9,17 +9,18 @@ import (
 // the provider parsers produce and the renderers consume; the transcript package
 // owns the model and the rendering, not any provider's parsing.
 type Message struct {
-	UUID              string              `json:"uuid"`                 // entry UUID (for linking to tool results)
-	ParentUUID        string              `json:"parent_uuid"`          // direct provider parent entry UUID when present
-	LogicalParentUUID string              `json:"logical_parent_uuid"`  // provider logical parent UUID when present
-	Role              string              `json:"role"`                 // "user", "assistant", or provider-internal "system"
-	Visibility        MessageVisibility   `json:"visibility"`           // provider visibility hint for this entry
-	Compaction        *CompactionMetadata `json:"compaction,omitempty"` // typed compaction-boundary metadata when present
-	Timestamp         time.Time           `json:"timestamp"`            // when this entry was created
-	Text              string              `json:"text"`                 // concatenated text blocks (no tool calls, no thinking)
-	Thinking          string              `json:"thinking"`             // thinking block text (for HTML export)
-	HasTools          bool                `json:"has_tools"`            // true if assistant message contained tool_use blocks
-	Tools             []ToolCall          `json:"tools,omitempty"`      // parsed tool calls with inputs
+	UUID              string              `json:"uuid"`                  // entry UUID (for linking to tool results)
+	ParentUUID        string              `json:"parent_uuid"`           // direct provider parent entry UUID when present
+	LogicalParentUUID string              `json:"logical_parent_uuid"`   // provider logical parent UUID when present
+	Role              string              `json:"role"`                  // "user", "assistant", or provider-internal "system"
+	Visibility        MessageVisibility   `json:"visibility"`            // provider visibility hint for this entry
+	Compaction        *CompactionMetadata `json:"compaction,omitempty"`  // typed compaction-boundary metadata when present
+	Timestamp         time.Time           `json:"timestamp"`             // when this entry was created
+	Text              string              `json:"text"`                  // concatenated text blocks (no tool calls, no thinking)
+	Thinking          string              `json:"thinking"`              // thinking block text (for HTML export)
+	HasTools          bool                `json:"has_tools"`             // true if assistant message contained tool_use blocks
+	Tools             []ToolCall          `json:"tools,omitempty"`       // parsed tool calls with inputs
+	Attachments       []Attachment        `json:"attachments,omitempty"` // provider-neutral attachment metadata
 }
 
 // HarnessStrips accumulates harness-written content a parser removed or
@@ -144,9 +145,25 @@ type ToolCall struct {
 	// its own harness's tool shapes. Anything that shows or stores a tool call
 	// reads this rather than re-deriving it from Input, which keeps the harness's
 	// serialization inside the provider package.
-	DisplayLang string `json:"display_lang,omitempty"`
-	Output      string `json:"output"`   // tool result text (loaded on demand, empty by default)
-	IsError     bool   `json:"is_error"` // true if tool result was an error
+	DisplayLang string       `json:"display_lang,omitempty"`
+	Output      string       `json:"output"`                // tool result text (loaded on demand, empty by default)
+	IsError     bool         `json:"is_error"`              // true if tool result was an error
+	Attachments []Attachment `json:"attachments,omitempty"` // provider-neutral result attachment metadata
+}
+
+// Attachment preserves non-payload metadata for a binary or other external
+// asset. Payload bytes never cross the provider boundary.
+type Attachment struct {
+	Kind           string `json:"kind,omitempty"`
+	DisplayName    string `json:"display_name,omitempty"`
+	Path           string `json:"path,omitempty"`
+	URL            string `json:"url,omitempty"`
+	MIMEType       string `json:"mime_type,omitempty"`
+	SizeBytes      int64  `json:"size_bytes,omitempty"`
+	Description    string `json:"description,omitempty"`
+	AssetReference string `json:"asset_reference,omitempty"`
+	OmittedReason  string `json:"omitted_reason,omitempty"`
+	Text           string `json:"text,omitempty"`
 }
 
 // ToolNames returns the names of all tools used in this message.

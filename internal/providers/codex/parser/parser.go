@@ -94,6 +94,7 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		Attachments:       nil,
 	}
 }
 

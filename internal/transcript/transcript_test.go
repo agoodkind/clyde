@@ -88,6 +88,23 @@ func TestShapeConversationConversationOnlyStripsImagePlaceholderLines(t *testing
 	}
 }
 
+func TestShapeConversationConversationOnlyKeepsAttachmentOnlyTurns(t *testing.T) {
+	attachment := Attachment{Kind: "image", DisplayName: "diagram.png"}
+	turns := ShapeConversation([]Message{{
+		Role:        "user",
+		Text:        "[Image #1]",
+		HasTools:    true,
+		Tools:       []ToolCall{{Name: "Read"}},
+		Attachments: []Attachment{attachment},
+	}}, ShapeOptions{ConversationOnly: true, ToolOnly: ToolOnlyOmit})
+	if len(turns) != 1 {
+		t.Fatalf("turns=%d want 1", len(turns))
+	}
+	if len(turns[0].Attachments) != 1 || turns[0].Attachments[0] != attachment {
+		t.Fatalf("attachments=%+v want %+v", turns[0].Attachments, attachment)
+	}
+}
+
 func TestRenderJSONUsesShapedConversation(t *testing.T) {
 	body, err := RenderJSONWithOptions([]Message{{
 		Role:     "assistant",
