@@ -75,6 +75,7 @@ func mapJSONLMessage(
 				DisplayLang: displayLang,
 				Output:      "",
 				IsError:     false,
+				Attachments: nil,
 			})
 		}
 	}
@@ -114,6 +115,7 @@ func mapJSONLMessage(
 		Thinking:          "",
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
+		Attachments:       nil,
 	}, true
 }
 
@@ -162,6 +164,7 @@ func mapComposerBubble(
 			DisplayLang: displayLang,
 			Output:      toolOutput,
 			IsError:     toolErrored(bubble.ToolCall.Status),
+			Attachments: nil,
 		})
 	}
 	// Cursor persists whatever Clyde's MITM/BYOK ingress streamed into
@@ -196,6 +199,7 @@ func mapComposerBubble(
 		Thinking:          bubble.Thinking.Text,
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
+		Attachments:       nil,
 	}, true
 }
 
@@ -263,6 +267,7 @@ func mapLegacyBubble(
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		Attachments:       nil,
 	}, true
 }
 
@@ -279,6 +284,7 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		Attachments:       nil,
 	}
 }
 

@@ -26,6 +26,7 @@ func codexTranscriptMessage(
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
+			Attachments:       nil,
 		}, true
 	}
 
@@ -45,5 +46,6 @@ func codexTranscriptMessage(
 		Thinking:          msg.Thinking,
 		HasTools:          msg.HasTools,
 		Tools:             msg.Tools,
+		Attachments:       nil,
 	}, true
 }

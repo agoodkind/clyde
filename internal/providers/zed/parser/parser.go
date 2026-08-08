@@ -224,6 +224,7 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 				Thinking:          "",
 				HasTools:          false,
 				Tools:             nil,
+				Attachments:       nil,
 			}, nil)
 			return
 		}
@@ -258,6 +259,7 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
+		Attachments:       nil,
 	}
 }
 
@@ -565,6 +567,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
+			Attachments:       nil,
 		}, true
 	case zedstore.ThreadMessageKindAgent:
 		if message.Agent == nil {
@@ -586,6 +589,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          thinking,
 			HasTools:          len(tools) > 0,
 			Tools:             tools,
+			Attachments:       nil,
 		}, true
 	case zedstore.ThreadMessageKindResume:
 		return transcript.Message{
@@ -600,6 +604,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
+			Attachments:       nil,
 		}, true
 	case zedstore.ThreadMessageKindCompaction:
 		if !opts.IncludeSystemMessages || message.Compaction == nil {
@@ -621,6 +626,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
+			Attachments:       nil,
 		}, true
 	default:
 		return emptyMessage(), false
@@ -681,6 +687,7 @@ func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) 
 				DisplayLang: displayLang,
 				Output:      output,
 				IsError:     isError,
+				Attachments: nil,
 			})
 		}
 	}
