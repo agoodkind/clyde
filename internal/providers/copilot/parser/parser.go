@@ -295,7 +295,7 @@ func emptyMessage() transcript.Message {
 	return transcript.Message{
 		UUID: "", ParentUUID: "", LogicalParentUUID: "", Role: "",
 		Visibility: "", Compaction: nil, Timestamp: time.Time{}, Text: "",
-		Thinking: "", HasTools: false, Tools: nil,
+		Thinking: "", HasTools: false, Tools: nil, Attachments: nil,
 	}
 }
 
@@ -400,7 +400,7 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 		}
 		_ = json.Unmarshal(item.Data, &raw)
 		for _, call := range raw.ToolRequests {
-			tool := transcript.ToolCall{ID: call.ToolCallID, Name: call.Name, Input: transcript.ToolInputJSON{Raw: append([]byte(nil), call.Input...)}, Display: "", DisplayLang: "", Output: "", IsError: false}
+			tool := transcript.ToolCall{ID: call.ToolCallID, Name: call.Name, Input: transcript.ToolInputJSON{Raw: append([]byte(nil), call.Input...)}, Display: "", DisplayLang: "", Output: "", IsError: false, Attachments: nil}
 			calls = append(calls, tool)
 		}
 		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: thinking, HasTools: len(calls) > 0, Tools: calls, Attachments: mapAttachments(item.Data)}, text != "" || thinking != "" || len(calls) > 0 || len(mapAttachments(item.Data)) > 0
@@ -409,13 +409,13 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 		if text == "" {
 			return emptyMessage(), false
 		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: nil, Timestamp: timestamp, Text: "", Thinking: text, HasTools: false, Tools: nil}, true
+		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: nil, Timestamp: timestamp, Text: "", Thinking: text, HasTools: false, Tools: nil, Attachments: nil}, true
 	case eventSystemMessage:
 		if !opts.IncludeSystemMessages {
 			return emptyMessage(), false
 		}
 		text := stringField(item.Data, stringFieldContent)
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "system", Visibility: transcript.MessageVisibilityMetaOnly, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: "", HasTools: false, Tools: nil}, text != ""
+		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "system", Visibility: transcript.MessageVisibilityMetaOnly, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: "", HasTools: false, Tools: nil, Attachments: nil}, text != ""
 	case eventToolExecutionComplete:
 		return emptyMessage(), false
 	case eventCompactionComplete:
@@ -426,7 +426,7 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 		if data.Summary == "" {
 			return emptyMessage(), false
 		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: &transcript.CompactionMetadata{Kind: transcript.CompactionKindSummary, Trigger: transcript.CompactionTriggerUnknown, PreTokens: 0, PostTokens: 0, TokensSaved: 0, MessagesSummarized: 0, ReplacementHistoryCount: 0, HeadUUID: "", AnchorUUID: "", TailUUID: "", ContextItems: nil, UserContext: "", Direction: "", PreCompactDiscoveredTools: nil, CompactedToolIDs: nil, ClearedAttachmentUUIDs: nil, RawCompactMetadata: nil, RawMicrocompactMetadata: nil, RawSummarizeMetadata: nil}, Timestamp: timestamp, Text: data.Summary, Thinking: "", HasTools: false, Tools: nil}, true
+		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: &transcript.CompactionMetadata{Kind: transcript.CompactionKindSummary, Trigger: transcript.CompactionTriggerUnknown, PreTokens: 0, PostTokens: 0, TokensSaved: 0, MessagesSummarized: 0, ReplacementHistoryCount: 0, HeadUUID: "", AnchorUUID: "", TailUUID: "", ContextItems: nil, UserContext: "", Direction: "", PreCompactDiscoveredTools: nil, CompactedToolIDs: nil, ClearedAttachmentUUIDs: nil, RawCompactMetadata: nil, RawMicrocompactMetadata: nil, RawSummarizeMetadata: nil}, Timestamp: timestamp, Text: data.Summary, Thinking: "", HasTools: false, Tools: nil, Attachments: nil}, true
 	case eventSessionStart, eventSubagentStarted:
 		return emptyMessage(), false
 	default:
