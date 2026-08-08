@@ -85,6 +85,21 @@ type subagentData struct {
 	ToolCallID       string `json:"toolCallId"`
 }
 
+type attachmentData struct {
+	MIMEType       string `json:"mimeType"`
+	MimeType       string `json:"mime_type"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	Size           int64  `json:"size"`
+	Description    string `json:"description"`
+	AssetReference string `json:"assetReference"`
+	Asset          string `json:"asset"`
+	Text           string `json:"text"`
+}
+
+type attachmentsData struct {
+	Attachments []attachmentData `json:"attachments"`
+}
+
 // Discover finds Copilot CLI event logs and their root and subagent chats.
 func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
 	root, err := copilotRoot()
@@ -367,10 +382,11 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 	switch item.Type {
 	case eventUserMessage:
 		text := stringField(item.Data, stringFieldContent)
-		if text == "" {
+		attachments := mapAttachments(item.Data)
+		if text == "" && len(attachments) == 0 {
 			return emptyMessage(), false
 		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "user", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: "", HasTools: false, Tools: nil}, true
+		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "user", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: "", HasTools: false, Tools: nil, Attachments: attachments}, true
 	case eventAssistantMessage:
 		text := stringField(item.Data, stringFieldContent)
 		thinking := firstNonEmpty(stringField(item.Data, stringFieldReasoningText), stringField(item.Data, stringFieldReasoning))
@@ -387,7 +403,7 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 			tool := transcript.ToolCall{ID: call.ToolCallID, Name: call.Name, Input: transcript.ToolInputJSON{Raw: append([]byte(nil), call.Input...)}, Display: "", DisplayLang: "", Output: "", IsError: false}
 			calls = append(calls, tool)
 		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: thinking, HasTools: len(calls) > 0, Tools: calls}, text != "" || thinking != "" || len(calls) > 0
+		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: thinking, HasTools: len(calls) > 0, Tools: calls, Attachments: mapAttachments(item.Data)}, text != "" || thinking != "" || len(calls) > 0 || len(mapAttachments(item.Data)) > 0
 	case eventAssistantReasoning:
 		text := firstNonEmpty(stringField(item.Data, stringFieldContent), stringField(item.Data, stringFieldText))
 		if text == "" {
@@ -427,8 +443,9 @@ func attachToolOutputs(messages []transcript.Message, events []event, selector s
 			ToolCallID string `json:"toolCallId"`
 			Success    bool   `json:"success"`
 			Result     struct {
-				Content  string            `json:"content"`
-				Contents []json.RawMessage `json:"contents"`
+				Content     string            `json:"content"`
+				Contents    []json.RawMessage `json:"contents"`
+				Attachments []attachmentData  `json:"attachments"`
 			} `json:"result"`
 			Error struct {
 				Message string `json:"message"`
@@ -447,10 +464,39 @@ func attachToolOutputs(messages []transcript.Message, events []event, selector s
 				if tool.ID == data.ToolCallID {
 					tool.Output = output
 					tool.IsError = !data.Success
+					tool.Attachments = normalizeAttachments(data.Result.Attachments)
 				}
 			}
 		}
 	}
+}
+
+func mapAttachments(raw json.RawMessage) []transcript.Attachment {
+	var data attachmentsData
+	if json.Unmarshal(raw, &data) != nil {
+		return nil
+	}
+	return normalizeAttachments(data.Attachments)
+}
+
+func normalizeAttachments(values []attachmentData) []transcript.Attachment {
+	attachments := make([]transcript.Attachment, 0, len(values))
+	for _, value := range values {
+		mimeType := firstNonEmpty(value.MIMEType, value.MimeType)
+		sizeBytes := value.SizeBytes
+		if sizeBytes == 0 {
+			sizeBytes = value.Size
+		}
+		assetReference := firstNonEmpty(value.AssetReference, value.Asset)
+		if mimeType == "" && sizeBytes == 0 && value.Description == "" && assetReference == "" && value.Text == "" {
+			continue
+		}
+		attachments = append(attachments, transcript.Attachment{
+			MIMEType: mimeType, SizeBytes: sizeBytes, Description: value.Description,
+			AssetReference: assetReference, Text: value.Text,
+		})
+	}
+	return attachments
 }
 
 func readEvents(path string) ([]event, error) {
