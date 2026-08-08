@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"log/slog"
 	"os"
@@ -126,58 +127,82 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 
 // ScanRecord reads the root chat metadata from one Copilot event log.
 func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
-	return p.scanOne(conversation.ScanCandidate{Path: path, Selector: "", Stamp: stamp})
+	return p.scanHeader(conversation.ScanCandidate{Path: path, Selector: "", Stamp: stamp})
 }
 
 // ScanRecords reads metadata for the selected chat in one Copilot event log.
 func (p *Parser) ScanRecords(candidate conversation.ScanCandidate) ([]conversation.Record, bool) {
-	record, ok := p.scanOne(candidate)
+	record, ok := p.scanHeader(candidate)
 	if !ok {
 		return nil, false
 	}
 	return []conversation.Record{record}, true
 }
 
-func (p *Parser) scanOne(candidate conversation.ScanCandidate) (conversation.Record, bool) {
-	events, err := readEvents(candidate.Path)
-	if err != nil && len(events) == 0 {
+func (p *Parser) scanHeader(candidate conversation.ScanCandidate) (conversation.Record, bool) {
+	file, err := os.Open(candidate.Path)
+	if err != nil {
 		return emptyRecord(), false
 	}
+	defer func() { _ = file.Close() }()
 
 	var start sessionStart
 	var firstUser string
 	var created time.Time
-	var updated time.Time
 	var subagent subagentData
-	for _, item := range events {
-		if item.Type == eventSessionStart {
-			_ = json.Unmarshal(item.Data, &start)
+	reader := bufio.NewReader(file)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) == 0 && errors.Is(readErr, io.EOF) {
+			break
 		}
-		if item.AgentID == candidate.Selector && item.Type == eventUserMessage && firstUser == "" {
-			firstUser = stringField(item.Data, stringFieldContent)
-		}
-		if item.AgentID == candidate.Selector {
-			timestamp := parseTime(item.Timestamp)
-			if !timestamp.IsZero() {
-				if created.IsZero() {
+		var item event
+		if json.Unmarshal(line, &item) == nil && item.Type != "" {
+			if item.Type == eventSessionStart {
+				_ = json.Unmarshal(item.Data, &start)
+			}
+			if item.AgentID == candidate.Selector && item.Type == eventUserMessage && firstUser == "" {
+				firstUser = stringField(item.Data, stringFieldContent)
+			}
+			if item.AgentID == candidate.Selector {
+				timestamp := parseTime(item.Timestamp)
+				if !timestamp.IsZero() && created.IsZero() {
 					created = timestamp
 				}
-				updated = timestamp
+			}
+			if item.AgentID == candidate.Selector && item.Type == eventSubagentStarted {
+				_ = json.Unmarshal(item.Data, &subagent)
 			}
 		}
-		if item.AgentID == candidate.Selector && item.Type == eventSubagentStarted {
-			_ = json.Unmarshal(item.Data, &subagent)
+		if start.SessionID != "" && !created.IsZero() &&
+			(candidate.Selector == "" && firstUser != "" ||
+				candidate.Selector != "" && (subagent.AgentDisplayName != "" ||
+					subagent.AgentName != "" || subagent.AgentDescription != "")) {
+			break
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return emptyRecord(), false
 		}
 	}
+	return scanRecordMetadata(candidate, start, firstUser, created, subagent), true
+}
+
+func scanRecordMetadata(
+	candidate conversation.ScanCandidate,
+	start sessionStart,
+	firstUser string,
+	created time.Time,
+	subagent subagentData,
+) conversation.Record {
 	sessionID := start.SessionID
 	if sessionID == "" {
 		sessionID = filepath.Base(filepath.Dir(candidate.Path))
 	}
 	if created.IsZero() {
 		created = parseTime(start.StartTime)
-	}
-	if updated.IsZero() {
-		updated = candidate.Stamp.Mtime
 	}
 	nativeID := sessionID
 	title := trimTitle(firstUser)
@@ -213,11 +238,11 @@ func (p *Parser) scanOne(candidate conversation.ScanCandidate) (conversation.Rec
 		ArtifactKind:    artifactKind,
 		Model:           model,
 		CreatedAt:       created,
-		UpdatedAt:       updated,
+		UpdatedAt:       candidate.Stamp.Mtime,
 		SizeBytes:       candidate.Stamp.Size,
 		Archived:        false,
 		LatestRequestID: "",
-	}, true
+	}
 }
 
 func emptyRecord() conversation.Record {
