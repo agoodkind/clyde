@@ -39,6 +39,12 @@ func TestRecordJSONParsesProviderLabel(t *testing.T) {
 	}
 }
 
+func TestCopilotProviderAliasMatchesProviderIdentity(t *testing.T) {
+	if ProviderCopilot.String() != "copilot" {
+		t.Fatalf("ProviderCopilot = %q, want copilot", ProviderCopilot.String())
+	}
+}
+
 func TestRecordJSONParsesLegacyProviderEnumValue(t *testing.T) {
 	var record Record
 	if err := json.Unmarshal([]byte(`{"provider":1}`), &record); err != nil {

@@ -3,6 +3,7 @@ package parser
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,8 +23,10 @@ import (
 )
 
 const (
-	artifactKind = "copilot_events"
-	concern      = "providers.copilot.parser"
+	artifactKind           = "copilot_events"
+	concern                = "providers.copilot.parser"
+	scanRecordLineLimit    = 128
+	supportedSchemaVersion = 1
 )
 
 // Parser implements conversation parsing for Copilot CLI event logs.
@@ -67,10 +71,15 @@ const (
 )
 
 type sessionStart struct {
-	SessionID  string `json:"sessionId"`
-	StartTime  string `json:"startTime"`
-	Model      string `json:"selectedModel"`
-	ModelAlt   string `json:"model"`
+	Version                             int                     `json:"version"`
+	SessionID                           string                  `json:"sessionId"`
+	StartTime                           string                  `json:"startTime"`
+	SelectedModel                       string                  `json:"selectedModel"`
+	DetachedFromSpawningParentSessionID string                  `json:"detachedFromSpawningParentSessionId"`
+	Context                             workingDirectoryContext `json:"context"`
+}
+
+type workingDirectoryContext struct {
 	CWD        string `json:"cwd"`
 	GitRoot    string `json:"gitRoot"`
 	Repository string `json:"repository"`
@@ -85,8 +94,11 @@ type subagentData struct {
 	ToolCallID       string `json:"toolCallId"`
 }
 
-// Discover finds Copilot CLI event logs and their root and subagent chats.
-func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
+// Discover finds one candidate for each physical Copilot event log.
+func (*Parser) Discover(
+	ctx context.Context,
+	_ map[string]conversation.Record,
+) ([]conversation.ScanCandidate, error) {
 	root, err := copilotRoot()
 	if err != nil {
 		slog.WarnContext(ctx, "providers.copilot.parser.root_failed", "concern", concern, "err", err)
@@ -108,31 +120,22 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 			}
 			return nil, fmt.Errorf("stat Copilot event log %s: %w", path, err)
 		}
-		events, err := readEvents(path)
-		if err != nil && len(events) == 0 {
-			continue
-		}
-		_, agents := identities(events)
 		candidates = append(candidates, conversation.ScanCandidate{
-			Path: path, Selector: "", Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+			Path:     path,
+			Selector: "",
+			Stamp:    conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
 		})
-		for agentID := range agents {
-			candidates = append(candidates, conversation.ScanCandidate{
-				Path: path, Selector: agentID, Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
-			})
-		}
 	}
 	return candidates, nil
 }
 
-// ScanRecord reads the root chat metadata from one Copilot event log.
-func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
-	return p.scanHeader(conversation.ScanCandidate{Path: path, Selector: "", Stamp: stamp})
-}
-
-// ScanRecords reads metadata for the selected chat in one Copilot event log.
-func (p *Parser) ScanRecords(candidate conversation.ScanCandidate) ([]conversation.Record, bool) {
-	record, ok := p.scanHeader(candidate)
+// ScanRecord reads the root record from one Copilot event log.
+func (*Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
+	candidate := conversation.ScanCandidate{Path: path, Selector: "", Stamp: stamp}
+	return scanRootRecord(candidate, func(visit func(event) bool) error {
+		_, err := readCompleteEvents(path, 0, scanRecordLineLimit, visit)
+		return err
+	})
 }
 
 func scanRootRecord(
@@ -148,106 +151,224 @@ func scanRootRecord(
 		return metadata.start.SessionID == "" || metadata.chat("").firstUser == ""
 	})
 	if err != nil || metadata.start.Version != supportedSchemaVersion || metadata.start.SessionID == "" {
-		return nil, false
-	}
-	return []conversation.Record{record}, true
-}
-
-func (p *Parser) scanHeader(candidate conversation.ScanCandidate) (conversation.Record, bool) {
-	file, err := os.Open(candidate.Path)
-	if err != nil {
 		return emptyRecord(), false
 	}
-	defer func() { _ = file.Close() }()
-
-	var start sessionStart
-	var firstUser string
-	var created time.Time
-	var subagent subagentData
-	reader := bufio.NewReader(file)
-	for {
-		line, readErr := reader.ReadBytes('\n')
-		if len(line) == 0 && errors.Is(readErr, io.EOF) {
-			break
-		}
-		var item event
-		if json.Unmarshal(line, &item) == nil && item.Type != "" {
-			if item.Type == eventSessionStart {
-				_ = json.Unmarshal(item.Data, &start)
-			}
-			if item.AgentID == candidate.Selector && item.Type == eventUserMessage && firstUser == "" {
-				firstUser = stringField(item.Data, stringFieldContent)
-			}
-			if item.AgentID == candidate.Selector {
-				timestamp := parseTime(item.Timestamp)
-				if !timestamp.IsZero() && created.IsZero() {
-					created = timestamp
-				}
-			}
-			if item.AgentID == candidate.Selector && item.Type == eventSubagentStarted {
-				_ = json.Unmarshal(item.Data, &subagent)
-			}
-		}
-		if start.SessionID != "" && !created.IsZero() &&
-			(candidate.Selector == "" && firstUser != "" ||
-				candidate.Selector != "" && (subagent.AgentDisplayName != "" ||
-					subagent.AgentName != "" || subagent.AgentDescription != "")) {
-			break
-		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			return emptyRecord(), false
-		}
-	}
-	return scanRecordMetadata(candidate, start, firstUser, created, subagent), true
+	return buildRecord(candidate, metadata.start, "", *metadata.chat("")), true
 }
 
-func scanRecordMetadata(
+// ScanRecords reads every root and subagent record from one physical artifact.
+func (*Parser) ScanRecords(
+	input conversation.MultiConversationScan,
+) (conversation.MultiConversationScanResult, bool) {
+	metadata := newScanMetadata(input.PriorRecords)
+	completeOffset, err := readCompleteEvents(input.Candidate.Path, input.StartOffset, 0, func(item event) bool {
+		metadata.add(item)
+		return true
+	})
+	if err != nil {
+		return conversation.MultiConversationScanResult{Records: nil, CompleteOffset: input.StartOffset}, false
+	}
+	if metadata.start.Version != supportedSchemaVersion || metadata.start.SessionID == "" {
+		return conversation.MultiConversationScanResult{Records: nil, CompleteOffset: completeOffset}, false
+	}
+	records := metadata.records(input.Candidate)
+	if len(records) == 0 {
+		return conversation.MultiConversationScanResult{Records: nil, CompleteOffset: completeOffset}, false
+	}
+	return conversation.MultiConversationScanResult{Records: records, CompleteOffset: completeOffset}, true
+}
+
+type chatMetadata struct {
+	firstUser string
+	created   time.Time
+	subagent  subagentData
+}
+
+type scanMetadata struct {
+	start           sessionStart
+	chats           map[string]*chatMetadata
+	priorBySelector map[string]conversation.Record
+}
+
+func newScanMetadata(prior []conversation.Record) *scanMetadata {
+	metadata := &scanMetadata{
+		start: sessionStart{
+			Version: 0, SessionID: "", StartTime: "", SelectedModel: "",
+			DetachedFromSpawningParentSessionID: "",
+			Context:                             workingDirectoryContext{CWD: "", GitRoot: "", Repository: "", Branch: ""},
+		},
+		chats:           make(map[string]*chatMetadata),
+		priorBySelector: make(map[string]conversation.Record, len(prior)),
+	}
+	for _, record := range prior {
+		firstUser := record.Title
+		if record.TitleUncertain {
+			firstUser = ""
+		}
+		metadata.priorBySelector[record.Selector] = record
+		metadata.chats[record.Selector] = &chatMetadata{
+			firstUser: firstUser,
+			created:   record.CreatedAt,
+			subagent: subagentData{
+				AgentName: "", AgentDisplayName: "", AgentDescription: "",
+				Model: record.Model, ToolCallID: parentMessageUUID(record),
+			},
+		}
+		if record.Selector != "" {
+			continue
+		}
+		metadata.start.Version = supportedSchemaVersion
+		metadata.start.SessionID = record.NativeID
+		metadata.start.StartTime = record.CreatedAt.Format(time.RFC3339Nano)
+		metadata.start.SelectedModel = record.Model
+		metadata.start.Context.GitRoot = record.WorkspaceRoot
+		if record.Lineage != nil {
+			metadata.start.DetachedFromSpawningParentSessionID = record.Lineage.ParentNativeID
+		}
+	}
+	return metadata
+}
+
+func parentMessageUUID(record conversation.Record) string {
+	if record.Lineage == nil {
+		return ""
+	}
+	return record.Lineage.ParentMessageUUID
+}
+
+func (metadata *scanMetadata) add(item event) {
+	if item.Ephemeral {
+		return
+	}
+	if item.Type == eventSessionStart {
+		var start sessionStart
+		if json.Unmarshal(item.Data, &start) == nil {
+			metadata.start = start
+		}
+	}
+	chat := metadata.chat(item.AgentID)
+	if chat.created.IsZero() {
+		chat.created = parseTime(item.Timestamp)
+	}
+	if item.Type == eventUserMessage && chat.firstUser == "" {
+		var data userMessageData
+		if json.Unmarshal(item.Data, &data) == nil && !isSkillSource(data.Source) {
+			chat.firstUser = data.Content
+		}
+	}
+	if item.Type == eventSubagentStarted && item.AgentID != "" {
+		_ = json.Unmarshal(item.Data, &chat.subagent)
+	}
+}
+
+func (metadata *scanMetadata) chat(selector string) *chatMetadata {
+	chat, ok := metadata.chats[selector]
+	if ok {
+		return chat
+	}
+	chat = &chatMetadata{
+		firstUser: "",
+		created:   time.Time{},
+		subagent: subagentData{
+			AgentName: "", AgentDisplayName: "", AgentDescription: "",
+			Model: "", ToolCallID: "",
+		},
+	}
+	metadata.chats[selector] = chat
+	return chat
+}
+
+func (metadata *scanMetadata) records(candidate conversation.ScanCandidate) []conversation.Record {
+	selectors := make([]string, 0, len(metadata.chats))
+	for selector := range metadata.chats {
+		selectors = append(selectors, selector)
+	}
+	sort.Strings(selectors)
+	if len(selectors) == 0 || selectors[0] != "" {
+		selectors = append([]string{""}, selectors...)
+	}
+	records := make([]conversation.Record, 0, len(selectors))
+	for _, selector := range selectors {
+		chat := metadata.chat(selector)
+		if prior, ok := metadata.priorBySelector[selector]; ok {
+			prior.UpdatedAt = candidate.Stamp.Mtime
+			prior.SizeBytes = candidate.Stamp.Size
+			if prior.TitleUncertain && chat.firstUser != "" {
+				prior.Title = trimTitle(chat.firstUser)
+				prior.TitleUncertain = false
+			}
+			if selector != "" && chat.subagent.Model != "" {
+				prior.Model = chat.subagent.Model
+			}
+			records = append(records, prior)
+			continue
+		}
+		records = append(records, buildRecord(candidate, metadata.start, selector, *chat))
+	}
+	return records
+}
+
+func buildRecord(
 	candidate conversation.ScanCandidate,
 	start sessionStart,
-	firstUser string,
-	created time.Time,
-	subagent subagentData,
+	selector string,
+	chat chatMetadata,
 ) conversation.Record {
-	sessionID := start.SessionID
-	if sessionID == "" {
-		sessionID = filepath.Base(filepath.Dir(candidate.Path))
+	nativeID := start.SessionID
+	origin := conversation.OriginUser
+	var lineage *conversation.Lineage
+	model := start.SelectedModel
+	title := trimTitle(chat.firstUser)
+	if selector == "" && start.DetachedFromSpawningParentSessionID != "" {
+		origin = conversation.OriginSubagent
+		lineage = &conversation.Lineage{
+			Kind:              conversation.ConversationLineageKindSpawn,
+			ParentProvider:    providerid.ProviderCopilot,
+			ParentNativeID:    start.DetachedFromSpawningParentSessionID,
+			ParentMessageUUID: "",
+		}
+	}
+	if selector != "" {
+		nativeID += ":agent:" + selector
+		origin = conversation.OriginSubagent
+		model = firstNonEmpty(chat.subagent.Model, start.SelectedModel)
+		title = firstNonEmpty(
+			chat.subagent.AgentDisplayName,
+			chat.subagent.AgentName,
+			chat.subagent.AgentDescription,
+			title,
+		)
+		lineage = &conversation.Lineage{
+			Kind:              conversation.ConversationLineageKindSpawn,
+			ParentProvider:    providerid.ProviderCopilot,
+			ParentNativeID:    start.SessionID,
+			ParentMessageUUID: chat.subagent.ToolCallID,
+		}
+	}
+	titleUncertain := title == ""
+	if titleUncertain {
+		title = nativeID
+	}
+	created := chat.created
+	if selector == "" {
+		startTime := parseTime(start.StartTime)
+		if !startTime.IsZero() {
+			created = startTime
+		}
 	}
 	if created.IsZero() {
 		created = parseTime(start.StartTime)
 	}
-	nativeID := sessionID
-	title := trimTitle(firstUser)
-	origin := conversation.OriginUser
-	var lineage *conversation.Lineage
-	if candidate.Selector != "" {
-		nativeID += ":agent:" + candidate.Selector
-		origin = conversation.OriginSubagent
-		title = firstNonEmpty(subagent.AgentDisplayName, subagent.AgentName, subagent.AgentDescription, title, nativeID)
-		lineage = &conversation.Lineage{
-			Kind:              conversation.ConversationLineageKindSpawn,
-			ParentProvider:    providerid.ProviderCopilot,
-			ParentNativeID:    sessionID,
-			ParentMessageUUID: "",
-		}
-	}
-	if title == "" {
-		title = nativeID
-	}
-	model := firstNonEmpty(start.Model, start.ModelAlt, subagent.Model)
-	workspace := firstNonEmpty(start.CWD, start.GitRoot)
 	return conversation.Record{
 		ID:              conversation.DerivedID(providerid.ProviderCopilot, nativeID, candidate.Path),
 		Provider:        providerid.ProviderCopilot,
 		NativeID:        nativeID,
-		Selector:        candidate.Selector,
+		Selector:        selector,
 		Lineage:         lineage,
 		Origin:          origin,
 		Title:           title,
-		TitleUncertain:  false,
-		WorkspaceRoot:   workspace,
+		TitleUncertain:  titleUncertain,
+		WorkspaceRoot:   firstNonEmpty(start.Context.GitRoot, start.Context.CWD),
 		ArtifactPath:    candidate.Path,
 		ArtifactKind:    artifactKind,
 		Model:           model,
@@ -257,6 +378,61 @@ func scanRecordMetadata(
 		Archived:        false,
 		LatestRequestID: "",
 	}
+}
+
+func readCompleteEvents(
+	path string,
+	startOffset int64,
+	maxCompleteLines int,
+	visit func(event) bool,
+) (int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		wrapped := fmt.Errorf("open Copilot event log: %w", err)
+		slog.Warn("providers.copilot.parser.read_failed", "concern", concern, "path", path, "err", wrapped)
+		return startOffset, wrapped
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
+		wrapped := fmt.Errorf("seek Copilot event log: %w", err)
+		slog.Warn("providers.copilot.parser.read_failed", "concern", concern, "path", path, "err", wrapped)
+		return startOffset, wrapped
+	}
+	reader := bufio.NewReader(file)
+	completeOffset := startOffset
+	completeLines := 0
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if bytes.HasSuffix(line, []byte{'\n'}) {
+			completeOffset += int64(len(line))
+			completeLines++
+			if item, ok := decodeEventLine(line); ok {
+				if !visit(item) {
+					return completeOffset, nil
+				}
+			}
+			if maxCompleteLines > 0 && completeLines >= maxCompleteLines {
+				return completeOffset, nil
+			}
+		}
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			return completeOffset, nil
+		}
+		wrapped := fmt.Errorf("read Copilot event log: %w", readErr)
+		slog.Warn("providers.copilot.parser.read_failed", "concern", concern, "path", path, "err", wrapped)
+		return completeOffset, wrapped
+	}
+}
+
+func decodeEventLine(line []byte) (event, bool) {
+	var item event
+	if json.Unmarshal(line, &item) != nil || item.Type == "" {
+		return item, false
+	}
+	return item, true
 }
 
 func emptyRecord() conversation.Record {
@@ -269,224 +445,9 @@ func emptyRecord() conversation.Record {
 	}
 }
 
-func emptyMessage() transcript.Message {
-	return transcript.Message{
-		UUID: "", ParentUUID: "", LogicalParentUUID: "", Role: "",
-		Visibility: "", Compaction: nil, Timestamp: time.Time{}, Text: "",
-		Thinking: "", HasTools: false, Tools: nil,
-	}
-}
-
-func parentID(item event) string {
-	if item.ParentID == nil {
-		return ""
-	}
-	return *item.ParentID
-}
-
 // Stream yields the root chat from a Copilot CLI event log.
 func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return p.StreamSelected(path, "", opts)
-}
-
-// StreamSelected yields only the selected root or subagent chat.
-func (p *Parser) StreamSelected(path string, selector string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
-	return func(yield func(transcript.Message, error) bool) {
-		if !opts.IncludeToolOutputs {
-			streamWithoutToolOutputs(path, selector, opts, yield)
-			return
-		}
-		events, err := readEvents(path)
-		if err != nil {
-			yield(emptyMessage(), err)
-			return
-		}
-		messages := make([]transcript.Message, 0)
-		for _, item := range events {
-			if item.Ephemeral || item.AgentID != selector {
-				continue
-			}
-			message, ok := mapEvent(item, opts)
-			if !ok {
-				continue
-			}
-			messages = append(messages, message)
-		}
-		if opts.IncludeToolOutputs {
-			attachToolOutputs(messages, events, selector)
-		}
-		for _, message := range messages {
-			if !yield(message, nil) {
-				return
-			}
-		}
-	}
-}
-
-func streamWithoutToolOutputs(
-	path string,
-	selector string,
-	opts conversation.LoadOptions,
-	yield func(transcript.Message, error) bool,
-) {
-	file, err := os.Open(path)
-	if err != nil {
-		yield(emptyMessage(), fmt.Errorf("open Copilot event log: %w", err))
-		return
-	}
-	defer func() { _ = file.Close() }()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		var item event
-		if json.Unmarshal(scanner.Bytes(), &item) != nil || item.Type == "" {
-			continue
-		}
-		if item.Ephemeral || item.AgentID != selector {
-			continue
-		}
-		message, ok := mapEvent(item, opts)
-		if ok && !yield(message, nil) {
-			return
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		yield(emptyMessage(), fmt.Errorf("read Copilot event log: %w", err))
-	}
-}
-
-func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bool) {
-	timestamp := parseTime(item.Timestamp)
-	switch item.Type {
-	case eventUserMessage:
-		text := stringField(item.Data, stringFieldContent)
-		if text == "" {
-			return emptyMessage(), false
-		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "user", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: "", HasTools: false, Tools: nil}, true
-	case eventAssistantMessage:
-		text := stringField(item.Data, stringFieldContent)
-		thinking := firstNonEmpty(stringField(item.Data, stringFieldReasoningText), stringField(item.Data, stringFieldReasoning))
-		var calls []transcript.ToolCall
-		var raw struct {
-			ToolRequests []struct {
-				ToolCallID string          `json:"toolCallId"`
-				Name       string          `json:"name"`
-				Input      json.RawMessage `json:"arguments"`
-			} `json:"toolRequests"`
-		}
-		_ = json.Unmarshal(item.Data, &raw)
-		for _, call := range raw.ToolRequests {
-			tool := transcript.ToolCall{ID: call.ToolCallID, Name: call.Name, Input: transcript.ToolInputJSON{Raw: append([]byte(nil), call.Input...)}, Display: "", DisplayLang: "", Output: "", IsError: false}
-			calls = append(calls, tool)
-		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: thinking, HasTools: len(calls) > 0, Tools: calls}, text != "" || thinking != "" || len(calls) > 0
-	case eventAssistantReasoning:
-		text := firstNonEmpty(stringField(item.Data, stringFieldContent), stringField(item.Data, stringFieldText))
-		if text == "" {
-			return emptyMessage(), false
-		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: nil, Timestamp: timestamp, Text: "", Thinking: text, HasTools: false, Tools: nil}, true
-	case eventSystemMessage:
-		if !opts.IncludeSystemMessages {
-			return emptyMessage(), false
-		}
-		text := stringField(item.Data, stringFieldContent)
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "system", Visibility: transcript.MessageVisibilityMetaOnly, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: "", HasTools: false, Tools: nil}, text != ""
-	case eventToolExecutionComplete:
-		return emptyMessage(), false
-	case eventCompactionComplete:
-		var data struct {
-			Summary string `json:"summary"`
-		}
-		_ = json.Unmarshal(item.Data, &data)
-		if data.Summary == "" {
-			return emptyMessage(), false
-		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: &transcript.CompactionMetadata{Kind: transcript.CompactionKindSummary, Trigger: transcript.CompactionTriggerUnknown, PreTokens: 0, PostTokens: 0, TokensSaved: 0, MessagesSummarized: 0, ReplacementHistoryCount: 0, HeadUUID: "", AnchorUUID: "", TailUUID: "", ContextItems: nil, UserContext: "", Direction: "", PreCompactDiscoveredTools: nil, CompactedToolIDs: nil, ClearedAttachmentUUIDs: nil, RawCompactMetadata: nil, RawMicrocompactMetadata: nil, RawSummarizeMetadata: nil}, Timestamp: timestamp, Text: data.Summary, Thinking: "", HasTools: false, Tools: nil}, true
-	case eventSessionStart, eventSubagentStarted:
-		return emptyMessage(), false
-	default:
-		return emptyMessage(), false
-	}
-}
-
-func attachToolOutputs(messages []transcript.Message, events []event, selector string) {
-	for _, item := range events {
-		if item.Ephemeral || item.AgentID != selector || item.Type != eventToolExecutionComplete {
-			continue
-		}
-		var data struct {
-			ToolCallID string `json:"toolCallId"`
-			Success    bool   `json:"success"`
-			Result     struct {
-				Content  string            `json:"content"`
-				Contents []json.RawMessage `json:"contents"`
-			} `json:"result"`
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if json.Unmarshal(item.Data, &data) != nil || data.ToolCallID == "" {
-			continue
-		}
-		output := data.Result.Content
-		if !data.Success {
-			output = data.Error.Message
-		}
-		for messageIndex := range messages {
-			for toolIndex := range messages[messageIndex].Tools {
-				tool := &messages[messageIndex].Tools[toolIndex]
-				if tool.ID == data.ToolCallID {
-					tool.Output = output
-					tool.IsError = !data.Success
-				}
-			}
-		}
-	}
-}
-
-func readEvents(path string) ([]event, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open Copilot event log: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-	var events []event
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(strings.TrimSpace(string(line))) == 0 {
-			continue
-		}
-		var item event
-		if json.Unmarshal(line, &item) != nil || item.Type == "" {
-			continue
-		}
-		events = append(events, item)
-	}
-	if err := scanner.Err(); err != nil {
-		slog.Warn("providers.copilot.parser.read_failed", "concern", concern, "path", path, "err", err)
-		return events, fmt.Errorf("read Copilot event log: %w", err)
-	}
-	return events, nil
-}
-
-func identities(events []event) (string, map[string]bool) {
-	var sessionID string
-	agents := make(map[string]bool)
-	for _, item := range events {
-		if item.Type == eventSessionStart {
-			var start sessionStart
-			_ = json.Unmarshal(item.Data, &start)
-			sessionID = start.SessionID
-		}
-		if item.AgentID != "" {
-			agents[item.AgentID] = true
-		}
-	}
-	return sessionID, agents
 }
 
 func copilotRoot() (string, error) {
@@ -507,38 +468,6 @@ func parseTime(raw string) time.Time {
 		return time.Time{}
 	}
 	return value
-}
-
-type stringFieldKey string
-
-const (
-	stringFieldContent       stringFieldKey = "content"
-	stringFieldReasoningText stringFieldKey = "reasoningText"
-	stringFieldReasoning     stringFieldKey = "reasoning"
-	stringFieldText          stringFieldKey = "text"
-)
-
-func stringField(data json.RawMessage, key stringFieldKey) string {
-	var fields struct {
-		Content       string `json:"content"`
-		ReasoningText string `json:"reasoningText"`
-		Reasoning     string `json:"reasoning"`
-		Text          string `json:"text"`
-	}
-	if json.Unmarshal(data, &fields) != nil {
-		return ""
-	}
-	switch key {
-	case stringFieldContent:
-		return fields.Content
-	case stringFieldReasoningText:
-		return fields.ReasoningText
-	case stringFieldReasoning:
-		return fields.Reasoning
-	case stringFieldText:
-		return fields.Text
-	}
-	return ""
 }
 
 func trimTitle(text string) string {

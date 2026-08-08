@@ -24,6 +24,8 @@ const (
 	ProviderCursor Provider = providerid.ProviderCursor
 	// ProviderZed identifies Zed thread artifacts.
 	ProviderZed Provider = providerid.ProviderZed
+	// ProviderCopilot identifies standalone GitHub Copilot CLI event logs.
+	ProviderCopilot Provider = providerid.ProviderCopilot
 )
 
 // Record is a derived index row for one raw provider conversation.
@@ -35,10 +37,9 @@ type Record struct {
 	Lineage  *Lineage `json:"lineage,omitempty"`
 	Origin   Origin   `json:"origin,omitempty"`
 	Title    string   `json:"title"`
-	// TitleUncertain marks a title the scan settled on after skipping a record it
-	// could not read. That record may have been the conversation's real first user
-	// message, so the title is the earliest one clyde could read rather than the
-	// conversation's own. It stays false for every artifact that read cleanly.
+	// TitleUncertain marks a provisional title produced before the scan has read a
+	// qualifying first user message. The message may not be complete yet, or an
+	// earlier record may have been unreadable. A later scan may replace the title.
 	//
 	// It is daemon-local today. The control server's wire record carries no such
 	// field, so a CLI or MCP listing reads back a record with it cleared; carrying
