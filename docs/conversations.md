@@ -1,12 +1,12 @@
 # Conversations
 
-Clyde reads raw conversation artifacts from Claude, Codex, Cursor, and Zed so
-users can inspect, search, and export provider-owned transcripts without
-changing those provider files.
+Clyde reads raw conversation artifacts from registered providers so users can
+inspect, search, and export provider-owned transcripts without changing those
+provider files.
 
-Claude and Codex each write one transcript file per conversation. Cursor and Zed
-keep conversations in SQLite databases the running application owns, and Cursor
-uses more than one store. See [Cursor stores](cursor/stores.md).
+Providers store conversations in transcript files or SQLite databases. Clyde
+opens provider databases read-only, and Cursor uses more than one store. See
+[Cursor stores](cursor/stores.md).
 
 ## Model
 
@@ -21,14 +21,9 @@ read-only because the application that owns them may be running.
 
 ## IDs
 
-Conversation ids are derived ids:
-
-- `claude:<provider-session-id>` for Claude transcripts with a provider session id.
-- `codex:<thread-id>` for Codex transcripts with a thread id.
-- `cursor:<native-id>` for Cursor conversations, where the native id depends on
-  which store holds the conversation.
-- `zed:<thread-id>` for Zed threads.
-- `artifact:<path-hash>` when a provider id is not available.
+Conversation ids combine the provider label and native id, such as
+`copilot:<session-id>`. Clyde uses `artifact:<path-hash>` when a provider id is
+not available.
 
 CLI and MCP calls use `conversation_id` for this value. Most conversation tools
 also accept a native id, title, or artifact path as a resolver input, but the
@@ -50,14 +45,13 @@ Use `clyde conversation info CONVERSATION_ID` before exporting when you need
 static metadata or compaction segment numbers. The info command prints record
 metadata, message counts, tool counts, compaction count, and the segment stack.
 
-Use `clyde conversation show CONVERSATION_ID` when you only need plain text.
-Use `clyde conversation context CONVERSATION_ID` when you need a window around a
-message index or timestamp.
+Use `clyde conversation search CONVERSATION_ID` to read a transcript. Add
+`--around MESSAGE_INDEX --window N` to read a context window.
 
-Use `clyde conversation search across` to search the indexed corpus. Use
-`clyde conversation search within CONVERSATION_ID QUERY` to search one
-conversation. Search returns excerpts and result ids; export is the portable
-transcript path.
+Use `clyde conversation search --query QUERY` to search the indexed corpus. Add
+`CONVERSATION_ID` before `--query` to search one conversation. Omit both to
+browse conversation metadata. Search returns excerpts and result ids; export is
+the portable transcript path.
 
 ## Compaction Segments
 
@@ -165,9 +159,8 @@ operations. Use `clyde_conversation_info` to inspect metadata and the segment
 stack. Use `clyde_export_transcript` to export transcript content.
 
 `clyde_export_transcript` accepts `include_compactions`, `full_history`, and
-`last_n` with the same segment selection rules as the CLI. The MCP tool writes
-the export file into the caller working directory and returns its absolute path
-in metadata. The text fallback retains the export body.
+`last_n` with the same segment selection rules as the CLI. The MCP tool returns
+the export body unless `output` names an absolute file path, which it writes.
 
 `conversation export tail` is a CLI-only shortcut. MCP clients can request the
 same range by calling `clyde_export_transcript` with `include_compactions: "0"`,

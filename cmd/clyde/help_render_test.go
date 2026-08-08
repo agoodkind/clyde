@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"goodkind.io/clyde/internal/clispec"
 )
 
 // walkCommands visits root and every descendant command except the
@@ -66,6 +68,7 @@ func TestEveryParentRejectsUnknownSubcommand(t *testing.T) {
 // TestMisuseRendersFullHelp drives the misuse classes end to end and asserts
 // each renders the offending command's full help, not a bare error line.
 func TestMisuseRendersFullHelp(t *testing.T) {
+	providerList := clispec.ConversationProviderList()
 	cases := []struct {
 		name     string
 		args     []string
@@ -79,7 +82,7 @@ func TestMisuseRendersFullHelp(t *testing.T) {
 		{
 			name:     "unknown subcommand under a generated parent",
 			args:     []string{"conversation", "bogus"},
-			wantHelp: "Inspect indexed Claude, Codex, Cursor, and Zed conversations",
+			wantHelp: "Inspect indexed " + providerList + " conversations",
 		},
 		{
 			name:     "unknown subcommand under a handwritten parent",
@@ -101,12 +104,12 @@ func TestMisuseRendersFullHelp(t *testing.T) {
 		{
 			name:     "unsupported provider value",
 			args:     []string{"conversation", "search", "--provider", "bogus"},
-			wantHelp: "One operation over indexed Claude, Codex, Cursor, and Zed conversations",
+			wantHelp: "One operation over indexed " + providerList + " conversations",
 		},
 		{
 			name:     "unparseable search time bound",
 			args:     []string{"conversation", "search", "--query", "auth", "--after", "nope"},
-			wantHelp: "One operation over indexed Claude, Codex, Cursor, and Zed conversations",
+			wantHelp: "One operation over indexed " + providerList + " conversations",
 		},
 	}
 	for _, tc := range cases {

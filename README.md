@@ -1,9 +1,9 @@
 # Clyde
 
-Clyde is a local Go CLI and daemon for reading raw Claude and Codex provider
-artifacts, exposing conversation search and transcript export through CLI and
-MCP surfaces, hosting adapter ingress, and capturing provider traffic through
-daemon-owned MITM listeners.
+Clyde is a local Go CLI and daemon for reading raw provider artifacts, exposing
+conversation search and transcript export through CLI and MCP surfaces, hosting
+adapter ingress, and capturing provider traffic through daemon-owned MITM
+listeners.
 
 Use Clyde for provider-owned artifact inspection. Use raw `claude` and `codex`
 for provider session lifecycle and interactive work.
@@ -12,26 +12,24 @@ for provider session lifecycle and interactive work.
 
 Clyde moves quickly, so this README intentionally avoids copied command tables,
 config schemas, route inventories, model catalogs, and listener lists. Use the
-current source or generated help for details that can drift:
+generated help or the focused documentation for details that can drift:
 
 - CLI commands: `clyde --help` and `clyde <command> --help`.
-- Conversation model, ids, indexing, compaction segments, and export selection:
-  `docs/conversations.md`.
-- Conversation CLI and MCP operations: `clyde conversation --help` and
-  `internal/clispec/`.
-- Runtime config: `clyde.example.toml` and `internal/config/`.
+- Conversation model, IDs, indexing, compaction segments, and export selection:
+  [conversations](docs/conversations.md).
+- Conversation CLI and MCP operations: `clyde conversation --help`.
+- Runtime config: start from the [example configuration](clyde.example.toml).
 - Adapter model routing and catalog behavior:
   [adapter model routing](docs/adapter/overview.md).
 - Adapter Responses API (`/v1/responses`) and per-provider compatibility
   warnings: [adapter compatibility warnings](docs/adapter/compatibility.md).
-- Cursor ingress and error behavior: `docs/cursor.md`.
-- MITM listeners and capture behavior: `docs/wire-baseline.md`,
-  `docs/cursor-mitm-setup.md`, and `internal/mitm/`.
-- Logging, sinks, request paths, and inventory: `docs/logging/`.
+- Cursor ingress and error behavior: [Cursor](docs/cursor.md).
+- MITM listeners and capture behavior: [wire baseline](docs/wire-baseline.md)
+  and [Cursor MITM setup](docs/cursor-mitm-setup.md).
+- Logging, sinks, request paths, and inventory: [logging](docs/logging/).
 
-`cmd/clyde/main.go` owns the root command routing. Conversation operations are
-declared once in `internal/clispec/` and rendered onto both CLI and MCP
-surfaces, with alignment covered by tests in that package.
+The root command routes the CLI. One conversation-operation registry renders
+both CLI and MCP surfaces, and alignment tests keep them consistent.
 
 ## Installation
 
@@ -47,12 +45,11 @@ The common user config path is:
 ~/.config/clyde/config.toml
 ```
 
-Copy only the sections you need from `clyde.example.toml`, then edit the local
-config for your adapter, logging, search, and MITM setup. The config structs in
-`internal/config/` are the implementation source of truth.
+Copy only the sections you need for your adapter, logging, search, and MITM
+setup.
 
 External gRPC clients can read `[daemon] grpc_address`; it defaults to `unix://`
-plus the user-scoped daemon socket path from `internal/config`.
+plus the user-scoped daemon socket path.
 
 ## Operations
 
@@ -73,8 +70,7 @@ clyde daemon reload
 ```
 
 State, logs, caches, adapter records, and MITM captures follow Clyde's XDG path
-resolution. Use `clyde logs --help`, `docs/logging/`, and the config reference
-for current paths and retention behavior.
+resolution. Use `clyde logs --help` for current paths and retention behavior.
 
 Use [daemon metrics history](docs/logging/metrics.md) to inspect retained adapter activity with `clyde daemon status --since 1h`.
 

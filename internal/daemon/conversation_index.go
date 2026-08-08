@@ -2,9 +2,12 @@ package daemon
 
 import (
 	"log/slog"
+	"slices"
+	"strings"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/providerid"
 	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
 	codexparser "goodkind.io/clyde/internal/providers/codex/parser"
 	copilotparser "goodkind.io/clyde/internal/providers/copilot/parser"
@@ -26,12 +29,22 @@ func newConversationRegistry() *conversation.Registry {
 	return registry
 }
 
-// NewConversationIndex builds a disk-backed conversation index with the Claude,
-// Codex, Cursor, and Zed parsers wired in. It serves callers outside the daemon
-// worker, such as the scalar-backfill CLI command, that need the same derived
-// records the daemon serves without standing up the full daemon. It reads the
-// global config so those callers hide subagent conversations exactly as the
-// daemon does; an unreadable config falls back to the defaults.
+// ConversationProviders returns the providers wired into the conversation
+// parser registry in display order.
+func ConversationProviders() []providerid.Provider {
+	providers := newConversationRegistry().Providers()
+	slices.SortFunc(providers, func(left, right providerid.Provider) int {
+		return strings.Compare(left.String(), right.String())
+	})
+	return providers
+}
+
+// NewConversationIndex builds a disk-backed conversation index with every
+// registered parser wired in. It serves callers outside the daemon worker, such
+// as the scalar-backfill CLI command, that need the same derived records the
+// daemon serves without standing up the full daemon. It reads the global config
+// so those callers hide subagent conversations exactly as the daemon does; an
+// unreadable config falls back to the defaults.
 func NewConversationIndex() *conversation.Index {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
