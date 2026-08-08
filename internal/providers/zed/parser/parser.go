@@ -105,8 +105,9 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 				continue
 			}
 			candidates = append(candidates, conversation.ScanCandidate{
-				Path:  path,
-				Stamp: conversation.FileStamp{Size: int64(len(row.Data)), Mtime: row.UpdatedAt},
+				Path:     path,
+				Selector: "",
+				Stamp:    conversation.FileStamp{Size: int64(len(row.Data)), Mtime: row.UpdatedAt},
 			})
 			discovered[path] = newNativeDiscoveredThread(row, thread, metadata.Metadata, root.RootDir, metadata.Channel)
 		}
@@ -117,8 +118,9 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 				continue
 			}
 			candidates = append(candidates, conversation.ScanCandidate{
-				Path:  path,
-				Stamp: terminalMetadataStamp(terminal.Metadata),
+				Path:     path,
+				Selector: "",
+				Stamp:    terminalMetadataStamp(terminal.Metadata),
 			})
 			discovered[path] = newTerminalDiscoveredThread(terminal.Metadata, root.RootDir, terminal.Channel)
 		}
@@ -157,6 +159,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			ID:              conversation.DerivedID(providerid.ProviderZed, terminalSessionID(terminal.TerminalID), path),
 			Provider:        providerid.ProviderZed,
 			NativeID:        terminal.TerminalID,
+			Selector:        "",
 			Lineage:         nil,
 			Origin:          conversation.OriginUnspecified,
 			Title:           title,
@@ -178,6 +181,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		ID:             conversation.DerivedID(providerid.ProviderZed, discovered.Row.ThreadID, path),
 		Provider:       providerid.ProviderZed,
 		NativeID:       discovered.Row.ThreadID,
+		Selector:       "",
 		Lineage:        buildLineage(discovered.Row.ParentThreadID, thread.SubagentContext),
 		Origin:         zedThreadOrigin(discovered.Metadata.AgentID, thread.SubagentContext),
 		Title:          resolvedTitle(discovered.Metadata, thread),

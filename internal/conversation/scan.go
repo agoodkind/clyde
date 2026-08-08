@@ -48,31 +48,48 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 				slog.WarnContext(ctx, "conversation.scan.canceled", "concern", "conversation.scan", "component", "conversation", "provider", provider.String(), "err", ctx.Err())
 				return scanResult{}, fmt.Errorf("scan %s conversations canceled: %w", provider.String(), ctx.Err())
 			}
-			if prev, ok := prior.stamps[candidate.Path]; ok && prev.Equal(candidate.Stamp) {
-				// The artifact did not change. Reuse the prior record, or nothing
-				// when the file previously yielded none, without re-reading it.
-				stamps[candidate.Path] = candidate.Stamp
-				if record, ok := prior.records[candidate.Path]; ok {
-					out = append(out, record)
+			records, stampRecorded := scanCandidate(parser, candidate, prior)
+			out = append(out, records...)
+			if stampRecorded {
+				if len(records) == 0 {
+					stamps[recordKey(candidate.Path, candidate.Selector)] = candidate.Stamp
+					continue
 				}
-				continue
+				for _, record := range records {
+					stamps[recordKey(record.ArtifactPath, record.Selector)] = candidate.Stamp
+				}
 			}
-			record, ok := parser.ScanRecord(candidate.Path, candidate.Stamp)
-			if ok {
-				stamps[candidate.Path] = candidate.Stamp
-				out = append(out, record)
-				continue
-			}
-			// The scan produced no record. Recording the stamp anyway would claim
-			// this artifact was handled, so a later pass would reuse that verdict
-			// and never re-read it. Carry a prior record forward and leave the
-			// stamp unrecorded so the next pass reads the artifact again.
-			if priorRecord, hadPrior := prior.records[candidate.Path]; hadPrior {
-				out = append(out, priorRecord)
-				continue
-			}
-			stamps[candidate.Path] = candidate.Stamp
 		}
 	}
 	return scanResult{records: out, stamps: stamps}, nil
+}
+
+func scanCandidate(parser Parser, candidate ScanCandidate, prior scanCache) ([]Record, bool) {
+	key := recordKey(candidate.Path, candidate.Selector)
+	if previous, ok := prior.stamps[key]; ok && previous.Equal(candidate.Stamp) {
+		record, found := prior.records[key]
+		if found {
+			return []Record{record}, true
+		}
+		return nil, true
+	}
+	if multi, ok := parser.(MultiConversationParser); ok {
+		records, found := multi.ScanRecords(candidate)
+		if found {
+			return records, true
+		}
+	} else if record, found := parser.ScanRecord(candidate.Path, candidate.Stamp); found {
+		return []Record{record}, true
+	}
+	if record, found := prior.records[key]; found {
+		return []Record{record}, false
+	}
+	return nil, true
+}
+
+func recordKey(path string, selector string) string {
+	if selector == "" {
+		return path
+	}
+	return path + "\x00" + selector
 }

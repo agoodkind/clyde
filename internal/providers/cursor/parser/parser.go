@@ -196,6 +196,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			ID:             conversation.DerivedID(providerid.ProviderCursor, discovered.ConversationID, path),
 			Provider:       providerid.ProviderCursor,
 			NativeID:       discovered.ConversationID,
+			Selector:       "",
 			Lineage:        cursorSpawnLineage(discovered.ParentConversationID),
 			Origin:         discovered.Origin,
 			Title:          firstNonEmptyString(truncateTitle(header.FirstUserText), untitledCursorConversationText),
@@ -236,6 +237,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			ID:             conversation.DerivedID(providerid.ProviderCursor, discovered.ComposerID, path),
 			Provider:       providerid.ProviderCursor,
 			NativeID:       discovered.ComposerID,
+			Selector:       "",
 			Lineage:        nil,
 			Origin:         origin,
 			Title:          firstNonEmptyString(header.Name, workspaceTitle, untitledCursorConversationText),
@@ -264,6 +266,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			ID:             conversation.DerivedID(providerid.ProviderCursor, legacyConversationID, path),
 			Provider:       providerid.ProviderCursor,
 			NativeID:       legacyConversationID,
+			Selector:       "",
 			Lineage:        nil,
 			Origin:         conversation.OriginUnspecified,
 			Title:          firstNonEmptyString(tab.ChatTitle, untitledCursorChatText),
@@ -350,7 +353,8 @@ func (p *Parser) discoverJSONL(
 			continue
 		}
 		candidates = append(candidates, conversation.ScanCandidate{
-			Path: file.Path,
+			Path:     file.Path,
+			Selector: "",
 			Stamp: conversation.FileStamp{
 				Size:  info.Size(),
 				Mtime: info.ModTime(),
@@ -474,8 +478,9 @@ func discoverComposersForRoot(
 		}
 		info, hasInfo := metadataIndex.ByComposerID[composerID]
 		candidates = append(candidates, conversation.ScanCandidate{
-			Path:  path,
-			Stamp: stampCoveringMetadata(stamp, info, hasInfo),
+			Path:     path,
+			Selector: "",
+			Stamp:    stampCoveringMetadata(stamp, info, hasInfo),
 		})
 		priorRecord, hasPriorRecord := prior[path]
 		var artifact discoveredArtifact
@@ -553,7 +558,8 @@ func discoverLegacyForEntry(
 			continue
 		}
 		candidates = append(candidates, conversation.ScanCandidate{
-			Path: path,
+			Path:     path,
+			Selector: "",
 			Stamp: conversation.FileStamp{
 				Size:  int64(len(tab.Bubbles)),
 				Mtime: stampMtime,

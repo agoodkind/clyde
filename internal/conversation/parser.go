@@ -72,8 +72,9 @@ func ContentFingerprint(record Record, stamp FileStamp) string {
 // incremental scan. Stamp lets the scan driver skip files whose size and mtime
 // are unchanged, reusing the prior record without re-reading the file.
 type ScanCandidate struct {
-	Path  string
-	Stamp FileStamp
+	Path     string
+	Selector string
+	Stamp    FileStamp
 }
 
 // LoadOptions configures how [Parser.Stream] reads a single artifact.
@@ -113,6 +114,14 @@ type Parser interface {
 	// implementation holds at most one message in flight; only [CollectMessages]
 	// builds a slice. A caller may stop the range early to read a window.
 	Stream(path string, opts LoadOptions) iter.Seq2[transcript.Message, error]
+}
+
+// MultiConversationParser is implemented by providers whose one physical
+// artifact contains several independently addressable conversations.
+type MultiConversationParser interface {
+	Parser
+	ScanRecords(candidate ScanCandidate) ([]Record, bool)
+	StreamSelected(path string, selector string, opts LoadOptions) iter.Seq2[transcript.Message, error]
 }
 
 // CollectMessages folds a streaming parse into a full slice. Use it only where a

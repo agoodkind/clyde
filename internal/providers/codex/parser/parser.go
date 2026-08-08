@@ -62,6 +62,7 @@ func emptyRecord() conversation.Record {
 		ID:              "",
 		Provider:        providerid.ProviderUnspecified,
 		NativeID:        "",
+		Selector:        "",
 		Lineage:         nil,
 		Origin:          conversation.OriginUnspecified,
 		Title:           "",
@@ -150,8 +151,9 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 	out := make([]conversation.ScanCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		out = append(out, conversation.ScanCandidate{
-			Path:  candidate.Path,
-			Stamp: conversation.FileStamp{Size: candidate.Stamp.Size, Mtime: candidate.Stamp.Mtime},
+			Path:     candidate.Path,
+			Selector: "",
+			Stamp:    conversation.FileStamp{Size: candidate.Stamp.Size, Mtime: candidate.Stamp.Mtime},
 		})
 	}
 	return out, nil
@@ -226,6 +228,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		ID:             conversation.DerivedID(providerid.ProviderCodex, thread.ID, thread.RolloutPath),
 		Provider:       providerid.ProviderCodex,
 		NativeID:       thread.ID,
+		Selector:       "",
 		Lineage:        lineage,
 		Origin:         origin,
 		Title:          title,

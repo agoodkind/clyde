@@ -50,7 +50,7 @@ const (
 	// file is finished and never changes again, so without the raise every twin
 	// cached by version 2 keeps its user-origin record forever and stays in the
 	// index and the semantic feed.
-	cacheFormatVersion = 3
+	cacheFormatVersion = 4
 )
 
 // Index owns the derived raw conversation cache. It resolves each artifact's
@@ -738,7 +738,7 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 func recordsByPath(records []Record) map[string]Record {
 	byPath := make(map[string]Record, len(records))
 	for _, record := range records {
-		byPath[record.ArtifactPath] = record
+		byPath[recordKey(record.ArtifactPath, record.Selector)] = record
 	}
 	return byPath
 }
@@ -906,7 +906,7 @@ func cloneStampedRecords(records []Record, stamps map[string]FileStamp) []Stampe
 	for _, record := range records {
 		out = append(out, StampedRecord{
 			Record: record,
-			Stamp:  stamps[record.ArtifactPath],
+			Stamp:  stamps[recordKey(record.ArtifactPath, record.Selector)],
 		})
 	}
 	return out

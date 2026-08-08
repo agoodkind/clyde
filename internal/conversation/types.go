@@ -31,6 +31,7 @@ type Record struct {
 	ID       string   `json:"id"`
 	Provider Provider `json:"provider"`
 	NativeID string   `json:"native_id"`
+	Selector string   `json:"selector,omitempty"`
 	Lineage  *Lineage `json:"lineage,omitempty"`
 	Origin   Origin   `json:"origin,omitempty"`
 	Title    string   `json:"title"`
@@ -76,6 +77,7 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 		ID              string          `json:"id"`
 		Provider        json.RawMessage `json:"provider"`
 		NativeID        string          `json:"native_id"`
+		Selector        string          `json:"selector"`
 		Lineage         *Lineage        `json:"lineage"`
 		Origin          Origin          `json:"origin"`
 		Title           string          `json:"title"`
@@ -102,6 +104,7 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 		ID:              wire.ID,
 		Provider:        provider,
 		NativeID:        wire.NativeID,
+		Selector:        wire.Selector,
 		Lineage:         wire.Lineage,
 		Origin:          wire.Origin,
 		Title:           wire.Title,

@@ -59,6 +59,7 @@ func emptyRecord() conversation.Record {
 		ID:              "",
 		Provider:        providerid.ProviderUnspecified,
 		NativeID:        "",
+		Selector:        "",
 		Lineage:         nil,
 		Origin:          conversation.OriginUnspecified,
 		Title:           "",
@@ -136,8 +137,9 @@ func (Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([
 			return nil
 		}
 		out = append(out, conversation.ScanCandidate{
-			Path:  path,
-			Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+			Path:     path,
+			Selector: "",
+			Stamp:    conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
 		})
 		return nil
 	})
@@ -262,6 +264,7 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 		ID:             conversation.DerivedID(providerid.ProviderClaude, recordProviderID, path),
 		Provider:       providerid.ProviderClaude,
 		NativeID:       recordProviderID,
+		Selector:       "",
 		Lineage:        lineage,
 		Origin:         origin,
 		Title:          title,
