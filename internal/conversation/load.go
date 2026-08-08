@@ -17,6 +17,9 @@ func (idx *Index) resolveStream(record Record, opts LoadOptions) (iter.Seq2[tran
 		slog.Warn("conversation.load.parser_unresolved", "concern", "conversation.load", "component", "conversation", "provider", record.Provider.String(), "conversation_id", record.ID, "err", err)
 		return nil, fmt.Errorf("resolve parser for %s: %w", record.Provider.String(), err)
 	}
+	if multi, ok := parser.(MultiConversationParser); ok {
+		return multi.StreamSelected(record.ArtifactPath, record.Selector, opts), nil
+	}
 	return parser.Stream(record.ArtifactPath, opts), nil
 }
 

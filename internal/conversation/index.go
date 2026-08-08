@@ -50,7 +50,7 @@ const (
 	// file is finished and never changes again, so without the raise every twin
 	// cached by version 2 keeps its user-origin record forever and stays in the
 	// index and the semantic feed.
-	cacheFormatVersion = 3
+	cacheFormatVersion = 4
 )
 
 // Index owns the derived raw conversation cache. It resolves each artifact's
@@ -67,6 +67,7 @@ type Index struct {
 	records          []Record
 	prevRecords      map[string]Record
 	prevStamps       map[string]FileStamp
+	prevMultiStates  map[string]MultiConversationScanState
 	loaded           bool
 	refreshing       bool
 	// refreshRun is the refresh currently in flight and the outcome it finished
@@ -93,6 +94,7 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		records:          nil,
 		prevRecords:      nil,
 		prevStamps:       nil,
+		prevMultiStates:  nil,
 		loaded:           false,
 		refreshing:       false,
 		refreshRun:       nil,
@@ -570,7 +572,7 @@ func (idx *Index) Refresh(ctx context.Context) (err error) {
 		return err
 	}
 	sortRecords(result.records)
-	if err = writeCache(idx.cachePath, result.records, result.stamps); err != nil {
+	if err = writeCache(idx.cachePath, result.records, result.stamps, result.multiStates); err != nil {
 		return err
 	}
 	idx.installRefreshResult(result)
@@ -596,11 +598,15 @@ func (idx *Index) beginRefresh() (*refreshRun, scanCache, bool) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	if idx.refreshing {
-		return idx.refreshRun, scanCache{records: nil, stamps: nil}, false
+		return idx.refreshRun, scanCache{records: nil, stamps: nil, multiStates: nil}, false
 	}
 	idx.refreshing = true
 	idx.refreshRun = &refreshRun{done: make(chan struct{}), err: nil}
-	return idx.refreshRun, scanCache{records: idx.prevRecords, stamps: idx.prevStamps}, true
+	return idx.refreshRun, scanCache{
+		records:     idx.prevRecords,
+		stamps:      idx.prevStamps,
+		multiStates: idx.prevMultiStates,
+	}, true
 }
 
 // endRefresh records the rebuild's outcome, releases the refresh slot, and wakes
@@ -647,6 +653,7 @@ func (idx *Index) installRefreshResult(result scanResult) {
 	idx.records = result.records
 	idx.prevRecords = recordsByPath(result.records)
 	idx.prevStamps = result.stamps
+	idx.prevMultiStates = result.multiStates
 	idx.loaded = true
 	idx.lastRefresh = clock.Now()
 }
@@ -684,7 +691,7 @@ func (idx *Index) loadOnce() error {
 	}
 	idx.mu.Unlock()
 
-	records, stamps, err := readCache(idx.cachePath)
+	records, stamps, multiStates, err := readCache(idx.cachePath)
 	if err != nil {
 		return err
 	}
@@ -692,6 +699,7 @@ func (idx *Index) loadOnce() error {
 	idx.records = records
 	idx.prevRecords = recordsByPath(records)
 	idx.prevStamps = stamps
+	idx.prevMultiStates = multiStates
 	idx.loaded = true
 	idx.mu.Unlock()
 	return nil
@@ -722,7 +730,7 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 		result, err := idx.scanProvider(context.WithoutCancel(ctx), idx.registry, prior)
 		if err == nil {
 			sortRecords(result.records)
-			err = writeCache(idx.cachePath, result.records, result.stamps)
+			err = writeCache(idx.cachePath, result.records, result.stamps, result.multiStates)
 		}
 		if err != nil {
 			slog.WarnContext(ctx, "conversation.index.background_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", err)
@@ -733,12 +741,12 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 	}()
 }
 
-// recordsByPath indexes records by artifact path so the next incremental scan
-// can reuse the record for any file whose stamp is unchanged.
+// recordsByPath indexes records by artifact path and selector so the next
+// incremental scan can reuse every conversation from an unchanged artifact.
 func recordsByPath(records []Record) map[string]Record {
 	byPath := make(map[string]Record, len(records))
 	for _, record := range records {
-		byPath[record.ArtifactPath] = record
+		byPath[recordKey(record.ArtifactPath, record.Selector)] = record
 	}
 	return byPath
 }
@@ -750,19 +758,22 @@ func recordsByPath(records []Record) map[string]Record {
 type cacheFile struct {
 	// Version is the record shape the writing binary used. A file written before
 	// the field existed decodes to zero, which is older than every real version.
-	Version int                  `json:"version"`
-	Records []Record             `json:"records"`
-	Stamps  map[string]FileStamp `json:"stamps"`
+	Version     int                                   `json:"version"`
+	Records     []Record                              `json:"records"`
+	Stamps      map[string]FileStamp                  `json:"stamps"`
+	MultiStates map[string]MultiConversationScanState `json:"multi_conversation_scan_states,omitempty"`
 }
 
-func readCache(path string) ([]Record, map[string]FileStamp, error) {
+func readCache(
+	path string,
+) ([]Record, map[string]FileStamp, map[string]MultiConversationScanState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
 		slog.Warn("conversation.index.cache_read_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
-		return nil, nil, fmt.Errorf("read conversation cache: %w", err)
+		return nil, nil, nil, fmt.Errorf("read conversation cache: %w", err)
 	}
 	var cache cacheFile
 	if err := json.Unmarshal(data, &cache); err == nil && cache.Records != nil {
@@ -773,9 +784,9 @@ func readCache(path string) ([]Record, map[string]FileStamp, error) {
 			// derives the fields this shape added. Without that, an unchanged file
 			// would keep its old record forever and never gain an origin.
 			slog.Info("conversation.index.cache_format_upgraded", "concern", "conversation.index", "component", "conversation", "path", path, "from_version", cache.Version, "to_version", cacheFormatVersion, "records", len(cache.Records))
-			return cache.Records, nil, nil
+			return cache.Records, nil, nil, nil
 		}
-		return cache.Records, cache.Stamps, nil
+		return cache.Records, cache.Stamps, cache.MultiStates, nil
 	}
 	// Fall back to the legacy records-only array. The next write upgrades the
 	// file to the stamped envelope, so the first refresh re-parses once and then
@@ -783,18 +794,28 @@ func readCache(path string) ([]Record, map[string]FileStamp, error) {
 	var records []Record
 	if err := json.Unmarshal(data, &records); err != nil {
 		slog.Warn("conversation.index.cache_decode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
-		return nil, nil, fmt.Errorf("decode conversation cache: %w", err)
+		return nil, nil, nil, fmt.Errorf("decode conversation cache: %w", err)
 	}
 	sortRecords(records)
-	return records, nil, nil
+	return records, nil, nil, nil
 }
 
-func writeCache(path string, records []Record, stamps map[string]FileStamp) error {
+func writeCache(
+	path string,
+	records []Record,
+	stamps map[string]FileStamp,
+	multiStates map[string]MultiConversationScanState,
+) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		slog.Warn("conversation.index.cache_mkdir_failed", "concern", "conversation.index", "component", "conversation", "path", filepath.Dir(path), "err", err)
 		return fmt.Errorf("create conversation cache dir: %w", err)
 	}
-	data, err := json.MarshalIndent(cacheFile{Version: cacheFormatVersion, Records: records, Stamps: stamps}, "", "  ")
+	data, err := json.MarshalIndent(cacheFile{
+		Version:     cacheFormatVersion,
+		Records:     records,
+		Stamps:      stamps,
+		MultiStates: multiStates,
+	}, "", "  ")
 	if err != nil {
 		slog.Warn("conversation.index.cache_encode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
 		return fmt.Errorf("encode conversation cache: %w", err)
@@ -906,7 +927,7 @@ func cloneStampedRecords(records []Record, stamps map[string]FileStamp) []Stampe
 	for _, record := range records {
 		out = append(out, StampedRecord{
 			Record: record,
-			Stamp:  stamps[record.ArtifactPath],
+			Stamp:  stamps[recordKey(record.ArtifactPath, record.Selector)],
 		})
 	}
 	return out

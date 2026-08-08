@@ -80,7 +80,7 @@ func TestReadCacheDropsStampsFromAnOlderFormat(t *testing.T) {
 		t.Fatalf("write conversation cache: %v", err)
 	}
 
-	records, stamps, err := readCache(cachePath)
+	records, stamps, _, err := readCache(cachePath)
 	if err != nil {
 		t.Fatalf("read conversation cache: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 		SizeBytes:     0,
 		Archived:      false,
 	}}
-	if err := writeCache(cachePath, written, nil); err != nil {
+	if err := writeCache(cachePath, written, nil, nil); err != nil {
 		t.Fatalf("write conversation cache: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 		t.Fatalf("cached records = %#v, want one subagent-origin record", cache.Records)
 	}
 
-	roundTripped, stamps, err := readCache(cachePath)
+	roundTripped, stamps, _, err := readCache(cachePath)
 	if err != nil {
 		t.Fatalf("re-read conversation cache: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestReadCacheDropsStampsFromVersionOne(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	records, stamps, err := readCache(path)
+	records, stamps, _, err := readCache(path)
 	if err != nil {
 		t.Fatalf("readCache returned error: %v", err)
 	}

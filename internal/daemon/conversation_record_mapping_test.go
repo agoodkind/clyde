@@ -59,6 +59,24 @@ func TestConversationRecordProtoRoundTripCarriesLineage(t *testing.T) {
 	}
 }
 
+func TestConversationRecordProtoRoundTripCarriesSelector(t *testing.T) {
+	t.Parallel()
+
+	idx := conversation.NewIndex(conversation.NewRegistry(), config.ConversationConfig{})
+	record := testDaemonConversationRecord("codex:session:child", conversation.ProviderCodex)
+	record.Selector = "child"
+
+	wire := protoConversationRecord(context.Background(), idx, record)
+	if wire.GetSelector() != record.Selector {
+		t.Fatalf("wire selector = %q, want %q", wire.GetSelector(), record.Selector)
+	}
+
+	roundTrip := conversationRecordFromProto(wire)
+	if !reflect.DeepEqual(roundTrip, record) {
+		t.Fatalf("round-trip record = %#v, want %#v", roundTrip, record)
+	}
+}
+
 func testDaemonConversationRecord(id string, provider conversation.Provider) conversation.Record {
 	return conversation.Record{
 		ID:            id,

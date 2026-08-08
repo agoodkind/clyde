@@ -44,7 +44,7 @@ func TestReadCacheDropsStampsWrittenByAnOlderRecordShape(t *testing.T) {
 		LatestRequestID: "",
 	}}
 	stamps := map[string]FileStamp{"/tmp/chat": {Size: 1, Mtime: time.Unix(0, 0).UTC()}}
-	if err := writeCache(path, records, stamps); err != nil {
+	if err := writeCache(path, records, stamps, nil); err != nil {
 		t.Fatalf("writeCache returned error: %v", err)
 	}
 
@@ -62,7 +62,7 @@ func TestReadCacheDropsStampsWrittenByAnOlderRecordShape(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	gotRecords, gotStamps, err := readCache(path)
+	gotRecords, gotStamps, _, err := readCache(path)
 	if err != nil {
 		t.Fatalf("readCache returned error: %v", err)
 	}

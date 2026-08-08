@@ -72,8 +72,34 @@ func ContentFingerprint(record Record, stamp FileStamp) string {
 // incremental scan. Stamp lets the scan driver skip files whose size and mtime
 // are unchanged, reusing the prior record without re-reading the file.
 type ScanCandidate struct {
-	Path  string
-	Stamp FileStamp
+	Path     string
+	Selector string
+	Stamp    FileStamp
+}
+
+// MultiConversationScan is one incremental read of an artifact that can hold
+// several independently selected conversations. StartOffset is zero for a full
+// scan and otherwise points at the first byte after the last complete record
+// from the prior scan. PriorRecords contains the records produced before that
+// offset so the parser can return the complete current record set.
+type MultiConversationScan struct {
+	Candidate    ScanCandidate
+	PriorRecords []Record
+	StartOffset  int64
+}
+
+// MultiConversationScanResult is the complete current record set for one
+// physical artifact and the byte boundary through its last complete record.
+type MultiConversationScanResult struct {
+	Records        []Record
+	CompleteOffset int64
+}
+
+// MultiConversationScanState is the persisted position of the last successful
+// multi-conversation artifact scan.
+type MultiConversationScanState struct {
+	Stamp          FileStamp `json:"stamp"`
+	CompleteOffset int64     `json:"complete_offset"`
 }
 
 // LoadOptions configures how [Parser.Stream] reads a single artifact.
@@ -113,6 +139,14 @@ type Parser interface {
 	// implementation holds at most one message in flight; only [CollectMessages]
 	// builds a slice. A caller may stop the range early to read a window.
 	Stream(path string, opts LoadOptions) iter.Seq2[transcript.Message, error]
+}
+
+// MultiConversationParser is implemented by providers whose one physical
+// artifact contains several independently addressable conversations.
+type MultiConversationParser interface {
+	Parser
+	ScanRecords(input MultiConversationScan) (MultiConversationScanResult, bool)
+	StreamSelected(path string, selector string, opts LoadOptions) iter.Seq2[transcript.Message, error]
 }
 
 // CollectMessages folds a streaming parse into a full slice. Use it only where a

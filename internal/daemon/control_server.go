@@ -593,6 +593,7 @@ func protoConversationRecord(ctx context.Context, idx *conversation.Index, recor
 		SizeBytes:       record.SizeBytes,
 		Archived:        record.Archived,
 		LatestRequestId: record.LatestRequestID,
+		Selector:        record.Selector,
 	}
 	if record.Lineage != nil {
 		wire.Lineage = &clydev1.ConversationLineage{
