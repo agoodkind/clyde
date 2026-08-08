@@ -154,7 +154,7 @@ func (p *Parser) scanOne(candidate conversation.ScanCandidate) (conversation.Rec
 			_ = json.Unmarshal(item.Data, &start)
 		}
 		if item.AgentID == candidate.Selector && item.Type == eventUserMessage && firstUser == "" {
-			firstUser = stringField(item.Data, "content")
+			firstUser = stringField(item.Data, stringFieldContent)
 		}
 		if item.AgentID == candidate.Selector {
 			timestamp := parseTime(item.Timestamp)
@@ -320,14 +320,14 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 	timestamp := parseTime(item.Timestamp)
 	switch item.Type {
 	case eventUserMessage:
-		text := stringField(item.Data, "content")
+		text := stringField(item.Data, stringFieldContent)
 		if text == "" {
 			return emptyMessage(), false
 		}
 		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "user", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: "", HasTools: false, Tools: nil}, true
 	case eventAssistantMessage:
-		text := stringField(item.Data, "content")
-		thinking := firstNonEmpty(stringField(item.Data, "reasoningText"), stringField(item.Data, "reasoning"))
+		text := stringField(item.Data, stringFieldContent)
+		thinking := firstNonEmpty(stringField(item.Data, stringFieldReasoningText), stringField(item.Data, stringFieldReasoning))
 		var calls []transcript.ToolCall
 		var raw struct {
 			ToolRequests []struct {
@@ -343,7 +343,7 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 		}
 		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityVisible, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: thinking, HasTools: len(calls) > 0, Tools: calls}, text != "" || thinking != "" || len(calls) > 0
 	case eventAssistantReasoning:
-		text := firstNonEmpty(stringField(item.Data, "content"), stringField(item.Data, "text"))
+		text := firstNonEmpty(stringField(item.Data, stringFieldContent), stringField(item.Data, stringFieldText))
 		if text == "" {
 			return emptyMessage(), false
 		}
@@ -352,7 +352,7 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 		if !opts.IncludeSystemMessages {
 			return emptyMessage(), false
 		}
-		text := stringField(item.Data, "content")
+		text := stringField(item.Data, stringFieldContent)
 		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "system", Visibility: transcript.MessageVisibilityMetaOnly, Compaction: nil, Timestamp: timestamp, Text: text, Thinking: "", HasTools: false, Tools: nil}, text != ""
 	case eventToolExecutionComplete:
 		return emptyMessage(), false
@@ -364,7 +364,7 @@ func mapEvent(item event, opts conversation.LoadOptions) (transcript.Message, bo
 		if data.Summary == "" {
 			return emptyMessage(), false
 		}
-		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: &transcript.CompactionMetadata{Kind: transcript.CompactionKindSummary, Trigger: transcript.CompactionTriggerUnknown, PreTokens: 0, PostTokens: 0, TokensSaved: 0, MessagesSummarized: 0, ReplacementHistoryCount: 0, HeadUUID: "", AnchorUUID: "", TailUUID: "", ContextItems: nil, UserContext: "", Direction: "", PreCompactDiscoveredTools: nil, CompactedToolIDs: nil, RawCompactMetadata: nil, RawMicrocompactMetadata: nil, RawSummarizeMetadata: nil}, Timestamp: timestamp, Text: data.Summary, Thinking: "", HasTools: false, Tools: nil}, true
+		return transcript.Message{UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant", Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: &transcript.CompactionMetadata{Kind: transcript.CompactionKindSummary, Trigger: transcript.CompactionTriggerUnknown, PreTokens: 0, PostTokens: 0, TokensSaved: 0, MessagesSummarized: 0, ReplacementHistoryCount: 0, HeadUUID: "", AnchorUUID: "", TailUUID: "", ContextItems: nil, UserContext: "", Direction: "", PreCompactDiscoveredTools: nil, CompactedToolIDs: nil, ClearedAttachmentUUIDs: nil, RawCompactMetadata: nil, RawMicrocompactMetadata: nil, RawSummarizeMetadata: nil}, Timestamp: timestamp, Text: data.Summary, Thinking: "", HasTools: false, Tools: nil}, true
 	case eventSessionStart, eventSubagentStarted:
 		return emptyMessage(), false
 	default:
@@ -470,7 +470,16 @@ func parseTime(raw string) time.Time {
 	return value
 }
 
-func stringField(data json.RawMessage, key string) string {
+type stringFieldKey string
+
+const (
+	stringFieldContent       stringFieldKey = "content"
+	stringFieldReasoningText stringFieldKey = "reasoningText"
+	stringFieldReasoning     stringFieldKey = "reasoning"
+	stringFieldText          stringFieldKey = "text"
+)
+
+func stringField(data json.RawMessage, key stringFieldKey) string {
 	var fields struct {
 		Content       string `json:"content"`
 		ReasoningText string `json:"reasoningText"`
@@ -481,13 +490,13 @@ func stringField(data json.RawMessage, key string) string {
 		return ""
 	}
 	switch key {
-	case "content":
+	case stringFieldContent:
 		return fields.Content
-	case "reasoningText":
+	case stringFieldReasoningText:
 		return fields.ReasoningText
-	case "reasoning":
+	case stringFieldReasoning:
 		return fields.Reasoning
-	case "text":
+	case stringFieldText:
 		return fields.Text
 	}
 	return ""
