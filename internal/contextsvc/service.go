@@ -211,6 +211,7 @@ func emptyRecord() conversation.Record {
 		ID:              "",
 		Provider:        conversation.Provider(0),
 		NativeID:        "",
+		Selector:        "",
 		Lineage:         nil,
 		Origin:          conversation.OriginUnspecified,
 		Title:           "",

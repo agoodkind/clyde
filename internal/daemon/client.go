@@ -398,6 +398,7 @@ func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.
 		ID:              wire.GetId(),
 		Provider:        providerFromProto(wire.GetProvider()),
 		NativeID:        wire.GetNativeId(),
+		Selector:        wire.GetSelector(),
 		Lineage:         lineage,
 		Origin:          conversation.OriginUnspecified,
 		Title:           wire.GetTitle(),

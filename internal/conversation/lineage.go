@@ -105,6 +105,7 @@ func emptyRecord() Record {
 		ID:              "",
 		Provider:        providerid.ProviderUnspecified,
 		NativeID:        "",
+		Selector:        "",
 		Lineage:         nil,
 		Origin:          OriginUnspecified,
 		Title:           "",

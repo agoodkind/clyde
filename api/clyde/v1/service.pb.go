@@ -3700,6 +3700,7 @@ type ConversationRecord struct {
 	// recent turn, when the provider records one in the artifact header. Empty
 	// otherwise.
 	LatestRequestId string `protobuf:"bytes,15,opt,name=latest_request_id,json=latestRequestId,proto3" json:"latest_request_id,omitempty"`
+	Selector        string `protobuf:"bytes,16,opt,name=selector,proto3" json:"selector,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -3835,6 +3836,13 @@ func (x *ConversationRecord) GetParentConversationId() string {
 func (x *ConversationRecord) GetLatestRequestId() string {
 	if x != nil {
 		return x.LatestRequestId
+	}
+	return ""
+}
+
+func (x *ConversationRecord) GetSelector() string {
+	if x != nil {
+		return x.Selector
 	}
 	return ""
 }
@@ -4255,7 +4263,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12;\n" +
 	"\x0fparent_provider\x18\x02 \x01(\x0e2\x12.clyde.v1.ProviderR\x0eparentProvider\x12(\n" +
 	"\x10parent_native_id\x18\x03 \x01(\tR\x0eparentNativeId\x12.\n" +
-	"\x13parent_message_uuid\x18\x04 \x01(\tR\x11parentMessageUuid\"\xb4\x04\n" +
+	"\x13parent_message_uuid\x18\x04 \x01(\tR\x11parentMessageUuid\"\xd0\x04\n" +
 	"\x12ConversationRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
 	"\bprovider\x18\x02 \x01(\x0e2\x12.clyde.v1.ProviderR\bprovider\x12\x1b\n" +
@@ -4273,7 +4281,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\barchived\x18\f \x01(\bR\barchived\x127\n" +
 	"\alineage\x18\r \x01(\v2\x1d.clyde.v1.ConversationLineageR\alineage\x124\n" +
 	"\x16parent_conversation_id\x18\x0e \x01(\tR\x14parentConversationId\x12*\n" +
-	"\x11latest_request_id\x18\x0f \x01(\tR\x0flatestRequestId\"\x95\x02\n" +
+	"\x11latest_request_id\x18\x0f \x01(\tR\x0flatestRequestId\x12\x1a\n" +
+	"\bselector\x18\x10 \x01(\tR\bselector\"\x95\x02\n" +
 	"\x19ListConversationsResponse\x12B\n" +
 	"\rconversations\x18\x01 \x03(\v2\x1c.clyde.v1.ConversationRecordR\rconversations\x12#\n" +
 	"\rtotal_matched\x18\x02 \x01(\x03R\ftotalMatched\x12%\n" +

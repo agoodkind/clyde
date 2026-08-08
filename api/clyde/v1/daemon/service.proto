@@ -534,6 +534,7 @@ message ConversationRecord {
   // recent turn, when the provider records one in the artifact header. Empty
   // otherwise.
   string latest_request_id = 15;
+  string selector = 16;
 }
 
 message ListConversationsResponse {
