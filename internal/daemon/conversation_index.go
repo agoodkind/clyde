@@ -7,6 +7,7 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
 	codexparser "goodkind.io/clyde/internal/providers/codex/parser"
+	copilotparser "goodkind.io/clyde/internal/providers/copilot/parser"
 	cursorparser "goodkind.io/clyde/internal/providers/cursor/parser"
 	zedparser "goodkind.io/clyde/internal/providers/zed/parser"
 )
@@ -19,6 +20,7 @@ func newConversationRegistry() *conversation.Registry {
 	registry := conversation.NewRegistry()
 	registry.Register(claudeparser.New())
 	registry.Register(codexparser.New())
+	registry.Register(copilotparser.New())
 	registry.Register(cursorparser.New())
 	registry.Register(zedparser.New())
 	return registry

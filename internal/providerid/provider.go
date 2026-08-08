@@ -31,6 +31,8 @@ const (
 	ProviderConductor
 	// ProviderZed identifies Zed thread artifacts.
 	ProviderZed
+	// ProviderCopilot identifies GitHub Copilot CLI conversation artifacts.
+	ProviderCopilot
 )
 
 type providerLabel string
@@ -55,6 +57,7 @@ const (
 	labelZed                  providerLabel = "zed"
 	labelZedAgent             providerLabel = "zed-agent"
 	labelZedAgentUnderscore   providerLabel = "zed_agent"
+	labelCopilot              providerLabel = "copilot"
 	passthroughOverridePrefix               = "passthrough-override-"
 )
 
@@ -84,6 +87,8 @@ func Parse(raw string) (Provider, bool) {
 		return ProviderConductor, true
 	case labelZed, labelZedAgent, labelZedAgentUnderscore:
 		return ProviderZed, true
+	case labelCopilot:
+		return ProviderCopilot, true
 	default:
 		if strings.HasPrefix(string(label), passthroughOverridePrefix) {
 			return ProviderOpenAICompat, true
@@ -124,6 +129,8 @@ func (p Provider) String() string {
 		return "conductor"
 	case ProviderZed:
 		return "zed"
+	case ProviderCopilot:
+		return "copilot"
 	default:
 		return "unspecified"
 	}
@@ -144,7 +151,7 @@ func (p Provider) Valid() bool {
 	switch p {
 	case ProviderUnspecified:
 		return false
-	case ProviderClaude, ProviderCodex, ProviderAnthropic, ProviderOpenAICompat, ProviderMITM, ProviderArtifact, ProviderCursor, ProviderConductor, ProviderZed:
+	case ProviderClaude, ProviderCodex, ProviderAnthropic, ProviderOpenAICompat, ProviderMITM, ProviderArtifact, ProviderCursor, ProviderConductor, ProviderZed, ProviderCopilot:
 		return true
 	default:
 		return false
