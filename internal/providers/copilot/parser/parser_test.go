@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/conversation"
@@ -86,6 +87,7 @@ func TestStreamSelectedAttachesToolOutputOnlyWhenRequested(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	messages, err := conversation.CollectMessages(New().StreamSelected(path, "", conversation.LoadOptions{}))
 	if err != nil {
 		t.Fatal(err)
@@ -99,5 +101,27 @@ func TestStreamSelectedAttachesToolOutputOnlyWhenRequested(t *testing.T) {
 	}
 	if messages[0].Tools[0].Output != "ok" {
 		t.Fatalf("tool output = %q, want ok", messages[0].Tools[0].Output)
+	}
+}
+
+func TestStreamSelectedSkipsMalformedAndPartialRecordsAndReadsLargeRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	largeText := strings.Repeat("x", 17*1024*1024)
+	body := `not json` + "\n" +
+		`{"id":"1","timestamp":"2026-08-07T10:00:00Z","type":"user.message","data":{"content":"` + largeText + `"}}` + "\n" +
+		`{"id":"2","timestamp":"2026-08-07T10:00:01Z","type":"user.message","data":{"content":"partial"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := conversation.CollectMessages(New().StreamSelected(path, "", conversation.LoadOptions{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(messages))
+	}
+	if len(messages[0].Text) != len(largeText) {
+		t.Fatalf("text length = %d, want %d", len(messages[0].Text), len(largeText))
 	}
 }

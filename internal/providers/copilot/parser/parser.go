@@ -3,6 +3,7 @@ package parser
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -357,11 +358,21 @@ func streamWithoutToolOutputs(
 		return
 	}
 	defer func() { _ = file.Close() }()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
+	reader := bufio.NewReader(file)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			yield(emptyMessage(), fmt.Errorf("read Copilot event log: %w", readErr))
+			return
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
 		var item event
-		if json.Unmarshal(scanner.Bytes(), &item) != nil || item.Type == "" {
+		if json.Unmarshal(line, &item) != nil || item.Type == "" {
 			continue
 		}
 		if item.Ephemeral || item.AgentID != selector {
@@ -371,9 +382,6 @@ func streamWithoutToolOutputs(
 		if ok && !yield(message, nil) {
 			return
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		yield(emptyMessage(), fmt.Errorf("read Copilot event log: %w", err))
 	}
 }
 
@@ -507,11 +515,17 @@ func readEvents(path string) ([]event, error) {
 	}
 	defer func() { _ = file.Close() }()
 	var events []event
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(strings.TrimSpace(string(line))) == 0 {
+	reader := bufio.NewReader(file)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			slog.Warn("providers.copilot.parser.read_failed", "concern", concern, "path", path, "err", readErr)
+			return events, fmt.Errorf("read Copilot event log: %w", readErr)
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var item event
@@ -519,10 +533,6 @@ func readEvents(path string) ([]event, error) {
 			continue
 		}
 		events = append(events, item)
-	}
-	if err := scanner.Err(); err != nil {
-		slog.Warn("providers.copilot.parser.read_failed", "concern", concern, "path", path, "err", err)
-		return events, fmt.Errorf("read Copilot event log: %w", err)
 	}
 	return events, nil
 }
