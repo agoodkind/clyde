@@ -15,6 +15,7 @@ func TestNewConversationRegistryRegistersEveryConversationProvider(t *testing.T)
 		providerid.ProviderCodex,
 		providerid.ProviderCursor,
 		providerid.ProviderZed,
+		providerid.ProviderCopilot,
 	} {
 		parser, err := registry.Lookup(provider)
 		if err != nil {
