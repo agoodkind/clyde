@@ -154,10 +154,15 @@ type ToolCall struct {
 // Attachment preserves non-payload metadata for a binary or other external
 // asset. Payload bytes never cross the provider boundary.
 type Attachment struct {
+	Kind           string `json:"kind,omitempty"`
+	DisplayName    string `json:"display_name,omitempty"`
+	Path           string `json:"path,omitempty"`
+	URL            string `json:"url,omitempty"`
 	MIMEType       string `json:"mime_type,omitempty"`
 	SizeBytes      int64  `json:"size_bytes,omitempty"`
 	Description    string `json:"description,omitempty"`
 	AssetReference string `json:"asset_reference,omitempty"`
+	OmittedReason  string `json:"omitted_reason,omitempty"`
 	Text           string `json:"text,omitempty"`
 }
 

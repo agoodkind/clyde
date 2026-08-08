@@ -112,7 +112,7 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 		}
 		turn.IsToolOnly = msg.HasTools && text == ""
 		text, keepTurn := textWithTools(text, turn.ToolNames, msg, opts)
-		if !keepTurn {
+		if !keepTurn && len(turn.Attachments) == 0 {
 			continue
 		}
 		if text == "" && thinking == "" && len(turn.Attachments) == 0 {
@@ -312,7 +312,19 @@ func attachmentPlaceholders(attachments []Attachment) string {
 	}
 	lines := make([]string, 0, len(attachments))
 	for _, attachment := range attachments {
-		parts := make([]string, 0, 4)
+		parts := make([]string, 0, 10)
+		if attachment.Kind != "" {
+			parts = append(parts, attachment.Kind)
+		}
+		if attachment.DisplayName != "" {
+			parts = append(parts, attachment.DisplayName)
+		}
+		if attachment.Path != "" {
+			parts = append(parts, attachment.Path)
+		}
+		if attachment.URL != "" {
+			parts = append(parts, attachment.URL)
+		}
 		if attachment.MIMEType != "" {
 			parts = append(parts, attachment.MIMEType)
 		}
@@ -324,6 +336,9 @@ func attachmentPlaceholders(attachments []Attachment) string {
 		}
 		if attachment.AssetReference != "" {
 			parts = append(parts, attachment.AssetReference)
+		}
+		if attachment.OmittedReason != "" {
+			parts = append(parts, attachment.OmittedReason)
 		}
 		if attachment.Text != "" {
 			parts = append(parts, attachment.Text)
