@@ -1,10 +1,10 @@
-Clyde transcript tools read raw Claude and Codex conversations without changing
-provider-owned files.
+Clyde transcript tools read raw registered-provider conversations without
+changing provider-owned files.
 
 Available tools:
 
 ### clyde_search
-Search, read, or browse Claude and Codex conversations. One operation with
+Search, read, or browse registered-provider conversations. One operation with
 several modes, chosen from which inputs are set.
 - query: text or semantic query to find in transcript messages.
 - conversation_id: optional conversation id, native id, title, or artifact path
@@ -38,11 +38,12 @@ detail.
   in workspace.
 - workspace: workspace root. Required when conversation is empty; also scopes
   memory and the fallback search.
-- topic: narrows memory docs and the fallback search.
 - cursor: continuation cursor from a prior page. Empty starts at the first
   page.
-- window, limit, page_bytes, json: window size, evidence-item cap, page budget,
-  and JSON output.
+- max_lines: cap the recovered transcript to its last N lines.
+- page_bytes: per-page byte budget.
+- tool_outputs: include full tool result bodies instead of the default tool-call
+  commands.
 
 Each page carries a `remaining` count and a `next_cursor`. While `remaining` is
 above zero, call again with `cursor` set to `next_cursor`, and read every page,
@@ -63,12 +64,12 @@ Export a conversation transcript.
 - last_n (optional): keep only the last N visible messages after compaction
   segment selection.
 
-Content kinds for the `only` array: `chat`, `thinking`, `tool_calls`,
-`tool_outputs`, `system_prompts`, `system_messages`, `raw_json_metadata`. Two
-group values fan out: `tools` covers tool summaries, and `all` covers every
-non-tool kind plus tool outputs. Example: `only: ["chat", "thinking",
-"tool_calls"]` or `only: ["all"]`. Tool outputs render only with
-`tool_outputs`, and raw metadata fields render only with `format: "json"`.
+Content kinds for the `only` array: `chat`, `thinking`, `tools`, `tool_calls`,
+`tool_outputs`, `system_prompts`, `system_messages`, `injected`, and
+`raw_json_metadata`. `all` selects every content kind. Example:
+`only: ["chat", "thinking", "tool_calls"]` or `only: ["all"]`. Tool outputs
+render only with `tool_outputs`, and raw metadata fields render only with
+`format: "json"`.
 
 Compaction selectors count from newest to oldest, but export output remains
 chronological. A conversation with no compaction has one segment, `0`, with no

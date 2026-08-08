@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"goodkind.io/clyde/internal/daemon"
 )
 
 // TestLeafHelpDocumentsArgumentsExamplesAndEnum asserts that a rendered leaf
@@ -41,4 +43,39 @@ func TestMCPDescriptionCarriesExamples(t *testing.T) {
 	if !strings.Contains(tool.Description, "clyde conversation export") {
 		t.Errorf("mcp description missing example: %q", tool.Description)
 	}
+}
+
+func TestConversationHelpIncludesRegisteredProviders(t *testing.T) {
+	t.Parallel()
+
+	search := searchOp()
+	helpSurfaces := map[string]string{
+		"conversation short": conversationGroup.Short,
+		"conversation long":  conversationGroup.Long,
+		"search short":       search.Short,
+		"search long":        search.Long,
+	}
+	for _, provider := range daemon.ConversationProviders() {
+		label := provider.String()
+		displayLabel := strings.ToUpper(label[:1]) + label[1:]
+		for name, help := range helpSurfaces {
+			if !strings.Contains(help, displayLabel) {
+				t.Errorf("%s help missing %s: %q", name, displayLabel, help)
+			}
+		}
+	}
+
+	params := searchParams()
+	for _, param := range params {
+		if param.Canonical != "provider" {
+			continue
+		}
+		for _, provider := range daemon.ConversationProviders() {
+			if !strings.Contains(param.Description, provider.String()) {
+				t.Errorf("provider help missing %s: %q", provider, param.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("provider parameter missing")
 }

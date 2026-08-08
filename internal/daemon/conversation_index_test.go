@@ -2,20 +2,17 @@ package daemon
 
 import (
 	"testing"
-
-	"goodkind.io/clyde/internal/providerid"
 )
 
 func TestNewConversationRegistryRegistersEveryConversationProvider(t *testing.T) {
 	t.Parallel()
 
 	registry := newConversationRegistry()
-	for _, provider := range []providerid.Provider{
-		providerid.ProviderClaude,
-		providerid.ProviderCodex,
-		providerid.ProviderCursor,
-		providerid.ProviderZed,
-	} {
+	providers := ConversationProviders()
+	if len(providers) == 0 {
+		t.Fatal("conversation provider list is empty")
+	}
+	for _, provider := range providers {
 		parser, err := registry.Lookup(provider)
 		if err != nil {
 			t.Fatalf("Lookup(%v) returned error: %v", provider, err)

@@ -55,3 +55,15 @@ func TestProviderParseAndStringIncludeZedAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderParseAndStringIncludeCopilot(t *testing.T) {
+	t.Parallel()
+
+	provider, ok := Parse("copilot")
+	if !ok || provider != ProviderCopilot {
+		t.Fatalf("Parse(copilot) = (%v, %v), want (%v, true)", provider, ok, ProviderCopilot)
+	}
+	if provider.String() != "copilot" || !provider.Valid() {
+		t.Fatalf("Copilot provider = %q, valid %v", provider.String(), provider.Valid())
+	}
+}

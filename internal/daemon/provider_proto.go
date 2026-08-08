@@ -25,6 +25,8 @@ func providerFromProto(provider clydev1.Provider) providerid.Provider {
 		return providerid.ProviderConductor
 	case clydev1.Provider_PROVIDER_ZED:
 		return providerid.ProviderZed
+	case clydev1.Provider_PROVIDER_COPILOT:
+		return providerid.ProviderCopilot
 	case clydev1.Provider_PROVIDER_UNSPECIFIED:
 		return providerid.ProviderUnspecified
 	default:
@@ -52,6 +54,8 @@ func protoProvider(provider providerid.Provider) clydev1.Provider {
 		return clydev1.Provider_PROVIDER_CONDUCTOR
 	case providerid.ProviderZed:
 		return clydev1.Provider_PROVIDER_ZED
+	case providerid.ProviderCopilot:
+		return clydev1.Provider_PROVIDER_COPILOT
 	case providerid.ProviderUnspecified:
 		return clydev1.Provider_PROVIDER_UNSPECIFIED
 	default:

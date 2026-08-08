@@ -6,10 +6,9 @@ daemon stays untouched.
 
 ## Overview
 
-The suite lives under `test/live/` behind the `live` build tag, so an ordinary test
-run never starts a daemon. Each test boots a throwaway daemon, drives its adapter or
-MITM listeners, and shuts it down. Every test confirms the production daemon survived
-unchanged.
+The `live` build tag gates the suite, so an ordinary test run never starts a
+daemon. Each test boots a throwaway daemon, drives its adapter or MITM listeners,
+and shuts it down. Every test confirms the production daemon survived unchanged.
 
 ## Run the suite
 
@@ -25,10 +24,10 @@ root, reached through `XDG_STATE_HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and
 sandbox, and it binds throwaway ports instead of the production defaults. The
 production binary and its daemon are never touched.
 
-`internal/sandbox` builds those roots and owns the temp-root check, and
-`clyde daemon sandbox` uses the same package, so a suite run and a hand-run
-sandbox cannot disagree about what isolation means. The ports below stay in the
-suite, which is the only caller that binds any.
+The sandbox implementation builds those roots and owns the temp-root check.
+`clyde daemon sandbox` uses the same implementation, so a suite run and a
+hand-run sandbox cannot disagree about what isolation means. The ports below
+stay in the suite, which is the only caller that binds any.
 
 ## Running a sandbox by hand
 
@@ -39,6 +38,9 @@ prints the environment prefix for driving it from a second terminal. It is one
 process: ending the command ends the daemon, and it also stops if whatever
 launched it dies without signalling it. Pass `--keep` to leave the directories in
 place afterwards.
+
+Run the printed prefix followed by `clyde conversation search` to browse the
+sandbox conversation metadata.
 
 It differs from the suite in one way that matters. The suite boots `clyde daemon
 run`, so it gets a supervisor and a worker, because reload and rebind are among

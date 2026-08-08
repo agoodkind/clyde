@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/clock"
 	conv "goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
@@ -87,12 +88,44 @@ type conversationInfoPayload struct {
 
 func (conversationInfoPayload) isClispecPrepared() {}
 
+// ConversationProviderList returns the registered conversation providers as a
+// display-ready English list.
+func ConversationProviderList() string {
+	return formatConversationProviderList(true)
+}
+
+func formatConversationProviderList(titleCase bool) string {
+	providers := daemon.ConversationProviders()
+	labels := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		label := provider.String()
+		if titleCase && label != "" {
+			label = strings.ToUpper(label[:1]) + label[1:]
+		}
+		labels = append(labels, label)
+	}
+	return formatEnglishList(labels)
+}
+
+func formatEnglishList(values []string) string {
+	switch len(values) {
+	case 0:
+		return ""
+	case 1:
+		return values[0]
+	case 2:
+		return values[0] + " and " + values[1]
+	default:
+		return strings.Join(values[:len(values)-1], ", ") + ", and " + values[len(values)-1]
+	}
+}
+
 // conversationGroup is the terminal parent for conversation operations.
 var conversationGroup = &Group{
-	Use:     "conversation",
-	Short:   "Inspect Claude, Codex, Cursor, and Zed conversations",
-	Long:    "Inspect indexed Claude, Codex, Cursor, and Zed conversations: search across or within conversations, read a transcript or a context window, browse metadata, inspect static conversation info, rebuild recovery context, and export transcripts. Clyde reads provider-owned artifacts and never mutates them.",
-	Example: "clyde conversation search --query \"auth timeout\"\nclyde conversation search zed:1a2b3c --around 42\nclyde conversation export zed:1a2b3c --only chat --stdout",
+	Use:     cli.ConversationGroupName,
+	Short:   "Inspect " + ConversationProviderList() + " conversations",
+	Long:    "Inspect indexed " + ConversationProviderList() + " conversations: search across or within conversations, read a transcript or a context window, browse metadata, inspect static conversation info, rebuild recovery context, and export transcripts. Clyde reads provider-owned artifacts and never mutates them.",
+	Example: cli.ConversationBrowseCommand() + " --query \"auth timeout\"\n" + cli.ConversationBrowseCommand() + " zed:1a2b3c --around 42\nclyde conversation export zed:1a2b3c --only chat --stdout",
 	Parent:  nil,
 }
 
@@ -144,7 +177,7 @@ func searchParams() []Param[searchInput] {
 	return []Param[searchInput]{
 		StringParam("query", "Text or semantic query to find in transcript messages.", "", false,
 			func(in *searchInput, v string) { in.Query = v }),
-		StringParam("provider", "Provider filter, such as claude, codex, cursor, or zed.", "", false,
+		StringParam("provider", "Provider filter: "+formatConversationProviderList(false)+".", "", false,
 			func(in *searchInput, v string) { in.Provider = v }),
 		StringParam("workspace", "Workspace root filter.", "", false,
 			func(in *searchInput, v string) { in.WorkspaceRoot = v }),
@@ -191,19 +224,20 @@ func newSearchInput() searchInput {
 }
 
 func searchOp() Operation[searchInput, searchPayload] {
+	browseCommand := cli.ConversationBrowseCommand()
 	return Operation[searchInput, searchPayload]{
-		Name:       Name{Canonical: "search", CLIOverride: ""},
+		Name:       Name{Canonical: "search", CLIOverride: cli.ConversationSearchName},
 		Group:      conversationGroup,
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindValue,
-		Short:      "Search, read, or browse Claude, Codex, Cursor, and Zed conversations.",
-		Long:       "One operation over indexed Claude, Codex, Cursor, and Zed conversations. Set --query to search the corpus, or pass CONVERSATION_ID plus --query to search within one conversation. Pass CONVERSATION_ID without --query to read a whole transcript, or add --around to read a context window. Set neither --query nor CONVERSATION_ID to browse conversation metadata.",
+		Short:      "Search, read, or browse " + ConversationProviderList() + " conversations.",
+		Long:       "One operation over indexed " + ConversationProviderList() + " conversations. Set --query to search the corpus, or pass CONVERSATION_ID plus --query to search within one conversation. Pass CONVERSATION_ID without --query to read a whole transcript, or add --around to read a context window. Set neither --query nor CONVERSATION_ID to browse conversation metadata.",
 		Examples: []string{
-			"clyde conversation search --query \"auth timeout\" --limit 10",
-			"clyde conversation search --query \"auth timeout\" --after 2026-05-01 --before 2026-05-21",
-			"clyde conversation search claude:1a2b3c --query \"auth timeout\"",
-			"clyde conversation search claude:1a2b3c --around 42 --window 5",
-			"clyde conversation search --provider zed --limit 20",
+			browseCommand + " --query \"auth timeout\" --limit 10",
+			browseCommand + " --query \"auth timeout\" --after 2026-05-01 --before 2026-05-21",
+			browseCommand + " claude:1a2b3c --query \"auth timeout\"",
+			browseCommand + " claude:1a2b3c --around 42 --window 5",
+			browseCommand + " --provider zed --limit 20",
 		},
 		Args: []Arg[searchInput]{
 			OptionalPositionalArg("conversation_id", "Conversation id, native id, title, or artifact path to scope or read.",

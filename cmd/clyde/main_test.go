@@ -7,6 +7,7 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/gklog/version"
 )
 
@@ -79,6 +80,19 @@ func TestRootUsesStampedGklogVersion(t *testing.T) {
 
 	if root.Version != version.Version {
 		t.Fatalf("root version = %q, want stamped gklog version %q", root.Version, version.Version)
+	}
+}
+
+func TestRootHelpIncludesRegisteredConversationProviders(t *testing.T) {
+	factory, _, _ := testFactory()
+	root := newRoot(factory)
+	help := root.Short + "\n" + root.Long
+	for _, provider := range daemon.ConversationProviders() {
+		label := provider.String()
+		displayLabel := strings.ToUpper(label[:1]) + label[1:]
+		if !strings.Contains(help, displayLabel) {
+			t.Errorf("root help missing %s: %q", displayLabel, help)
+		}
 	}
 }
 
