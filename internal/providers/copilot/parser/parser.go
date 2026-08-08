@@ -146,48 +146,69 @@ func (p *Parser) scanHeader(candidate conversation.ScanCandidate) (conversation.
 	}
 	defer func() { _ = file.Close() }()
 
-	var start sessionStart
-	var firstUser string
-	var created time.Time
-	var subagent subagentData
+	var metadata headerMetadata
 	reader := bufio.NewReader(file)
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) == 0 && errors.Is(readErr, io.EOF) {
 			break
 		}
-		var item event
-		if json.Unmarshal(line, &item) == nil && item.Type != "" {
-			if item.Type == eventSessionStart {
-				_ = json.Unmarshal(item.Data, &start)
-			}
-			if item.AgentID == candidate.Selector && item.Type == eventUserMessage && firstUser == "" {
-				firstUser = stringField(item.Data, stringFieldContent)
-			}
-			if item.AgentID == candidate.Selector {
-				timestamp := parseTime(item.Timestamp)
-				if !timestamp.IsZero() && created.IsZero() {
-					created = timestamp
-				}
-			}
-			if item.AgentID == candidate.Selector && item.Type == eventSubagentStarted {
-				_ = json.Unmarshal(item.Data, &subagent)
-			}
+		if item, ok := decodeEventLine(line); ok {
+			metadata.add(item, candidate.Selector)
 		}
-		if start.SessionID != "" && !created.IsZero() &&
-			(candidate.Selector == "" && firstUser != "" ||
-				candidate.Selector != "" && (subagent.AgentDisplayName != "" ||
-					subagent.AgentName != "" || subagent.AgentDescription != "")) {
+		if metadata.ready(candidate.Selector) {
 			break
 		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			return emptyRecord(), false
 		}
 	}
-	return scanRecordMetadata(candidate, start, firstUser, created, subagent), true
+	return scanRecordMetadata(candidate, metadata.start, metadata.firstUser, metadata.created, metadata.subagent), true
+}
+
+type headerMetadata struct {
+	start     sessionStart
+	firstUser string
+	created   time.Time
+	subagent  subagentData
+}
+
+func decodeEventLine(line []byte) (event, bool) {
+	var item event
+	if json.Unmarshal(line, &item) != nil || item.Type == "" {
+		return item, false
+	}
+	return item, true
+}
+
+func (metadata *headerMetadata) add(item event, selector string) {
+	if item.Type == eventSessionStart {
+		_ = json.Unmarshal(item.Data, &metadata.start)
+	}
+	if item.AgentID != selector {
+		return
+	}
+	if item.Type == eventUserMessage && metadata.firstUser == "" {
+		metadata.firstUser = stringField(item.Data, stringFieldContent)
+	}
+	if metadata.created.IsZero() {
+		metadata.created = parseTime(item.Timestamp)
+	}
+	if item.Type == eventSubagentStarted {
+		_ = json.Unmarshal(item.Data, &metadata.subagent)
+	}
+}
+
+func (metadata *headerMetadata) ready(selector string) bool {
+	if metadata.start.SessionID == "" || metadata.created.IsZero() {
+		return false
+	}
+	if selector == "" {
+		return metadata.firstUser != ""
+	}
+	return metadata.subagent.AgentDisplayName != "" ||
+		metadata.subagent.AgentName != "" ||
+		metadata.subagent.AgentDescription != ""
 }
 
 func scanRecordMetadata(
