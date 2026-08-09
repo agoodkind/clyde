@@ -61,6 +61,9 @@ type daemonStatusOutput struct {
 	TimeBreakdown          *daemonsvc.MetricsTimeBreakdown `json:"time_breakdown,omitempty"`
 	UnattributedDurationMS *int64                          `json:"unattributed_duration_ms,omitempty"`
 	Warnings               []string                        `json:"warnings,omitempty"`
+	// Windows carries the default 1h, 1d, and 1w report. It is present when
+	// the caller asked for no explicit window, which is the default path.
+	Windows []daemonsvc.MetricsWindowReport `json:"windows,omitempty"`
 }
 
 func (daemonStatusOutput) isClispecStructuredPayload() {}
@@ -201,6 +204,7 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 				TimeBreakdown:          nil,
 				UnattributedDurationMS: nil,
 				Warnings:               nil,
+				Windows:                nil,
 			}
 			if payload.Since > 0 {
 				metrics := daemonsvc.MetricsHistoryFromConfig(payload.Since, clock.Now())
@@ -224,6 +228,13 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 					Warnings: metrics.Warnings,
 				}, Text: body.String()}, nil
 			}
+			// Without an explicit window the command reports the default
+			// windows from the distilled rollup. That store is pre-aggregated,
+			// so this stays fast enough to run on every status invocation,
+			// which is why history no longer has to be asked for.
+			windows := daemonsvc.MetricsWindowsFromRollup(clock.Now())
+			daemoncmd.WriteMetricsWindowsReport(&body, windows)
+			output.Windows = windows
 			return valueResult{Payload: output, Text: body.String()}, nil
 		},
 	}

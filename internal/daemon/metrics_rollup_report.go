@@ -24,15 +24,6 @@ type MetricsWindowReport struct {
 	Report MetricsHistoryReport `json:"report"`
 }
 
-// DefaultMetricsWindowLabels names the default windows in report order.
-func DefaultMetricsWindowLabels() []string {
-	labels := make([]string, 0, len(defaultMetricsWindows))
-	for _, window := range defaultMetricsWindows {
-		labels = append(labels, metricsWindowLabel(window))
-	}
-	return labels
-}
-
 // metricsWindowLabel renders a window duration the way the surfaces print it.
 func metricsWindowLabel(window time.Duration) string {
 	switch {
