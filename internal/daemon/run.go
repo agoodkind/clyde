@@ -148,6 +148,12 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		return err
 	}
 
+	// The rollup distiller starts here for the same reason the feeder does: its
+	// stop is installed on the lifecycle group inside the start call, ahead of
+	// the goroutine launch, so a reload cannot begin the workers-phase drain
+	// while the distiller still reads the daemon log.
+	startMetricsRollup(ctx, log, runtime.group)
+
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
 		grpc.MaxSendMsgSize(controlMaxMessageBytes),
