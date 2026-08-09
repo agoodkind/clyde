@@ -12,7 +12,9 @@ import (
 )
 
 const (
-	sentinelKeyword = "MYKEYWORD"
+	sentinelKeyword           = "MYKEYWORD"
+	actualUserSentinelKeyword = "ACTUAL_USER"
+	responseSentinelKeyword   = "CLAUDE_REWRITE"
 
 	sentinelRequestBody = `{"messages":[` +
 		`{"role":"user","content":"older MYKEYWORD ignored"},` +
@@ -83,7 +85,9 @@ func TestExtractForcedContent(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := extractForcedContent(tc.user, tc.sentinel)
+			split := parseSentinels(tc.user, tc.sentinel, "")
+			got := split.forcedResponse
+			ok := split.hasResponse
 			if ok != tc.ok {
 				t.Fatalf("ok = %v, want %v", ok, tc.ok)
 			}
@@ -96,7 +100,7 @@ func TestExtractForcedContent(t *testing.T) {
 
 func TestHookMatchesLatestUserMessage(t *testing.T) {
 	t.Parallel()
-	hook := New(sentinelKeyword)
+	hook := New(sentinelKeyword, "")
 	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(sentinelRequestBody)))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
@@ -115,7 +119,7 @@ func TestHookMatchesLatestUserMessage(t *testing.T) {
 
 func TestHookDoesNotMatchWithoutKeyword(t *testing.T) {
 	t.Parallel()
-	hook := New(sentinelKeyword)
+	hook := New(sentinelKeyword, "")
 	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(normalRequestBody)))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
@@ -132,7 +136,7 @@ func TestHookIgnoresKeywordOnlyInOlderUserMessage(t *testing.T) {
 		`{"role":"assistant","content":"ok"},` +
 		`{"role":"user","content":"say hello"}` +
 		`]}`
-	hook := New(sentinelKeyword)
+	hook := New(sentinelKeyword, "")
 	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(body)))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
@@ -144,7 +148,7 @@ func TestHookIgnoresKeywordOnlyInOlderUserMessage(t *testing.T) {
 
 func TestHookRejectsNonClaudeProvider(t *testing.T) {
 	t.Parallel()
-	hook := New(sentinelKeyword)
+	hook := New(sentinelKeyword, "")
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Provider: "openai",
 		Method:   http.MethodPost,
@@ -161,7 +165,7 @@ func TestHookRejectsNonClaudeProvider(t *testing.T) {
 
 func TestHookRejectsPrefixedMessagesPath(t *testing.T) {
 	t.Parallel()
-	hook := New(sentinelKeyword)
+	hook := New(sentinelKeyword, "")
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Provider: claudeProviderName,
 		Method:   http.MethodPost,
@@ -293,13 +297,125 @@ func TestTransformPassesThroughNonStreamingResponse(t *testing.T) {
 
 func TestNewEmptySentinelNeverMatches(t *testing.T) {
 	t.Parallel()
-	hook := New("")
+	hook := New("", "")
 	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(sentinelRequestBody)))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
 	if match.Matched {
 		t.Fatal("empty sentinel must not match")
+	}
+}
+
+func TestParseSentinelsDual(t *testing.T) {
+	t.Parallel()
+	userText := "CLAUDE_REWRITE mytext for response here\nACTUAL_USER i only want this to come back"
+	split := parseSentinels(userText, responseSentinelKeyword, actualUserSentinelKeyword)
+	if !split.hasResponse || !split.hasUpstreamUser {
+		t.Fatalf("split = %#v, want both rewrites", split)
+	}
+	if split.forcedResponse != " mytext for response here\n" {
+		t.Fatalf("forcedResponse = %q", split.forcedResponse)
+	}
+	if split.upstreamUser != " i only want this to come back" {
+		t.Fatalf("upstreamUser = %q", split.upstreamUser)
+	}
+}
+
+func TestHookDualRewritesRequestAndResponse(t *testing.T) {
+	t.Parallel()
+	body := `{"messages":[{"role":"user","content":"CLAUDE_REWRITE mytext for response here\nACTUAL_USER i only want this to come back"}]}`
+	hook := New(responseSentinelKeyword, actualUserSentinelKeyword)
+	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(body)))
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if !match.Matched {
+		t.Fatal("expected dual sentinel request to match")
+	}
+	respTransformer, ok := match.Transformer.(responseReplaceTransformer)
+	if !ok {
+		t.Fatalf("transformer type = %T, want responseReplaceTransformer", match.Transformer)
+	}
+	if respTransformer.content != " mytext for response here\n" {
+		t.Fatalf("response content = %q", respTransformer.content)
+	}
+	reqTransformer, ok := match.RequestTransformer.(requestReplaceTransformer)
+	if !ok {
+		t.Fatalf("request transformer type = %T, want requestReplaceTransformer", match.RequestTransformer)
+	}
+	if reqTransformer.upstreamUser != " i only want this to come back" {
+		t.Fatalf("upstream user = %q", reqTransformer.upstreamUser)
+	}
+}
+
+func TestRequestTransformerRewritesLatestUserMessage(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"messages":[{"role":"assistant","content":"ok"},{"role":"user","content":"old text"}]}`)
+	transformer := requestReplaceTransformer{upstreamUser: "i only want this to come back"}
+	out, changed, err := transformer.TransformRequest(context.Background(), body)
+	if err != nil {
+		t.Fatalf("TransformRequest err = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected request body to change")
+	}
+	var request anthropicMessagesRequest
+	if err := json.Unmarshal(out, &request); err != nil {
+		t.Fatalf("decode transformed request: %v", err)
+	}
+	if got := lastUserMessageText(request); got != "i only want this to come back" {
+		t.Fatalf("latest user = %q, want rewritten upstream text", got)
+	}
+}
+
+func TestHookActualUserOnlyRewritesRequest(t *testing.T) {
+	t.Parallel()
+	body := `{"messages":[{"role":"user","content":"ACTUAL_USER i only want this to come back"}]}`
+	hook := New("", actualUserSentinelKeyword)
+	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(body)))
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if !match.Matched {
+		t.Fatal("expected actual-user sentinel request to match")
+	}
+	if match.Transformer != nil {
+		t.Fatalf("response transformer = %#v, want nil", match.Transformer)
+	}
+	reqTransformer, ok := match.RequestTransformer.(requestReplaceTransformer)
+	if !ok {
+		t.Fatalf("request transformer type = %T, want requestReplaceTransformer", match.RequestTransformer)
+	}
+	if reqTransformer.upstreamUser != " i only want this to come back" {
+		t.Fatalf("upstream user = %q", reqTransformer.upstreamUser)
+	}
+}
+
+func TestHookWrongOrderFallsBackToSingleMarkers(t *testing.T) {
+	t.Parallel()
+	body := `{"messages":[{"role":"user","content":"ACTUAL_USER hidden\nCLAUDE_REWRITE forced reply"}]}`
+	hook := New(responseSentinelKeyword, actualUserSentinelKeyword)
+	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(body)))
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if !match.Matched {
+		t.Fatal("expected wrong-order request to match single-marker rules")
+	}
+	respTransformer, ok := match.Transformer.(responseReplaceTransformer)
+	if !ok {
+		t.Fatalf("transformer type = %T, want responseReplaceTransformer", match.Transformer)
+	}
+	if respTransformer.content != " forced reply" {
+		t.Fatalf("response content = %q", respTransformer.content)
+	}
+	reqTransformer, ok := match.RequestTransformer.(requestReplaceTransformer)
+	if !ok {
+		t.Fatalf("request transformer type = %T, want requestReplaceTransformer", match.RequestTransformer)
+	}
+	if reqTransformer.upstreamUser != " hidden\nCLAUDE_REWRITE forced reply" {
+		t.Fatalf("upstream user = %q", reqTransformer.upstreamUser)
 	}
 }
 

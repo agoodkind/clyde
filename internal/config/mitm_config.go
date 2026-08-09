@@ -52,6 +52,12 @@ type MITMConfig struct {
 	// user message on an intercepted Anthropic /v1/messages request and
 	// rewrites the downstream model message to everything after the keyword.
 	Sentinel string `json:"sentinel,omitempty" toml:"sentinel,omitempty"`
+	// ActualUserSentinel, when non-empty, rewrites the latest user message sent
+	// upstream to everything after this keyword. When both Sentinel and
+	// ActualUserSentinel appear in order in the latest user message, the text
+	// between them becomes the forced downstream reply and the text after
+	// ActualUserSentinel becomes the upstream user message.
+	ActualUserSentinel string `json:"actualUserSentinel,omitempty" toml:"actual_user_sentinel,omitempty"`
 	// App maps each desktop (Electron) client name to its MITM listen endpoint,
 	// declared as [mitm.app.<name>] (for example [mitm.app.cursor]). CLI maps
 	// each CLI client name, declared as [mitm.cli.<name>] (for example
