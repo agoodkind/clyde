@@ -43,3 +43,22 @@ func TestSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 		t.Fatalf("hook type = %T, want *sentinelinject.Hook", hooks[0])
 	}
 }
+
+// TestMitmHooksRegistersSentinelBeforeReorient locks the first-match order: when
+// both features are on, sentinel is first so it wins if both hooks would match.
+func TestMitmHooksRegistersSentinelBeforeReorient(t *testing.T) {
+	t.Parallel()
+	hooks := mitmRequestResponseHooks(config.MITMConfig{
+		Sentinel:                 "MYKEYWORD",
+		ReorientSummaryInjection: true,
+	})
+	if len(hooks) != 2 {
+		t.Fatalf("hooks = %d, want 2", len(hooks))
+	}
+	if _, ok := hooks[0].(*sentinelinject.Hook); !ok {
+		t.Fatalf("hooks[0] = %T, want *sentinelinject.Hook first", hooks[0])
+	}
+	if _, ok := hooks[1].(*reorientinject.Hook); !ok {
+		t.Fatalf("hooks[1] = %T, want *reorientinject.Hook second", hooks[1])
+	}
+}

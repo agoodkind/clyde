@@ -169,25 +169,52 @@ func TestTransformResponseReplacesModelText(t *testing.T) {
 
 func TestTransformPassesThroughNonStreamingResponse(t *testing.T) {
 	t.Parallel()
-	resp := mitm.ResponseHookResponse{
-		StatusCode:    http.StatusBadRequest,
-		Status:        "400 Bad Request",
-		Proto:         "HTTP/1.1",
-		Header:        http.Header{"Content-Type": []string{"application/json"}},
-		Body:          strings.NewReader(`{"type":"error"}`),
-		ContentLength: 16,
+	cases := []struct {
+		name        string
+		status      int
+		statusText  string
+		contentType string
+		body        string
+	}{
+		{
+			name:        "4xx json error",
+			status:      http.StatusBadRequest,
+			statusText:  "400 Bad Request",
+			contentType: "application/json",
+			body:        `{"type":"error"}`,
+		},
+		{
+			name:        "200 non-stream json",
+			status:      http.StatusOK,
+			statusText:  "200 OK",
+			contentType: "application/json",
+			body:        `{"type":"message","content":[{"type":"text","text":"hello"}]}`,
+		},
 	}
-	transformer := responseReplaceTransformer{content: "forced"}
-	out, err := transformer.TransformResponse(context.Background(), resp)
-	if err != nil {
-		t.Fatalf("TransformResponse err = %v", err)
-	}
-	body, err := io.ReadAll(out.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	if string(body) != `{"type":"error"}` {
-		t.Fatalf("body = %q, want unchanged error body", string(body))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := mitm.ResponseHookResponse{
+				StatusCode:    tc.status,
+				Status:        tc.statusText,
+				Proto:         "HTTP/1.1",
+				Header:        http.Header{"Content-Type": []string{tc.contentType}},
+				Body:          strings.NewReader(tc.body),
+				ContentLength: int64(len(tc.body)),
+			}
+			transformer := responseReplaceTransformer{content: "forced"}
+			out, err := transformer.TransformResponse(context.Background(), resp)
+			if err != nil {
+				t.Fatalf("TransformResponse err = %v", err)
+			}
+			body, err := io.ReadAll(out.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if string(body) != tc.body {
+				t.Fatalf("body = %q, want unchanged %q", string(body), tc.body)
+			}
+		})
 	}
 }
 

@@ -242,9 +242,13 @@ func bindMITMPacketConns(ctx context.Context, log *slog.Logger, listenerCfg conf
 
 // mitmRequestResponseHooks returns the MITM request/response hooks enabled by
 // config. The default configuration registers no hooks and the proxy path stays
-// byte-for-byte unchanged.
+// byte-for-byte unchanged. Sentinel is registered first so a matched sentinel
+// rewrite wins over reorient when both are enabled and both would match.
 func mitmRequestResponseHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
 	var hooks []mitm.RequestResponseHook
+	if sentinel := strings.TrimSpace(mitmCfg.Sentinel); sentinel != "" {
+		hooks = append(hooks, sentinelinject.New(sentinel))
+	}
 	if mitmCfg.ReorientSummaryInjection {
 		hooks = append(hooks, reorientinject.New(
 			newReorientInjectContentProvider(mitmCfg.ReorientInjectMaxLines),
@@ -257,9 +261,6 @@ func mitmRequestResponseHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseH
 				RecentFraction:          mitmCfg.ReorientRecentFraction,
 			},
 		))
-	}
-	if sentinel := strings.TrimSpace(mitmCfg.Sentinel); sentinel != "" {
-		hooks = append(hooks, sentinelinject.New(sentinel))
 	}
 	return hooks
 }
