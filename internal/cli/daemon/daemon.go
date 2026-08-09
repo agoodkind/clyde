@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -123,6 +124,97 @@ func WriteMetricsHistoryReport(out io.Writer, report daemonsvc.MetricsHistoryRep
 	_, _ = fmt.Fprintf(out, "unattributed_duration_ms: %s\n", formatMetricInt(report.UnattributedDurationMS))
 	for _, warning := range report.Warnings {
 		_, _ = fmt.Fprintf(out, "warning: %s\n", warning)
+	}
+}
+
+// WriteMetricsWindowsReport writes the default multi-window metrics table.
+//
+// One row per metric and one column per window puts the same measure at three
+// timescales on one line, which is what makes a spike legible: a rate that is
+// high in the hour column and low in the week column is new, and the reverse
+// is recovering.
+func WriteMetricsWindowsReport(out io.Writer, windows []daemonsvc.MetricsWindowReport) {
+	if len(windows) == 0 {
+		return
+	}
+	labels := make([]string, 0, len(windows))
+	for _, window := range windows {
+		labels = append(labels, window.Label)
+	}
+	writer := tabwriter.NewWriter(out, 0, 0, 2, ' ', tabwriter.AlignRight)
+	_, _ = fmt.Fprintf(writer, "metric\t%s\t\n", strings.Join(labels, "\t"))
+
+	for _, row := range metricsWindowCounterRows() {
+		values := make([]string, 0, len(windows))
+		for _, window := range windows {
+			values = append(values, formatMetricInt(row.read(window.Report.Metrics).Delta))
+		}
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t\n", row.name, strings.Join(values, "\t"))
+	}
+
+	for _, row := range metricsWindowDurationRows() {
+		values := make([]string, 0, len(windows))
+		for _, window := range windows {
+			values = append(values, formatMetricInt(row.read(window.Report.TimeBreakdown.Total)))
+		}
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t\n", row.name, strings.Join(values, "\t"))
+	}
+
+	restarts := make([]string, 0, len(windows))
+	coverage := make([]string, 0, len(windows))
+	for _, window := range windows {
+		restarts = append(restarts, strconv.Itoa(window.Report.Restarts))
+		coverage = append(coverage, strconv.FormatBool(window.Report.Coverage.Complete))
+	}
+	_, _ = fmt.Fprintf(writer, "restarts\t%s\t\n", strings.Join(restarts, "\t"))
+	_, _ = fmt.Fprintf(writer, "coverage_complete\t%s\t\n", strings.Join(coverage, "\t"))
+	_ = writer.Flush()
+
+	for _, window := range windows {
+		for _, warning := range window.Report.Warnings {
+			_, _ = fmt.Fprintf(out, "warning[%s]: %s\n", window.Label, warning)
+		}
+	}
+}
+
+// metricsWindowCounterRow names one counter row of the multi-window table.
+type metricsWindowCounterRow struct {
+	name string
+	read func(daemonsvc.MetricsValues) daemonsvc.MetricsCounter
+}
+
+// metricsWindowCounterRows lists the counters the table reports, in the order
+// the daemon declares them rather than alphabetically, so a row keeps its
+// position between releases.
+func metricsWindowCounterRows() []metricsWindowCounterRow {
+	return []metricsWindowCounterRow{
+		{name: "requests", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Requests }},
+		{name: "completed", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Completed }},
+		{name: "failed", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Failed }},
+		{name: "cancelled", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Cancelled }},
+		{name: "bytes_in", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.BytesIn }},
+		{name: "bytes_out", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.BytesOut }},
+		{name: "input_tokens", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.InputTokens }},
+		{name: "output_tokens", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.OutputTokens }},
+		{name: "cache_tokens", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.CacheTokens }},
+		{name: "cost_microcents", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.CostMicrocents }},
+	}
+}
+
+// metricsWindowDurationRow names one latency row of the multi-window table.
+type metricsWindowDurationRow struct {
+	name string
+	read func(daemonsvc.MetricsDuration) *int64
+}
+
+// metricsWindowDurationRows reports request latency at each window. The median
+// and the 95th percentile appear together because a window where they diverge
+// is a tail problem rather than a slowdown.
+func metricsWindowDurationRows() []metricsWindowDurationRow {
+	return []metricsWindowDurationRow{
+		{name: "p50_ms", read: func(d daemonsvc.MetricsDuration) *int64 { return d.P50MS }},
+		{name: "p95_ms", read: func(d daemonsvc.MetricsDuration) *int64 { return d.P95MS }},
+		{name: "max_ms", read: func(d daemonsvc.MetricsDuration) *int64 { return d.MaxMS }},
 	}
 }
 

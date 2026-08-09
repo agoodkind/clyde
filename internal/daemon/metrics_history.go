@@ -58,6 +58,7 @@ func MetricsHistoryFromConfig(since time.Duration, now time.Time) MetricsHistory
 			Metrics:                emptyMetricsValues(),
 			TimeBreakdown:          MetricsTimeBreakdown{Total: emptyMetricsDuration(), Stages: []MetricsStageDuration{}},
 			UnattributedDurationMS: nil,
+			Restarts:               0,
 			Warnings:               []string{"unable to load Clyde logging configuration"},
 			historyCoversStart:     false,
 			liveCoversEnd:          false,
@@ -81,12 +82,16 @@ type MetricsHistoryReport struct {
 	Metrics                MetricsValues        `json:"metrics"`
 	TimeBreakdown          MetricsTimeBreakdown `json:"time_breakdown"`
 	UnattributedDurationMS *int64               `json:"unattributed_duration_ms"`
-	Warnings               []string             `json:"warnings"`
-	historyCoversStart     bool                 `json:"-"`
-	liveCoversEnd          bool                 `json:"-"`
-	generationStable       bool                 `json:"-"`
-	invalidHistory         bool                 `json:"-"`
-	sawCanonicalRecord     bool                 `json:"-"`
+	// Restarts counts daemon generations that began inside the window. A
+	// window spanning a restart sums across the discontinuity, so this is what
+	// tells the reader how many resets the summed totals absorb.
+	Restarts           int      `json:"restarts"`
+	Warnings           []string `json:"warnings"`
+	historyCoversStart bool     `json:"-"`
+	liveCoversEnd      bool     `json:"-"`
+	generationStable   bool     `json:"-"`
+	invalidHistory     bool     `json:"-"`
+	sawCanonicalRecord bool     `json:"-"`
 }
 
 // MetricsWindow describes the included interval.
@@ -208,6 +213,7 @@ func BuildMetricsHistory(input MetricsHistoryInput) MetricsHistoryReport {
 		Metrics:                emptyMetricsValues(),
 		TimeBreakdown:          MetricsTimeBreakdown{Total: emptyMetricsDuration(), Stages: []MetricsStageDuration{}},
 		UnattributedDurationMS: nil,
+		Restarts:               0,
 		Warnings:               []string{},
 		historyCoversStart:     false,
 		liveCoversEnd:          false,

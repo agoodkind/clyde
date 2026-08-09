@@ -409,6 +409,7 @@ aliases = [{ id = "claude-haiku-4-5", advertise = true }]
 providers = ["claude", "codex", "conductor", "cursor"]
 
 # sentinel = "MYKEYWORD"
+# actual_user_sentinel = "ACTUAL_USER"
 
 # Per-client MITM listeners, split into CLIs ([mitm.cli.<name>]) and desktop apps
 # ([mitm.app.<name>]). The table key is the client name; each gets its own

@@ -1,5 +1,5 @@
-// Package sentinelinject rewrites intercepted Anthropic /v1/messages responses
-// when the latest user message contains a configured keyword.
+// Package sentinelinject rewrites intercepted Anthropic /v1/messages requests
+// and responses when the latest user message contains configured keywords.
 package sentinelinject
 
 import (
@@ -40,23 +40,27 @@ const (
 )
 
 // Hook scans the latest user message on an Anthropic /v1/messages request and
-// rewrites the downstream model text to everything after the configured keyword.
+// may rewrite the upstream user text, the downstream model text, or both.
 type Hook struct {
-	sentinel string
+	sentinel           string
+	actualUserSentinel string
 }
 
-// New constructs a sentinel rewrite hook. An empty sentinel yields a hook that
-// never matches.
-func New(sentinel string) *Hook {
-	return &Hook{sentinel: strings.TrimSpace(sentinel)}
+// New constructs a sentinel rewrite hook. An empty sentinel and empty
+// actualUserSentinel yields a hook that never matches.
+func New(sentinel, actualUserSentinel string) *Hook {
+	return &Hook{
+		sentinel:           strings.TrimSpace(sentinel),
+		actualUserSentinel: strings.TrimSpace(actualUserSentinel),
+	}
 }
 
-// MatchRequestResponse pairs a response transformer when the latest user
-// message contains the configured keyword.
+// MatchRequestResponse pairs request and/or response transformers when the
+// latest user message contains the configured keyword(s).
 func (h *Hook) MatchRequestResponse(
 	req mitm.RequestResponseHookRequest,
 ) (mitm.RequestResponseHookMatch, error) {
-	if h == nil || h.sentinel == "" {
+	if h == nil || (h.sentinel == "" && h.actualUserSentinel == "") {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
 	if req.Method != http.MethodPost {
@@ -92,17 +96,26 @@ func (h *Hook) MatchRequestResponse(
 		)
 		return unmatchedRequestResponseHookMatch(), nil
 	}
-	forced, ok := extractForcedContent(lastUserMessageText(request), h.sentinel)
-	if !ok {
+	split := parseSentinels(lastUserMessageText(request), h.sentinel, h.actualUserSentinel)
+	if !split.matched() {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
-	return mitm.RequestResponseHookMatch{
-		Matched: true,
-		Transformer: responseReplaceTransformer{
-			content: forced,
-		},
+	match := mitm.RequestResponseHookMatch{
+		Matched:            true,
+		Transformer:        nil,
 		RequestTransformer: nil,
-	}, nil
+	}
+	if split.hasResponse {
+		match.Transformer = responseReplaceTransformer{
+			content: split.forcedResponse,
+		}
+	}
+	if split.hasUpstreamUser {
+		match.RequestTransformer = requestReplaceTransformer{
+			upstreamUser: split.upstreamUser,
+		}
+	}
+	return match, nil
 }
 
 func unmatchedRequestResponseHookMatch() mitm.RequestResponseHookMatch {
@@ -125,6 +138,48 @@ type anthropicMessage struct {
 type anthropicTextBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+type sentinelSplit struct {
+	forcedResponse  string
+	upstreamUser    string
+	hasResponse     bool
+	hasUpstreamUser bool
+}
+
+func (s sentinelSplit) matched() bool {
+	return s.hasResponse || s.hasUpstreamUser
+}
+
+func parseSentinels(userText, sentinel, actualUserSentinel string) sentinelSplit {
+	if sentinel != "" && actualUserSentinel != "" {
+		sentinelIdx := strings.Index(userText, sentinel)
+		actualIdx := strings.Index(userText, actualUserSentinel)
+		if sentinelIdx >= 0 && actualIdx > sentinelIdx {
+			return sentinelSplit{
+				forcedResponse:  userText[sentinelIdx+len(sentinel) : actualIdx],
+				upstreamUser:    userText[actualIdx+len(actualUserSentinel):],
+				hasResponse:     true,
+				hasUpstreamUser: true,
+			}
+		}
+	}
+	var split sentinelSplit
+	if sentinel != "" {
+		_, after, found := strings.Cut(userText, sentinel)
+		if found {
+			split.forcedResponse = after
+			split.hasResponse = true
+		}
+	}
+	if actualUserSentinel != "" {
+		_, after, found := strings.Cut(userText, actualUserSentinel)
+		if found {
+			split.upstreamUser = after
+			split.hasUpstreamUser = true
+		}
+	}
+	return split
 }
 
 func lastUserMessageText(request anthropicMessagesRequest) string {
@@ -165,15 +220,58 @@ func (m anthropicMessage) text() string {
 	return builder.String()
 }
 
-func extractForcedContent(userText, sentinel string) (string, bool) {
-	if sentinel == "" {
-		return "", false
+type requestReplaceTransformer struct {
+	upstreamUser string
+}
+
+func (t requestReplaceTransformer) TransformRequest(
+	ctx context.Context,
+	body []byte,
+) ([]byte, bool, error) {
+	var request anthropicMessagesRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		slog.WarnContext(
+			ctx,
+			"mitm.sentinel_inject.request_transform_decode_failed",
+			"component", sentinelInjectComponent,
+			"concern", sentinelInjectConcern,
+			"err", err,
+		)
+		return body, false, fmt.Errorf("decode sentinel inject request: %w", err)
 	}
-	_, after, found := strings.Cut(userText, sentinel)
-	if !found {
-		return "", false
+	if !replaceLatestUserContent(&request, t.upstreamUser) {
+		return body, false, nil
 	}
-	return after, true
+	output, err := json.Marshal(request)
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"mitm.sentinel_inject.request_transform_encode_failed",
+			"component", sentinelInjectComponent,
+			"concern", sentinelInjectConcern,
+			"err", err,
+		)
+		return body, false, fmt.Errorf("encode sentinel inject request: %w", err)
+	}
+	return output, true, nil
+}
+
+func replaceLatestUserContent(request *anthropicMessagesRequest, text string) bool {
+	if request == nil {
+		return false
+	}
+	for i := range slices.Backward(request.Messages) {
+		if request.Messages[i].Role != "user" {
+			continue
+		}
+		encoded, err := json.Marshal(text)
+		if err != nil {
+			return false
+		}
+		request.Messages[i].Content = encoded
+		return true
+	}
+	return false
 }
 
 type responseReplaceTransformer struct {

@@ -246,8 +246,10 @@ func bindMITMPacketConns(ctx context.Context, log *slog.Logger, listenerCfg conf
 // rewrite wins over reorient when both are enabled and both would match.
 func mitmRequestResponseHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
 	var hooks []mitm.RequestResponseHook
-	if sentinel := strings.TrimSpace(mitmCfg.Sentinel); sentinel != "" {
-		hooks = append(hooks, sentinelinject.New(sentinel))
+	sentinel := strings.TrimSpace(mitmCfg.Sentinel)
+	actualUserSentinel := strings.TrimSpace(mitmCfg.ActualUserSentinel)
+	if sentinel != "" || actualUserSentinel != "" {
+		hooks = append(hooks, sentinelinject.New(sentinel, actualUserSentinel))
 	}
 	if mitmCfg.ReorientSummaryInjection {
 		hooks = append(hooks, reorientinject.New(
