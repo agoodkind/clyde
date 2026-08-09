@@ -70,7 +70,7 @@ func TestLiveMITMProxyRewritesMessagesSSE(t *testing.T) {
 
 	proxy, baseURL := startLiveMITMProxy(t)
 	proxy.SetRequestResponseHooks([]mitm.RequestResponseHook{
-		sentinelinject.New(keyword),
+		sentinelinject.New(keyword, ""),
 	})
 
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/v1/messages", strings.NewReader(requestBody))
@@ -98,6 +98,103 @@ func TestLiveMITMProxyRewritesMessagesSSE(t *testing.T) {
 	if !strings.Contains(text, "live-forced-reply") {
 		t.Fatalf("rewritten SSE missing forced suffix: %s", text)
 	}
+}
+
+// TestLiveMITMProxyDualSentinelRewritesRequestAndResponse boots a real MITM
+// proxy with both sentinels and asserts the upstream request body and client
+// SSE are rewritten independently.
+func TestLiveMITMProxyDualSentinelRewritesRequestAndResponse(t *testing.T) {
+	const responseSentinel = "CLAUDE_REWRITE"
+	const actualUserSentinel = "ACTUAL_USER"
+	const forcedResponse = "mytext for response here"
+	const upstreamUser = "i only want this to come back"
+	requestBody := `{"messages":[{"role":"user","content":"` +
+		responseSentinel + ` ` + forcedResponse + `\n` +
+		actualUserSentinel + ` ` + upstreamUser + `"}]}`
+	upstreamSSE := "event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"m","content":[]}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"real upstream reply"}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+
+	var gotUpstreamBody string
+	upstream := startLiveUpstreamWithCapture(t, upstreamSSE, &gotUpstreamBody)
+	mitm.RegisterProvider(livePlainRouteProvider{upstream: upstream})
+	t.Cleanup(func() {
+		mitm.RegisterProvider(livePlainRouteProvider{upstream: "http://127.0.0.1:9"})
+	})
+
+	proxy, baseURL := startLiveMITMProxy(t)
+	proxy.SetRequestResponseHooks([]mitm.RequestResponseHook{
+		sentinelinject.New(responseSentinel, actualUserSentinel),
+	})
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/v1/messages", strings.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("content-type", "application/json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST through MITM: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	gotBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	text := string(gotBody)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, text)
+	}
+	if !strings.Contains(gotUpstreamBody, upstreamUser) {
+		t.Fatalf("upstream body missing rewritten user text: %s", gotUpstreamBody)
+	}
+	if strings.Contains(gotUpstreamBody, responseSentinel) || strings.Contains(gotUpstreamBody, actualUserSentinel) {
+		t.Fatalf("upstream body still contains sentinel markers: %s", gotUpstreamBody)
+	}
+	if strings.Contains(text, "real upstream reply") {
+		t.Fatalf("upstream model text leaked through MITM: %s", text)
+	}
+	if !strings.Contains(text, forcedResponse) {
+		t.Fatalf("rewritten SSE missing forced response: %s", text)
+	}
+}
+
+func startLiveUpstreamWithCapture(t *testing.T, sseBody string, captured *string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("listen upstream: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Errorf("read upstream request body: %v", readErr)
+		}
+		if captured != nil {
+			*captured = string(body)
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = io.WriteString(w, sseBody)
+	})
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
+	go func() { _ = server.Serve(ln) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	})
+	return "http://" + ln.Addr().String()
 }
 
 func startLiveUpstream(t *testing.T, sseBody string) string {
