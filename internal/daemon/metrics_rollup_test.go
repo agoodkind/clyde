@@ -290,15 +290,10 @@ func TestLoadMetricsRollupMissingStoreIsEmptyNotAnError(t *testing.T) {
 // is what keeps each pass reading only the new tail of the daemon log.
 func TestMetricsRollupCheckpointRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
-	if empty := readMetricsRollupCheckpoint(path); empty.Offset != 0 || empty.Path != "" {
+	if empty := readMetricsRollupCheckpoint(path); empty.LastRecordAt != "" {
 		t.Fatalf("missing checkpoint did not read as zero: %+v", empty)
 	}
-	want := metricsRollupCheckpoint{
-		Path:         "/state/clyde-daemon.jsonl",
-		Offset:       4096,
-		Size:         8192,
-		LastRecordAt: "2026-08-08T10:00:00Z",
-	}
+	want := metricsRollupCheckpoint{LastRecordAt: "2026-08-08T10:00:00Z"}
 	if err := writeMetricsRollupCheckpoint(path, want); err != nil {
 		t.Fatalf("write checkpoint: %v", err)
 	}
