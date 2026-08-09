@@ -1,9 +1,14 @@
 package daemon
 
 import (
+	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
@@ -50,7 +55,7 @@ func TestRollupReportMatchesDirectLogReplay(t *testing.T) {
 	now := time.Date(2026, 8, 8, 11, 0, 0, 0, time.UTC)
 	pricing := rollupPricingTable()
 
-	if _, err := distillMetricsRollup(metricsRollupDistillInput{
+	if _, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
 		LastRecordAt: time.Time{}, Pricing: pricing,
 	}); err != nil {
@@ -60,7 +65,8 @@ func TestRollupReportMatchesDirectLogReplay(t *testing.T) {
 	direct := BuildMetricsHistory(MetricsHistoryInput{
 		Since: now.Add(-2 * time.Hour), Now: now, LogPath: logPath, Pricing: pricing,
 	})
-	fromRollup := metricsWindowsFromRollupPath(rollupPath, []time.Duration{2 * time.Hour}, now, pricing)
+	checkpointPath := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
+	fromRollup := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, pricing)
 	if len(fromRollup) != 1 {
 		t.Fatalf("got %d windows, want 1", len(fromRollup))
 	}
@@ -127,7 +133,7 @@ func TestDistillIsIdempotentAcrossPasses(t *testing.T) {
 	now := time.Date(2026, 8, 8, 11, 0, 0, 0, time.UTC)
 	pricing := rollupPricingTable()
 
-	first, err := distillMetricsRollup(metricsRollupDistillInput{
+	first, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
 		LastRecordAt: time.Time{}, Pricing: pricing,
 	})
@@ -138,7 +144,7 @@ func TestDistillIsIdempotentAcrossPasses(t *testing.T) {
 		t.Fatalf("first pass wrote %d records, want 2", first.Written)
 	}
 
-	second, err := distillMetricsRollup(metricsRollupDistillInput{
+	second, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
 		LastRecordAt: first.LastRecordAt, Pricing: pricing,
 	})
@@ -149,7 +155,8 @@ func TestDistillIsIdempotentAcrossPasses(t *testing.T) {
 		t.Fatalf("second pass wrote %d records over an unchanged log, want 0", second.Written)
 	}
 
-	reports := metricsWindowsFromRollupPath(rollupPath, []time.Duration{2 * time.Hour}, now, pricing)
+	checkpointPath := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
+	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, pricing)
 	if got := metricInt(reports[0].Report.Metrics.Requests.Delta); got != 2 {
 		t.Fatalf("requests after two passes = %d, want 2", got)
 	}
@@ -169,7 +176,7 @@ func TestDistillSkipsRequestsWithNoTerminalRecord(t *testing.T) {
 	rollupPath := filepath.Join(t.TempDir(), metricsRollupFileName)
 	now := time.Date(2026, 8, 8, 11, 0, 0, 0, time.UTC)
 
-	result, err := distillMetricsRollup(metricsRollupDistillInput{
+	result, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
 		LastRecordAt: time.Time{}, Pricing: rollupPricingTable(),
 	})
@@ -193,7 +200,8 @@ func TestDefaultWindowsReportIndependentTotals(t *testing.T) {
 		requestRollupFixture("in-week", "2026-08-06T02:00:00Z", "", "2026-08-06T02:00:02Z"),
 	})
 
-	reports := metricsWindowsFromRollupPath(rollupPath, defaultMetricsWindows, now, rollupPricingTable())
+	checkpointPath := writeRollupCheckpointFixture(t, now)
+	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, defaultMetricsWindows, now, rollupPricingTable())
 	if len(reports) != 3 {
 		t.Fatalf("got %d windows, want 3", len(reports))
 	}
@@ -220,7 +228,8 @@ func TestWindowReportsRestartCount(t *testing.T) {
 		requestRollupFixture("after", "2026-08-08T11:45:00Z", "", "2026-08-08T11:45:02Z"),
 	})
 
-	reports := metricsWindowsFromRollupPath(rollupPath, []time.Duration{2 * time.Hour}, now, rollupPricingTable())
+	checkpointPath := writeRollupCheckpointFixture(t, now)
+	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, rollupPricingTable())
 	report := reports[0].Report
 	if report.Restarts != 1 {
 		t.Fatalf("restarts = %d, want 1", report.Restarts)
@@ -235,20 +244,29 @@ func TestWindowReportsRestartCount(t *testing.T) {
 
 func hasWarningContaining(report MetricsHistoryReport, needle string) bool {
 	for _, warning := range report.Warnings {
-		if len(warning) >= len(needle) && containsSubstring(warning, needle) {
+		if strings.Contains(warning, needle) {
 			return true
 		}
 	}
 	return false
 }
 
-func containsSubstring(haystack string, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
+// writeRollupCheckpointFixture writes a checkpoint whose pass just completed
+// at now, so a window ending at now reads as caught up to the trailing edge.
+// Most fixture-driven tests want this: they are asserting something about the
+// store's content, not about distill staleness, and a missing checkpoint would
+// otherwise mark every one of them Coverage.Complete=false for a reason
+// unrelated to what they are testing.
+func writeRollupCheckpointFixture(t *testing.T, passCompletedAt time.Time) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
+	if err := writeMetricsRollupCheckpoint(path, metricsRollupCheckpoint{
+		LastRecordAt: "",
+		LastPassAt:   formatRollupTime(passCompletedAt),
+	}); err != nil {
+		t.Fatalf("write checkpoint fixture: %v", err)
 	}
-	return false
+	return path
 }
 
 // TestEmptyRollupReportsNoHistoryRatherThanZero separates "nothing happened"
@@ -256,9 +274,10 @@ func containsSubstring(haystack string, needle string) bool {
 func TestEmptyRollupReportsNoHistoryRatherThanZero(t *testing.T) {
 	t.Parallel()
 	rollupPath := filepath.Join(t.TempDir(), metricsRollupFileName)
+	checkpointPath := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 
-	reports := metricsWindowsFromRollupPath(rollupPath, defaultMetricsWindows, now, rollupPricingTable())
+	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, defaultMetricsWindows, now, rollupPricingTable())
 	for _, report := range reports {
 		if report.Report.Coverage.Complete {
 			t.Fatalf("window %s claims complete coverage with no store", report.Label)
@@ -269,5 +288,121 @@ func TestEmptyRollupReportsNoHistoryRatherThanZero(t *testing.T) {
 		if !hasWarningContaining(report.Report, "no distilled daemon history") {
 			t.Fatalf("window %s warnings = %v, want the missing-history warning", report.Label, report.Report.Warnings)
 		}
+	}
+}
+
+// TestWindowClearsCoverageWhenDistillerLagsBehindWindowEnd is the coverage-lag
+// finding: the distiller runs on an interval, so a read taken just before the
+// next pass can be missing up to that long of the most recent traffic. Without
+// checking the checkpoint's pass time, Coverage.Complete would say the window
+// is trustworthy right up to Window.Until when it is not.
+func TestWindowClearsCoverageWhenDistillerLagsBehindWindowEnd(t *testing.T) {
+	t.Parallel()
+	now := rollupTestTime(t, "2026-08-08T12:00:00Z")
+	rollupPath := writeRollupFixture(t, []metricsRollupRecord{
+		requestRollupFixture("in-window", "2026-08-08T11:30:00Z", "", "2026-08-08T11:30:02Z"),
+	})
+	// The last pass finished 12 minutes before now, well past
+	// metricsRollupInterval (5 minutes), so the store cannot be trusted to hold
+	// everything up to Window.Until.
+	staleCheckpoint := writeRollupCheckpointFixture(t, now.Add(-12*time.Minute))
+
+	reports := metricsWindowsFromRollupPath(rollupPath, staleCheckpoint, []time.Duration{time.Hour}, now, rollupPricingTable())
+	report := reports[0].Report
+	if report.Coverage.Complete {
+		t.Fatal("coverage claims complete with a distill pass 12 minutes stale")
+	}
+	if !hasWarningContaining(report, "distilled history may be up to") {
+		t.Fatalf("warnings = %v, want one naming the distill lag", report.Warnings)
+	}
+}
+
+// TestWindowReportsCompleteCoverageWhenDistillerIsCurrent is the positive case:
+// a fresh checkpoint and history reaching back to the window start together
+// mean the reader can trust the numbers.
+func TestWindowReportsCompleteCoverageWhenDistillerIsCurrent(t *testing.T) {
+	t.Parallel()
+	now := rollupTestTime(t, "2026-08-08T12:00:00Z")
+	rollupPath := writeRollupFixture(t, []metricsRollupRecord{
+		generationRollupRecord(now.Add(-90 * time.Minute)),
+		requestRollupFixture("in-window", "2026-08-08T11:30:00Z", "", "2026-08-08T11:30:02Z"),
+	})
+	freshCheckpoint := writeRollupCheckpointFixture(t, now.Add(-1*time.Minute))
+
+	reports := metricsWindowsFromRollupPath(rollupPath, freshCheckpoint, []time.Duration{time.Hour}, now, rollupPricingTable())
+	report := reports[0].Report
+	if !report.Coverage.Complete {
+		t.Fatalf("coverage = incomplete warnings=%v, want complete with a current pass and full history", report.Warnings)
+	}
+}
+
+// TestDistillMetricsRollupStopsPromptlyWhenCanceled is the cancellation
+// finding: a cold-start pass with no checkpoint scans the full retention
+// window, and a reload's drain must be able to interrupt that scan rather than
+// wait for it to finish.
+func TestDistillMetricsRollupStopsPromptlyWhenCanceled(t *testing.T) {
+	t.Parallel()
+	logPath := twoRequestLog(t)
+	rollupPath := filepath.Join(t.TempDir(), metricsRollupFileName)
+	now := time.Date(2026, 8, 8, 11, 0, 0, 0, time.UTC)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := distillMetricsRollup(ctx, metricsRollupDistillInput{
+		LogPath: logPath, RollupPath: rollupPath, Now: now,
+		LastRecordAt: time.Time{}, Pricing: rollupPricingTable(),
+	})
+	if err == nil {
+		t.Fatal("distill with a canceled context returned no error")
+	}
+	if _, statErr := os.Stat(rollupPath); !os.IsNotExist(statErr) {
+		t.Fatalf("distill wrote to the store despite cancellation before any log read: stat err=%v", statErr)
+	}
+}
+
+// TestDistillMetricsRollupWaitsForTheWriteLock is the reload-overlap finding:
+// two processes distilling the same store concurrently must not interleave
+// their append-and-prune passes, since a prune's scan-then-rename can lose
+// lines the other process appended in between. This test proves the lock is
+// real by holding it externally and observing the distill call block until it
+// is released.
+func TestDistillMetricsRollupWaitsForTheWriteLock(t *testing.T) {
+	t.Parallel()
+	logPath := twoRequestLog(t)
+	rollupPath := filepath.Join(t.TempDir(), metricsRollupFileName)
+	now := time.Date(2026, 8, 8, 11, 0, 0, 0, time.UTC)
+
+	holder := flock.New(rollupPath + ".lock")
+	if err := holder.Lock(); err != nil {
+		t.Fatalf("acquire test lock: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
+			LogPath: logPath, RollupPath: rollupPath, Now: now,
+			LastRecordAt: time.Time{}, Pricing: rollupPricingTable(),
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("distill returned (err=%v) while the write lock was still held", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := holder.Unlock(); err != nil {
+		t.Fatalf("release test lock: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("distill after lock release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("distill did not proceed after the write lock was released")
 	}
 }

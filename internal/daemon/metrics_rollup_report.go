@@ -43,7 +43,8 @@ func metricsWindowLabel(window time.Duration) string {
 // every status invocation, which is what lets the command report history
 // without being asked for a window.
 func MetricsWindowsFromRollup(now time.Time) []MetricsWindowReport {
-	return metricsWindowsFromRollupPath(metricsRollupPath(), defaultMetricsWindows, now, loadRollupPricing())
+	return metricsWindowsFromRollupPath(
+		metricsRollupPath(), metricsRollupCheckpointPath(), defaultMetricsWindows, now, loadRollupPricing())
 }
 
 // loadRollupPricing resolves the pricing table the cost counter needs. A
@@ -58,9 +59,14 @@ func loadRollupPricing() adapterruntime.PricingTable {
 }
 
 // metricsWindowsFromRollupPath is the testable core of
-// [MetricsWindowsFromRollup].
+// [MetricsWindowsFromRollup]. checkpointPath is separate from path because
+// production resolves both from the state dir, but a test isolates the
+// rollup file in its own temp dir and must isolate the checkpoint the same
+// way, or a coverage-lag check here would read the real host's checkpoint
+// instead of the fixture's.
 func metricsWindowsFromRollupPath(
 	path string,
+	checkpointPath string,
 	durations []time.Duration,
 	now time.Time,
 	pricing adapterruntime.PricingTable,
@@ -69,6 +75,9 @@ func metricsWindowsFromRollupPath(
 	for _, duration := range durations {
 		windows = append(windows, MetricsWindow{Since: now.Add(-duration), Until: now})
 	}
+
+	checkpoint := readMetricsRollupCheckpoint(checkpointPath)
+	lastPassAt, _ := parseRollupTime(checkpoint.LastPassAt)
 
 	reports := make([]MetricsWindowReport, 0, len(durations))
 	loaded, loadErr := loadMetricsRollup(path, windows)
@@ -80,7 +89,7 @@ func metricsWindowsFromRollupPath(
 			reports = append(reports, MetricsWindowReport{Label: metricsWindowLabel(duration), Report: report})
 			continue
 		}
-		applyRollupWindow(&report, loaded[i], pricing)
+		applyRollupWindow(&report, loaded[i], lastPassAt, pricing)
 		reports = append(reports, MetricsWindowReport{Label: metricsWindowLabel(duration), Report: report})
 	}
 	return reports
@@ -110,21 +119,43 @@ func newRollupReport(window MetricsWindow) MetricsHistoryReport {
 // counters: the store holds per-request records, so summing across a restart
 // is exact, and the restart count is what tells the reader the window spans a
 // discontinuity.
-func applyRollupWindow(report *MetricsHistoryReport, loaded metricsRollupWindow, pricing adapterruntime.PricingTable) {
+//
+// lastPassAt is when the distiller last completed a pass, from the writer
+// checkpoint. The distiller runs on metricsRollupInterval, so the store can
+// lag Window.Until by up to that long even when every record it does hold is
+// correct; without checking lastPassAt, a read taken just before the next
+// pass would claim complete coverage while under-reporting the most recent
+// traffic.
+func applyRollupWindow(
+	report *MetricsHistoryReport,
+	loaded metricsRollupWindow,
+	lastPassAt time.Time,
+	pricing adapterruntime.PricingTable,
+) {
 	report.Restarts = loaded.Restarts
 	report.sawCanonicalRecord = loaded.Found || !loaded.EarliestSeen.IsZero()
 	report.historyCoversStart = !loaded.EarliestSeen.IsZero() &&
 		!loaded.EarliestSeen.After(report.Window.Since)
-	report.liveCoversEnd = true
+	report.liveCoversEnd = !lastPassAt.IsZero() &&
+		report.Window.Until.Sub(lastPassAt) <= metricsRollupInterval
 
 	if !report.sawCanonicalRecord {
 		addMetricsWarning(report, "no distilled daemon history yet")
 	} else if !report.historyCoversStart {
 		addMetricsWarning(report, "distilled history starts after the requested window")
 	}
+	if !report.liveCoversEnd {
+		if lastPassAt.IsZero() {
+			addMetricsWarning(report, "distiller has not completed a pass yet")
+		} else {
+			addMetricsWarning(report, fmt.Sprintf(
+				"distilled history may be up to %s behind; the next distill pass has not run yet",
+				report.Window.Until.Sub(lastPassAt).Round(time.Second)))
+		}
+	}
 	if loaded.Restarts > 0 {
 		addMetricsWarning(report, fmt.Sprintf("window spans %d daemon restart(s); totals are summed across them", loaded.Restarts))
 	}
 	aggregateMetricsRequests(report, loaded.Requests, pricing)
-	report.Coverage.Complete = report.historyCoversStart && !report.invalidHistory
+	report.Coverage.Complete = report.historyCoversStart && report.liveCoversEnd && !report.invalidHistory
 }

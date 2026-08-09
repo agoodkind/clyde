@@ -120,7 +120,7 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 		return
 	}
 	startedAt := w.now()
-	result, err := distillMetricsRollup(metricsRollupDistillInput{
+	result, err := distillMetricsRollup(ctx, metricsRollupDistillInput{
 		LogPath:      w.logPath,
 		RollupPath:   w.rollupPath,
 		Now:          startedAt,
@@ -140,6 +140,7 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 	w.lastRecordAt = result.LastRecordAt
 	if err := writeMetricsRollupCheckpoint(metricsRollupCheckpointPath(), metricsRollupCheckpoint{
 		LastRecordAt: formatRollupTime(result.LastRecordAt),
+		LastPassAt:   formatRollupTime(w.now()),
 	}); err != nil {
 		w.log.WarnContext(ctx, "daemon.metrics_rollup.checkpoint_write_failed",
 			"concern", "daemon.workers",

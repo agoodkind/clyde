@@ -11,6 +11,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -105,6 +107,12 @@ type metricsRollupRecord struct {
 // having to map byte offsets across log rotations.
 type metricsRollupCheckpoint struct {
 	LastRecordAt string `json:"last_record_at"`
+	// LastPassAt is when the most recent pass completed, success or not. It is
+	// distinct from LastRecordAt: a quiet system with no new requests still
+	// completes passes, and LastPassAt is what tells a reader whether the store
+	// is caught up to the window's end rather than merely caught up to the last
+	// request it happened to see.
+	LastPassAt string `json:"last_pass_at"`
 }
 
 // metricsRollupPath returns the rollup store path inside the clyde state dir.
@@ -117,10 +125,29 @@ func metricsRollupCheckpointPath() string {
 	return filepath.Join(config.DefaultStateDir(), metricsRollupCheckpointFileName)
 }
 
+// acquireRollupWriteLock takes the cross-process advisory lock that guards a
+// distill pass's append-and-prune sequence.
+//
+// A reload can start a new generation's worker before the old generation's
+// worker has drained, so two processes can run a pass concurrently. Without
+// this lock, a prune that scans the store while the other process appends can
+// rename away lines the other process just wrote: the scan already finished
+// reading them out, the rename replaces the file with what the scan saw, and
+// the appended lines are gone. The lock file lives beside the store, matching
+// the `.lock` convention `gklog.NewLockedWriteCloser` uses for every other
+// JSONL sink this daemon owns.
+func acquireRollupWriteLock(path string) (*flock.Flock, error) {
+	lock := flock.New(path + ".lock")
+	if err := lock.Lock(); err != nil {
+		return nil, rollupError("daemon.metrics_rollup.lock_failed", path, err, "lock metrics rollup")
+	}
+	return lock, nil
+}
+
 // readMetricsRollupCheckpoint loads the writer checkpoint. A missing or
 // unreadable checkpoint yields the zero value, which starts a full pass.
 func readMetricsRollupCheckpoint(path string) metricsRollupCheckpoint {
-	empty := metricsRollupCheckpoint{LastRecordAt: ""}
+	empty := metricsRollupCheckpoint{LastRecordAt: "", LastPassAt: ""}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return empty
@@ -259,7 +286,7 @@ func applyRollupRecord(record metricsRollupRecord, windows []MetricsWindow, load
 		}
 		for i, window := range windows {
 			markRollupEarliest(&loaded[i], startedAt)
-			if startedAt.After(window.Since) && !startedAt.After(window.Until) {
+			if !startedAt.Before(window.Since) && !startedAt.After(window.Until) {
 				loaded[i].Restarts++
 			}
 		}
@@ -386,8 +413,18 @@ func generationRollupRecord(startedAt time.Time) metricsRollupRecord {
 // pruneMetricsRollup rewrites the store without records older than the cutoff
 // and returns how many it dropped.
 //
-// The rewrite goes through a temporary file and one rename, so a concurrent
-// reader sees either the whole old store or the whole new one.
+// Kept lines stream straight to the temporary file during the scan instead of
+// buffering in memory first: the store has no size limit, and buffering the
+// full eight-day retention window before writing risks a large allocation on
+// a busy daemon. A store with nothing to drop still costs one temporary-file
+// write, since streaming means the decision to keep a line and the write of
+// that line happen at the same step; that is a fixed, small cost against the
+// unbounded one buffering the whole store would risk.
+//
+// The rewrite goes through the temporary file and one rename, so a concurrent
+// reader sees either the whole old store or the whole new one. The caller
+// holds the rollup write lock across this call, which is what keeps a
+// concurrent append from being renamed away.
 func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -396,10 +433,19 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 		}
 		return 0, rollupError("daemon.metrics_rollup.open_failed", path, err, "open metrics rollup")
 	}
-	kept := make([]string, 0, 1024)
+	temporary := path + ".tmp"
+	temporaryFile, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		_ = file.Close()
+		return 0, rollupError("daemon.metrics_rollup.prune_open_failed", temporary, err, "open pruned metrics rollup")
+	}
+	writer := bufio.NewWriter(temporaryFile)
+
 	dropped := 0
+	kept := 0
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxMetricsRollupLineBytes)
+	var writeErr error
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -409,27 +455,45 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 			dropped++
 			continue
 		}
-		kept = append(kept, line)
+		kept++
+		if writeErr == nil {
+			_, writeErr = writer.WriteString(line)
+			if writeErr == nil {
+				writeErr = writer.WriteByte('\n')
+			}
+		}
 	}
 	scanErr := scanner.Err()
 	closeErr := file.Close()
 	if scanErr != nil {
+		_ = temporaryFile.Close()
+		_ = os.Remove(temporary)
 		return 0, rollupError("daemon.metrics_rollup.read_failed", path, scanErr, "read metrics rollup")
 	}
 	if closeErr != nil {
+		_ = temporaryFile.Close()
+		_ = os.Remove(temporary)
 		return 0, rollupError("daemon.metrics_rollup.close_failed", path, closeErr, "close metrics rollup")
 	}
+	if writeErr != nil {
+		_ = temporaryFile.Close()
+		_ = os.Remove(temporary)
+		return 0, rollupError("daemon.metrics_rollup.prune_write_failed", temporary, writeErr, "write pruned metrics rollup")
+	}
+	if flushErr := writer.Flush(); flushErr != nil {
+		_ = temporaryFile.Close()
+		_ = os.Remove(temporary)
+		return 0, rollupError("daemon.metrics_rollup.prune_write_failed", temporary, flushErr, "write pruned metrics rollup")
+	}
+	if closeErr := temporaryFile.Close(); closeErr != nil {
+		_ = os.Remove(temporary)
+		return 0, rollupError("daemon.metrics_rollup.prune_close_failed", temporary, closeErr, "close pruned metrics rollup")
+	}
 	if dropped == 0 {
+		if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, rollupError("daemon.metrics_rollup.prune_discard_failed", temporary, err, "discard pruned metrics rollup")
+		}
 		return 0, nil
-	}
-	payload := make([]byte, 0, len(kept)*128)
-	for _, line := range kept {
-		payload = append(payload, line...)
-		payload = append(payload, '\n')
-	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, payload, 0o600); err != nil {
-		return 0, rollupError("daemon.metrics_rollup.prune_write_failed", temporary, err, "write pruned metrics rollup")
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		return 0, rollupError("daemon.metrics_rollup.prune_replace_failed", path, err, "replace metrics rollup")
@@ -440,7 +504,7 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 		"subcomponent", "metrics_rollup",
 		"path", path,
 		"count", dropped,
-		"kept", len(kept),
+		"kept", kept,
 	)
 	return dropped, nil
 }

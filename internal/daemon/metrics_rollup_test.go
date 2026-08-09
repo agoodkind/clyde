@@ -114,6 +114,27 @@ func TestLoadMetricsRollupCountsRestartsPerWindow(t *testing.T) {
 	}
 }
 
+// TestLoadMetricsRollupCountsGenerationAtExactWindowStart pins the boundary a
+// review found inconsistent: a request landing exactly at window.Since counts
+// (terminalAt uses !Before(Since)), so a generation at that same instant must
+// count too, not just one strictly after it.
+func TestLoadMetricsRollupCountsGenerationAtExactWindowStart(t *testing.T) {
+	since := rollupTestTime(t, "2026-08-08T11:00:00Z")
+	path := writeRollupFixture(t, []metricsRollupRecord{
+		generationRollupRecord(since),
+	})
+	loaded, err := loadMetricsRollup(path, []MetricsWindow{{
+		Since: since,
+		Until: rollupTestTime(t, "2026-08-08T12:00:00Z"),
+	}})
+	if err != nil {
+		t.Fatalf("load rollup: %v", err)
+	}
+	if loaded[0].Restarts != 1 {
+		t.Fatalf("restarts = %d, want 1 for a generation exactly at window.Since", loaded[0].Restarts)
+	}
+}
+
 // TestRollupRoundTripPreservesAggregationInputs checks that a request survives
 // the store unchanged in every field the aggregation reads. A dropped field
 // here would silently zero a counter in the reported window.
@@ -293,7 +314,7 @@ func TestMetricsRollupCheckpointRoundTrip(t *testing.T) {
 	if empty := readMetricsRollupCheckpoint(path); empty.LastRecordAt != "" {
 		t.Fatalf("missing checkpoint did not read as zero: %+v", empty)
 	}
-	want := metricsRollupCheckpoint{LastRecordAt: "2026-08-08T10:00:00Z"}
+	want := metricsRollupCheckpoint{LastRecordAt: "2026-08-08T10:00:00Z", LastPassAt: "2026-08-08T10:05:00Z"}
 	if err := writeMetricsRollupCheckpoint(path, want); err != nil {
 		t.Fatalf("write checkpoint: %v", err)
 	}

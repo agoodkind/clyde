@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
 	"time"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
@@ -38,27 +41,19 @@ type metricsRollupDistillResult struct {
 // It reuses the log replay that the historical report already uses, so the
 // rollup and a direct log read agree by construction rather than by two
 // parsers staying in step.
-func distillMetricsRollup(input metricsRollupDistillInput) (metricsRollupDistillResult, error) {
+//
+// A cold start with no checkpoint scans the full retention window, which can
+// be the largest single pass the distiller ever runs. ctx lets a reload's
+// drain interrupt that scan between log rotations instead of waiting for it
+// to finish or for the drain's own timeout to expire.
+func distillMetricsRollup(ctx context.Context, input metricsRollupDistillInput) (metricsRollupDistillResult, error) {
 	result := metricsRollupDistillResult{Written: 0, Pruned: 0, LastRecordAt: input.LastRecordAt}
 	since := input.LastRecordAt.Add(-metricsRollupOverlap)
 	if input.LastRecordAt.IsZero() {
 		since = input.Now.Add(-metricsRollupRetention)
 	}
 
-	report := MetricsHistoryReport{
-		Window:                 MetricsWindow{Since: since, Until: input.Now},
-		Coverage:               MetricsCoverage{Complete: false},
-		Metrics:                emptyMetricsValues(),
-		TimeBreakdown:          MetricsTimeBreakdown{Total: emptyMetricsDuration(), Stages: []MetricsStageDuration{}},
-		UnattributedDurationMS: nil,
-		Warnings:               []string{},
-		historyCoversStart:     false,
-		liveCoversEnd:          false,
-		generationStable:       true,
-		invalidHistory:         false,
-		sawCanonicalRecord:     false,
-		Restarts:               0,
-	}
+	report := newRollupReport(MetricsWindow{Since: since, Until: input.Now})
 	replay := MetricsHistoryInput{
 		Since:   since,
 		Now:     input.Now,
@@ -67,6 +62,16 @@ func distillMetricsRollup(input metricsRollupDistillInput) (metricsRollupDistill
 	}
 	requests := make(map[string]*metricsRequest)
 	for _, path := range daemonLogHistoryPaths(input.LogPath, since) {
+		if err := ctx.Err(); err != nil {
+			slog.WarnContext(ctx, "daemon.metrics_rollup.pass_canceled",
+				"concern", "daemon.workers",
+				"component", "daemon",
+				"subcomponent", "metrics_rollup",
+				"path", input.RollupPath,
+				"err", err.Error(),
+			)
+			return result, fmt.Errorf("distill metrics rollup: %w", err)
+		}
 		readMetricsHistoryFile(path, replay, requests, &report)
 	}
 
@@ -81,6 +86,13 @@ func distillMetricsRollup(input metricsRollupDistillInput) (metricsRollupDistill
 			newest = request.terminalAt
 		}
 	}
+
+	lock, err := acquireRollupWriteLock(input.RollupPath)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = lock.Unlock() }()
+
 	if len(records) > 0 {
 		if err := appendMetricsRollupRecords(input.RollupPath, sortedRollupRecords(records)); err != nil {
 			return result, err
