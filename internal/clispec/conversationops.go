@@ -494,57 +494,61 @@ func formatListResult(result conv.ListResult) string {
 	return out.String()
 }
 
-// formatSearchConversationsResult renders the search result as a scannable
-// numbered list in the lm-semantic-search style: a Found header, then one entry
-// per match leading with its [workspace] tag, title, and provider, a line with
-// the message date and time and role (plus an archived marker when the
-// conversation is archived), and the matching snippet. The full structured data
-// (source, freshness, facets, filter funnel, and the per-record fields) stays
-// available through --output-format json.
+const conversationSearchCollection = "clyde-conversations"
+
+// formatSearchConversationsResult renders the lm-semantic-search conversation
+// layout with a human timestamp. The full structured data stays available
+// through --output-format json.
 func formatSearchConversationsResult(result conv.SearchConversationsResult, query string) string {
 	var out strings.Builder
 	if len(result.Matches) == 0 {
-		fmt.Fprintf(&out, "No results found for %q.\n", query)
+		fmt.Fprintf(
+			&out,
+			"🔍 No conversation results found for query: %q in collection '%s'\n",
+			query,
+			conversationSearchCollection,
+		)
 		return out.String()
 	}
-	fmt.Fprintf(&out, "Found %d results for %q\n\n", len(result.Matches), query)
+	resultLabel := "results"
+	if len(result.Matches) == 1 {
+		resultLabel = "result"
+	}
+	fmt.Fprintf(
+		&out,
+		"🔍 Found %d conversation %s for query: %q in collection '%s'\n\n",
+		len(result.Matches),
+		resultLabel,
+		query,
+		conversationSearchCollection,
+	)
 	for index, match := range result.Matches {
-		record := match.Record
-		workspace := shortPath(record.WorkspaceRoot)
-		if workspace == "" {
-			workspace = "no workspace"
-		}
-		title := record.Title
-		if title == "" {
-			title = record.ID
-		}
 		role := match.Role
 		if role == "" {
 			role = "unknown"
 		}
-		fmt.Fprintf(&out, "%d. [%s]  %s (%s)\n", index+1, workspace, title, record.Provider.String())
-		meta := fmt.Sprintf("%s · %s", match.Timestamp.Format("2006-01-02 15:04"), role)
-		if record.Archived {
-			meta += " · archived"
+		fmt.Fprintf(&out, "%d. Conversation message [%s]\n", index+1, conversationSearchCollection)
+		fmt.Fprintf(&out, "   Conversation: %s\n", match.Record.ID)
+		fmt.Fprintf(&out, "   Message index: %d\n", match.MessageIndex)
+		fmt.Fprintf(&out, "   Role: %s\n", role)
+		fmt.Fprintf(&out, "   Timestamp: %s\n", match.Timestamp.Format("2006-01-02 15:04 MST"))
+		fmt.Fprintf(&out, "   Rank: %d\n", index+1)
+		snippet := strings.TrimSpace(match.Snippet)
+		fence := "```"
+		for strings.Contains(snippet, fence) {
+			fence += "`"
 		}
-		fmt.Fprintf(&out, "   %s\n", meta)
-		if snippet := collapseWhitespace(match.Snippet); snippet != "" {
-			fmt.Fprintf(&out, "   %s\n", snippet)
+		fmt.Fprintf(&out, "   Content:\n%s\n", fence)
+		out.WriteString(snippet)
+		fmt.Fprintf(&out, "\n%s\n", fence)
+		if index < len(result.Matches)-1 {
+			out.WriteString("\n")
 		}
-		out.WriteString("\n")
 	}
-	fmt.Fprintf(&out, "%d results.", len(result.Matches))
 	if result.HasMore {
-		fmt.Fprintf(&out, " More: --offset %d", result.NextOffset)
+		fmt.Fprintf(&out, "\nMore: --offset %d\n", result.NextOffset)
 	}
-	out.WriteString("\n")
 	return out.String()
-}
-
-// collapseWhitespace folds every run of whitespace, including newlines, into a
-// single space so a snippet renders on one line.
-func collapseWhitespace(value string) string {
-	return strings.Join(strings.Fields(value), " ")
 }
 
 func formatConversationInfo(info conv.Info) string {
