@@ -34,7 +34,7 @@ func (s *Server) recordPassthroughEgressAttempt(
 	s.deps.CaptureStore.RecordCappedExchange(correlation.FromContext(ctx), capture.Exchange{
 		Client: "adapter.passthrough", Provider: "openai-compatible", Concern: "adapter.passthrough.egress",
 		Host: request.URL.Host, Method: request.Method, Path: request.URL.Path, Status: status,
-		UpstreamRequestID: upstreamRequestID, SessionID: "", RequestHeaders: requestHeaders,
+		UpstreamRequestID: upstreamRequestID, SessionID: "", ConversationID: "", ConversationSource: "", RequestHeaders: requestHeaders,
 		ResponseHeaders: responseHeaders, RequestBody: requestBody, ResponseBody: result.body,
 		RequestType: request.Header.Get("Content-Type"), ResponseType: responseType, Started: started,
 	}, result.totalBytes, result.truncated)

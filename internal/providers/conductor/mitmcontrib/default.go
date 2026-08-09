@@ -54,6 +54,8 @@ func (routeProvider) ExtractIdentity(headers http.Header) mitm.IdentityContribut
 		PreferredRequestID:         "",
 		PreferredUpstreamRequestID: "",
 		SessionID:                  "",
+		ConversationID:             "",
+		ConversationSource:         "",
 		Facet:                      nil,
 	}
 }

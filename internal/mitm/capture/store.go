@@ -201,15 +201,15 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("capture: open sqlite %s: %w", cfg.DBPath, err)
 	}
 	db.SetMaxOpenConns(1)
+	if err := ensureRequestsIdentityColumns(ctx, db, log); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("capture: apply schema: %w", err)
 	}
 	if err := ensureToolEventColumns(ctx, db, log); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := ensureRequestsIdentityColumns(ctx, db, log); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -324,6 +324,14 @@ func ensureToolEventColumns(ctx context.Context, db *sql.DB, log *slog.Logger) e
 }
 
 func ensureRequestsIdentityColumns(ctx context.Context, db *sql.DB, log *slog.Logger) error {
+	var tableCount int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='requests'`).Scan(&tableCount); err != nil {
+		log.WarnContext(ctx, "mitm.capture.inspect_requests_table_failed", "err", err)
+		return fmt.Errorf("capture: inspect requests table: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(requests)`)
 	if err != nil {
 		log.WarnContext(ctx, "mitm.capture.inspect_requests_identity_columns_failed", "err", err)

@@ -18,8 +18,12 @@ func extractIdentity(headers http.Header) mitm.IdentityContribution {
 	threadID := firstHeader(headers, "thread-id", "session-id")
 	requestID := firstHeader(headers, "x-client-request-id")
 	contrib := mitm.IdentityContribution{
-		PreferredRequestID: requestID,
-		SessionID:          sessionID,
+		PreferredRequestID:         requestID,
+		PreferredUpstreamRequestID: "",
+		SessionID:                  sessionID,
+		ConversationID:             "",
+		ConversationSource:         "",
+		Facet:                      nil,
 	}
 	if threadID != "" {
 		contrib.ConversationID = threadID
