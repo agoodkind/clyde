@@ -23,6 +23,7 @@ import (
 	"goodkind.io/clyde/internal/providerid"
 	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
 	"goodkind.io/clyde/internal/reorientinject"
+	"goodkind.io/clyde/internal/sentinelinject"
 )
 
 type runtimeServices struct {
@@ -239,16 +240,13 @@ func bindMITMPacketConns(ctx context.Context, log *slog.Logger, listenerCfg conf
 	return packetConns, nil
 }
 
-// reorientInjectHooks returns the MITM request/response hooks enabled by config.
-// It returns the reorient summary-injection hook only when the feature is on, so
-// the default configuration registers no hooks and the proxy path stays
+// mitmRequestResponseHooks returns the MITM request/response hooks enabled by
+// config. The default configuration registers no hooks and the proxy path stays
 // byte-for-byte unchanged.
-func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
-	if !mitmCfg.ReorientSummaryInjection {
-		return nil
-	}
-	return []mitm.RequestResponseHook{
-		reorientinject.New(
+func mitmRequestResponseHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
+	var hooks []mitm.RequestResponseHook
+	if mitmCfg.ReorientSummaryInjection {
+		hooks = append(hooks, reorientinject.New(
 			newReorientInjectContentProvider(mitmCfg.ReorientInjectMaxLines),
 			reorientinject.Sizing{
 				MaxTokens:               mitmCfg.ReorientInjectMaxTokens,
@@ -258,8 +256,18 @@ func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
 				OneMillionContextWindow: mitmCfg.ReorientOneMillionContextWindow,
 				RecentFraction:          mitmCfg.ReorientRecentFraction,
 			},
-		),
+		))
 	}
+	if sentinel := strings.TrimSpace(mitmCfg.Sentinel); sentinel != "" {
+		hooks = append(hooks, sentinelinject.New(sentinel))
+	}
+	return hooks
+}
+
+// reorientInjectHooks is the historical name kept for existing tests. It returns
+// the same hook list as [mitmRequestResponseHooks].
+func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
+	return mitmRequestResponseHooks(mitmCfg)
 }
 
 // newReorientInjectContentProvider builds the reorient content provider. It
@@ -322,7 +330,7 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 		)
 		return fmt.Errorf("init mitm proxy for listener %q: %w", listenerCfg.ID, err)
 	}
-	proxy.SetRequestResponseHooks(reorientInjectHooks(cfg.MITM))
+	proxy.SetRequestResponseHooks(mitmRequestResponseHooks(cfg.MITM))
 	runtime.mitmProxies[listenerCfg.ID] = proxy
 	runtime.mitmListeners[listenerCfg.ID] = sockets
 	runtime.mitmPacketConns[listenerCfg.ID] = packetConns

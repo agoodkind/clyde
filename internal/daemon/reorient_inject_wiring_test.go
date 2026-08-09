@@ -5,6 +5,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/reorientinject"
+	"goodkind.io/clyde/internal/sentinelinject"
 )
 
 // TestReorientInjectHooksDisabledByDefault asserts the default MITM config
@@ -27,5 +28,18 @@ func TestReorientInjectHooksEnabledRegistersOneHook(t *testing.T) {
 	}
 	if _, ok := hooks[0].(*reorientinject.Hook); !ok {
 		t.Fatalf("hook type = %T, want *reorientinject.Hook", hooks[0])
+	}
+}
+
+// TestSentinelInjectHooksRegistersWhenConfigured asserts a non-empty sentinel
+// registers the sentinel rewrite hook.
+func TestSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
+	t.Parallel()
+	hooks := mitmRequestResponseHooks(config.MITMConfig{Sentinel: "MYKEYWORD"})
+	if len(hooks) != 1 {
+		t.Fatalf("mitmRequestResponseHooks(sentinel) = %d hooks, want 1", len(hooks))
+	}
+	if _, ok := hooks[0].(*sentinelinject.Hook); !ok {
+		t.Fatalf("hook type = %T, want *sentinelinject.Hook", hooks[0])
 	}
 }

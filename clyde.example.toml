@@ -408,6 +408,8 @@ aliases = [{ id = "claude-haiku-4-5", advertise = true }]
 [mitm]
 providers = ["claude", "codex", "conductor", "cursor"]
 
+# sentinel = "MYKEYWORD"
+
 # Per-client MITM listeners, split into CLIs ([mitm.cli.<name>]) and desktop apps
 # ([mitm.app.<name>]). The table key is the client name; each gets its own
 # loopback port so every captured exchange in mitm/capture.db is tagged with the

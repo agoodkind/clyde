@@ -48,6 +48,10 @@ type MITMConfig struct {
 	// fallback path taken when no valid request split is computed. Zero uses the
 	// conversation renderer default (3500).
 	ReorientInjectMaxLines int `json:"reorientInjectMaxLines,omitempty" toml:"reorient_inject_max_lines,omitempty"`
+	// Sentinel, when non-empty, enables the MITM hook that scans the latest
+	// user message on an intercepted Anthropic /v1/messages request and
+	// rewrites the downstream model message to everything after the keyword.
+	Sentinel string `json:"sentinel,omitempty" toml:"sentinel,omitempty"`
 	// App maps each desktop (Electron) client name to its MITM listen endpoint,
 	// declared as [mitm.app.<name>] (for example [mitm.app.cursor]). CLI maps
 	// each CLI client name, declared as [mitm.cli.<name>] (for example
