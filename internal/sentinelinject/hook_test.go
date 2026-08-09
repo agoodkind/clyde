@@ -2,6 +2,7 @@ package sentinelinject
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -43,6 +44,15 @@ type staticHookBody struct {
 
 func (b staticHookBody) Bytes() ([]byte, error) {
 	return b.body, nil
+}
+
+func claudeMessagesRequest(body []byte) mitm.RequestResponseHookRequest {
+	return mitm.RequestResponseHookRequest{
+		Provider: claudeProviderName,
+		Method:   http.MethodPost,
+		Path:     messagesPath,
+		Body:     staticHookBody{body: body},
+	}
 }
 
 func eventStreamResponse(body string) mitm.ResponseHookResponse {
@@ -87,11 +97,7 @@ func TestExtractForcedContent(t *testing.T) {
 func TestHookMatchesLatestUserMessage(t *testing.T) {
 	t.Parallel()
 	hook := New(sentinelKeyword)
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Body:   staticHookBody{body: []byte(sentinelRequestBody)},
-	})
+	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(sentinelRequestBody)))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -110,11 +116,7 @@ func TestHookMatchesLatestUserMessage(t *testing.T) {
 func TestHookDoesNotMatchWithoutKeyword(t *testing.T) {
 	t.Parallel()
 	hook := New(sentinelKeyword)
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Body:   staticHookBody{body: []byte(normalRequestBody)},
-	})
+	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(normalRequestBody)))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -131,16 +133,46 @@ func TestHookIgnoresKeywordOnlyInOlderUserMessage(t *testing.T) {
 		`{"role":"user","content":"say hello"}` +
 		`]}`
 	hook := New(sentinelKeyword)
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Body:   staticHookBody{body: []byte(body)},
-	})
+	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(body)))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
 	if match.Matched {
 		t.Fatal("keyword only in an older user message must not match")
+	}
+}
+
+func TestHookRejectsNonClaudeProvider(t *testing.T) {
+	t.Parallel()
+	hook := New(sentinelKeyword)
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Provider: "openai",
+		Method:   http.MethodPost,
+		Path:     messagesPath,
+		Body:     staticHookBody{body: []byte(sentinelRequestBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if match.Matched {
+		t.Fatal("non-claude provider must not match")
+	}
+}
+
+func TestHookRejectsPrefixedMessagesPath(t *testing.T) {
+	t.Parallel()
+	hook := New(sentinelKeyword)
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Provider: claudeProviderName,
+		Method:   http.MethodPost,
+		Path:     "/proxy/v1/messages",
+		Body:     staticHookBody{body: []byte(sentinelRequestBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if match.Matched {
+		t.Fatal("prefixed /v1/messages path must not match")
 	}
 }
 
@@ -158,12 +190,53 @@ func TestTransformResponseReplacesModelText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read transformed body: %v", err)
 	}
-	text := string(body)
-	if strings.Contains(text, `"text":"hello"`) {
-		t.Fatalf("upstream model text leaked into rewritten SSE: %s", text)
+	events := parseSSEEvents(string(body))
+	wantNames := []string{
+		"message_start",
+		string(contentBlockEventStart),
+		string(contentBlockEventDelta),
+		string(contentBlockEventStop),
+		"message_delta",
+		"message_stop",
 	}
-	if !strings.Contains(text, `"text":"\nforced reply"`) && !strings.Contains(text, `"text":"\\nforced reply"`) {
-		t.Fatalf("rewritten SSE missing forced suffix: %s", text)
+	if len(events) != len(wantNames) {
+		t.Fatalf("events = %d (%v), want %d (%v)", len(events), eventNames(events), len(wantNames), wantNames)
+	}
+	for i, name := range wantNames {
+		if events[i].Name != name {
+			t.Fatalf("events[%d].Name = %q, want %q", i, events[i].Name, name)
+		}
+	}
+	var delta contentBlockDeltaPayload
+	if err := json.Unmarshal([]byte(events[2].Data), &delta); err != nil {
+		t.Fatalf("decode delta: %v", err)
+	}
+	wantDelta := newContentBlockDeltaPayload(0, "\nforced reply")
+	if delta != wantDelta {
+		t.Fatalf("delta = %#v, want %#v", delta, wantDelta)
+	}
+}
+
+func TestReplaceSSETextPreservesEmptyAndPingOnlyStreams(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "empty body", body: ""},
+		{name: "ping only", body: "event: ping\ndata: {}\n\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := replaceSSEText([]byte(tc.body), "forced")
+			if err != nil {
+				t.Fatalf("replaceSSEText err = %v", err)
+			}
+			if string(got) != tc.body {
+				t.Fatalf("body = %q, want unchanged %q", string(got), tc.body)
+			}
+		})
 	}
 }
 
@@ -221,15 +294,19 @@ func TestTransformPassesThroughNonStreamingResponse(t *testing.T) {
 func TestNewEmptySentinelNeverMatches(t *testing.T) {
 	t.Parallel()
 	hook := New("")
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Body:   staticHookBody{body: []byte(sentinelRequestBody)},
-	})
+	match, err := hook.MatchRequestResponse(claudeMessagesRequest([]byte(sentinelRequestBody)))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
 	if match.Matched {
 		t.Fatal("empty sentinel must not match")
 	}
+}
+
+func eventNames(events []sseEvent) []string {
+	names := make([]string, 0, len(events))
+	for _, event := range events {
+		names = append(names, event.Name)
+	}
+	return names
 }

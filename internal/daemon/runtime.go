@@ -265,12 +265,6 @@ func mitmRequestResponseHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseH
 	return hooks
 }
 
-// reorientInjectHooks is the historical name kept for existing tests. It returns
-// the same hook list as [mitmRequestResponseHooks].
-func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
-	return mitmRequestResponseHooks(mitmCfg)
-}
-
 // newReorientInjectContentProvider builds the reorient content provider. It
 // closes over a dedicated conversation index used only to render a transcript
 // directly from its on-disk path: the index never scans and is independent of

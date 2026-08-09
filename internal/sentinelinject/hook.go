@@ -17,11 +17,26 @@ import (
 )
 
 const (
-	messagesPathSuffix      = "/v1/messages"
+	messagesPath            = "/v1/messages"
+	claudeProviderName      = "claude"
 	eventStreamContentType  = "text/event-stream"
 	sentinelInjectConcern   = "providers.mitm.wire"
 	sentinelInjectComponent = "mitm"
 	defaultTextContentIndex = 0
+)
+
+// contentBlockEventName enumerates Anthropic SSE content-block event names the
+// rewrite path strips and re-emits.
+type contentBlockEventName string
+
+const (
+	contentBlockEventStart contentBlockEventName = "content_block_start"
+	contentBlockEventDelta contentBlockEventName = "content_block_delta"
+	contentBlockEventStop  contentBlockEventName = "content_block_stop"
+)
+
+const (
+	sseEventMessageStart = "message_start"
 )
 
 // Hook scans the latest user message on an Anthropic /v1/messages request and
@@ -47,7 +62,10 @@ func (h *Hook) MatchRequestResponse(
 	if req.Method != http.MethodPost {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
-	if !strings.HasSuffix(req.Path, messagesPathSuffix) {
+	if req.Provider != claudeProviderName {
+		return unmatchedRequestResponseHookMatch(), nil
+	}
+	if req.Path != messagesPath {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
 	body, err := req.Body.Bytes()
@@ -83,6 +101,7 @@ func (h *Hook) MatchRequestResponse(
 		Transformer: responseReplaceTransformer{
 			content: forced,
 		},
+		RequestTransformer: nil,
 	}, nil
 }
 
@@ -150,11 +169,11 @@ func extractForcedContent(userText, sentinel string) (string, bool) {
 	if sentinel == "" {
 		return "", false
 	}
-	index := strings.Index(userText, sentinel)
-	if index < 0 {
+	_, after, found := strings.Cut(userText, sentinel)
+	if !found {
 		return "", false
 	}
-	return userText[index+len(sentinel):], true
+	return after, true
 }
 
 type responseReplaceTransformer struct {
@@ -210,7 +229,7 @@ func responseIsStreamingSuccess(resp mitm.ResponseHookResponse) bool {
 func replaceSSEText(body []byte, forced string) ([]byte, error) {
 	events := parseSSEEvents(string(body))
 	if len(events) == 0 {
-		return buildMinimalSSE(forced), nil
+		return body, nil
 	}
 	output := make([]sseEvent, 0, len(events)+3)
 	blockInserted := false
@@ -219,7 +238,7 @@ func replaceSSEText(body []byte, forced string) ([]byte, error) {
 			continue
 		}
 		output = append(output, event)
-		if event.Name == "message_start" && !blockInserted {
+		if event.Name == sseEventMessageStart && !blockInserted {
 			appendEvents, err := marshalTextBlockEvents(defaultTextContentIndex, forced)
 			if err != nil {
 				return nil, err
@@ -229,53 +248,37 @@ func replaceSSEText(body []byte, forced string) ([]byte, error) {
 		}
 	}
 	if !blockInserted {
-		return buildMinimalSSE(forced), nil
+		return body, nil
 	}
 	return buildSSEBody(output), nil
 }
 
 func isContentBlockEvent(name string) bool {
-	switch name {
-	case "content_block_start", "content_block_delta", "content_block_stop":
+	switch contentBlockEventName(name) {
+	case contentBlockEventStart, contentBlockEventDelta, contentBlockEventStop:
 		return true
 	default:
 		return false
 	}
 }
 
-func buildMinimalSSE(forced string) []byte {
-	appendEvents, err := marshalTextBlockEvents(defaultTextContentIndex, forced)
-	if err != nil {
-		return nil
-	}
-	events := []sseEvent{
-		{Name: "message_start", Data: `{"type":"message_start","message":{"id":"sentinel","content":[]}}`},
-	}
-	events = append(events, appendEvents...)
-	events = append(events,
-		sseEvent{Name: "message_delta", Data: `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`},
-		sseEvent{Name: "message_stop", Data: `{"type":"message_stop"}`},
-	)
-	return buildSSEBody(events)
-}
-
 func marshalTextBlockEvents(blockIndex int, content string) ([]sseEvent, error) {
-	start, err := marshalSSEData(newContentBlockStartPayload(blockIndex))
+	start, err := MarshalSSEData(newContentBlockStartPayload(blockIndex))
 	if err != nil {
 		return nil, err
 	}
-	delta, err := marshalSSEData(newContentBlockDeltaPayload(blockIndex, content))
+	delta, err := MarshalSSEData(newContentBlockDeltaPayload(blockIndex, content))
 	if err != nil {
 		return nil, err
 	}
-	stop, err := marshalSSEData(newContentBlockStopPayload(blockIndex))
+	stop, err := MarshalSSEData(newContentBlockStopPayload(blockIndex))
 	if err != nil {
 		return nil, err
 	}
 	return []sseEvent{
-		{Name: "content_block_start", Data: start},
-		{Name: "content_block_delta", Data: delta},
-		{Name: "content_block_stop", Data: stop},
+		{Name: string(contentBlockEventStart), Data: start},
+		{Name: string(contentBlockEventDelta), Data: delta},
+		{Name: string(contentBlockEventStop), Data: stop},
 	}, nil
 }
 
@@ -333,7 +336,7 @@ type contentBlockStopPayload struct {
 
 func newContentBlockStartPayload(blockIndex int) contentBlockStartPayload {
 	return contentBlockStartPayload{
-		Type:  "content_block_start",
+		Type:  string(contentBlockEventStart),
 		Index: blockIndex,
 		ContentBlock: textContentBlock{
 			Type: "text",
@@ -344,7 +347,7 @@ func newContentBlockStartPayload(blockIndex int) contentBlockStartPayload {
 
 func newContentBlockDeltaPayload(blockIndex int, content string) contentBlockDeltaPayload {
 	return contentBlockDeltaPayload{
-		Type:  "content_block_delta",
+		Type:  string(contentBlockEventDelta),
 		Index: blockIndex,
 		Delta: textDelta{
 			Type: "text_delta",
@@ -355,16 +358,23 @@ func newContentBlockDeltaPayload(blockIndex int, content string) contentBlockDel
 
 func newContentBlockStopPayload(blockIndex int) contentBlockStopPayload {
 	return contentBlockStopPayload{
-		Type:  "content_block_stop",
+		Type:  string(contentBlockEventStop),
 		Index: blockIndex,
 	}
 }
 
-func marshalSSEData[T ssePayload](payload T) (string, error) {
+// MarshalSSEData encodes one Anthropic SSE JSON payload without HTML escaping.
+func MarshalSSEData[T ssePayload](payload T) (string, error) {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(payload); err != nil {
+		slog.Warn(
+			"mitm.sentinel_inject.sse_json_encode_failed",
+			"component", sentinelInjectComponent,
+			"concern", sentinelInjectConcern,
+			"err", err,
+		)
 		return "", fmt.Errorf("encode sentinel inject SSE JSON: %w", err)
 	}
 	return strings.TrimSuffix(buffer.String(), "\n"), nil
