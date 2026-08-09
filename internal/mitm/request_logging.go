@@ -8,7 +8,9 @@ import (
 
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/providerid"
 )
 
 // mitmRequestIdentity builds the generic [logevent.Identity] for an
@@ -59,6 +61,8 @@ func extractIdentityContribution(host, path string, headers http.Header) Identit
 		PreferredRequestID:         "",
 		PreferredUpstreamRequestID: "",
 		SessionID:                  "",
+		ConversationID:             "",
+		ConversationSource:         "",
 		Facet:                      nil,
 	}
 }
@@ -67,7 +71,27 @@ func identityContributionEmpty(contrib IdentityContribution) bool {
 	return contrib.PreferredRequestID == "" &&
 		contrib.PreferredUpstreamRequestID == "" &&
 		contrib.SessionID == "" &&
+		contrib.ConversationID == "" &&
 		contrib.Facet == nil
+}
+
+// captureConversationFields derives the Clyde conversation id and
+// source tag stored on MITM capture rows from the provider label and
+// native conversation id contributed by the provider extractor.
+func captureConversationFields(provider string, contrib IdentityContribution) (conversationID string, conversationSource string) {
+	nativeID := strings.TrimSpace(contrib.ConversationID)
+	if nativeID == "" {
+		return "", ""
+	}
+	prov, ok := providerid.Parse(provider)
+	if !ok || prov == providerid.ProviderUnspecified {
+		return "", ""
+	}
+	source := strings.TrimSpace(contrib.ConversationSource)
+	if source == "" {
+		source = "header"
+	}
+	return conversation.DerivedID(prov, nativeID, ""), source
 }
 
 func (p *Proxy) beginMITMLogRecorder(headers http.Header, path logevent.Path) *logevent.Recorder {

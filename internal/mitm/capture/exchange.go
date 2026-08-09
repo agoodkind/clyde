@@ -55,22 +55,24 @@ func (b *CappedBuffer) TotalRead() int { return b.totalRead }
 // (Client, Provider, Concern, UpstreamRequestID, SessionID) and the
 // request/response bytes; RecordExchange stamps the correlation ids and timing.
 type Exchange struct {
-	Client            string
-	Provider          string
-	Concern           string
-	Host              string
-	Method            string
-	Path              string
-	Status            int
-	UpstreamRequestID string
-	SessionID         string
-	RequestHeaders    http.Header
-	ResponseHeaders   http.Header
-	RequestBody       []byte
-	ResponseBody      []byte
-	RequestType       string
-	ResponseType      string
-	Started           time.Time
+	Client             string
+	Provider           string
+	Concern            string
+	Host               string
+	Method             string
+	Path               string
+	Status             int
+	UpstreamRequestID  string
+	SessionID          string
+	ConversationID     string
+	ConversationSource string
+	RequestHeaders     http.Header
+	ResponseHeaders    http.Header
+	RequestBody        []byte
+	ResponseBody       []byte
+	RequestType        string
+	ResponseType       string
+	Started            time.Time
 }
 
 // RecordExchange builds a Record from an Exchange and the request's correlation
@@ -82,26 +84,28 @@ func (s *Store) RecordExchange(corr correlation.Context, ex Exchange) {
 		return
 	}
 	s.Record(Record{
-		Timestamp:         clock.Now(),
-		Client:            ex.Client,
-		Provider:          ex.Provider,
-		Concern:           ex.Concern,
-		Host:              ex.Host,
-		Method:            ex.Method,
-		Path:              ex.Path,
-		Status:            ex.Status,
-		RequestID:         corr.RequestID,
-		UpstreamRequestID: ex.UpstreamRequestID,
-		SessionID:         ex.SessionID,
-		TraceID:           string(corr.TraceID),
-		RequestHeaders:    ex.RequestHeaders,
-		ResponseHeaders:   ex.ResponseHeaders,
-		RequestBody:       ex.RequestBody,
-		ResponseBody:      ex.ResponseBody,
-		RequestType:       ex.RequestType,
-		ResponseType:      ex.ResponseType,
-		DecodedRequest:    nil,
-		Duration:          clock.Since(ex.Started),
+		Timestamp:          clock.Now(),
+		Client:             ex.Client,
+		Provider:           ex.Provider,
+		Concern:            ex.Concern,
+		Host:               ex.Host,
+		Method:             ex.Method,
+		Path:               ex.Path,
+		Status:             ex.Status,
+		RequestID:          corr.RequestID,
+		UpstreamRequestID:  ex.UpstreamRequestID,
+		SessionID:          ex.SessionID,
+		ConversationID:     ex.ConversationID,
+		ConversationSource: ex.ConversationSource,
+		TraceID:            string(corr.TraceID),
+		RequestHeaders:     ex.RequestHeaders,
+		ResponseHeaders:    ex.ResponseHeaders,
+		RequestBody:        ex.RequestBody,
+		ResponseBody:       ex.ResponseBody,
+		RequestType:        ex.RequestType,
+		ResponseType:       ex.ResponseType,
+		DecodedRequest:     nil,
+		Duration:           clock.Since(ex.Started),
 	})
 }
 
@@ -119,7 +123,9 @@ func exchangeRecord(corr correlation.Context, ex Exchange) Record {
 	return Record{
 		Timestamp: clock.Now(), Client: ex.Client, Provider: ex.Provider, Concern: ex.Concern,
 		Host: ex.Host, Method: ex.Method, Path: ex.Path, Status: ex.Status, RequestID: corr.RequestID,
-		UpstreamRequestID: ex.UpstreamRequestID, SessionID: ex.SessionID, TraceID: string(corr.TraceID),
+		UpstreamRequestID: ex.UpstreamRequestID, SessionID: ex.SessionID,
+		ConversationID: ex.ConversationID, ConversationSource: ex.ConversationSource,
+		TraceID:        string(corr.TraceID),
 		RequestHeaders: ex.RequestHeaders, ResponseHeaders: ex.ResponseHeaders, RequestBody: ex.RequestBody,
 		ResponseBody: ex.ResponseBody, RequestType: ex.RequestType, ResponseType: ex.ResponseType,
 		DecodedRequest: nil,

@@ -105,6 +105,44 @@ func TestRecordTextAndBinaryBodies(t *testing.T) {
 	}
 }
 
+func TestRecordPersistsConversationIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.db")
+	store := openTestStore(t, Config{DBPath: path})
+
+	store.Record(Record{
+		Timestamp:          time.Now(),
+		Client:             "cli.claude-code",
+		Provider:           "claude",
+		Host:               "api.anthropic.com",
+		Method:             "POST",
+		Path:               "/v1/messages",
+		Status:             200,
+		RequestID:          "req-conv",
+		SessionID:          "sess-native",
+		ConversationID:     "claude:sess-native",
+		ConversationSource: "header",
+	})
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db := openVerifier(t, path)
+	var sessionID, conversationID, conversationSource string
+	if err := db.QueryRow(`SELECT session_id, conversation_id, conversation_source FROM requests WHERE request_id='req-conv'`).
+		Scan(&sessionID, &conversationID, &conversationSource); err != nil {
+		t.Fatalf("scan identity columns: %v", err)
+	}
+	if sessionID != "sess-native" {
+		t.Fatalf("session_id = %q", sessionID)
+	}
+	if conversationID != "claude:sess-native" {
+		t.Fatalf("conversation_id = %q", conversationID)
+	}
+	if conversationSource != "header" {
+		t.Fatalf("conversation_source = %q", conversationSource)
+	}
+}
+
 func TestTruncation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capture.db")
 	store := openTestStore(t, Config{DBPath: path, MaxBodyBytes: 10})

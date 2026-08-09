@@ -88,16 +88,10 @@ func (routeProvider) ClassifyPlain(path string) mitm.PlainRouteClaim {
 	}
 }
 
-// ExtractIdentity returns the zero typed contribution. Codex
-// traffic over plain-HTTP MITM does not currently contribute a
-// provider identity facet through this contract.
+// ExtractIdentity returns Codex session and thread identity parsed
+// from request headers.
 func (routeProvider) ExtractIdentity(headers http.Header) mitm.IdentityContribution {
-	return mitm.IdentityContribution{
-		PreferredRequestID:         "",
-		PreferredUpstreamRequestID: "",
-		SessionID:                  "",
-		Facet:                      nil,
-	}
+	return extractIdentity(headers)
 }
 
 func init() {

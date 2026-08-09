@@ -246,6 +246,8 @@ func (unknownProvider) ExtractIdentity(http.Header) IdentityContribution {
 		PreferredRequestID:         "",
 		PreferredUpstreamRequestID: "",
 		SessionID:                  "",
+		ConversationID:             "",
+		ConversationSource:         "",
 		Facet:                      nil,
 	}
 }

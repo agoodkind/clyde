@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS requests (
 	request_id TEXT NOT NULL DEFAULT '',
 	upstream_request_id TEXT NOT NULL DEFAULT '',
 	session_id TEXT NOT NULL DEFAULT '',
+	conversation_id TEXT NOT NULL DEFAULT '',
+	conversation_source TEXT NOT NULL DEFAULT '',
 	trace_id TEXT NOT NULL DEFAULT '',
 	req_headers TEXT NOT NULL DEFAULT '',
 	resp_headers TEXT NOT NULL DEFAULT '',
@@ -26,6 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_requests_host ON requests(host);
 CREATE INDEX IF NOT EXISTS idx_requests_concern ON requests(concern);
 CREATE INDEX IF NOT EXISTS idx_requests_request_id ON requests(request_id);
 CREATE INDEX IF NOT EXISTS idx_requests_trace_id ON requests(trace_id);
+CREATE INDEX IF NOT EXISTS idx_requests_conversation_id ON requests(conversation_id);
 CREATE TABLE IF NOT EXISTS bodies (
 	request_row_id INTEGER NOT NULL,
 	which TEXT NOT NULL,
