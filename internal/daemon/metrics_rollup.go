@@ -78,19 +78,13 @@ type metricsRollupRecord struct {
 	GenerationStartedAt string `json:"generation_started_at,omitempty"`
 }
 
-// metricsRollupCheckpoint records how much of the daemon log the writer has
-// already distilled, so each pass reads only the new tail.
+// metricsRollupCheckpoint records how far the writer has already distilled.
 //
-// The offset is meaningful only for the file named by Path. A rotation renames
-// the active log, so a pass that finds a different path, or a file shorter than
-// the checkpoint describes, restarts that file from the beginning rather than
-// trusting a stale offset.
+// The cursor is the newest request terminal instant written, not a byte
+// offset. A pass re-reads a small overlap behind that instant and drops
+// anything at or before it, which keeps the store free of duplicates without
+// having to map byte offsets across log rotations.
 type metricsRollupCheckpoint struct {
-	Path   string `json:"path"`
-	Offset int64  `json:"offset"`
-	Size   int64  `json:"size"`
-	// LastRecordAt is the newest request terminal instant already written. It
-	// suppresses duplicates when a file has to be re-read from the start.
 	LastRecordAt string `json:"last_record_at"`
 }
 
@@ -107,7 +101,7 @@ func metricsRollupCheckpointPath() string {
 // readMetricsRollupCheckpoint loads the writer checkpoint. A missing or
 // unreadable checkpoint yields the zero value, which starts a full pass.
 func readMetricsRollupCheckpoint(path string) metricsRollupCheckpoint {
-	empty := metricsRollupCheckpoint{Path: "", Offset: 0, Size: 0, LastRecordAt: ""}
+	empty := metricsRollupCheckpoint{LastRecordAt: ""}
 	raw, err := os.ReadFile(path) //nolint:gosec // daemon-owned state path
 	if err != nil {
 		return empty
