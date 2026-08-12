@@ -131,6 +131,11 @@ func TestRunLinuxInactiveInstallsService(t *testing.T) {
 		`deploy: event=action.install_service.selected reason="inactive_service" cause="systemd_inactive"`,
 		`deploy: event=main.done platform="Linux" action="install_service" reason="inactive_service" cause="systemd_inactive"`,
 	)
+	written := fixture.fs.written[fixture.config.SystemdUserUnit]
+	wantExecStart := "ExecStart=" + fixture.config.InstallBin + " daemon run"
+	if !strings.Contains(string(written), wantExecStart) {
+		t.Fatalf("systemd unit missing %q:\n%s", wantExecStart, written)
+	}
 }
 
 func TestRunReloadOnlyRefusesOnDarwinConfigMismatch(t *testing.T) {

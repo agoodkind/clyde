@@ -27,8 +27,9 @@ func TestOptionsUseClydeReleaseIdentityAndLibraryDefaultPaths(t *testing.T) {
 	if options.Config.CurrentBuildHash != version.BuildHash() {
 		t.Fatalf("CurrentBuildHash = %q, want %q", options.Config.CurrentBuildHash, version.BuildHash())
 	}
-	if options.Config.CurrentDirty != (version.Dirty == "true") {
-		t.Fatalf("CurrentDirty = %v, want %v", options.Config.CurrentDirty, version.Dirty == "true")
+	wantCurrentDirty := isLocalBuild(version.Version, version.Dirty == "true")
+	if options.Config.CurrentDirty != wantCurrentDirty {
+		t.Fatalf("CurrentDirty = %v, want %v", options.Config.CurrentDirty, wantCurrentDirty)
 	}
 	if options.Config.AllowPrerelease != nil {
 		t.Fatal("AllowPrerelease is non-nil, want library rolling default")
