@@ -27,7 +27,7 @@ func Options(overrides Overrides) selfupdate.Options {
 			CurrentVersion:   version.Version,
 			CurrentCommit:    version.Commit,
 			CurrentBuildHash: version.BuildHash(),
-			CurrentDirty:     version.Dirty == "true",
+			CurrentDirty:     isLocalBuild(version.Version, version.Dirty == "true"),
 			AllowPrerelease:  nil,
 			ValidateArgs:     []string{"--version"},
 			ValidateMatch:    "clyde version",
