@@ -67,6 +67,38 @@ func TestStateReportsApplied(t *testing.T) {
 	}
 }
 
+func TestBinaryVersionIgnoresStderr(t *testing.T) {
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "main.go")
+	binaryPath := filepath.Join(directory, "version-helper")
+	source := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	fmt.Fprintln(os.Stdout, "clyde version test-release")
+	fmt.Fprintln(os.Stderr, "diagnostic")
+}
+`
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if output, err := commandOutput(t.Context(), directory, nil, "go", "build", "-o", binaryPath, sourcePath); err != nil {
+		t.Fatalf("go build error = %v, output = %q", err, output)
+	}
+
+	version, err := binaryVersion(t.Context(), directory, binaryPath)
+	if err != nil {
+		t.Fatalf("binaryVersion() error = %v", err)
+	}
+	if version != "clyde version test-release" {
+		t.Fatalf("binaryVersion() = %q, want stdout only", version)
+	}
+}
+
 func TestRemoveTestRootRejectsTempDirectory(t *testing.T) {
 	t.Parallel()
 	err := removeTestRoot(os.TempDir())

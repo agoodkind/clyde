@@ -378,7 +378,7 @@ func (check *updateCheck) buildOldBinary(
 	); err != nil {
 		return err
 	}
-	version, err := commandOutput(ctx, check.repository, nil, check.installBin, "--version")
+	version, err := binaryVersion(ctx, check.repository, check.installBin)
 	if err != nil {
 		return err
 	}
@@ -502,17 +502,17 @@ func (check *updateCheck) waitForUpdate(ctx context.Context, targetTag string) e
 	statePath := check.updateStatePath()
 	wantVersion := "clyde version " + targetTag
 	for attempt := 1; attempt <= maxUpdateAttempts; attempt++ {
+		version, versionErr := binaryVersion(ctx, check.repository, check.installBin)
+		applied, stateErr := stateReportsApplied(statePath)
+		if versionErr == nil && stateErr == nil && version == wantVersion && applied {
+			return nil
+		}
 		if processErr, exited := check.child.status(); exited {
 			if processErr == nil {
 				return fmt.Errorf("daemon exited before applying the update")
 			}
 			slog.WarnContext(ctx, "ci.auto_update.daemon_exited", "component", "ci.auto_update", "err", processErr)
 			return fmt.Errorf("daemon exited before applying the update: %w", processErr)
-		}
-		version, versionErr := commandOutput(ctx, check.repository, nil, check.installBin, "--version")
-		applied, stateErr := stateReportsApplied(statePath)
-		if versionErr == nil && stateErr == nil && version == wantVersion && applied {
-			return nil
 		}
 		if err := wait(ctx, pollInterval); err != nil {
 			return err
@@ -641,6 +641,20 @@ func commandOutput(
 		return "", fmt.Errorf("run %s: %w: %s", name, err, strings.TrimSpace(string(output)))
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func binaryVersion(ctx context.Context, directory string, binary string) (string, error) {
+	command := exec.CommandContext(ctx, binary, "--version")
+	command.Dir = directory
+	var stdout strings.Builder
+	var stderr strings.Builder
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		slog.WarnContext(ctx, "ci.auto_update.version_failed", "component", "ci.auto_update", "binary", binary, "err", err)
+		return "", fmt.Errorf("run %s --version: %w: %s", binary, err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func replaceEnvironment(current []string, replacements map[string]string) []string {
