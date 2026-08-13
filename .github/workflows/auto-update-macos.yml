@@ -1,0 +1,26 @@
+name: Auto Update macOS 26
+
+on:
+  workflow_dispatch:
+
+jobs:
+  auto-update-macos:
+    name: Auto Update macOS 26
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      attestations: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          cache: false
+          go-version-file: go.mod
+      - name: Test automatic update
+        run: go run ./cmd/ci-auto-update
