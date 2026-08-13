@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -57,8 +58,9 @@ type environment struct {
 }
 
 type githubRelease struct {
-	TagName string `json:"tag_name"`
-	Draft   bool   `json:"draft"`
+	TagName     string    `json:"tag_name"`
+	Draft       bool      `json:"draft"`
+	PublishedAt time.Time `json:"published_at"`
 }
 
 type releaseSelection struct {
@@ -236,6 +238,9 @@ func selectReleases(releases []githubRelease, env environment) (releaseSelection
 			eligible = append(eligible, release)
 		}
 	}
+	sort.SliceStable(eligible, func(i int, j int) bool {
+		return eligible[i].PublishedAt.After(eligible[j].PublishedAt)
+	})
 	if env.manual {
 		if len(eligible) < 2 {
 			return releaseSelection{}, fmt.Errorf("manual run requires at least two published releases")

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"goodkind.io/go-makefile/selfupdate"
 )
@@ -11,8 +12,8 @@ import (
 func TestSelectReleasesForBranchBuild(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
-		{TagName: "202608121600-13b-abcdef12"},
-		{TagName: "202608111500-13a-12345678"},
+		{TagName: "202608111500-13a-12345678", PublishedAt: time.Date(2026, time.August, 11, 15, 0, 0, 0, time.UTC)},
+		{TagName: "202608121600-13b-abcdef12", PublishedAt: time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC)},
 	}
 	env := environment{
 		commit:  "abcdef1234567890",
@@ -24,16 +25,16 @@ func TestSelectReleasesForBranchBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
-	if selection.target != releases[0].TagName || selection.previous != releases[1].TagName {
-		t.Fatalf("selection = %#v, want target %q and previous %q", selection, releases[0].TagName, releases[1].TagName)
+	if selection.target != releases[1].TagName || selection.previous != releases[0].TagName {
+		t.Fatalf("selection = %#v, want target %q and previous %q", selection, releases[1].TagName, releases[0].TagName)
 	}
 }
 
 func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
-		{TagName: "202608121600-13b-abcdef12"},
-		{TagName: "202608111500-13a-12345678"},
+		{TagName: "202608111500-13a-12345678", PublishedAt: time.Date(2026, time.August, 11, 15, 0, 0, 0, time.UTC)},
+		{TagName: "202608121600-13b-abcdef12", PublishedAt: time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC)},
 	}
 	env := environment{
 		commit:  "unreleased123456",
@@ -46,7 +47,7 @@ func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
-	if selection.target != releases[0].TagName || selection.previous != releases[1].TagName {
+	if selection.target != releases[1].TagName || selection.previous != releases[0].TagName {
 		t.Fatalf("selection = %#v, want latest two releases", selection)
 	}
 }
