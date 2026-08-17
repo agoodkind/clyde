@@ -43,8 +43,7 @@ type RequestResponseHookBody interface {
 // matched hook must carry at least one transformer. RequestTransformer, when
 // set, rewrites the request body before it is forwarded upstream; Transformer,
 // when set, rewrites the response stream returned to the client. A hook may set
-// both, as the reorient injection hook does (it trims the summarization request
-// and appends to the summary response from the same match).
+// both, rewriting the request and the response from the same match.
 type RequestResponseHookMatch struct {
 	Matched            bool
 	Transformer        ResponseTransformer

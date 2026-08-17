@@ -21,12 +21,6 @@ service ClydeService {
   // The response names which path answered, because the index and the provider's
   // live store are different sources that can disagree.
   rpc ResolveConversationRequest(ResolveConversationRequestRequest) returns (ResolveConversationRequestResponse);
-  // ReorientConversation resolves the post-fork, post-compaction recovery
-  // context for one conversation and returns one bounded, cursor-paged page of
-  // evidence. Each page stays small enough to render inline, so a caller loops
-  // with next_cursor until remaining is zero rather than receiving one large
-  // payload.
-  rpc ReorientConversation(ReorientConversationRequest) returns (ReorientConversationResponse);
   // StreamConversation, StreamConversationContext, and StreamExportTranscript are
   // the server-streaming conversation reads and export. They carry one request
   // and produce the rendered payload chunked, so a large transcript or export is
@@ -420,58 +414,6 @@ message ResolveConversationRequestResponse {
   RequestResolutionNotFoundReason not_found_reason = 4;
   // conversation is set only when found is true.
   ConversationRecord conversation = 5;
-}
-
-message ReorientConversationRequest {
-  // conversation_id selects the current conversation. Empty means the newest
-  // conversation in workspace.
-  string conversation_id = 1;
-  string workspace = 2;
-  // cursor continues a prior page. Empty starts at the first page.
-  string cursor = 3;
-  // page_bytes bounds one page so it renders inline. Zero means the daemon
-  // default.
-  int64 page_bytes = 4;
-  // synthetic_precompact recovers the current conversation, for hooks that run
-  // before the provider compacts and there is no boundary yet. The result is
-  // still capped by max_lines.
-  bool synthetic_precompact = 5;
-  // max_lines caps the recovered transcript to its last N lines. Zero means the
-  // daemon default.
-  int64 max_lines = 6;
-  // include_tool_outputs renders full tool result bodies instead of the default
-  // tool-call commands.
-  bool include_tool_outputs = 7;
-}
-
-message ReorientConversationRef {
-  string id = 1;
-  Provider provider = 2;
-  string title = 3;
-  string workspace_root = 4;
-}
-
-message ReorientConversationResponse {
-  ReorientConversationRef current_conversation = 1;
-  // page_body is this page's slice of the recovered pre-compaction transcript.
-  bytes page_body = 2;
-  // next_cursor continues to the next page. Empty on the final page.
-  string next_cursor = 3;
-  // remaining is the number of recovered transcript bytes not yet delivered.
-  // Above zero means the caller has not paged to the end.
-  int64 remaining = 4;
-  // offset is the byte offset of page_body within the whole recovered transcript.
-  int64 offset = 5;
-  // total_bytes is the size of the whole recovered transcript.
-  int64 total_bytes = 6;
-  // total_lines is the line count of the whole recovered transcript.
-  int64 total_lines = 7;
-  // truncated reports that the line cap dropped older lines from the top.
-  bool truncated = 8;
-  // restart reports that the conversation was compacted again since the cursor
-  // was issued, so paging restarted from the first page of the new transcript.
-  bool restart = 9;
-  repeated string warnings = 10;
 }
 
 message ExportTranscriptRequest {

@@ -34,7 +34,6 @@ Prefer code and tests over this file for exact behavior.
 - Use `docs/logging/` and `internal/slogger/` for logging, sink, inventory, and correlation contracts.
 - Use `internal/contextsvc/` and `docs/context/overview.md` for the ConversationContext gRPC service that returns recent conversation turns.
 - Use `docs/cursor.md` for the empirical reasons behind Cursor-specific adapter rules, and `docs/cursor/stores.md` for the Cursor conversation stores and how they are read.
-- Use `docs/reorient/overview.md` for the two-tier reorient-after-compaction delivery and the MITM summary-injection hook.
 
 Do not add stale snapshots of command tables, schemas, request payloads, local machine setup, or dated audits to this file. Add links or brief pointers instead.
 

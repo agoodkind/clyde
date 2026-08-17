@@ -64,7 +64,7 @@ func TestStreamStripsHookAdditionalContextAfterThePrompt(t *testing.T) {
 func TestStreamStripsSessionStartHookContext(t *testing.T) {
 	t.Parallel()
 	path := writeInjectedFixture(t,
-		`"continue the migration\n\nSessionStart hook additional context: reorient instructions here"`)
+		`"continue the migration\n\nSessionStart hook additional context: injected instructions here"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
@@ -139,7 +139,7 @@ func TestStreamKeepsAQuotedHookHeadingBeforeTheRealSplice(t *testing.T) {
 func TestStreamKeepsAQuotedHeadingOfTheOtherType(t *testing.T) {
 	t.Parallel()
 	path := writeInjectedFixture(t,
-		`"my logs show this line:\nUserPromptSubmit hook additional context: something\nis that expected?\n\nSessionStart hook additional context: reorient text"`)
+		`"my logs show this line:\nUserPromptSubmit hook additional context: something\nis that expected?\n\nSessionStart hook additional context: injected text"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {

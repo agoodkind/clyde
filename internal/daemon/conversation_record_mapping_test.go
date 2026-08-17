@@ -193,50 +193,6 @@ func TestConversationRecordProtoRoundTripCarriesZedProvider(t *testing.T) {
 	}
 }
 
-func TestReorientPageProtoMappingCarriesPagingAndBody(t *testing.T) {
-	t.Parallel()
-
-	page := conversation.ReorientPage{
-		CurrentConversation: conversation.ReorientConversationRef{
-			ID:            "claude:current",
-			Provider:      "claude",
-			Title:         "Current",
-			WorkspaceRoot: "/repo",
-		},
-		Body:       "recovered transcript slice",
-		NextCursor: "cursor-2",
-		Remaining:  3,
-		Offset:     1,
-		TotalBytes: 26,
-		TotalLines: 4,
-		Truncated:  true,
-		Restart:    false,
-		Warnings:   []string{"warning"},
-	}
-
-	wire := protoReorientPage(page)
-	if wire.GetCurrentConversation().GetId() != "claude:current" {
-		t.Fatalf("current id = %q, want claude:current", wire.GetCurrentConversation().GetId())
-	}
-	if wire.GetCurrentConversation().GetProvider() != protoProvider(conversation.ProviderClaude) {
-		t.Fatalf("current provider = %v, want %v", wire.GetCurrentConversation().GetProvider(), protoProvider(conversation.ProviderClaude))
-	}
-	if string(wire.GetPageBody()) != "recovered transcript slice" {
-		t.Fatalf("page body = %q, want recovered transcript slice", string(wire.GetPageBody()))
-	}
-	if wire.GetOffset() != 1 || wire.GetTotalBytes() != 26 || wire.GetTotalLines() != 4 {
-		t.Fatalf("offset/total_bytes/total_lines = %d/%d/%d, want 1/26/4", wire.GetOffset(), wire.GetTotalBytes(), wire.GetTotalLines())
-	}
-	if !wire.GetTruncated() || wire.GetRestart() {
-		t.Fatalf("truncated/restart = %v/%v, want true/false", wire.GetTruncated(), wire.GetRestart())
-	}
-
-	roundTrip := reorientPageFromProto(wire)
-	if !reflect.DeepEqual(roundTrip, page) {
-		t.Fatalf("round-trip page = %#v, want %#v", roundTrip, page)
-	}
-}
-
 func TestLogsInventoryProtoMappingCarriesCategoriesAndCleanup(t *testing.T) {
 	t.Parallel()
 

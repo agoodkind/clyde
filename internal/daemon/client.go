@@ -274,46 +274,6 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	}, nil
 }
 
-// ReorientConversation asks the daemon for one cursor-paged page of the
-// recovered pre-compaction transcript as typed data.
-func ReorientConversation(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs bool) (conversation.ReorientPage, error) {
-	return reorientConversation(ctx, conversationID, workspace, cursor, maxLines, pageBytes, includeToolOutputs, false)
-}
-
-// ReorientConversationForHook asks the daemon for one reorient page and lets
-// hook callers recover the current conversation before the provider compacts.
-// The recovered transcript is still capped by maxLines (or the daemon default).
-func ReorientConversationForHook(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs, syntheticPreCompact bool) (conversation.ReorientPage, error) {
-	return reorientConversation(ctx, conversationID, workspace, cursor, maxLines, pageBytes, includeToolOutputs, syntheticPreCompact)
-}
-
-func reorientConversation(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs, syntheticPreCompact bool) (conversation.ReorientPage, error) {
-	client, err := connectDaemon(ctx)
-	if err != nil {
-		return conversation.ReorientPage{}, err
-	}
-	defer func() { _ = client.conn.Close() }()
-
-	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
-	defer cancel()
-	resp, err := client.rpc.ReorientConversation(rpcCtx, &clydev1.ReorientConversationRequest{
-		ConversationId:      conversationID,
-		Workspace:           workspace,
-		Cursor:              cursor,
-		MaxLines:            int64(maxLines),
-		PageBytes:           int64(pageBytes),
-		IncludeToolOutputs:  includeToolOutputs,
-		SyntheticPrecompact: syntheticPreCompact,
-	})
-	if err != nil {
-		return conversation.ReorientPage{}, daemonRPCError(rpcCtx, "reorient conversation", err)
-	}
-	if resp.GetCurrentConversation() == nil {
-		return conversation.ReorientPage{}, fmt.Errorf("reorient conversation: daemon returned no current conversation; deploy matching daemon binary")
-	}
-	return reorientPageFromProto(resp), nil
-}
-
 // searchSourceFromProto maps the wire search source onto its domain enum.
 func searchSourceFromProto(source clydev1.SearchSource) conversation.SearchSource {
 	switch source {

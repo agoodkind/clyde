@@ -4,7 +4,6 @@ import (
 	"time"
 
 	conv "goodkind.io/clyde/internal/conversation"
-	"goodkind.io/clyde/internal/hookspec"
 )
 
 type listConversationsOutput struct {
@@ -113,26 +112,6 @@ type filterStageOutput struct {
 	Remaining int    `json:"remaining"`
 }
 
-type reorientPageOutput struct {
-	CurrentConversation reorientConversationRefOutput `json:"current_conversation"`
-	Body                string                        `json:"body"`
-	NextCursor          string                        `json:"next_cursor,omitempty"`
-	Remaining           int                           `json:"remaining"`
-	Offset              int                           `json:"offset"`
-	TotalBytes          int                           `json:"total_bytes"`
-	TotalLines          int                           `json:"total_lines"`
-	Truncated           bool                          `json:"truncated,omitempty"`
-	Restart             bool                          `json:"restart,omitempty"`
-	Warnings            []string                      `json:"warnings,omitempty"`
-}
-
-type reorientConversationRefOutput struct {
-	ID            string `json:"id"`
-	Provider      string `json:"provider"`
-	Title         string `json:"title"`
-	WorkspaceRoot string `json:"workspace_root"`
-}
-
 type exportTranscriptOutput struct {
 	ConversationID string `json:"conversation_id"`
 	Format         string `json:"format"`
@@ -141,28 +120,12 @@ type exportTranscriptOutput struct {
 	Pipe           bool   `json:"pipe,omitempty"`
 }
 
-type installHooksOutput struct {
-	Files   []installHooksFileOutput `json:"files"`
-	Changed bool                     `json:"changed"`
-	DryRun  bool                     `json:"dry_run,omitempty"`
-}
-
-type installHooksFileOutput struct {
-	Client       string   `json:"client"`
-	SettingsPath string   `json:"settings_path"`
-	Installed    []string `json:"installed"`
-	Changed      bool     `json:"changed"`
-	Preview      string   `json:"preview,omitempty"`
-}
-
 func (listConversationsOutput) isClispecStructuredPayload()   {}
 func (getConversationOutput) isClispecStructuredPayload()     {}
 func (getContextOutput) isClispecStructuredPayload()          {}
 func (conversationInfoOutput) isClispecStructuredPayload()    {}
 func (searchConversationsOutput) isClispecStructuredPayload() {}
-func (reorientPageOutput) isClispecStructuredPayload()        {}
 func (exportTranscriptOutput) isClispecStructuredPayload()    {}
-func (installHooksOutput) isClispecStructuredPayload()        {}
 
 func listConversationsOutputFromDomain(result conv.ListResult) listConversationsOutput {
 	return listConversationsOutput{
@@ -280,50 +243,4 @@ func filterStageOutputsFromDomain(stages []conv.FilterStage) []filterStageOutput
 		})
 	}
 	return outputs
-}
-
-func reorientPageOutputFromDomain(page conv.ReorientPage) reorientPageOutput {
-	return reorientPageOutput{
-		CurrentConversation: reorientConversationRefOutput{
-			ID:            page.CurrentConversation.ID,
-			Provider:      page.CurrentConversation.Provider,
-			Title:         page.CurrentConversation.Title,
-			WorkspaceRoot: page.CurrentConversation.WorkspaceRoot,
-		},
-		Body:       page.Body,
-		NextCursor: page.NextCursor,
-		Remaining:  page.Remaining,
-		Offset:     page.Offset,
-		TotalBytes: page.TotalBytes,
-		TotalLines: page.TotalLines,
-		Truncated:  page.Truncated,
-		Restart:    page.Restart,
-		Warnings:   page.Warnings,
-	}
-}
-
-func installHooksOutputFromResult(result hookspec.InstallResult) installHooksOutput {
-	output := installHooksOutput{
-		Files:   make([]installHooksFileOutput, 0, len(result.Files)),
-		Changed: result.Changed,
-		DryRun:  result.DryRun,
-	}
-	for _, file := range result.Files {
-		installed := make([]string, 0, len(file.Installed))
-		for _, id := range file.Installed {
-			installed = append(installed, string(id))
-		}
-		fileOutput := installHooksFileOutput{
-			Client:       string(file.Client),
-			SettingsPath: file.SettingsPath,
-			Installed:    installed,
-			Changed:      file.Changed,
-			Preview:      "",
-		}
-		if result.DryRun {
-			fileOutput.Preview = string(file.Preview)
-		}
-		output.Files = append(output.Files, fileOutput)
-	}
-	return output
 }

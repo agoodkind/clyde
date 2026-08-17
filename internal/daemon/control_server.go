@@ -22,7 +22,6 @@ import (
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/mitmshow"
-	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -204,25 +203,6 @@ func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest
 		ConversationID:       req.GetConversationId(),
 		ContextWindow:        int(req.GetContextWindow()),
 	}
-}
-
-// ReorientConversation builds the recovered pre-compaction transcript for one
-// conversation and returns one cursor-paged page of it. The page is bounded so
-// it renders inline, and the caller loops on next_cursor until remaining is zero.
-func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.ReorientConversationRequest) (*clydev1.ReorientConversationResponse, error) {
-	ctx, _ = correlation.Ensure(ctx, "")
-	page, err := s.index.ReorientPage(ctx, conversation.ReorientOptions{
-		ConversationID:      req.GetConversationId(),
-		WorkspaceRoot:       req.GetWorkspace(),
-		MaxLines:            int(req.GetMaxLines()),
-		MaxBytes:            0,
-		IncludeToolOutputs:  req.GetIncludeToolOutputs(),
-		SyntheticPreCompact: req.GetSyntheticPrecompact(),
-	}, req.GetCursor(), int(req.GetPageBytes()))
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "reorient conversation: %v", err)
-	}
-	return protoReorientPage(page), nil
 }
 
 // GetSearchFreshness returns the feeder's latest sync snapshot, the same
@@ -619,34 +599,6 @@ func protoConversationInfo(
 		Stats:           protoConversationStats(info.Stats),
 		CompactionCount: int64(info.CompactionCount),
 		Segments:        protoConversationSegments(info.Segments),
-	}
-}
-
-func protoReorientPage(page conversation.ReorientPage) *clydev1.ReorientConversationResponse {
-	return &clydev1.ReorientConversationResponse{
-		CurrentConversation: protoReorientConversationRef(page.CurrentConversation),
-		PageBody:            []byte(page.Body),
-		NextCursor:          page.NextCursor,
-		Remaining:           int64(page.Remaining),
-		Offset:              int64(page.Offset),
-		TotalBytes:          int64(page.TotalBytes),
-		TotalLines:          int64(page.TotalLines),
-		Truncated:           page.Truncated,
-		Restart:             page.Restart,
-		Warnings:            page.Warnings,
-	}
-}
-
-func protoReorientConversationRef(ref conversation.ReorientConversationRef) *clydev1.ReorientConversationRef {
-	provider, ok := providerid.Parse(ref.Provider)
-	if !ok {
-		provider = providerid.ProviderUnspecified
-	}
-	return &clydev1.ReorientConversationRef{
-		Id:            ref.ID,
-		Provider:      protoProvider(provider),
-		Title:         ref.Title,
-		WorkspaceRoot: ref.WorkspaceRoot,
 	}
 }
 

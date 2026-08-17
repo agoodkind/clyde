@@ -32,7 +32,7 @@ func TestGroupNameListsSubcommands(t *testing.T) {
 		t.Fatalf("conversation help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"export", "info", "reorient", "search"} {
+	for _, name := range []string{"export", "info", "search"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("conversation help missing subcommand %q:\n%s", name, out)
 		}

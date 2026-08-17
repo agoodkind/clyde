@@ -160,7 +160,7 @@ type MultiConversationParser interface {
 // discard them.
 //
 // Every caller that needs a whole conversation folds through here, so one
-// recover covers export, reorient, search, and the ingestion feeder. A caller
+// recover covers export, search, and the ingestion feeder. A caller
 // that ranges the parser stream itself, rather than folding it, is not covered.
 //
 // This is the outer bound, not the working one. A push iterator dies where it

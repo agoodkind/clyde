@@ -14,40 +14,6 @@ type MITMConfig struct {
 	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
 	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
 	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
-	// ReorientSummaryInjection turns on the MITM reorient hook: when set, the
-	// proxy detects a Claude Code compaction summarization request and rewrites
-	// its streaming summary response, appending the recovered pre-compaction
-	// transcript (read off disk by the request's session id) so the client
-	// persists it in the isCompactSummary message. Default false; enabling it
-	// makes the proxy read the local transcript and rewrite that one response.
-	ReorientSummaryInjection bool `json:"reorientSummaryInjection,omitempty" toml:"reorient_summary_injection,omitempty"`
-	// ReorientInjectMaxTokens caps the injected transcript before the hook also
-	// applies its context-window fraction. Zero uses the hook default.
-	ReorientInjectMaxTokens int `json:"reorientInjectMaxTokens,omitempty" toml:"reorient_inject_max_tokens,omitempty"`
-	// ReorientRecentFraction is the fraction of conversation messages, by count,
-	// the R2 request-trim split reattaches verbatim as the recent half. A larger
-	// fraction reattaches more of the conversation and summarizes less; the injected
-	// half is still bounded by the byte cap derived from ReorientInjectMaxTokens.
-	// Zero uses the hook default (0.5).
-	ReorientRecentFraction float64 `json:"reorientRecentFraction,omitempty" toml:"reorient_recent_fraction,omitempty"`
-	// ReorientContextWindowFraction is the fraction of the request's context window
-	// the injection may fill. Zero uses the hook default (0.5).
-	ReorientContextWindowFraction float64 `json:"reorientContextWindowFraction,omitempty" toml:"reorient_context_window_fraction,omitempty"`
-	// ReorientBytesPerToken is the token-to-byte approximation the hook uses to turn
-	// a token budget into a byte cap. Zero uses the hook default (4).
-	ReorientBytesPerToken int `json:"reorientBytesPerToken,omitempty" toml:"reorient_bytes_per_token,omitempty"`
-	// ReorientStandardContextWindow is the assumed context window, in tokens, for a
-	// compaction request without the context-1m beta. Zero uses the hook default
-	// (200000).
-	ReorientStandardContextWindow int `json:"reorientStandardContextWindow,omitempty" toml:"reorient_standard_context_window,omitempty"`
-	// ReorientOneMillionContextWindow is the assumed context window, in tokens, for a
-	// compaction request carrying the context-1m beta. Zero uses the hook default
-	// (1000000).
-	ReorientOneMillionContextWindow int `json:"reorientOneMillionContextWindow,omitempty" toml:"reorient_one_million_context_window,omitempty"`
-	// ReorientInjectMaxLines caps the disk-recovered transcript, in lines, on the
-	// fallback path taken when no valid request split is computed. Zero uses the
-	// conversation renderer default (3500).
-	ReorientInjectMaxLines int `json:"reorientInjectMaxLines,omitempty" toml:"reorient_inject_max_lines,omitempty"`
 	// Sentinel, when non-empty, enables the MITM hook that scans the latest
 	// user message on an intercepted Anthropic /v1/messages request and
 	// rewrites the downstream model message to everything after the keyword.

@@ -43,7 +43,6 @@ func TestConversationRegistryNames(t *testing.T) {
 		"clyde_conversation_info",
 		"clyde_conversation_resolve_request",
 		"clyde_export_transcript",
-		"clyde_reorient",
 		"clyde_search",
 	}
 	var got []string
@@ -115,8 +114,8 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	roots := RenderCobra(NewConversationRegistry(), testFactory(&out))
-	if len(roots) != 7 {
-		t.Fatalf("root commands: got %d, want 7 (conversation, install, logs, mitm, daemon, mcp, update)", len(roots))
+	if len(roots) != 6 {
+		t.Fatalf("root commands: got %d, want 6 (conversation, logs, mitm, daemon, mcp, update)", len(roots))
 	}
 	parents := map[string]*cobra.Command{}
 	for _, root := range roots {
@@ -127,7 +126,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	if conversationParent == nil {
 		t.Fatal("conversation parent missing")
 	}
-	wantConversationChildren := []string{"export", "info", "reorient", "resolve-request", "search"}
+	wantConversationChildren := []string{"export", "info", "resolve-request", "search"}
 	var gotChildren []string
 	for _, child := range conversationParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())
@@ -186,19 +185,6 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	sort.Strings(gotChildren)
 	if strings.Join(gotChildren, ",") != "inventory" {
 		t.Fatalf("logs children: got %v, want [inventory]", gotChildren)
-	}
-
-	installParent := parents["install"]
-	if installParent == nil {
-		t.Fatal("install parent missing")
-	}
-	gotChildren = nil
-	for _, child := range installParent.Commands() {
-		gotChildren = append(gotChildren, child.Name())
-	}
-	sort.Strings(gotChildren)
-	if strings.Join(gotChildren, ",") != "hooks" {
-		t.Fatalf("install children: got %v, want [hooks]", gotChildren)
 	}
 
 	mitmParent := parents["mitm"]
