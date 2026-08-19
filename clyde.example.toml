@@ -173,6 +173,12 @@ generated_aliases = { prefix = "clyde-codex-5.5", advertise = true, dimensions =
 # Ordered full-string provider claims preserve undeclared future model IDs and
 # caller-supplied optional controls. Wildcard matches route but are not listed
 # by /v1/models.
+#
+# A wildcard route resolves no thinking mode, so the adapter leaves the
+# request's thinking field unset. Anthropic answers such a request with a
+# thinking block that carries only an encrypted signature and no plaintext,
+# which renders as "(thinking hidden by provider)" in the client. Declare the
+# model exactly and bind a thinking profile when you want the reasoning text.
 [[adapter.model_routes]]
 match = "gpt-*"
 surfaces = ["cursor", "openai"]
@@ -216,6 +222,15 @@ model = ""
 # wire_model = "local-model"
 # profile = "local"
 # passthrough_override = "local"
+
+# Wildcard routes reuse one learned wire profile when this names a flavor slug
+# from the MITM baseline. Leave it unset unless you need that pin. The learner
+# re-hashes a slug whenever the CLI wire shape moves, so a pinned slug goes
+# stale and every Anthropic request then fails with HTTP 503 and the code
+# wire_baseline_unavailable. Unset, selection matches the request model against
+# the learned interactive flavors, which keeps working across re-learns.
+[adapter.anthropic]
+# default_wire_profile = "claude-code-interactive-REDACTED-SLUG"
 
 [adapter.anthropic.oauth]
 token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
