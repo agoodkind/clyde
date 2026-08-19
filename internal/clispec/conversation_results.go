@@ -113,26 +113,6 @@ type filterStageOutput struct {
 	Remaining int    `json:"remaining"`
 }
 
-type reorientPageOutput struct {
-	CurrentConversation reorientConversationRefOutput `json:"current_conversation"`
-	Body                string                        `json:"body"`
-	NextCursor          string                        `json:"next_cursor,omitempty"`
-	Remaining           int                           `json:"remaining"`
-	Offset              int                           `json:"offset"`
-	TotalBytes          int                           `json:"total_bytes"`
-	TotalLines          int                           `json:"total_lines"`
-	Truncated           bool                          `json:"truncated,omitempty"`
-	Restart             bool                          `json:"restart,omitempty"`
-	Warnings            []string                      `json:"warnings,omitempty"`
-}
-
-type reorientConversationRefOutput struct {
-	ID            string `json:"id"`
-	Provider      string `json:"provider"`
-	Title         string `json:"title"`
-	WorkspaceRoot string `json:"workspace_root"`
-}
-
 type exportTranscriptOutput struct {
 	ConversationID string `json:"conversation_id"`
 	Format         string `json:"format"`
@@ -160,7 +140,6 @@ func (getConversationOutput) isClispecStructuredPayload()     {}
 func (getContextOutput) isClispecStructuredPayload()          {}
 func (conversationInfoOutput) isClispecStructuredPayload()    {}
 func (searchConversationsOutput) isClispecStructuredPayload() {}
-func (reorientPageOutput) isClispecStructuredPayload()        {}
 func (exportTranscriptOutput) isClispecStructuredPayload()    {}
 func (installHooksOutput) isClispecStructuredPayload()        {}
 
@@ -280,26 +259,6 @@ func filterStageOutputsFromDomain(stages []conv.FilterStage) []filterStageOutput
 		})
 	}
 	return outputs
-}
-
-func reorientPageOutputFromDomain(page conv.ReorientPage) reorientPageOutput {
-	return reorientPageOutput{
-		CurrentConversation: reorientConversationRefOutput{
-			ID:            page.CurrentConversation.ID,
-			Provider:      page.CurrentConversation.Provider,
-			Title:         page.CurrentConversation.Title,
-			WorkspaceRoot: page.CurrentConversation.WorkspaceRoot,
-		},
-		Body:       page.Body,
-		NextCursor: page.NextCursor,
-		Remaining:  page.Remaining,
-		Offset:     page.Offset,
-		TotalBytes: page.TotalBytes,
-		TotalLines: page.TotalLines,
-		Truncated:  page.Truncated,
-		Restart:    page.Restart,
-		Warnings:   page.Warnings,
-	}
 }
 
 func installHooksOutputFromResult(result hookspec.InstallResult) installHooksOutput {

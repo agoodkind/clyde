@@ -274,12 +274,6 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	}, nil
 }
 
-// ReorientConversation asks the daemon for one cursor-paged page of the
-// recovered pre-compaction transcript as typed data.
-func ReorientConversation(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs bool) (conversation.ReorientPage, error) {
-	return reorientConversation(ctx, conversationID, workspace, cursor, maxLines, pageBytes, includeToolOutputs, false)
-}
-
 // ReorientConversationForHook asks the daemon for one reorient page and lets
 // hook callers recover the current conversation before the provider compacts.
 // The recovered transcript is still capped by maxLines (or the daemon default).
