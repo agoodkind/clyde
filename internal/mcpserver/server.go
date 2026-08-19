@@ -30,13 +30,6 @@ import (
 //go:embed getting_started.md
 var gettingStartedPrompt string
 
-//go:embed reorient_skill.md
-var reorientSkill string
-
-// reorientResourceURI is the MCP resource URI that serves the reorient skill as
-// its canonical home, the skills-over-MCP pattern.
-const reorientResourceURI = "skill://reorient"
-
 const mcpRequestIDHeader = "X-Clyde-Mcp-Request-Id"
 
 // maxConcurrentMCPTasks bounds how many task-augmented tool calls run at once.
@@ -88,8 +81,6 @@ func NewServer(auditRotation audit.RotationConfig) *Server {
 	)
 	mcpServer.Use(toolCallMiddleware(registry, "clyde"))
 	registerPrompt(mcpServer)
-	registerReorientResource(mcpServer)
-	registerReorientPrompt(mcpServer)
 	return &Server{
 		Tunnels: registry,
 		group:   group,
@@ -233,58 +224,6 @@ func registerPrompt(mcpServer *server.MCPServer) {
 				Messages: []mcp.PromptMessage{{
 					Role:    mcp.RoleUser,
 					Content: mcp.NewTextContent(gettingStartedPrompt),
-				}},
-			}, nil
-		},
-	)
-}
-
-// registerReorientResource serves the reorient skill as an MCP resource, its
-// canonical home. The resource and the reorient prompt share one embedded body,
-// so there is no second copy to drift.
-func registerReorientResource(mcpServer *server.MCPServer) {
-	mcpServer.AddResource(
-		mcp.NewResource(
-			reorientResourceURI,
-			"Reorient skill",
-			mcp.WithResourceDescription("The /reorient workflow: rebuild post-compaction context from clyde evidence and the codebase, then resume the work."),
-			mcp.WithMIMEType("text/markdown"),
-		),
-		func(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-			_ = ctx
-			_ = req
-			return []mcp.ResourceContents{
-				mcp.TextResourceContents{
-					URI:      reorientResourceURI,
-					MIMEType: "text/markdown",
-					Text:     reorientSkill,
-				},
-			}, nil
-		},
-	)
-}
-
-// registerReorientPrompt exposes the reorient skill as an invokable prompt with
-// an optional topic argument, over the same embedded body as the resource.
-func registerReorientPrompt(mcpServer *server.MCPServer) {
-	mcpServer.AddPrompt(
-		mcp.Prompt{
-			Name:        "reorient",
-			Description: "Rebuild post-compaction context from clyde evidence and the codebase, then resume. Optional topic argument focuses the search.",
-			Arguments: []mcp.PromptArgument{{
-				Name:        "topic",
-				Description: "Thread to focus the reorient search on.",
-				Required:    false,
-			}},
-		},
-		func(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-			_ = ctx
-			_ = req
-			return &mcp.GetPromptResult{
-				Description: "Reorient workflow",
-				Messages: []mcp.PromptMessage{{
-					Role:    mcp.RoleUser,
-					Content: mcp.NewTextContent(reorientSkill),
 				}},
 			}, nil
 		},
