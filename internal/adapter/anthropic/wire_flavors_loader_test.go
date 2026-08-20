@@ -74,6 +74,51 @@ func TestLoaderSkipsFlavorsMissingIdentityHeaders(t *testing.T) {
 	}
 }
 
+// TestLoaderDropsStaleAttestationHeader locks in that a captured
+// x-cc-atis attestation token never reaches StaticHeaders, so it cannot ride
+// an outbound request. Clyde cannot mint the token, and a stale one is not
+// inert: on claude-fable-5 the upstream answers a request carrying one with a
+// thinking block that has a signature and no plaintext, which the stream
+// translator then renders as a hidden-thinking placeholder. Measured over five
+// paired requests differing only in this header, fable returned 48, 48, 141,
+// 4, and 48 plaintext characters without it and 0 every time with it.
+func TestLoaderDropsStaleAttestationHeader(t *testing.T) {
+	t.Parallel()
+
+	store := seedStoreWithFlavors(t, []mitm.FlavorShape{testInteractiveFlavorShape()})
+
+	flavors, err := newWireFlavorsLoader().Load(context.Background(), store)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	flavor, ok := flavors["claude-code-interactive-17c1f069"]
+	if !ok {
+		t.Fatal("interactive flavor missing from loaded map")
+	}
+	for _, header := range flavor.StaticHeaders {
+		if strings.EqualFold(header.Name, "x-cc-atis") {
+			t.Fatalf("attestation header projected into StaticHeaders with value %q", header.Value)
+		}
+		if header.Value == testStaleAttestationToken {
+			t.Fatalf("attestation token leaked onto header %q", header.Name)
+		}
+	}
+	// The rest of the constant identity set must survive, so the exclusion is
+	// scoped to the attestation token and does not blank the flavor.
+	if !hasStaticHeader(flavor, "X-App", "cli") {
+		t.Fatalf("expected X-App to survive projection; got %+v", flavor.StaticHeaders)
+	}
+}
+
+func hasStaticHeader(flavor WireFlavor, name, value string) bool {
+	for _, header := range flavor.StaticHeaders {
+		if strings.EqualFold(header.Name, name) && header.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLoaderProjectsFeatureVectors(t *testing.T) {
 	shape := testInteractiveFlavorShape()
 	shape.FeatureVectors = []mitm.RequestFeatures{
