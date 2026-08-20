@@ -3,7 +3,6 @@ package hooks
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -111,20 +110,8 @@ func TestRunCommandDispatchesAfterCompactRuntime(t *testing.T) {
 	if !slices.Equal(calls, expectedCalls) {
 		t.Fatalf("calls = %#v, want %#v", calls, expectedCalls)
 	}
-	var envelope struct {
-		HookSpecificOutput struct {
-			HookEventName     string `json:"hookEventName"`
-			AdditionalContext string `json:"additionalContext"`
-		} `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
-		t.Fatalf("Unmarshal output: %v\n%s", err, output)
-	}
-	if envelope.HookSpecificOutput.HookEventName != "SessionStart" {
-		t.Fatalf("hook event = %q, want SessionStart", envelope.HookSpecificOutput.HookEventName)
-	}
-	if !strings.Contains(envelope.HookSpecificOutput.AdditionalContext, "This conversation was just compacted.") {
-		t.Fatalf("additional context missing compact note:\n%s", envelope.HookSpecificOutput.AdditionalContext)
+	if output != "" {
+		t.Fatalf("after-compact output = %q, want empty; the hook must not instruct the model", output)
 	}
 }
 
@@ -165,14 +152,8 @@ func TestRunCommandDispatchesStopFollowupRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stop-followup Execute: %v", err)
 	}
-	var decoded struct {
-		FollowupMessage string `json:"followup_message"`
-	}
-	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
-		t.Fatalf("Unmarshal output: %v\n%s", err, output)
-	}
-	if !strings.Contains(decoded.FollowupMessage, "/tmp/cursor.jsonl") {
-		t.Fatalf("stop followup output missing transcript selector:\n%s", decoded.FollowupMessage)
+	if output != "" {
+		t.Fatalf("stop-followup output = %q, want empty; Cursor must receive no follow-up message", output)
 	}
 }
 

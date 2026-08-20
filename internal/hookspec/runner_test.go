@@ -2,7 +2,6 @@ package hookspec
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -283,7 +282,10 @@ func TestRunnerPreCompactStoresSyntheticBoundarySnapshot(t *testing.T) {
 	}
 }
 
-func TestRunnerAfterCompactWritesClaudeReorientNote(t *testing.T) {
+// TestRunnerAfterCompactDrainsClaudeSnapshotSilently pins the contract that
+// replaced the reorient note: the hook drains the captured snapshot so it does
+// not accumulate on disk, and writes nothing back to the client.
+func TestRunnerAfterCompactDrainsClaudeSnapshotSilently(t *testing.T) {
 	t.Parallel()
 
 	store := newMemorySnapshotStore()
@@ -315,17 +317,9 @@ func TestRunnerAfterCompactWritesClaudeReorientNote(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	var decoded hookSpecificOutputEnvelope
-	if err := json.Unmarshal([]byte(output.String()), &decoded); err != nil {
-		t.Fatalf("Unmarshal output: %v\n%s", err, output.String())
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty; the hook must not instruct the model", output.String())
 	}
-	if decoded.HookSpecificOutput.HookEventName != EventSessionStart {
-		t.Fatalf("hook event = %q", decoded.HookSpecificOutput.HookEventName)
-	}
-	if strings.Contains(decoded.HookSpecificOutput.AdditionalContext, "snapshot body") {
-		t.Fatalf("additional context contains snapshot body:\n%s", decoded.HookSpecificOutput.AdditionalContext)
-	}
-	assertReorientAfterCompactNote(t, decoded.HookSpecificOutput.AdditionalContext, "/tmp/session.jsonl")
 	if _, ok := store.snapshots[normalizeSnapshotKey(key)]; ok {
 		t.Fatal("after-compact should drain the before-compact snapshot so snapshots do not accumulate")
 	}
@@ -344,7 +338,7 @@ func TestRunnerRejectsLegacyRuntimeAlias(t *testing.T) {
 	}
 }
 
-func TestRunnerAfterCompactWritesCodexAdditionalContext(t *testing.T) {
+func TestRunnerAfterCompactStaysSilentOnCodex(t *testing.T) {
 	t.Parallel()
 
 	store := newMemorySnapshotStore()
@@ -378,17 +372,9 @@ func TestRunnerAfterCompactWritesCodexAdditionalContext(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	var decoded hookSpecificOutputEnvelope
-	if err := json.Unmarshal([]byte(output.String()), &decoded); err != nil {
-		t.Fatalf("Unmarshal output: %v\n%s", err, output.String())
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty; the hook must not instruct the model", output.String())
 	}
-	if decoded.HookSpecificOutput.HookEventName != EventSessionStart {
-		t.Fatalf("hook event = %q", decoded.HookSpecificOutput.HookEventName)
-	}
-	if strings.Contains(decoded.HookSpecificOutput.AdditionalContext, "snapshot body") {
-		t.Fatalf("additional context contains snapshot body:\n%s", decoded.HookSpecificOutput.AdditionalContext)
-	}
-	assertReorientAfterCompactNote(t, decoded.HookSpecificOutput.AdditionalContext, "/tmp/session.jsonl")
 }
 
 func TestRunnerAfterCompactCursorRuntimeNoOps(t *testing.T) {
@@ -524,14 +510,9 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 	if err := stop.Run(context.Background(), HookIDReorientStopFollowup); err != nil {
 		t.Fatalf("stop Run: %v", err)
 	}
-	var decoded cursorFollowupOutput
-	if err := json.Unmarshal([]byte(output.String()), &decoded); err != nil {
-		t.Fatalf("Unmarshal output: %v\n%s", err, output.String())
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty; Cursor must receive no follow-up message", output.String())
 	}
-	if strings.Contains(decoded.FollowupMessage, "cursor snapshot body") {
-		t.Fatalf("followup message contains snapshot body:\n%s", decoded.FollowupMessage)
-	}
-	assertReorientAfterCompactNote(t, decoded.FollowupMessage, "/tmp/cursor.jsonl")
 }
 
 func TestRunnerIgnoresNonCompactSessionStart(t *testing.T) {
@@ -622,7 +603,7 @@ func TestRunnerStopFollowupNonCursorRuntimeNoOps(t *testing.T) {
 	}
 }
 
-func TestRunnerAfterCompactWritesNoteWithoutSnapshot(t *testing.T) {
+func TestRunnerAfterCompactStaysSilentWithoutSnapshot(t *testing.T) {
 	t.Parallel()
 
 	var output strings.Builder
@@ -642,11 +623,9 @@ func TestRunnerAfterCompactWritesNoteWithoutSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	var decoded hookSpecificOutputEnvelope
-	if err := json.Unmarshal([]byte(output.String()), &decoded); err != nil {
-		t.Fatalf("Unmarshal output: %v\n%s", err, output.String())
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty; the hook must not instruct the model", output.String())
 	}
-	assertReorientAfterCompactNote(t, decoded.HookSpecificOutput.AdditionalContext, "/tmp/session.jsonl")
 }
 
 func TestRunnerPreCompactErrorsWhenReorientCursorStalls(t *testing.T) {
