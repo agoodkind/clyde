@@ -55,16 +55,22 @@ func (b *CappedBuffer) TotalRead() int { return b.totalRead }
 // (Client, Provider, Concern, UpstreamRequestID, SessionID) and the
 // request/response bytes; RecordExchange stamps the correlation ids and timing.
 type Exchange struct {
-	Client             string
-	Provider           string
-	Concern            string
-	Host               string
-	Method             string
-	Path               string
-	Status             int
-	UpstreamRequestID  string
-	SessionID          string
-	ConversationID     string
+	Client            string
+	Provider          string
+	Concern           string
+	Host              string
+	Method            string
+	Path              string
+	Status            int
+	UpstreamRequestID string
+	SessionID         string
+	// ConversationID is the clyde-derived conversation id in "provider:native"
+	// form, such as "cursor:1a2b3c". Empty when the request carries nothing that
+	// resolves to a conversation.
+	ConversationID string
+	// ConversationSource names how ConversationID was recovered, so a reader can
+	// tell a provider-supplied id from one clyde derived. Empty whenever
+	// ConversationID is empty.
 	ConversationSource string
 	RequestHeaders     http.Header
 	ResponseHeaders    http.Header

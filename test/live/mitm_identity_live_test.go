@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,9 +35,9 @@ func TestLiveMITMIdentityCaptureSandbox(t *testing.T) {
 			wantSessionID:        sessionID,
 			wantConversationID:   "claude:" + sessionID,
 			wantConversationSource: "header",
-			headers: map[string]string{
-				"X-Claude-Code-Session-Id": sessionID,
-				"X-Client-Request-Id":      requestID,
+			headers: http.Header{
+				"X-Claude-Code-Session-Id": []string{sessionID},
+				"X-Client-Request-Id":      []string{requestID},
 			},
 		})
 	})
@@ -49,10 +51,10 @@ func TestLiveMITMIdentityCaptureSandbox(t *testing.T) {
 			wantSessionID:        threadID,
 			wantConversationID:   "codex:" + threadID,
 			wantConversationSource: "header",
-			headers: map[string]string{
-				"Session-Id":          threadID,
-				"Thread-Id":           threadID,
-				"X-Client-Request-Id": requestID,
+			headers: http.Header{
+				"Session-Id":          []string{threadID},
+				"Thread-Id":           []string{threadID},
+				"X-Client-Request-Id": []string{requestID},
 			},
 		})
 	})
@@ -65,7 +67,7 @@ type identityCaptureExpectation struct {
 	wantSessionID          string
 	wantConversationID     string
 	wantConversationSource string
-	headers                map[string]string
+	headers                http.Header
 }
 
 func assertLiveMITMIdentityCapture(t *testing.T, expect identityCaptureExpectation) {
@@ -101,8 +103,10 @@ func assertLiveMITMIdentityCapture(t *testing.T, expect identityCaptureExpectati
 
 	req := httptest.NewRequest(http.MethodPost, "http://clyde.test"+expect.path, bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("content-type", "application/json")
-	for key, value := range expect.headers {
-		req.Header.Set(key, value)
+	for key, values := range expect.headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 	recorder := httptest.NewRecorder()
 	proxy.Handle(recorder, req)
@@ -155,7 +159,14 @@ type rewriteUpstreamTransport struct {
 func (transport *rewriteUpstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
 	clone.URL.Scheme = "http"
-	clone.URL.Host = transport.target.Listener.Addr().String()
+	// The listener reports a literal loopback address; the repository's
+	// networking rule is to use localhost wherever a hostname is accepted, so
+	// keep the port and swap the host.
+	_, port, err := net.SplitHostPort(transport.target.Listener.Addr().String())
+	if err != nil {
+		return nil, fmt.Errorf("split upstream address %q: %w", transport.target.Listener.Addr(), err)
+	}
+	clone.URL.Host = net.JoinHostPort("localhost", port)
 	inner := transport.inner
 	if inner == nil {
 		inner = http.DefaultTransport

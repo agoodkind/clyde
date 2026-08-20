@@ -5,6 +5,7 @@ package mitm
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -35,12 +36,12 @@ type LiveIdentityCaptureProxy struct {
 func NewLiveIdentityCaptureProxy(captureDir string, dbPath string, upstreamClient *http.Client) (*LiveIdentityCaptureProxy, error) {
 	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open capture store %q: %w", dbPath, err)
 	}
 	path := filepath.Join(captureDir, slogger.ConcernRelPath(slogger.ConcernProviderMITMWire))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		_ = store.Close(context.Background(), "live identity proxy setup failed")
-		return nil, err
+		return nil, fmt.Errorf("create wire log dir %q: %w", filepath.Dir(path), err)
 	}
 	logger := slog.New(gklog.FileJSON(path, slog.LevelDebug, gklog.RotationConfig{}))
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})

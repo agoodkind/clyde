@@ -101,18 +101,23 @@ func (c Config) withDefaults() Config {
 // [http.Header] values serialized to JSON at write time; bodies are the raw
 // (decoded) bytes the proxy observed.
 type Record struct {
-	Timestamp          time.Time
-	Client             string
-	Provider           string
-	Concern            string
-	Host               string
-	Method             string
-	Path               string
-	Status             int
-	RequestID          string
-	UpstreamRequestID  string
-	SessionID          string
-	ConversationID     string
+	Timestamp         time.Time
+	Client            string
+	Provider          string
+	Concern           string
+	Host              string
+	Method            string
+	Path              string
+	Status            int
+	RequestID         string
+	UpstreamRequestID string
+	SessionID         string
+	// ConversationID is the clyde-derived conversation id in "provider:native"
+	// form persisted with the row, so a captured exchange joins to the
+	// conversation that issued it. Empty when nothing resolved.
+	ConversationID string
+	// ConversationSource records how ConversationID was recovered. Empty
+	// whenever ConversationID is empty.
 	ConversationSource string
 	TraceID            string
 	RequestHeaders     http.Header
