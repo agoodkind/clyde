@@ -227,12 +227,22 @@ func constantHeaderValueFromShape(shape mitm.FlavorShape, name string) string {
 // wireFlavorExcludedHeaders is the set of header names projected into
 // named fields or carrying secrets / per-session state, which must not
 // appear in StaticHeaders.
+//
+// x-cc-atis is a claude-cli attestation token Clyde cannot mint. Replaying a
+// captured one is not neutral: on claude-fable-5 the upstream answers a
+// request carrying a stale token with a thinking block that has an encrypted
+// signature and no plaintext, so the reasoning text disappears. Measured over
+// five paired requests differing only in this header, fable returned 48, 48,
+// 141, 4, and 48 plaintext characters without it and 0 every time with it;
+// claude-sonnet-5 and claude-opus-5 were unaffected either way. Current
+// claude-cli sends no such header, so dropping it matches the live client.
 var wireFlavorExcludedHeaders = map[string]bool{
 	"user-agent":               true,
 	"anthropic-beta":           true,
 	"anthropic-version":        true,
 	"authorization":            true,
 	"x-claude-code-session-id": true,
+	"x-cc-atis":                true,
 	"content-length":           true,
 	"content-type":             true,
 	"accept":                   true,
