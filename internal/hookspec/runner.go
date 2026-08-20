@@ -41,15 +41,6 @@ type RunEnvironment struct {
 	SnapshotStore SnapshotStore
 }
 
-// The selector is interpolated with %s (raw), not %q: the reorient operation
-// only trims whitespace on its selector, so Go-style double quotes would be
-// copied into the tool call and fail to resolve. The selector is a single
-// whitespace-free token (a conversation id or a path), so the raw form is
-// unambiguous.
-const reorientAfterCompactNoteFormat = "This conversation was just compacted. Before continuing, call the clyde " +
-	"reorient tool with conversation set to %s to recover pre-compaction detail. Page through it by calling again " +
-	"with each returned cursor until remaining is zero, then continue."
-
 // Runner dispatches an installed hook by id.
 type Runner struct {
 	Registry      Registry
@@ -285,16 +276,6 @@ func runReorientAfterCompact(ctx context.Context, env RunEnvironment) error {
 			slog.WarnContext(ctx, "reorient after-compact snapshot drain failed", "hook_id", HookIDReorientAfterCompact, "transcript_path", key.TranscriptPath, "session_id", key.SessionID, "cwd", key.CWD, "err", consumeErr)
 		}
 	}
-	body, err := reorientAfterCompactNote(input)
-	if err != nil {
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientAfterCompact, "err", err)
-		return err
-	}
-	if err := writeAdditionalContext(env.Output, client, eventName, body); err != nil {
-		wrapped := fmt.Errorf("write reorient after-compact note output: %w", err)
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientAfterCompact, "err", wrapped)
-		return wrapped
-	}
 	return nil
 }
 
@@ -323,29 +304,7 @@ func runReorientStopFollowup(ctx context.Context, env RunEnvironment) error {
 	if !ok {
 		return nil
 	}
-	note, noteErr := reorientAfterCompactNote(input)
-	if noteErr != nil {
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientStopFollowup, "err", noteErr)
-		return noteErr
-	}
-	if err := writeCursorFollowup(env.Output, note); err != nil {
-		wrapped := fmt.Errorf("write Cursor followup output: %w", err)
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientStopFollowup, "err", wrapped)
-		return wrapped
-	}
 	return nil
-}
-
-func reorientAfterCompactNote(input hookInput) (string, error) {
-	conversationSelector := input.conversationSelector()
-	if conversationSelector == "" {
-		return "", fmt.Errorf("reorient note requires transcript_path, conversation_id, or conversationId")
-	}
-	return buildReorientAfterCompactNote(conversationSelector), nil
-}
-
-func buildReorientAfterCompactNote(conversationSelector string) string {
-	return fmt.Sprintf(reorientAfterCompactNoteFormat, conversationSelector)
 }
 
 func decodeHookInput(reader io.Reader) (hookInput, error) {
