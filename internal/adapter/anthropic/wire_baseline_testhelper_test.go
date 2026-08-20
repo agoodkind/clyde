@@ -21,7 +21,12 @@ const (
 	// attaches only to the fable and opus flavors, standing in for any
 	// per-model beta the learned baseline carries. It is deliberately not a
 	// real provider flag, so no vendor wire vocabulary lives in the tests.
-	testModelGatedBeta          = "model-gated-beta-2026-01-01"
+	testModelGatedBeta = "model-gated-beta-2026-01-01"
+	// testStaleAttestationToken stands in for a captured claude-cli
+	// attestation token. Clyde cannot mint one, and replaying a stale value
+	// makes the upstream withhold thinking plaintext, so the projection must
+	// drop it rather than carry it onto outbound requests.
+	testStaleAttestationToken   = "stale-attestation-token"
 	testModelGatedBetaHeader    = testStandardBetaHeader + "," + testModelGatedBeta
 	testDefaultFlavorSlug       = "claude-code-interactive-default-17c1f069"
 	testSonnetFlavorSlug        = "claude-code-interactive-sonnet-200k"
@@ -184,6 +189,7 @@ func testInteractiveFlavorHeadersWithBeta(betaHeader string) []mitm.Header {
 		// exclusion path.
 		constant("authorization", "<redacted>"),
 		constant("x-claude-code-session-id", "abc-123"),
+		constant("x-cc-atis", testStaleAttestationToken),
 	}
 }
 
