@@ -112,15 +112,22 @@ type Record struct {
 	RequestID         string
 	UpstreamRequestID string
 	SessionID         string
-	TraceID           string
-	RequestHeaders    http.Header
-	ResponseHeaders   http.Header
-	RequestBody       []byte
-	ResponseBody      []byte
-	RequestType       string
-	ResponseType      string
-	DecodedRequest    *DecodedBody
-	Duration          time.Duration
+	// ConversationID is the clyde-derived conversation id in "provider:native"
+	// form persisted with the row, so a captured exchange joins to the
+	// conversation that issued it. Empty when nothing resolved.
+	ConversationID string
+	// ConversationSource records how ConversationID was recovered. Empty
+	// whenever ConversationID is empty.
+	ConversationSource string
+	TraceID            string
+	RequestHeaders     http.Header
+	ResponseHeaders    http.Header
+	RequestBody        []byte
+	ResponseBody       []byte
+	RequestType        string
+	ResponseType       string
+	DecodedRequest     *DecodedBody
+	Duration           time.Duration
 }
 
 // DecodeStatus identifies whether a provider-specific body decoder understood
@@ -199,6 +206,10 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("capture: open sqlite %s: %w", cfg.DBPath, err)
 	}
 	db.SetMaxOpenConns(1)
+	if err := ensureRequestsIdentityColumns(ctx, db, log); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("capture: apply schema: %w", err)
@@ -317,6 +328,60 @@ func ensureToolEventColumns(ctx context.Context, db *sql.DB, log *slog.Logger) e
 	return nil
 }
 
+func ensureRequestsIdentityColumns(ctx context.Context, db *sql.DB, log *slog.Logger) error {
+	var tableCount int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='requests'`).Scan(&tableCount); err != nil {
+		log.WarnContext(ctx, "mitm.capture.inspect_requests_table_failed", "err", err)
+		return fmt.Errorf("capture: inspect requests table: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(requests)`)
+	if err != nil {
+		log.WarnContext(ctx, "mitm.capture.inspect_requests_identity_columns_failed", "err", err)
+		return fmt.Errorf("capture: inspect requests identity columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	hasConversationID := false
+	hasConversationSource := false
+	for rows.Next() {
+		var columnID int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue *string
+		var primaryKey int
+		if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			log.WarnContext(ctx, "mitm.capture.scan_requests_identity_column_failed", "err", err)
+			return fmt.Errorf("capture: scan requests identity column: %w", err)
+		}
+		if name == "conversation_id" {
+			hasConversationID = true
+		}
+		if name == "conversation_source" {
+			hasConversationSource = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.WarnContext(ctx, "mitm.capture.inspect_requests_identity_columns_failed", "err", err)
+		return fmt.Errorf("capture: inspect requests identity columns: %w", err)
+	}
+	if !hasConversationID {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE requests ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			log.WarnContext(ctx, "mitm.capture.add_conversation_id_column_failed", "err", err)
+			return fmt.Errorf("capture: add conversation_id column: %w", err)
+		}
+	}
+	if !hasConversationSource {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE requests ADD COLUMN conversation_source TEXT NOT NULL DEFAULT ''`); err != nil {
+			log.WarnContext(ctx, "mitm.capture.add_conversation_source_column_failed", "err", err)
+			return fmt.Errorf("capture: add conversation_source column: %w", err)
+		}
+	}
+	return nil
+}
+
 // Record enqueues an exchange for asynchronous persistence. It never blocks: if
 // the writer queue is full or the store is closed, the record is dropped with a
 // warning, since capture is best-effort diagnostics and must not stall the
@@ -389,11 +454,11 @@ func (s *Store) insert(ctx context.Context, queued queuedRecord) {
 	}
 	requestSQL, requestArgs, err := sq.Insert("requests").
 		Columns("ts", "client", "provider", "concern", "host", "method", "path", "status",
-			"request_id", "upstream_request_id", "session_id", "trace_id",
+			"request_id", "upstream_request_id", "session_id", "conversation_id", "conversation_source", "trace_id",
 			"req_headers", "resp_headers", "req_content_type", "resp_content_type",
 			"req_bytes", "resp_bytes", "duration_ms").
 		Values(rec.Timestamp.UnixNano(), rec.Client, rec.Provider, rec.Concern, rec.Host, rec.Method, rec.Path, rec.Status,
-			rec.RequestID, rec.UpstreamRequestID, rec.SessionID, rec.TraceID,
+			rec.RequestID, rec.UpstreamRequestID, rec.SessionID, rec.ConversationID, rec.ConversationSource, rec.TraceID,
 			encodeHeaders(rec.RequestHeaders), encodeHeaders(rec.ResponseHeaders), rec.RequestType, rec.ResponseType,
 			queued.requestBytes, queued.responseBytes, rec.Duration.Milliseconds()).
 		ToSql()

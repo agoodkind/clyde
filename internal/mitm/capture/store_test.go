@@ -105,6 +105,117 @@ func TestRecordTextAndBinaryBodies(t *testing.T) {
 	}
 }
 
+func TestRecordPersistsConversationIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.db")
+	store := openTestStore(t, Config{DBPath: path})
+
+	store.Record(Record{
+		Timestamp:          time.Now(),
+		Client:             "cli.claude-code",
+		Provider:           "claude",
+		Host:               "api.anthropic.com",
+		Method:             "POST",
+		Path:               "/v1/messages",
+		Status:             200,
+		RequestID:          "req-conv",
+		SessionID:          "sess-native",
+		ConversationID:     "claude:sess-native",
+		ConversationSource: "header",
+	})
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db := openVerifier(t, path)
+	var sessionID, conversationID, conversationSource string
+	if err := db.QueryRow(`SELECT session_id, conversation_id, conversation_source FROM requests WHERE request_id='req-conv'`).
+		Scan(&sessionID, &conversationID, &conversationSource); err != nil {
+		t.Fatalf("scan identity columns: %v", err)
+	}
+	if sessionID != "sess-native" {
+		t.Fatalf("session_id = %q", sessionID)
+	}
+	if conversationID != "claude:sess-native" {
+		t.Fatalf("conversation_id = %q", conversationID)
+	}
+	if conversationSource != "header" {
+		t.Fatalf("conversation_source = %q", conversationSource)
+	}
+}
+
+// TestOpenMigratesLegacyRequestsTableIdentityColumns covers the upgrade path a
+// fresh database never exercises: an existing capture.db whose requests table
+// predates the conversation identity columns. Open must add both columns and
+// then accept a recorded identity.
+func TestOpenMigratesLegacyRequestsTableIdentityColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.db")
+
+	legacy, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+	// The pre-migration schema: identical to schema.sql minus conversation_id
+	// and conversation_source, which are what ensureRequestsIdentityColumns adds.
+	if _, err := legacy.Exec(`CREATE TABLE requests (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts INTEGER NOT NULL,
+		client TEXT NOT NULL DEFAULT '',
+		provider TEXT NOT NULL DEFAULT '',
+		concern TEXT NOT NULL DEFAULT '',
+		host TEXT NOT NULL DEFAULT '',
+		method TEXT NOT NULL DEFAULT '',
+		path TEXT NOT NULL DEFAULT '',
+		status INTEGER NOT NULL DEFAULT 0,
+		request_id TEXT NOT NULL DEFAULT '',
+		upstream_request_id TEXT NOT NULL DEFAULT '',
+		session_id TEXT NOT NULL DEFAULT '',
+		trace_id TEXT NOT NULL DEFAULT '',
+		req_headers TEXT NOT NULL DEFAULT '',
+		resp_headers TEXT NOT NULL DEFAULT '',
+		req_content_type TEXT NOT NULL DEFAULT '',
+		resp_content_type TEXT NOT NULL DEFAULT '',
+		req_bytes INTEGER NOT NULL DEFAULT 0,
+		resp_bytes INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		t.Fatalf("create legacy requests table: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store := openTestStore(t, Config{DBPath: path})
+	store.Record(Record{
+		Timestamp:          time.Now(),
+		Client:             "cli.claude-code",
+		Provider:           "claude",
+		Host:               "api.anthropic.com",
+		Method:             "POST",
+		Path:               "/v1/messages",
+		Status:             200,
+		RequestID:          "req-legacy",
+		SessionID:          "sess-legacy",
+		ConversationID:     "claude:sess-legacy",
+		ConversationSource: "header",
+	})
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db := openVerifier(t, path)
+	var conversationID, conversationSource string
+	if err := db.QueryRow(`SELECT conversation_id, conversation_source FROM requests WHERE request_id='req-legacy'`).
+		Scan(&conversationID, &conversationSource); err != nil {
+		t.Fatalf("scan migrated identity columns: %v", err)
+	}
+	if conversationID != "claude:sess-legacy" {
+		t.Fatalf("conversation_id = %q, want claude:sess-legacy", conversationID)
+	}
+	if conversationSource != "header" {
+		t.Fatalf("conversation_source = %q, want header", conversationSource)
+	}
+}
+
 func TestTruncation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capture.db")
 	store := openTestStore(t, Config{DBPath: path, MaxBodyBytes: 10})

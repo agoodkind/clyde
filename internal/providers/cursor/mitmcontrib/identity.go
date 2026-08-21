@@ -30,7 +30,13 @@ func extractIdentity(headers http.Header) mitm.IdentityContribution {
 		PreferredRequestID:         requestID,
 		PreferredUpstreamRequestID: originalRequestID,
 		SessionID:                  sessionID,
+		ConversationID:             "",
+		ConversationSource:         "",
 		Facet:                      nil,
+	}
+	if conversationID != "" {
+		contrib.ConversationID = conversationID
+		contrib.ConversationSource = "header"
 	}
 	if !facet.Empty() {
 		contrib.Facet = facet

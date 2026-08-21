@@ -639,6 +639,7 @@ type captureStoreInput struct {
 func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, in captureStoreInput) {
 	contrib := extractIdentityContribution(r.Host, r.URL.Path, r.Header)
 	identity := mitmRequestIdentity(r.Header, contrib)
+	conversationID, conversationSource := captureConversationFields(in.provider, contrib)
 	captureRules := in.captureRules
 	if !in.hasCaptureRules {
 		captureRules = p.config().CaptureRules
@@ -667,26 +668,28 @@ func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, 
 		}
 	}
 	p.store.Record(capture.Record{
-		Timestamp:         clock.Now(),
-		Client:            p.client,
-		Provider:          in.provider,
-		Concern:           concern,
-		Host:              in.host,
-		Method:            in.method,
-		Path:              in.path,
-		Status:            in.status,
-		RequestID:         identity.RequestID,
-		UpstreamRequestID: identity.UpstreamRequestID,
-		SessionID:         identity.SessionID,
-		TraceID:           identity.TraceID,
-		RequestHeaders:    r.Header,
-		ResponseHeaders:   responseHeader,
-		RequestBody:       in.requestBody,
-		ResponseBody:      in.responseBody,
-		RequestType:       r.Header.Get("Content-Type"),
-		ResponseType:      responseHeader.Get("Content-Type"),
-		DecodedRequest:    decodedRequest,
-		Duration:          in.duration,
+		Timestamp:          clock.Now(),
+		Client:             p.client,
+		Provider:           in.provider,
+		Concern:            concern,
+		Host:               in.host,
+		Method:             in.method,
+		Path:               in.path,
+		Status:             in.status,
+		RequestID:          identity.RequestID,
+		UpstreamRequestID:  identity.UpstreamRequestID,
+		SessionID:          identity.SessionID,
+		ConversationID:     conversationID,
+		ConversationSource: conversationSource,
+		TraceID:            identity.TraceID,
+		RequestHeaders:     r.Header,
+		ResponseHeaders:    responseHeader,
+		RequestBody:        in.requestBody,
+		ResponseBody:       in.responseBody,
+		RequestType:        r.Header.Get("Content-Type"),
+		ResponseType:       responseHeader.Get("Content-Type"),
+		DecodedRequest:     decodedRequest,
+		Duration:           in.duration,
 	})
 }
 

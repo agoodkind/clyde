@@ -48,6 +48,12 @@ func TestRouteProviderExtractsCursorIdentity(t *testing.T) {
 	if contrib.SessionID != "cursor-session" {
 		t.Fatalf("session id = %q", contrib.SessionID)
 	}
+	if contrib.ConversationID != "cursor-conv" {
+		t.Fatalf("conversation id = %q", contrib.ConversationID)
+	}
+	if contrib.ConversationSource != "header" {
+		t.Fatalf("conversation source = %q", contrib.ConversationSource)
+	}
 	if contrib.Facet == nil {
 		t.Fatal("expected Cursor facet")
 	}

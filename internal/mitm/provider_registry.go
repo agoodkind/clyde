@@ -70,11 +70,16 @@ type PlainRouteClaim struct {
 // generic layer flushes it via the [logevent.Facets] bundle and
 // never branches on its FacetKey. SessionID is the generic
 // [logevent.Identity.SessionID] when a provider can recover a
-// session identifier from headers.
+// session identifier from headers. ConversationID is the native
+// provider conversation or thread id used to derive the Clyde
+// conversation_id stored on capture rows. ConversationSource tags
+// how ConversationID was recovered.
 type IdentityContribution struct {
 	PreferredRequestID         string
 	PreferredUpstreamRequestID string
 	SessionID                  string
+	ConversationID             string
+	ConversationSource         string
 	Facet                      logevent.Facet
 }
 

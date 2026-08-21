@@ -64,13 +64,21 @@ type Exchange struct {
 	Status            int
 	UpstreamRequestID string
 	SessionID         string
-	RequestHeaders    http.Header
-	ResponseHeaders   http.Header
-	RequestBody       []byte
-	ResponseBody      []byte
-	RequestType       string
-	ResponseType      string
-	Started           time.Time
+	// ConversationID is the clyde-derived conversation id in "provider:native"
+	// form, such as "cursor:1a2b3c". Empty when the request carries nothing that
+	// resolves to a conversation.
+	ConversationID string
+	// ConversationSource names how ConversationID was recovered, so a reader can
+	// tell a provider-supplied id from one clyde derived. Empty whenever
+	// ConversationID is empty.
+	ConversationSource string
+	RequestHeaders     http.Header
+	ResponseHeaders    http.Header
+	RequestBody        []byte
+	ResponseBody       []byte
+	RequestType        string
+	ResponseType       string
+	Started            time.Time
 }
 
 // RecordExchange builds a Record from an Exchange and the request's correlation
@@ -82,26 +90,28 @@ func (s *Store) RecordExchange(corr correlation.Context, ex Exchange) {
 		return
 	}
 	s.Record(Record{
-		Timestamp:         clock.Now(),
-		Client:            ex.Client,
-		Provider:          ex.Provider,
-		Concern:           ex.Concern,
-		Host:              ex.Host,
-		Method:            ex.Method,
-		Path:              ex.Path,
-		Status:            ex.Status,
-		RequestID:         corr.RequestID,
-		UpstreamRequestID: ex.UpstreamRequestID,
-		SessionID:         ex.SessionID,
-		TraceID:           string(corr.TraceID),
-		RequestHeaders:    ex.RequestHeaders,
-		ResponseHeaders:   ex.ResponseHeaders,
-		RequestBody:       ex.RequestBody,
-		ResponseBody:      ex.ResponseBody,
-		RequestType:       ex.RequestType,
-		ResponseType:      ex.ResponseType,
-		DecodedRequest:    nil,
-		Duration:          clock.Since(ex.Started),
+		Timestamp:          clock.Now(),
+		Client:             ex.Client,
+		Provider:           ex.Provider,
+		Concern:            ex.Concern,
+		Host:               ex.Host,
+		Method:             ex.Method,
+		Path:               ex.Path,
+		Status:             ex.Status,
+		RequestID:          corr.RequestID,
+		UpstreamRequestID:  ex.UpstreamRequestID,
+		SessionID:          ex.SessionID,
+		ConversationID:     ex.ConversationID,
+		ConversationSource: ex.ConversationSource,
+		TraceID:            string(corr.TraceID),
+		RequestHeaders:     ex.RequestHeaders,
+		ResponseHeaders:    ex.ResponseHeaders,
+		RequestBody:        ex.RequestBody,
+		ResponseBody:       ex.ResponseBody,
+		RequestType:        ex.RequestType,
+		ResponseType:       ex.ResponseType,
+		DecodedRequest:     nil,
+		Duration:           clock.Since(ex.Started),
 	})
 }
 
@@ -119,7 +129,9 @@ func exchangeRecord(corr correlation.Context, ex Exchange) Record {
 	return Record{
 		Timestamp: clock.Now(), Client: ex.Client, Provider: ex.Provider, Concern: ex.Concern,
 		Host: ex.Host, Method: ex.Method, Path: ex.Path, Status: ex.Status, RequestID: corr.RequestID,
-		UpstreamRequestID: ex.UpstreamRequestID, SessionID: ex.SessionID, TraceID: string(corr.TraceID),
+		UpstreamRequestID: ex.UpstreamRequestID, SessionID: ex.SessionID,
+		ConversationID: ex.ConversationID, ConversationSource: ex.ConversationSource,
+		TraceID:        string(corr.TraceID),
 		RequestHeaders: ex.RequestHeaders, ResponseHeaders: ex.ResponseHeaders, RequestBody: ex.RequestBody,
 		ResponseBody: ex.ResponseBody, RequestType: ex.RequestType, ResponseType: ex.ResponseType,
 		DecodedRequest: nil,
