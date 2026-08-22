@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/mitm/capture"
+	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -107,6 +110,7 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 			status = aerr.HTTPStatus
 		}
 	}
+	conversationID, conversationSource := ingressConversationFields(corr)
 	s.deps.CaptureStore.RecordExchange(corr, capture.Exchange{
 		Client:             captureClientIngress,
 		Provider:           "",
@@ -117,8 +121,8 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 		Status:             status,
 		UpstreamRequestID:  "",
 		SessionID:          "",
-		ConversationID:     "",
-		ConversationSource: "",
+		ConversationID:     conversationID,
+		ConversationSource: conversationSource,
 		RequestHeaders:     redactedIngressHeaders(r.Header),
 		ResponseHeaders:    sanitizedCaptureResponseHeaders(capW.Header()),
 		RequestBody:        body,
@@ -127,6 +131,26 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 		ResponseType:       capW.Header().Get("Content-Type"),
 		Started:            started,
 	})
+}
+
+// ingressConversationFields derives the capture row's conversation identity
+// from the request's chat identity.
+//
+// Only a native chat key becomes a conversation id. Cursor supplies one when it
+// sends conversation metadata; otherwise the resolver derives a lineage key
+// that groups related requests but names no conversation. Storing a derived key
+// here would put a value in conversation_id that
+// `clyde conversation export <id>` cannot resolve, so a derived key is left
+// out and the column keeps its single meaning.
+func ingressConversationFields(corr correlation.Context) (conversationID string, conversationSource string) {
+	if clydeingress.ChatKeySource(corr) != clydeingress.ChatKeySourceNative {
+		return "", ""
+	}
+	nativeID := strings.TrimSpace(clydeingress.ChatKey(corr))
+	if nativeID == "" {
+		return "", ""
+	}
+	return conversation.DerivedID(providerid.ProviderCursor, nativeID, ""), clydeingress.ChatKeySourceNative
 }
 
 func sanitizedCaptureResponseHeaders(headers http.Header) http.Header {

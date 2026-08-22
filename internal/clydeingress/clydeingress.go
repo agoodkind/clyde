@@ -61,6 +61,19 @@ const (
 	AttrKeyUpstreamResponseID = "upstream_response_id"
 )
 
+// Values AttrKeyChatKeySource can hold. They live beside the attribute they
+// describe so a reader that cannot import an ingress package, such as the
+// adapter's capture path, can still tell an id the client supplied from one
+// Clyde inferred.
+const (
+	// ChatKeySourceNative means the client supplied the chat key as
+	// conversation metadata, so it names a real conversation.
+	ChatKeySourceNative = "native"
+	// ChatKeySourceDerived means Clyde inferred the chat key from request
+	// lineage. It groups related requests and names no conversation.
+	ChatKeySourceDerived = "derived"
+)
+
 // FromHTTPHeader builds a [correlation.Context] from header using
 // gklog's standard parser for trace and span identifiers, then layers
 // the clyde-specific x-clyde-* header set and x-claude-code-session-id

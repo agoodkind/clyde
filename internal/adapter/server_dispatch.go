@@ -147,6 +147,11 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 		return err
 	}
 	ctx, r, corr, ingressCtx, bodyFacets := s.applyBodyChatIdentity(ctx, r, corr, recorder, ingress, &req)
+	// The ingress capture defer reads hctx.Correlation when it runs, after the
+	// response completes. Publishing the body-derived chat identity here is what
+	// lets the captured row carry the conversation it belongs to; the header-only
+	// correlation built at handler construction does not have it yet.
+	hctx.Correlation = corr
 
 	// The resolver is the authoritative single resolution path. It maps
 	// the alias and reasoning effort to a typed ResolvedRequest carrying

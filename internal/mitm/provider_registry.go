@@ -119,6 +119,31 @@ type CaptureDecoder interface {
 	DecodeCaptureRequest(exchange ExchangeDiagnostic) (capture.DecodedBody, bool)
 }
 
+// BodyConversationIdentifier is an optional provider extension for wire
+// contracts that carry the conversation id in the request body rather than in
+// a header. The generic layer calls it at the capture site, where the decoded
+// body already exists, and only when header extraction produced no
+// conversation id, so a provider that answers from headers never pays for it.
+//
+// Implementations return the native provider conversation id, not the derived
+// Clyde id; the generic layer derives that once in captureConversationFields.
+// They must return false for any request outside their supported contract, and
+// must not retain the body beyond the call.
+type BodyConversationIdentifier interface {
+	ConversationIDFromBody(exchange ExchangeDiagnostic) (string, bool)
+}
+
+func bodyConversationIdentifierFor(providerName string) (BodyConversationIdentifier, bool) {
+	for _, provider := range defaultRegistry.snapshot() {
+		identifier, ok := provider.(BodyConversationIdentifier)
+		if !ok || provider.ID().String() != providerName {
+			continue
+		}
+		return identifier, true
+	}
+	return nil, false
+}
+
 func captureDecoderFor(providerName string, host string) (CaptureDecoder, bool) {
 	for _, provider := range defaultRegistry.snapshot() {
 		decoder, ok := provider.(CaptureDecoder)
