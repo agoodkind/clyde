@@ -1,6 +1,10 @@
 package mitmcontrib
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/binary"
+	"io"
 	"strings"
 
 	"goodkind.io/clyde/internal/mitm"
@@ -38,18 +42,68 @@ const conversationIDMaxLen = 64
 // The scan reads two length-delimited fields at most and never walks the whole
 // message, so a large agent request costs the same as a small one.
 func (routeProvider) ConversationIDFromBody(exchange mitm.ExchangeDiagnostic) (string, bool) {
-	switch strings.TrimSpace(exchange.Path) {
-	case agentUpdateConversationMetadataPath:
-		return conversationIDField(exchange.DecodedRequestBody, conversationIDTopLevelField)
-	case agentRunPath:
-		request, ok := protoBytesField(exchange.DecodedRequestBody, agentRunRequestField)
-		if !ok {
-			return "", false
-		}
-		return conversationIDField(request, agentRunConversationField)
-	default:
+	path := strings.TrimSpace(exchange.Path)
+	if path != agentRunPath && path != agentUpdateConversationMetadataPath {
 		return "", false
 	}
+	message, ok := connectFrameMessage(exchange.DecodedRequestBody)
+	if !ok {
+		return "", false
+	}
+	if path == agentUpdateConversationMetadataPath {
+		return conversationIDField(message, conversationIDTopLevelField)
+	}
+	request, ok := protoBytesField(message, agentRunRequestField)
+	if !ok {
+		return "", false
+	}
+	return conversationIDField(request, agentRunConversationField)
+}
+
+// connectFrameMessage unwraps the Connect RPC envelope Cursor's agent routes
+// use: one flag byte, a four-byte big-endian length, then the message.
+//
+// The generic capture path decodes HTTP Content-Encoding only, and Cursor
+// compresses inside the envelope instead, so the bytes arriving here are still
+// framed and usually still gzipped. Unwrapping is therefore this provider's
+// job, not the shared path's.
+//
+// A body that is not a Connect frame is returned unchanged, so a future
+// uncompressed or unframed variant still parses.
+func connectFrameMessage(body []byte) ([]byte, bool) {
+	const (
+		flagOffset      = 0
+		lengthOffset    = 1
+		messageOffset   = 5
+		compressedFlag  = 0x01
+		maxDecompressed = 8 << 20
+	)
+	if len(body) < messageOffset {
+		return body, len(body) > 0
+	}
+	declared := binary.BigEndian.Uint32(body[lengthOffset:messageOffset])
+	message := body[messageOffset:]
+	// A capture body is truncated at the store cap, so a declared length longer
+	// than what arrived is expected and the short read is used as-is.
+	if int(declared) < len(message) {
+		message = message[:declared]
+	}
+	if body[flagOffset]&compressedFlag == 0 {
+		return message, len(message) > 0
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(message))
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = reader.Close() }()
+	decompressed, err := io.ReadAll(io.LimitReader(reader, maxDecompressed))
+	// A truncated capture body yields an unexpected-EOF error after valid bytes.
+	// Those bytes still hold the leading fields this decoder reads, so they are
+	// kept rather than discarded.
+	if err != nil && len(decompressed) == 0 {
+		return nil, false
+	}
+	return decompressed, len(decompressed) > 0
 }
 
 // conversationIDField returns the named field when it holds a plausible

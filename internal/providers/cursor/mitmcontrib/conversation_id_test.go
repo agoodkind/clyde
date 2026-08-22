@@ -1,12 +1,41 @@
 package mitmcontrib
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/binary"
 	"testing"
 
 	"goodkind.io/clyde/internal/mitm"
 )
 
 const testConversationID = "2e26c0f6-c33d-4b54-93a4-96c94b0b7b11"
+
+// connectFrame wraps a message the way Cursor's agent routes do: one flag byte,
+// a four-byte big-endian length, then the message, gzipped when compressed is
+// set. Live traffic is always compressed; the uncompressed form is covered so a
+// future variant still parses.
+func connectFrame(t *testing.T, message []byte, compressed bool) []byte {
+	t.Helper()
+	payload := message
+	flag := byte(0)
+	if compressed {
+		flag = 1
+		var buf bytes.Buffer
+		writer := gzip.NewWriter(&buf)
+		if _, err := writer.Write(message); err != nil {
+			t.Fatalf("gzip write: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("gzip close: %v", err)
+		}
+		payload = buf.Bytes()
+	}
+	framed := make([]byte, 5, 5+len(payload))
+	framed[0] = flag
+	binary.BigEndian.PutUint32(framed[1:5], uint32(len(payload)))
+	return append(framed, payload...)
+}
 
 // protoBytes encodes one length-delimited protobuf field. Field numbers here
 // stay under 16 so the tag is a single byte, which every fixture below relies on.
@@ -47,26 +76,36 @@ func TestConversationIDFromBodyReadsBothAgentRoutes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		path string
-		body []byte
+		name       string
+		path       string
+		message    []byte
+		compressed bool
 	}{
 		{
-			name: "update conversation metadata",
-			path: agentUpdateConversationMetadataPath,
-			body: updateConversationMetadataBody(testConversationID),
+			name:       "update conversation metadata, gzipped as sent",
+			path:       agentUpdateConversationMetadataPath,
+			message:    updateConversationMetadataBody(testConversationID),
+			compressed: true,
 		},
 		{
-			name: "agent run",
-			path: agentRunPath,
-			body: agentRunBody(testConversationID),
+			name:       "agent run, gzipped as sent",
+			path:       agentRunPath,
+			message:    agentRunBody(testConversationID),
+			compressed: true,
+		},
+		{
+			name:       "agent run, uncompressed frame",
+			path:       agentRunPath,
+			message:    agentRunBody(testConversationID),
+			compressed: false,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, ok := routeProvider{}.ConversationIDFromBody(exchangeFor(test.path, test.body))
+			body := connectFrame(t, test.message, test.compressed)
+			got, ok := routeProvider{}.ConversationIDFromBody(exchangeFor(test.path, body))
 			if !ok {
 				t.Fatalf("ConversationIDFromBody returned ok=false")
 			}
@@ -85,7 +124,7 @@ func TestConversationIDFromBodyReadsBothAgentRoutes(t *testing.T) {
 func TestConversationIDFromBodyRejectsNonConversationInput(t *testing.T) {
 	t.Parallel()
 
-	full := updateConversationMetadataBody(testConversationID)
+	full := connectFrame(t, updateConversationMetadataBody(testConversationID), true)
 	tests := []struct {
 		name string
 		path string
@@ -97,7 +136,7 @@ func TestConversationIDFromBodyRejectsNonConversationInput(t *testing.T) {
 			body: full,
 		},
 		{
-			name: "truncated body",
+			name: "truncated frame",
 			path: agentUpdateConversationMetadataPath,
 			body: full[:len(full)/2],
 		},
@@ -107,14 +146,24 @@ func TestConversationIDFromBodyRejectsNonConversationInput(t *testing.T) {
 			body: nil,
 		},
 		{
+			name: "frame header only",
+			path: agentRunPath,
+			body: full[:5],
+		},
+		{
+			name: "compressed flag set on bytes that are not gzip",
+			path: agentRunPath,
+			body: append([]byte{1, 0, 0, 0, 4}, []byte("junk")...),
+		},
+		{
 			name: "field holds a non-id string",
 			path: agentUpdateConversationMetadataPath,
-			body: updateConversationMetadataBody("not-a-conversation-id"),
+			body: connectFrame(t, updateConversationMetadataBody("not-a-conversation-id"), true),
 		},
 		{
 			name: "run wrapper without the id field",
 			path: agentRunPath,
-			body: protoBytes(1, protoBytes(2, []byte("payload"))),
+			body: connectFrame(t, protoBytes(1, protoBytes(2, []byte("payload"))), true),
 		},
 	}
 	for _, test := range tests {
