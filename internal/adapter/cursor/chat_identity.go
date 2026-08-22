@@ -18,10 +18,10 @@ import (
 const (
 	// ChatKeySourceNative means the chat key came from client-supplied
 	// conversation metadata.
-	ChatKeySourceNative = "native"
+	ChatKeySourceNative = clydeingress.ChatKeySourceNative
 	// ChatKeySourceDerived means Clyde derived the chat key from sanitized
 	// request lineage because Cursor did not send native chat metadata.
-	ChatKeySourceDerived = "derived"
+	ChatKeySourceDerived = clydeingress.ChatKeySourceDerived
 )
 
 // ChatIdentity describes the privacy-safe chat partition selected for one

@@ -639,7 +639,6 @@ type captureStoreInput struct {
 func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, in captureStoreInput) {
 	contrib := extractIdentityContribution(r.Host, r.URL.Path, r.Header)
 	identity := mitmRequestIdentity(r.Header, contrib)
-	conversationID, conversationSource := captureConversationFields(in.provider, contrib)
 	captureRules := in.captureRules
 	if !in.hasCaptureRules {
 		captureRules = p.config().CaptureRules
@@ -652,6 +651,26 @@ func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, 
 		RequestContentType:  r.Header.Get("Content-Type"),
 		ResponseContentType: responseHeader.Get("Content-Type"),
 	})
+	// Headers win. Only when the provider sent no conversation header does the
+	// body get consulted, and only for providers that carry the id in the body.
+	if strings.TrimSpace(contrib.ConversationID) == "" {
+		if identifier, ok := bodyConversationIdentifierFor(in.provider); ok {
+			nativeID, found := identifier.ConversationIDFromBody(ExchangeDiagnostic{
+				RequestHeader:      r.Header,
+				DecodedRequestBody: in.requestBody,
+				Method:             in.method,
+				Path:               in.path,
+				Host:               in.host,
+				Concern:            concern,
+				HookName:           "",
+			})
+			if found {
+				contrib.ConversationID = nativeID
+				contrib.ConversationSource = "body"
+			}
+		}
+	}
+	conversationID, conversationSource := captureConversationFields(in.provider, contrib)
 	var decodedRequest *capture.DecodedBody
 	if decoder, ok := captureDecoderFor(in.provider, in.host); ok {
 		decoded, supported := decoder.DecodeCaptureRequest(ExchangeDiagnostic{
