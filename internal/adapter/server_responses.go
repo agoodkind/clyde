@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clock"
@@ -49,6 +51,24 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 		defer func() {
 			s.finishIngressCapture(capW, hctx.Correlation, r, body, started, err)
 		}()
+	}
+	if raw, model, native := nativeCodexResponsesRequest(body, r.Header); native {
+		var modelRequest ChatRequest
+		modelRequest.Model = model
+		resolvedReq, resolverErr := resolveResponsesRequest(
+			openAIIngressSurface(ctx),
+			modelRequest,
+			adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
+		)
+		if resolverErr != nil {
+			return adapterErrModelNotFound(resolverErr.Error())
+		}
+		if resolvedReq.Provider == adapterresolver.ProviderCodex {
+			resolvedReq.RequestID = reqID
+			resolvedReq.Correlation = corr
+			s.dispatchNativeCodexResponses(w, r, reqID, raw, resolvedReq)
+			return nil
+		}
 	}
 	rr, parseErr := adapteropenai.UnmarshalResponsesRequest(body)
 	if parseErr != nil {
@@ -96,6 +116,64 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 
 	s.dispatchResolvedResponsesWithID(w, r, req, reqID, responseID, body, resolvedReq, warnings)
 	return nil
+}
+
+func nativeCodexResponsesRequest(body []byte, header http.Header) (adaptercodex.RawResponsesRequest, string, bool) {
+	var request struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil || strings.TrimSpace(request.Model) == "" {
+		var zero adaptercodex.RawResponsesRequest
+		return zero, "", false
+	}
+	raw := adaptercodex.RawResponsesRequest{Body: body, Header: header.Clone(), Stream: request.Stream}
+	if !raw.HasValidTurnMetadata() {
+		var zero adaptercodex.RawResponsesRequest
+		return zero, "", false
+	}
+	return raw, request.Model, true
+}
+
+func (s *Server) dispatchNativeCodexResponses(
+	w http.ResponseWriter,
+	r *http.Request,
+	requestID string,
+	raw adaptercodex.RawResponsesRequest,
+	resolved adapterresolver.ResolvedRequest,
+) {
+	if s.codexProvider == nil {
+		s.respondAdapterError(w, r, codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured))
+		return
+	}
+	ctx, lifecycle := s.beginProviderRequestLifecycle(r.Context(), &resolved, "direct", requestID, resolved.Model, raw.Stream)
+	for key, values := range clydeingress.HTTPHeaders(resolved.Correlation) {
+		raw.Header.Del(key)
+		for _, value := range values {
+			raw.Header.Add(key, value)
+		}
+	}
+	egressCtx, _, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindHTTP, EgressMeta{
+		Provider: "codex", UpstreamURL: s.cfg.Codex.BaseURL, UpstreamRequestID: "", AttemptNo: 0, ParentRequestID: requestID,
+	})
+	defer releaseEgress("codex.raw_responses.done")
+	response, err := s.codexProvider.OpenRawResponses(egressCtx, raw)
+	if err != nil {
+		var result adapterprovider.Result
+		lifecycle.terminal(ctx, result, err)
+		s.respondAdapterError(w, r, codexProviderAdapterError(err))
+		return
+	}
+	defer func() { _ = response.Body.Close() }()
+	if raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+		lifecycle.streamOpened(ctx)
+	}
+	_, copyErr := s.copyPassthroughResponse(ctx, w, response, raw.Stream)
+	var result adapterprovider.Result
+	lifecycle.terminal(ctx, result, copyErr)
+	if copyErr != nil {
+		s.log.WarnContext(ctx, "adapter.codex.raw_responses.copy_failed", "concern", "adapter.providers.codex.request", "err", copyErr)
+	}
 }
 
 // responsesRequestToChatRequest projects a typed Responses request into
