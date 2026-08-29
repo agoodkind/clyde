@@ -13,7 +13,9 @@ import (
 	"sync"
 
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -116,6 +118,7 @@ func (p *Provider) openRawResponsesAttempt(ctx context.Context, raw RawResponses
 	if hook := beforeAttemptFromContext(ctx); hook != nil {
 		attemptCtx, releaseAttempt = hook(ctx, attemptNumber)
 	}
+	started := clock.Now()
 	response, err := p.openRawResponsesOnce(attemptCtx, raw, token, accountID)
 	if err != nil {
 		releaseAttempt("codex.raw_responses.attempt.failed")
@@ -125,8 +128,49 @@ func (p *Provider) openRawResponsesAttempt(ctx context.Context, raw RawResponses
 	attemptBody.ReadCloser = response.Body
 	attemptBody.release = releaseAttempt
 	attemptBody.log = p.log
+	if p.captureStore != nil {
+		attemptBody.captureBody = capture.NewCappedBuffer(codexCaptureBodyCap)
+		attemptBody.recordCapture = func(responseBody []byte) {
+			recordCodexHTTPEgress(
+				p.captureStore, raw.Correlation, response.Request, response,
+				raw.Body, responseBody, "", started,
+			)
+		}
+	}
 	response.Body = &attemptBody
 	return response, nil
+}
+
+type rawResponsesAttemptBody struct {
+	io.ReadCloser
+	release       func(string)
+	log           *slog.Logger
+	once          sync.Once
+	captureBody   *capture.CappedBuffer
+	recordCapture func([]byte)
+	captureOnce   sync.Once
+}
+
+func (b *rawResponsesAttemptBody) Read(p []byte) (int, error) {
+	count, err := b.ReadCloser.Read(p)
+	if count > 0 && b.captureBody != nil {
+		_, _ = b.captureBody.Write(p[:count])
+	}
+	if errors.Is(err, io.EOF) {
+		b.finishCapture()
+		return count, io.EOF
+	}
+	if err != nil {
+		return count, fmt.Errorf("read raw Responses capture body: %w", err)
+	}
+	return count, nil
+}
+
+func (b *rawResponsesAttemptBody) finishCapture() {
+	if b.captureBody == nil || b.recordCapture == nil {
+		return
+	}
+	b.captureOnce.Do(func() { b.recordCapture(b.captureBody.Bytes()) })
 }
 
 func (p *Provider) openRawResponsesOnce(ctx context.Context, raw RawResponsesRequest, token, accountID string) (*http.Response, error) {
@@ -197,15 +241,9 @@ func rawResponsesModelRewriteError(operation string, err error) error {
 	return fmt.Errorf("raw Responses model rewrite %s: %w", operation, err)
 }
 
-type rawResponsesAttemptBody struct {
-	io.ReadCloser
-	release func(string)
-	log     *slog.Logger
-	once    sync.Once
-}
-
 func (b *rawResponsesAttemptBody) Close() error {
 	err := b.ReadCloser.Close()
+	b.finishCapture()
 	b.once.Do(func() { b.release("codex.raw_responses.attempt.completed") })
 	if err != nil {
 		b.log.Warn("adapter.codex.raw_responses.body_close_failed", "concern", "adapter.providers.codex.request", "err", err)
