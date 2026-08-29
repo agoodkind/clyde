@@ -74,7 +74,7 @@ func (s *Server) codexEgressContext(
 }
 
 func (s *Server) codexRawResponsesEgressContext(ctx context.Context, requestID string) (context.Context, func(string)) {
-	upstreamURL := s.cfg.Codex.BaseURL
+	upstreamURL := adaptercodex.ResponsesBaseURL(s.cfg.Codex.BaseURL)
 	egressCtx, parentSession, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindHTTP, EgressMeta{
 		Provider: "codex", UpstreamURL: upstreamURL, UpstreamRequestID: "", AttemptNo: 0, ParentRequestID: requestID,
 	})

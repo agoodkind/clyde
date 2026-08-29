@@ -12,7 +12,9 @@ import (
 	"testing"
 
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/gklog/correlation"
 )
 
 type rawResponsesAuth struct {
@@ -78,6 +80,12 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 			"X-Codex-Turn-Metadata": {`{"session_id":"native-session","thread_source":"user","turn_id":"","sandbox":"none"}`},
 			"X-Preserve":            {"opaque"},
 		},
+		RequestID: "raw-request-id",
+		Correlation: correlation.Context{
+			TraceID: "0123456789abcdef0123456789abcdef", SpanID: "0123456789abcdef",
+			ParentSpanID: "fedcba9876543210", RequestID: "stale-request-id", IdentityAttributes: nil,
+		},
+		Stream: false,
 	})
 	if err != nil {
 		t.Fatalf("OpenRawResponses() error = %v", err)
@@ -105,6 +113,12 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 	if got := gotHeader.Get("X-Preserve"); got != "opaque" {
 		t.Fatalf("X-Preserve = %q", got)
 	}
+	if got := gotHeader.Get(clydeingress.HeaderRequestID); got != "raw-request-id" {
+		t.Fatalf("request id = %q", got)
+	}
+	if got := gotHeader.Get(clydeingress.HeaderTraceID); got != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("trace id = %q", got)
+	}
 }
 
 func TestProviderOpenRawResponsesRefreshesOnceAfterUnauthorized(t *testing.T) {
@@ -124,7 +138,10 @@ func TestProviderOpenRawResponsesRefreshesOnceAfterUnauthorized(t *testing.T) {
 
 	auth.accountID = "configured-account"
 	provider := NewProvider(adapterprovider.Deps{Config: rawResponsesConfig(upstream.URL), Auth: auth, HTTPClient: upstream.Client()}, ProviderOptions{})
-	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{Body: []byte(`{"model":"gpt-native"}`), Header: http.Header{}})
+	var raw RawResponsesRequest
+	raw.Body = []byte(`{"model":"gpt-native"}`)
+	raw.Header = http.Header{}
+	response, err := provider.OpenRawResponses(context.Background(), raw)
 	if err != nil {
 		t.Fatalf("OpenRawResponses() error = %v", err)
 	}
@@ -152,7 +169,10 @@ func TestProviderOpenRawResponsesPreservesRedirectResponse(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	provider := NewProvider(adapterprovider.Deps{Config: rawResponsesConfig(upstream.URL), Auth: &rawResponsesAuth{accountID: "configured-account"}, HTTPClient: upstream.Client()}, ProviderOptions{})
-	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{Body: []byte(`{"model":"gpt-native"}`), Header: http.Header{}})
+	var raw RawResponsesRequest
+	raw.Body = []byte(`{"model":"gpt-native"}`)
+	raw.Header = http.Header{}
+	response, err := provider.OpenRawResponses(context.Background(), raw)
 	if err != nil {
 		t.Fatalf("OpenRawResponses() error = %v", err)
 	}
