@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 
 type rawResponsesAuth struct {
 	refreshes atomic.Int32
+	accountID string
 }
 
 func rawResponsesConfig(baseURL string) config.AdapterConfig {
@@ -28,6 +31,25 @@ func (a *rawResponsesAuth) Token(context.Context) (string, error) {
 func (a *rawResponsesAuth) ForceRefresh(context.Context) (string, error) {
 	a.refreshes.Add(1)
 	return "refreshed-token", nil
+}
+
+func (a *rawResponsesAuth) AccountID(context.Context) (string, error) {
+	return a.accountID, nil
+}
+
+func TestAuthManagerAccountIDReadsConfiguredAuthFile(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"account_id":"configured-account"}}`), 0o600); err != nil {
+		t.Fatalf("write auth file: %v", err)
+	}
+	manager := NewAuthManager(authPath, AuthManagerOptions{})
+	accountID, err := manager.AccountID(context.Background())
+	if err != nil {
+		t.Fatalf("AccountID() error = %v", err)
+	}
+	if accountID != "configured-account" {
+		t.Fatalf("AccountID() = %q", accountID)
+	}
 }
 
 func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *testing.T) {
@@ -44,7 +66,7 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 	}))
 	t.Cleanup(upstream.Close)
 
-	provider := NewProvider(adapterprovider.Deps{Config: rawResponsesConfig(upstream.URL), Auth: &rawResponsesAuth{}, HTTPClient: upstream.Client()}, ProviderOptions{})
+	provider := NewProvider(adapterprovider.Deps{Config: rawResponsesConfig(upstream.URL), Auth: &rawResponsesAuth{accountID: "configured-account"}, HTTPClient: upstream.Client()}, ProviderOptions{})
 	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{
 		Body: requestBody,
 		Header: http.Header{
@@ -52,7 +74,7 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 			"Proxy-Authorization":   {"Basic inbound-proxy-secret"},
 			"Connection":            {"X-Remove"},
 			"X-Remove":              {"hop-by-hop"},
-			"Chatgpt-Account-Id":    {"native-account"},
+			"Chatgpt-Account-Id":    {"untrusted-account"},
 			"X-Codex-Turn-Metadata": {`{"session_id":"native-session","thread_source":"user","turn_id":"","sandbox":"none"}`},
 			"X-Preserve":            {"opaque"},
 		},
@@ -77,7 +99,7 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 	if gotHeader.Get("Proxy-Authorization") != "" || gotHeader.Get("X-Remove") != "" || gotHeader.Get("Connection") != "" {
 		t.Fatalf("credential or hop header leaked: %v", gotHeader)
 	}
-	if got := gotHeader.Get("Chatgpt-Account-Id"); got != "native-account" {
+	if got := gotHeader.Get("Chatgpt-Account-Id"); got != "configured-account" {
 		t.Fatalf("Chatgpt-Account-Id = %q", got)
 	}
 	if got := gotHeader.Get("X-Preserve"); got != "opaque" {
@@ -100,6 +122,7 @@ func TestProviderOpenRawResponsesRefreshesOnceAfterUnauthorized(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
+	auth.accountID = "configured-account"
 	provider := NewProvider(adapterprovider.Deps{Config: rawResponsesConfig(upstream.URL), Auth: auth, HTTPClient: upstream.Client()}, ProviderOptions{})
 	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{Body: []byte(`{"model":"gpt-native"}`), Header: http.Header{}})
 	if err != nil {
@@ -108,5 +131,37 @@ func TestProviderOpenRawResponsesRefreshesOnceAfterUnauthorized(t *testing.T) {
 	t.Cleanup(func() { _ = response.Body.Close() })
 	if response.StatusCode != http.StatusForbidden || requests.Load() != 2 || auth.refreshes.Load() != 1 || lastAuthorization != "Bearer refreshed-token" {
 		t.Fatalf("status=%d requests=%d refreshes=%d authorization=%q", response.StatusCode, requests.Load(), auth.refreshes.Load(), lastAuthorization)
+	}
+}
+
+func TestProviderOpenRawResponsesPreservesRedirectResponse(t *testing.T) {
+	redirected := atomic.Bool{}
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		redirected.Store(true)
+		if request.Header.Get("Authorization") != "" || request.Header.Get("Chatgpt-Account-Id") != "" {
+			t.Errorf("sensitive headers followed redirect: %v", request.Header)
+		}
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(redirectTarget.Close)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Location", redirectTarget.URL)
+		writer.WriteHeader(http.StatusTemporaryRedirect)
+		_, _ = writer.Write([]byte(`{"redirect":"preserve"}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	provider := NewProvider(adapterprovider.Deps{Config: rawResponsesConfig(upstream.URL), Auth: &rawResponsesAuth{accountID: "configured-account"}, HTTPClient: upstream.Client()}, ProviderOptions{})
+	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{Body: []byte(`{"model":"gpt-native"}`), Header: http.Header{}})
+	if err != nil {
+		t.Fatalf("OpenRawResponses() error = %v", err)
+	}
+	t.Cleanup(func() { _ = response.Body.Close() })
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read redirect response: %v", err)
+	}
+	if redirected.Load() || response.StatusCode != http.StatusTemporaryRedirect || !bytes.Equal(body, []byte(`{"redirect":"preserve"}`)) {
+		t.Fatalf("redirected=%t status=%d body=%s", redirected.Load(), response.StatusCode, body)
 	}
 }
