@@ -13,15 +13,19 @@ import (
 	"sync"
 
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 )
 
 // RawResponsesRequest preserves a native Codex Responses request at the
 // provider boundary. Its body and headers are forwarded without typed
 // projection when the ingress has already validated its turn metadata.
 type RawResponsesRequest struct {
-	Body   []byte
-	Header http.Header
-	Stream bool
+	Body        []byte
+	Header      http.Header
+	RequestID   string
+	Correlation correlation.Context
+	Stream      bool
 }
 
 type rawResponsesAccountLookup interface {
@@ -67,12 +71,9 @@ func (p *Provider) OpenRawResponses(ctx context.Context, raw RawResponsesRequest
 		return nil, accountErr
 	}
 	response, err := p.openRawResponsesAttempt(ctx, raw, token, accountID, 1)
-	if err != nil || !shouldRefreshRawResponsesAuth(response.StatusCode, p.auth) {
+	refresher, shouldRefresh := rawResponsesRefresher(response, err, p.auth)
+	if !shouldRefresh {
 		return response, err
-	}
-	refresher, ok := p.auth.(adapterprovider.AuthRefresher)
-	if !ok {
-		return response, nil
 	}
 	refreshedToken, refreshErr := refresher.ForceRefresh(ctx)
 	if refreshErr != nil {
@@ -101,12 +102,12 @@ func (p *Provider) rawResponsesAccountID(ctx context.Context) (string, error) {
 	return accountID, nil
 }
 
-func shouldRefreshRawResponsesAuth(status int, auth adapterprovider.AuthLookup) bool {
-	if status != http.StatusUnauthorized && status != http.StatusForbidden {
-		return false
+func rawResponsesRefresher(response *http.Response, requestErr error, auth adapterprovider.AuthLookup) (adapterprovider.AuthRefresher, bool) {
+	if requestErr != nil || response == nil || (response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusForbidden) {
+		return nil, false
 	}
-	_, ok := auth.(adapterprovider.AuthRefresher)
-	return ok
+	refresher, ok := auth.(adapterprovider.AuthRefresher)
+	return refresher, ok
 }
 
 func (p *Provider) openRawResponsesAttempt(ctx context.Context, raw RawResponsesRequest, token, accountID string, attemptNumber int) (*http.Response, error) {
@@ -134,12 +135,16 @@ func (p *Provider) openRawResponsesOnce(ctx context.Context, raw RawResponsesReq
 		p.log.WarnContext(ctx, "adapter.codex.raw_responses.build_failed", "concern", "adapter.providers.codex.request", "err", err)
 		return nil, fmt.Errorf("codex provider: build raw Responses request: %w", err)
 	}
-	req.Header = rawResponsesHeaders(raw.Header, token, accountID)
+	req.Header = rawResponsesHeaders(raw, token, accountID)
 	client := p.httpClient
 	if client == nil {
 		client = http.DefaultClient
 	}
-	requestClient := *client
+	requestClient := http.Client{
+		Transport: client.Transport,
+		Jar:       client.Jar,
+		Timeout:   client.Timeout,
+	}
 	requestClient.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
@@ -149,6 +154,47 @@ func (p *Provider) openRawResponsesOnce(ctx context.Context, raw RawResponsesReq
 		return nil, fmt.Errorf("codex provider: raw Responses request: %w", err)
 	}
 	return response, nil
+}
+
+// MarshalWithModel returns a raw request that carries model while retaining every
+// other top-level request field. It returns the original bytes when model
+// already matches, preserving the native request exactly on the common path.
+func (r RawResponsesRequest) MarshalWithModel(model string) (RawResponsesRequest, error) {
+	if strings.TrimSpace(model) == "" {
+		return RawResponsesRequest{}, errors.New("raw Responses model is empty")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(r.Body, &fields); err != nil {
+		return RawResponsesRequest{}, rawResponsesModelRewriteError("decode request", err)
+	}
+	if fields == nil {
+		return RawResponsesRequest{}, rawResponsesModelRewriteError("decode request", errors.New("request must be a JSON object"))
+	}
+	var current string
+	if rawModel, ok := fields["model"]; ok {
+		if err := json.Unmarshal(rawModel, &current); err != nil {
+			return RawResponsesRequest{}, rawResponsesModelRewriteError("decode model", err)
+		}
+	}
+	if current == model {
+		return r, nil
+	}
+	replacement, err := json.Marshal(model)
+	if err != nil {
+		return RawResponsesRequest{}, rawResponsesModelRewriteError("encode model", err)
+	}
+	fields["model"] = replacement
+	body, err := json.Marshal(fields)
+	if err != nil {
+		return RawResponsesRequest{}, rawResponsesModelRewriteError("encode request", err)
+	}
+	r.Body = body
+	return r, nil
+}
+
+func rawResponsesModelRewriteError(operation string, err error) error {
+	slog.Warn("adapter.codex.raw_responses.model_rewrite_failed", "concern", "adapter.providers.codex.request", "operation", operation, "err", err)
+	return fmt.Errorf("raw Responses model rewrite %s: %w", operation, err)
 }
 
 type rawResponsesAttemptBody struct {
@@ -168,8 +214,8 @@ func (b *rawResponsesAttemptBody) Close() error {
 	return nil
 }
 
-func rawResponsesHeaders(inbound http.Header, token, accountID string) http.Header {
-	headers := inbound.Clone()
+func rawResponsesHeaders(raw RawResponsesRequest, token, accountID string) http.Header {
+	headers := raw.Header.Clone()
 	connectionHeaders := rawResponsesConnectionHeaders(headers)
 	for header := range connectionHeaders {
 		headers.Del(header)
@@ -184,6 +230,16 @@ func rawResponsesHeaders(inbound http.Header, token, accountID string) http.Head
 	headers.Set("Authorization", "Bearer "+token)
 	if strings.TrimSpace(accountID) != "" {
 		headers.Set("Chatgpt-Account-Id", accountID)
+	}
+	corr := raw.Correlation
+	if strings.TrimSpace(raw.RequestID) != "" {
+		corr = corr.WithRequestID(raw.RequestID)
+	}
+	for key, values := range clydeingress.HTTPHeaders(corr) {
+		headers.Del(key)
+		for _, value := range values {
+			headers.Add(key, value)
+		}
 	}
 	return headers
 }

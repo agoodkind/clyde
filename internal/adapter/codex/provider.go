@@ -310,13 +310,17 @@ func codexSummaryRenderStrategy(strategy config.CodexRoundTripSummary) adapterre
 	}
 }
 
-// codexBaseURL applies the documented default for the Codex Responses
+// ResponsesBaseURL applies the documented default for the Codex Responses
 // HTTP endpoint when the config leaves BaseURL empty.
-func codexBaseURL(raw string) string {
+func ResponsesBaseURL(raw string) string {
 	if v := strings.TrimSpace(raw); v != "" {
 		return v
 	}
 	return "https://chatgpt.com/backend-api/codex/responses"
+}
+
+func codexBaseURL(raw string) string {
+	return ResponsesBaseURL(raw)
 }
 
 // codexWebsocketURL converts a Codex base URL into the matching
