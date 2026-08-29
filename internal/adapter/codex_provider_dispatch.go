@@ -73,6 +73,20 @@ func (s *Server) codexEgressContext(
 	return egressCtx, releaseEgress
 }
 
+func (s *Server) codexRawResponsesEgressContext(ctx context.Context, requestID string) (context.Context, func(string)) {
+	upstreamURL := s.cfg.Codex.BaseURL
+	egressCtx, parentSession, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindHTTP, EgressMeta{
+		Provider: "codex", UpstreamURL: upstreamURL, UpstreamRequestID: "", AttemptNo: 0, ParentRequestID: requestID,
+	})
+	hook := func(attemptCtx context.Context, attemptNumber int) (context.Context, func(string)) {
+		childCtx, _, releaseAttempt := registerEgress(attemptCtx, s.egressRegistry, egressSessionKindAttempt, EgressMeta{
+			Provider: "codex", UpstreamURL: upstreamURL, UpstreamRequestID: "", AttemptNo: attemptNumber, ParentRequestID: requestID,
+		}, livetrack.WithParent(parentSession))
+		return childCtx, releaseAttempt
+	}
+	return adaptercodex.WithBeforeAttempt(egressCtx, hook), releaseEgress
+}
+
 // codexCompletedAttrs builds the structured attribute slice for the
 // adapter.chat.completed emit on the Codex dispatch path. Both the
 // streaming and non-streaming finalize sites share this builder so the

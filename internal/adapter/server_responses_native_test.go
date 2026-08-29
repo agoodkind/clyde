@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func TestNativeCodexResponsesPreservesRawRequestAndResponse(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	srv := newNativeResponsesServer(t, upstream.URL, routingTestAuth{})
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
@@ -60,20 +61,35 @@ func TestNativeCodexResponsesStreamsRawBytes(t *testing.T) {
 	t.Cleanup(upstream.Close)
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
-	srv := newNativeResponsesServer(t, upstream.URL, routingTestAuth{})
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
-	request, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-native","input":"native","stream":true}`))
+	request, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-native","input":"native"}`))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
 	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatalf("post response: %v", err)
-	}
-	t.Cleanup(func() { _ = response.Body.Close() })
+	responseDone := make(chan *http.Response, 1)
+	requestErr := make(chan error, 1)
+	go func() {
+		response, requestErrValue := http.DefaultClient.Do(request)
+		if requestErrValue != nil {
+			requestErr <- requestErrValue
+			return
+		}
+		responseDone <- response
+	}()
 	<-firstWritten
+	var response *http.Response
+	select {
+	case response = <-responseDone:
+		t.Cleanup(func() { _ = response.Body.Close() })
+	case requestErrValue := <-requestErr:
+		t.Fatalf("post response: %v", requestErrValue)
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("SSE headers waited for upstream completion")
+	}
 	readDone := make(chan string, 1)
 	go func() {
 		buffer := make([]byte, 64)
@@ -92,6 +108,95 @@ func TestNativeCodexResponsesStreamsRawBytes(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("first raw bytes waited for upstream completion")
+	}
+}
+
+type nativeRawRefreshAuth struct {
+	refreshes atomic.Int32
+}
+
+func (a *nativeRawRefreshAuth) Token(context.Context) (string, error) {
+	return "configured-token", nil
+}
+
+func (a *nativeRawRefreshAuth) ForceRefresh(context.Context) (string, error) {
+	a.refreshes.Add(1)
+	return "refreshed-token", nil
+}
+
+func (a *nativeRawRefreshAuth) AccountID(context.Context) (string, error) {
+	return "configured-account", nil
+}
+
+func TestNativeCodexResponsesTracksEachRawHTTPAttempt(t *testing.T) {
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var releaseFirstOnce sync.Once
+	var releaseSecondOnce sync.Once
+	closeFirst := func() { releaseFirstOnce.Do(func() { close(releaseFirst) }) }
+	closeSecond := func() { releaseSecondOnce.Do(func() { close(releaseSecond) }) }
+	var attempts atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if attempts.Add(1) == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		close(secondStarted)
+		<-releaseSecond
+		_, _ = writer.Write([]byte(`{"id":"resp-native"}`))
+	}))
+	t.Cleanup(upstream.Close)
+	t.Cleanup(closeFirst)
+	t.Cleanup(closeSecond)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-native","input":"native"}`))
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	responseDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		srv.mux.ServeHTTP(recorder, request)
+		responseDone <- recorder
+	}()
+	<-firstStarted
+	assertRawHTTPAttempt(t, srv, 1)
+	closeFirst()
+	<-secondStarted
+	assertRawHTTPAttempt(t, srv, 2)
+	closeSecond()
+	recorder := <-responseDone
+	if recorder.Code != http.StatusOK || attempts.Load() != 2 {
+		t.Fatalf("status=%d attempts=%d body=%s", recorder.Code, attempts.Load(), recorder.Body.String())
+	}
+}
+
+func assertRawHTTPAttempt(t *testing.T, srv *Server, attemptNumber int) {
+	t.Helper()
+	sessions := srv.egressRegistry.Snapshot()
+	if len(sessions) != 2 {
+		t.Fatalf("active egress sessions = %d, want parent plus attempt: %+v", len(sessions), sessions)
+	}
+	var parentID string
+	var attemptParentID string
+	for _, session := range sessions {
+		switch session.Meta.AttemptNo {
+		case 0:
+			parentID = session.ID
+		case attemptNumber:
+			if session.ParentID == "" {
+				t.Fatalf("attempt %d has no parent: %+v", attemptNumber, session)
+			}
+			attemptParentID = session.ParentID
+		default:
+			t.Fatalf("unexpected egress attempt: %+v", session)
+		}
+	}
+	if parentID == "" || attemptParentID != parentID {
+		t.Fatalf("parent id=%q attempt parent id=%q", parentID, attemptParentID)
 	}
 }
 

@@ -238,6 +238,19 @@ func (m *AuthManager) ForceRefresh(ctx context.Context) (string, error) {
 	return m.refreshFromAuthorityLocked(ctx, m.cachedToken)
 }
 
+// AccountID returns the account identity stored with the configured Codex
+// credentials. Raw forwarding uses it instead of accepting an inbound account
+// header from an untrusted client.
+func (m *AuthManager) AccountID(ctx context.Context) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	doc, err := m.readAuthFile(ctx)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(doc.tokens.accountID), nil
+}
+
 func (m *AuthManager) readAuthFile(ctx context.Context) (*codexAuthFile, error) {
 	doc, err := readCodexAuthFileFromDisk(m.path)
 	if err != nil {

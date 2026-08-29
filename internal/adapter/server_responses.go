@@ -153,9 +153,7 @@ func (s *Server) dispatchNativeCodexResponses(
 			raw.Header.Add(key, value)
 		}
 	}
-	egressCtx, _, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindHTTP, EgressMeta{
-		Provider: "codex", UpstreamURL: s.cfg.Codex.BaseURL, UpstreamRequestID: "", AttemptNo: 0, ParentRequestID: requestID,
-	})
+	egressCtx, releaseEgress := s.codexRawResponsesEgressContext(ctx, requestID)
 	defer releaseEgress("codex.raw_responses.done")
 	response, err := s.codexProvider.OpenRawResponses(egressCtx, raw)
 	if err != nil {
@@ -165,10 +163,11 @@ func (s *Server) dispatchNativeCodexResponses(
 		return
 	}
 	defer func() { _ = response.Body.Close() }()
-	if raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+	streamingResponse := raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
+	if streamingResponse {
 		lifecycle.streamOpened(ctx)
 	}
-	_, copyErr := s.copyPassthroughResponse(ctx, w, response, raw.Stream)
+	_, copyErr := s.copyPassthroughResponse(ctx, w, response, streamingResponse)
 	var result adapterprovider.Result
 	lifecycle.terminal(ctx, result, copyErr)
 	if copyErr != nil {
