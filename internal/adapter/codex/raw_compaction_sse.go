@@ -27,18 +27,20 @@ type rawCompactionSSEBody struct {
 	pending    []byte
 	pendingErr error
 	candidate  []byte
+	following  []byte
 	disabled   bool
 }
 
 func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCompactionSSEBody {
 	return &rawCompactionSSEBody{
-		inner:      inner,
-		reader:     bufio.NewReader(inner),
-		transcript: transcriptText,
-		pending:    nil,
-		pendingErr: nil,
-		candidate:  nil,
-		disabled:   false,
+		inner:                  inner,
+		reader:                 bufio.NewReader(inner),
+		transcript:             transcriptText,
+		pending:                nil,
+		pendingErr:             nil,
+		candidate:              nil,
+		following:              nil,
+		disabled:               false,
 	}
 }
 
@@ -79,33 +81,36 @@ func (b *rawCompactionSSEBody) loadNextFrame() error {
 		rawCompactionSSEError:
 		return b.failOpenSSE(frame, readErr)
 	default:
-		if readErr != nil && len(b.candidate) > 0 {
-			return b.flushCandidateBeforeEOFFrame(frame, readErr)
+		if len(b.candidate) > 0 {
+			if readErr != nil || !rawCompactionUnknownSSEFrameIsValid(frame) {
+				return b.failOpenSSE(frame, readErr)
+			}
+			b.following = joinRawCompactionSSEFrames(b.following, frame)
+			return nil
 		}
 		return b.queueSSEBytes(frame, readErr)
 	}
 }
 
 func (b *rawCompactionSSEBody) handleSSECandidateFrame(frame []byte, readErr error) error {
-	mutated, matched, valid := appendRawCompactionSSEFrame(frame, b.transcript)
+	_, matched, valid := appendRawCompactionSSEFrame(frame, b.transcript)
 	if !valid {
 		return b.failOpenSSE(frame, readErr)
 	}
 	if !matched {
-		if readErr != nil && len(b.candidate) > 0 {
-			return b.flushCandidateBeforeEOFFrame(frame, readErr)
+		if len(b.candidate) > 0 {
+			return b.failOpenSSE(frame, readErr)
 		}
 		return b.queueSSEBytes(frame, readErr)
 	}
 	if readErr != nil {
-		b.pending = joinRawCompactionSSEFrames(b.candidate, mutated)
-		b.candidate = nil
-		return b.queueSSEError(readErr)
+		return b.failOpenSSE(frame, readErr)
 	}
 	if len(b.candidate) > 0 {
-		b.pending = b.candidate
+		b.pending = joinRawCompactionSSEFrames(b.candidate, b.following)
 	}
 	b.candidate = frame
+	b.following = nil
 	return nil
 }
 
@@ -113,12 +118,20 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 	if !rawCompactionSSEJSONFrameIsValid(frame, rawCompactionSSECompleted) {
 		return b.failOpenSSE(frame, readErr)
 	}
-	mutated, ok := b.mutatedSSECandidate()
-	if !ok {
+	mutatedCandidate, candidateOK := b.mutatedSSECandidate()
+	if !candidateOK {
 		return b.failOpenSSE(frame, readErr)
 	}
-	b.pending = joinRawCompactionSSEFrames(mutated, frame)
+	mutatedCompleted, completedOK := appendRawCompactionSSECompletedFrame(frame, b.transcript)
+	if !completedOK {
+		return b.failOpenSSE(frame, readErr)
+	}
+	b.pending = joinRawCompactionSSEFrames(
+		joinRawCompactionSSEFrames(mutatedCandidate, b.following),
+		mutatedCompleted,
+	)
 	b.candidate = nil
+	b.following = nil
 	return b.queueSSEError(readErr)
 }
 
@@ -126,23 +139,10 @@ func (b *rawCompactionSSEBody) flushCandidateAtEOF(readErr error) error {
 	if len(b.candidate) == 0 {
 		return readErr
 	}
-	mutated, ok := b.mutatedSSECandidate()
-	if !ok {
-		mutated = b.candidate
-		b.disabled = true
-	}
-	b.pending = mutated
+	b.pending = joinRawCompactionSSEFrames(b.candidate, b.following)
 	b.candidate = nil
-	return b.queueSSEError(readErr)
-}
-
-func (b *rawCompactionSSEBody) flushCandidateBeforeEOFFrame(frame []byte, readErr error) error {
-	mutated, ok := b.mutatedSSECandidate()
-	if !ok {
-		return b.failOpenSSE(frame, readErr)
-	}
-	b.pending = joinRawCompactionSSEFrames(mutated, frame)
-	b.candidate = nil
+	b.following = nil
+	b.disabled = true
 	return b.queueSSEError(readErr)
 }
 
@@ -155,8 +155,12 @@ func (b *rawCompactionSSEBody) mutatedSSECandidate() ([]byte, bool) {
 }
 
 func (b *rawCompactionSSEBody) failOpenSSE(frame []byte, readErr error) error {
-	b.pending = joinRawCompactionSSEFrames(b.candidate, frame)
+	b.pending = joinRawCompactionSSEFrames(
+		joinRawCompactionSSEFrames(b.candidate, b.following),
+		frame,
+	)
 	b.candidate = nil
+	b.following = nil
 	b.disabled = true
 	return b.queueSSEError(readErr)
 }
@@ -179,14 +183,19 @@ func joinRawCompactionSSEFrames(first, second []byte) []byte {
 }
 
 func rawCompactionSSEJSONFrameIsValid(frame []byte, eventName rawCompactionSSEEvent) bool {
-	gotEvent, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
-	if gotEvent != string(eventName) || dataCount != 1 || !json.Valid(frame[dataStart:dataEnd]) {
+	gotEvent, data, dataCount := rawSSEFrameDataValue(frame)
+	if gotEvent != string(eventName) || dataCount == 0 || !json.Valid(data) {
 		return false
 	}
 	var payload struct {
 		Type string `json:"type"`
 	}
-	return json.Unmarshal(frame[dataStart:dataEnd], &payload) == nil && payload.Type == string(eventName)
+	return json.Unmarshal(data, &payload) == nil && payload.Type == string(eventName)
+}
+
+func rawCompactionUnknownSSEFrameIsValid(frame []byte) bool {
+	_, data, dataCount := rawSSEFrameDataValue(frame)
+	return dataCount == 0 || json.Valid(data)
 }
 
 func (b *rawCompactionSSEBody) Close() error {
@@ -212,27 +221,139 @@ func readRawCompactionSSEFrame(reader *bufio.Reader) ([]byte, error) {
 }
 
 func appendRawCompactionSSEFrame(frame []byte, transcriptText string) ([]byte, bool, bool) {
-	eventName, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
+	eventName, data, dataCount := rawSSEFrameDataValue(frame)
 	if eventName != string(rawCompactionSSEOutputItemDone) {
 		return frame, false, true
 	}
-	if dataCount != 1 {
+	if dataCount == 0 {
 		return frame, false, false
 	}
-	itemStart, itemEnd, ok := jsonObjectFieldValueRange(frame[dataStart:dataEnd], "item")
+	itemStart, itemEnd, ok := jsonObjectFieldValueRange(data, "item")
 	if !ok {
 		return frame, false, false
 	}
-	itemStart += dataStart
-	itemEnd += dataStart
-	mutated, matched, valid := appendRawCompactionAssistantItem(frame[itemStart:itemEnd], transcriptText)
+	mutated, matched, valid := appendRawCompactionAssistantItem(data[itemStart:itemEnd], transcriptText)
 	if !valid || !matched {
 		return frame, matched, valid
 	}
-	if bytes.Equal(mutated, frame[itemStart:itemEnd]) {
+	if bytes.Equal(mutated, data[itemStart:itemEnd]) {
 		return frame, true, true
 	}
-	return replaceByteRange(frame, itemStart, itemEnd, mutated), true, true
+	return replaceRawSSEFrameData(frame, replaceByteRange(data, itemStart, itemEnd, mutated)), true, true
+}
+
+func appendRawCompactionSSECompletedFrame(frame []byte, transcriptText string) ([]byte, bool) {
+	eventName, data, dataCount := rawSSEFrameDataValue(frame)
+	if eventName != string(rawCompactionSSECompleted) || dataCount == 0 {
+		return frame, false
+	}
+	responseStart, responseEnd, hasResponse := jsonObjectFieldValueRange(data, "response")
+	if !hasResponse {
+		return frame, true
+	}
+	response := data[responseStart:responseEnd]
+	if _, _, hasOutput := jsonObjectFieldValueRange(response, "output"); !hasOutput {
+		return frame, true
+	}
+	mutatedResponse, ok := appendRawCompactionJSON(response, transcriptText)
+	if !ok {
+		return frame, false
+	}
+	if bytes.Equal(mutatedResponse, response) {
+		return frame, true
+	}
+	mutatedData := replaceByteRange(data, responseStart, responseEnd, mutatedResponse)
+	return replaceRawSSEFrameData(frame, mutatedData), true
+}
+
+// selectRawCompactionStart renders only a logarithmic number of suffixes when
+// enforcing a byte limit. A longer suffix starts at a lower unit index.
+func selectRawCompactionStart(
+	units []rawCompactionInterval,
+	maxBytes int,
+	targetCount int,
+	render func(start int) (string, bool),
+) (int, string, bool) {
+	firstCandidate := len(units) - targetCount
+	if maxBytes <= 0 {
+		rendered, ok := render(units[firstCandidate].start)
+		return firstCandidate, rendered, ok && strings.TrimSpace(rendered) != ""
+	}
+
+	selected := -1
+	selectedTranscript := ""
+	lower := firstCandidate
+	upper := len(units) - 1
+	for lower <= upper {
+		middle := lower + (upper-lower)/2
+		rendered, ok := render(units[middle].start)
+		if !ok || strings.TrimSpace(rendered) == "" {
+			return 0, "", false
+		}
+		if len(rendered) > maxBytes {
+			lower = middle + 1
+			continue
+		}
+		selected = middle
+		selectedTranscript = rendered
+		upper = middle - 1
+	}
+	if selected < 0 {
+		return 0, "", false
+	}
+	return selected, selectedTranscript, true
+}
+
+func appendRawCompactionAssistantContentPart(
+	item []byte,
+	contentStart int,
+	contentEnd int,
+	hasContent bool,
+	transcriptText string,
+) ([]byte, bool, bool) {
+	encodedText, ok := marshalRawCompactionString(transcriptText)
+	if !ok {
+		return item, false, false
+	}
+	part := append([]byte(`{"type":"output_text","text":`), encodedText...)
+	part = append(part, '}')
+	if hasContent {
+		content := item[contentStart:contentEnd]
+		closing := len(content) - 1
+		for closing >= 0 && (content[closing] == ' ' || content[closing] == '\t' || content[closing] == '\r' || content[closing] == '\n') {
+			closing--
+		}
+		if closing < 0 || content[closing] != ']' {
+			return item, false, false
+		}
+		hasParts := len(bytes.TrimSpace(content[1:closing])) > 0
+		replacement := make([]byte, 0, len(content)+len(part)+1)
+		replacement = append(replacement, content[:closing]...)
+		if hasParts {
+			replacement = append(replacement, ',')
+		}
+		replacement = append(replacement, part...)
+		replacement = append(replacement, content[closing:]...)
+		return replaceByteRange(item, contentStart, contentEnd, replacement), true, true
+	}
+	closing := len(item) - 1
+	for closing >= 0 && (item[closing] == ' ' || item[closing] == '\t' || item[closing] == '\r' || item[closing] == '\n') {
+		closing--
+	}
+	if closing < 0 || item[closing] != '}' {
+		return item, false, false
+	}
+	hasFields := len(bytes.TrimSpace(item[1:closing])) > 0
+	replacement := make([]byte, 0, len(item)+len(part)+13)
+	replacement = append(replacement, item[:closing]...)
+	if hasFields {
+		replacement = append(replacement, ',')
+	}
+	replacement = append(replacement, `"content":[`...)
+	replacement = append(replacement, part...)
+	replacement = append(replacement, ']')
+	replacement = append(replacement, item[closing:]...)
+	return replacement, true, true
 }
 
 func rawSSEFrameEvent(frame []byte) rawCompactionSSEEvent {
@@ -281,4 +402,78 @@ func rawSSEFrameData(frame []byte) (string, int, int, int) {
 		lineStart = lineEnd + 1
 	}
 	return eventName, dataStart, dataEnd, dataCount
+}
+
+func rawSSEFrameDataValue(frame []byte) (string, []byte, int) {
+	eventName := ""
+	data := make([]byte, 0, len(frame))
+	dataCount := 0
+	for line := range bytes.SplitSeq(frame, []byte("\n")) {
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		field, value := rawSSEField(line)
+		if bytes.Equal(field, []byte("event")) {
+			eventName = string(value)
+		}
+		if !bytes.Equal(field, []byte("data")) {
+			continue
+		}
+		if dataCount > 0 {
+			data = append(data, '\n')
+		}
+		data = append(data, value...)
+		dataCount++
+	}
+	return eventName, data, dataCount
+}
+
+func rawSSEField(line []byte) ([]byte, []byte) {
+	if len(line) == 0 || line[0] == ':' {
+		return nil, nil
+	}
+	field, value, found := bytes.Cut(line, []byte(":"))
+	if !found {
+		return line, nil
+	}
+	if len(value) > 0 && value[0] == ' ' {
+		value = value[1:]
+	}
+	return field, value
+}
+
+func replaceRawSSEFrameData(frame []byte, data []byte) []byte {
+	var compacted bytes.Buffer
+	if json.Compact(&compacted, data) == nil {
+		data = compacted.Bytes()
+	}
+	firstDataLineStart := -1
+	var result bytes.Buffer
+	lineStart := 0
+	for lineStart < len(frame) {
+		lineEnd := bytes.IndexByte(frame[lineStart:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(frame)
+		} else {
+			lineEnd += lineStart + 1
+		}
+		line := frame[lineStart:lineEnd]
+		lineContent := bytes.TrimSuffix(bytes.TrimSuffix(line, []byte("\n")), []byte("\r"))
+		field, _ := rawSSEField(lineContent)
+		if !bytes.Equal(field, []byte("data")) {
+			result.Write(line)
+			lineStart = lineEnd
+			continue
+		}
+		if firstDataLineStart < 0 {
+			firstDataLineStart = lineStart
+			result.WriteString("data: ")
+			result.Write(data)
+			if bytes.HasSuffix(line, []byte("\r\n")) {
+				result.WriteString("\r\n")
+			} else if bytes.HasSuffix(line, []byte("\n")) {
+				result.WriteByte('\n')
+			}
+		}
+		lineStart = lineEnd
+	}
+	return result.Bytes()
 }

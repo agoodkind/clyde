@@ -1,7 +1,9 @@
 package codex
 
 import (
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/andybalholm/brotli"
 
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/reorienttag"
@@ -36,12 +40,36 @@ type RawResponsesCompactionSettings struct {
 	RecentFraction              float64
 }
 
+// HasRawResponsesCompactionItem identifies raw requests that cannot project
+// compaction state into chat messages but must still reach the raw transport.
+func HasRawResponsesCompactionItem(request RawResponsesRequest) bool {
+	var body struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(request.Body, &body) != nil {
+		return false
+	}
+	for _, item := range codexstore.NormalizeResponseInputItems(body.Input) {
+		if item.Kind == transcript.CompactedContextItemKindCompaction {
+			return true
+		}
+	}
+	return false
+}
+
 // RawResponsesCompactionTransformer appends the removed native transcript to
 // the successful compaction response.
 type RawResponsesCompactionTransformer struct {
 	transcript string
 	stream     bool
 }
+
+type rawCompactionContentEncoding string
+
+const (
+	rawCompactionContentEncodingGzip   rawCompactionContentEncoding = "gzip"
+	rawCompactionContentEncodingBrotli rawCompactionContentEncoding = "br"
+)
 
 type rawResponsesCompactionMetadata struct {
 	RequestKind string `json:"request_kind"`
@@ -193,26 +221,18 @@ func planRawResponsesCompaction(
 	if targetCount >= len(units) {
 		targetCount = len(units) - 1
 	}
-	selectedStart := len(units)
-	for unitIndex := len(units) - 1; unitIndex >= 0 && len(units)-unitIndex <= targetCount; unitIndex-- {
-		candidateStart := units[unitIndex].start
-		candidateTranscript, renderable := renderRawResponsesCompactionItems(items[candidateStart:promptIndex])
-		if !renderable {
-			return emptyPlan, false
-		}
-		if maxBytes > 0 && len(candidateTranscript) > maxBytes {
-			break
-		}
-		selectedStart = unitIndex
-	}
-	if selectedStart >= len(units) {
+	selectedStart, rendered, ok := selectRawCompactionStart(
+		units,
+		maxBytes,
+		targetCount,
+		func(start int) (string, bool) {
+			return renderRawResponsesCompactionNormalizedItems(normalized[start:promptIndex])
+		},
+	)
+	if !ok {
 		return emptyPlan, false
 	}
 	removedStart := units[selectedStart].start
-	rendered, ok := renderRawResponsesCompactionItems(items[removedStart:promptIndex])
-	if !ok || strings.TrimSpace(rendered) == "" {
-		return emptyPlan, false
-	}
 	return rawCompactionPlan{
 		removedStart: removedStart,
 		promptIndex:  promptIndex,
@@ -420,8 +440,7 @@ func rawCompactionPairsAreComplete(items []transcript.CompactedContextItem) bool
 	return true
 }
 
-func renderRawResponsesCompactionItems(rawItems []json.RawMessage) (string, bool) {
-	items := codexstore.NormalizeResponseInputItems(rawItems)
+func renderRawResponsesCompactionNormalizedItems(items []transcript.CompactedContextItem) (string, bool) {
 	if !rawCompactionPairsAreComplete(items) {
 		return "", false
 	}
@@ -668,6 +687,10 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		return response
 	}
 	wrapped := wrappedRawCompactionTranscript(t.transcript)
+	encoding, encoded := rawCompactionResponseContentEncoding(response.Header.Get("Content-Encoding"))
+	if encoded {
+		return t.transformEncodedResponse(response, wrapped, encoding)
+	}
 	if t.stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		clone := *response
 		clone.Header = response.Header.Clone()
@@ -694,6 +717,217 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	clone.ContentLength = -1
 	clone.Body = io.NopCloser(bytes.NewReader(transformed))
 	return &clone
+}
+
+func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
+	response *http.Response,
+	transcriptText string,
+	encoding rawCompactionContentEncoding,
+) *http.Response {
+	streamingResponse := t.stream || strings.Contains(
+		strings.ToLower(response.Header.Get("Content-Type")),
+		"text/event-stream",
+	)
+	if streamingResponse {
+		decoded, ok := newRawCompactionDecodedStream(response, encoding)
+		if !ok {
+			return response
+		}
+		clone := *response
+		clone.Header = response.Header.Clone()
+		clone.Header.Del("Content-Length")
+		clone.ContentLength = -1
+		clone.Body = newRawCompactionEncodedBody(
+			newRawCompactionSSEBody(decoded, transcriptText),
+			encoding,
+		)
+		return &clone
+	}
+
+	originalBody := response.Body
+	wireBody, readErr := io.ReadAll(originalBody)
+	if readErr != nil {
+		response.Body = &rawCompactionReadCloser{reader: io.MultiReader(bytes.NewReader(wireBody), originalBody), closer: originalBody}
+		return response
+	}
+	_ = originalBody.Close()
+	decodedBody, ok := decodeRawCompactionBody(wireBody, encoding)
+	if !ok {
+		response.Body = io.NopCloser(bytes.NewReader(wireBody))
+		return response
+	}
+	transformed, ok := appendRawCompactionJSON(decodedBody, transcriptText)
+	if !ok || bytes.Equal(transformed, decodedBody) {
+		response.Body = io.NopCloser(bytes.NewReader(wireBody))
+		return response
+	}
+	encodedBody, ok := encodeRawCompactionBody(transformed, encoding)
+	if !ok {
+		response.Body = io.NopCloser(bytes.NewReader(wireBody))
+		return response
+	}
+	t.markMutated()
+	clone := *response
+	clone.Header = response.Header.Clone()
+	clone.Header.Del("Content-Length")
+	clone.ContentLength = -1
+	clone.Body = io.NopCloser(bytes.NewReader(encodedBody))
+	return &clone
+}
+
+func rawCompactionResponseContentEncoding(value string) (rawCompactionContentEncoding, bool) {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case string(rawCompactionContentEncodingGzip):
+		return rawCompactionContentEncodingGzip, true
+	case string(rawCompactionContentEncodingBrotli):
+		return rawCompactionContentEncodingBrotli, true
+	default:
+		return "", false
+	}
+}
+
+func decodeRawCompactionBody(body []byte, encoding rawCompactionContentEncoding) ([]byte, bool) {
+	var reader io.Reader
+	switch encoding {
+	case rawCompactionContentEncodingGzip:
+		gzipReader, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, false
+		}
+		defer func() { _ = gzipReader.Close() }()
+		reader = gzipReader
+	case rawCompactionContentEncodingBrotli:
+		reader = brotli.NewReader(bytes.NewReader(body))
+	default:
+		return nil, false
+	}
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
+func encodeRawCompactionBody(body []byte, encoding rawCompactionContentEncoding) ([]byte, bool) {
+	var buffer bytes.Buffer
+	writer, ok := newRawCompactionEncodingWriter(&buffer, encoding)
+	if !ok {
+		return nil, false
+	}
+	if _, err := writer.Write(body); err != nil {
+		_ = writer.Close()
+		return nil, false
+	}
+	if err := writer.Close(); err != nil {
+		return nil, false
+	}
+	return buffer.Bytes(), true
+}
+
+func newRawCompactionDecodedStream(
+	response *http.Response,
+	encoding rawCompactionContentEncoding,
+) (io.ReadCloser, bool) {
+	switch encoding {
+	case rawCompactionContentEncodingGzip:
+		buffered := bufio.NewReader(response.Body)
+		gzipReader, err := gzip.NewReader(buffered)
+		if err != nil {
+			response.Body = &rawCompactionReadCloser{reader: buffered, closer: response.Body}
+			return nil, false
+		}
+		return &rawCompactionMultiCloser{
+			Reader:  gzipReader,
+			closers: []io.Closer{gzipReader, response.Body},
+		}, true
+	case rawCompactionContentEncodingBrotli:
+		return &rawCompactionReadCloser{reader: brotli.NewReader(response.Body), closer: response.Body}, true
+	default:
+		return nil, false
+	}
+}
+
+type rawCompactionReadCloser struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func (b *rawCompactionReadCloser) Read(destination []byte) (int, error) {
+	return b.reader.Read(destination)
+}
+
+func (b *rawCompactionReadCloser) Close() error {
+	return b.closer.Close()
+}
+
+type rawCompactionMultiCloser struct {
+	io.Reader
+	closers []io.Closer
+}
+
+func (b *rawCompactionMultiCloser) Close() error {
+	var firstErr error
+	for _, closer := range b.closers {
+		if err := closer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+type rawCompactionEncodedBody struct {
+	reader *io.PipeReader
+	source io.ReadCloser
+}
+
+func newRawCompactionEncodedBody(
+	source io.ReadCloser,
+	encoding rawCompactionContentEncoding,
+) io.ReadCloser {
+	reader, pipeWriter := io.Pipe()
+	go func() {
+		defer func() { _ = source.Close() }()
+		writer, ok := newRawCompactionEncodingWriter(pipeWriter, encoding)
+		if !ok {
+			_ = pipeWriter.CloseWithError(errors.New("unsupported raw compaction response encoding"))
+			return
+		}
+		_, copyErr := io.Copy(writer, source)
+		closeErr := writer.Close()
+		if copyErr != nil {
+			_ = pipeWriter.CloseWithError(copyErr)
+			return
+		}
+		_ = pipeWriter.CloseWithError(closeErr)
+	}()
+	return &rawCompactionEncodedBody{reader: reader, source: source}
+}
+
+func (b *rawCompactionEncodedBody) Read(destination []byte) (int, error) {
+	return b.reader.Read(destination)
+}
+
+func (b *rawCompactionEncodedBody) Close() error {
+	sourceErr := b.source.Close()
+	readerErr := b.reader.Close()
+	if sourceErr != nil {
+		return sourceErr
+	}
+	return readerErr
+}
+
+func newRawCompactionEncodingWriter(
+	writer io.Writer,
+	encoding rawCompactionContentEncoding,
+) (io.WriteCloser, bool) {
+	switch encoding {
+	case rawCompactionContentEncodingGzip:
+		return gzip.NewWriter(writer), true
+	case rawCompactionContentEncodingBrotli:
+		return brotli.NewWriter(writer), true
+	default:
+		return nil, false
+	}
 }
 
 func wrappedRawCompactionTranscript(content string) string {
@@ -741,14 +975,16 @@ func appendRawCompactionAssistantItem(
 	if identity.Type != "message" || identity.Role != "assistant" {
 		return item, false, true
 	}
-	contentStart, contentEnd, ok := jsonObjectFieldValueRange(item, "content")
-	if !ok {
-		return item, false, false
+	contentStart, contentEnd, hasContent := jsonObjectFieldValueRange(item, "content")
+	if !hasContent {
+		return appendRawCompactionAssistantContentPart(item, 0, 0, false, transcriptText)
 	}
 	contentRanges, ok := jsonArrayValueRanges(item[contentStart:contentEnd])
 	if !ok {
 		return item, false, false
 	}
+	var target rawCompactionInterval
+	hasTarget := false
 	for index := range slices.Backward(contentRanges) {
 		partStart := contentStart + contentRanges[index].start
 		partEnd := contentStart + contentRanges[index].end
@@ -770,18 +1006,32 @@ func appendRawCompactionAssistantItem(
 		if json.Unmarshal(part[textStart:textEnd], &text) != nil {
 			return item, false, false
 		}
-		if strings.Contains(text, reorienttag.PreCompactionTranscriptOpen) ||
-			strings.Contains(text, reorienttag.PreCompactionTranscriptClose) {
+		if strings.Contains(text, transcriptText) || rawCompactionTextHasTranscriptWrapper(text) {
 			return item, true, true
 		}
-		encodedText, ok := marshalRawCompactionString(text + transcriptText)
-		if !ok {
-			return item, false, false
+		if !hasTarget {
+			target = rawCompactionInterval{start: partStart, end: partEnd}
+			hasTarget = true
 		}
-		mutatedPart := replaceByteRange(part, textStart, textEnd, encodedText)
-		return replaceByteRange(item, partStart, partEnd, mutatedPart), true, true
 	}
-	return item, false, false
+	if !hasTarget {
+		return appendRawCompactionAssistantContentPart(item, contentStart, contentEnd, true, transcriptText)
+	}
+	part := item[target.start:target.end]
+	textStart, textEnd, ok := jsonObjectFieldValueRange(part, "text")
+	if !ok {
+		return item, false, false
+	}
+	var text string
+	if json.Unmarshal(part[textStart:textEnd], &text) != nil {
+		return item, false, false
+	}
+	encodedText, ok := marshalRawCompactionString(text + transcriptText)
+	if !ok {
+		return item, false, false
+	}
+	mutatedPart := replaceByteRange(part, textStart, textEnd, encodedText)
+	return replaceByteRange(item, target.start, target.end, mutatedPart), true, true
 }
 
 func rawCompactionTextHasTranscriptWrapper(text string) bool {

@@ -116,7 +116,7 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	body []byte,
 	corr correlation.Context,
 ) (bool, error) {
-	raw, _, native := nativeCodexResponsesRequest(body, r.Header, corr)
+	raw, model, native := nativeCodexResponsesRequest(body, r.Header, corr)
 	if !native {
 		return false, nil
 	}
@@ -126,7 +126,14 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	}
 	req, _, projectionErr := responsesRequestToChatRequest(rr)
 	if projectionErr != nil {
-		return false, projectionErr
+		decodedRaw := raw
+		decodedRaw.Body = decodedBody
+		if !adaptercodex.HasRawResponsesCompactionItem(decodedRaw) {
+			return false, projectionErr
+		}
+		var rawCompactionRequest ChatRequest
+		rawCompactionRequest.Model = model
+		req = rawCompactionRequest
 	}
 	forceStreamUsageOptIn(&req)
 	resolvedReq, resolverErr := resolveResponsesRequest(

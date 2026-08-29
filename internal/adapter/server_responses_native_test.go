@@ -163,8 +163,8 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	}
 	readDone := make(chan string, 1)
 	go func() {
-		buffer := make([]byte, 256)
-		count, readErr := response.Body.Read(buffer)
+		buffer := make([]byte, len("event: response.created\ndata: {\"type\":\"response.created\",\"opaque\":true}\n\n"))
+		count, readErr := io.ReadFull(response.Body, buffer)
 		if readErr != nil {
 			readDone <- "error: " + readErr.Error()
 			return
