@@ -141,6 +141,44 @@ func TestRawResponsesCompactionExpandsEverySupportedToolPair(t *testing.T) {
 	}
 }
 
+func TestRawResponsesCompactionRejectsIncompleteToolPairs(t *testing.T) {
+	tests := []struct {
+		name  string
+		items string
+	}{
+		{name: "call without id", items: `{"type":"function_call","name":"lookup","arguments":"{}"}`},
+		{name: "output without id", items: `{"type":"function_call_output","output":"result"}`},
+		{name: "call without output", items: `{"type":"function_call","name":"lookup","arguments":"{}","call_id":"call-1"}`},
+		{name: "output without call", items: `{"type":"function_call_output","call_id":"call-1","output":"result"}`},
+		{name: "custom call without output", items: `{"type":"custom_tool_call","name":"apply_patch","input":"patch","call_id":"call-1"}`},
+		{name: "custom output without call", items: `{"type":"custom_tool_call_output","name":"apply_patch","call_id":"call-1","output":"result"}`},
+		{name: "shell call without output", items: `{"type":"local_shell_call","call_id":"call-1","action":{"type":"exec","command":"pwd"}}`},
+		{name: "search call without output", items: `{"type":"tool_search_call","call_id":"call-1","arguments":{"query":"calendar"}}`},
+		{name: "search output without call", items: `{"type":"tool_search_output","call_id":"call-1","tools":[]}`},
+		{name: "duplicate calls", items: `{"type":"function_call","name":"one","arguments":"{}","call_id":"call-1"},{"type":"function_call","name":"two","arguments":"{}","call_id":"call-1"},{"type":"function_call_output","call_id":"call-1","output":"result"}`},
+		{name: "duplicate outputs", items: `{"type":"function_call","name":"one","arguments":"{}","call_id":"call-1"},{"type":"function_call_output","call_id":"call-1","output":"one"},{"type":"function_call_output","call_id":"call-1","output":"two"}`},
+		{name: "wrong output kind", items: `{"type":"function_call","name":"one","arguments":"{}","call_id":"call-1"},{"type":"custom_tool_call_output","call_id":"call-1","name":"one","output":"result"}`},
+	}
+	settings := RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, FallbackContextWindowTokens: 0,
+		MaxTokens: 10_000, ContextWindowFraction: 1, BytesPerToken: 1,
+		RecentFraction: 0.9,
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-native","input":[` +
+				`{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},` +
+				testCase.items + `,` +
+				`{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}` +
+				`]}`)
+			transformed, transformer := PrepareRawResponsesCompaction(rawCompactionRequest(t, body), settings)
+			if transformer != nil || !bytes.Equal(transformed.Body, body) {
+				t.Fatalf("incomplete pair did not fail open: %s", transformed.Body)
+			}
+		})
+	}
+}
+
 func TestRawResponsesCompactionFailsOpenForMetadataAndMalformedRemovedItems(t *testing.T) {
 	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"future_item","value":1},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
 	settings := RawResponsesCompactionSettings{

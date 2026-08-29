@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -386,8 +387,46 @@ func rawCompactionKindsPair(callKind, outputKind rawCompactionCallKind) bool {
 	return callKind == outputKind
 }
 
+func rawCompactionPairsAreComplete(items []transcript.CompactedContextItem) bool {
+	calls := make(map[string]rawCompactionCallKind)
+	outputs := make(map[string]rawCompactionCallKind)
+	for _, item := range items {
+		if callID, callKind, call := rawCompactionCall(item); call {
+			if callID == "" {
+				return false
+			}
+			if _, duplicate := calls[callID]; duplicate {
+				return false
+			}
+			calls[callID] = callKind
+		}
+		if callID, outputKind, output := rawCompactionOutput(item); output {
+			if callID == "" {
+				return false
+			}
+			if _, duplicate := outputs[callID]; duplicate {
+				return false
+			}
+			outputs[callID] = outputKind
+		}
+	}
+	if len(calls) != len(outputs) {
+		return false
+	}
+	for callID, callKind := range calls {
+		outputKind, exists := outputs[callID]
+		if !exists || !rawCompactionKindsPair(callKind, outputKind) {
+			return false
+		}
+	}
+	return true
+}
+
 func renderRawResponsesCompactionItems(rawItems []json.RawMessage) (string, bool) {
 	items := codexstore.NormalizeResponseInputItems(rawItems)
+	if !rawCompactionPairsAreComplete(items) {
+		return "", false
+	}
 	messages := make([]transcript.Message, 0, len(items))
 	tools := make(map[string]rawCompactionToolRef)
 	for _, item := range items {
@@ -617,6 +656,15 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	if t == nil || response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return response
 	}
+	wrapped := wrappedRawCompactionTranscript(t.transcript)
+	if t.stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+		clone := *response
+		clone.Header = response.Header.Clone()
+		clone.Header.Del("Content-Length")
+		clone.ContentLength = -1
+		clone.Body = newRawCompactionSSEBody(response.Body, wrapped)
+		return &clone
+	}
 	originalBody := response.Body
 	body, err := io.ReadAll(originalBody)
 	if err != nil {
@@ -625,14 +673,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	}
 	_ = originalBody.Close()
 	response.Body = io.NopCloser(bytes.NewReader(body))
-	wrapped := wrappedRawCompactionTranscript(t.transcript)
-	var transformed []byte
-	var ok bool
-	if t.stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
-		transformed, ok = appendRawCompactionSSE(body, wrapped)
-	} else {
-		transformed, ok = appendRawCompactionJSON(body, wrapped)
-	}
+	transformed, ok := appendRawCompactionJSON(body, wrapped)
 	if !ok || bytes.Equal(transformed, body) {
 		return response
 	}
@@ -642,6 +683,80 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	clone.ContentLength = -1
 	clone.Body = io.NopCloser(bytes.NewReader(transformed))
 	return &clone
+}
+
+type rawCompactionSSEBody struct {
+	inner       io.ReadCloser
+	reader      *bufio.Reader
+	transcript  string
+	pending     []byte
+	pendingErr  error
+	transformed bool
+	disabled    bool
+}
+
+func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCompactionSSEBody {
+	return &rawCompactionSSEBody{
+		inner:       inner,
+		reader:      bufio.NewReader(inner),
+		transcript:  transcriptText,
+		pending:     nil,
+		pendingErr:  nil,
+		transformed: false,
+		disabled:    false,
+	}
+}
+
+func (b *rawCompactionSSEBody) Read(destination []byte) (int, error) {
+	if len(destination) == 0 {
+		return 0, nil
+	}
+	for len(b.pending) == 0 {
+		if b.pendingErr != nil {
+			err := b.pendingErr
+			b.pendingErr = nil
+			return 0, err
+		}
+		frame, readErr := readRawCompactionSSEFrame(b.reader)
+		if len(frame) == 0 {
+			return 0, readErr
+		}
+		if !b.disabled && !b.transformed {
+			mutated, matched, valid := appendRawCompactionSSEFrame(frame, b.transcript)
+			if !valid {
+				b.disabled = true
+			} else if matched {
+				frame = mutated
+				b.transformed = true
+			}
+		}
+		b.pending = frame
+		b.pendingErr = readErr
+	}
+	count := copy(destination, b.pending)
+	b.pending = b.pending[count:]
+	return count, nil
+}
+
+func (b *rawCompactionSSEBody) Close() error {
+	if err := b.inner.Close(); err != nil {
+		return fmt.Errorf("close raw compaction SSE response: %w", err)
+	}
+	return nil
+}
+
+func readRawCompactionSSEFrame(reader *bufio.Reader) ([]byte, error) {
+	var frame bytes.Buffer
+	for {
+		line, err := reader.ReadBytes('\n')
+		frame.Write(line)
+		if bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n")) {
+			return frame.Bytes(), err
+		}
+		if err != nil {
+			return frame.Bytes(), err
+		}
+	}
 }
 
 func wrappedRawCompactionTranscript(content string) string {
@@ -675,37 +790,28 @@ func appendRawCompactionJSON(body []byte, transcriptText string) ([]byte, bool) 
 	return body, false
 }
 
-func appendRawCompactionSSE(body []byte, transcriptText string) ([]byte, bool) {
-	frames := sseRawFrameRanges(body)
-	for index := range slices.Backward(frames) {
-		frame := body[frames[index].start:frames[index].end]
-		eventName, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
-		if eventName != "response.output_item.done" {
-			continue
-		}
-		if dataCount != 1 {
-			return body, false
-		}
-		itemStart, itemEnd, ok := jsonObjectFieldValueRange(frame[dataStart:dataEnd], "item")
-		if !ok {
-			return body, false
-		}
-		itemStart += dataStart
-		itemEnd += dataStart
-		mutated, matched, valid := appendRawCompactionAssistantItem(frame[itemStart:itemEnd], transcriptText)
-		if !valid {
-			return body, false
-		}
-		if !matched {
-			continue
-		}
-		if bytes.Equal(mutated, frame[itemStart:itemEnd]) {
-			return body, true
-		}
-		mutatedFrame := replaceByteRange(frame, itemStart, itemEnd, mutated)
-		return replaceByteRange(body, frames[index].start, frames[index].end, mutatedFrame), true
+func appendRawCompactionSSEFrame(frame []byte, transcriptText string) ([]byte, bool, bool) {
+	eventName, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
+	if eventName != "response.output_item.done" {
+		return frame, false, true
 	}
-	return body, false
+	if dataCount != 1 {
+		return frame, false, false
+	}
+	itemStart, itemEnd, ok := jsonObjectFieldValueRange(frame[dataStart:dataEnd], "item")
+	if !ok {
+		return frame, false, false
+	}
+	itemStart += dataStart
+	itemEnd += dataStart
+	mutated, matched, valid := appendRawCompactionAssistantItem(frame[itemStart:itemEnd], transcriptText)
+	if !valid || !matched {
+		return frame, matched, valid
+	}
+	if bytes.Equal(mutated, frame[itemStart:itemEnd]) {
+		return frame, true, true
+	}
+	return replaceByteRange(frame, itemStart, itemEnd, mutated), true, true
 }
 
 func appendRawCompactionAssistantItem(
@@ -967,27 +1073,6 @@ func replaceByteRange(raw []byte, start, end int, replacement []byte) []byte {
 	out = append(out, replacement...)
 	out = append(out, raw[end:]...)
 	return out
-}
-
-func sseRawFrameRanges(body []byte) []rawCompactionInterval {
-	frames := make([]rawCompactionInterval, 0)
-	start := 0
-	for start < len(body) {
-		separator := bytes.Index(body[start:], []byte("\n\n"))
-		separatorSize := 2
-		if separator < 0 {
-			separator = bytes.Index(body[start:], []byte("\r\n\r\n"))
-			separatorSize = 4
-		}
-		if separator < 0 {
-			frames = append(frames, rawCompactionInterval{start: start, end: len(body)})
-			break
-		}
-		end := start + separator + separatorSize
-		frames = append(frames, rawCompactionInterval{start: start, end: end})
-		start = end
-	}
-	return frames
 }
 
 func rawSSEFrameData(frame []byte) (string, int, int, int) {
