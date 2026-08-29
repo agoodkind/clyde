@@ -79,10 +79,18 @@ here:
 ## Serve the Responses API
 
 The adapter serves the OpenAI Responses API at `POST /v1/responses` on the same
-OpenAI-compatible route family and bearer auth as `/v1/chat/completions`. The
-handler parses a typed `ResponsesRequest`, projects it into the shared
-ChatRequest, and runs the same resolver, preflight, and provider dispatch the
-chat path runs, so Responses and chat share one backend contract.
+OpenAI-compatible route family and bearer auth as `/v1/chat/completions`.
+Generic requests use a typed projection into the shared chat pipeline. They run
+the same resolver, preflight, provider dispatch, and compatibility warnings as
+chat requests.
+
+An authenticated native Codex request takes a narrower path. It must carry
+valid `X-Codex-Turn-Metadata`, and its top-level model must resolve to Codex.
+Clyde then forwards the native Responses body and unknown fields without typed
+projection. It replaces inbound credentials with the configured Codex OAuth
+token and account identity, strips hop-by-hop headers, and refreshes OAuth once
+after an upstream 401 or 403. Requests outside that exact match keep using the
+generic projection path.
 
 A non-streaming request returns a Responses response object. A streaming request
 returns the Responses SSE event sequence with named lifecycle events, from
@@ -98,3 +106,9 @@ The adapter also reports which request fields and tool types the resolved
 provider cannot honor. See [adapter compatibility warnings](compatibility.md)
 for the warning contract, the per-provider field dispositions, and the
 unsupported-tool behavior.
+
+When `capture_ingress` is enabled, the daemon opens the shared capture database
+even if MITM listeners are disabled. A native request records the ingress
+request, transformed upstream request, raw upstream response, and client
+response. Capture copies remove adapter and OAuth tokens, account identifiers,
+and cookies. Forwarded bytes remain unchanged.
