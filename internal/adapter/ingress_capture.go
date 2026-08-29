@@ -95,9 +95,8 @@ func (s *Server) beginIngressCapture(hctx *handlerCtx) *ingressCaptureWriter {
 // response carries the status and rendered body the wrapper observed. A request
 // that errored before any write carries the status of the returned
 // adapterError and an empty response body, because the error envelope is
-// rendered downstream on the raw writer rather than through the wrapper. The
-// raw inbound body is recorded as received; Authorization and cookie headers
-// are dropped.
+// rendered downstream on the raw writer rather than through the wrapper.
+// Credential and account values are removed from both captured stages.
 func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlation.Context, r *http.Request, body []byte, started time.Time, handlerErr error) {
 	if capW == nil {
 		return
@@ -111,6 +110,8 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 		}
 	}
 	conversationID, conversationSource := ingressConversationFields(corr)
+	requestHeaders, requestBody := capture.RedactHTTP(r.Header, body)
+	responseHeaders, responseBody := capture.RedactHTTP(capW.Header(), capW.body.Bytes())
 	s.deps.CaptureStore.RecordExchange(corr, capture.Exchange{
 		Client:             captureClientIngress,
 		Provider:           "",
@@ -123,10 +124,10 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 		SessionID:          "",
 		ConversationID:     conversationID,
 		ConversationSource: conversationSource,
-		RequestHeaders:     redactedIngressHeaders(r.Header),
-		ResponseHeaders:    sanitizedCaptureResponseHeaders(capW.Header()),
-		RequestBody:        body,
-		ResponseBody:       capW.body.Bytes(),
+		RequestHeaders:     requestHeaders,
+		ResponseHeaders:    responseHeaders,
+		RequestBody:        requestBody,
+		ResponseBody:       responseBody,
 		RequestType:        r.Header.Get("Content-Type"),
 		ResponseType:       capW.Header().Get("Content-Type"),
 		Started:            started,
@@ -161,18 +162,4 @@ func sanitizedCaptureResponseHeaders(headers http.Header) http.Header {
 		}
 	}
 	return sanitized
-}
-
-// redactedIngressHeaders clones the request headers with secret-bearing names
-// dropped, per the credential-handling rule. Capture-store bodies are raw, but
-// the inbound request headers carry the caller's bearer token and cookies.
-func redactedIngressHeaders(h http.Header) http.Header {
-	out := h.Clone()
-	if out == nil {
-		return nil
-	}
-	for _, name := range []string{"Authorization", "Cookie", "Proxy-Authorization", "X-Api-Key"} {
-		out.Del(name)
-	}
-	return out
 }
