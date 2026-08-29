@@ -46,6 +46,13 @@ func TestConversationContextServiceDialSmoke(t *testing.T) {
 
 	grpcServer := grpc.NewServer()
 	index := conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{})
+	t.Cleanup(func() {
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer waitCancel()
+		if err := index.Refresh(waitCtx); err != nil {
+			t.Fatalf("wait for conversation index refresh: %v", err)
+		}
+	})
 	registerConversationContextService(grpcServer, index)
 	serveErr := make(chan error, 1)
 	go func() {
