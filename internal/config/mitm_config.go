@@ -14,15 +14,12 @@ type MITMConfig struct {
 	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
 	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
 	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
-	// ReorientSummaryInjection turns on the MITM reorient hook: when set, the
-	// proxy detects a Claude Code compaction summarization request and rewrites
-	// its streaming summary response, appending the recovered pre-compaction
-	// transcript (read off disk by the request's session id) so the client
-	// persists it in the isCompactSummary message. Default false; enabling it
-	// makes the proxy read the local transcript and rewrite that one response.
+	// ReorientSummaryInjection turns on compaction reorientation. The Anthropic
+	// MITM path may recover transcript content from disk; the native Codex path
+	// uses only the transcript carried in the Responses request. Default false.
 	ReorientSummaryInjection bool `json:"reorientSummaryInjection,omitempty" toml:"reorient_summary_injection,omitempty"`
-	// ReorientInjectMaxTokens caps the injected transcript before the hook also
-	// applies its context-window fraction. Zero uses the hook default.
+	// ReorientInjectMaxTokens caps the injected transcript before reorientation
+	// also applies its context-window fraction. Zero uses the reorient default.
 	ReorientInjectMaxTokens int `json:"reorientInjectMaxTokens,omitempty" toml:"reorient_inject_max_tokens,omitempty"`
 	// ReorientRecentFraction is the fraction of conversation messages, by count,
 	// the R2 request-trim split reattaches verbatim as the recent half. A larger
@@ -36,9 +33,9 @@ type MITMConfig struct {
 	// ReorientBytesPerToken is the token-to-byte approximation the hook uses to turn
 	// a token budget into a byte cap. Zero uses the hook default (4).
 	ReorientBytesPerToken int `json:"reorientBytesPerToken,omitempty" toml:"reorient_bytes_per_token,omitempty"`
-	// ReorientStandardContextWindow is the assumed context window, in tokens, for a
-	// compaction request without the context-1m beta. Zero uses the hook default
-	// (200000).
+	// ReorientStandardContextWindow is the fallback context window, in tokens.
+	// Anthropic uses it without context-1m; native Codex uses it only when model
+	// resolution supplies no input budget. Zero uses the default (200000).
 	ReorientStandardContextWindow int `json:"reorientStandardContextWindow,omitempty" toml:"reorient_standard_context_window,omitempty"`
 	// ReorientOneMillionContextWindow is the assumed context window, in tokens, for a
 	// compaction request carrying the context-1m beta. Zero uses the hook default

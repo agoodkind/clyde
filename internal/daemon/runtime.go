@@ -399,8 +399,17 @@ func startAdapter(
 		RequestEvents:  stats.record,
 		RuntimeLogging: adapter.NewRuntimeLogging(cfg.Logging),
 		GetAuth:        getAuth(cfg, log),
-		CaptureStore:   store,
-		Group:          group,
+		RawResponsesCompaction: adaptercodex.RawResponsesCompactionSettings{
+			Enabled:                     cfg.MITM.ReorientSummaryInjection,
+			ContextWindowTokens:         0,
+			FallbackContextWindowTokens: cfg.MITM.ReorientStandardContextWindow,
+			MaxTokens:                   cfg.MITM.ReorientInjectMaxTokens,
+			ContextWindowFraction:       cfg.MITM.ReorientContextWindowFraction,
+			BytesPerToken:               cfg.MITM.ReorientBytesPerToken,
+			RecentFraction:              cfg.MITM.ReorientRecentFraction,
+		},
+		CaptureStore: store,
+		Group:        group,
 	}
 	server, err := adapter.New(ctx, cfg.Adapter, cfg.Logging, deps, log)
 	if err != nil {
