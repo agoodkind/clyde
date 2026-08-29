@@ -251,8 +251,33 @@ func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *
 	}
 }
 
+func TestRawResponsesCompactionMutatesOnlyFinalAssistantSSEItem(t *testing.T) {
+	transformer := rawResponseTransformerForTest(t)
+	first := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"first assistant\"}]}}\n\n"
+	final := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"final assistant\"}]}}\n\n"
+	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(first + final + completed)),
+	}
+	body := readResponseBody(t, transformer.TransformResponse(response))
+	if !bytes.Contains(body, []byte(first)) {
+		t.Fatalf("first assistant item changed: %s", body)
+	}
+	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 {
+		t.Fatalf("transcript tag count was not one: %s", body)
+	}
+	finalStart := bytes.Index(body, []byte("final assistant"))
+	tagStart := bytes.Index(body, []byte("<pre-compaction-transcript>"))
+	if finalStart < 0 || tagStart < finalStart {
+		t.Fatalf("final assistant did not receive transcript: %s", body)
+	}
+}
+
 func TestRawResponsesCompactionResponseFailuresPassThrough(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
+	assistantCandidate := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
 	tests := []struct {
 		name        string
 		status      int
@@ -262,6 +287,8 @@ func TestRawResponsesCompactionResponseFailuresPassThrough(t *testing.T) {
 		{name: "upstream failure", status: http.StatusBadRequest, contentType: "application/json", body: []byte(`{"error":"unchanged"}`)},
 		{name: "malformed json", status: http.StatusOK, contentType: "application/json", body: []byte(`{"output":[`)},
 		{name: "malformed sse item", status: http.StatusOK, contentType: "text/event-stream", body: []byte("event: response.output_item.done\ndata: {not-json}\n\n")},
+		{name: "stream response error after candidate", status: http.StatusOK, contentType: "text/event-stream", body: []byte(assistantCandidate + "event: response.failed\ndata: {\"type\":\"response.failed\",\"error\":{\"message\":\"failed\"}}\n\n")},
+		{name: "malformed stream after candidate", status: http.StatusOK, contentType: "text/event-stream", body: []byte(assistantCandidate + "event: response.output_item.done\ndata: {not-json}\n\n")},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

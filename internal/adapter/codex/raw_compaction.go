@@ -1,11 +1,9 @@
 package codex
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -623,6 +621,19 @@ func rawCompactionOutputText(item transcript.CompactedContextItem) string {
 			return ""
 		}
 		raw = encoded
+	case transcript.CompactedContextItemKindMessage,
+		transcript.CompactedContextItemKindReasoning,
+		transcript.CompactedContextItemKindLocalShellCall,
+		transcript.CompactedContextItemKindFunctionCall,
+		transcript.CompactedContextItemKindToolSearchCall,
+		transcript.CompactedContextItemKindCustomToolCall,
+		transcript.CompactedContextItemKindWebSearchCall,
+		transcript.CompactedContextItemKindImageGenerationCall,
+		transcript.CompactedContextItemKindCompaction,
+		transcript.CompactedContextItemKindCompactionTrigger,
+		transcript.CompactedContextItemKindContextCompaction,
+		transcript.CompactedContextItemKindOther:
+		return ""
 	default:
 		return ""
 	}
@@ -685,80 +696,6 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	return &clone
 }
 
-type rawCompactionSSEBody struct {
-	inner       io.ReadCloser
-	reader      *bufio.Reader
-	transcript  string
-	pending     []byte
-	pendingErr  error
-	transformed bool
-	disabled    bool
-}
-
-func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCompactionSSEBody {
-	return &rawCompactionSSEBody{
-		inner:       inner,
-		reader:      bufio.NewReader(inner),
-		transcript:  transcriptText,
-		pending:     nil,
-		pendingErr:  nil,
-		transformed: false,
-		disabled:    false,
-	}
-}
-
-func (b *rawCompactionSSEBody) Read(destination []byte) (int, error) {
-	if len(destination) == 0 {
-		return 0, nil
-	}
-	for len(b.pending) == 0 {
-		if b.pendingErr != nil {
-			err := b.pendingErr
-			b.pendingErr = nil
-			return 0, err
-		}
-		frame, readErr := readRawCompactionSSEFrame(b.reader)
-		if len(frame) == 0 {
-			return 0, readErr
-		}
-		if !b.disabled && !b.transformed {
-			mutated, matched, valid := appendRawCompactionSSEFrame(frame, b.transcript)
-			if !valid {
-				b.disabled = true
-			} else if matched {
-				frame = mutated
-				b.transformed = true
-			}
-		}
-		b.pending = frame
-		b.pendingErr = readErr
-	}
-	count := copy(destination, b.pending)
-	b.pending = b.pending[count:]
-	return count, nil
-}
-
-func (b *rawCompactionSSEBody) Close() error {
-	if err := b.inner.Close(); err != nil {
-		return fmt.Errorf("close raw compaction SSE response: %w", err)
-	}
-	return nil
-}
-
-func readRawCompactionSSEFrame(reader *bufio.Reader) ([]byte, error) {
-	var frame bytes.Buffer
-	for {
-		line, err := reader.ReadBytes('\n')
-		frame.Write(line)
-		if bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n")) {
-			return frame.Bytes(), err
-		}
-		if err != nil {
-			return frame.Bytes(), err
-		}
-	}
-}
-
 func wrappedRawCompactionTranscript(content string) string {
 	return "\n\n" + reorienttag.PreCompactionTranscriptOpen + "\n" + content + "\n" + reorienttag.PreCompactionTranscriptClose + "\n"
 }
@@ -788,30 +725,6 @@ func appendRawCompactionJSON(body []byte, transcriptText string) ([]byte, bool) 
 		return replaceByteRange(body, itemStart, itemEnd, mutated), true
 	}
 	return body, false
-}
-
-func appendRawCompactionSSEFrame(frame []byte, transcriptText string) ([]byte, bool, bool) {
-	eventName, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
-	if eventName != "response.output_item.done" {
-		return frame, false, true
-	}
-	if dataCount != 1 {
-		return frame, false, false
-	}
-	itemStart, itemEnd, ok := jsonObjectFieldValueRange(frame[dataStart:dataEnd], "item")
-	if !ok {
-		return frame, false, false
-	}
-	itemStart += dataStart
-	itemEnd += dataStart
-	mutated, matched, valid := appendRawCompactionAssistantItem(frame[itemStart:itemEnd], transcriptText)
-	if !valid || !matched {
-		return frame, matched, valid
-	}
-	if bytes.Equal(mutated, frame[itemStart:itemEnd]) {
-		return frame, true, true
-	}
-	return replaceByteRange(frame, itemStart, itemEnd, mutated), true, true
 }
 
 func appendRawCompactionAssistantItem(
@@ -861,8 +774,8 @@ func appendRawCompactionAssistantItem(
 			strings.Contains(text, reorienttag.PreCompactionTranscriptClose) {
 			return item, true, true
 		}
-		encodedText, err := marshalRawCompactionString(text + transcriptText)
-		if err != nil {
+		encodedText, ok := marshalRawCompactionString(text + transcriptText)
+		if !ok {
 			return item, false, false
 		}
 		mutatedPart := replaceByteRange(part, textStart, textEnd, encodedText)
@@ -876,14 +789,14 @@ func rawCompactionTextHasTranscriptWrapper(text string) bool {
 	return found && strings.Contains(following, reorienttag.PreCompactionTranscriptClose)
 }
 
-func marshalRawCompactionString(value string) ([]byte, error) {
+func marshalRawCompactionString(value string) ([]byte, bool) {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(value); err != nil {
-		return nil, fmt.Errorf("encode raw compaction string: %w", err)
+		return nil, false
 	}
-	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), true
 }
 
 func marshalRawArray(items []json.RawMessage) ([]byte, error) {
@@ -1073,42 +986,4 @@ func replaceByteRange(raw []byte, start, end int, replacement []byte) []byte {
 	out = append(out, replacement...)
 	out = append(out, raw[end:]...)
 	return out
-}
-
-func rawSSEFrameData(frame []byte) (string, int, int, int) {
-	eventName := ""
-	dataStart := 0
-	dataEnd := 0
-	dataCount := 0
-	lineStart := 0
-	for lineStart < len(frame) {
-		lineEnd := bytes.IndexByte(frame[lineStart:], '\n')
-		if lineEnd < 0 {
-			lineEnd = len(frame)
-		} else {
-			lineEnd += lineStart
-		}
-		contentEnd := lineEnd
-		if contentEnd > lineStart && frame[contentEnd-1] == '\r' {
-			contentEnd--
-		}
-		line := frame[lineStart:contentEnd]
-		if bytes.HasPrefix(line, []byte("event:")) {
-			eventName = strings.TrimSpace(string(line[len("event:"):]))
-		}
-		if bytes.HasPrefix(line, []byte("data:")) {
-			dataCount++
-			valueStart := lineStart + len("data:")
-			if valueStart < contentEnd && frame[valueStart] == ' ' {
-				valueStart++
-			}
-			dataStart = valueStart
-			dataEnd = contentEnd
-		}
-		if lineEnd >= len(frame) {
-			break
-		}
-		lineStart = lineEnd + 1
-	}
-	return eventName, dataStart, dataEnd, dataCount
 }
