@@ -107,3 +107,16 @@ Ordinary test runs still cover the handler and compatibility contracts through t
 [response object tests](../../internal/adapter/openai/responses_response_test.go),
 [compat warning surfaces test](../../internal/adapter/server_responses_compat_test.go),
 and [compat catalog tests](../../internal/adapter/compat/compat_test.go).
+
+## Native Codex Responses validation
+
+Native route tests use a real HTTP boundary and SQLite capture database. They
+verify raw forwarding, OAuth replacement, compaction, streaming, and four
+redacted capture stages. The runtime test also starts the adapter with MITM
+disabled and confirms that `capture_ingress` still opens the shared database.
+
+For hands-on validation, run `clyde daemon sandbox --keep`. Use only the printed
+sandbox roots and a temporary capture database. Configure the sandbox adapter,
+then run a real Codex client through it for a normal tool turn and a forced
+compaction turn. Inspect the four capture stages before stopping the sandbox.
+Do not restart or reconfigure the production daemon.

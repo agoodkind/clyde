@@ -35,9 +35,9 @@ type runtimeServices struct {
 	// keyed by listener id. mitmListeners holds the matching bound sockets
 	// keyed by the same id; a "localhost" listener binds two loopback sockets
 	// ([::1] and 127.0.0.1) served by the one proxy, so the slice has two
-	// entries. captureStore is the single SQLite capture sink shared by every
-	// proxy; it is closed after the proxies drain so the WAL flushes before any
-	// new generation reopens it.
+	// entries. captureStore is the single SQLite capture sink shared by the
+	// adapter and every proxy; it is closed after both surfaces drain so the WAL
+	// flushes before any new generation reopens it.
 	mitmProxies     map[string]*mitm.Proxy
 	mitmListeners   map[string][]net.Listener
 	mitmPacketConns map[string][]net.PacketConn
@@ -104,6 +104,12 @@ func startRuntime(
 		currentConfig:         atomic.Pointer[config.Config]{},
 	}
 	runtime.currentConfig.Store(cfg)
+	if cfg.MITM.EnabledDefault || cfg.Adapter.CaptureIngress {
+		if err := startCaptureStore(ctx, cfg, log, runtime); err != nil {
+			runtime.shutdown(context.WithoutCancel(ctx))
+			return nil, err
+		}
+	}
 	if cfg.MITM.EnabledDefault {
 		if err := startMITM(ctx, cfg, log, runtime, inherited); err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
@@ -142,14 +148,10 @@ func startRuntime(
 	return runtime, nil
 }
 
-// startMITM opens the single shared capture store and starts one proxy per
-// configured MITM listener, populating runtime.captureStore, runtime.mitmProxies,
-// and runtime.mitmListeners. On any failure the caller drains the runtime, which
-// closes whatever proxies and the store were already started.
-func startMITM(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices, inherited inheritedRuntime) error {
+func startCaptureStore(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices) error {
 	store, err := openMITMCaptureStore(ctx, cfg, log)
 	if err != nil {
-		log.WarnContext(ctx, "daemon.mitm.capture_store_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		log.WarnContext(ctx, "daemon.capture_store_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"db_path", cfg.MITM.CaptureStore.DBPath,
 			"err", err,
 		)
@@ -157,6 +159,12 @@ func startMITM(ctx context.Context, cfg *config.Config, log *slog.Logger, runtim
 	}
 	runtime.captureStore = store
 	runtime.addCaptureStoreCloseHook(store)
+	return nil
+}
+
+// startMITM starts one proxy per configured listener against the shared store.
+// On failure the caller drains the proxies and store already started.
+func startMITM(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices, inherited inheritedRuntime) error {
 	for id, listenerCfg := range cfg.MITM.Listeners {
 		listenerCfg.ID = id
 		if err := startMITMListener(ctx, cfg, log, runtime, listenerCfg, inherited); err != nil {

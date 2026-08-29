@@ -1,10 +1,21 @@
 # Adapter Compatibility Warnings
 
-The adapter forwards what the resolved provider can honor and surfaces a
-compatibility warning for every request field it drops or overrides. A
-`/v1/responses` request never fails just because it carries a field or a tool
-type the backend cannot use, so a client keeps working while it learns what the
-backend ignored.
+The generic Responses projection forwards what the resolved provider can honor
+and warns for every request field it drops or overrides. A generic
+`/v1/responses` request never fails just because it carries a field or tool type
+the backend cannot use.
+
+## Native Codex boundary
+
+A request with valid `X-Codex-Turn-Metadata` uses authenticated native raw
+forwarding only when its top-level model resolves to Codex. That path does not
+project fields or emit compatibility warnings. It preserves unknown fields,
+tools, identifiers, upstream status, and response bytes. Clyde supplies its
+configured Codex OAuth token and account identity instead of trusting inbound
+credentials.
+
+Invalid metadata and non-Codex models stay on the generic projection path. The
+field and tool rules below apply to that path.
 
 ## Warning contract
 
