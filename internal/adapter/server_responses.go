@@ -100,6 +100,10 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	if preErr := s.preflightChat(ctx, &req, &resolvedReq, reqID); preErr != nil {
 		return preErr
 	}
+	if resolvedReq.Provider == adapterresolver.ProviderPassthrough {
+		s.forwardPassthroughResponsesWire(w, r, reqID, &resolvedReq, wireBody, body)
+		return nil
+	}
 
 	// The compatibility boundary describes which request fields the resolved
 	// provider omits or overrides, plus the built-in / custom tool types the
@@ -195,6 +199,38 @@ func nativeResponsesResolverError(resolverErr error) *adapterError {
 	return adapterErrModelNotFound(resolverErr.Error())
 }
 
+// forwardPassthroughResponsesWire retains native request compression when no
+// rewrite is required, and re-encodes a rewritten model under that encoding.
+func (s *Server) forwardPassthroughResponsesWire(w http.ResponseWriter, r *http.Request, reqID string, req *adapterresolver.ResolvedRequest, wireBody, decodedBody []byte) {
+	baseURL, apiKey, modelOverride, upstreamLabel, targetErr := passthroughUpstreamTarget(req)
+	if targetErr != nil {
+		s.respondAdapterError(w, r, targetErr)
+		return
+	}
+	contentEncoding := r.Header.Get("Content-Encoding")
+	body := wireBody
+	if !nativeResponsesZstdEncoded(contentEncoding) {
+		body = decodedBody
+		contentEncoding = ""
+	}
+	if modelOverride != "" {
+		rewrittenBody := passthroughResponsesBodyWithModel(decodedBody, modelOverride)
+		encodedBody, encoded := encodeNativeResponsesBody(rewrittenBody, contentEncoding)
+		if !encoded {
+			s.respondAdapterError(w, r, adapterErrInvalidRequest("failed to encode passthrough Responses request", nil))
+			return
+		}
+		body = encodedBody
+	}
+	streamRequested := passthroughBodyStreamRequested(decodedBody)
+	s.forwardPassthroughHTTP(w, r, req, passthroughForwardOptions{
+		requestID: reqID, endpointPath: "/responses", baseURL: baseURL, apiKey: apiKey,
+		upstreamLabel: upstreamLabel, body: body, contentEncoding: contentEncoding,
+		streamRequested: streamRequested, streamIncrementally: true, preserveCorrelation: true,
+		rawChatRequest: nil, jsonSpec: JSONResponseSpec{Mode: "", SchemaName: "", Schema: nil},
+	})
+}
+
 func nativeCodexResponsesRequest(wireBody, decodedBody []byte, header http.Header, corr correlation.Context) (adaptercodex.RawResponsesRequest, string, bool) {
 	var request struct {
 		Model  string `json:"model"`
@@ -236,11 +272,11 @@ func (s *Server) dispatchNativeCodexResponses(
 		s.respondAdapterError(w, r, codexProviderAdapterError(err))
 		return
 	}
+	streamingResponse := raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
 	if compactionTransformer != nil {
-		response = transformNativeCodexCompactionResponse(response, compactionTransformer, raw.Stream)
+		response = transformNativeCodexCompactionResponse(response, compactionTransformer, streamingResponse)
 	}
 	defer func() { _ = response.Body.Close() }()
-	streamingResponse := raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
 	if streamingResponse {
 		lifecycle.streamOpened(ctx)
 	}

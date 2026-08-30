@@ -1,3 +1,4 @@
+//revive:disable:file-length-limit
 package codex
 
 import (
@@ -6,7 +7,9 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -227,7 +230,7 @@ func planRawResponsesCompaction(
 		maxBytes,
 		targetCount,
 		func(start int) (string, bool) {
-			return renderRawResponsesCompactionNormalizedItems(normalized[start:promptIndex])
+			return renderRawResponsesCompactionNormalizedItems(normalized[units[start].start:promptIndex])
 		},
 	)
 	if !ok {
@@ -239,6 +242,39 @@ func planRawResponsesCompaction(
 		promptIndex:  promptIndex,
 		transcript:   rendered,
 	}, true
+}
+
+func selectRawCompactionStart(
+	units []rawCompactionInterval,
+	maxBytes int,
+	targetCount int,
+	render func(int) (string, bool),
+) (int, string, bool) {
+	if targetCount < 1 || targetCount > len(units) {
+		return 0, "", false
+	}
+	minimumStart := len(units) - targetCount
+	maximumStart := len(units) - 1
+	selectedStart := -1
+	selectedTranscript := ""
+	for minimumStart <= maximumStart {
+		candidateStart := minimumStart + (maximumStart-minimumStart)/2
+		candidateTranscript, ok := render(candidateStart)
+		if !ok || strings.TrimSpace(candidateTranscript) == "" {
+			return 0, "", false
+		}
+		if maxBytes > 0 && len(candidateTranscript) > maxBytes {
+			minimumStart = candidateStart + 1
+			continue
+		}
+		selectedStart = candidateStart
+		selectedTranscript = candidateTranscript
+		maximumStart = candidateStart - 1
+	}
+	if selectedStart < 0 {
+		return 0, "", false
+	}
+	return selectedStart, selectedTranscript, true
 }
 
 func rawCompactionPromptIsValid(item transcript.CompactedContextItem) bool {
@@ -869,11 +905,22 @@ type rawCompactionReadCloser struct {
 }
 
 func (b *rawCompactionReadCloser) Read(destination []byte) (int, error) {
-	return b.reader.Read(destination)
+	count, err := b.reader.Read(destination)
+	if errors.Is(err, io.EOF) {
+		return count, io.EOF
+	}
+	if err != nil {
+		return count, fmt.Errorf("read raw compaction response: %w", err)
+	}
+	return count, nil
 }
 
 func (b *rawCompactionReadCloser) Close() error {
-	return b.closer.Close()
+	if err := b.closer.Close(); err != nil {
+		slog.Warn("adapter.codex.raw_compaction.close_failed", "concern", "adapter.providers.codex.request", "err", err)
+		return fmt.Errorf("close raw compaction response: %w", err)
+	}
+	return nil
 }
 
 type rawCompactionMultiCloser struct {
@@ -902,6 +949,13 @@ func newRawCompactionEncodedBody(
 ) io.ReadCloser {
 	reader, pipeWriter := io.Pipe()
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicErr := fmt.Errorf("encode raw compaction response: %v", recovered)
+				slog.Error("adapter.codex.raw_compaction.encode_panic", "concern", "adapter.providers.codex.request", "err", panicErr)
+				_ = pipeWriter.CloseWithError(panicErr)
+			}
+		}()
 		defer func() { _ = source.Close() }()
 		writer, ok := newRawCompactionEncodingWriter(pipeWriter, encoding)
 		if !ok {
@@ -920,16 +974,28 @@ func newRawCompactionEncodedBody(
 }
 
 func (b *rawCompactionEncodedBody) Read(destination []byte) (int, error) {
-	return b.reader.Read(destination)
+	count, err := b.reader.Read(destination)
+	if errors.Is(err, io.EOF) {
+		return count, io.EOF
+	}
+	if err != nil {
+		return count, fmt.Errorf("read encoded raw compaction response: %w", err)
+	}
+	return count, nil
 }
 
 func (b *rawCompactionEncodedBody) Close() error {
-	sourceErr := b.source.Close()
 	readerErr := b.reader.Close()
+	sourceErr := b.source.Close()
 	if sourceErr != nil {
-		return sourceErr
+		slog.Warn("adapter.codex.raw_compaction.source_close_failed", "concern", "adapter.providers.codex.request", "err", sourceErr)
+		return fmt.Errorf("close raw compaction response source: %w", sourceErr)
 	}
-	return readerErr
+	if readerErr != nil {
+		slog.Warn("adapter.codex.raw_compaction.reader_close_failed", "concern", "adapter.providers.codex.request", "err", readerErr)
+		return fmt.Errorf("close encoded raw compaction response: %w", readerErr)
+	}
+	return nil
 }
 
 func newRawCompactionEncodingWriter(
@@ -1053,6 +1119,54 @@ func appendRawCompactionAssistantItem(
 func rawCompactionTextHasTranscriptWrapper(text string) bool {
 	_, following, found := strings.Cut(text, reorienttag.PreCompactionTranscriptOpen)
 	return found && strings.Contains(following, reorienttag.PreCompactionTranscriptClose)
+}
+
+func appendRawCompactionAssistantContentPart(
+	item []byte,
+	contentStart int,
+	contentEnd int,
+	hasContent bool,
+	transcriptText string,
+) ([]byte, bool, bool) {
+	encodedText, ok := marshalRawCompactionString(transcriptText)
+	if !ok {
+		return item, false, false
+	}
+	part := make([]byte, 0, len(encodedText)+32)
+	part = append(part, `{"type":"output_text","text":`...)
+	part = append(part, encodedText...)
+	part = append(part, '}')
+	if hasContent {
+		content := item[contentStart:contentEnd]
+		if len(content) < 2 || content[0] != '[' || content[len(content)-1] != ']' {
+			return item, false, false
+		}
+		mutatedContent := make([]byte, 0, len(content)+len(part)+1)
+		mutatedContent = append(mutatedContent, content[:len(content)-1]...)
+		if len(bytes.TrimSpace(content[1:len(content)-1])) > 0 {
+			mutatedContent = append(mutatedContent, ',')
+		}
+		mutatedContent = append(mutatedContent, part...)
+		mutatedContent = append(mutatedContent, ']')
+		return replaceByteRange(item, contentStart, contentEnd, mutatedContent), true, true
+	}
+	trimmedItem := bytes.TrimSpace(item)
+	if len(trimmedItem) < 2 || trimmedItem[len(trimmedItem)-1] != '}' {
+		return item, false, false
+	}
+	itemEnd := len(item) - len(bytes.TrimRight(item, " \t\r\n"))
+	if itemEnd == len(item) {
+		itemEnd = len(item)
+	}
+	insertionIndex := len(item) - itemEnd - 1
+	if insertionIndex < 0 {
+		return item, false, false
+	}
+	field := make([]byte, 0, len(part)+11)
+	field = append(field, `,"content":[`...)
+	field = append(field, part...)
+	field = append(field, ']')
+	return replaceByteRange(item, insertionIndex, insertionIndex, field), true, true
 }
 
 func marshalRawCompactionString(value string) ([]byte, bool) {

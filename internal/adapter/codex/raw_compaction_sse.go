@@ -85,7 +85,11 @@ func (b *rawCompactionSSEBody) loadNextFrame() error {
 			if readErr != nil || !rawCompactionUnknownSSEFrameIsValid(frame) {
 				return b.failOpenSSE(frame, readErr)
 			}
-			b.following = joinRawCompactionSSEFrames(b.following, frame)
+			_, _, dataCount := rawSSEFrameDataValue(frame)
+			if dataCount == 0 {
+				return b.queueSSEBytes(frame, readErr)
+			}
+			b.following = append(b.following, frame...)
 			return nil
 		}
 		return b.queueSSEBytes(frame, readErr)
@@ -198,14 +202,6 @@ func rawCompactionUnknownSSEFrameIsValid(frame []byte) bool {
 	return dataCount == 0 || json.Valid(data)
 }
 
-func rawCompactionUnknownSSEFrameIsValid(frame []byte) bool {
-	_, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
-	if dataCount == 0 {
-		return true
-	}
-	return dataCount == 1 && json.Valid(frame[dataStart:dataEnd])
-}
-
 func (b *rawCompactionSSEBody) Close() error {
 	if err := b.inner.Close(); err != nil {
 		slog.Warn("adapter.codex.raw_compaction.sse_close_failed", "concern", "adapter.providers.codex.request", "err", err)
@@ -282,44 +278,6 @@ func rawSSEFrameEvent(frame []byte) rawCompactionSSEEvent {
 		}
 	}
 	return ""
-}
-
-func rawSSEFrameData(frame []byte) (string, int, int, int) {
-	eventName := ""
-	dataStart := 0
-	dataEnd := 0
-	dataCount := 0
-	lineStart := 0
-	for lineStart < len(frame) {
-		lineEnd := bytes.IndexByte(frame[lineStart:], '\n')
-		if lineEnd < 0 {
-			lineEnd = len(frame)
-		} else {
-			lineEnd += lineStart
-		}
-		contentEnd := lineEnd
-		if contentEnd > lineStart && frame[contentEnd-1] == '\r' {
-			contentEnd--
-		}
-		line := frame[lineStart:contentEnd]
-		if bytes.HasPrefix(line, []byte("event:")) {
-			eventName = strings.TrimSpace(string(line[len("event:"):]))
-		}
-		if bytes.HasPrefix(line, []byte("data:")) {
-			dataCount++
-			valueStart := lineStart + len("data:")
-			if valueStart < contentEnd && frame[valueStart] == ' ' {
-				valueStart++
-			}
-			dataStart = valueStart
-			dataEnd = contentEnd
-		}
-		if lineEnd >= len(frame) {
-			break
-		}
-		lineStart = lineEnd + 1
-	}
-	return eventName, dataStart, dataEnd, dataCount
 }
 
 func rawSSEFrameDataValue(frame []byte) (string, []byte, int) {

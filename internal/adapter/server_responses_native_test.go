@@ -220,6 +220,32 @@ func TestNativeCodexResponsesZstdCompactionTransformsRequestAndResponse(t *testi
 	}
 }
 
+func TestNativeCodexResponsesZstdCompactionPreservesOversizedResponse(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	compressedResponse := zstdEncodeNativeResponseBody(t, bytes.Repeat([]byte("x"), maxResponsesResponseBodyBytes+1))
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Encoding", "zstd")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(compressedResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(zstdEncodeNativeResponseBody(t, requestBody)))
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Header().Get("Content-Encoding") != "zstd" || !bytes.Equal(recorder.Body.Bytes(), compressedResponse) {
+		t.Fatalf("oversized response changed encoding=%q body=%d", recorder.Header().Get("Content-Encoding"), recorder.Body.Len())
+	}
+}
+
 func TestNativeCodexResponsesInvalidZstdRedactsAccountDiagnostic(t *testing.T) {
 	const accountID = "inbound-account-must-not-leak"
 	srv := newNativeResponsesServer(t, "http://127.0.0.1:1", &nativeRawRefreshAuth{})
@@ -523,9 +549,9 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 		}
 		responseDone <- response
 	}()
-	<-firstWritten
 	var response *http.Response
 	select {
+	case <-firstWritten:
 	case response = <-responseDone:
 		t.Cleanup(func() { _ = response.Body.Close() })
 	case requestErrValue := <-requestErr:
@@ -533,6 +559,17 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	case <-time.After(500 * time.Millisecond):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("matching compaction SSE headers waited for upstream completion")
+	}
+	if response == nil {
+		select {
+		case response = <-responseDone:
+			t.Cleanup(func() { _ = response.Body.Close() })
+		case requestErrValue := <-requestErr:
+			t.Fatalf("post response: %v", requestErrValue)
+		case <-time.After(500 * time.Millisecond):
+			releaseOnce.Do(func() { close(release) })
+			t.Fatal("matching compaction SSE headers waited for upstream completion")
+		}
 	}
 	readDone := make(chan string, 1)
 	go func() {
@@ -600,9 +637,9 @@ func TestNativeCodexResponsesZstdCompactionStreamsFirstFrameBeforeCompletion(t *
 		}
 		responseDone <- response
 	}()
-	<-firstWritten
 	var response *http.Response
 	select {
+	case <-firstWritten:
 	case response = <-responseDone:
 		t.Cleanup(func() { _ = response.Body.Close() })
 	case requestErrValue := <-requestErr:
@@ -611,14 +648,25 @@ func TestNativeCodexResponsesZstdCompactionStreamsFirstFrameBeforeCompletion(t *
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("zstd compaction SSE headers waited for upstream completion")
 	}
+	if response == nil {
+		select {
+		case response = <-responseDone:
+			t.Cleanup(func() { _ = response.Body.Close() })
+		case requestErrValue := <-requestErr:
+			t.Fatalf("post response: %v", requestErrValue)
+		case <-time.After(500 * time.Millisecond):
+			releaseOnce.Do(func() { close(release) })
+			t.Fatal("zstd compaction SSE headers waited for upstream completion")
+		}
+	}
 	if response.Header.Get("Content-Encoding") != "" {
 		t.Fatalf("downstream Content-Encoding=%q", response.Header.Get("Content-Encoding"))
 	}
 	readDone := make(chan []byte, 1)
 	readErr := make(chan error, 1)
 	go func() {
-		buffer := make([]byte, 256)
-		count, err := response.Body.Read(buffer)
+		buffer := make([]byte, len("event: response.created"))
+		count, err := io.ReadFull(response.Body, buffer)
 		if err != nil {
 			readErr <- err
 			return
