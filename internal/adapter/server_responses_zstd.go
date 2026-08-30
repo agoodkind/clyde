@@ -14,7 +14,10 @@ import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 )
 
-const maxResponsesRequestBodyBytes = 8 * 1024 * 1024
+const (
+	maxResponsesRequestBodyBytes  = 8 * 1024 * 1024
+	maxResponsesResponseBodyBytes = 8 * 1024 * 1024
+)
 
 func readResponsesRequestBody(body []byte, contentEncoding string) ([]byte, error) {
 	if !nativeResponsesZstdEncoded(contentEncoding) {
