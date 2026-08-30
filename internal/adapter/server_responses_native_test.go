@@ -506,6 +506,26 @@ func TestResponsesWithoutValidNativeMetadataUsesTypedProjection(t *testing.T) {
 	}
 }
 
+func TestNativeTurnMetadataWithUnresolvedModelUsesTypedRejectionPrecedence(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		t.Fatal("unresolved model reached native upstream")
+	}))
+	t.Cleanup(upstream.Close)
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"unresolved-native","input":"typed","previous_response_id":"resp-previous"}`),
+	)
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest ||
+		!strings.Contains(recorder.Body.String(), "previous_response_id is not supported by Clyde") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestNativeTurnMetadataForNonCodexUsesTypedProjection(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)
