@@ -253,13 +253,12 @@ func (b *rawResponsesAttemptBody) Close() error {
 }
 
 func rawResponsesHeaders(raw RawResponsesRequest, token, accountID string) http.Header {
-	headers := raw.Header.Clone()
+	headers, _ := capture.RedactHTTP(raw.Header, nil)
 	connectionHeaders := rawResponsesConnectionHeaders(headers)
 	for header := range connectionHeaders {
 		headers.Del(header)
 	}
 	for _, header := range []string{
-		"Authorization", "Proxy-Authorization", "Chatgpt-Account-Id", "Cookie", "X-Api-Key",
 		"Connection", "Keep-Alive", "Proxy-Authenticate", "Te", "Trailer",
 		"Transfer-Encoding", "Upgrade", "Content-Length", "Proxy-Connection",
 	} {
