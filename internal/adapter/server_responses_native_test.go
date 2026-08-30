@@ -130,7 +130,7 @@ func TestNativeCodexResponsesCapturesFourRedactedStages(t *testing.T) {
 		responseAccount   = "response-account-must-not-persist"
 		responseCookie    = "response-cookie-must-not-persist"
 	)
-	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent-stage-marker"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}],"access_token":"` + requestOAuth + `","account_id":"` + requestAccount + `","cookie":"` + requestCookie + `"}`)
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent-stage-marker"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}],"access_token":"` + requestOAuth + `","account_id":"` + requestAccount + `","cookie":"` + requestCookie + `"}`)
 	responseBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary-stage-marker"}]}],"access_token":"` + responseOAuth + `","account_id":"` + responseAccount + `","cookie":"` + responseCookie + `"}`)
 	var upstreamBody []byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -341,7 +341,7 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	}
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
-	requestBody := `{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`
+	requestBody := `{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`
 	request, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", strings.NewReader(requestBody))
 	if err != nil {
 		t.Fatalf("new request: %v", err)

@@ -74,6 +74,9 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 		Header: http.Header{
 			"Authorization":         {"Bearer inbound-secret"},
 			"Proxy-Authorization":   {"Basic inbound-proxy-secret"},
+			"Openai-Api-Key":        {"inbound-openai-secret"},
+			"X-Clyde-Token":         {"inbound-clyde-secret"},
+			"X-Amz-Security-Token":  {"inbound-aws-secret"},
 			"Connection":            {"X-Remove"},
 			"X-Remove":              {"hop-by-hop"},
 			"Chatgpt-Account-Id":    {"untrusted-account"},
@@ -104,7 +107,9 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 	if got := gotHeader.Get("Authorization"); got != "Bearer configured-token" {
 		t.Fatalf("Authorization = %q", got)
 	}
-	if gotHeader.Get("Proxy-Authorization") != "" || gotHeader.Get("X-Remove") != "" || gotHeader.Get("Connection") != "" {
+	if gotHeader.Get("Proxy-Authorization") != "" || gotHeader.Get("Openai-Api-Key") != "" ||
+		gotHeader.Get("X-Clyde-Token") != "" || gotHeader.Get("X-Amz-Security-Token") != "" ||
+		gotHeader.Get("X-Remove") != "" || gotHeader.Get("Connection") != "" {
 		t.Fatalf("credential or hop header leaked: %v", gotHeader)
 	}
 	if got := gotHeader.Get("Chatgpt-Account-Id"); got != "configured-account" {
