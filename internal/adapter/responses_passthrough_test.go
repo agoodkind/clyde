@@ -96,6 +96,32 @@ func TestResponsesPassthroughRewritesOnlyConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestResponsesPassthroughPreservesZstdWireEncoding(t *testing.T) {
+	requestBody := []byte(`{"model":"snapshot-alias","input":"compressed"}`)
+	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
+	var upstreamBody []byte
+	var upstreamEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamBody, _ = io.ReadAll(request.Body)
+		upstreamEncoding = request.Header.Get("Content-Encoding")
+		_, _ = writer.Write([]byte(`{"id":"resp-passthrough"}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
+	request.Header.Set("Content-Encoding", "zstd")
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	if upstreamEncoding != "zstd" || !bytes.Equal(upstreamBody, compressedRequest) {
+		t.Fatalf("upstream encoding=%q body=%x want encoding=zstd body=%x", upstreamEncoding, upstreamBody, compressedRequest)
+	}
+}
+
 func TestResponsesPassthroughPreservesStatusHeadersAndRequestIdentity(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

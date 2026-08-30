@@ -147,3 +147,29 @@ func TestCodexWebsocketFullFrameRecorded(t *testing.T) {
 		t.Fatalf("response body = %q, want joined frames %q", got, wantResp)
 	}
 }
+
+func TestCodexEgressRedactsRequestCredentialEchoedByResponse(t *testing.T) {
+	store, dbPath := openCodexCaptureStore(t)
+	request, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer request-credential")
+	response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}
+	recordCodexHTTPEgress(
+		store,
+		correlation.Context{},
+		request,
+		response,
+		[]byte(`{"input":"safe"}`),
+		[]byte(`{"safe":"request-credential"}`),
+		"conv-echo",
+		clock.Now(),
+	)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	if got := queryCodexRow(t, dbPath, "response"); bytes.Contains(got, []byte("request-credential")) {
+		t.Fatalf("response body leaked request credential: %q", got)
+	}
+}

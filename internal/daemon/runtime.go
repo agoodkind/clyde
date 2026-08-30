@@ -104,7 +104,7 @@ func startRuntime(
 		currentConfig:         atomic.Pointer[config.Config]{},
 	}
 	runtime.currentConfig.Store(cfg)
-	if cfg.MITM.EnabledDefault || cfg.Adapter.CaptureIngress {
+	if captureStoreRequired(cfg) {
 		if err := startCaptureStore(ctx, cfg, log, runtime); err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
 			return nil, err
@@ -146,6 +146,10 @@ func startRuntime(
 	}
 	runtime.semantic = startConversationSemanticRuntime(ctx, cfg, log, runtime.group)
 	return runtime, nil
+}
+
+func captureStoreRequired(cfg *config.Config) bool {
+	return cfg.MITM.EnabledDefault || (cfg.Adapter.Enabled && cfg.Adapter.CaptureIngress)
 }
 
 func startCaptureStore(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices) error {

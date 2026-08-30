@@ -86,20 +86,27 @@ func transformNativeCodexCompactionResponse(
 		return transformStreamingNativeCodexCompactionResponse(response, transformer)
 	}
 	originalBody := response.Body
-	wireBody, err := io.ReadAll(originalBody)
+	wireBody, err := io.ReadAll(io.LimitReader(originalBody, maxResponsesResponseBodyBytes+1))
 	if err != nil {
+		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody), source: originalBody}
+		return response
+	}
+	if len(wireBody) > maxResponsesResponseBodyBytes {
 		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody), source: originalBody}
 		return response
 	}
 	_ = originalBody.Close()
 	response.Body = io.NopCloser(bytes.NewReader(wireBody))
-	decoder, err := zstd.NewReader(nil)
+	decoder, err := zstd.NewReader(
+		bytes.NewReader(wireBody),
+		zstd.WithDecoderMaxMemory(maxResponsesResponseBodyBytes),
+	)
 	if err != nil {
 		return response
 	}
-	decodedBody, err := decoder.DecodeAll(wireBody, nil)
+	decodedBody, err := io.ReadAll(io.LimitReader(decoder, maxResponsesResponseBodyBytes+1))
 	decoder.Close()
-	if err != nil {
+	if err != nil || len(decodedBody) > maxResponsesResponseBodyBytes {
 		return response
 	}
 	decodedResponse := *response
@@ -152,7 +159,10 @@ func transformStreamingNativeCodexCompactionResponse(
 		return response
 	}
 	_ = originalBody.Close()
-	decoder, err := zstd.NewReader(response.Body)
+	decoder, err := zstd.NewReader(
+		bytes.NewReader(wireBody),
+		zstd.WithDecoderMaxMemory(maxResponsesResponseBodyBytes),
+	)
 	if err != nil {
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
