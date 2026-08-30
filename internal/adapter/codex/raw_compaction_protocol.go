@@ -6,12 +6,16 @@ import (
 	"strings"
 )
 
+// RawResponsesCompactionProtocol identifies an exact native Responses compaction implementation.
 type RawResponsesCompactionProtocol string
 
 const (
+	// RawResponsesCompactionNone represents missing, malformed, or unknown metadata.
 	RawResponsesCompactionNone RawResponsesCompactionProtocol = ""
-	RawResponsesCompactionV1   RawResponsesCompactionProtocol = "responses"
-	RawResponsesCompactionV2   RawResponsesCompactionProtocol = "responses_compaction_v2"
+	// RawResponsesCompactionV1 represents the native Responses text-summary compaction protocol.
+	RawResponsesCompactionV1 RawResponsesCompactionProtocol = "responses"
+	// RawResponsesCompactionV2 represents the native encrypted compaction protocol.
+	RawResponsesCompactionV2 RawResponsesCompactionProtocol = "responses_compaction_v2"
 )
 
 type rawResponsesCompactionMetadata struct {
@@ -23,6 +27,7 @@ type rawResponsesCompactionMetadata struct {
 	} `json:"compaction"`
 }
 
+// DetectRawResponsesCompactionProtocol classifies the native turn metadata header.
 func DetectRawResponsesCompactionProtocol(header http.Header) RawResponsesCompactionProtocol {
 	metadataValue := strings.TrimSpace(header.Get(CodexTurnMetadataHeader))
 	if metadataValue == "" {
@@ -33,6 +38,8 @@ func DetectRawResponsesCompactionProtocol(header http.Header) RawResponsesCompac
 		return RawResponsesCompactionNone
 	}
 	switch RawResponsesCompactionProtocol(metadata.Compaction.Implementation) {
+	case RawResponsesCompactionNone:
+		return RawResponsesCompactionNone
 	case RawResponsesCompactionV1:
 		return RawResponsesCompactionV1
 	case RawResponsesCompactionV2:
