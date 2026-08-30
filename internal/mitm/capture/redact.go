@@ -117,6 +117,9 @@ func redactHTTPBody(body []byte, sensitiveValues []string) []byte {
 		return redacted
 	}
 	if value, handled := redactSSEJSON(redacted); handled {
+		if containsSensitiveSSENonDataMarker(value) {
+			return []byte(redactedValue)
+		}
 		return value
 	}
 	if containsSensitiveBodyMarker(redacted) {
@@ -275,6 +278,19 @@ func redactSSEJSON(body []byte) ([]byte, bool) {
 		return body, handled
 	}
 	return bytes.Join(lines, nil), true
+}
+
+func containsSensitiveSSENonDataMarker(body []byte) bool {
+	for line := range bytes.SplitSeq(body, []byte("\n")) {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("data:")) {
+			continue
+		}
+		if containsSensitiveBodyMarker(trimmed) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsSensitiveBodyMarker(body []byte) bool {

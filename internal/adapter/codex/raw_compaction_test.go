@@ -90,17 +90,17 @@ func TestPlanRawResponsesCompactionHonorsFractionAndByteCapBoundaries(t *testing
 	if ok {
 		t.Fatalf("fraction below one item unexpectedly split: %+v", lastOnly)
 	}
-	lastMessage, ok := renderRawResponsesCompactionNormalizedItems(
-		codexstore.NormalizeResponseInputItems(items[5:6]),
+	lastTurn, ok := renderRawResponsesCompactionNormalizedItems(
+		codexstore.NormalizeResponseInputItems(items[4:6]),
 	)
 	if !ok {
-		t.Fatal("last message did not render")
+		t.Fatal("last turn did not render")
 	}
-	capPlan, ok := planRawResponsesCompaction(items, len(lastMessage), 0.5)
-	if !ok || capPlan.removedStart != 5 {
-		t.Fatalf("cap plan = %+v ok=%t, want only index 5 removed", capPlan, ok)
+	capPlan, ok := planRawResponsesCompaction(items, len(lastTurn), 0.5)
+	if !ok || capPlan.removedStart != 4 {
+		t.Fatalf("cap plan = %+v ok=%t, want complete turn [4:6) removed", capPlan, ok)
 	}
-	underCap, ok := planRawResponsesCompaction(items, len(lastMessage)-1, 0.5)
+	underCap, ok := planRawResponsesCompaction(items, len(lastTurn)-1, 0.5)
 	if ok {
 		t.Fatalf("under-cap plan unexpectedly split: %+v", underCap)
 	}

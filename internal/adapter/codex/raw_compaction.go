@@ -256,8 +256,9 @@ func rawCompactionPromptIsValid(item transcript.CompactedContextItem) bool {
 }
 
 func rawCompactionUnits(items []transcript.CompactedContextItem) []rawCompactionInterval {
-	pairIntervals := rawCompactionPairIntervals(items)
-	merged := mergeRawCompactionIntervals(pairIntervals)
+	intervals := rawCompactionTurnIntervals(items)
+	intervals = append(intervals, rawCompactionPairIntervals(items)...)
+	merged := mergeRawCompactionIntervals(intervals)
 	units := make([]rawCompactionInterval, 0, len(items))
 	intervalIndex := 0
 	for itemIndex := 0; itemIndex < len(items); {
@@ -271,6 +272,20 @@ func rawCompactionUnits(items []transcript.CompactedContextItem) []rawCompaction
 		itemIndex++
 	}
 	return units
+}
+
+func rawCompactionTurnIntervals(items []transcript.CompactedContextItem) []rawCompactionInterval {
+	intervals := make([]rawCompactionInterval, 0)
+	turnStart := 0
+	for itemIndex := 1; itemIndex < len(items); itemIndex++ {
+		item := items[itemIndex]
+		if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil || item.Message.Role != "user" {
+			continue
+		}
+		intervals = append(intervals, rawCompactionInterval{start: turnStart, end: itemIndex})
+		turnStart = itemIndex
+	}
+	return append(intervals, rawCompactionInterval{start: turnStart, end: len(items)})
 }
 
 func rawCompactionPairIntervals(items []transcript.CompactedContextItem) []rawCompactionInterval {

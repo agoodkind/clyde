@@ -84,3 +84,27 @@ func TestRedactHTTPHandlesJSONLines(t *testing.T) {
 		t.Fatalf("JSON lines are not two valid frames: %s", redacted)
 	}
 }
+
+func TestRedactHTTPScansNonDataSSELinesAfterFrameRedaction(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "comment",
+			body: ": access_token=comment-secret\ndata: {\"safe\":true}\n\n",
+		},
+		{
+			name: "event field",
+			body: "event: cookie=event-secret\ndata: {\"safe\":true}\n\n",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, body := RedactHTTP(nil, []byte(testCase.body))
+			if string(body) != redactedValue {
+				t.Fatalf("redacted body = %q, want fail-closed marker", body)
+			}
+		})
+	}
+}
