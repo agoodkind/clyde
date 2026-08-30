@@ -193,6 +193,28 @@ func TestRedactHTTPFailsClosedForInvalidZstdCopy(t *testing.T) {
 	}
 }
 
+func TestRedactHTTPFailsClosedForOversizedDecodedZstdCopy(t *testing.T) {
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("create zstd encoder: %v", err)
+	}
+	compressed := encoder.EncodeAll(bytes.Repeat([]byte("x"), DefaultMaxBodyBytes+1), nil)
+	encoder.Close()
+	headers := http.Header{
+		"Content-Encoding": {"zstd"},
+		"Content-Length":   {"123"},
+	}
+
+	redactedHeaders, redacted := RedactHTTP(headers, compressed)
+	if string(redacted) != redactedValue {
+		t.Fatalf("oversized decoded zstd body = %q, want fail-closed marker", redacted)
+	}
+	if redactedHeaders.Get("Content-Encoding") != "" ||
+		redactedHeaders.Get("Content-Length") != "" {
+		t.Fatalf("oversized decoded zstd capture retained encoding headers: %v", redactedHeaders)
+	}
+}
+
 func TestRedactHTTPPreservesSafeSSEFrame(t *testing.T) {
 	body := []byte("event: response.completed\n: keepalive\ndata: { \"safe\" : true }\n\n")
 	_, redacted := RedactHTTP(nil, body)
