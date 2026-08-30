@@ -39,6 +39,12 @@ type rawCompactionSSEBody struct {
 	disabled   bool
 }
 
+// RequiresTerminalValidation reports whether streamed mutation state must be
+// validated before accepting the response.
+func (t *RawResponsesCompactionTransformer) RequiresTerminalValidation() bool {
+	return false
+}
+
 func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCompactionSSEBody {
 	return &rawCompactionSSEBody{
 		inner:      inner,
@@ -236,7 +242,11 @@ func rawCompactionSSEJSONFrameIsValid(frame []byte, eventName rawCompactionSSEEv
 }
 
 func rawCompactionUnknownSSEFrameIsValid(frame []byte) bool {
-	return len(frame) > 0
+	_, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
+	if dataCount == 0 {
+		return true
+	}
+	return dataCount == 1 && json.Valid(frame[dataStart:dataEnd])
 }
 
 func (b *rawCompactionSSEBody) Close() error {
