@@ -10,9 +10,11 @@ the backend cannot use.
 A request with valid `X-Codex-Turn-Metadata` uses authenticated native raw
 forwarding only when its top-level model resolves to Codex. That path does not
 project fields or emit compatibility warnings. It preserves unknown fields,
-tools, identifiers, upstream status, and response bytes. Clyde supplies its
-configured Codex OAuth token and account identity instead of trusting inbound
-credentials.
+tools, identifiers, and upstream status. It preserves response bytes unless
+native Responses compaction is enabled and the request carries the exact
+compaction metadata. That case mutates only the final assistant summary. Clyde
+supplies its configured Codex OAuth token and account identity instead of
+trusting inbound credentials.
 
 Invalid metadata and non-Codex models stay on the generic projection path. The
 field and tool rules below apply to that path.
