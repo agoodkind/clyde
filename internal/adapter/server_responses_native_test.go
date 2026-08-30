@@ -438,6 +438,100 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	}
 }
 
+func TestNativeCodexResponsesZstdCompactionStreamsFirstFrameBeforeCompletion(t *testing.T) {
+	firstWritten := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Encoding", "zstd")
+		writer.Header().Set("Content-Type", "text/event-stream")
+		encoder, _ := zstd.NewWriter(writer)
+		_, _ = io.WriteString(encoder, "event: response.created\ndata: {\"type\":\"response.created\",\"opaque\":true}\n\n")
+		_ = encoder.Flush()
+		writer.(http.Flusher).Flush()
+		close(firstWritten)
+		<-release
+		_, _ = io.WriteString(encoder, "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n")
+		_, _ = io.WriteString(encoder, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+		_ = encoder.Close()
+	}))
+	t.Cleanup(upstream.Close)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	front := httptest.NewServer(srv.mux)
+	t.Cleanup(front.Close)
+	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
+	request, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", bytes.NewReader(compressedRequest))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	responseDone := make(chan *http.Response, 1)
+	requestErr := make(chan error, 1)
+	go func() {
+		response, requestErrValue := http.DefaultClient.Do(request)
+		if requestErrValue != nil {
+			requestErr <- requestErrValue
+			return
+		}
+		responseDone <- response
+	}()
+	<-firstWritten
+	var response *http.Response
+	select {
+	case response = <-responseDone:
+		t.Cleanup(func() { _ = response.Body.Close() })
+	case requestErrValue := <-requestErr:
+		t.Fatalf("post response: %v", requestErrValue)
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("zstd compaction SSE headers waited for upstream completion")
+	}
+	if response.Header.Get("Content-Encoding") != "" {
+		t.Fatalf("downstream Content-Encoding=%q", response.Header.Get("Content-Encoding"))
+	}
+	readDone := make(chan []byte, 1)
+	readErr := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 256)
+		count, err := response.Body.Read(buffer)
+		if err != nil {
+			readErr <- err
+			return
+		}
+		readDone <- buffer[:count]
+	}()
+	var firstFrame []byte
+	select {
+	case firstFrame = <-readDone:
+		if !bytes.Contains(firstFrame, []byte("response.created")) {
+			t.Fatalf("first downstream frame = %q", firstFrame)
+		}
+	case err := <-readErr:
+		t.Fatalf("read first downstream frame: %v", err)
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("zstd compaction SSE first frame waited for upstream completion")
+	}
+	releaseOnce.Do(func() { close(release) })
+	remainder, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read remaining downstream frames: %v", err)
+	}
+	completeResponse := append(firstFrame, remainder...)
+	if !bytes.Contains(completeResponse, []byte("<pre-compaction-transcript>")) ||
+		!bytes.Contains(completeResponse, []byte("recent")) {
+		t.Fatalf("downstream summary missing transcript: %s", completeResponse)
+	}
+}
+
 func TestNativeCodexResponsesStreamsRawBytes(t *testing.T) {
 	firstWritten := make(chan struct{})
 	release := make(chan struct{})
