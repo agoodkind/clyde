@@ -30,6 +30,7 @@ func TestRedactedHeader(t *testing.T) {
 		{name: "x-cursor-version", header: "x-cursor-version", expected: true},
 		{name: "openai-api-key", header: "openai-api-key", expected: true},
 		{name: "openai-organization", header: "openai-organization", expected: true},
+		{name: "chatgpt-account-id", header: "chatgpt-account-id", expected: true},
 		{name: "x-amz-security-token", header: "x-amz-security-token", expected: true},
 		{name: "x-custom-api-key", header: "x-custom-api-key", expected: true},
 		{name: "content-type", header: "content-type", expected: false},
@@ -53,6 +54,7 @@ func TestRedactedHeaders(t *testing.T) {
 		"X-AMZ-Security-Token": {"redactme"},
 		"X-Cursor-Secret":      {"value"},
 		"OpenAI-Token":         {"value"},
+		"Chatgpt-Account-Id":   {"value"},
 		"User-Agent":           {"ua"},
 	}
 
@@ -63,6 +65,7 @@ func TestRedactedHeaders(t *testing.T) {
 		"content-type":         "application/json",
 		"x-cursor-secret":      "[redacted]",
 		"openai-token":         "[redacted]",
+		"chatgpt-account-id":   "[redacted]",
 		"user-agent":           "ua",
 	}
 	if !reflect.DeepEqual(out, expected) {
