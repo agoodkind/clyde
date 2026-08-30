@@ -47,6 +47,7 @@ func TestRedactHTTPFailsClosedForMalformedSensitiveBodies(t *testing.T) {
 		{name: "mixed valid and malformed json lines", body: []byte("{\"safe\":1}\n{\"access\\u005ftoken\":\"truncated-secret\"")},
 		{name: "truncated sse", body: []byte("data: {\"account_id\":\"truncated-account\"\n\n")},
 		{name: "truncated escaped key sse", body: []byte("data: {\"access\\u005ftoken\":\"truncated-secret\"\n\n")},
+		{name: "bom prefixed truncated escaped key sse", body: []byte("\xef\xbb\xbfdata: {\"access\\u005ftoken\":\"truncated-secret\"\n\n")},
 		{name: "malformed sse without marker", body: []byte("data: {\"safe\":\n\n")},
 		{name: "mixed valid and truncated sse", body: []byte("data: {\"access_token\":\"first-secret\"}\n\ndata: {\"account_id\":\"truncated-account\"\n\n")},
 		{name: "plain assignment", body: []byte("cookie=session-secret")},

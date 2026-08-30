@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-const redactedValue = "[REDACTED]"
+const (
+	redactedValue     = "[REDACTED]"
+	utf8ByteOrderMark = "\xef\xbb\xbf"
+)
 
 type sensitiveHeaderName string
 
@@ -94,7 +97,7 @@ func appendSensitiveHeaderValues(values []string, name string, value string) []s
 }
 
 func redactHTTPBody(body []byte, sensitiveValues []string) []byte {
-	redacted := bytes.Clone(body)
+	redacted := bytes.TrimPrefix(bytes.Clone(body), []byte(utf8ByteOrderMark))
 	for _, value := range sensitiveValues {
 		if len(value) < 3 {
 			continue
