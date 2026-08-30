@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
@@ -14,11 +15,7 @@ import (
 )
 
 func TestStartRuntimeOpensCaptureStoreForAdapterIngressWithoutMITM(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "clyde-runtime-")
-	if err != nil {
-		t.Fatalf("create runtime directory: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := t.TempDir()
 	adapterListener, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen adapter: %v", err)
@@ -30,7 +27,10 @@ func TestStartRuntimeOpensCaptureStoreForAdapterIngressWithoutMITM(t *testing.T)
 	}
 
 	cfg := config.NewConfigWithDefaults()
-	cfg.Daemon.GRPCAddress = "unix://" + filepath.Join(dir, "daemon.sock")
+	socketName := strings.ReplaceAll(t.Name(), "/", "-") + ".sock"
+	socketPath := filepath.Join("/tmp", socketName)
+	cfg.Daemon.GRPCAddress = "unix://" + socketPath
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	cfg.Adapter.Enabled = true
 	cfg.Adapter.Host = "::1"
 	cfg.Adapter.Port = tcpAddress.Port
@@ -56,5 +56,15 @@ func TestStartRuntimeOpensCaptureStoreForAdapterIngressWithoutMITM(t *testing.T)
 	}
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Fatalf("capture database: %v", err)
+	}
+}
+
+func TestCaptureStoreRequiredSkipsDisabledAdapter(t *testing.T) {
+	cfg := config.NewConfigWithDefaults()
+	cfg.MITM.EnabledDefault = false
+	cfg.Adapter.Enabled = false
+	cfg.Adapter.CaptureIngress = true
+	if captureStoreRequired(cfg) {
+		t.Fatal("disabled adapter should not open capture storage")
 	}
 }
