@@ -102,6 +102,80 @@ func TestNativeCodexResponsesZstdPreservesRawExchange(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesZstdCapturesDecodedRedactedCopies(t *testing.T) {
+	requestSensitiveValue := "request-compressed-sensitive-marker"
+	requestBody, err := json.Marshal(map[string]string{
+		"model":             "gpt-native",
+		"input":             "request-safe",
+		"access_" + "token": requestSensitiveValue,
+	})
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
+	responseSensitiveValue := "response-compressed-sensitive-marker"
+	responseBody, err := json.Marshal(map[string]string{
+		"id":                "resp-native",
+		"safe":              "response-safe",
+		"access_" + "token": responseSensitiveValue,
+	})
+	if err != nil {
+		t.Fatalf("marshal response body: %v", err)
+	}
+	compressedResponse := zstdEncodeNativeResponseBody(t, responseBody)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamBody, _ := io.ReadAll(request.Body)
+		if request.Header.Get("Content-Encoding") != "zstd" ||
+			!bytes.Equal(upstreamBody, compressedRequest) {
+			t.Errorf("upstream request encoding=%q body=%x", request.Header.Get("Content-Encoding"), upstreamBody)
+		}
+		writer.Header().Set("Content-Encoding", "zstd")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(compressedResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	dbPath := filepath.Join(t.TempDir(), "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("capture.Open: %v", err)
+	}
+	srv := newNativeResponsesServerWithCapture(t, upstream.URL, &nativeRawRefreshAuth{}, store)
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	if recorder.Header().Get("Content-Encoding") != "zstd" ||
+		!bytes.Equal(recorder.Body.Bytes(), compressedResponse) {
+		t.Fatalf("downstream response encoding=%q body=%x", recorder.Header().Get("Content-Encoding"), recorder.Body.Bytes())
+	}
+
+	db := openNativeCaptureVerifier(t, dbPath)
+	stages := []struct {
+		client         string
+		which          string
+		safe           string
+		sensitiveValue string
+	}{
+		{client: "adapter.ingress", which: "request", safe: "request-safe", sensitiveValue: requestSensitiveValue},
+		{client: "adapter.codex", which: "request", safe: "request-safe", sensitiveValue: requestSensitiveValue},
+		{client: "adapter.codex", which: "response", safe: "response-safe", sensitiveValue: responseSensitiveValue},
+		{client: "adapter.ingress", which: "response", safe: "response-safe", sensitiveValue: responseSensitiveValue},
+	}
+	for _, stage := range stages {
+		captured := nativeCaptureBody(t, db, stage.client, stage.which)
+		if !json.Valid(captured) || !bytes.Contains(captured, []byte(stage.safe)) ||
+			bytes.Contains(captured, []byte(stage.sensitiveValue)) {
+			t.Fatalf("%s %s capture = %q", stage.client, stage.which, captured)
+		}
+	}
+}
+
 func TestNativeCodexResponsesZstdCompactionTransformsRequestAndResponse(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
 	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
@@ -320,7 +394,7 @@ func assertNativeCaptureSecretsAbsent(t *testing.T, captured []byte) {
 	}
 }
 
-func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *testing.T) {
+func TestNativeCodexResponsesExactCompactionRouteTrimsAndInjectsOnce(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }],"tools":[{"type":"custom","name":"opaque"}],"metadata":{"keep":true}}`)
 	responseBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`)
 	var gotBody []byte
@@ -353,6 +427,15 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 	if bytes.Contains(gotBody, []byte(`"text":"recent"`)) || !bytes.Contains(gotBody, []byte(`"text":"old"`)) {
 		t.Fatalf("upstream transcript split was wrong: %s", gotBody)
 	}
+	var upstreamRequest struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(gotBody, &upstreamRequest); err != nil {
+		t.Fatalf("unmarshal trimmed upstream request: %v", err)
+	}
+	if len(upstreamRequest.Input) != 3 {
+		t.Fatalf("trimmed upstream input count = %d, want 3: %s", len(upstreamRequest.Input), gotBody)
+	}
 	if !bytes.Contains(gotBody, []byte(`{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }`)) {
 		t.Fatalf("upstream prompt bytes changed: %s", gotBody)
 	}
@@ -360,7 +443,7 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 		!bytes.Contains(gotBody, []byte(`"metadata":{"keep":true}`)) {
 		t.Fatalf("upstream unrelated fields changed: %s", gotBody)
 	}
-	if !strings.Contains(recorder.Body.String(), "<pre-compaction-transcript>") ||
+	if strings.Count(recorder.Body.String(), "<pre-compaction-transcript>") != 1 ||
 		!strings.Contains(recorder.Body.String(), "recent") {
 		t.Fatalf("downstream summary missing transcript: %s", recorder.Body.String())
 	}

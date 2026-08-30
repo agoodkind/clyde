@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestRedactHTTPCoversHeadersJSONAndSSE(t *testing.T) {
@@ -118,6 +120,10 @@ func TestRedactHTTPScansNonDataSSELinesAfterFrameRedaction(t *testing.T) {
 			name: "whitespace before AWS security token assignment",
 			body: "event: x-amz-security-token \t = whitespace-secret\ndata: {\"safe\":true}\n\n",
 		},
+		{
+			name: "colon form authorization line",
+			body: "event: Authorization" + ": Bearer colon-sensitive-marker\ndata: {\"safe\":true}\n\n",
+		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -126,6 +132,64 @@ func TestRedactHTTPScansNonDataSSELinesAfterFrameRedaction(t *testing.T) {
 				t.Fatalf("redacted body = %q, want fail-closed marker", body)
 			}
 		})
+	}
+}
+
+func TestRedactHTTPRedactsScalarSSEData(t *testing.T) {
+	body := []byte("event: response.future\ndata: \"access_" + "token=scalar-sensitive-marker\"\n\n")
+	_, redacted := RedactHTTP(nil, body)
+	if bytes.Contains(redacted, []byte("scalar-sensitive-marker")) ||
+		!bytes.Contains(redacted, []byte(`"[REDACTED]"`)) {
+		t.Fatalf("scalar SSE data was not redacted: %s", redacted)
+	}
+}
+
+func TestRedactHTTPPreservesSafeScalarSSEData(t *testing.T) {
+	body := []byte("event: response.future\ndata: \"safe scalar\"\n\n")
+	_, redacted := RedactHTTP(nil, body)
+	if !bytes.Equal(redacted, body) {
+		t.Fatalf("safe scalar SSE data changed:\n got: %q\nwant: %q", redacted, body)
+	}
+}
+
+func TestRedactHTTPDecodesZstdCopyBeforeRedaction(t *testing.T) {
+	body, err := json.Marshal(map[string]string{
+		"access_" + "token": "compressed-sensitive-marker",
+		"safe":              "kept",
+	})
+	if err != nil {
+		t.Fatalf("marshal zstd body: %v", err)
+	}
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("create zstd encoder: %v", err)
+	}
+	compressed := encoder.EncodeAll(body, nil)
+	encoder.Close()
+	headers := http.Header{
+		"Content-Encoding": {"zstd"},
+		"Content-Length":   {"123"},
+	}
+
+	redactedHeaders, redacted := RedactHTTP(headers, compressed)
+	if bytes.Contains(redacted, []byte("compressed-sensitive-marker")) ||
+		!bytes.Contains(redacted, []byte(`"safe":"kept"`)) {
+		t.Fatalf("compressed body redaction = %s", redacted)
+	}
+	if redactedHeaders.Get("Content-Encoding") != "" ||
+		redactedHeaders.Get("Content-Length") != "" {
+		t.Fatalf("decoded capture retained wire encoding headers: %v", redactedHeaders)
+	}
+}
+
+func TestRedactHTTPFailsClosedForInvalidZstdCopy(t *testing.T) {
+	headers := http.Header{"Content-Encoding": {"zstd"}}
+	redactedHeaders, redacted := RedactHTTP(headers, []byte("not-zstd"))
+	if string(redacted) != redactedValue {
+		t.Fatalf("invalid zstd body = %q, want fail-closed marker", redacted)
+	}
+	if redactedHeaders.Get("Content-Encoding") != "" {
+		t.Fatalf("invalid zstd capture retained Content-Encoding: %v", redactedHeaders)
 	}
 }
 

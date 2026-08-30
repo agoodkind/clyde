@@ -3,8 +3,11 @@ package capture
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -49,6 +52,16 @@ const (
 // and sensitive JSON fields in a body copy. It never changes forwarded bytes.
 func RedactHTTP(headers http.Header, body []byte) (http.Header, []byte) {
 	redactedHeaders := headers.Clone()
+	redactionBody := body
+	if body != nil && captureBodyUsesZstd(headers.Get("Content-Encoding")) {
+		redactedHeaders.Del("Content-Encoding")
+		redactedHeaders.Del("Content-Length")
+		decoded, ok := decodeZstdCaptureBody(body)
+		if !ok {
+			return redactedHeaders, []byte(redactedValue)
+		}
+		redactionBody = decoded
+	}
 	sensitiveValues := make([]string, 0)
 	for name, values := range headers {
 		if !sensitiveHTTPHeader(name) {
@@ -59,7 +72,28 @@ func RedactHTTP(headers http.Header, body []byte) (http.Header, []byte) {
 		}
 		redactedHeaders.Del(name)
 	}
-	return redactedHeaders, redactHTTPBody(body, sensitiveValues)
+	return redactedHeaders, redactHTTPBody(redactionBody, sensitiveValues)
+}
+
+func captureBodyUsesZstd(contentEncoding string) bool {
+	encoding := strings.ToLower(strings.TrimSpace(contentEncoding))
+	return encoding == "zstd" || encoding == "zstandard"
+}
+
+func decodeZstdCaptureBody(body []byte) ([]byte, bool) {
+	decoder, err := zstd.NewReader(
+		bytes.NewReader(body),
+		zstd.WithDecoderMaxMemory(DefaultMaxBodyBytes),
+	)
+	if err != nil {
+		return nil, false
+	}
+	defer decoder.Close()
+	decoded, err := io.ReadAll(io.LimitReader(decoder, DefaultMaxBodyBytes+1))
+	if err != nil || len(decoded) > DefaultMaxBodyBytes {
+		return nil, false
+	}
+	return decoded, true
 }
 
 func sensitiveHTTPHeader(name string) bool {
@@ -265,6 +299,9 @@ func redactSSEJSON(body []byte) ([]byte, bool) {
 		}
 		redacted, payloadChanged := redactJSONValue(payload)
 		if !payloadChanged {
+			redacted, payloadChanged = redactSensitiveSSEScalar(payload)
+		}
+		if !payloadChanged {
 			continue
 		}
 		before, after, found := bytes.Cut(line, payload)
@@ -278,6 +315,15 @@ func redactSSEJSON(body []byte) ([]byte, bool) {
 		return body, handled
 	}
 	return bytes.Join(lines, nil), true
+}
+
+func redactSensitiveSSEScalar(payload []byte) ([]byte, bool) {
+	var value string
+	if json.Unmarshal(payload, &value) != nil ||
+		!containsSensitiveBodyMarker([]byte(value)) {
+		return payload, false
+	}
+	return []byte(`"` + redactedValue + `"`), true
 }
 
 func containsSensitiveSSENonDataMarker(body []byte) bool {
@@ -294,7 +340,8 @@ func containsSensitiveSSENonDataMarker(body []byte) bool {
 }
 
 func containsSensitiveBodyMarker(body []byte) bool {
-	if containsSensitiveHTTPHeaderAssignment(body) {
+	if containsSensitiveHTTPHeaderAssignment(body, '=') ||
+		containsSensitiveHTTPHeaderAssignment(body, ':') {
 		return true
 	}
 	lower := bytes.ToLower(body)
@@ -319,10 +366,10 @@ func containsSensitiveBodyMarker(body []byte) bool {
 	return false
 }
 
-func containsSensitiveHTTPHeaderAssignment(body []byte) bool {
+func containsSensitiveHTTPHeaderAssignment(body []byte, separator byte) bool {
 	remaining := body
 	for {
-		assignmentIndex := bytes.IndexByte(remaining, '=')
+		assignmentIndex := bytes.IndexByte(remaining, separator)
 		if assignmentIndex < 0 {
 			return false
 		}
