@@ -40,6 +40,41 @@ func TestRedactHTTPCoversHeadersJSONAndSSE(t *testing.T) {
 	}
 }
 
+func TestRedactHTTPRedactsCredentialHeadersAndPreservesProviderMetadata(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("X-Cursor-Api-Key", "cursor-secret")
+	headers.Set("OpenAI-Api-Key", "openai-secret")
+	headers.Set("Api-Key", "api-key-secret")
+	headers.Set("X-Auth-Token", "auth-token-secret")
+	headers.Set("OpenAI-Processing-Ms", "123")
+	headers.Set("X-Cursor-Client-Version", "0.48")
+	redactedHeaders, redactedBody := RedactHTTP(
+		headers,
+		[]byte(`{"safe":"cursor-secret openai-secret api-key-secret auth-token-secret 123 0.48"}`),
+	)
+	for _, header := range []string{"X-Cursor-Api-Key", "OpenAI-Api-Key", "Api-Key", "X-Auth-Token"} {
+		if redactedHeaders.Get(header) != "" {
+			t.Fatalf("sensitive header %s persisted: %v", header, redactedHeaders)
+		}
+	}
+	for _, secret := range []string{"cursor-secret", "openai-secret", "api-key-secret", "auth-token-secret"} {
+		if bytes.Contains(redactedBody, []byte(secret)) {
+			t.Fatalf("redacted body leaked %q: %s", secret, redactedBody)
+		}
+	}
+	for header, value := range map[string]string{
+		"OpenAI-Processing-Ms":    "123",
+		"X-Cursor-Client-Version": "0.48",
+	} {
+		if got := redactedHeaders.Get(header); got != value {
+			t.Fatalf("provider metadata %s = %q, want %q", header, got, value)
+		}
+		if !bytes.Contains(redactedBody, []byte(value)) {
+			t.Fatalf("redacted body removed provider metadata value %q: %s", value, redactedBody)
+		}
+	}
+}
+
 func TestRedactHTTPRedactsNoncanonicalAuthTokenAndClientSecret(t *testing.T) {
 	headers := http.Header{"x-auth-token": {"header-secret"}}
 	_, redactedBody := RedactHTTP(headers, []byte(`{"client_secret":"body-secret","safe":"kept"}`))
@@ -301,6 +336,19 @@ func TestRedactHTTPRedactsBareCredentialHeaders(t *testing.T) {
 	}
 	if bytes.Contains(redactedBody, []byte("bare-api-key")) || bytes.Contains(redactedBody, []byte("bare-access-token")) {
 		t.Fatalf("bare credential values persisted: %q", redactedBody)
+	}
+}
+
+func TestRedactHTTPRedactsRefreshAndIdentityTokenHeaders(t *testing.T) {
+	for _, name := range []string{"Refresh-Token", "Id-Token", "X-Refresh-Token", "X-Id-Token"} {
+		t.Run(name, func(t *testing.T) {
+			value := "sensitive-" + strings.ToLower(name)
+			headers := http.Header{name: {value}}
+			redactedHeaders, redactedBody := RedactHTTP(headers, []byte(`{"echo":`+strconv.Quote(value)+`}`))
+			if redactedHeaders.Get(name) != "" || bytes.Contains(redactedBody, []byte(value)) {
+				t.Fatalf("credential header persisted: headers=%v body=%s", redactedHeaders, redactedBody)
+			}
+		})
 	}
 }
 
