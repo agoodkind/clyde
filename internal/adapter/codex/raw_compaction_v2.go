@@ -21,7 +21,11 @@ type RawResponsesCompactionV2Layout struct {
 func ParseRawResponsesCompactionV2(
 	request RawResponsesRequest,
 ) (RawResponsesCompactionV2Layout, bool) {
-	emptyLayout := RawResponsesCompactionV2Layout{}
+	emptyLayout := RawResponsesCompactionV2Layout{
+		SetupEnd:        0,
+		TranscriptStart: 0,
+		TriggerIndex:    0,
+	}
 	if !rawResponsesCompactionV2MetadataIsValid(request) {
 		return emptyLayout, false
 	}
