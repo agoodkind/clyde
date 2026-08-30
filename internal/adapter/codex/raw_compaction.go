@@ -226,7 +226,8 @@ func planRawResponsesCompaction(
 	}
 	normalized := codexstore.NormalizeResponseInputItems(items)
 	promptIndex := len(items) - 1
-	if !rawCompactionPromptIsValid(normalized[promptIndex]) {
+	if !rawCompactionPromptIsValid(normalized[promptIndex]) ||
+		!rawCompactionPairsAreComplete(normalized[:promptIndex]) {
 		return emptyPlan, false
 	}
 	units := rawCompactionUnits(normalized[:promptIndex])
