@@ -512,6 +512,39 @@ func TestNativeCodexResponsesCompactionV2PassesThrough(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesCompactionV2MalformedLayoutPassesThrough(t *testing.T) {
+	originalRequest := []byte(`{"model":"gpt-native","input":[{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"compaction_trigger"}]}`)
+	upstreamResponse := []byte(`{"id":"resp-1","output":[]}`)
+	var upstreamRequest []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamRequest, _ = io.ReadAll(request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(upstreamResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalRequest))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	if !bytes.Equal(upstreamRequest, originalRequest) {
+		t.Fatal("malformed v2 layout did not reach native raw forwarding")
+	}
+	if !bytes.Equal(recorder.Body.Bytes(), upstreamResponse) {
+		t.Fatalf("native response changed: %s", recorder.Body.Bytes())
+	}
+}
+
 func TestNativeCodexResponsesCompactionInjectsWithMultilineUnknownFrame(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
 	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
