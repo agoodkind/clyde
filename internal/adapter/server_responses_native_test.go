@@ -102,6 +102,104 @@ func TestNativeCodexResponsesZstdPreservesRawExchange(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesZstdCompactionPassesThroughOversizedWireResponse(t *testing.T) {
+	transformer := nativeCompactionTransformerForTest(t)
+	wireBody := bytes.Repeat([]byte("w"), maxResponsesResponseBodyBytes+1)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Encoding": {"zstd"},
+			"Content-Type":     {"application/json"},
+		},
+		Body: io.NopCloser(bytes.NewReader(wireBody)),
+	}
+	transformed := transformNativeCodexCompactionResponse(response, transformer, false)
+	got, err := io.ReadAll(transformed.Body)
+	if err != nil {
+		t.Fatalf("read preserved wire response: %v", err)
+	}
+	if transformed.Header.Get("Content-Encoding") != "zstd" || !bytes.Equal(got, wireBody) {
+		t.Fatalf("encoding=%q body=%d bytes, want zstd and %d bytes", transformed.Header.Get("Content-Encoding"), len(got), len(wireBody))
+	}
+}
+
+func TestNativeCodexResponsesZstdCompactionPassesThroughOversizedDecodedResponse(t *testing.T) {
+	transformer := nativeCompactionTransformerForTest(t)
+	decodedBody := append([]byte(`{"output":[],"padding":"`), bytes.Repeat([]byte("x"), maxResponsesResponseBodyBytes+1)...)
+	decodedBody = append(decodedBody, []byte(`"}`)...)
+	wireBody := zstdEncodeNativeResponseBody(t, decodedBody)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Encoding": {"zstd"},
+			"Content-Type":     {"application/json"},
+		},
+		Body: io.NopCloser(bytes.NewReader(wireBody)),
+	}
+	transformed := transformNativeCodexCompactionResponse(response, transformer, false)
+	got, err := io.ReadAll(transformed.Body)
+	if err != nil {
+		t.Fatalf("read preserved decoded-limit response: %v", err)
+	}
+	if transformed.Header.Get("Content-Encoding") != "zstd" || !bytes.Equal(got, wireBody) {
+		t.Fatalf("encoding=%q body=%d bytes, want original compressed response", transformed.Header.Get("Content-Encoding"), len(got))
+	}
+}
+
+func TestNativeCodexResponsesZstdCompactionPreservesUndecodableStreamingResponse(t *testing.T) {
+	transformer := nativeCompactionTransformerForTest(t)
+	wireBody := []byte("not-a-zstd-stream")
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Encoding": {"zstd"},
+			"Content-Type":     {"text/event-stream"},
+		},
+		Body: io.NopCloser(bytes.NewReader(wireBody)),
+	}
+	transformed := transformNativeCodexCompactionResponse(response, transformer, true)
+	got, err := io.ReadAll(transformed.Body)
+	if err != nil {
+		t.Fatalf("read preserved malformed stream: %v", err)
+	}
+	if transformed.Header.Get("Content-Encoding") != "zstd" || !bytes.Equal(got, wireBody) {
+		t.Fatalf("encoding=%q body=%q, want original compressed stream", transformed.Header.Get("Content-Encoding"), got)
+	}
+}
+
+func TestNativeCodexResponsesZstdCompactionBoundsStreamingDecoderMemory(t *testing.T) {
+	transformer := nativeCompactionTransformerForTest(t)
+	encoder, err := zstd.NewWriter(
+		nil,
+		zstd.WithWindowSize(2*maxResponsesResponseBodyBytes),
+		zstd.WithSingleSegment(false),
+	)
+	if err != nil {
+		t.Fatalf("create oversized-window zstd encoder: %v", err)
+	}
+	decodedBody := bytes.Repeat([]byte("x"), 2*maxResponsesResponseBodyBytes+1)
+	wireBody := encoder.EncodeAll(decodedBody, nil)
+	if err := encoder.Close(); err != nil {
+		t.Fatalf("close oversized-window zstd encoder: %v", err)
+	}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Encoding": {"zstd"},
+			"Content-Type":     {"text/event-stream"},
+		},
+		Body: io.NopCloser(bytes.NewReader(wireBody)),
+	}
+	transformed := transformNativeCodexCompactionResponse(response, transformer, true)
+	got, readErr := io.ReadAll(transformed.Body)
+	if readErr != nil {
+		t.Fatalf("read preserved oversized-window stream: %v", readErr)
+	}
+	if transformed.Header.Get("Content-Encoding") != "zstd" || !bytes.Equal(got, wireBody) {
+		t.Fatalf("encoding=%q body=%d bytes, want original compressed stream", transformed.Header.Get("Content-Encoding"), len(got))
+	}
+}
+
 func TestNativeCodexResponsesZstdCapturesDecodedRedactedCopies(t *testing.T) {
 	requestSensitiveValue := "request-compressed-sensitive-marker"
 	requestBody, err := json.Marshal(map[string]string{
@@ -1017,6 +1115,27 @@ func nativeCompactionTurnMetadata() string {
 
 func nativeCompactionV2TurnMetadata() string {
 	return `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}}`
+}
+
+func nativeCompactionTransformerForTest(t *testing.T) *adaptercodex.RawResponsesCompactionTransformer {
+	t.Helper()
+	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	_, transformer := adaptercodex.PrepareRawResponsesCompaction(
+		adaptercodex.RawResponsesRequest{
+			Body:      body,
+			Header:    http.Header{adaptercodex.CodexTurnMetadataHeader: {nativeCompactionTurnMetadata()}},
+			RequestID: "req-native",
+			Stream:    false,
+		},
+		adaptercodex.RawResponsesCompactionSettings{
+			Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+			ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+		},
+	)
+	if transformer == nil {
+		t.Fatal("expected native compaction transformer")
+	}
+	return transformer
 }
 
 func zstdEncodeNativeResponseBody(t *testing.T, body []byte) []byte {

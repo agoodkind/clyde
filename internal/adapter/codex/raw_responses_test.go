@@ -2,6 +2,7 @@ package codex
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -153,6 +154,76 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 	}
 	if got := gotHeader.Get(clydeingress.HeaderTraceID); got != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("trace id = %q", got)
+	}
+}
+
+func TestProviderOpenRawResponsesPreservesGzipWithoutInboundEncoding(t *testing.T) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte(`{"id":"compressed-response"}`)); err != nil {
+		t.Fatalf("write gzip response: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close gzip response: %v", err)
+	}
+	responseBody := compressed.Bytes()
+	var gotEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotEncoding = request.Header.Get("Accept-Encoding")
+		writer.Header().Set("Content-Encoding", "gzip")
+		_, _ = writer.Write(responseBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	provider := NewProvider(adapterprovider.Deps{
+		Config: rawResponsesConfig(upstream.URL), Auth: rawResponsesNoRefreshAuth{}, HTTPClient: upstream.Client(),
+	}, ProviderOptions{})
+	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{
+		Body: []byte(`{"model":"gpt-native"}`), Header: http.Header{},
+	})
+	if err != nil {
+		t.Fatalf("OpenRawResponses() error = %v", err)
+	}
+	t.Cleanup(func() { _ = response.Body.Close() })
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if gotEncoding != "identity" {
+		t.Fatalf("Accept-Encoding = %q, want identity", gotEncoding)
+	}
+	if response.Header.Get("Content-Encoding") != "gzip" || !bytes.Equal(body, responseBody) {
+		t.Fatalf("gzip response changed: header=%q body=%x", response.Header.Get("Content-Encoding"), body)
+	}
+}
+
+func TestProviderOpenRawResponsesForcesIdentityForV1Compaction(t *testing.T) {
+	var gotEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotEncoding = request.Header.Get("Accept-Encoding")
+		_, _ = writer.Write([]byte(`{"id":"compaction-response"}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	provider := NewProvider(adapterprovider.Deps{
+		Config: rawResponsesConfig(upstream.URL), Auth: rawResponsesNoRefreshAuth{}, HTTPClient: upstream.Client(),
+	}, ProviderOptions{})
+	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{
+		Body: []byte(`{"model":"gpt-native"}`),
+		Header: http.Header{
+			"Accept-Encoding":       {"gzip, br"},
+			CodexTurnMetadataHeader: {`{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses"}}`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("OpenRawResponses() error = %v", err)
+	}
+	t.Cleanup(func() { _ = response.Body.Close() })
+	if _, err := io.ReadAll(response.Body); err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if gotEncoding != "identity" {
+		t.Fatalf("Accept-Encoding = %q, want identity", gotEncoding)
 	}
 }
 
