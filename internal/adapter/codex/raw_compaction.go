@@ -124,7 +124,14 @@ func PrepareRawResponsesCompaction(
 	raw RawResponsesRequest,
 	settings RawResponsesCompactionSettings,
 ) (RawResponsesRequest, *RawResponsesCompactionTransformer) {
-	if !settings.Enabled || !rawResponsesRequestIsLocalCompaction(raw.Header) {
+	protocol := DetectRawResponsesCompactionProtocol(raw.Header)
+	if protocol == RawResponsesCompactionV2 {
+		if _, ok := ParseRawResponsesCompactionV2(raw); !ok {
+			return raw, nil
+		}
+		return raw, nil
+	}
+	if !settings.Enabled || protocol != RawResponsesCompactionV1 {
 		return raw, nil
 	}
 	inputStart, inputEnd, ok := jsonObjectFieldValueRange(raw.Body, "input")

@@ -475,6 +475,43 @@ func TestNativeCodexResponsesExactCompactionRouteTrimsAndInjectsOnce(t *testing.
 	}
 }
 
+func TestNativeCodexResponsesCompactionV2PassesThrough(t *testing.T) {
+	originalRequest := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
+	upstreamResponse := []byte("event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"cmp-1\",\"type\":\"compaction\",\"encrypted_content\":\"encrypted-state\"}}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[]}}\n\n")
+	var upstreamRequest []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamRequest, _ = io.ReadAll(request.Body)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write(upstreamResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalRequest))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	if !bytes.Equal(upstreamRequest, originalRequest) {
+		t.Fatal("v2 request changed before persistence proof")
+	}
+	clientResponse := recorder.Body.Bytes()
+	if !bytes.Equal(clientResponse, upstreamResponse) {
+		t.Fatal("v2 response changed before persistence proof")
+	}
+}
+
 func TestNativeCodexResponsesCompactionInjectsWithMultilineUnknownFrame(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
 	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
@@ -943,6 +980,10 @@ func nativeTurnMetadata(t *testing.T) string {
 
 func nativeCompactionTurnMetadata() string {
 	return `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses"}}`
+}
+
+func nativeCompactionV2TurnMetadata() string {
+	return `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}}`
 }
 
 func zstdEncodeNativeResponseBody(t *testing.T, body []byte) []byte {
