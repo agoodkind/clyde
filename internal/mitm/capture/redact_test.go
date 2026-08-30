@@ -110,6 +110,14 @@ func TestRedactHTTPScansNonDataSSELinesAfterFrameRedaction(t *testing.T) {
 			name: "AWS security token comment",
 			body: ": x-amz-security-token=aws-secret\ndata: {\"safe\":true}\n\n",
 		},
+		{
+			name: "mixed case Clyde token comment",
+			body: ": X-ClYdE-ToKeN=mixed-secret\ndata: {\"safe\":true}\n\n",
+		},
+		{
+			name: "whitespace before AWS security token assignment",
+			body: "event: x-amz-security-token \t = whitespace-secret\ndata: {\"safe\":true}\n\n",
+		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -118,5 +126,13 @@ func TestRedactHTTPScansNonDataSSELinesAfterFrameRedaction(t *testing.T) {
 				t.Fatalf("redacted body = %q, want fail-closed marker", body)
 			}
 		})
+	}
+}
+
+func TestRedactHTTPPreservesSafeSSEFrame(t *testing.T) {
+	body := []byte("event: response.completed\n: keepalive\ndata: { \"safe\" : true }\n\n")
+	_, redacted := RedactHTTP(nil, body)
+	if !bytes.Equal(redacted, body) {
+		t.Fatalf("safe SSE body changed:\n got: %q\nwant: %q", redacted, body)
 	}
 }
