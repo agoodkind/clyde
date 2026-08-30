@@ -100,3 +100,19 @@ func TestRawResponsesCompactionPassesThroughNonV1Protocol(t *testing.T) {
 		})
 	}
 }
+
+func TestRawResponsesCompactionV2PassesThroughMalformedLayout(t *testing.T) {
+	body := []byte(`{"input":[{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"compaction_trigger"}]}`)
+	settings := RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	raw := RawResponsesRequest{
+		Body:   body,
+		Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"compaction","compaction":{"implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}}`}},
+	}
+	transformed, transformer := PrepareRawResponsesCompaction(raw, settings)
+	if transformer != nil || !bytes.Equal(transformed.Body, body) {
+		t.Fatalf("v2 did not pass through: %s", transformed.Body)
+	}
+}
