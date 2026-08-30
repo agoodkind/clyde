@@ -2,6 +2,7 @@ package capture
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"testing"
 )
@@ -40,7 +41,13 @@ func TestRedactHTTPFailsClosedForMalformedSensitiveBodies(t *testing.T) {
 		body []byte
 	}{
 		{name: "truncated json", body: []byte(`{"safe":"kept","access_token":"truncated-secret"`)},
+		{name: "truncated escaped key json", body: []byte(`{"safe":"kept","access\u005ftoken":"truncated-secret"`)},
+		{name: "malformed json without marker", body: []byte(`{"safe":`)},
+		{name: "malformed json scalar", body: []byte(`"unterminated`)},
+		{name: "mixed valid and malformed json lines", body: []byte("{\"safe\":1}\n{\"access\\u005ftoken\":\"truncated-secret\"")},
 		{name: "truncated sse", body: []byte("data: {\"account_id\":\"truncated-account\"\n\n")},
+		{name: "truncated escaped key sse", body: []byte("data: {\"access\\u005ftoken\":\"truncated-secret\"\n\n")},
+		{name: "malformed sse without marker", body: []byte("data: {\"safe\":\n\n")},
 		{name: "mixed valid and truncated sse", body: []byte("data: {\"access_token\":\"first-secret\"}\n\ndata: {\"account_id\":\"truncated-account\"\n\n")},
 		{name: "plain assignment", body: []byte("cookie=session-secret")},
 	}
@@ -59,5 +66,20 @@ func TestRedactHTTPHandlesNestedWrongTypeFields(t *testing.T) {
 	_, redacted := RedactHTTP(nil, body)
 	if bytes.Contains(redacted, []byte("nested-secret")) || !bytes.Contains(redacted, []byte(`"safe":"kept"`)) {
 		t.Fatalf("nested redaction = %s", redacted)
+	}
+}
+
+func TestRedactHTTPHandlesJSONLines(t *testing.T) {
+	body := []byte("{\"access\\u005ftoken\":\"first-secret\",\"safe\":1}\n{\"account_id\":\"second-secret\",\"safe\":2}")
+	_, redacted := RedactHTTP(nil, body)
+	if bytes.Contains(redacted, []byte("first-secret")) || bytes.Contains(redacted, []byte("second-secret")) {
+		t.Fatalf("JSON lines leaked a secret: %s", redacted)
+	}
+	if bytes.Equal(redacted, []byte(redactedValue)) || bytes.Count(redacted, []byte(`"safe"`)) != 2 {
+		t.Fatalf("JSON lines were not preserved: %s", redacted)
+	}
+	lines := bytes.Split(redacted, []byte("\n"))
+	if len(lines) != 2 || !json.Valid(lines[0]) || !json.Valid(lines[1]) {
+		t.Fatalf("JSON lines are not two valid frames: %s", redacted)
 	}
 }

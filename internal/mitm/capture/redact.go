@@ -101,16 +101,66 @@ func redactHTTPBody(body []byte, sensitiveValues []string) []byte {
 		}
 		redacted = bytes.ReplaceAll(redacted, []byte(value), []byte(redactedValue))
 	}
-	if value, changed := redactJSONValue(redacted); changed {
-		return value
+	if looksLikeJSONValue(redacted) {
+		if !json.Valid(redacted) {
+			if value, valid := redactJSONLines(redacted); valid {
+				return value
+			}
+			return []byte(redactedValue)
+		}
+		if value, changed := redactJSONValue(redacted); changed {
+			return value
+		}
+		return redacted
 	}
-	if value, changed := redactSSEJSON(redacted); changed {
+	if value, handled := redactSSEJSON(redacted); handled {
 		return value
 	}
 	if containsSensitiveBodyMarker(redacted) {
 		return []byte(redactedValue)
 	}
 	return redacted
+}
+
+func looksLikeJSONValue(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return false
+	}
+	switch trimmed[0] {
+	case '{', '[', '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'f', 'n':
+		return true
+	default:
+		return false
+	}
+}
+
+func redactJSONLines(body []byte) ([]byte, bool) {
+	lines := bytes.SplitAfter(body, []byte("\n"))
+	valueCount := 0
+	for index, line := range lines {
+		value := bytes.TrimSpace(line)
+		if len(value) == 0 {
+			continue
+		}
+		if !json.Valid(value) {
+			return body, false
+		}
+		valueCount++
+		redacted, changed := redactJSONValue(value)
+		if !changed {
+			continue
+		}
+		before, after, found := bytes.Cut(line, value)
+		if !found {
+			return body, false
+		}
+		lines[index] = bytes.Join([][]byte{before, redacted, after}, nil)
+	}
+	if valueCount < 2 {
+		return body, false
+	}
+	return bytes.Join(lines, nil), true
 }
 
 func redactJSONValue(raw []byte) ([]byte, bool) {
@@ -193,17 +243,22 @@ func sensitiveJSONField(name string) bool {
 func redactSSEJSON(body []byte) ([]byte, bool) {
 	lines := bytes.SplitAfter(body, []byte("\n"))
 	changed := false
+	handled := false
 	for index, line := range lines {
 		trimmed := bytes.TrimSpace(line)
 		if !bytes.HasPrefix(trimmed, []byte("data:")) {
 			continue
 		}
+		handled = true
 		payload := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		if !json.Valid(payload) {
+			return []byte(redactedValue), true
+		}
 		redacted, payloadChanged := redactJSONValue(payload)
 		if !payloadChanged {
-			if containsSensitiveBodyMarker(payload) {
-				return []byte(redactedValue), true
-			}
 			continue
 		}
 		before, after, found := bytes.Cut(line, payload)
@@ -214,7 +269,7 @@ func redactSSEJSON(body []byte) ([]byte, bool) {
 		changed = true
 	}
 	if !changed {
-		return body, false
+		return body, handled
 	}
 	return bytes.Join(lines, nil), true
 }
