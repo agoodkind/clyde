@@ -98,6 +98,18 @@ func TestRedactHTTPScansNonDataSSELinesAfterFrameRedaction(t *testing.T) {
 			name: "event field",
 			body: "event: cookie=event-secret\ndata: {\"safe\":true}\n\n",
 		},
+		{
+			name: "Clyde token comment",
+			body: ": x-clyde-token=clyde-secret\ndata: {\"safe\":true}\n\n",
+		},
+		{
+			name: "OpenAI key event field",
+			body: "event: openai-api-key=openai-secret\ndata: {\"safe\":true}\n\n",
+		},
+		{
+			name: "AWS security token comment",
+			body: ": x-amz-security-token=aws-secret\ndata: {\"safe\":true}\n\n",
+		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

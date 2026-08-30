@@ -294,6 +294,9 @@ func containsSensitiveSSENonDataMarker(body []byte) bool {
 }
 
 func containsSensitiveBodyMarker(body []byte) bool {
+	if containsSensitiveHTTPHeaderAssignment(body) {
+		return true
+	}
 	lower := bytes.ToLower(body)
 	markers := [][]byte{
 		[]byte(`"authorization"`), []byte(`"proxy-authorization"`),
@@ -305,8 +308,7 @@ func containsSensitiveBodyMarker(body []byte) bool {
 		[]byte(`"account_id"`), []byte(`"accountid"`),
 		[]byte(`"account_uuid"`), []byte(`"accountuuid"`),
 		[]byte(`"chatgpt-account-id"`),
-		[]byte("authorization="), []byte("access_token="),
-		[]byte("refresh_token="), []byte("api_key="), []byte("cookie="),
+		[]byte("access_token="), []byte("refresh_token="), []byte("api_key="),
 		[]byte("account_id="), []byte("account_uuid="),
 	}
 	for _, marker := range markers {
@@ -315,4 +317,31 @@ func containsSensitiveBodyMarker(body []byte) bool {
 		}
 	}
 	return false
+}
+
+func containsSensitiveHTTPHeaderAssignment(body []byte) bool {
+	remaining := body
+	for {
+		assignmentIndex := bytes.IndexByte(remaining, '=')
+		if assignmentIndex < 0 {
+			return false
+		}
+		nameEnd := assignmentIndex
+		for nameEnd > 0 && (remaining[nameEnd-1] == ' ' || remaining[nameEnd-1] == '\t') {
+			nameEnd--
+		}
+		nameStart := nameEnd
+		for nameStart > 0 && sensitiveHTTPHeaderNameByte(remaining[nameStart-1]) {
+			nameStart--
+		}
+		if nameStart < nameEnd && sensitiveHTTPHeader(string(remaining[nameStart:nameEnd])) {
+			return true
+		}
+		remaining = remaining[assignmentIndex+1:]
+	}
+}
+
+func sensitiveHTTPHeaderNameByte(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9' || value == '-'
 }
