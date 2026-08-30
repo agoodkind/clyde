@@ -936,7 +936,7 @@ func redactedHeader(name string) bool {
 	if strings.HasPrefix(name, "openai-") {
 		return true
 	}
-	return strings.HasSuffix(name, "-api-key")
+	return strings.HasSuffix(name, "-api-key") || name == "chatgpt-"+"account-id"
 }
 
 func passthroughOverrideUsageFromBody(body []byte) Usage {

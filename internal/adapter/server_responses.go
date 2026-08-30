@@ -43,17 +43,21 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	responseID := responsesResponseID(reqID)
 	clydeingress.SetHTTPHeaders(corr, w.Header())
 
-	body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
+	wireBody, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxResponsesRequestBodyBytes))
 	if readErr != nil {
 		return adapterErrInvalidRequest("failed to read body", readErr)
 	}
 	if capW := s.beginIngressCapture(hctx); capW != nil {
 		w = hctx.Writer
 		defer func() {
-			s.finishIngressCapture(capW, hctx.Correlation, r, body, started, err)
+			s.finishIngressCapture(capW, hctx.Correlation, r, wireBody, started, err)
 		}()
 	}
-	handledNative, nativeErr := s.tryDispatchNativeCodexResponses(ctx, w, r, reqID, body, corr)
+	body, decodeErr := readResponsesRequestBody(wireBody, r.Header.Get("Content-Encoding"))
+	if decodeErr != nil {
+		return adapterErrInvalidRequest("invalid zstd request body", decodeErr)
+	}
+	handledNative, nativeErr := s.tryDispatchNativeCodexResponses(ctx, w, r, reqID, wireBody, body, corr)
 	if nativeErr != nil {
 		return nativeErr
 	}
@@ -113,16 +117,20 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	w http.ResponseWriter,
 	r *http.Request,
 	requestID string,
-	body []byte,
+	wireBody []byte,
+	decodedBody []byte,
 	corr correlation.Context,
 ) (bool, error) {
-	raw, model, native := nativeCodexResponsesRequest(body, r.Header, corr)
+	raw, model, native := nativeCodexResponsesRequest(wireBody, decodedBody, r.Header, corr)
 	if !native {
 		return false, nil
 	}
-	rr, parseErr := adapteropenai.UnmarshalResponsesRequest(body)
+	rr, parseErr := adapteropenai.UnmarshalResponsesRequest(decodedBody)
 	if parseErr != nil {
 		return false, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
+	}
+	if rejected := adaptercompat.RejectedParam(func(param string) int { return int(rr.Fields.Presence(param)) }); rejected != "" {
+		return false, adapterErrInvalidRequest(rejected+" is not supported by Clyde", nil)
 	}
 	req, _, projectionErr := responsesRequestToChatRequest(rr)
 	if projectionErr != nil {
@@ -144,6 +152,8 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	}
 	resolvedReq.RequestID = requestID
 	resolvedReq.Correlation = corr
+	resolvedReq.Responses = &rr
+	resolvedReq.ResponsesFields = rr.Fields
 	if overrideErr := s.applyBackendOverride(r, req, &resolvedReq, requestID); overrideErr != nil {
 		return false, overrideErr
 	}
@@ -153,13 +163,26 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	if preErr := s.preflightChat(ctx, &req, &resolvedReq, requestID); preErr != nil {
 		return false, preErr
 	}
-	resolvedRaw, rawErr := raw.MarshalWithModel(resolvedReq.Model)
-	if rawErr != nil {
-		return false, adapterErrInvalidRequest(rawErr.Error(), rawErr)
+	resolvedRaw := raw
+	resolvedBody := decodedBody
+	if model != resolvedReq.Model {
+		decodedRaw := raw
+		decodedRaw.Body = decodedBody
+		rewrittenRaw, rawErr := decodedRaw.MarshalWithModel(resolvedReq.Model)
+		if rawErr != nil {
+			return false, adapterErrInvalidRequest(rawErr.Error(), rawErr)
+		}
+		resolvedBody = rewrittenRaw.Body
+		forwardBody, encoded := encodeNativeResponsesBody(resolvedBody, raw.Header.Get("Content-Encoding"))
+		if !encoded {
+			return false, adapterErrInvalidRequest("failed to encode resolved Responses request", nil)
+		}
+		resolvedRaw = rewrittenRaw
+		resolvedRaw.Body = forwardBody
 	}
 	compactionSettings := s.deps.RawResponsesCompaction
 	compactionSettings.ContextWindowTokens = resolvedReq.ContextBudget.InputTokens
-	transformedRaw, compactionTransformer := adaptercodex.PrepareRawResponsesCompaction(resolvedRaw, compactionSettings)
+	transformedRaw, compactionTransformer := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, compactionSettings)
 	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer)
 	return true, nil
 }
@@ -172,17 +195,17 @@ func nativeResponsesResolverError(resolverErr error) *adapterError {
 	return adapterErrModelNotFound(resolverErr.Error())
 }
 
-func nativeCodexResponsesRequest(body []byte, header http.Header, corr correlation.Context) (adaptercodex.RawResponsesRequest, string, bool) {
+func nativeCodexResponsesRequest(wireBody, decodedBody []byte, header http.Header, corr correlation.Context) (adaptercodex.RawResponsesRequest, string, bool) {
 	var request struct {
 		Model  string `json:"model"`
 		Stream bool   `json:"stream"`
 	}
-	if err := json.Unmarshal(body, &request); err != nil || strings.TrimSpace(request.Model) == "" {
+	if err := json.Unmarshal(decodedBody, &request); err != nil || strings.TrimSpace(request.Model) == "" {
 		var zero adaptercodex.RawResponsesRequest
 		return zero, "", false
 	}
 	raw := adaptercodex.RawResponsesRequest{
-		Body: body, Header: header.Clone(), RequestID: corr.RequestID, Correlation: corr, Stream: request.Stream,
+		Body: wireBody, Header: header.Clone(), RequestID: corr.RequestID, Correlation: corr, Stream: request.Stream,
 	}
 	if !raw.HasValidTurnMetadata() {
 		var zero adaptercodex.RawResponsesRequest
@@ -214,12 +237,11 @@ func (s *Server) dispatchNativeCodexResponses(
 		return
 	}
 	if compactionTransformer != nil {
-		response = compactionTransformer.TransformResponse(response)
+		response = transformNativeCodexCompactionResponse(response, compactionTransformer, raw.Stream)
 	}
 	defer func() { _ = response.Body.Close() }()
 	streamingResponse := raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
 	if streamingResponse {
-		lifecycle.stream = true
 		lifecycle.streamOpened(ctx)
 	}
 	_, copyErr := s.copyPassthroughResponse(ctx, w, response, streamingResponse)
