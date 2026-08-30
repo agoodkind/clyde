@@ -264,7 +264,7 @@ func rawResponsesHeaders(raw RawResponsesRequest, token, accountID string) http.
 	} {
 		headers.Del(header)
 	}
-	if rawResponsesRequestIsLocalCompaction(raw.Header) {
+	if DetectRawResponsesCompactionProtocol(raw.Header) == RawResponsesCompactionV1 {
 		headers.Set("Accept-Encoding", "identity")
 	}
 	headers.Set("Authorization", "Bearer "+token)

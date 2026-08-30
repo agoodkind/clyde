@@ -16,6 +16,12 @@ compaction metadata. That case mutates only the final assistant summary. Clyde
 supplies its configured Codex OAuth token and account identity instead of
 trusting inbound credentials.
 
+Native compaction implementations use separate protocol handlers, and unknown
+implementations pass through unchanged. `responses_compaction_v2` remains
+byte-preserving pass-through. Clyde does not inject plaintext into its request
+or response. Activating v2 requires new persistence evidence and a reviewed
+production handler.
+
 Invalid metadata and non-Codex models stay on the generic projection path. The
 field and tool rules below apply to that path.
 
