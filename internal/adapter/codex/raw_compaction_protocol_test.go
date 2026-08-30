@@ -18,6 +18,11 @@ func TestDetectRawResponsesCompactionProtocol(t *testing.T) {
 			want:   RawResponsesCompactionNone,
 		},
 		{
+			name:   "empty implementation",
+			header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"compaction","compaction":{}}`}},
+			want:   RawResponsesCompactionNone,
+		},
+		{
 			name:   "exact v1",
 			header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"compaction","compaction":{"implementation":"responses"}}`}},
 			want:   RawResponsesCompactionV1,
