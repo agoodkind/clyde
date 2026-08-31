@@ -125,6 +125,56 @@ func TestRedactHTTPHandlesJSONLines(t *testing.T) {
 	}
 }
 
+func TestRedactHTTPFailsClosedForSensitiveStructuredScalarValues(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "top-level string", body: `"access_token=top-level-secret"`},
+		{name: "JSON Lines string", body: "\"refresh_token=json-lines-secret\"\n{\"safe\":\"kept\"}"},
+		{name: "object string", body: `{"safe":"api_key=object-secret"}`},
+		{name: "array string", body: `["account_id=array-secret"]`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, redacted := RedactHTTP(nil, []byte(testCase.body))
+			if string(redacted) != redactedValue {
+				t.Fatalf("redacted body = %q, want fail-closed marker", redacted)
+			}
+		})
+	}
+}
+
+func TestRedactHTTPFailsClosedForDuplicateJSONScalarValues(t *testing.T) {
+	body := []byte(`{"safe":"api_key=first-secret","safe":"kept"}`)
+	_, redacted := RedactHTTP(nil, body)
+	if string(redacted) != redactedValue {
+		t.Fatalf("duplicate JSON scalar body = %q, want fail-closed marker", redacted)
+	}
+}
+
+func TestRedactHTTPScansJSONScalarsAfterFieldRedaction(t *testing.T) {
+	body := []byte(`{"token":"field-secret","safe":"api_key=remaining-secret"}`)
+	_, redacted := RedactHTTP(nil, body)
+	if string(redacted) != redactedValue {
+		t.Fatalf("field-redacted JSON body = %q, want fail-closed marker", redacted)
+	}
+}
+
+func TestRedactHTTPFailsClosedForStructuredSSEJSONScalars(t *testing.T) {
+	tests := [][]byte{
+		[]byte("data: {\"safe\":\"api_key=sse-secret\"}\n\n"),
+		[]byte("data: {\"outer\":[\"account_id=nested-secret\"]}\n\n"),
+		[]byte("data: {\"label api_key=name-secret\":true}\n\n"),
+	}
+	for _, body := range tests {
+		_, redacted := RedactHTTP(nil, body)
+		if string(redacted) != redactedValue {
+			t.Fatalf("structured SSE body = %q, want fail-closed marker", redacted)
+		}
+	}
+}
+
 func TestRedactHTTPScansNonDataSSELinesAfterFrameRedaction(t *testing.T) {
 	tests := []struct {
 		name string

@@ -107,6 +107,33 @@ func TestPlanRawResponsesCompactionHonorsFractionAndByteCapBoundaries(t *testing
 	}
 }
 
+func TestPlanRawResponsesCompactionHandlesLargeTranscriptWithinWatchdog(t *testing.T) {
+	const itemCount = 10_001
+	var body strings.Builder
+	body.WriteString(`{"input":[`)
+	for index := 0; index < itemCount; index++ {
+		if index > 0 {
+			body.WriteByte(',')
+		}
+		body.WriteString(`{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}`)
+	}
+	body.WriteString(`,{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	items := rawInputItemsForTest(t, []byte(body.String()))
+	result := make(chan bool, 1)
+	go func() {
+		_, ok := planRawResponsesCompaction(items, 0, 1)
+		result <- ok
+	}()
+	select {
+	case ok := <-result:
+		if !ok {
+			t.Fatal("large transcript did not produce a compaction plan")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("large transcript planning exceeded watchdog")
+	}
+}
+
 func TestRawResponsesCompactionExpandsEverySupportedToolPair(t *testing.T) {
 	tests := []struct {
 		name       string
