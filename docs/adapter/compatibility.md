@@ -17,11 +17,11 @@ supplies its configured Codex OAuth token and account identity instead of
 trusting inbound credentials.
 
 Native compaction implementations use separate protocol handlers, and unknown
-implementations pass through unchanged. `responses_compaction_v2` remains
-byte-preserving pass-through. A wire-equivalent Codex 0.151.0 probe preserved
-the encrypted item but discarded the added plaintext assistant item. Activating
-v2 transcript recovery requires a supported persistence mechanism and a
-reviewed production handler.
+implementations pass through unchanged. The `responses` handler retains its
+final-summary behavior. The `responses_compaction_v2` handler uses a separate
+native recovery path. V2 requires Codex's built-in `openai` provider with
+`openai_base_url` pointed at Clyde. A custom provider remains compatible with
+v1 but does not activate v2 remote compaction.
 
 Invalid metadata and non-Codex models stay on the generic projection path. The
 field and tool rules below apply to that path.
