@@ -750,7 +750,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
-		clone.Body = newRawCompactionSSEBody(response.Body, wrapped, t.markMutated)
+		clone.Body = newRawCompactionSSEBody(response.Body, wrapped, t.markMutated, t.mutation != nil)
 		return &clone
 	}
 	originalBody := response.Body
@@ -791,7 +791,7 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
 		clone.Body = newRawCompactionEncodedBody(
-			newRawCompactionSSEBody(decoded, transcriptText),
+			newRawCompactionSSEBody(decoded, transcriptText, t.markMutated, t.mutation != nil),
 			encoding,
 		)
 		return &clone

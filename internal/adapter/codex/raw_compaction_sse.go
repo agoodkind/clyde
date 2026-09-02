@@ -31,15 +31,16 @@ const (
 )
 
 type rawCompactionSSEBody struct {
-	inner      io.ReadCloser
-	reader     *bufio.Reader
-	transcript string
-	pending    []byte
-	pendingErr error
-	candidate  []byte
-	following  []byte
-	disabled   bool
-	onMutated  func()
+	inner                  io.ReadCloser
+	reader                 *bufio.Reader
+	transcript             string
+	pending                []byte
+	pendingErr             error
+	candidate              []byte
+	following              []byte
+	disabled               bool
+	onMutated              func()
+	requireCompletedStatus bool
 }
 
 type rawCompactionMutation struct {
@@ -92,21 +93,18 @@ func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {
 	return rawResponsesCompactionV2RegularTurn(header) && metadata.Compaction.Phase == "final_answer"
 }
 
-func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutatedCallbacks ...func()) *rawCompactionSSEBody {
-	var onMutated func()
-	if len(onMutatedCallbacks) > 0 {
-		onMutated = onMutatedCallbacks[0]
-	}
+func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutated func(), requireCompletedStatus bool) *rawCompactionSSEBody {
 	return &rawCompactionSSEBody{
-		inner:      inner,
-		reader:     bufio.NewReader(inner),
-		transcript: transcriptText,
-		pending:    nil,
-		pendingErr: nil,
-		candidate:  nil,
-		following:  nil,
-		disabled:   false,
-		onMutated:  onMutated,
+		inner:                  inner,
+		reader:                 bufio.NewReader(inner),
+		transcript:             transcriptText,
+		pending:                nil,
+		pendingErr:             nil,
+		candidate:              nil,
+		following:              nil,
+		disabled:               false,
+		onMutated:              onMutated,
+		requireCompletedStatus: requireCompletedStatus,
 	}
 }
 
@@ -230,7 +228,7 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 	if readErr != nil {
 		return b.failOpenSSE(frame, readErr)
 	}
-	if !rawCompactionSSEJSONFrameIsValid(frame, rawCompactionSSECompleted) {
+	if !rawCompactionSSEJSONFrameIsValid(frame, rawCompactionSSECompleted) || (b.requireCompletedStatus && !rawCompactionSSECompletedFrameIsSuccessful(frame)) {
 		return b.failOpenSSE(frame, readErr)
 	}
 	if len(b.candidate) == 0 {
@@ -250,6 +248,19 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 		b.onMutated()
 	}
 	return b.queueSSEError(readErr)
+}
+
+func rawCompactionSSECompletedFrameIsSuccessful(frame []byte) bool {
+	if !rawCompactionSSEJSONFrameIsValid(frame, rawCompactionSSECompleted) {
+		return false
+	}
+	_, data, _ := rawSSEFrameDataValue(frame)
+	var payload struct {
+		Response struct {
+			Status string `json:"status"`
+		} `json:"response"`
+	}
+	return json.Unmarshal(data, &payload) == nil && payload.Response.Status == "completed"
 }
 
 func (b *rawCompactionSSEBody) flushCandidateAtEOF(readErr error) error {
