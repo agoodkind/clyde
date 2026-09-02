@@ -308,7 +308,7 @@ func TestRawResponsesCompactionMutatesNonStreamingJSONOnce(t *testing.T) {
 
 func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T) {
 	recovery := &RawResponsesCompactionV2Recovery{transcript: "recovered transcript"}
-	finalRequest := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"compaction":{"phase":"final_answer"}}`}}}
+	finalRequest := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}
 	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(finalRequest, recovery)
 	if transformer == nil {
 		t.Fatal("final answer did not create transformer")
