@@ -306,6 +306,45 @@ func TestRawResponsesCompactionMutatesNonStreamingJSONOnce(t *testing.T) {
 	}
 }
 
+func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T) {
+	recovery := &RawResponsesCompactionV2Recovery{transcript: "recovered transcript"}
+	finalRequest := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"compaction":{"phase":"final_answer"}}`}}}
+	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(finalRequest, recovery)
+	if transformer == nil {
+		t.Fatal("final answer did not create transformer")
+	}
+	body := readResponseBody(t, transformer.TransformResponse(rawJSONResponse(http.StatusOK, "answer")))
+	if !transformer.DidMutateResponse() || bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 {
+		t.Fatalf("final answer mutation = %t body=%s", transformer.DidMutateResponse(), body)
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		metadata string
+		response *http.Response
+	}{
+		{name: "commentary", metadata: `{"request_kind":"turn","compaction":{"phase":"commentary"}}`, response: rawJSONResponse(http.StatusOK, "comment")},
+		{name: "tool only", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","call_id":"call"}]}`))}},
+		{name: "malformed", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":[`))}},
+		{name: "duplicate tag", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: rawJSONResponse(http.StatusOK, "<pre-compaction-transcript>kept</pre-compaction-transcript>")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {testCase.metadata}}}
+			candidate := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
+			if testCase.name == "commentary" {
+				if candidate != nil {
+					t.Fatal("commentary created transformer")
+				}
+				return
+			}
+			got := readResponseBody(t, candidate.TransformResponse(testCase.response))
+			if candidate.DidMutateResponse() || bytes.Contains(got, []byte("recovered transcript")) {
+				t.Fatalf("%s mutated: %s", testCase.name, got)
+			}
+		})
+	}
+}
+
 func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
 	unknownFrame := "event: response.future\n: keep this exact comment\ndata: { \"opaque\" : [1, 2] }\n\n"

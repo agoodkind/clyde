@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
+	"sync/atomic"
 )
 
 type rawCompactionSSEEvent string
@@ -21,17 +23,64 @@ const (
 )
 
 type rawCompactionSSEBody struct {
-	inner      io.ReadCloser
-	reader     *bufio.Reader
-	transcript string
-	pending    []byte
-	pendingErr error
-	candidate  []byte
-	following  []byte
-	disabled   bool
+	inner                  io.ReadCloser
+	reader                 *bufio.Reader
+	transcript             string
+	pending                []byte
+	pendingErr             error
+	candidate              []byte
+	following              []byte
+	disabled               bool
+	onMutated              func()
 }
 
-func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCompactionSSEBody {
+type rawCompactionMutation struct {
+	mutated atomic.Bool
+}
+
+// NewRawResponsesCompactionV2FinalAnswerTransformer creates the one-shot
+// recovery transformer only for a regular final-answer request.
+func NewRawResponsesCompactionV2FinalAnswerTransformer(request RawResponsesRequest, recovery *RawResponsesCompactionV2Recovery) *RawResponsesCompactionTransformer {
+	if recovery == nil || !rawResponsesCompactionV2FinalAnswer(request.Header) {
+		return nil
+	}
+	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}}
+}
+
+// DidMutateResponse reports whether this transformer produced tagged output.
+func (t *RawResponsesCompactionTransformer) DidMutateResponse() bool {
+	return t != nil && t.mutation != nil && t.mutation.mutated.Load()
+}
+
+// RequiresTerminalValidation reports whether recovery completion depends on a
+// successful response mutation.
+func (t *RawResponsesCompactionTransformer) RequiresTerminalValidation() bool {
+	return t != nil && t.mutation != nil
+}
+
+func (t *RawResponsesCompactionTransformer) markMutated() {
+	if t != nil && t.mutation != nil {
+		t.mutation.mutated.Store(true)
+	}
+}
+
+func rawResponsesCompactionV2FinalAnswer(header http.Header) bool {
+	var metadata rawResponsesCompactionMetadata
+	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
+		return false
+	}
+	return metadata.Compaction.Phase == "final_answer"
+}
+
+func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {
+	var metadata rawResponsesCompactionMetadata
+	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
+		return false
+	}
+	return rawResponsesCompactionV2RegularTurn(header) && metadata.Compaction.Phase == "final_answer"
+}
+
+func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutated func()) *rawCompactionSSEBody {
 	return &rawCompactionSSEBody{
 		inner:                  inner,
 		reader:                 bufio.NewReader(inner),
@@ -41,6 +90,7 @@ func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCom
 		candidate:              nil,
 		following:              nil,
 		disabled:               false,
+		onMutated:  onMutated,
 	}
 }
 
@@ -136,6 +186,9 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 	)
 	b.candidate = nil
 	b.following = nil
+	if b.onMutated != nil && !bytes.Equal(mutatedCandidate, b.candidate) {
+		b.onMutated()
+	}
 	return b.queueSSEError(readErr)
 }
 

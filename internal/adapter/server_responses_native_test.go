@@ -652,6 +652,44 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequest(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesCompactionV2RecoveryLifecycle(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
+	naturalResend := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>"}]}]}`)
+	responseBody := []byte(`{"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final answer"}]}]}`)
+	naturalResponse := []byte(`{"id":"resp-2","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>\nfinal answer"}]}]}`)
+	var upstreamBodies [][]byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		upstreamBodies = append(upstreamBodies, body)
+		if bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
+			_, _ = writer.Write(naturalResponse)
+			return
+		}
+		_, _ = writer.Write(responseBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+		t.Fatal("arm registry")
+	}
+	for _, body := range [][]byte{requestBody, naturalResend} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+		request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
+		recorder := httptest.NewRecorder()
+		srv.mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK || bytes.Count(recorder.Body.Bytes(), []byte("<pre-compaction-transcript>")) != 1 {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+		}
+	}
+	if _, ok := srv.compactionV2.Match("native-session", "cipher"); ok {
+		t.Fatal("final answer did not complete recovery")
+	}
+	if len(upstreamBodies) != 2 || bytes.Count(upstreamBodies[0], []byte(`\u003cpre-compaction-transcript\u003e`)) != 1 || !bytes.Equal(upstreamBodies[1], naturalResend) {
+		t.Fatalf("upstream bodies = %q", upstreamBodies)
+	}
+}
+
 func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	responseBody := []byte(`{"id":"resp-1","output":[]}`)
@@ -1252,6 +1290,10 @@ func nativeCompactionTurnMetadata() string {
 
 func nativeCompactionV2TurnMetadata() string {
 	return `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}}`
+}
+
+func nativeFinalAnswerTurnMetadata() string {
+	return `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`
 }
 
 func nativeCompactionTransformerForTest(t *testing.T) *adaptercodex.RawResponsesCompactionTransformer {
