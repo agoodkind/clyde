@@ -750,7 +750,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
-		clone.Body = newRawCompactionSSEBody(response.Body, wrapped)
+		clone.Body = newRawCompactionSSEBody(response.Body, wrapped, t.markMutated)
 		return &clone
 	}
 	originalBody := response.Body
@@ -765,6 +765,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	if !ok || bytes.Equal(transformed, body) {
 		return response
 	}
+	t.markMutated()
 	clone := *response
 	clone.Header = rawCompactionMutatedHeaders(response.Header)
 	clone.ContentLength = -1
