@@ -47,22 +47,33 @@ func prepareNativeCodexResponsesCompaction(
 	raw adaptercodex.RawResponsesRequest,
 	decodedBody []byte,
 	settings adaptercodex.RawResponsesCompactionSettings,
-) (adaptercodex.RawResponsesRequest, *adaptercodex.RawResponsesCompactionTransformer, *adaptercodex.RawResponsesCompactionV2Plan) {
+	registry *adaptercodex.RawResponsesCompactionV2Registry,
+) (adaptercodex.RawResponsesRequest, *adaptercodex.RawResponsesCompactionTransformer, *adaptercodex.RawResponsesCompactionV2Plan, *adaptercodex.RawResponsesCompactionV2Recovery) {
 	decodedRaw := raw
 	decodedRaw.Body = decodedBody
 	if adaptercodex.DetectRawResponsesCompactionProtocol(decodedRaw.Header) == adaptercodex.RawResponsesCompactionV2 {
-		return prepareNativeCodexResponsesCompactionV2(raw, decodedRaw, decodedBody, settings)
+		transformed, plan := prepareNativeCodexResponsesCompactionV2(raw, decodedRaw, decodedBody, settings)
+		return transformed, nil, plan, nil
+	}
+	injected, recovery, changed := adaptercodex.InjectRawResponsesCompactionV2Recovery(decodedRaw, registry)
+	if changed {
+		forwardBody, ok := encodeNativeResponsesBody(injected.Body, raw.Header.Get("Content-Encoding"))
+		if !ok {
+			return raw, nil, nil, nil
+		}
+		injected.Body = forwardBody
+		return injected, nil, nil, recovery
 	}
 	transformed, transformer := adaptercodex.PrepareRawResponsesCompaction(decodedRaw, settings)
 	if transformer == nil {
-		return raw, nil, nil
+		return raw, nil, nil, nil
 	}
 	forwardBody, ok := encodeNativeResponsesBody(transformed.Body, raw.Header.Get("Content-Encoding"))
 	if !ok {
-		return raw, nil, nil
+		return raw, nil, nil, nil
 	}
 	transformed.Body = forwardBody
-	return transformed, transformer, nil
+	return transformed, transformer, nil, nil
 }
 
 func prepareNativeCodexResponsesCompactionV2(
