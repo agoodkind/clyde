@@ -647,6 +647,77 @@ func TestNativeCodexResponsesCompactionV2PassesThrough(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesCompactionV2EndToEndRecovery(t *testing.T) {
+	compactionRequest := []byte(`{"model":"gpt-native","input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"oldest"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"oldest answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"newer"}]},{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":"result"},{"type":"compaction_trigger"}]}`)
+	encryptedResponse := []byte(`{"id":"resp-n","status":"completed","output":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
+	regularRequest := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"encrypted-state"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+	regularResponse := []byte(`{"id":"resp-n-plus-1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final answer"}]}]}`)
+	var upstreamBodies [][]byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		upstreamBodies = append(upstreamBodies, body)
+		if bytes.Contains(body, []byte(`"compaction_trigger"`)) {
+			_, _ = writer.Write(encryptedResponse)
+			return
+		}
+		_, _ = writer.Write(regularResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	compaction := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compactionRequest))
+	compaction.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
+	compactionRecorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(compactionRecorder, compaction)
+	if compactionRecorder.Code != http.StatusOK || !bytes.Equal(compactionRecorder.Body.Bytes(), encryptedResponse) {
+		t.Fatalf("compaction status=%d body=%s", compactionRecorder.Code, compactionRecorder.Body.Bytes())
+	}
+
+	regular := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(regularRequest))
+	regular.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
+	regularRecorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(regularRecorder, regular)
+	if regularRecorder.Code != http.StatusOK || bytes.Count(regularRecorder.Body.Bytes(), []byte("<pre-compaction-transcript>")) != 1 {
+		t.Fatalf("regular status=%d body=%s", regularRecorder.Code, regularRecorder.Body.Bytes())
+	}
+
+	var regularBody struct {
+		Output []json.RawMessage `json:"output"`
+	}
+	if err := json.Unmarshal(regularRecorder.Body.Bytes(), &regularBody); err != nil || len(regularBody.Output) != 1 {
+		t.Fatalf("decode regular response: %v body=%s", err, regularRecorder.Body.Bytes())
+	}
+	naturalResend, err := json.Marshal(struct {
+		Model string            `json:"model"`
+		Input []json.RawMessage `json:"input"`
+	}{
+		Model: "gpt-native",
+		Input: []json.RawMessage{
+			json.RawMessage(`{"type":"compaction","encrypted_content":"encrypted-state"}`),
+			regularBody.Output[0],
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode natural resend: %v", err)
+	}
+	next := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(naturalResend))
+	next.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
+	nextRecorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(nextRecorder, next)
+	if nextRecorder.Code != http.StatusOK || !bytes.Equal(nextRecorder.Body.Bytes(), regularResponse) {
+		t.Fatalf("next status=%d body=%s", nextRecorder.Code, nextRecorder.Body.Bytes())
+	}
+	if len(upstreamBodies) != 3 || !bytes.Contains(upstreamBodies[0], []byte(`"newer"`)) ||
+		bytes.Count(upstreamBodies[1], []byte(`\u003cpre-compaction-transcript\u003e`)) != 1 ||
+		!bytes.Equal(upstreamBodies[2], naturalResend) {
+		t.Fatalf("upstream bodies = %q", upstreamBodies)
+	}
+}
+
 func TestNativeCodexResponsesCompactionV2RecoveryRequest(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher","opaque":true},{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}],"opaque":{"keep":true}}`)
 	responseBody := []byte(`{"id":"resp-1","output":[]}`)
