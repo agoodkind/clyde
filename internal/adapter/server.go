@@ -133,7 +133,8 @@ type Server struct {
 	// ingress is this Server's own ingress contract. It owns a
 	// per-Server ChatIdentityResolver so branch/fork state is isolated
 	// per Server rather than shared through the package-level registry.
-	ingress ingresscontract.IngressContract
+	ingress      ingresscontract.IngressContract
+	compactionV2 *adaptercodex.RawResponsesCompactionV2Registry
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -210,6 +211,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		errorRenderers:       defaultBoundaryRegistry.snapshotRenderers(),
 		streamErrorRenderers: defaultBoundaryRegistry.snapshotStreamErrorRenderers(),
 		ingress:              newServerIngress(),
+		compactionV2:         adaptercodex.NewRawResponsesCompactionV2Registry(nil),
 	}
 	s.registry.Store(registry)
 	s.providerRegistry = adapterprovider.NewRegistry()
