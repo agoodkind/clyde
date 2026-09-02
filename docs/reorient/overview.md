@@ -16,12 +16,25 @@ Detection matches a stable substring of Claude Code's compaction prompt in the r
 
 Content comes from `Index.RenderReorientArtifact` in `internal/conversation/reorient.go`, which builds the record directly from the transcript path and renders it with the reorient knobs, so it avoids the index resolve and refresh path. `internal/conversation/reorient_artifact_test.go` holds the behavior.
 
-The authenticated native Codex path uses the same reorient sizing controls. It
-matches only compaction metadata whose implementation is `responses`. It keeps
-the final synthesized user item byte-for-byte, splits the earlier request input
-on complete turn and tool-pair boundaries, and appends the removed transcript
-to the final assistant summary. It reads no disk fallback. Any parse, pairing,
-or response transformation failure forwards the original request and response.
+The authenticated native Codex path uses the same reorient sizing controls. The
+`responses` implementation keeps the final synthesized user item byte-for-byte,
+splits the earlier request input on complete turn and tool-pair boundaries, and
+appends the removed transcript to the final assistant summary. It reads no disk
+fallback.
+
+The `responses_compaction_v2` implementation keeps turn N's encrypted
+compaction response byte-identical. Clyde holds the bounded selected transcript
+in process memory after that successful response. On the matching regular turn
+N+1, it inserts one tagged assistant history item after the encrypted item in
+the upstream request. It appends that tag once to the first successful regular
+final assistant response. Codex then resends the tagged result naturally on
+N+2, so Clyde clears the pending entry after the N+1 append succeeds.
+
+The v2 entry expires after two hours, holds at most 32 pending recoveries, and
+does not survive a daemon restart. Expiry, restart, correlation, parsing, or
+response transformation failure forwards native v2 traffic unchanged. Codex
+uses this path only through its built-in `openai` provider when
+`openai_base_url` points at Clyde.
 
 ## Hook seam
 
