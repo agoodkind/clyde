@@ -186,8 +186,8 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	}
 	compactionSettings := s.deps.RawResponsesCompaction
 	compactionSettings.ContextWindowTokens = resolvedReq.ContextBudget.InputTokens
-	transformedRaw, compactionTransformer := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, compactionSettings)
-	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer)
+	transformedRaw, compactionTransformer, v2Plan := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, compactionSettings)
+	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer, v2Plan)
 	return true, nil
 }
 
@@ -257,6 +257,7 @@ func (s *Server) dispatchNativeCodexResponses(
 	raw adaptercodex.RawResponsesRequest,
 	resolved adapterresolver.ResolvedRequest,
 	compactionTransformer *adaptercodex.RawResponsesCompactionTransformer,
+	v2Plan *adaptercodex.RawResponsesCompactionV2Plan,
 ) {
 	if s.codexProvider == nil {
 		s.respondAdapterError(w, r, codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured))
@@ -276,11 +277,17 @@ func (s *Server) dispatchNativeCodexResponses(
 	if compactionTransformer != nil {
 		response = transformNativeCodexCompactionResponse(response, compactionTransformer, streamingResponse)
 	}
+	if v2Plan != nil {
+		response = adaptercodex.ObserveRawResponsesCompactionV2Response(response, *v2Plan, s.compactionV2)
+	}
 	defer func() { _ = response.Body.Close() }()
 	if streamingResponse {
 		lifecycle.streamOpened(ctx)
 	}
 	_, copyErr := s.copyPassthroughResponse(ctx, w, response, streamingResponse)
+	if copyErr == nil && v2Plan != nil {
+		adaptercodex.ArmRawResponsesCompactionV2Response(response)
+	}
 	var result adapterprovider.Result
 	lifecycle.terminal(ctx, result, copyErr)
 	if copyErr != nil {
