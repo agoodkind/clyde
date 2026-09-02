@@ -763,6 +763,30 @@ func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAnd
 	})
 }
 
+func TestNativeCodexResponsesCompactionV2RecoveryReleasesWhenProviderMissing(t *testing.T) {
+	registry := adaptercodex.NewRawResponsesCompactionV2Registry(nil)
+	if !registry.Arm("native-session", "cipher", "recovered transcript") {
+		t.Fatal("arm registry")
+	}
+	body := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
+	raw := adaptercodex.RawResponsesRequest{Body: body, Header: http.Header{adaptercodex.CodexTurnMetadataHeader: {nativeFinalAnswerTurnMetadata()}}}
+	transformed, _, _, recovery := prepareNativeCodexResponsesCompaction(raw, body, adaptercodex.RawResponsesCompactionSettings{}, registry)
+	if recovery == nil {
+		t.Fatal("missing recovery")
+	}
+	srv := &Server{compactionV2: registry}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	srv.dispatchNativeCodexResponses(recorder, request, "request", transformed, adapterresolver.ResolvedRequest{}, nil, nil, recovery)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+	_, nextRecovery, changed := adaptercodex.InjectRawResponsesCompactionV2Recovery(raw, registry)
+	if !changed || nextRecovery == nil {
+		t.Fatal("missing provider left recovery leased")
+	}
+}
+
 func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	responseBody := []byte(`{"id":"resp-1","output":[]}`)
