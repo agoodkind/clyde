@@ -690,6 +690,79 @@ func TestNativeCodexResponsesCompactionV2RecoveryLifecycle(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAndDeliveryFailures(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
+	sseBody := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n")
+	jsonBody := []byte(`{"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}]}`)
+	for _, testCase := range []struct {
+		name         string
+		metadata     string
+		body         []byte
+		requestZstd  bool
+		responseBody []byte
+		responseType string
+		responseZstd bool
+	}{
+		{name: "nonregular json", metadata: `{"session_id":"native-session","thread_source":"user","sandbox":"none","compaction":{"phase":"final_answer"}}`, body: requestBody, responseBody: jsonBody, responseType: "application/json"},
+		{name: "nonregular stream", metadata: `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"implementation":"responses_compaction_v2","phase":"final_answer"}}`, body: requestBody, responseBody: sseBody, responseType: "text/event-stream"},
+		{name: "nonregular zstd", metadata: `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer","strategy":"memento"}}`, body: requestBody, requestZstd: true, responseBody: jsonBody, responseType: "application/json", responseZstd: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			wireRequest := testCase.body
+			if testCase.requestZstd {
+				wireRequest = zstdEncodeNativeResponseBody(t, wireRequest)
+			}
+			wireResponse := testCase.responseBody
+			if testCase.responseZstd {
+				wireResponse = zstdEncodeNativeResponseBody(t, wireResponse)
+			}
+			var upstreamBody []byte
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				upstreamBody, _ = io.ReadAll(request.Body)
+				writer.Header().Set("Content-Type", testCase.responseType)
+				if testCase.responseZstd {
+					writer.Header().Set("Content-Encoding", "zstd")
+				}
+				_, _ = writer.Write(wireResponse)
+			}))
+			t.Cleanup(upstream.Close)
+			srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+			if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+				t.Fatal("arm registry")
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(wireRequest))
+			request.Header.Set(adaptercodex.CodexTurnMetadataHeader, testCase.metadata)
+			if testCase.requestZstd {
+				request.Header.Set("Content-Encoding", "zstd")
+			}
+			recorder := httptest.NewRecorder()
+			srv.mux.ServeHTTP(recorder, request)
+			if !bytes.Equal(upstreamBody, wireRequest) || !bytes.Equal(recorder.Body.Bytes(), wireResponse) {
+				t.Fatalf("request=%x response=%x", upstreamBody, recorder.Body.Bytes())
+			}
+			if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
+				t.Fatal("pending recovery changed")
+			}
+		})
+	}
+
+	t.Run("downstream write failure", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write(jsonBody) }))
+		t.Cleanup(upstream.Close)
+		srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+		if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+			t.Fatal("arm registry")
+		}
+		request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+		request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
+		writer := &passthroughPartialWriter{header: make(http.Header), failAfter: 0}
+		srv.mux.ServeHTTP(writer, request)
+		if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
+			t.Fatal("failed client write completed recovery")
+		}
+	})
+}
+
 func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	responseBody := []byte(`{"id":"resp-1","output":[]}`)
