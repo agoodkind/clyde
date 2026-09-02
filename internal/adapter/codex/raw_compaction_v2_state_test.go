@@ -19,6 +19,12 @@ func TestRawResponsesCompactionV2RegistryLifecycle(t *testing.T) {
 	if registry.Arm("s", "encrypted", "other") {
 		t.Fatal("duplicate Arm() succeeded")
 	}
+	if _, ok := registry.Reserve("s", "encrypted"); !ok {
+		t.Fatal("Reserve() = false")
+	}
+	if _, ok := registry.Reserve("s", "encrypted"); ok {
+		t.Fatal("duplicate Reserve() succeeded")
+	}
 	if !registry.Complete("s", "encrypted") {
 		t.Fatal("Complete() = false")
 	}
