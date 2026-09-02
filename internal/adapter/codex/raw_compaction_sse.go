@@ -69,7 +69,11 @@ func rawResponsesCompactionV2FinalAnswer(header http.Header) bool {
 	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
 		return false
 	}
-	return metadata.Compaction.Phase == "final_answer"
+	return metadata.RequestKind == "turn" && metadata.Compaction.Implementation == "" && metadata.Compaction.Strategy == "" && metadata.Compaction.Phase == "final_answer"
+}
+
+func rawResponsesCompactionV2RegularFinalAnswer(header http.Header) bool {
+	return rawResponsesCompactionV2FinalAnswer(header)
 }
 
 func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {

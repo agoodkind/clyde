@@ -634,7 +634,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequest(t *testing.T) {
 				t.Fatal("arm registry")
 			}
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(testCase.body))
-			request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+			request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
 			if testCase.encoding != "" {
 				request.Header.Set("Content-Encoding", testCase.encoding)
 			}

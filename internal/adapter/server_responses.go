@@ -299,8 +299,12 @@ func (s *Server) dispatchNativeCodexResponses(
 	if copyErr == nil && v2Plan != nil {
 		adaptercodex.ArmRawResponsesCompactionV2Response(response)
 	}
-	if copyErr == nil && v2Transformer != nil && v2Transformer.DidMutateResponse() {
-		v2Recovery.CompleteRecovery()
+	if v2Recovery != nil {
+		if copyErr == nil && v2Transformer != nil && v2Transformer.DidMutateResponse() {
+			v2Recovery.CompleteRecovery()
+		} else {
+			v2Recovery.ReleaseRecovery()
+		}
 	}
 	var result adapterprovider.Result
 	lifecycle.terminal(ctx, result, copyErr)
