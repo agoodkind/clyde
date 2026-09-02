@@ -167,6 +167,43 @@ func TestNativeCodexResponsesZstdCompactionPreservesUndecodableStreamingResponse
 	}
 }
 
+func TestNativeCodexResponsesCompactionV2RecoveryPreservesLateCorruptZstdStreams(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
+	candidate := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n"
+	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+	for _, testCase := range []struct {
+		name   string
+		stream string
+	}{
+		{name: "after candidate", stream: candidate},
+		{name: "after completed", stream: candidate + completed},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			wireResponse := append(zstdEncodeNativeResponseBody(t, []byte(testCase.stream)), []byte("late-corruption")...)
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				writer.Header().Set("Content-Encoding", "zstd")
+				_, _ = writer.Write(wireResponse)
+			}))
+			t.Cleanup(upstream.Close)
+			srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+			if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+				t.Fatal("arm registry")
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+			request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
+			recorder := httptest.NewRecorder()
+			srv.mux.ServeHTTP(recorder, request)
+			if recorder.Header().Get("Content-Encoding") != "zstd" || !bytes.Equal(recorder.Body.Bytes(), wireResponse) {
+				t.Fatalf("headers=%v body=%x", recorder.Header(), recorder.Body.Bytes())
+			}
+			if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
+				t.Fatal("corrupt stream completed recovery")
+			}
+		})
+	}
+}
+
 func TestNativeCodexResponsesZstdCompactionBoundsStreamingDecoderMemory(t *testing.T) {
 	transformer := nativeCompactionTransformerForTest(t)
 	encoder, err := zstd.NewWriter(

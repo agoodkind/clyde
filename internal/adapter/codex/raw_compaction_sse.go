@@ -181,6 +181,10 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 	if !rawCompactionSSEJSONFrameIsValid(frame, rawCompactionSSECompleted) || (b.requireCompletedStatus && !rawCompactionSSECompletedFrameIsSuccessful(frame)) {
 		return b.failOpenSSE(frame, readErr)
 	}
+	if len(b.candidate) == 0 {
+		b.pending = frame
+		return b.queueSSEError(readErr)
+	}
 	mutatedCandidate, candidateOK := b.mutatedSSECandidate()
 	if !candidateOK {
 		return b.failOpenSSE(frame, readErr)
