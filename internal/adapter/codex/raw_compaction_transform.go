@@ -18,7 +18,7 @@ import (
 // RequiresTerminalValidation reports whether streamed mutation state must be
 // validated before accepting the response.
 func (t *RawResponsesCompactionTransformer) RequiresTerminalValidation() bool {
-	return false
+	return t != nil && t.mutation != nil
 }
 
 // TransformResponse appends the removed transcript to one successful response.
@@ -36,7 +36,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
-		clone.Body = newRawCompactionSSEBody(response.Body, wrapped)
+		clone.Body = newRawCompactionSSEBody(response.Body, wrapped, t.markMutated)
 		return &clone
 	}
 	originalBody := response.Body
@@ -51,6 +51,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	if !ok || bytes.Equal(transformed, body) {
 		return response
 	}
+	t.markMutated()
 	clone := *response
 	clone.Header = rawCompactionMutatedHeaders(response.Header)
 	clone.ContentLength = -1
