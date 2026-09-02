@@ -63,6 +63,7 @@ func hasRawResponsesNativeContinuationItem(request RawResponsesRequest, wanted .
 type RawResponsesCompactionTransformer struct {
 	transcript string
 	stream     bool
+	mutation   *rawCompactionMutation
 }
 
 type rawCompactionContentEncoding string
@@ -148,6 +149,7 @@ func PrepareRawResponsesCompaction(
 	return transformed, &RawResponsesCompactionTransformer{
 		transcript: plan.transcript,
 		stream:     raw.Stream,
+		mutation:   nil,
 	}
 }
 

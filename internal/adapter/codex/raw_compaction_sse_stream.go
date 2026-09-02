@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"sync/atomic"
 )
 
 type rawCompactionSSEEvent string
@@ -35,9 +37,54 @@ type rawCompactionSSEBody struct {
 	candidate  []byte
 	following  []byte
 	disabled   bool
+	onMutated  func()
 }
 
-func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCompactionSSEBody {
+type rawCompactionMutation struct {
+	mutated atomic.Bool
+}
+
+// NewRawResponsesCompactionV2FinalAnswerTransformer creates the one-shot
+// recovery transformer only for a regular final-answer request.
+func NewRawResponsesCompactionV2FinalAnswerTransformer(request RawResponsesRequest, recovery *RawResponsesCompactionV2Recovery) *RawResponsesCompactionTransformer {
+	if recovery == nil || !rawResponsesCompactionV2FinalAnswer(request.Header) {
+		return nil
+	}
+	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{}}
+}
+
+// DidMutateResponse reports whether this transformer produced tagged output.
+func (t *RawResponsesCompactionTransformer) DidMutateResponse() bool {
+	return t != nil && t.mutation != nil && t.mutation.mutated.Load()
+}
+
+func (t *RawResponsesCompactionTransformer) markMutated() {
+	if t != nil && t.mutation != nil {
+		t.mutation.mutated.Store(true)
+	}
+}
+
+func rawResponsesCompactionV2FinalAnswer(header http.Header) bool {
+	var metadata rawResponsesCompactionMetadata
+	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
+		return false
+	}
+	return metadata.Compaction.Phase == "final_answer"
+}
+
+func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {
+	var metadata rawResponsesCompactionMetadata
+	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
+		return false
+	}
+	return rawResponsesCompactionV2RegularTurn(header) && metadata.Compaction.Phase == "final_answer"
+}
+
+func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutatedCallbacks ...func()) *rawCompactionSSEBody {
+	var onMutated func()
+	if len(onMutatedCallbacks) > 0 {
+		onMutated = onMutatedCallbacks[0]
+	}
 	return &rawCompactionSSEBody{
 		inner:      inner,
 		reader:     bufio.NewReader(inner),
@@ -47,6 +94,7 @@ func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCom
 		candidate:  nil,
 		following:  nil,
 		disabled:   false,
+		onMutated:  onMutated,
 	}
 }
 
@@ -120,6 +168,10 @@ func (b *rawCompactionSSEBody) handleSSEOtherFrame(frame []byte, readErr error) 
 		if readErr != nil || !rawCompactionUnknownSSEFrameIsValid(frame) {
 			return b.failOpenSSE(frame, readErr)
 		}
+		_, _, dataCount := rawSSEFrameDataValue(frame)
+		if dataCount == 0 && rawSSEFrameIsCommentOnly(frame) {
+			return b.queueSSEBytes(frame, readErr)
+		}
 		if !rawCompactionSSEPendingFits(b.candidate, b.following, frame) {
 			return b.failOpenSSE(frame, readErr)
 		}
@@ -177,9 +229,14 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 	if !ok {
 		return b.failOpenSSE(frame, readErr)
 	}
+	originalFrames := joinRawCompactionSSEFrames(joinRawCompactionSSEFrames(b.candidate, b.following), frame)
+	mutated := !bytes.Equal(mutatedFrames, originalFrames)
 	b.pending = mutatedFrames
 	b.candidate = nil
 	b.following = nil
+	if b.onMutated != nil && mutated {
+		b.onMutated()
+	}
 	return b.queueSSEError(readErr)
 }
 
