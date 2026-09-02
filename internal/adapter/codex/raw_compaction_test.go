@@ -745,7 +745,7 @@ func rawResponseTransformerForTest(t *testing.T) *RawResponsesCompactionTransfor
 }
 
 func rawJSONResponse(status int, text string) *http.Response {
-	body := []byte(`{"id":"resp-1","output":[{"type":"reasoning","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(text) + `}],"opaque":true}],"unknown":{"keep":true}}`)
+	body := []byte(`{"id":"resp-1","status":"completed","output":[{"type":"reasoning","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(text) + `}],"opaque":true}],"unknown":{"keep":true}}`)
 	return &http.Response{
 		StatusCode: status,
 		Header:     http.Header{"Content-Type": {"application/json"}, "Content-Length": {"1"}},

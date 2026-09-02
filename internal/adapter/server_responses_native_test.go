@@ -655,7 +655,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequest(t *testing.T) {
 func TestNativeCodexResponsesCompactionV2RecoveryLifecycle(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	naturalResend := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>"}]}]}`)
-	responseBody := []byte(`{"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final answer"}]}]}`)
+	responseBody := []byte(`{"id":"resp-1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final answer"}]}]}`)
 	naturalResponse := []byte(`{"id":"resp-2","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>\nfinal answer"}]}]}`)
 	var upstreamBodies [][]byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
