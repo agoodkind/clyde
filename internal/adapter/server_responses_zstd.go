@@ -47,19 +47,44 @@ func prepareNativeCodexResponsesCompaction(
 	raw adaptercodex.RawResponsesRequest,
 	decodedBody []byte,
 	settings adaptercodex.RawResponsesCompactionSettings,
-) (adaptercodex.RawResponsesRequest, *adaptercodex.RawResponsesCompactionTransformer) {
+) (adaptercodex.RawResponsesRequest, *adaptercodex.RawResponsesCompactionTransformer, *adaptercodex.RawResponsesCompactionV2Plan) {
 	decodedRaw := raw
 	decodedRaw.Body = decodedBody
+	if adaptercodex.DetectRawResponsesCompactionProtocol(decodedRaw.Header) == adaptercodex.RawResponsesCompactionV2 {
+		return prepareNativeCodexResponsesCompactionV2(raw, decodedRaw, decodedBody, settings)
+	}
 	transformed, transformer := adaptercodex.PrepareRawResponsesCompaction(decodedRaw, settings)
 	if transformer == nil {
-		return raw, nil
+		return raw, nil, nil
 	}
 	forwardBody, ok := encodeNativeResponsesBody(transformed.Body, raw.Header.Get("Content-Encoding"))
 	if !ok {
-		return raw, nil
+		return raw, nil, nil
 	}
 	transformed.Body = forwardBody
-	return transformed, transformer
+	return transformed, transformer, nil
+}
+
+func prepareNativeCodexResponsesCompactionV2(
+	raw adaptercodex.RawResponsesRequest,
+	decodedRaw adaptercodex.RawResponsesRequest,
+	decodedBody []byte,
+	settings adaptercodex.RawResponsesCompactionSettings,
+) (adaptercodex.RawResponsesRequest, *adaptercodex.RawResponsesCompactionV2Plan) {
+	plan, ok := adaptercodex.PlanRawResponsesCompactionV2(decodedRaw, settings)
+	if !ok {
+		return raw, nil
+	}
+	if bytes.Equal(plan.Request.Body, decodedBody) {
+		plan.Request.Body = raw.Body
+		return plan.Request, &plan
+	}
+	forwardBody, ok := encodeNativeResponsesBody(plan.Request.Body, raw.Header.Get("Content-Encoding"))
+	if !ok {
+		return raw, nil
+	}
+	plan.Request.Body = forwardBody
+	return plan.Request, &plan
 }
 
 func encodeNativeResponsesBody(body []byte, contentEncoding string) ([]byte, bool) {
