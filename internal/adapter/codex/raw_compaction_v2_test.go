@@ -3,7 +3,9 @@ package codex
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -179,6 +181,72 @@ func TestPlanRawResponsesCompactionV2PreservesUnfinishedMidTurn(t *testing.T) {
 		bytes.Contains([]byte(plan.Transcript), []byte("call-1")) {
 		t.Fatalf("transcript includes unfinished mid-turn items: %s", plan.Transcript)
 	}
+}
+
+func TestPlanRawResponsesCompactionV2RendersDeveloperMessages(t *testing.T) {
+	request := rawResponsesCompactionV2TestRequest(
+		`[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"newer"}]},
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"newer developer instruction"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"newer answer"}]},
+			{"type":"compaction_trigger"}
+		]`,
+		rawResponsesCompactionV2TestMetadata("mid_turn", "memento"),
+	)
+	request.Header.Set(CodexTurnMetadataHeader, `{"session_id":"session-1","request_kind":"compaction","compaction":{"implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}}`)
+	plan, ok := PlanRawResponsesCompactionV2(request, RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	})
+	if !ok {
+		t.Fatal("v2 compaction rejected a developer message in the removable turn")
+	}
+	if !bytes.Contains([]byte(plan.Transcript), []byte("newer developer instruction")) {
+		t.Fatal("v2 recovery transcript omitted the developer message")
+	}
+}
+
+func TestPlanRawResponsesCompactionV2BoundsRecoveryTranscript(t *testing.T) {
+	underRequest := rawResponsesCompactionV2DeveloperRequest(t, "x")
+	basePlan, ok := PlanRawResponsesCompactionV2(underRequest, RawResponsesCompactionSettings{Enabled: true, RecentFraction: 0.5})
+	if !ok {
+		t.Fatal("plan developer boundary fixture")
+	}
+	underText := strings.Repeat("x", maxRawResponsesCompactionV2RecoveryBytes-len(basePlan.Transcript)+1)
+	underRequest = rawResponsesCompactionV2DeveloperRequest(t, underText)
+	underPlan, ok := PlanRawResponsesCompactionV2(underRequest, RawResponsesCompactionSettings{Enabled: true, RecentFraction: 0.5})
+	if !ok || len(underPlan.Transcript) > maxRawResponsesCompactionV2RecoveryBytes {
+		t.Fatalf("under-cap v2 recovery plan ok=%t bytes=%d", ok, len(underPlan.Transcript))
+	}
+
+	overText := underText + "xx"
+	overRequest := rawResponsesCompactionV2DeveloperRequest(t, overText)
+	if _, ok := PlanRawResponsesCompactionV2(overRequest, RawResponsesCompactionSettings{Enabled: true, RecentFraction: 0.5}); ok {
+		t.Fatal("over-cap v2 recovery plan unexpectedly succeeded")
+	}
+}
+
+func rawResponsesCompactionV2DeveloperRequest(t *testing.T, developerText string) RawResponsesRequest {
+	t.Helper()
+	encodedText, err := json.Marshal(developerText)
+	if err != nil {
+		t.Fatalf("encode developer fixture: %v", err)
+	}
+	request := rawResponsesCompactionV2TestRequest(
+		fmt.Sprintf(`[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"newer"}]},
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":%s}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"newer answer"}]},
+			{"type":"compaction_trigger"}
+		]`, encodedText),
+		rawResponsesCompactionV2TestMetadata("mid_turn", "memento"),
+	)
+	request.Header.Set(CodexTurnMetadataHeader, `{"session_id":"session-1","request_kind":"compaction","compaction":{"implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}}`)
+	return request
 }
 
 func rawResponsesCompactionV2TestRequest(input string, metadata string) RawResponsesRequest {
