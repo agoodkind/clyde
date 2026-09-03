@@ -54,6 +54,33 @@ func TestPlanRawResponsesCompactionUsesTranscriptIndexesAndPreservesPrompt(t *te
 	}
 }
 
+func TestPlanRawResponsesCompactionRendersDeveloperMessages(t *testing.T) {
+	body := []byte(`{"input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"older user"}]},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},
+		{"type":"message","role":"developer","content":[{"type":"input_text","text":"recent developer instruction"}]},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent answer"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}
+	]}`)
+	transformed, transformer := PrepareRawResponsesCompaction(
+		rawCompactionRequest(t, body),
+		RawResponsesCompactionSettings{
+			Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+			ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+		},
+	)
+	if transformer == nil || bytes.Contains(transformed.Body, []byte("recent developer instruction")) {
+		t.Fatal("v1 compaction did not remove the developer-containing recent turn")
+	}
+	responseBody := readResponseBody(t, transformer.TransformResponse(rawJSONResponse(http.StatusOK, "summary")))
+	for _, content := range []string{"recent user", "recent developer instruction", "recent answer"} {
+		if !bytes.Contains(responseBody, []byte(content)) {
+			t.Fatalf("v1 recovery omitted %q", content)
+		}
+	}
+}
+
 func TestHasRawResponsesCompactionItem(t *testing.T) {
 	for _, testCase := range []struct {
 		name string

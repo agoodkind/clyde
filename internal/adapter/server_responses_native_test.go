@@ -942,6 +942,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpen(t *testing.T) 
 		{name: "duplicate compaction", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "malformed input field", body: []byte(`{"model":"gpt-native","input":[],"input":[{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>kept</pre-compaction-transcript>"}]}]}`), metadata: nativeTurnMetadata(t)},
+		{name: "escaped tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"\u003cpre-compaction-transcript\u003ekept\u003c/pre-compaction-transcript\u003e"}]}]}`), metadata: nativeTurnMetadata(t)},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -980,6 +981,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpenZstd(t *testing
 		{name: "duplicate compaction", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "malformed input field", body: []byte(`{"model":"gpt-native","input":[],"input":[{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>kept</pre-compaction-transcript>"}]}]}`), metadata: nativeTurnMetadata(t)},
+		{name: "escaped tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"\u003cpre-compaction-transcript\u003ekept\u003c/pre-compaction-transcript\u003e"}]}]}`), metadata: nativeTurnMetadata(t)},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
