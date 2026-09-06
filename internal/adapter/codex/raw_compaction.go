@@ -65,6 +65,7 @@ func HasRawResponsesCompactionItem(request RawResponsesRequest) bool {
 type RawResponsesCompactionTransformer struct {
 	transcript string
 	stream     bool
+	mutation   *rawCompactionMutation
 }
 
 type rawCompactionContentEncoding string
@@ -150,6 +151,7 @@ func PrepareRawResponsesCompaction(
 	return transformed, &RawResponsesCompactionTransformer{
 		transcript: plan.transcript,
 		stream:     raw.Stream,
+		mutation:   nil,
 	}
 }
 
@@ -733,7 +735,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		clone.Header = response.Header.Clone()
 		clone.Header.Del("Content-Length")
 		clone.ContentLength = -1
-		clone.Body = newRawCompactionSSEBody(response.Body, wrapped)
+		clone.Body = newRawCompactionSSEBody(response.Body, wrapped, t.markMutated, t.mutation != nil)
 		return &clone
 	}
 	originalBody := response.Body
@@ -748,6 +750,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	if !ok || bytes.Equal(transformed, body) {
 		return response
 	}
+	t.markMutated()
 	clone := *response
 	clone.Header = response.Header.Clone()
 	clone.Header.Del("Content-Length")
@@ -775,7 +778,7 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		clone.Header.Del("Content-Length")
 		clone.ContentLength = -1
 		clone.Body = newRawCompactionEncodedBody(
-			newRawCompactionSSEBody(decoded, transcriptText),
+			newRawCompactionSSEBody(decoded, transcriptText, t.markMutated, t.mutation != nil),
 			encoding,
 		)
 		return &clone

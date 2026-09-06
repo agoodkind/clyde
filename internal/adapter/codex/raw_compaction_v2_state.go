@@ -15,15 +15,17 @@ const (
 
 // RawResponsesCompactionV2Registry retains bounded process-local recovery state.
 type RawResponsesCompactionV2Registry struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	entries map[string]rawResponsesCompactionV2Entry
+	mu             sync.Mutex
+	now            func() time.Time
+	entries        map[string]rawResponsesCompactionV2Entry
+	nextGeneration uint64
 }
 
 type rawResponsesCompactionV2Entry struct {
 	transcript string
 	created    time.Time
-	claimed    bool
+	leased     bool
+	generation uint64
 }
 
 // NewRawResponsesCompactionV2Registry creates an empty recovery registry.
@@ -31,7 +33,7 @@ func NewRawResponsesCompactionV2Registry(now func() time.Time) *RawResponsesComp
 	if now == nil {
 		now = time.Now
 	}
-	return &RawResponsesCompactionV2Registry{mu: sync.Mutex{}, now: now, entries: make(map[string]rawResponsesCompactionV2Entry)}
+	return &RawResponsesCompactionV2Registry{mu: sync.Mutex{}, now: now, entries: make(map[string]rawResponsesCompactionV2Entry), nextGeneration: 0}
 }
 
 // Arm stores transcript recovery under the digest of encrypted content.
@@ -58,11 +60,28 @@ func (r *RawResponsesCompactionV2Registry) ArmWithGeneration(sessionID, encrypte
 			return 0, false
 		}
 	}
-	r.entries[key] = rawResponsesCompactionV2Entry{transcript: transcript, created: now, claimed: false}
+	r.nextGeneration++
+	r.entries[key] = rawResponsesCompactionV2Entry{transcript: transcript, created: now, leased: false, generation: r.nextGeneration}
 	return r.nextGeneration, true
 }
 
-// Match atomically reserves an unexpired transcript recovery entry.
+// Disarm removes a pending recovery after its terminal client write fails.
+func (r *RawResponsesCompactionV2Registry) Disarm(sessionID, encryptedContent string, generation uint64) {
+	if r == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(encryptedContent) == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.expire(r.now())
+	key := rawResponsesCompactionV2Key(sessionID, encryptedContent)
+	entry, ok := r.entries[key]
+	if !ok || entry.leased || entry.generation != generation {
+		return
+	}
+	delete(r.entries, key)
+}
+
+// Match returns an unexpired transcript recovery entry.
 func (r *RawResponsesCompactionV2Registry) Match(sessionID, encryptedContent string) (string, bool) {
 	if r == nil {
 		return "", false
@@ -70,39 +89,49 @@ func (r *RawResponsesCompactionV2Registry) Match(sessionID, encryptedContent str
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.expire(r.now())
-	key := rawResponsesCompactionV2Key(sessionID, encryptedContent)
-	entry, ok := r.entries[key]
-	if !ok || entry.claimed {
-		return "", false
-	}
-	entry.claimed = true
-	r.entries[key] = entry
+	entry, ok := r.entries[rawResponsesCompactionV2Key(sessionID, encryptedContent)]
 	if !ok || entry.leased {
 		return "", false
 	}
 	return entry.transcript, true
 }
 
-// Release makes a reserved recovery entry available after persistence fails.
-func (r *RawResponsesCompactionV2Registry) Release(sessionID, encryptedContent string) bool {
+// Reserve leases an unexpired recovery entry to one regular final-answer request.
+func (r *RawResponsesCompactionV2Registry) Reserve(sessionID, encryptedContent string) (string, uint64, bool) {
 	if r == nil {
-		return false
+		return "", 0, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.expire(r.now())
 	key := rawResponsesCompactionV2Key(sessionID, encryptedContent)
 	entry, ok := r.entries[key]
-	if !ok || !entry.claimed {
-		return false
+	if !ok || entry.leased {
+		return "", 0, false
 	}
-	entry.claimed = false
+	entry.leased = true
 	r.entries[key] = entry
-	return true
+	return entry.transcript, entry.generation, true
 }
 
-// Complete removes a reserved recovery entry after successful persistence.
-func (r *RawResponsesCompactionV2Registry) Complete(sessionID, encryptedContent string) bool {
+// Release makes a reserved recovery available after fail-open delivery.
+func (r *RawResponsesCompactionV2Registry) Release(sessionID, encryptedContent string, generation uint64) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := rawResponsesCompactionV2Key(sessionID, encryptedContent)
+	entry, ok := r.entries[key]
+	if !ok || entry.generation != generation {
+		return
+	}
+	entry.leased = false
+	r.entries[key] = entry
+}
+
+// Complete removes a matched recovery entry after successful persistence.
+func (r *RawResponsesCompactionV2Registry) Complete(sessionID, encryptedContent string, generation uint64) bool {
 	if r == nil {
 		return false
 	}
@@ -110,7 +139,7 @@ func (r *RawResponsesCompactionV2Registry) Complete(sessionID, encryptedContent 
 	defer r.mu.Unlock()
 	key := rawResponsesCompactionV2Key(sessionID, encryptedContent)
 	entry, ok := r.entries[key]
-	if !ok || !entry.claimed {
+	if !ok || !entry.leased || entry.generation != generation {
 		return false
 	}
 	delete(r.entries, key)

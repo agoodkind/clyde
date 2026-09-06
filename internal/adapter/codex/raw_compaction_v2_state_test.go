@@ -19,7 +19,11 @@ func TestRawResponsesCompactionV2RegistryLifecycle(t *testing.T) {
 	if registry.Arm("s", "encrypted", "other") {
 		t.Fatal("duplicate Arm() succeeded")
 	}
-	if !registry.Complete("s", "encrypted") {
+	if _, generation, ok := registry.Reserve("s", "encrypted"); !ok {
+		t.Fatal("Reserve() = false")
+	} else if _, _, ok := registry.Reserve("s", "encrypted"); ok {
+		t.Fatal("duplicate Reserve() succeeded")
+	} else if !registry.Complete("s", "encrypted", generation) {
 		t.Fatal("Complete() = false")
 	}
 	if _, ok := registry.Match("s", "encrypted"); ok {
@@ -83,5 +87,38 @@ func TestRawResponsesCompactionV2RegistryExpiresAndEvicts(t *testing.T) {
 	}
 	if _, ok := registry.Match("s", "encrypted-0"); ok {
 		t.Fatal("oldest entry survived eviction")
+	}
+}
+
+func TestRawResponsesCompactionV2RegistryFencesStaleLeaseAfterRearm(t *testing.T) {
+	now := time.Unix(1, 0)
+	registry := NewRawResponsesCompactionV2Registry(func() time.Time { return now })
+	if !registry.Arm("s", "encrypted", "old") {
+		t.Fatal("arm old")
+	}
+	_, oldGeneration, ok := registry.Reserve("s", "encrypted")
+	if !ok {
+		t.Fatal("reserve old")
+	}
+	now = now.Add(rawResponsesCompactionV2TTL)
+	if _, ok := registry.Match("s", "encrypted"); ok {
+		t.Fatal("old entry remained")
+	}
+	if !registry.Arm("s", "encrypted", "new") {
+		t.Fatal("arm new")
+	}
+	_, newGeneration, ok := registry.Reserve("s", "encrypted")
+	if !ok {
+		t.Fatal("reserve new")
+	}
+	registry.Release("s", "encrypted", oldGeneration)
+	if _, _, ok := registry.Reserve("s", "encrypted"); ok {
+		t.Fatal("stale release changed new lease")
+	}
+	if registry.Complete("s", "encrypted", oldGeneration) {
+		t.Fatal("stale completion removed new entry")
+	}
+	if !registry.Complete("s", "encrypted", newGeneration) {
+		t.Fatal("complete new")
 	}
 }

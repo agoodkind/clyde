@@ -330,6 +330,47 @@ func (h *harness) writeAdapterConfig(t *testing.T, adapterPort int, passthroughU
 	h.writeAdapterConfigWithCapture(t, adapterPort, passthroughURL, extraModels, false)
 }
 
+// writeCodexAdapterConfig enables the isolated direct Codex route used by the
+// native Responses live harness. The caller supplies a throwaway upstream and
+// auth file, so the daemon cannot read the operator's Codex credentials.
+func (h *harness) writeCodexAdapterConfig(t *testing.T, upstreamURL, authFile string) {
+	t.Helper()
+	h.writeAdapterConfig(t, h.cfg.AdapterPort, upstreamURL, nil)
+	content, err := os.ReadFile(h.configPath)
+	if err != nil {
+		t.Fatalf("read fake adapter config: %v", err)
+	}
+	updated := strings.Replace(
+		string(content),
+		"[adapter]\nenabled = true\n",
+		"[adapter]\nenabled = true\nreorient_summary_injection = true\n",
+		1,
+	)
+	updated += fmt.Sprintf(`
+[adapter.codex]
+enabled = true
+base_url = %q
+auth_file = %q
+
+[adapter.model_profiles.codex-live]
+contexts = [{ name = "standard", tokens = 2000, transport_limits = [{ transport = "codex_http", tokens = 2000 }] }]
+max_output_tokens = 8000
+reasoning_efforts = ["medium"]
+default_effort = "medium"
+supports_tools = true
+supports_vision = false
+
+[adapter.models."gpt-5.6-terra"]
+provider = "codex"
+wire_model = "gpt-5.6-terra"
+profile = "codex-live"
+advertise = true
+`, upstreamURL, authFile)
+	if err := os.WriteFile(h.configPath, []byte(updated), 0o600); err != nil {
+		t.Fatalf("write fake Codex adapter config: %v", err)
+	}
+}
+
 // writeCombinedAdapterMITMConfig enables adapter ingress capture and the MITM
 // listener against the same isolated capture store used by the daemon.
 func (h *harness) writeCombinedAdapterMITMConfig(t *testing.T, adapterPort int, passthroughURL string) {

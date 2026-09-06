@@ -54,6 +54,33 @@ func TestPlanRawResponsesCompactionUsesTranscriptIndexesAndPreservesPrompt(t *te
 	}
 }
 
+func TestPlanRawResponsesCompactionRendersDeveloperMessages(t *testing.T) {
+	body := []byte(`{"input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"older user"}]},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},
+		{"type":"message","role":"developer","content":[{"type":"input_text","text":"recent developer instruction"}]},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent answer"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}
+	]}`)
+	transformed, transformer := PrepareRawResponsesCompaction(
+		rawCompactionRequest(t, body),
+		RawResponsesCompactionSettings{
+			Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+			ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+		},
+	)
+	if transformer == nil || bytes.Contains(transformed.Body, []byte("recent developer instruction")) {
+		t.Fatal("v1 compaction did not remove the developer-containing recent turn")
+	}
+	responseBody := readResponseBody(t, transformer.TransformResponse(rawJSONResponse(http.StatusOK, "summary")))
+	for _, content := range []string{"recent user", "recent developer instruction", "recent answer"} {
+		if !bytes.Contains(responseBody, []byte(content)) {
+			t.Fatalf("v1 recovery omitted %q", content)
+		}
+	}
+}
+
 func TestHasRawResponsesCompactionItem(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
@@ -303,6 +330,45 @@ func TestRawResponsesCompactionMutatesNonStreamingJSONOnce(t *testing.T) {
 	repeatedBody := readResponseBody(t, repeated)
 	if !bytes.Equal(repeatedBody, body) {
 		t.Fatalf("repeated transformation changed response:\n got: %s\nwant: %s", repeatedBody, body)
+	}
+}
+
+func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T) {
+	recovery := &RawResponsesCompactionV2Recovery{transcript: "recovered transcript"}
+	finalRequest := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}
+	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(finalRequest, recovery)
+	if transformer == nil {
+		t.Fatal("final answer did not create transformer")
+	}
+	body := readResponseBody(t, transformer.TransformResponse(rawJSONResponse(http.StatusOK, "answer")))
+	if !transformer.DidMutateResponse() || bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 {
+		t.Fatalf("final answer mutation = %t body=%s", transformer.DidMutateResponse(), body)
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		metadata string
+		response *http.Response
+	}{
+		{name: "commentary", metadata: `{"request_kind":"turn","compaction":{"phase":"commentary"}}`, response: rawJSONResponse(http.StatusOK, "comment")},
+		{name: "tool only", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","call_id":"call"}]}`))}},
+		{name: "malformed", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":[`))}},
+		{name: "duplicate tag", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: rawJSONResponse(http.StatusOK, "<pre-compaction-transcript>kept</pre-compaction-transcript>")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {testCase.metadata}}}
+			candidate := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
+			if testCase.name == "commentary" {
+				if candidate != nil {
+					t.Fatal("commentary created transformer")
+				}
+				return
+			}
+			got := readResponseBody(t, candidate.TransformResponse(testCase.response))
+			if candidate.DidMutateResponse() || bytes.Contains(got, []byte("recovered transcript")) {
+				t.Fatalf("%s mutated: %s", testCase.name, got)
+			}
+		})
 	}
 }
 
@@ -706,7 +772,7 @@ func rawResponseTransformerForTest(t *testing.T) *RawResponsesCompactionTransfor
 }
 
 func rawJSONResponse(status int, text string) *http.Response {
-	body := []byte(`{"id":"resp-1","output":[{"type":"reasoning","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(text) + `}],"opaque":true}],"unknown":{"keep":true}}`)
+	body := []byte(`{"id":"resp-1","status":"completed","output":[{"type":"reasoning","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(text) + `}],"opaque":true}],"unknown":{"keep":true}}`)
 	return &http.Response{
 		StatusCode: status,
 		Header:     http.Header{"Content-Type": {"application/json"}, "Content-Length": {"1"}},
