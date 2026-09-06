@@ -227,6 +227,36 @@ func TestProviderOpenRawResponsesForcesIdentityForV1Compaction(t *testing.T) {
 	}
 }
 
+func TestProviderOpenRawResponsesForcesIdentityForV2Compaction(t *testing.T) {
+	var gotEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotEncoding = request.Header.Get("Accept-Encoding")
+		_, _ = writer.Write([]byte(`{"id":"compaction-response"}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	provider := NewProvider(adapterprovider.Deps{
+		Config: rawResponsesConfig(upstream.URL), Auth: rawResponsesNoRefreshAuth{}, HTTPClient: upstream.Client(),
+	}, ProviderOptions{})
+	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{
+		Body: []byte(`{"model":"gpt-native"}`),
+		Header: http.Header{
+			"Accept-Encoding":       {"gzip, br"},
+			CodexTurnMetadataHeader: {`{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}}`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("OpenRawResponses() error = %v", err)
+	}
+	t.Cleanup(func() { _ = response.Body.Close() })
+	if _, err := io.ReadAll(response.Body); err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if gotEncoding != "identity" {
+		t.Fatalf("Accept-Encoding = %q, want identity", gotEncoding)
+	}
+}
+
 func TestProviderOpenRawResponsesRefreshesOnceAfterUnauthorized(t *testing.T) {
 	auth := &rawResponsesAuth{}
 	var requests atomic.Int32
