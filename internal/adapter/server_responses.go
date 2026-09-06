@@ -10,12 +10,15 @@ import (
 	"strconv"
 	"strings"
 
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/gklog/trace"
 )
 
@@ -49,6 +52,13 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 		defer func() {
 			s.finishIngressCapture(capW, hctx.Correlation, r, body, started, err)
 		}()
+	}
+	handledNative, nativeErr := s.tryDispatchNativeCodexResponses(ctx, w, r, reqID, body, corr)
+	if nativeErr != nil {
+		return nativeErr
+	}
+	if handledNative {
+		return nil
 	}
 	rr, parseErr := adapteropenai.UnmarshalResponsesRequest(body)
 	if parseErr != nil {
@@ -96,6 +106,114 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 
 	s.dispatchResolvedResponsesWithID(w, r, req, reqID, responseID, body, resolvedReq, warnings)
 	return nil
+}
+
+func (s *Server) tryDispatchNativeCodexResponses(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	requestID string,
+	body []byte,
+	corr correlation.Context,
+) (bool, error) {
+	raw, _, native := nativeCodexResponsesRequest(body, r.Header, corr)
+	if !native {
+		return false, nil
+	}
+	rr, parseErr := adapteropenai.UnmarshalResponsesRequest(body)
+	if parseErr != nil {
+		return false, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
+	}
+	req, _, projectionErr := responsesRequestToChatRequest(rr)
+	if projectionErr != nil {
+		return false, projectionErr
+	}
+	forceStreamUsageOptIn(&req)
+	resolvedReq, resolverErr := resolveResponsesRequest(
+		openAIIngressSurface(ctx), req, adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
+	)
+	if resolverErr != nil {
+		return false, nativeResponsesResolverError(resolverErr)
+	}
+	resolvedReq.RequestID = requestID
+	resolvedReq.Correlation = corr
+	if overrideErr := s.applyBackendOverride(r, req, &resolvedReq, requestID); overrideErr != nil {
+		return false, overrideErr
+	}
+	if resolvedReq.Provider != adapterresolver.ProviderCodex {
+		return false, nil
+	}
+	if preErr := s.preflightChat(ctx, &req, &resolvedReq, requestID); preErr != nil {
+		return false, preErr
+	}
+	resolvedRaw, rawErr := raw.MarshalWithModel(resolvedReq.Model)
+	if rawErr != nil {
+		return false, adapterErrInvalidRequest(rawErr.Error(), rawErr)
+	}
+	s.dispatchNativeCodexResponses(w, r, requestID, resolvedRaw, resolvedReq)
+	return true, nil
+}
+
+func nativeResponsesResolverError(resolverErr error) *adapterError {
+	var invalidRequestErr *adapterresolver.InvalidRequestError
+	if errors.As(resolverErr, &invalidRequestErr) {
+		return adapterErrInvalidRequest(invalidRequestErr.Error(), resolverErr)
+	}
+	return adapterErrModelNotFound(resolverErr.Error())
+}
+
+func nativeCodexResponsesRequest(body []byte, header http.Header, corr correlation.Context) (adaptercodex.RawResponsesRequest, string, bool) {
+	var request struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil || strings.TrimSpace(request.Model) == "" {
+		var zero adaptercodex.RawResponsesRequest
+		return zero, "", false
+	}
+	raw := adaptercodex.RawResponsesRequest{
+		Body: body, Header: header.Clone(), RequestID: corr.RequestID, Correlation: corr, Stream: request.Stream,
+	}
+	if !raw.HasValidTurnMetadata() {
+		var zero adaptercodex.RawResponsesRequest
+		return zero, "", false
+	}
+	return raw, request.Model, true
+}
+
+func (s *Server) dispatchNativeCodexResponses(
+	w http.ResponseWriter,
+	r *http.Request,
+	requestID string,
+	raw adaptercodex.RawResponsesRequest,
+	resolved adapterresolver.ResolvedRequest,
+) {
+	if s.codexProvider == nil {
+		s.respondAdapterError(w, r, codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured))
+		return
+	}
+	ctx, lifecycle := s.beginProviderRequestLifecycle(r.Context(), &resolved, "direct", requestID, resolved.Model, raw.Stream)
+	egressCtx, releaseEgress := s.codexRawResponsesEgressContext(ctx, requestID)
+	defer releaseEgress("codex.raw_responses.done")
+	response, err := s.codexProvider.OpenRawResponses(egressCtx, raw)
+	if err != nil {
+		var result adapterprovider.Result
+		lifecycle.terminal(ctx, result, err)
+		s.respondAdapterError(w, r, codexProviderAdapterError(err))
+		return
+	}
+	defer func() { _ = response.Body.Close() }()
+	streamingResponse := raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
+	if streamingResponse {
+		lifecycle.stream = true
+		lifecycle.streamOpened(ctx)
+	}
+	_, copyErr := s.copyPassthroughResponse(ctx, w, response, streamingResponse)
+	var result adapterprovider.Result
+	lifecycle.terminal(ctx, result, copyErr)
+	if copyErr != nil {
+		s.log.WarnContext(ctx, "adapter.codex.raw_responses.copy_failed", "concern", "adapter.providers.codex.request", "err", copyErr)
+	}
 }
 
 // responsesRequestToChatRequest projects a typed Responses request into
