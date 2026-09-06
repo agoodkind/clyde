@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andybalholm/brotli"
 
@@ -90,17 +91,17 @@ func TestPlanRawResponsesCompactionHonorsFractionAndByteCapBoundaries(t *testing
 	if ok {
 		t.Fatalf("fraction below one item unexpectedly split: %+v", lastOnly)
 	}
-	lastMessage, ok := renderRawResponsesCompactionNormalizedItems(
-		codexstore.NormalizeResponseInputItems(items[5:6]),
+	lastTurn, ok := renderRawResponsesCompactionNormalizedItems(
+		codexstore.NormalizeResponseInputItems(items[4:6]),
 	)
 	if !ok {
-		t.Fatal("last message did not render")
+		t.Fatal("last turn did not render")
 	}
-	capPlan, ok := planRawResponsesCompaction(items, len(lastMessage), 0.5)
-	if !ok || capPlan.removedStart != 5 {
-		t.Fatalf("cap plan = %+v ok=%t, want only index 5 removed", capPlan, ok)
+	capPlan, ok := planRawResponsesCompaction(items, len(lastTurn), 0.5)
+	if !ok || capPlan.removedStart != 4 {
+		t.Fatalf("cap plan = %+v ok=%t, want complete turn [4:6) removed", capPlan, ok)
 	}
-	underCap, ok := planRawResponsesCompaction(items, len(lastMessage)-1, 0.5)
+	underCap, ok := planRawResponsesCompaction(items, len(lastTurn)-1, 0.5)
 	if ok {
 		t.Fatalf("under-cap plan unexpectedly split: %+v", underCap)
 	}
@@ -142,7 +143,10 @@ func TestRawResponsesCompactionExpandsEverySupportedToolPair(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := []byte(`{"model":"gpt-native","input":[` +
 				`{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},` +
+				`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},` +
+				`{"type":"message","role":"user","content":[{"type":"input_text","text":"recent"}]},` +
 				testCase.call + `,` + testCase.output + `,` +
+				`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent assistant"}]},` +
 				`{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}` +
 				`]}`)
 			transformed, transformer := PrepareRawResponsesCompaction(
@@ -202,6 +206,28 @@ func TestRawResponsesCompactionRejectsIncompleteToolPairs(t *testing.T) {
 				t.Fatalf("incomplete pair did not fail open: %s", transformed.Body)
 			}
 		})
+	}
+}
+
+func TestRawResponsesCompactionRejectsDuplicateCallIDsAcrossTurns(t *testing.T) {
+	body := []byte(`{"model":"gpt-native","input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"old user"}]},
+		{"type":"function_call","name":"old","arguments":"{}","call_id":"call-1"},
+		{"type":"function_call_output","call_id":"call-1","output":"old result"},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},
+		{"type":"function_call","name":"recent","arguments":"{}","call_id":"call-1"},
+		{"type":"function_call_output","call_id":"call-1","output":"recent result"},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent assistant"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}
+	]}`)
+	settings := RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	transformed, transformer := PrepareRawResponsesCompaction(rawCompactionRequest(t, body), settings)
+	if transformer != nil || !bytes.Equal(transformed.Body, body) {
+		t.Fatalf("duplicate call IDs did not fail open: %s", transformed.Body)
 	}
 }
 
@@ -321,8 +347,53 @@ func TestRawResponsesCompactionPreservesInterveningSSEFrames(t *testing.T) {
 	heartbeatIndex := bytes.Index(body, []byte(heartbeat))
 	interveningIndex := bytes.Index(body, []byte("response.future"))
 	completedIndex := bytes.Index(body, []byte("response.completed"))
-	if itemIndex < 0 || heartbeatIndex <= itemIndex || interveningIndex <= heartbeatIndex || completedIndex <= interveningIndex {
+	if heartbeatIndex < 0 || itemIndex <= heartbeatIndex || interveningIndex <= itemIndex || completedIndex <= interveningIndex {
 		t.Fatalf("intervening SSE frame order changed: %s", body)
+	}
+}
+
+func TestRawResponsesCompactionForwardsHeartbeatAfterCandidate(t *testing.T) {
+	transformer := rawResponseTransformerForTest(t)
+	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
+	heartbeat := ": keepalive\n\n"
+	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+	upstream, writer := io.Pipe()
+	release := make(chan struct{})
+	go func() {
+		_, _ = io.WriteString(writer, itemDone)
+		_, _ = io.WriteString(writer, heartbeat)
+		<-release
+		_, _ = io.WriteString(writer, completed)
+		_ = writer.Close()
+	}()
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       upstream,
+	}
+	body := transformer.TransformResponse(response).Body
+	t.Cleanup(func() { _ = body.Close() })
+	firstFrame := make([]byte, len(heartbeat))
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(body, firstFrame)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("read heartbeat: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("heartbeat after candidate did not reach live reader")
+	}
+	if string(firstFrame) != heartbeat {
+		t.Fatalf("first downstream frame = %q, want heartbeat", firstFrame)
+	}
+	close(release)
+	remainder := readResponseBody(t, &http.Response{Body: body})
+	if !bytes.Contains(remainder, []byte("<pre-compaction-transcript>")) {
+		t.Fatalf("completed response lost transcript: %s", remainder)
 	}
 }
 
@@ -450,8 +521,8 @@ func TestRawResponsesCompactionKeepsCompletedSSEOutputCoherent(t *testing.T) {
 		t.Fatalf("transcript was not appended to both SSE results: %s", body)
 	}
 	for _, frame := range bytes.Split(bytes.TrimSpace(body), []byte("\n\n")) {
-		_, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
-		if dataCount != 1 || !json.Valid(frame[dataStart:dataEnd]) {
+		_, data, dataCount := rawSSEFrameDataValue(frame)
+		if dataCount != 1 || !json.Valid(data) {
 			t.Fatalf("invalid SSE frame: %s", frame)
 		}
 	}
@@ -593,7 +664,7 @@ func rawCompactionRequest(t *testing.T, body []byte) RawResponsesRequest {
 
 func rawResponseTransformerForTest(t *testing.T) *RawResponsesCompactionTransformer {
 	t.Helper()
-	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
 	_, transformer := PrepareRawResponsesCompaction(
 		rawCompactionRequest(t, body),
 		RawResponsesCompactionSettings{

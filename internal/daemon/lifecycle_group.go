@@ -101,7 +101,7 @@ func (r *runtimeServices) addMITMLifecycleHook(id string, proxy *mitm.Proxy) {
 	})
 }
 
-// addCaptureStoreCloseHook registers the MITM capture store's close as a
+// addCaptureStoreCloseHook registers the shared capture store's close as a
 // PhaseStorage after-hook so its SQLite WAL flushes only after every surface
 // has drained.
 func (r *runtimeServices) addCaptureStoreCloseHook(store *capture.Store) {

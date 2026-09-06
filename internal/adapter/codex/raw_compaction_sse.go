@@ -85,7 +85,11 @@ func (b *rawCompactionSSEBody) loadNextFrame() error {
 			if readErr != nil || !rawCompactionUnknownSSEFrameIsValid(frame) {
 				return b.failOpenSSE(frame, readErr)
 			}
-			b.following = joinRawCompactionSSEFrames(b.following, frame)
+			_, _, dataCount := rawSSEFrameDataValue(frame)
+			if dataCount == 0 {
+				return b.queueSSEBytes(frame, readErr)
+			}
+			b.following = append(b.following, frame...)
 			return nil
 		}
 		return b.queueSSEBytes(frame, readErr)
@@ -266,96 +270,6 @@ func appendRawCompactionSSECompletedFrame(frame []byte, transcriptText string) (
 	return replaceRawSSEFrameData(frame, mutatedData), true
 }
 
-// selectRawCompactionStart renders only a logarithmic number of suffixes when
-// enforcing a byte limit. A longer suffix starts at a lower unit index.
-func selectRawCompactionStart(
-	units []rawCompactionInterval,
-	maxBytes int,
-	targetCount int,
-	render func(start int) (string, bool),
-) (int, string, bool) {
-	firstCandidate := len(units) - targetCount
-	if maxBytes <= 0 {
-		rendered, ok := render(units[firstCandidate].start)
-		return firstCandidate, rendered, ok && strings.TrimSpace(rendered) != ""
-	}
-
-	selected := -1
-	selectedTranscript := ""
-	lower := firstCandidate
-	upper := len(units) - 1
-	for lower <= upper {
-		middle := lower + (upper-lower)/2
-		rendered, ok := render(units[middle].start)
-		if !ok || strings.TrimSpace(rendered) == "" {
-			return 0, "", false
-		}
-		if len(rendered) > maxBytes {
-			lower = middle + 1
-			continue
-		}
-		selected = middle
-		selectedTranscript = rendered
-		upper = middle - 1
-	}
-	if selected < 0 {
-		return 0, "", false
-	}
-	return selected, selectedTranscript, true
-}
-
-func appendRawCompactionAssistantContentPart(
-	item []byte,
-	contentStart int,
-	contentEnd int,
-	hasContent bool,
-	transcriptText string,
-) ([]byte, bool, bool) {
-	encodedText, ok := marshalRawCompactionString(transcriptText)
-	if !ok {
-		return item, false, false
-	}
-	part := append([]byte(`{"type":"output_text","text":`), encodedText...)
-	part = append(part, '}')
-	if hasContent {
-		content := item[contentStart:contentEnd]
-		closing := len(content) - 1
-		for closing >= 0 && (content[closing] == ' ' || content[closing] == '\t' || content[closing] == '\r' || content[closing] == '\n') {
-			closing--
-		}
-		if closing < 0 || content[closing] != ']' {
-			return item, false, false
-		}
-		hasParts := len(bytes.TrimSpace(content[1:closing])) > 0
-		replacement := make([]byte, 0, len(content)+len(part)+1)
-		replacement = append(replacement, content[:closing]...)
-		if hasParts {
-			replacement = append(replacement, ',')
-		}
-		replacement = append(replacement, part...)
-		replacement = append(replacement, content[closing:]...)
-		return replaceByteRange(item, contentStart, contentEnd, replacement), true, true
-	}
-	closing := len(item) - 1
-	for closing >= 0 && (item[closing] == ' ' || item[closing] == '\t' || item[closing] == '\r' || item[closing] == '\n') {
-		closing--
-	}
-	if closing < 0 || item[closing] != '}' {
-		return item, false, false
-	}
-	hasFields := len(bytes.TrimSpace(item[1:closing])) > 0
-	replacement := make([]byte, 0, len(item)+len(part)+13)
-	replacement = append(replacement, item[:closing]...)
-	if hasFields {
-		replacement = append(replacement, ',')
-	}
-	replacement = append(replacement, `"content":[`...)
-	replacement = append(replacement, part...)
-	replacement = append(replacement, ']')
-	replacement = append(replacement, item[closing:]...)
-	return replacement, true, true
-}
-
 func rawSSEFrameEvent(frame []byte) rawCompactionSSEEvent {
 	for line := range bytes.SplitSeq(frame, []byte("\n")) {
 		line = bytes.TrimSuffix(line, []byte("\r"))
@@ -364,44 +278,6 @@ func rawSSEFrameEvent(frame []byte) rawCompactionSSEEvent {
 		}
 	}
 	return ""
-}
-
-func rawSSEFrameData(frame []byte) (string, int, int, int) {
-	eventName := ""
-	dataStart := 0
-	dataEnd := 0
-	dataCount := 0
-	lineStart := 0
-	for lineStart < len(frame) {
-		lineEnd := bytes.IndexByte(frame[lineStart:], '\n')
-		if lineEnd < 0 {
-			lineEnd = len(frame)
-		} else {
-			lineEnd += lineStart
-		}
-		contentEnd := lineEnd
-		if contentEnd > lineStart && frame[contentEnd-1] == '\r' {
-			contentEnd--
-		}
-		line := frame[lineStart:contentEnd]
-		if bytes.HasPrefix(line, []byte("event:")) {
-			eventName = strings.TrimSpace(string(line[len("event:"):]))
-		}
-		if bytes.HasPrefix(line, []byte("data:")) {
-			dataCount++
-			valueStart := lineStart + len("data:")
-			if valueStart < contentEnd && frame[valueStart] == ' ' {
-				valueStart++
-			}
-			dataStart = valueStart
-			dataEnd = contentEnd
-		}
-		if lineEnd >= len(frame) {
-			break
-		}
-		lineStart = lineEnd + 1
-	}
-	return eventName, dataStart, dataEnd, dataCount
 }
 
 func rawSSEFrameDataValue(frame []byte) (string, []byte, int) {

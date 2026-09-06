@@ -1,6 +1,6 @@
 # Reorient Delivery Overview
 
-Reorient delivery restores a conversation's pre-compaction transcript after a `/compact`, so the model keeps the detail the compaction summary drops. It ships in two tiers that share the same recovered-transcript content: Tier 1 (the paging note) covers Claude Code, Codex, and Cursor, while Tier 2 (the MITM summary injection) is Claude-Code-specific.
+Reorient delivery restores a conversation's pre-compaction transcript after a `/compact`, so the model keeps the detail the compaction summary drops. Tier 1 emits a paging note for Claude Code, Codex, and Cursor. Tier 2 injects transcript content into Claude MITM summaries and authenticated native Codex Responses summaries.
 
 Observed behavior of the current Claude Code client is that a large SessionStart `additionalContext` hook output is spilled to a file and only a short preview is injected, so the model never receives a full transcript delivered that way (this is client behavior, not defined in this repo). Both tiers work around that limit through a channel the client does not spill.
 
@@ -8,13 +8,20 @@ Observed behavior of the current Claude Code client is that a large SessionStart
 
 The hook emits a small note, under the client's hook-output size limit, that tells the model to page its pre-compaction transcript in through the clyde reorient tool. The note carries the conversation selector from the hook input. Claude Code and Codex emit it from `runReorientAfterCompact` on the post-compact SessionStart event. Cursor has no post-compact event, so `runReorientAfterCompact` no-ops for it and the same note is emitted from `runReorientStopFollowup` on the stop event, but only when a pre-compact snapshot exists for the conversation (`SnapshotStore.Consume` returns ok); a stop event with no snapshot emits nothing. Both hooks live in `internal/hookspec/runner.go`. `internal/hookspec/runner_test.go` and `internal/hookspec/output_snapshot_test.go` hold the behavior.
 
-## Tier 2: MITM summary injection (opt-in)
+## Tier 2: summary injection (opt-in)
 
-When `MITMConfig.ReorientSummaryInjection` is on (`internal/config/mitm_config.go`, default false), the MITM proxy injects the recovered transcript into the `/compact` summary response, so the client persists it in the `isCompactSummary` user message: in the transcript, uncut, and re-sent every turn. The transcript is inserted inside the model's `<summary>` span (before `</summary>`), because the client's `formatCompactSummary` keeps only the text between `<summary>` and `</summary>` and drops a separately appended trailing block; a response with no `</summary>` falls back to a trailing appended block, which the client keeps when there is no summary span. `internal/reorientinject/hook.go` holds detection, correlation, and the SSE injection; `internal/reorientinject/hook_test.go` and `internal/daemon/reorient_inject_e2e_test.go` hold the behavior.
+When `reorient_summary_injection` is on, the Claude MITM path injects the recovered transcript into the `/compact` summary response. The client persists that content in the `isCompactSummary` user message and sends it on later turns. The transcript is inserted inside the model's `<summary>` span. A response without a closing span receives a trailing block instead.
 
 Detection matches a stable substring of Claude Code's compaction prompt in the request's final message. The summarization request is otherwise structurally identical to a normal turn on the wire, because it carries the full tool schema, so the prompt text is the only reliable discriminator observed in the capture store. Correlation reads the Claude session id from the request's `metadata.user_id` field, which is a double-encoded JSON string (a JSON string value that itself contains an encoded JSON object) whose `session_id` names the on-disk transcript file. `internal/providers/claude/parser/session_path.go` resolves that session id to a path without the index (`internal/providers/claude/parser/session_path_test.go`).
 
 Content comes from `Index.RenderReorientArtifact` in `internal/conversation/reorient.go`, which builds the record directly from the transcript path and renders it with the reorient knobs, so it avoids the index resolve and refresh path. `internal/conversation/reorient_artifact_test.go` holds the behavior.
+
+The authenticated native Codex path uses the same reorient sizing controls. It
+matches only compaction metadata whose implementation is `responses`. It keeps
+the final synthesized user item byte-for-byte, splits the earlier request input
+on complete turn and tool-pair boundaries, and appends the removed transcript
+to the final assistant summary. It reads no disk fallback. Any parse, pairing,
+or response transformation failure forwards the original request and response.
 
 ## Hook seam
 

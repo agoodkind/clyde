@@ -3,22 +3,26 @@ package adapter
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
-	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -28,6 +32,7 @@ func TestNativeCodexResponsesRequestCarriesIngressCorrelation(t *testing.T) {
 		ParentSpanID: "fedcba9876543210", RequestID: "req-native", IdentityAttributes: nil,
 	}
 	raw, model, native := nativeCodexResponsesRequest(
+		[]byte(`{"model":"gpt-native","input":"native"}`),
 		[]byte(`{"model":"gpt-native","input":"native"}`),
 		http.Header{http.CanonicalHeaderKey(adaptercodex.CodexTurnMetadataHeader): {nativeTurnMetadata(t)}},
 		correlationContext,
@@ -64,8 +69,359 @@ func TestNativeCodexResponsesPreservesRawRequestAndResponse(t *testing.T) {
 	}
 }
 
-func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *testing.T) {
-	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }],"tools":[{"type":"custom","name":"opaque"}],"metadata":{"keep":true}}`)
+func TestNativeCodexResponsesZstdPreservesRawExchange(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":"native","metadata":{"opaque":true}}`)
+	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
+	responseBody := []byte(`{"id":"resp-native","status":"completed"}`)
+	compressedResponse := zstdEncodeNativeResponseBody(t, responseBody)
+	var gotBody []byte
+	var gotEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotBody, _ = io.ReadAll(request.Body)
+		gotEncoding = request.Header.Get("Content-Encoding")
+		writer.Header().Set("Content-Encoding", "zstd")
+		_, _ = writer.Write(compressedResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK ||
+		recorder.Header().Get("Content-Encoding") != "zstd" ||
+		!bytes.Equal(recorder.Body.Bytes(), compressedResponse) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	if gotEncoding != "zstd" || !bytes.Equal(gotBody, compressedRequest) {
+		t.Fatalf("upstream encoding=%q body=%x want encoding=zstd body=%x", gotEncoding, gotBody, compressedRequest)
+	}
+}
+
+func TestNativeCodexResponsesZstdCapturesDecodedRedactedCopies(t *testing.T) {
+	requestSensitiveValue := "request-compressed-sensitive-marker"
+	requestBody, err := json.Marshal(map[string]string{
+		"model":             "gpt-native",
+		"input":             "request-safe",
+		"access_" + "token": requestSensitiveValue,
+	})
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
+	responseSensitiveValue := "response-compressed-sensitive-marker"
+	responseBody, err := json.Marshal(map[string]string{
+		"id":                "resp-native",
+		"safe":              "response-safe",
+		"access_" + "token": responseSensitiveValue,
+	})
+	if err != nil {
+		t.Fatalf("marshal response body: %v", err)
+	}
+	compressedResponse := zstdEncodeNativeResponseBody(t, responseBody)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamBody, _ := io.ReadAll(request.Body)
+		if request.Header.Get("Content-Encoding") != "zstd" ||
+			!bytes.Equal(upstreamBody, compressedRequest) {
+			t.Errorf("upstream request encoding=%q body=%x", request.Header.Get("Content-Encoding"), upstreamBody)
+		}
+		writer.Header().Set("Content-Encoding", "zstd")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(compressedResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	dbPath := filepath.Join(t.TempDir(), "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("capture.Open: %v", err)
+	}
+	srv := newNativeResponsesServerWithCapture(t, upstream.URL, &nativeRawRefreshAuth{}, store)
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	if recorder.Header().Get("Content-Encoding") != "zstd" ||
+		!bytes.Equal(recorder.Body.Bytes(), compressedResponse) {
+		t.Fatalf("downstream response encoding=%q body=%x", recorder.Header().Get("Content-Encoding"), recorder.Body.Bytes())
+	}
+
+	db := openNativeCaptureVerifier(t, dbPath)
+	stages := []struct {
+		client         string
+		which          string
+		safe           string
+		sensitiveValue string
+	}{
+		{client: "adapter.ingress", which: "request", safe: "request-safe", sensitiveValue: requestSensitiveValue},
+		{client: "adapter.codex", which: "request", safe: "request-safe", sensitiveValue: requestSensitiveValue},
+		{client: "adapter.codex", which: "response", safe: "response-safe", sensitiveValue: responseSensitiveValue},
+		{client: "adapter.ingress", which: "response", safe: "response-safe", sensitiveValue: responseSensitiveValue},
+	}
+	for _, stage := range stages {
+		captured := nativeCaptureBody(t, db, stage.client, stage.which)
+		if !json.Valid(captured) || !bytes.Contains(captured, []byte(stage.safe)) ||
+			bytes.Contains(captured, []byte(stage.sensitiveValue)) {
+			t.Fatalf("%s %s capture = %q", stage.client, stage.which, captured)
+		}
+	}
+}
+
+func TestNativeCodexResponsesZstdCompactionTransformsRequestAndResponse(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
+	responseBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`)
+	compressedResponse := zstdEncodeNativeResponseBody(t, responseBody)
+	var upstreamEncodedBody []byte
+	var upstreamEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamEncodedBody, _ = io.ReadAll(request.Body)
+		upstreamEncoding = request.Header.Get("Content-Encoding")
+		writer.Header().Set("Content-Encoding", "zstd")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(compressedResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	upstreamBody := zstdDecodeNativeResponseBody(t, upstreamEncodedBody)
+	if upstreamEncoding != "zstd" || bytes.Contains(upstreamBody, []byte(`"text":"recent"`)) {
+		t.Fatalf("upstream encoding=%q body=%s", upstreamEncoding, upstreamBody)
+	}
+	if recorder.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("downstream Content-Encoding=%q", recorder.Header().Get("Content-Encoding"))
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("<pre-compaction-transcript>")) ||
+		!bytes.Contains(recorder.Body.Bytes(), []byte("recent")) {
+		t.Fatalf("downstream response was not transformed plaintext: %s", recorder.Body.Bytes())
+	}
+}
+
+func TestNativeCodexResponsesZstdCompactionPreservesOversizedResponse(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	compressedResponse := zstdEncodeNativeResponseBody(t, bytes.Repeat([]byte("x"), maxResponsesResponseBodyBytes+1))
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Encoding", "zstd")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(compressedResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(zstdEncodeNativeResponseBody(t, requestBody)))
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Header().Get("Content-Encoding") != "zstd" || !bytes.Equal(recorder.Body.Bytes(), compressedResponse) {
+		t.Fatalf("oversized response changed encoding=%q body=%d", recorder.Header().Get("Content-Encoding"), recorder.Body.Len())
+	}
+}
+
+func TestNativeCodexResponsesInvalidZstdRedactsAccountDiagnostic(t *testing.T) {
+	const accountID = "inbound-account-must-not-leak"
+	srv := newNativeResponsesServer(t, "http://127.0.0.1:1", &nativeRawRefreshAuth{})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte("not-zstd")))
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set("Chatgpt-Account-Id", accountID)
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest || bytes.Contains(recorder.Body.Bytes(), []byte(accountID)) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	var response adapteropenai.ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal error response: %v body=%s", err, recorder.Body.Bytes())
+	}
+	if response.Error.Code != "invalid_request" ||
+		response.Error.Message != "invalid zstd request body" ||
+		response.Error.Clyde == nil ||
+		response.Error.Clyde.Headers["chatgpt-account-id"] != "[redacted]" {
+		t.Fatalf("error=%+v", response.Error)
+	}
+}
+
+func TestNativeCodexResponsesCapturesFourRedactedStages(t *testing.T) {
+	const (
+		adapterToken      = "adapter-token-must-not-persist"
+		configuredOAuth   = "configured-oauth-must-not-persist"
+		configuredAccount = "configured-account-must-not-persist"
+		requestOAuth      = "request-oauth-must-not-persist"
+		requestAccount    = "request-account-must-not-persist"
+		requestCookie     = "request-cookie-must-not-persist"
+		responseOAuth     = "response-oauth-must-not-persist"
+		responseAccount   = "response-account-must-not-persist"
+		responseCookie    = "response-cookie-must-not-persist"
+	)
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent-stage-marker"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}],"access_token":"` + requestOAuth + `","account_id":"` + requestAccount + `","cookie":"` + requestCookie + `"}`)
+	responseBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary-stage-marker"}]}],"access_token":"` + responseOAuth + `","account_id":"` + responseAccount + `","cookie":"` + responseCookie + `"}`)
+	var upstreamBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamBody, _ = io.ReadAll(request.Body)
+		writer.Header().Set("Authorization", "Bearer "+responseOAuth)
+		writer.Header().Set("Chatgpt-Account-Id", responseAccount)
+		writer.Header().Set("Set-Cookie", "session="+responseCookie)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(responseBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	dbPath := filepath.Join(t.TempDir(), "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("capture.Open: %v", err)
+	}
+	auth := &nativeCaptureAuth{token: configuredOAuth, accountID: configuredAccount}
+	srv := newNativeResponsesServerWithCapture(t, upstream.URL, auth, store)
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+	request.Header.Set("Authorization", "Bearer "+adapterToken)
+	request.Header.Set("Cookie", "session="+requestCookie)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	if bytes.Contains(upstreamBody, []byte("recent-stage-marker")) || !bytes.Contains(upstreamBody, []byte(requestOAuth)) {
+		t.Fatalf("upstream body did not preserve the transformed raw request: %s", upstreamBody)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("<pre-compaction-transcript>")) || !bytes.Contains(recorder.Body.Bytes(), []byte(responseOAuth)) {
+		t.Fatalf("client body did not preserve the transformed raw response: %s", recorder.Body.Bytes())
+	}
+
+	db := openNativeCaptureVerifier(t, dbPath)
+	stages := []struct {
+		name       string
+		client     string
+		which      string
+		want       string
+		wantAbsent string
+	}{
+		{name: "ingress request", client: "adapter.ingress", which: "request", want: "recent-stage-marker"},
+		{name: "upstream request", client: "adapter.codex", which: "request", want: `"text":"old"`, wantAbsent: "recent-stage-marker"},
+		{name: "upstream response", client: "adapter.codex", which: "response", want: "summary-stage-marker", wantAbsent: "pre-compaction-transcript"},
+		{name: "client response", client: "adapter.ingress", which: "response", want: "pre-compaction-transcript"},
+	}
+	for _, stage := range stages {
+		t.Run(stage.name, func(t *testing.T) {
+			body := nativeCaptureBody(t, db, stage.client, stage.which)
+			if !bytes.Contains(body, []byte(stage.want)) {
+				t.Fatalf("capture body %q missing %q", body, stage.want)
+			}
+			if stage.wantAbsent != "" && bytes.Contains(body, []byte(stage.wantAbsent)) {
+				t.Fatalf("capture body %q contains %q", body, stage.wantAbsent)
+			}
+			assertNativeCaptureSecretsAbsent(t, body)
+		})
+	}
+	rows, err := db.Query(`SELECT req_headers, resp_headers FROM requests WHERE client IN ('adapter.ingress', 'adapter.codex')`)
+	if err != nil {
+		t.Fatalf("query capture headers: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	rowCount := 0
+	for rows.Next() {
+		var requestHeaders, responseHeaders string
+		if err := rows.Scan(&requestHeaders, &responseHeaders); err != nil {
+			t.Fatalf("scan capture headers: %v", err)
+		}
+		assertNativeCaptureSecretsAbsent(t, []byte(requestHeaders+responseHeaders))
+		rowCount++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate capture headers: %v", err)
+	}
+	if rowCount != 2 {
+		t.Fatalf("capture rows = %d, want ingress and egress", rowCount)
+	}
+}
+
+type nativeCaptureAuth struct {
+	token     string
+	accountID string
+}
+
+func (a *nativeCaptureAuth) Token(context.Context) (string, error) {
+	return a.token, nil
+}
+
+func (a *nativeCaptureAuth) AccountID(context.Context) (string, error) {
+	return a.accountID, nil
+}
+
+func openNativeCaptureVerifier(t *testing.T, dbPath string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open capture verifier: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func nativeCaptureBody(t *testing.T, db *sql.DB, client string, which string) []byte {
+	t.Helper()
+	var body []byte
+	query := `SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE client=?) AND which=?`
+	if err := db.QueryRow(query, client, which).Scan(&body); err != nil {
+		t.Fatalf("scan %s %s capture body: %v", client, which, err)
+	}
+	return body
+}
+
+func assertNativeCaptureSecretsAbsent(t *testing.T, captured []byte) {
+	t.Helper()
+	for _, secret := range []string{
+		"adapter-token-must-not-persist", "configured-oauth-must-not-persist",
+		"configured-account-must-not-persist", "request-oauth-must-not-persist",
+		"request-account-must-not-persist", "request-cookie-must-not-persist",
+		"response-oauth-must-not-persist", "response-account-must-not-persist",
+		"response-cookie-must-not-persist",
+	} {
+		if bytes.Contains(captured, []byte(secret)) {
+			t.Fatalf("capture leaked %q in %q", secret, captured)
+		}
+	}
+}
+
+func TestNativeCodexResponsesExactCompactionRouteTrimsAndInjectsOnce(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }],"tools":[{"type":"custom","name":"opaque"}],"metadata":{"keep":true}}`)
 	responseBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`)
 	var gotBody []byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -97,6 +453,15 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 	if bytes.Contains(gotBody, []byte(`"text":"recent"`)) || !bytes.Contains(gotBody, []byte(`"text":"old"`)) {
 		t.Fatalf("upstream transcript split was wrong: %s", gotBody)
 	}
+	var upstreamRequest struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(gotBody, &upstreamRequest); err != nil {
+		t.Fatalf("unmarshal trimmed upstream request: %v", err)
+	}
+	if len(upstreamRequest.Input) != 3 {
+		t.Fatalf("trimmed upstream input count = %d, want 3: %s", len(upstreamRequest.Input), gotBody)
+	}
 	if !bytes.Contains(gotBody, []byte(`{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }`)) {
 		t.Fatalf("upstream prompt bytes changed: %s", gotBody)
 	}
@@ -104,9 +469,43 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 		!bytes.Contains(gotBody, []byte(`"metadata":{"keep":true}`)) {
 		t.Fatalf("upstream unrelated fields changed: %s", gotBody)
 	}
-	if !strings.Contains(recorder.Body.String(), "<pre-compaction-transcript>") ||
+	if strings.Count(recorder.Body.String(), "<pre-compaction-transcript>") != 1 ||
 		!strings.Contains(recorder.Body.String(), "recent") {
 		t.Fatalf("downstream summary missing transcript: %s", recorder.Body.String())
+	}
+}
+
+func TestNativeCodexResponsesCompactionInjectsWithMultilineUnknownFrame(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
+	unknownFrame := "event: response.future\n: keep this exact comment\ndata: {\"type\":\"response.future\",\ndata: \"opaque\":true}\n\n"
+	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, itemDone+unknownFrame+completed)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.Bytes()
+	if !bytes.Contains(body, []byte(unknownFrame)) {
+		t.Fatalf("multiline unknown frame changed: %s", body)
+	}
+	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 ||
+		!bytes.Contains(body, []byte("recent")) {
+		t.Fatalf("multiline unknown frame suppressed transcript injection: %s", body)
 	}
 }
 
@@ -134,7 +533,7 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	}
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
-	requestBody := `{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`
+	requestBody := `{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`
 	request, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", strings.NewReader(requestBody))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -150,9 +549,9 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 		}
 		responseDone <- response
 	}()
-	<-firstWritten
 	var response *http.Response
 	select {
+	case <-firstWritten:
 	case response = <-responseDone:
 		t.Cleanup(func() { _ = response.Body.Close() })
 	case requestErrValue := <-requestErr:
@@ -160,6 +559,17 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	case <-time.After(500 * time.Millisecond):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("matching compaction SSE headers waited for upstream completion")
+	}
+	if response == nil {
+		select {
+		case response = <-responseDone:
+			t.Cleanup(func() { _ = response.Body.Close() })
+		case requestErrValue := <-requestErr:
+			t.Fatalf("post response: %v", requestErrValue)
+		case <-time.After(500 * time.Millisecond):
+			releaseOnce.Do(func() { close(release) })
+			t.Fatal("matching compaction SSE headers waited for upstream completion")
+		}
 	}
 	readDone := make(chan string, 1)
 	go func() {
@@ -179,6 +589,111 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	case <-time.After(500 * time.Millisecond):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("matching compaction SSE first frame waited for upstream completion")
+	}
+}
+
+func TestNativeCodexResponsesZstdCompactionStreamsFirstFrameBeforeCompletion(t *testing.T) {
+	firstWritten := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Encoding", "zstd")
+		writer.Header().Set("Content-Type", "text/event-stream")
+		encoder, _ := zstd.NewWriter(writer)
+		_, _ = io.WriteString(encoder, "event: response.created\ndata: {\"type\":\"response.created\",\"opaque\":true}\n\n")
+		_ = encoder.Flush()
+		writer.(http.Flusher).Flush()
+		close(firstWritten)
+		<-release
+		_, _ = io.WriteString(encoder, "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n")
+		_, _ = io.WriteString(encoder, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+		_ = encoder.Close()
+	}))
+	t.Cleanup(upstream.Close)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	front := httptest.NewServer(srv.mux)
+	t.Cleanup(front.Close)
+	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
+	request, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", bytes.NewReader(compressedRequest))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	responseDone := make(chan *http.Response, 1)
+	requestErr := make(chan error, 1)
+	go func() {
+		response, requestErrValue := http.DefaultClient.Do(request)
+		if requestErrValue != nil {
+			requestErr <- requestErrValue
+			return
+		}
+		responseDone <- response
+	}()
+	var response *http.Response
+	select {
+	case <-firstWritten:
+	case response = <-responseDone:
+		t.Cleanup(func() { _ = response.Body.Close() })
+	case requestErrValue := <-requestErr:
+		t.Fatalf("post response: %v", requestErrValue)
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("zstd compaction SSE headers waited for upstream completion")
+	}
+	if response == nil {
+		select {
+		case response = <-responseDone:
+			t.Cleanup(func() { _ = response.Body.Close() })
+		case requestErrValue := <-requestErr:
+			t.Fatalf("post response: %v", requestErrValue)
+		case <-time.After(500 * time.Millisecond):
+			releaseOnce.Do(func() { close(release) })
+			t.Fatal("zstd compaction SSE headers waited for upstream completion")
+		}
+	}
+	if response.Header.Get("Content-Encoding") != "" {
+		t.Fatalf("downstream Content-Encoding=%q", response.Header.Get("Content-Encoding"))
+	}
+	readDone := make(chan []byte, 1)
+	readErr := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, len("event: response.created"))
+		count, err := io.ReadFull(response.Body, buffer)
+		if err != nil {
+			readErr <- err
+			return
+		}
+		readDone <- buffer[:count]
+	}()
+	var firstFrame []byte
+	select {
+	case firstFrame = <-readDone:
+		if !bytes.Contains(firstFrame, []byte("response.created")) {
+			t.Fatalf("first downstream frame = %q", firstFrame)
+		}
+	case err := <-readErr:
+		t.Fatalf("read first downstream frame: %v", err)
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("zstd compaction SSE first frame waited for upstream completion")
+	}
+	releaseOnce.Do(func() { close(release) })
+	remainder, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read remaining downstream frames: %v", err)
+	}
+	completeResponse := append(firstFrame, remainder...)
+	if !bytes.Contains(completeResponse, []byte("<pre-compaction-transcript>")) ||
+		!bytes.Contains(completeResponse, []byte("recent")) {
+		t.Fatalf("downstream summary missing transcript: %s", completeResponse)
 	}
 }
 
@@ -228,8 +743,8 @@ func TestNativeCodexResponsesStreamsRawBytes(t *testing.T) {
 	}
 	readDone := make(chan string, 1)
 	go func() {
-		buffer := make([]byte, len("event: raw\\ndata: first\\n\\n"))
-		count, readErr := io.ReadFull(response.Body, buffer)
+		buffer := make([]byte, 64)
+		count, readErr := response.Body.Read(buffer)
 		if readErr != nil {
 			readDone <- "error: " + readErr.Error()
 			return
@@ -244,138 +759,6 @@ func TestNativeCodexResponsesStreamsRawBytes(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("first raw bytes waited for upstream completion")
-	}
-}
-
-func TestNativeCodexResponsesUsesResolvedModelWithoutDroppingFields(t *testing.T) {
-	requestBody := []byte(`{"model":"gpt-alias","input":"native","tools":[{"type":"custom","name":"apply_patch"}],"opaque":{"keep":[1,true]}}`)
-	var gotBody []byte
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		gotBody, _ = io.ReadAll(request.Body)
-		_, _ = writer.Write([]byte(`{"id":"resp-native"}`))
-	}))
-	t.Cleanup(upstream.Close)
-
-	cfg := baseConfig()
-	cfg.Codex.Enabled = true
-	cfg.Codex.BaseURL = upstream.URL
-	cfg.Models["gpt-alias"] = config.AdapterModelDeclaration{
-		Provider: config.AdapterModelProviderCodex, WireModel: "gpt-resolved", Profile: "haiku",
-	}
-	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
-		GetAuth: func(adapterresolver.ProviderID) adapterprovider.AuthLookup { return &nativeRawRefreshAuth{} },
-	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
-	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
-	recorder := httptest.NewRecorder()
-	srv.mux.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var got map[string]json.RawMessage
-	if err := json.Unmarshal(gotBody, &got); err != nil {
-		t.Fatalf("decode upstream body: %v", err)
-	}
-	if string(got["model"]) != `"gpt-resolved"` || string(got["tools"]) != `[{"type":"custom","name":"apply_patch"}]` || string(got["opaque"]) != `{"keep":[1,true]}` {
-		t.Fatalf("resolved raw body=%s", gotBody)
-	}
-}
-
-func TestNativeCodexResponsesSSEUpdatesLifecycleStream(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(writer, "data: done\\n\\n")
-	}))
-	t.Cleanup(upstream.Close)
-	var events []adapterruntime.RequestEvent
-	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) { events = append(events, event) }
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-native","input":"native"}`))
-	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
-	recorder := httptest.NewRecorder()
-	srv.mux.ServeHTTP(recorder, request)
-	if len(events) != 3 || events[1].Stage != adapterruntime.RequestStageStreamOpened || !events[1].Stream || !events[2].Stream {
-		t.Fatalf("lifecycle events=%+v", events)
-	}
-}
-
-func TestNativeCodexResponsesRunsControlsBeforeRawDispatch(t *testing.T) {
-	var upstreamCalls atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		upstreamCalls.Add(1)
-		_, _ = writer.Write([]byte(`{"id":"unexpected"}`))
-	}))
-	t.Cleanup(upstream.Close)
-
-	tests := []struct {
-		name     string
-		body     string
-		header   string
-		wantBody string
-	}{
-		{
-			name: "unsupported backend override", body: `{"model":"gpt-native","input":"native"}`,
-			header: "invalid", wantBody: "unsupported_backend",
-		},
-		{
-			name: "preflight tool validation", body: `{"model":"gpt-native","input":"native","tools":[{"type":"function","function":{"name":"","parameters":{"type":"object"}}}]}`,
-			wantBody: "invalid_tool_name",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(test.body))
-			request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
-			if test.header != "" {
-				request.Header.Set("X-Clyde-Backend", test.header)
-			}
-			recorder := httptest.NewRecorder()
-			srv.mux.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), test.wantBody) {
-				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-			}
-		})
-	}
-	if upstreamCalls.Load() != 0 {
-		t.Fatalf("raw upstream calls=%d, want 0", upstreamCalls.Load())
-	}
-}
-
-func TestNativeCodexResponsesPreservesInvalidResolverError(t *testing.T) {
-	cfg := baseConfig()
-	cfg.Codex.Enabled = true
-	cfg.Models["gpt-native"] = config.AdapterModelDeclaration{
-		Provider: config.AdapterModelProviderCodex, WireModel: "gpt-resolved", Profile: "haiku",
-	}
-	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
-		GetAuth: func(adapterresolver.ProviderID) adapterprovider.AuthLookup { return &nativeRawRefreshAuth{} },
-	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-native","input":"native","reasoning":{"effort":"low"}}`))
-	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
-	recorder := httptest.NewRecorder()
-	srv.mux.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "invalid_request_error") {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestNativeCodexResponsesEgressUsesDefaultURL(t *testing.T) {
-	srv := newNativeResponsesServer(t, "", &nativeRawRefreshAuth{})
-	ctx, release := srv.codexRawResponsesEgressContext(context.Background(), "native-request")
-	defer release("test")
-	if ctx == nil {
-		t.Fatal("egress context is nil")
-	}
-	sessions := srv.egressRegistry.Snapshot()
-	if len(sessions) != 1 || sessions[0].Meta.UpstreamURL != "https://chatgpt.com/backend-api/codex/responses" {
-		t.Fatalf("egress sessions=%+v", sessions)
 	}
 }
 
@@ -488,6 +871,26 @@ func TestResponsesWithoutValidNativeMetadataUsesTypedProjection(t *testing.T) {
 	}
 }
 
+func TestNativeTurnMetadataWithUnresolvedModelUsesTypedRejectionPrecedence(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		t.Fatal("unresolved model reached native upstream")
+	}))
+	t.Cleanup(upstream.Close)
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"unresolved-native","input":"typed","previous_response_id":"resp-previous"}`),
+	)
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest ||
+		!strings.Contains(recorder.Body.String(), "previous_response_id is not supported by Clyde") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestNativeTurnMetadataForNonCodexUsesTypedProjection(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)
@@ -509,13 +912,19 @@ func TestNativeTurnMetadataForNonCodexUsesTypedProjection(t *testing.T) {
 }
 
 func newNativeResponsesServer(t *testing.T, upstreamURL string, auth adapterprovider.AuthLookup) *Server {
+	return newNativeResponsesServerWithCapture(t, upstreamURL, auth, nil)
+}
+
+func newNativeResponsesServerWithCapture(t *testing.T, upstreamURL string, auth adapterprovider.AuthLookup, store *capture.Store) *Server {
 	t.Helper()
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
 	cfg.Codex.BaseURL = upstreamURL
+	cfg.CaptureIngress = store != nil
 	cfg.ModelRoutes = []config.AdapterModelRoute{modelRouteForTest("gpt-*", config.AdapterModelProviderCodex, config.AdapterIngressOpenAI)}
 	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
-		GetAuth: func(adapterresolver.ProviderID) adapterprovider.AuthLookup { return auth },
+		GetAuth:      func(adapterresolver.ProviderID) adapterprovider.AuthLookup { return auth },
+		CaptureStore: store,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -534,4 +943,28 @@ func nativeTurnMetadata(t *testing.T) string {
 
 func nativeCompactionTurnMetadata() string {
 	return `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses"}}`
+}
+
+func zstdEncodeNativeResponseBody(t *testing.T, body []byte) []byte {
+	t.Helper()
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("create zstd encoder: %v", err)
+	}
+	defer encoder.Close()
+	return encoder.EncodeAll(body, nil)
+}
+
+func zstdDecodeNativeResponseBody(t *testing.T, body []byte) []byte {
+	t.Helper()
+	decoder, err := zstd.NewReader(nil)
+	if err != nil {
+		t.Fatalf("create zstd decoder: %v", err)
+	}
+	defer decoder.Close()
+	decoded, err := decoder.DecodeAll(body, nil)
+	if err != nil {
+		t.Fatalf("decode zstd body: %v", err)
+	}
+	return decoded
 }

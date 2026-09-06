@@ -3,6 +3,7 @@ package codex
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,35 @@ import (
 type rawResponsesAuth struct {
 	refreshes atomic.Int32
 	accountID string
+}
+
+type rawResponsesRefreshFailureAuth struct {
+	refreshes      atomic.Int32
+	refreshedToken string
+	refreshErr     error
+}
+
+type rawResponsesNoRefreshAuth struct{}
+
+func (rawResponsesNoRefreshAuth) Token(context.Context) (string, error) {
+	return "configured-token", nil
+}
+
+func (rawResponsesNoRefreshAuth) AccountID(context.Context) (string, error) {
+	return "configured-account", nil
+}
+
+func (a *rawResponsesRefreshFailureAuth) Token(context.Context) (string, error) {
+	return "configured-token", nil
+}
+
+func (a *rawResponsesRefreshFailureAuth) ForceRefresh(context.Context) (string, error) {
+	a.refreshes.Add(1)
+	return a.refreshedToken, a.refreshErr
+}
+
+func (a *rawResponsesRefreshFailureAuth) AccountID(context.Context) (string, error) {
+	return "configured-account", nil
 }
 
 func rawResponsesConfig(baseURL string) config.AdapterConfig {
@@ -74,6 +104,9 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 		Header: http.Header{
 			"Authorization":         {"Bearer inbound-secret"},
 			"Proxy-Authorization":   {"Basic inbound-proxy-secret"},
+			"Openai-Api-Key":        {"inbound-openai-secret"},
+			"X-Clyde-Token":         {"inbound-clyde-secret"},
+			"X-Amz-Security-Token":  {"inbound-aws-secret"},
 			"Connection":            {"X-Remove"},
 			"X-Remove":              {"hop-by-hop"},
 			"Chatgpt-Account-Id":    {"untrusted-account"},
@@ -104,7 +137,9 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 	if got := gotHeader.Get("Authorization"); got != "Bearer configured-token" {
 		t.Fatalf("Authorization = %q", got)
 	}
-	if gotHeader.Get("Proxy-Authorization") != "" || gotHeader.Get("X-Remove") != "" || gotHeader.Get("Connection") != "" {
+	if gotHeader.Get("Proxy-Authorization") != "" || gotHeader.Get("Openai-Api-Key") != "" ||
+		gotHeader.Get("X-Clyde-Token") != "" || gotHeader.Get("X-Amz-Security-Token") != "" ||
+		gotHeader.Get("X-Remove") != "" || gotHeader.Get("Connection") != "" {
 		t.Fatalf("credential or hop header leaked: %v", gotHeader)
 	}
 	if got := gotHeader.Get("Chatgpt-Account-Id"); got != "configured-account" {
@@ -148,6 +183,88 @@ func TestProviderOpenRawResponsesRefreshesOnceAfterUnauthorized(t *testing.T) {
 	t.Cleanup(func() { _ = response.Body.Close() })
 	if response.StatusCode != http.StatusForbidden || requests.Load() != 2 || auth.refreshes.Load() != 1 || lastAuthorization != "Bearer refreshed-token" {
 		t.Fatalf("status=%d requests=%d refreshes=%d authorization=%q", response.StatusCode, requests.Load(), auth.refreshes.Load(), lastAuthorization)
+	}
+}
+
+func TestProviderOpenRawResponsesPreservesRejectionWhenRefreshCannotContinue(t *testing.T) {
+	tests := []struct {
+		name           string
+		status         int
+		refreshedToken string
+		refreshErr     error
+	}{
+		{name: "refresh fails", status: http.StatusUnauthorized, refreshErr: errors.New("refresh failed")},
+		{name: "refresh token is empty", status: http.StatusForbidden, refreshedToken: " \t "},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := []byte(`{"error":"original rejection"}`)
+			var requests atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				writer.Header().Set("X-Original-Rejection", "kept")
+				writer.WriteHeader(testCase.status)
+				_, _ = writer.Write(body)
+			}))
+			t.Cleanup(upstream.Close)
+
+			auth := &rawResponsesRefreshFailureAuth{
+				refreshedToken: testCase.refreshedToken,
+				refreshErr:     testCase.refreshErr,
+			}
+			provider := NewProvider(adapterprovider.Deps{
+				Config: rawResponsesConfig(upstream.URL), Auth: auth, HTTPClient: upstream.Client(),
+			}, ProviderOptions{})
+			response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{
+				Body: []byte(`{"model":"gpt-native"}`), Header: http.Header{},
+			})
+			if err != nil {
+				t.Fatalf("OpenRawResponses() error = %v", err)
+			}
+			t.Cleanup(func() { _ = response.Body.Close() })
+			gotBody, readErr := io.ReadAll(response.Body)
+			if readErr != nil {
+				t.Fatalf("read original rejection: %v", readErr)
+			}
+			if response.StatusCode != testCase.status ||
+				response.Header.Get("X-Original-Rejection") != "kept" ||
+				!bytes.Equal(gotBody, body) {
+				t.Fatalf("status=%d header=%v body=%s", response.StatusCode, response.Header, gotBody)
+			}
+			if requests.Load() != 1 || auth.refreshes.Load() != 1 {
+				t.Fatalf("requests=%d refreshes=%d", requests.Load(), auth.refreshes.Load())
+			}
+		})
+	}
+}
+
+func TestProviderOpenRawResponsesPreservesRejectionWithoutRefresher(t *testing.T) {
+	body := []byte(`{"error":"original rejection"}`)
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write(body)
+	}))
+	t.Cleanup(upstream.Close)
+
+	provider := NewProvider(adapterprovider.Deps{
+		Config: rawResponsesConfig(upstream.URL), Auth: rawResponsesNoRefreshAuth{}, HTTPClient: upstream.Client(),
+	}, ProviderOptions{})
+	response, err := provider.OpenRawResponses(context.Background(), RawResponsesRequest{
+		Body: []byte(`{"model":"gpt-native"}`), Header: http.Header{},
+	})
+	if err != nil {
+		t.Fatalf("OpenRawResponses() error = %v", err)
+	}
+	t.Cleanup(func() { _ = response.Body.Close() })
+	gotBody, readErr := io.ReadAll(response.Body)
+	if readErr != nil {
+		t.Fatalf("read original rejection: %v", readErr)
+	}
+	if response.StatusCode != http.StatusUnauthorized ||
+		!bytes.Equal(gotBody, body) || requests.Load() != 1 {
+		t.Fatalf("status=%d requests=%d body=%s", response.StatusCode, requests.Load(), gotBody)
 	}
 }
 
