@@ -64,6 +64,124 @@ func TestNativeCodexResponsesPreservesRawRequestAndResponse(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }],"tools":[{"type":"custom","name":"opaque"}],"metadata":{"keep":true}}`)
+	responseBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`)
+	var gotBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotBody, _ = io.ReadAll(request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(responseBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled:                     true,
+		ContextWindowTokens:         0,
+		FallbackContextWindowTokens: 10_000,
+		MaxTokens:                   10_000,
+		ContextWindowFraction:       1,
+		BytesPerToken:               1,
+		RecentFraction:              0.5,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if bytes.Contains(gotBody, []byte(`"text":"recent"`)) || !bytes.Contains(gotBody, []byte(`"text":"old"`)) {
+		t.Fatalf("upstream transcript split was wrong: %s", gotBody)
+	}
+	if !bytes.Contains(gotBody, []byte(`{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }`)) {
+		t.Fatalf("upstream prompt bytes changed: %s", gotBody)
+	}
+	if !bytes.Contains(gotBody, []byte(`"tools":[{"type":"custom","name":"opaque"}]`)) ||
+		!bytes.Contains(gotBody, []byte(`"metadata":{"keep":true}`)) {
+		t.Fatalf("upstream unrelated fields changed: %s", gotBody)
+	}
+	if !strings.Contains(recorder.Body.String(), "<pre-compaction-transcript>") ||
+		!strings.Contains(recorder.Body.String(), "recent") {
+		t.Fatalf("downstream summary missing transcript: %s", recorder.Body.String())
+	}
+}
+
+func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *testing.T) {
+	firstWritten := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "event: response.created\ndata: {\"type\":\"response.created\",\"opaque\":true}\n\n")
+		writer.(http.Flusher).Flush()
+		close(firstWritten)
+		<-release
+		_, _ = io.WriteString(writer, "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n")
+		_, _ = io.WriteString(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, FallbackContextWindowTokens: 0,
+		MaxTokens: 10_000, ContextWindowFraction: 1, BytesPerToken: 1,
+		RecentFraction: 0.5,
+	}
+	front := httptest.NewServer(srv.mux)
+	t.Cleanup(front.Close)
+	requestBody := `{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`
+	request, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", strings.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	responseDone := make(chan *http.Response, 1)
+	requestErr := make(chan error, 1)
+	go func() {
+		response, requestErrValue := http.DefaultClient.Do(request)
+		if requestErrValue != nil {
+			requestErr <- requestErrValue
+			return
+		}
+		responseDone <- response
+	}()
+	<-firstWritten
+	var response *http.Response
+	select {
+	case response = <-responseDone:
+		t.Cleanup(func() { _ = response.Body.Close() })
+	case requestErrValue := <-requestErr:
+		t.Fatalf("post response: %v", requestErrValue)
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("matching compaction SSE headers waited for upstream completion")
+	}
+	readDone := make(chan string, 1)
+	go func() {
+		buffer := make([]byte, len("event: response.created\ndata: {\"type\":\"response.created\",\"opaque\":true}\n\n"))
+		count, readErr := io.ReadFull(response.Body, buffer)
+		if readErr != nil {
+			readDone <- "error: " + readErr.Error()
+			return
+		}
+		readDone <- string(buffer[:count])
+	}()
+	select {
+	case firstFrame := <-readDone:
+		if !strings.Contains(firstFrame, "response.created") {
+			t.Fatalf("first downstream frame = %q", firstFrame)
+		}
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("matching compaction SSE first frame waited for upstream completion")
+	}
+}
+
 func TestNativeCodexResponsesStreamsRawBytes(t *testing.T) {
 	firstWritten := make(chan struct{})
 	release := make(chan struct{})
@@ -412,4 +530,8 @@ func nativeTurnMetadata(t *testing.T) string {
 		t.Fatalf("marshal turn metadata: %v", err)
 	}
 	return metadata
+}
+
+func nativeCompactionTurnMetadata() string {
+	return `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses"}}`
 }

@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/andybalholm/brotli v1.2.1
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/fsnotify/fsnotify v1.9.0

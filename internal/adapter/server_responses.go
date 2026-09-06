@@ -116,7 +116,7 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	body []byte,
 	corr correlation.Context,
 ) (bool, error) {
-	raw, _, native := nativeCodexResponsesRequest(body, r.Header, corr)
+	raw, model, native := nativeCodexResponsesRequest(body, r.Header, corr)
 	if !native {
 		return false, nil
 	}
@@ -126,7 +126,14 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	}
 	req, _, projectionErr := responsesRequestToChatRequest(rr)
 	if projectionErr != nil {
-		return false, projectionErr
+		decodedRaw := raw
+		decodedRaw.Body = decodedBody
+		if !adaptercodex.HasRawResponsesCompactionItem(decodedRaw) {
+			return false, projectionErr
+		}
+		var rawCompactionRequest ChatRequest
+		rawCompactionRequest.Model = model
+		req = rawCompactionRequest
 	}
 	forceStreamUsageOptIn(&req)
 	resolvedReq, resolverErr := resolveResponsesRequest(
@@ -150,7 +157,10 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	if rawErr != nil {
 		return false, adapterErrInvalidRequest(rawErr.Error(), rawErr)
 	}
-	s.dispatchNativeCodexResponses(w, r, requestID, resolvedRaw, resolvedReq)
+	compactionSettings := s.deps.RawResponsesCompaction
+	compactionSettings.ContextWindowTokens = resolvedReq.ContextBudget.InputTokens
+	transformedRaw, compactionTransformer := adaptercodex.PrepareRawResponsesCompaction(resolvedRaw, compactionSettings)
+	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer)
 	return true, nil
 }
 
@@ -187,6 +197,7 @@ func (s *Server) dispatchNativeCodexResponses(
 	requestID string,
 	raw adaptercodex.RawResponsesRequest,
 	resolved adapterresolver.ResolvedRequest,
+	compactionTransformer *adaptercodex.RawResponsesCompactionTransformer,
 ) {
 	if s.codexProvider == nil {
 		s.respondAdapterError(w, r, codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured))
@@ -201,6 +212,9 @@ func (s *Server) dispatchNativeCodexResponses(
 		lifecycle.terminal(ctx, result, err)
 		s.respondAdapterError(w, r, codexProviderAdapterError(err))
 		return
+	}
+	if compactionTransformer != nil {
+		response = compactionTransformer.TransformResponse(response)
 	}
 	defer func() { _ = response.Body.Close() }()
 	streamingResponse := raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
