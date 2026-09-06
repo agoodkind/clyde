@@ -11,16 +11,17 @@ A request with valid `X-Codex-Turn-Metadata` uses authenticated native raw
 forwarding only when its top-level model resolves to Codex. That path does not
 project fields or emit compatibility warnings. It preserves unknown fields,
 tools, identifiers, and upstream status. It preserves response bytes unless
-native Responses compaction is enabled and the request carries the exact
-compaction metadata. That case mutates only the final assistant summary. Clyde
+native `responses` compaction is enabled and the request carries the exact
+compaction metadata. That v1 case mutates only the final assistant summary. Clyde
 supplies its configured Codex OAuth token and account identity instead of
 trusting inbound credentials.
 
 Native compaction implementations use separate protocol handlers, and unknown
 implementations pass through unchanged. `responses_compaction_v2` remains
-byte-preserving pass-through. Clyde does not inject plaintext into its request
-or response. Activating v2 requires new persistence evidence and a reviewed
-production handler.
+byte-preserving pass-through. A wire-equivalent Codex 0.151.0 probe preserved
+the encrypted item but discarded the added plaintext assistant item. Activating
+v2 transcript recovery requires a supported persistence mechanism and a
+reviewed production handler.
 
 Invalid metadata and non-Codex models stay on the generic projection path. The
 field and tool rules below apply to that path.
