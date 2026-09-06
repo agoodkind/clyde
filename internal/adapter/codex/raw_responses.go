@@ -278,6 +278,11 @@ func rawResponsesHeaders(raw RawResponsesRequest, token, accountID string) http.
 			headers.Add(key, value)
 		}
 	}
+	if DetectRawResponsesCompactionProtocol(raw.Header) == RawResponsesCompactionV1 {
+		headers.Set("Accept-Encoding", "identity")
+	} else if headers.Get("Accept-Encoding") == "" {
+		headers.Set("Accept-Encoding", "identity")
+	}
 	return headers
 }
 
