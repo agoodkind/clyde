@@ -186,8 +186,8 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	}
 	compactionSettings := s.deps.RawResponsesCompaction
 	compactionSettings.ContextWindowTokens = resolvedReq.ContextBudget.InputTokens
-	transformedRaw, compactionTransformer, v2Plan := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, compactionSettings)
-	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer, v2Plan)
+	transformedRaw, compactionTransformer, v2Plan, v2Recovery := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, compactionSettings, s.compactionV2)
+	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer, v2Plan, v2Recovery)
 	return true, nil
 }
 
@@ -258,8 +258,12 @@ func (s *Server) dispatchNativeCodexResponses(
 	resolved adapterresolver.ResolvedRequest,
 	compactionTransformer *adaptercodex.RawResponsesCompactionTransformer,
 	v2Plan *adaptercodex.RawResponsesCompactionV2Plan,
+	v2Recovery *adaptercodex.RawResponsesCompactionV2Recovery,
 ) {
 	if s.codexProvider == nil {
+		if v2Recovery != nil {
+			v2Recovery.ReleaseRecovery()
+		}
 		s.respondAdapterError(w, r, codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured))
 		return
 	}
@@ -268,6 +272,9 @@ func (s *Server) dispatchNativeCodexResponses(
 	defer releaseEgress("codex.raw_responses.done")
 	response, err := s.codexProvider.OpenRawResponses(egressCtx, raw)
 	if err != nil {
+		if v2Recovery != nil {
+			v2Recovery.ReleaseRecovery()
+		}
 		var result adapterprovider.Result
 		lifecycle.terminal(ctx, result, err)
 		s.respondAdapterError(w, r, codexProviderAdapterError(err))
