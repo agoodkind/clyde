@@ -889,6 +889,32 @@ func TestNativeCodexResponsesCompactionV2RecoveryLifecycle(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesCompactionV2StreamingResponseCompletesRecovery(t *testing.T) {
+	itemDone, completed := nativeCompactionSSEFrames()
+	completed = strings.Replace(completed, `"response":{"id":`, `"response":{"status":"completed","id":`, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, itemDone+completed)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+		t.Fatal("arm registry")
+	}
+	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte("<pre-compaction-transcript>")) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	if _, ok := srv.compactionV2.Match("native-session", "cipher"); ok {
+		t.Fatal("streaming final answer did not complete recovery")
+	}
+}
+
 func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAndDeliveryFailures(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	sseBody := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n")

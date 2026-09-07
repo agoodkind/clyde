@@ -881,6 +881,26 @@ func TestRawResponsesCompactionPreservesFragmentedSSELines(t *testing.T) {
 	}
 }
 
+func TestRawResponsesCompactionStopsTransformingAfterCompleted(t *testing.T) {
+	firstItem := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"first"}]}`
+	secondItem := `{"id":"msg-2","type":"message","role":"assistant","content":[{"type":"output_text","text":"second"}]}`
+	firstDone, firstCompleted := rawCompactionSSEFramesForTest(firstItem, 0, 10, 11)
+	secondDone, secondCompleted := rawCompactionSSEFramesForTest(secondItem, 0, 12, 13)
+	secondExchange := []byte(secondDone + secondCompleted)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(firstDone + firstCompleted + string(secondExchange))),
+	}
+	body := readResponseBody(t, rawResponseTransformerForTest(t).TransformResponse(response))
+	if bytes.Count(body, []byte("event: response.content_part.added")) != 1 {
+		t.Fatalf("terminal response started another transformation: %s", body)
+	}
+	if !bytes.HasSuffix(body, secondExchange) {
+		t.Fatalf("post-terminal bytes changed: %s", body)
+	}
+}
+
 func TestRawResponsesCompactionSequenceOverflowFailsOpen(t *testing.T) {
 	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
 	tests := []struct {
@@ -977,6 +997,70 @@ func TestRawResponsesCompactionCandidateTypeFailuresPassThrough(t *testing.T) {
 			got := readResponseBody(t, rawResponseTransformerForTest(t).TransformResponse(response))
 			if !bytes.Equal(got, original) {
 				t.Fatalf("invalid type mutated response:\n got: %s\nwant: %s", got, original)
+			}
+		})
+	}
+}
+
+func TestRawResponsesCompactionV2CandidateTypeFailureKeepsRecoveryArmed(t *testing.T) {
+	for _, candidateType := range []string{"", "response.output_item.added"} {
+		t.Run(candidateType, func(t *testing.T) {
+			registry := NewRawResponsesCompactionV2Registry(nil)
+			if !registry.Arm("session", "cipher", "recovered") {
+				t.Fatal("arm recovery")
+			}
+			transcriptText, generation, reserved := registry.Reserve("session", "cipher")
+			if !reserved {
+				t.Fatal("reserve recovery")
+			}
+			recovery := &RawResponsesCompactionV2Recovery{
+				transcript: transcriptText,
+				complete:   nil,
+				release: func() {
+					registry.Release("session", "cipher", generation)
+				},
+			}
+			request := RawResponsesRequest{
+				Body:        nil,
+				Header:      http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
+				RequestID:   "",
+				Correlation: correlation.Context{},
+				Stream:      true,
+			}
+			transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
+			item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
+			itemDone, completed := rawCompactionSSEFramesForTest(item, 0, 10, 11)
+			if candidateType == "" {
+				itemDone = strings.Replace(itemDone, `"type":"response.output_item.done",`, "", 1)
+			} else {
+				itemDone = strings.Replace(itemDone, "response.output_item.done\",", candidateType+"\",", 1)
+			}
+			original := []byte(itemDone + completed)
+			response := &http.Response{
+				Status:           "",
+				StatusCode:       http.StatusOK,
+				Proto:            "",
+				ProtoMajor:       0,
+				ProtoMinor:       0,
+				Header:           http.Header{"Content-Type": {"text/event-stream"}},
+				Body:             io.NopCloser(bytes.NewReader(original)),
+				ContentLength:    0,
+				TransferEncoding: nil,
+				Close:            false,
+				Uncompressed:     false,
+				Trailer:          nil,
+				Request:          nil,
+				TLS:              nil,
+			}
+			got := readResponseBody(t, transformer.TransformResponse(response))
+			if !bytes.Equal(got, original) || transformer.DidMutateResponse() {
+				t.Fatalf("invalid type mutated response:\n got: %s\nwant: %s", got, original)
+			}
+			if !recovery.ReleaseRecovery() {
+				t.Fatal("release recovery")
+			}
+			if gotTranscript, armed := registry.Match("session", "cipher"); !armed || gotTranscript != "recovered" {
+				t.Fatalf("recovery = %q, %t", gotTranscript, armed)
 			}
 		})
 	}

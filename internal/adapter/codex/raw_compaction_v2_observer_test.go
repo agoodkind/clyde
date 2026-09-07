@@ -2,6 +2,8 @@ package codex
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -38,6 +40,245 @@ func TestObserveRawResponsesCompactionV2ResponsePreservesAndArms(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestObserveRawResponsesCompactionV2ResponseAcceptsAllSSELineEndings(t *testing.T) {
+	compaction := `{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"cipher"}}`
+	completed := `{"type":"response.completed","response":{"id":"resp-1"}}`
+	for _, testCase := range []struct {
+		name       string
+		lineEnding string
+		separator  string
+	}{
+		{name: "lf", lineEnding: "\n", separator: "\n\n"},
+		{name: "crlf", lineEnding: "\r\n", separator: "\r\n\r\n"},
+		{name: "cr", lineEnding: "\r", separator: "\r\r"},
+		{name: "mixed", lineEnding: "\r\n", separator: "\n\r"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := []byte("event: response.output_item.done" + testCase.lineEnding + "data: " + compaction + testCase.separator +
+				"event: response.completed" + testCase.lineEnding + "data: " + completed + testCase.separator)
+			if encrypted, ok := rawResponsesCompactionV2SSEEncryptedContent(body); !ok || encrypted != "cipher" {
+				t.Fatalf("full parser encrypted=%q matched=%t", encrypted, ok)
+			}
+			registry := NewRawResponsesCompactionV2Registry(nil)
+			response := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       &oneByteReadCloser{reader: bytes.NewReader(body)},
+			}
+			observed := ObserveRawResponsesCompactionV2Response(
+				response,
+				RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+				registry,
+			)
+			got, err := io.ReadAll(observed.Body)
+			if err != nil || !bytes.Equal(got, body) {
+				t.Fatalf("client body changed: err=%v body=%q", err, got)
+			}
+			ArmRawResponsesCompactionV2Response(observed)
+			if transcript, ok := registry.Match("s", "cipher"); !ok || transcript != "t" {
+				t.Fatal("recovery not armed")
+			}
+		})
+	}
+}
+
+func TestRawResponsesCompactionV2SSEFrameScanAdvancesLinearly(t *testing.T) {
+	body := []byte(`data: {"padding":"` + strings.Repeat("x", 128*1024) + `"}` + "\r\n\r\n")
+	buffer := make([]byte, 0, len(body))
+	scanOffset := 0
+	scanWork := 0
+	completed := false
+	for _, value := range body {
+		buffer = append(buffer, value)
+		scanWork += len(buffer) - scanOffset
+		_, remainder, complete, nextScanOffset := rawResponsesCompactionV2SSEFrameFrom(buffer, scanOffset, false)
+		if complete {
+			buffer = remainder
+			scanOffset = 0
+			completed = true
+			continue
+		}
+		scanOffset = nextScanOffset
+	}
+	if !completed || len(buffer) != 0 {
+		t.Fatal("incremental scanner did not finish the frame")
+	}
+	if scanWork > len(body)*4 {
+		t.Fatalf("scan work = %d, want at most %d", scanWork, len(body)*4)
+	}
+}
+
+func TestObserveRawResponsesCompactionV2ResponseArmsBeforeEOF(t *testing.T) {
+	body := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	registry := NewRawResponsesCompactionV2Registry(nil)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}
+	observed := ObserveRawResponsesCompactionV2Response(
+		response,
+		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		registry,
+	)
+	destination := make([]byte, len(body))
+	count, err := observed.Body.Read(destination)
+	if err != nil || count != len(body) || !bytes.Equal(destination[:count], body) {
+		t.Fatalf("first read changed: count=%d err=%v", count, err)
+	}
+	if transcriptText, ok := registry.Match("s", "cipher"); !ok || transcriptText != "t" {
+		t.Fatal("terminal frame did not arm recovery before EOF")
+	}
+}
+
+func TestObserveRawResponsesCompactionV2ResponseDisarmsInvalidPostTerminalTail(t *testing.T) {
+	prefix := []byte("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	for _, tail := range [][]byte{
+		[]byte(": post-terminal comment\n\n"),
+		[]byte("data: {\"type\":\"response.future\"}\n\n"),
+		[]byte("data: {"),
+	} {
+		registry := NewRawResponsesCompactionV2Registry(nil)
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body:       &chunkReadCloser{chunks: [][]byte{prefix, tail}},
+		}
+		observed := ObserveRawResponsesCompactionV2Response(
+			response,
+			RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+			registry,
+		)
+		first := make([]byte, len(prefix))
+		count, err := observed.Body.Read(first)
+		if err != nil || count != len(prefix) || !bytes.Equal(first, prefix) {
+			t.Fatalf("terminal read changed: count=%d err=%v", count, err)
+		}
+		if _, ok := registry.Match("s", "cipher"); !ok {
+			t.Fatal("terminal frame did not arm recovery")
+		}
+		remaining, err := io.ReadAll(observed.Body)
+		if err != nil || !bytes.Equal(remaining, tail) {
+			t.Fatalf("tail read changed: err=%v body=%q", err, remaining)
+		}
+		if _, ok := registry.Match("s", "cipher"); ok {
+			t.Fatalf("post-terminal tail %q kept recovery armed", tail)
+		}
+	}
+}
+
+func TestObserveRawResponsesCompactionV2ResponseDisarmsAfterReadError(t *testing.T) {
+	prefix := []byte("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	registry := NewRawResponsesCompactionV2Registry(nil)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body: &chunkReadCloser{
+			chunks:     [][]byte{prefix},
+			finalError: errors.New("upstream read failed"),
+		},
+	}
+	observed := ObserveRawResponsesCompactionV2Response(
+		response,
+		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		registry,
+	)
+	first := make([]byte, len(prefix))
+	if _, err := observed.Body.Read(first); err != nil {
+		t.Fatalf("terminal read: %v", err)
+	}
+	if _, ok := registry.Match("s", "cipher"); !ok {
+		t.Fatal("terminal frame did not arm recovery")
+	}
+	if _, err := observed.Body.Read(first); err == nil || !strings.Contains(err.Error(), "upstream read failed") {
+		t.Fatalf("read error = %v", err)
+	}
+	if _, ok := registry.Match("s", "cipher"); ok {
+		t.Fatal("read error kept recovery armed")
+	}
+}
+
+func TestReleaseRawResponsesCompactionV2ResponseDisarmsWithIncompleteTail(t *testing.T) {
+	prefix := []byte("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	tail := []byte("data: {")
+	registry := NewRawResponsesCompactionV2Registry(nil)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       &chunkReadCloser{chunks: [][]byte{prefix, tail}},
+	}
+	observed := ObserveRawResponsesCompactionV2Response(
+		response,
+		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		registry,
+	)
+	first := make([]byte, len(prefix))
+	if _, err := observed.Body.Read(first); err != nil {
+		t.Fatalf("terminal read: %v", err)
+	}
+	second := make([]byte, len(tail))
+	if _, err := observed.Body.Read(second); err != nil || !bytes.Equal(second, tail) {
+		t.Fatalf("tail read changed: err=%v body=%q", err, second)
+	}
+	if _, ok := registry.Match("s", "cipher"); !ok {
+		t.Fatal("terminal frame did not arm recovery")
+	}
+	ReleaseRawResponsesCompactionV2Response(observed)
+	if _, ok := registry.Match("s", "cipher"); ok {
+		t.Fatal("release kept incomplete response recovery armed")
+	}
+}
+
+type chunkReadCloser struct {
+	chunks     [][]byte
+	finalError error
+}
+
+func (r *chunkReadCloser) Read(destination []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		if r.finalError != nil {
+			return 0, r.finalError
+		}
+		return 0, io.EOF
+	}
+	count := copy(destination, r.chunks[0])
+	r.chunks[0] = r.chunks[0][count:]
+	if len(r.chunks[0]) == 0 {
+		r.chunks = r.chunks[1:]
+	}
+	return count, nil
+}
+
+func (r *chunkReadCloser) Close() error {
+	return nil
+}
+
+type oneByteReadCloser struct {
+	reader *bytes.Reader
+}
+
+func (r *oneByteReadCloser) Read(destination []byte) (int, error) {
+	if len(destination) > 1 {
+		destination = destination[:1]
+	}
+	count, err := r.reader.Read(destination)
+	if errors.Is(err, io.EOF) {
+		return count, io.EOF
+	}
+	if err != nil {
+		return count, fmt.Errorf("read one-byte fixture: %w", err)
+	}
+	return count, nil
+}
+
+func (r *oneByteReadCloser) Close() error {
+	return nil
 }
 
 func TestRawResponsesCompactionV2SSEEncryptedContentAcceptsLargeMultilineData(t *testing.T) {
@@ -133,16 +374,80 @@ func TestObserveRawResponsesCompactionV2ResponseRejectsIncompleteSSE(t *testing.
 	}
 }
 
+func TestObserveRawResponsesCompactionV2ResponseRejectsTruncatedTailAfterCompletion(t *testing.T) {
+	prefix := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	tail := []byte("data: {")
+	body := append(append([]byte(nil), prefix...), tail...)
+	registry := NewRawResponsesCompactionV2Registry(nil)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       &chunkReadCloser{chunks: [][]byte{prefix, tail}},
+	}
+	observed := ObserveRawResponsesCompactionV2Response(
+		response,
+		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		registry,
+	)
+	got, err := io.ReadAll(observed.Body)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("client body changed: err=%v body=%q", err, got)
+	}
+	ArmRawResponsesCompactionV2Response(observed)
+	if _, ok := registry.Match("s", "cipher"); ok {
+		t.Fatal("truncated SSE tail armed recovery")
+	}
+}
+
+func TestObserveRawResponsesCompactionV2ResponseRejectsTailBeyondCaptureLimit(t *testing.T) {
+	prefix := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	comment := []byte(": padding\n\n")
+	tail := bytes.Repeat(comment, maxRawResponsesCompactionV2ObserveBytes/len(comment)+1)
+	tail = append(tail, "data: {"...)
+	body := append(append([]byte(nil), prefix...), tail...)
+	registry := NewRawResponsesCompactionV2Registry(nil)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       &chunkReadCloser{chunks: [][]byte{prefix, tail}},
+	}
+	observed := ObserveRawResponsesCompactionV2Response(
+		response,
+		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		registry,
+	)
+	got, err := io.ReadAll(observed.Body)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("client body changed: err=%v length=%d", err, len(got))
+	}
+	ArmRawResponsesCompactionV2Response(observed)
+	if _, ok := registry.Match("s", "cipher"); ok {
+		t.Fatal("capture-truncated SSE tail armed recovery")
+	}
+}
+
 func TestRawResponsesCompactionV2SSEEncryptedContentRejectsInvalidOrderAndCardinality(t *testing.T) {
 	compaction := `{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"cipher"}}`
 	completed := `{"type":"response.completed","response":{"id":"resp-1"}}`
 	for _, body := range []string{
 		"data: " + completed + "\n\ndata: " + compaction + "\n\n",
 		"data: " + compaction + "\n\ndata: " + completed + "\n\ndata: " + completed + "\n\n",
+		"data: " + compaction + "\n\ndata: " + completed + "\n\n: post-terminal comment\n\n",
+		"data: " + compaction + "\n\ndata: " + completed + "\n\ndata: {\"type\":\"response.future\"}\n\n",
 	} {
 		if _, ok := rawResponsesCompactionV2SSEEncryptedContent([]byte(body)); ok {
 			t.Fatal("invalid SSE sequence accepted")
 		}
+	}
+}
+
+func TestRawResponsesCompactionV2SSEEncryptedContentRejectsUnterminatedFrame(t *testing.T) {
+	body := []byte("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}")
+	if _, ok := rawResponsesCompactionV2SSEEncryptedContent(body); ok {
+		t.Fatal("unterminated completed frame was accepted")
 	}
 }
 

@@ -1038,7 +1038,14 @@ func appendRawCompactionJSONWithPolicy(body []byte, transcriptText string, rejec
 	for index := range slices.Backward(ranges) {
 		itemStart := outputStart + ranges[index].start
 		itemEnd := outputStart + ranges[index].end
-		mutated, matched, valid := appendRawCompactionAssistantItemWithPolicy(body[itemStart:itemEnd], transcriptText, rejectExistingTranscript)
+		var mutated []byte
+		var matched bool
+		var valid bool
+		if rejectExistingTranscript {
+			mutated, matched, valid = appendRawCompactionAssistantItemWithPolicy(body[itemStart:itemEnd], transcriptText, true)
+		} else {
+			mutated, matched, valid = appendRawCompactionAssistantItem(body[itemStart:itemEnd], transcriptText)
+		}
 		if !valid {
 			return body, false
 		}
