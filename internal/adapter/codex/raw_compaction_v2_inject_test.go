@@ -16,7 +16,7 @@ func TestInjectRawResponsesCompactionV2Recovery(t *testing.T) {
 	}
 	request := RawResponsesRequest{
 		Body:   []byte(`{"model":"gpt-native","opaque":{"keep":true},"input":[ { "type":"message","role":"user","content":[{"type":"input_text","text":"next turn"}]}, {"type":"compaction","encrypted_content":"cipher","opaque":true}, {"type":"reasoning","summary":[]} ]}`),
-		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none"}`}},
+		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
 		Stream: true,
 	}
 
@@ -58,7 +58,7 @@ func TestInjectRawResponsesCompactionV2RecoveryFailsOpen(t *testing.T) {
 	}
 	base := RawResponsesRequest{
 		Body:   []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`),
-		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none"}`}},
+		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
 	}
 	tests := []struct {
 		name    string
@@ -85,6 +85,35 @@ func TestInjectRawResponsesCompactionV2RecoveryFailsOpen(t *testing.T) {
 	}
 }
 
+func TestInjectRawResponsesCompactionV2RecoveryRequiresExplicitFinalAnswer(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		metadata string
+		want     bool
+	}{
+		{name: "missing explicit phase", metadata: `{"session_id":"session-1","request_kind":"turn"}`, want: false},
+		{name: "non-final phase", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"phase":"mid_turn"}}`, want: false},
+		{name: "final answer", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"phase":"final_answer"}}`, want: true},
+		{name: "legacy empty metadata", metadata: `{"session_id":"session-1"}`, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			registry := NewRawResponsesCompactionV2Registry(nil)
+			if !registry.Arm("session-1", "cipher", "recovered transcript") {
+				t.Fatal("arm registry")
+			}
+			request := RawResponsesRequest{
+				Body:   []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`),
+				Header: http.Header{CodexTurnMetadataHeader: {testCase.metadata}},
+			}
+			got, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
+			hasRecovery := recovery != nil
+			if changed != testCase.want || hasRecovery != testCase.want {
+				t.Fatalf("changed=%t recovery=%t want=%t body=%s", changed, hasRecovery, testCase.want, got.Body)
+			}
+		})
+	}
+}
+
 func TestInjectRawResponsesCompactionV2RecoveryCompletionCapability(t *testing.T) {
 	registry := NewRawResponsesCompactionV2Registry(nil)
 	if !registry.Arm("session-1", "cipher", "recovered transcript") || !registry.Arm("session-1", "other", "other transcript") {
@@ -92,7 +121,7 @@ func TestInjectRawResponsesCompactionV2RecoveryCompletionCapability(t *testing.T
 	}
 	request := RawResponsesRequest{
 		Body:   []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`),
-		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none"}`}},
+		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
 	}
 	_, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
 	if !changed || recovery == nil {

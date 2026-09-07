@@ -140,9 +140,11 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	}
 	req, _, projectionErr := responsesRequestToChatRequest(rr)
 	if projectionErr != nil {
+		decodedRaw := raw
+		decodedRaw.Body = decodedBody
 		if !errors.Is(projectionErr, errResponsesProjectionInputRequired) ||
 			(!adaptercodex.IsRawResponsesV1CompactionRequest(raw) &&
-				!adaptercodex.HasRawResponsesNativeContinuationItem(raw)) {
+				!adaptercodex.HasRawResponsesNativeContinuationItem(decodedRaw)) {
 			return false, projectionErr
 		}
 		var rawCompactionRequest ChatRequest
@@ -297,6 +299,9 @@ func (s *Server) dispatchNativeCodexResponses(
 	_, copyErr := s.copyPassthroughResponse(ctx, w, response, streamingResponse)
 	if copyErr == nil && v2Plan != nil {
 		adaptercodex.ArmRawResponsesCompactionV2Response(response)
+	}
+	if v2Recovery != nil {
+		v2Recovery.ReleaseRecovery()
 	}
 	var result adapterprovider.Result
 	lifecycle.terminal(ctx, result, copyErr)
