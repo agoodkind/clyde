@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/andybalholm/brotli"
 
@@ -53,25 +57,6 @@ func TestPlanRawResponsesCompactionUsesTranscriptIndexesAndPreservesPrompt(t *te
 	}
 }
 
-func TestHasRawResponsesCompactionItem(t *testing.T) {
-	for _, testCase := range []struct {
-		name string
-		body string
-		want bool
-	}{
-		{name: "compaction", body: `{"input":[{"type":"compaction","encrypted_content":"cipher"}]}`, want: true},
-		{name: "message", body: `{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}]}`, want: false},
-		{name: "malformed", body: `{`, want: false},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			got := HasRawResponsesCompactionItem(RawResponsesRequest{Body: []byte(testCase.body)})
-			if got != testCase.want {
-				t.Fatalf("has compaction = %t, want %t", got, testCase.want)
-			}
-		})
-	}
-}
-
 func TestPlanRawResponsesCompactionHonorsFractionAndByteCapBoundaries(t *testing.T) {
 	items := rawInputItemsForTest(t, []byte(`{"input":[
 		{"type":"message","role":"user","content":[{"type":"input_text","text":"m0"}]},
@@ -90,17 +75,17 @@ func TestPlanRawResponsesCompactionHonorsFractionAndByteCapBoundaries(t *testing
 	if ok {
 		t.Fatalf("fraction below one item unexpectedly split: %+v", lastOnly)
 	}
-	lastMessage, ok := renderRawResponsesCompactionNormalizedItems(
-		codexstore.NormalizeResponseInputItems(items[5:6]),
+	lastTurn, ok := renderRawResponsesCompactionNormalizedItems(
+		codexstore.NormalizeResponseInputItems(items[4:6]),
 	)
 	if !ok {
-		t.Fatal("last message did not render")
+		t.Fatal("last turn did not render")
 	}
-	capPlan, ok := planRawResponsesCompaction(items, len(lastMessage), 0.5)
-	if !ok || capPlan.removedStart != 5 {
-		t.Fatalf("cap plan = %+v ok=%t, want only index 5 removed", capPlan, ok)
+	capPlan, ok := planRawResponsesCompaction(items, len(lastTurn), 0.5)
+	if !ok || capPlan.removedStart != 4 {
+		t.Fatalf("cap plan = %+v ok=%t, want complete turn [4:6) removed", capPlan, ok)
 	}
-	underCap, ok := planRawResponsesCompaction(items, len(lastMessage)-1, 0.5)
+	underCap, ok := planRawResponsesCompaction(items, len(lastTurn)-1, 0.5)
 	if ok {
 		t.Fatalf("under-cap plan unexpectedly split: %+v", underCap)
 	}
@@ -142,7 +127,10 @@ func TestRawResponsesCompactionExpandsEverySupportedToolPair(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := []byte(`{"model":"gpt-native","input":[` +
 				`{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},` +
+				`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},` +
+				`{"type":"message","role":"user","content":[{"type":"input_text","text":"recent"}]},` +
 				testCase.call + `,` + testCase.output + `,` +
+				`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent assistant"}]},` +
 				`{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}` +
 				`]}`)
 			transformed, transformer := PrepareRawResponsesCompaction(
@@ -260,8 +248,7 @@ func TestRawResponsesCompactionMutatesNonStreamingJSONOnce(t *testing.T) {
 func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
 	unknownFrame := "event: response.future\n: keep this exact comment\ndata: { \"opaque\" : [1, 2] }\n\n"
-	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
-	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+	itemDone, completed := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`, 0, 10, 11)
 	original := []byte(unknownFrame + itemDone + completed)
 	response := &http.Response{
 		StatusCode: http.StatusOK,
@@ -273,7 +260,7 @@ func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *
 	if !bytes.Contains(body, []byte(unknownFrame)) {
 		t.Fatalf("unknown SSE frame changed:\n%s", body)
 	}
-	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 || !bytes.Contains(body, []byte("recent")) {
+	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) || !bytes.Contains(body, []byte("recent")) {
 		t.Fatalf("streaming response was not injected once: %s", body)
 	}
 	if transformed.Header.Get("Content-Length") != "" {
@@ -284,18 +271,18 @@ func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *
 func TestRawResponsesCompactionMutatesMultilineSSEDataFrames(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
 	itemDone := "event: response.output_item.done\n" +
-		"data: {\"type\":\"response.output_item.done\",\"item\":\n" +
-		"data: {\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":\n" +
+		"data: {\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
 	completed := "event: response.completed\n" +
-		"data: {\"type\":\"response.completed\",\"response\":\n" +
-		"data: {\"id\":\"resp-1\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}]}}\n\n"
+		"data: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":\n" +
+		"data: {\"id\":\"resp-1\",\"output\":[{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}]}}\n\n"
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": {"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader(itemDone + completed)),
 	}
 	body := readResponseBody(t, transformer.TransformResponse(response))
-	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 2 {
+	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
 		t.Fatalf("multiline SSE transcript count was not two: %s", body)
 	}
 	for _, frame := range bytes.Split(bytes.TrimSpace(body), []byte("\n\n")) {
@@ -308,17 +295,16 @@ func TestRawResponsesCompactionMutatesMultilineSSEDataFrames(t *testing.T) {
 
 func TestRawResponsesCompactionPreservesInterveningSSEFrames(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
-	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
+	itemDone, completed := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`, 0, 10, 12)
 	heartbeat := ": keepalive\n\n"
-	intervening := "event: response.future\ndata: {\"type\":\"response.future\",\"opaque\":true}\n\n"
-	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+	intervening := "event: response.future\ndata: {\"type\":\"response.future\",\"sequence_number\":11,\"opaque\":true}\n\n"
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": {"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader(itemDone + heartbeat + intervening + completed)),
 	}
 	body := readResponseBody(t, transformer.TransformResponse(response))
-	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 {
+	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
 		t.Fatalf("intervening SSE frames prevented transcript injection: %s", body)
 	}
 	itemIndex := bytes.Index(body, []byte("response.output_item.done"))
@@ -338,7 +324,7 @@ func TestRawResponsesCompactionPreservesUnknownTextSSEFrame(t *testing.T) {
 	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
 	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(itemDone + unknown + completed))}
 	body := readResponseBody(t, transformer.TransformResponse(response))
-	if !bytes.Contains(body, []byte(unknown)) || !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
+	if !bytes.Equal(body, []byte(itemDone+unknown+completed)) {
 		t.Fatalf("unknown text SSE frame disrupted compaction: %s", body)
 	}
 }
@@ -352,7 +338,8 @@ func TestRawSSEFrameEventUsesLastField(t *testing.T) {
 
 func TestRawResponsesCompactionTransformsCompressedResponses(t *testing.T) {
 	jsonBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`)
-	sseBody := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	itemDone, completed := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`, 0, 10, 11)
+	sseBody := []byte(itemDone + completed)
 	for _, testCase := range []struct {
 		name     string
 		encoding string
@@ -438,9 +425,8 @@ func rawCompactionDecompressedBodyForTest(t *testing.T, body []byte, encoding st
 
 func TestRawResponsesCompactionMutatesOnlyFinalAssistantSSEItem(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
-	first := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"first assistant\"}]}}\n\n"
-	final := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"final assistant\"}]}}\n\n"
-	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+	first, _ := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"first assistant"}]}`, 0, 8, 9)
+	final, completed := rawCompactionSSEFramesForTest(`{"id":"msg-2","type":"message","role":"assistant","content":[{"type":"output_text","text":"final assistant"}]}`, 0, 10, 11)
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": {"text/event-stream"}},
@@ -450,35 +436,433 @@ func TestRawResponsesCompactionMutatesOnlyFinalAssistantSSEItem(t *testing.T) {
 	if !bytes.Contains(body, []byte(first)) {
 		t.Fatalf("first assistant item changed: %s", body)
 	}
-	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 {
+	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
 		t.Fatalf("transcript tag count was not one: %s", body)
 	}
-	finalStart := bytes.Index(body, []byte("final assistant"))
-	tagStart := bytes.Index(body, []byte("<pre-compaction-transcript>"))
-	if finalStart < 0 || tagStart < finalStart {
+	if !bytes.Contains(body, []byte(`"id":"msg-2"`)) || !bytes.Contains(body, []byte("final assistant")) {
 		t.Fatalf("final assistant did not receive transcript: %s", body)
 	}
 }
 
 func TestRawResponsesCompactionKeepsCompletedSSEOutputCoherent(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
-	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"No\"}]}}\n\n"
-	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"No\"}]}]}}\n\n"
+	itemDone, completed := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"refusal","refusal":"No"}]}`, 0, 10, 11)
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": {"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader(itemDone + completed)),
 	}
 	body := readResponseBody(t, transformer.TransformResponse(response))
-	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 2 {
+	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
 		t.Fatalf("transcript was not appended to both SSE results: %s", body)
 	}
 	for _, frame := range bytes.Split(bytes.TrimSpace(body), []byte("\n\n")) {
-		_, dataStart, dataEnd, dataCount := rawSSEFrameData(frame)
-		if dataCount != 1 || !json.Valid(frame[dataStart:dataEnd]) {
+		_, data, dataCount := rawSSEFrameDataValue(frame)
+		if dataCount != 1 || !json.Valid(data) {
 			t.Fatalf("invalid SSE frame: %s", frame)
 		}
 	}
+}
+
+func TestRawResponsesCompactionStreamingEventsMatchSnapshots(t *testing.T) {
+	tests := []struct {
+		name          string
+		item          string
+		prefix        string
+		firstSequence int
+	}{
+		{
+			name:          "existing output text",
+			item:          `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`,
+			prefix:        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\",\"sequence_number\":9}\n\n",
+			firstSequence: 9,
+		},
+		{name: "new output text", item: `{"id":"msg-1","type":"message","role":"assistant"}`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			itemSequence := testCase.firstSequence
+			if testCase.prefix != "" {
+				itemSequence++
+			}
+			itemDone, completed := rawCompactionSSEFramesForTest(testCase.item, 0, itemSequence, itemSequence+1)
+			response := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(testCase.prefix + itemDone + completed)),
+			}
+			body := readResponseBody(t, rawResponseTransformerForTest(t).TransformResponse(response))
+			frames := rawCompactionSSEDecodedFramesForTest(t, body)
+			var accumulated string
+			var itemText string
+			var completedText string
+			for index, frame := range frames {
+				if frame.SequenceNumber != testCase.firstSequence+index {
+					t.Fatalf("frame %d sequence = %d", index, frame.SequenceNumber)
+				}
+				if frame.Type == string(rawCompactionSSEOutputTextDelta) {
+					accumulated += frame.Delta
+				}
+				if frame.Type == string(rawCompactionSSEOutputItemDone) {
+					itemText = rawCompactionSSEOutputTextForTest(t, frame.Item)
+				}
+				if frame.Type == string(rawCompactionSSECompleted) {
+					var terminal struct {
+						Output []json.RawMessage `json:"output"`
+					}
+					if json.Unmarshal(frame.Response, &terminal) != nil || len(terminal.Output) != 1 {
+						t.Fatal("invalid completed snapshot")
+					}
+					completedText = rawCompactionSSEOutputTextForTest(t, terminal.Output[0])
+				}
+			}
+			if accumulated != itemText || accumulated != completedText || !strings.Contains(accumulated, "<pre-compaction-transcript>") {
+				t.Fatalf("deltas = %q item = %q completed = %q", accumulated, itemText, completedText)
+			}
+		})
+	}
+}
+
+func TestRawResponsesCompactionSyntheticEventsIncludeRequiredArrays(t *testing.T) {
+	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
+	itemDone, completed := rawCompactionSSEFramesForTest(item, 0, 10, 11)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(itemDone + completed)),
+	}
+	body := readResponseBody(t, rawResponseTransformerForTest(t).TransformResponse(response))
+	found := make(map[string]bool)
+	for _, frame := range bytes.Split(bytes.TrimSpace(body), []byte("\n\n")) {
+		_, data, dataCount := rawSSEFrameDataValue(frame)
+		if dataCount != 1 {
+			continue
+		}
+		var payload map[string]json.RawMessage
+		if json.Unmarshal(data, &payload) != nil {
+			continue
+		}
+		var eventType string
+		if json.Unmarshal(payload["type"], &eventType) != nil {
+			continue
+		}
+		switch rawCompactionSSEEvent(eventType) {
+		case rawCompactionSSEContentPartAdded, rawCompactionSSEContentPartDone:
+			var part map[string]json.RawMessage
+			var annotations []json.RawMessage
+			if json.Unmarshal(payload["part"], &part) != nil || json.Unmarshal(part["annotations"], &annotations) != nil {
+				t.Fatalf("%s omitted part.annotations: %s", eventType, frame)
+			}
+			found[eventType] = true
+		case rawCompactionSSEOutputTextDelta, rawCompactionSSEOutputTextDone:
+			var logprobs []json.RawMessage
+			if json.Unmarshal(payload["logprobs"], &logprobs) != nil {
+				t.Fatalf("%s omitted logprobs: %s", eventType, frame)
+			}
+			found[eventType] = true
+		default:
+		}
+	}
+	for _, eventType := range []rawCompactionSSEEvent{
+		rawCompactionSSEContentPartAdded,
+		rawCompactionSSEContentPartDone,
+		rawCompactionSSEOutputTextDelta,
+		rawCompactionSSEOutputTextDone,
+	} {
+		if !found[string(eventType)] {
+			t.Fatalf("required event %s was absent", eventType)
+		}
+	}
+}
+
+func TestRawResponsesCompactionCandidateBufferFailsOpenAtCap(t *testing.T) {
+	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
+	itemDone, _ := rawCompactionSSEFramesForTest(item, 0, 10, 11)
+	following := "event: response.future\ndata: {\"type\":\"response.future\",\"padding\":\"" +
+		strings.Repeat("x", maxRawCompactionSSEPendingBytes) + "\"}\n\n"
+	original := []byte(itemDone + following)
+	upstream, writer := io.Pipe()
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       upstream,
+	}
+	transformer := rawResponseTransformerForTest(t)
+	transformer.stream = true
+	body := transformer.TransformResponse(response).Body
+	t.Cleanup(func() { _ = body.Close() })
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := writer.Write(original)
+		writeDone <- err
+		<-release
+		_ = writer.Close()
+	}()
+	readDone := make(chan []byte, 1)
+	readErr := make(chan error, 1)
+	go func() {
+		got := make([]byte, len(original))
+		_, err := io.ReadFull(body, got)
+		if err != nil {
+			readErr <- err
+			return
+		}
+		readDone <- got
+	}()
+	select {
+	case got := <-readDone:
+		if !bytes.Equal(got, original) {
+			t.Fatal("cap fail-open changed streamed bytes")
+		}
+	case err := <-readErr:
+		t.Fatalf("read cap fail-open: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("cap fail-open waited for upstream EOF")
+	}
+	releaseOnce.Do(func() { close(release) })
+	if err := <-writeDone; err != nil {
+		t.Fatalf("write oversized stream: %v", err)
+	}
+}
+
+func TestRawResponsesCompactionOversizedUnterminatedFrameStreamsBeforeEOF(t *testing.T) {
+	for _, prefixSize := range []int{0, 64, 128, 4094, 4096} {
+		t.Run(fmt.Sprintf("prefix-%d", prefixSize), func(t *testing.T) {
+			prefix := ""
+			if prefixSize > 0 {
+				prefix = "id: " + strings.Repeat("i", prefixSize-5) + "\n"
+			}
+			expectedSize := maxRawCompactionSSEPendingBytes + 77
+			original := []byte(prefix + "data: " + strings.Repeat("x", expectedSize-len(prefix)-len("data: ")))
+			upstream, writer := io.Pipe()
+			response := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       upstream,
+			}
+			transformer := rawResponseTransformerForTest(t)
+			transformer.stream = true
+			body := transformer.TransformResponse(response).Body
+			t.Cleanup(func() { _ = body.Close() })
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+			writeDone := make(chan error, 1)
+			go func() {
+				_, err := writer.Write(original)
+				writeDone <- err
+				<-release
+				_ = writer.Close()
+			}()
+			readDone := make(chan []byte, 1)
+			readErr := make(chan error, 1)
+			go func() {
+				got := make([]byte, len(original))
+				_, err := io.ReadFull(body, got)
+				if err != nil {
+					readErr <- err
+					return
+				}
+				readDone <- got
+			}()
+			select {
+			case got := <-readDone:
+				if !bytes.Equal(got, original) {
+					t.Fatal("oversized unterminated frame changed streamed bytes")
+				}
+			case err := <-readErr:
+				t.Fatalf("read oversized unterminated frame: %v", err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("oversized unterminated frame waited for upstream EOF")
+			}
+			releaseOnce.Do(func() { close(release) })
+			if err := <-writeDone; err != nil {
+				t.Fatalf("write oversized unterminated frame: %v", err)
+			}
+		})
+	}
+}
+
+func TestRawResponsesCompactionPreservesFragmentedSSELines(t *testing.T) {
+	for _, lineEnding := range []string{"\n", "\r\n"} {
+		for _, lineSize := range []int{4094, 4095, 4096, 4097, 8191, 8192} {
+			t.Run(fmt.Sprintf("ending%d-size%d", len(lineEnding), lineSize), func(t *testing.T) {
+				template := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"%s"}]}`
+				emptyDone, _ := rawCompactionSSEFramesForTest(fmt.Sprintf(template, ""), 0, 10, 11)
+				emptyLineSize := len(strings.Split(emptyDone, "\n")[1])
+				padding := strings.Repeat("x", lineSize-emptyLineSize)
+				itemDone, completed := rawCompactionSSEFramesForTest(
+					fmt.Sprintf(template, padding),
+					0,
+					10,
+					11,
+				)
+				if actual := len(strings.Split(itemDone, "\n")[1]); actual != lineSize {
+					t.Fatalf("data line size = %d, want %d", actual, lineSize)
+				}
+				original := strings.ReplaceAll(itemDone+completed, "\n", lineEnding)
+				response := &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {"text/event-stream"}},
+					Body:       io.NopCloser(strings.NewReader(original)),
+				}
+				body := readResponseBody(t, rawResponseTransformerForTest(t).TransformResponse(response))
+				if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
+					t.Fatalf(
+						"valid SSE lost compaction injection at %d-byte data line with %d-byte ending",
+						lineSize,
+						len(lineEnding),
+					)
+				}
+			})
+		}
+	}
+}
+
+func TestRawResponsesCompactionSequenceOverflowFailsOpen(t *testing.T) {
+	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
+	tests := []struct {
+		name              string
+		itemSequence      int
+		followingSequence int
+		completedSequence int
+	}{
+		{name: "candidate", itemSequence: math.MaxInt - 3, completedSequence: math.MaxInt - 2},
+		{name: "following", itemSequence: math.MaxInt - 6, followingSequence: math.MaxInt - 3, completedSequence: math.MaxInt - 2},
+		{name: "completed", itemSequence: math.MaxInt - 5, completedSequence: math.MaxInt - 3},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			itemDone, completed := rawCompactionSuccessfulSSEFramesForTest(
+				item,
+				0,
+				testCase.itemSequence,
+				testCase.completedSequence,
+			)
+			following := ""
+			if testCase.followingSequence != 0 {
+				following = fmt.Sprintf(
+					"event: response.future\ndata: {\"type\":\"response.future\",\"sequence_number\":%d}\n\n",
+					testCase.followingSequence,
+				)
+			}
+			original := []byte(itemDone + following + completed)
+			transformer := rawResponseTransformerForTest(t)
+			response := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       io.NopCloser(bytes.NewReader(original)),
+			}
+
+			got := readResponseBody(t, transformer.TransformResponse(response))
+			if !bytes.Equal(got, original) {
+				t.Fatalf("overflow mutated response:\n got: %s\nwant: %s", got, original)
+			}
+		})
+	}
+}
+
+func TestRawResponsesCompactionSequenceBoundaryMutates(t *testing.T) {
+	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
+	itemDone, completed := rawCompactionSuccessfulSSEFramesForTest(
+		item,
+		0,
+		math.MaxInt-6,
+		math.MaxInt-4,
+	)
+	following := fmt.Sprintf(
+		"event: response.future\ndata: {\"type\":\"response.future\",\"sequence_number\":%d}\n\n",
+		math.MaxInt-5,
+	)
+	transformer := rawResponseTransformerForTest(t)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(itemDone + following + completed)),
+	}
+
+	frames := rawCompactionSSEDecodedFramesForTest(
+		t,
+		readResponseBody(t, transformer.TransformResponse(response)),
+	)
+	if len(frames) != 7 {
+		t.Fatalf("boundary frame count = %d, want 7", len(frames))
+	}
+	for index, frame := range frames {
+		want := math.MaxInt - 6 + index
+		if frame.SequenceNumber != want {
+			t.Fatalf("frame %d sequence = %d, want %d", index, frame.SequenceNumber, want)
+		}
+	}
+}
+
+func TestRawResponsesCompactionCandidateTypeFailuresPassThrough(t *testing.T) {
+	for _, candidateType := range []string{"", "response.output_item.added"} {
+		t.Run(candidateType, func(t *testing.T) {
+			item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
+			itemDone, completed := rawCompactionSSEFramesForTest(item, 0, 10, 11)
+			if candidateType == "" {
+				itemDone = strings.Replace(itemDone, `"type":"response.output_item.done",`, "", 1)
+			} else {
+				itemDone = strings.Replace(itemDone, "response.output_item.done\",", candidateType+"\",", 1)
+			}
+			original := []byte(itemDone + completed)
+			response := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       io.NopCloser(bytes.NewReader(original)),
+			}
+			got := readResponseBody(t, rawResponseTransformerForTest(t).TransformResponse(response))
+			if !bytes.Equal(got, original) {
+				t.Fatalf("invalid type mutated response:\n got: %s\nwant: %s", got, original)
+			}
+		})
+	}
+}
+
+type rawCompactionSSEDecodedFrame struct {
+	Type           string          `json:"type"`
+	SequenceNumber int             `json:"sequence_number"`
+	Delta          string          `json:"delta"`
+	Item           json.RawMessage `json:"item"`
+	Response       json.RawMessage `json:"response"`
+}
+
+func rawCompactionSSEDecodedFramesForTest(t *testing.T, body []byte) []rawCompactionSSEDecodedFrame {
+	t.Helper()
+	frames := make([]rawCompactionSSEDecodedFrame, 0)
+	for _, rawFrame := range bytes.Split(bytes.TrimSpace(body), []byte("\n\n")) {
+		_, data, dataCount := rawSSEFrameDataValue(rawFrame)
+		if dataCount != 1 {
+			t.Fatalf("data fields = %d", dataCount)
+		}
+		var frame rawCompactionSSEDecodedFrame
+		if json.Unmarshal(data, &frame) != nil {
+			t.Fatalf("invalid frame: %s", rawFrame)
+		}
+		frames = append(frames, frame)
+	}
+	return frames
+}
+
+func rawCompactionSSEOutputTextForTest(t *testing.T, item json.RawMessage) string {
+	t.Helper()
+	var decoded struct {
+		Content []rawCompactionSSEContentPart `json:"content"`
+	}
+	if json.Unmarshal(item, &decoded) != nil {
+		t.Fatalf("invalid item: %s", item)
+	}
+	var text string
+	for _, part := range decoded.Content {
+		if part.Type == "output_text" {
+			text += part.Text
+		}
+	}
+	return text
 }
 
 func TestAppendRawCompactionAssistantItemCreatesOutputTextTarget(t *testing.T) {
@@ -511,6 +895,7 @@ func TestAppendRawCompactionAssistantItemRequiresCompleteTranscriptWrapper(t *te
 	}{
 		{name: "opening tag", text: "quoted " + reorienttag.PreCompactionTranscriptOpen},
 		{name: "closing tag", text: "quoted " + reorienttag.PreCompactionTranscriptClose},
+		{name: "complete older wrapper", text: "summary" + wrappedRawCompactionTranscript("older")},
 		{name: "complete current wrapper", text: "summary" + transcriptText, unchanged: true},
 	}
 	for _, testCase := range tests {
@@ -617,7 +1002,7 @@ func rawCompactionRequest(t *testing.T, body []byte) RawResponsesRequest {
 
 func rawResponseTransformerForTest(t *testing.T) *RawResponsesCompactionTransformer {
 	t.Helper()
-	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
 	_, transformer := PrepareRawResponsesCompaction(
 		rawCompactionRequest(t, body),
 		RawResponsesCompactionSettings{
@@ -629,6 +1014,27 @@ func rawResponseTransformerForTest(t *testing.T) *RawResponsesCompactionTransfor
 		t.Fatal("expected transformer")
 	}
 	return transformer
+}
+
+func rawCompactionSSEFramesForTest(item string, outputIndex int, itemSequence int, completedSequence int) (string, string) {
+	itemDone := fmt.Sprintf(
+		"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":%d,\"sequence_number\":%d,\"item\":%s}\n\n",
+		outputIndex,
+		itemSequence,
+		item,
+	)
+	completed := fmt.Sprintf(
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":%d,\"response\":{\"id\":\"resp-1\",\"output\":[%s]}}\n\n",
+		completedSequence,
+		item,
+	)
+	return itemDone, completed
+}
+
+func rawCompactionSuccessfulSSEFramesForTest(item string, outputIndex int, itemSequence int, completedSequence int) (string, string) {
+	itemDone, completed := rawCompactionSSEFramesForTest(item, outputIndex, itemSequence, completedSequence)
+	completed = strings.Replace(completed, `"response":{"id":`, `"response":{"status":"completed","id":`, 1)
+	return itemDone, completed
 }
 
 func rawJSONResponse(status int, text string) *http.Response {

@@ -1,3 +1,4 @@
+//revive:disable:file-length-limit
 package codex
 
 import (
@@ -6,7 +7,9 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -38,12 +41,6 @@ type RawResponsesCompactionSettings struct {
 	ContextWindowFraction       float64
 	BytesPerToken               int
 	RecentFraction              float64
-}
-
-// HasRawResponsesCompactionItem identifies raw requests that cannot project
-// compaction state into chat messages but must still reach the raw transport.
-func HasRawResponsesCompactionItem(request RawResponsesRequest) bool {
-	return hasRawResponsesNativeContinuationItem(request, transcript.CompactedContextItemKindCompaction)
 }
 
 // HasRawResponsesNativeContinuationItem identifies native continuation items
@@ -181,6 +178,12 @@ func rawResponsesRequestIsLocalCompaction(header http.Header) bool {
 	return metadata.RequestKind == "compaction" && metadata.Compaction.Implementation == "responses"
 }
 
+// IsRawResponsesV1CompactionRequest reports whether request carries the exact
+// local v1 compaction metadata accepted by PrepareRawResponsesCompaction.
+func IsRawResponsesV1CompactionRequest(request RawResponsesRequest) bool {
+	return rawResponsesRequestIsLocalCompaction(request.Header)
+}
+
 func rawCompactionMaxBytes(settings RawResponsesCompactionSettings) int {
 	contextWindow := settings.ContextWindowTokens
 	if contextWindow <= 0 {
@@ -272,8 +275,9 @@ func rawCompactionPromptIsValid(item transcript.CompactedContextItem) bool {
 }
 
 func rawCompactionUnits(items []transcript.CompactedContextItem) []rawCompactionInterval {
-	pairIntervals := rawCompactionPairIntervals(items)
-	merged := mergeRawCompactionIntervals(pairIntervals)
+	intervals := rawCompactionTurnIntervals(items)
+	intervals = append(intervals, rawCompactionPairIntervals(items)...)
+	merged := mergeRawCompactionIntervals(intervals)
 	units := make([]rawCompactionInterval, 0, len(items))
 	intervalIndex := 0
 	for itemIndex := 0; itemIndex < len(items); {
@@ -287,6 +291,20 @@ func rawCompactionUnits(items []transcript.CompactedContextItem) []rawCompaction
 		itemIndex++
 	}
 	return units
+}
+
+func rawCompactionTurnIntervals(items []transcript.CompactedContextItem) []rawCompactionInterval {
+	intervals := make([]rawCompactionInterval, 0)
+	turnStart := 0
+	for itemIndex := 1; itemIndex < len(items); itemIndex++ {
+		item := items[itemIndex]
+		if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil || item.Message.Role != "user" {
+			continue
+		}
+		intervals = append(intervals, rawCompactionInterval{start: turnStart, end: itemIndex})
+		turnStart = itemIndex
+	}
+	return append(intervals, rawCompactionInterval{start: turnStart, end: len(items)})
 }
 
 func rawCompactionPairIntervals(items []transcript.CompactedContextItem) []rawCompactionInterval {
@@ -779,7 +797,6 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
-	t.markMutated()
 	clone := *response
 	clone.Header = rawCompactionMutatedHeaders(response.Header)
 	clone.ContentLength = -1
@@ -873,11 +890,22 @@ type rawCompactionReadCloser struct {
 }
 
 func (b *rawCompactionReadCloser) Read(destination []byte) (int, error) {
-	return b.reader.Read(destination)
+	count, err := b.reader.Read(destination)
+	if errors.Is(err, io.EOF) {
+		return count, io.EOF
+	}
+	if err != nil {
+		return count, fmt.Errorf("read raw compaction response: %w", err)
+	}
+	return count, nil
 }
 
 func (b *rawCompactionReadCloser) Close() error {
-	return b.closer.Close()
+	if err := b.closer.Close(); err != nil {
+		slog.Warn("adapter.codex.raw_compaction.close_failed", "concern", "adapter.providers.codex.request", "err", err)
+		return fmt.Errorf("close raw compaction response: %w", err)
+	}
+	return nil
 }
 
 type rawCompactionMultiCloser struct {
@@ -906,6 +934,13 @@ func newRawCompactionEncodedBody(
 ) io.ReadCloser {
 	reader, pipeWriter := io.Pipe()
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicErr := fmt.Errorf("encode raw compaction response: %v", recovered)
+				slog.Error("adapter.codex.raw_compaction.encode_panic", "concern", "adapter.providers.codex.request", "err", panicErr)
+				_ = pipeWriter.CloseWithError(panicErr)
+			}
+		}()
 		defer func() { _ = source.Close() }()
 		writer, ok := newRawCompactionEncodingWriter(pipeWriter, encoding)
 		if !ok {
@@ -924,16 +959,28 @@ func newRawCompactionEncodedBody(
 }
 
 func (b *rawCompactionEncodedBody) Read(destination []byte) (int, error) {
-	return b.reader.Read(destination)
+	count, err := b.reader.Read(destination)
+	if errors.Is(err, io.EOF) {
+		return count, io.EOF
+	}
+	if err != nil {
+		return count, fmt.Errorf("read encoded raw compaction response: %w", err)
+	}
+	return count, nil
 }
 
 func (b *rawCompactionEncodedBody) Close() error {
-	sourceErr := b.source.Close()
 	readerErr := b.reader.Close()
+	sourceErr := b.source.Close()
 	if sourceErr != nil {
-		return sourceErr
+		slog.Warn("adapter.codex.raw_compaction.source_close_failed", "concern", "adapter.providers.codex.request", "err", sourceErr)
+		return fmt.Errorf("close raw compaction response source: %w", sourceErr)
 	}
-	return readerErr
+	if readerErr != nil {
+		slog.Warn("adapter.codex.raw_compaction.reader_close_failed", "concern", "adapter.providers.codex.request", "err", readerErr)
+		return fmt.Errorf("close encoded raw compaction response: %w", readerErr)
+	}
+	return nil
 }
 
 func newRawCompactionEncodingWriter(
@@ -1026,7 +1073,7 @@ func appendRawCompactionAssistantItem(
 		if json.Unmarshal(part[textStart:textEnd], &text) != nil {
 			return item, false, false
 		}
-		if strings.Contains(text, transcriptText) || rawCompactionTextHasTranscriptWrapper(text) {
+		if strings.Contains(text, transcriptText) {
 			return item, true, true
 		}
 		if !hasTarget {
@@ -1052,11 +1099,6 @@ func appendRawCompactionAssistantItem(
 	}
 	mutatedPart := replaceByteRange(part, textStart, textEnd, encodedText)
 	return replaceByteRange(item, target.start, target.end, mutatedPart), true, true
-}
-
-func rawCompactionTextHasTranscriptWrapper(text string) bool {
-	_, following, found := strings.Cut(text, reorienttag.PreCompactionTranscriptOpen)
-	return found && strings.Contains(following, reorienttag.PreCompactionTranscriptClose)
 }
 
 func marshalRawCompactionString(value string) ([]byte, bool) {
@@ -1251,7 +1293,7 @@ func skipJSONSpace(raw []byte, index int) int {
 }
 
 func replaceByteRange(raw []byte, start, end int, replacement []byte) []byte {
-	out := make([]byte, 0, len(raw)-(end-start)+len(replacement))
+	out := make([]byte, 0, len(raw))
 	out = append(out, raw[:start]...)
 	out = append(out, replacement...)
 	out = append(out, raw[end:]...)

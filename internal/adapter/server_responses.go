@@ -22,6 +22,8 @@ import (
 	"goodkind.io/gklog/trace"
 )
 
+var errResponsesProjectionInputRequired = errors.New("input is required")
+
 // handleResponses serves POST /v1/responses. It parses the typed
 // Responses request, projects it into the shared ChatRequest the resolve
 // pipeline consumes, runs the same resolve + preflight the chat path
@@ -126,7 +128,9 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	}
 	req, _, projectionErr := responsesRequestToChatRequest(rr)
 	if projectionErr != nil {
-		if !adaptercodex.HasRawResponsesNativeContinuationItem(raw) {
+		if !errors.Is(projectionErr, errResponsesProjectionInputRequired) ||
+			(!adaptercodex.IsRawResponsesV1CompactionRequest(raw) &&
+				!adaptercodex.HasRawResponsesNativeContinuationItem(raw)) {
 			return false, projectionErr
 		}
 		var rawCompactionRequest ChatRequest
@@ -301,7 +305,10 @@ func responsesRequestToChatRequest(rr adapteropenai.ResponsesRequest) (ChatReque
 		req.Messages = append([]ChatMessage{responsesSystemMessage(instructions)}, req.Messages...)
 	}
 	if len(req.Messages) == 0 {
-		return ChatRequest{}, nil, adapterErrInvalidRequest("input is required", nil)
+		return ChatRequest{}, nil, adapterErrInvalidRequest(
+			errResponsesProjectionInputRequired.Error(),
+			errResponsesProjectionInputRequired,
+		)
 	}
 	return req, droppedTools, nil
 }
@@ -400,7 +407,8 @@ func (s *Server) dispatchResponsesStream(
 		return
 	}
 	if beginErr := writer.begin(); beginErr != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.begin_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
+		s.log.LogAttrs(
+			ctx, slog.LevelWarn, "adapter.responses.begin_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
 			slog.String("model", alias),
 			slog.Any("err", beginErr),
 		)
@@ -420,7 +428,8 @@ func (s *Server) dispatchResponsesStream(
 	if runErr != nil {
 		mappedErr := responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr)
 		if failErr := writer.fail(mappedErr); failErr != nil {
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.fail_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
+			s.log.LogAttrs(
+				ctx, slog.LevelWarn, "adapter.responses.fail_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
 				slog.String("model", alias),
 				slog.Any("err", failErr),
 			)
@@ -428,7 +437,8 @@ func (s *Server) dispatchResponsesStream(
 		return
 	}
 	if finishErr := writer.finish(result); finishErr != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.finish_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
+		s.log.LogAttrs(
+			ctx, slog.LevelWarn, "adapter.responses.finish_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
 			slog.String("model", alias),
 			slog.Any("err", finishErr),
 		)

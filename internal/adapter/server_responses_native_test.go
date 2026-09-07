@@ -64,8 +64,61 @@ func TestNativeCodexResponsesPreservesRawRequestAndResponse(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesRejectsMalformedRegularContinuation(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		upstreamCalls.Add(1)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"gpt-native","input":[{"type":"web_search_call","id":"search-1","status":"completed"}]}`),
+	)
+	request.Header.Set(
+		adaptercodex.CodexTurnMetadataHeader,
+		`{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn"}`,
+	)
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("upstream calls = %d, want 0", upstreamCalls.Load())
+	}
+}
+
+func TestNativeCodexResponsesPreservesProjectionErrorsBesideContinuation(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		upstreamCalls.Add(1)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"user","content":42}]}`),
+	)
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "invalid input content type") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("upstream calls = %d, want 0", upstreamCalls.Load())
+	}
+}
+
 func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *testing.T) {
-	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }],"tools":[{"type":"custom","name":"opaque"}],"metadata":{"keep":true}}`)
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent answer"}]},{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }],"tools":[{"type":"custom","name":"opaque"}],"metadata":{"keep":true}}`)
 	responseBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`)
 	var gotBody []byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -94,7 +147,10 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if bytes.Contains(gotBody, []byte(`"text":"recent"`)) || !bytes.Contains(gotBody, []byte(`"text":"old"`)) {
+	if bytes.Contains(gotBody, []byte(`"text":"recent user"`)) ||
+		bytes.Contains(gotBody, []byte(`"text":"recent answer"`)) ||
+		!bytes.Contains(gotBody, []byte(`"text":"old user"`)) ||
+		!bytes.Contains(gotBody, []byte(`"text":"old answer"`)) {
 		t.Fatalf("upstream transcript split was wrong: %s", gotBody)
 	}
 	if !bytes.Contains(gotBody, []byte(`{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }`)) {
@@ -105,7 +161,8 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 		t.Fatalf("upstream unrelated fields changed: %s", gotBody)
 	}
 	if !strings.Contains(recorder.Body.String(), "<pre-compaction-transcript>") ||
-		!strings.Contains(recorder.Body.String(), "recent") {
+		!strings.Contains(recorder.Body.String(), "recent user") ||
+		!strings.Contains(recorder.Body.String(), "recent answer") {
 		t.Fatalf("downstream summary missing transcript: %s", recorder.Body.String())
 	}
 }
@@ -150,9 +207,9 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 		}
 		responseDone <- response
 	}()
-	<-firstWritten
 	var response *http.Response
 	select {
+	case <-firstWritten:
 	case response = <-responseDone:
 		t.Cleanup(func() { _ = response.Body.Close() })
 	case requestErrValue := <-requestErr:
@@ -160,6 +217,17 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	case <-time.After(500 * time.Millisecond):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("matching compaction SSE headers waited for upstream completion")
+	}
+	if response == nil {
+		select {
+		case response = <-responseDone:
+			t.Cleanup(func() { _ = response.Body.Close() })
+		case requestErrValue := <-requestErr:
+			t.Fatalf("post response: %v", requestErrValue)
+		case <-time.After(500 * time.Millisecond):
+			releaseOnce.Do(func() { close(release) })
+			t.Fatal("matching compaction SSE headers waited for upstream completion")
+		}
 	}
 	readDone := make(chan string, 1)
 	go func() {
