@@ -289,11 +289,16 @@ func (s *Server) dispatchNativeCodexResponses(
 		lifecycle.streamOpened(ctx)
 	}
 	_, copyErr := s.copyPassthroughResponse(ctx, w, response, streamingResponse)
-	if copyErr == nil && v2Plan != nil {
+	responseSucceeded := response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
+	if copyErr == nil && responseSucceeded && v2Plan != nil {
 		adaptercodex.ArmRawResponsesCompactionV2Response(response)
 	}
+	terminalErr := copyErr
+	if terminalErr == nil && !responseSucceeded {
+		terminalErr = &adaptercodex.UpstreamStatusError{Status: response.StatusCode}
+	}
 	var result adapterprovider.Result
-	lifecycle.terminal(ctx, result, copyErr)
+	lifecycle.terminal(ctx, result, terminalErr)
 	if copyErr != nil {
 		s.log.WarnContext(ctx, "adapter.codex.raw_responses.copy_failed", "concern", "adapter.providers.codex.request", "err", copyErr)
 	}
