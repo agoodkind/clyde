@@ -30,11 +30,6 @@ func ObserveRawResponsesCompactionV2Response(response *http.Response, plan RawRe
 		contentType:     response.Header.Get("Content-Type"),
 		contentEncoding: response.Header.Get("Content-Encoding"),
 		armed:           false,
-		armGeneration:   0,
-		sseBuffer:       nil,
-		sseEncrypted:    "",
-		sseCompleted:    false,
-		sseInvalid:      false,
 	}
 	return &clone
 }
@@ -47,20 +42,12 @@ type rawResponsesCompactionV2ObservedBody struct {
 	contentType     string
 	contentEncoding string
 	armed           bool
-	armGeneration   uint64
-	sseBuffer       []byte
-	sseEncrypted    string
-	sseCompleted    bool
-	sseInvalid      bool
 }
 
 func (b *rawResponsesCompactionV2ObservedBody) Read(destination []byte) (int, error) {
 	n, err := b.source.Read(destination)
 	if n > 0 {
 		_, _ = b.captured.Write(destination[:n])
-	}
-	if err == io.EOF && !b.armed && !b.sseInvalid && b.sseCompleted && b.sseEncrypted != "" {
-		b.armEncrypted(b.sseEncrypted)
 	}
 	if err != nil && err != io.EOF {
 		return n, fmt.Errorf("read observed compaction response: %w", err)
@@ -118,11 +105,9 @@ func (b *rawResponsesCompactionV2ObservedBody) arm() {
 }
 
 func (b *rawResponsesCompactionV2ObservedBody) armEncrypted(encrypted string) {
-	generation, armed := b.registry.ArmWithGeneration(b.plan.SessionID, encrypted, b.plan.Transcript)
-	if !armed {
+	if !b.registry.Arm(b.plan.SessionID, encrypted, b.plan.Transcript) {
 		return
 	}
-	b.armGeneration = generation
 	b.armed = true
 }
 

@@ -51,7 +51,8 @@ func prepareNativeCodexResponsesCompaction(
 	decodedRaw := raw
 	decodedRaw.Body = decodedBody
 	if adaptercodex.DetectRawResponsesCompactionProtocol(decodedRaw.Header) == adaptercodex.RawResponsesCompactionV2 {
-		return prepareNativeCodexResponsesCompactionV2(raw, decodedRaw, decodedBody, settings)
+		transformed, plan := prepareNativeCodexResponsesCompactionV2(raw, decodedRaw, decodedBody, settings)
+		return transformed, nil, plan
 	}
 	transformed, transformer := adaptercodex.PrepareRawResponsesCompaction(decodedRaw, settings)
 	if transformer == nil {
