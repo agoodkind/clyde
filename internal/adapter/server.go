@@ -118,6 +118,7 @@ type Server struct {
 	sem                  chan struct{}
 	token                string
 	mux                  *http.ServeMux
+	httpSrvMu            sync.RWMutex
 	httpSrv              *http.Server
 	requests             *livetrack.Registry[IngressMeta]
 	anthr                *anthropic.Client

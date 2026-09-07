@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"net/http"
@@ -136,6 +137,43 @@ func TestIngressCaptureRecordsResponseAndRedactsAuth(t *testing.T) {
 	}
 	if strings.Contains(headers, "secret-should-not-store") {
 		t.Fatalf("req_headers leaked Authorization: %q", headers)
+	}
+}
+
+func TestIngressCaptureRedactsRequestAuthorizationEchoFromStoredResponse(t *testing.T) {
+	const authorization = "Bearer ingress-authorization-secret"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","echo":"` + authorization + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	store, dbPath := openIngressTestStore(t)
+	s := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
+	s.cfg.CaptureIngress = true
+	s.deps.CaptureStore = store
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"local-model","messages":[{"role":"user","content":"hello"}]}`),
+	)
+	request.Header.Set("Authorization", authorization)
+	recorder := httptest.NewRecorder()
+	s.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	db := openIngressVerifier(t, dbPath)
+	storedResponse := ingressBody(t, db, "response")
+	if bytes.Contains(storedResponse, []byte(authorization)) {
+		t.Fatalf("stored response leaked request Authorization: %s", storedResponse)
+	}
+	if !bytes.Contains(storedResponse, []byte("[REDACTED]")) {
+		t.Fatalf("stored response did not redact request Authorization echo: %s", storedResponse)
 	}
 }
 
