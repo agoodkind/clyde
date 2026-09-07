@@ -218,13 +218,13 @@ func TestLiveCodexV2ForegroundFunctionCall(t *testing.T) {
 		for key, values := range response.Header {
 			writer.Header()[key] = append([]string(nil), values...)
 		}
-		writer.WriteHeader(response.StatusCode)
-		_, _ = writer.Write(responseBody)
 		if request.Method == http.MethodPost && request.URL.Path == "/v1/responses" {
 			mutex.Lock()
 			clientResponses = append(clientResponses, codexLiveClientResponse{request: summarizeCodexLiveRequest(request, body, decodedBody), tagCount: codexLiveSSETranscriptTagCount(responseBody)})
 			mutex.Unlock()
 		}
+		writer.WriteHeader(response.StatusCode)
+		_, _ = writer.Write(responseBody)
 	}))
 	t.Cleanup(clientProxy.Close)
 	t.Cleanup(func() {
@@ -511,17 +511,31 @@ func assertCodexLiveV2ClientResponses(t *testing.T, responses []codexLiveClientR
 			t.Fatalf("upstream response transcript tags=%d, want 0", tagCount)
 		}
 	}
+	expectedSessionHash := [sha256.Size]byte{}
+	foundCompactionSession := false
+	for _, response := range responses {
+		if response.request.v2Compaction {
+			expectedSessionHash = response.request.sessionIDHash
+			foundCompactionSession = true
+			break
+		}
+	}
+	if !foundCompactionSession {
+		t.Fatal("v2 client responses have no compaction session")
+	}
 	foundNPlusTwoFinal := false
 	foundNPlusThreeResend := false
 	for index, response := range responses {
-		if index >= len(upstreamBranches) || upstreamBranches[index] != "final" || !response.request.regularTurn || !response.request.hasEncryptedContent {
+		if index >= len(upstreamBranches) || upstreamBranches[index] != "final" || !response.request.regularTurn ||
+			!response.request.hasEncryptedContent || response.request.sessionIDHash != expectedSessionHash {
 			continue
 		}
 		foundNPlusTwoFinal = true
 		if response.tagCount != 1 {
 			t.Fatalf("N+2 final client response transcript tags=%d, want 1", response.tagCount)
 		}
-		if index+1 < len(responses) && responses[index+1].request.transcriptTagCount == 1 {
+		if index+1 < len(responses) && responses[index+1].request.transcriptTagCount == 1 &&
+			responses[index+1].request.sessionIDHash == expectedSessionHash {
 			foundNPlusThreeResend = true
 		}
 		break
@@ -529,13 +543,6 @@ func assertCodexLiveV2ClientResponses(t *testing.T, responses []codexLiveClientR
 	if !foundNPlusTwoFinal || !foundNPlusThreeResend {
 		if len(responses) != len(upstreamBranches) {
 			t.Fatalf("v2 client response stages n_plus_two_final=%t n_plus_three_resend=%t client_responses=%d fixture_responses=%d", foundNPlusTwoFinal, foundNPlusThreeResend, len(responses), len(upstreamBranches))
-		}
-		expectedSessionHash := [sha256.Size]byte{}
-		for _, response := range responses {
-			if response.request.v2Compaction {
-				expectedSessionHash = response.request.sessionIDHash
-				break
-			}
 		}
 		trace := make([]string, 0, len(responses))
 		for index, response := range responses {
