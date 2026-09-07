@@ -123,23 +123,24 @@ func TestDrainIdleGraceForceClosesSilentSessions(t *testing.T) {
 	}
 }
 
-// TestDrainIdleGraceLetsActiveSessionsRun registers sessions, drives
-// a goroutine that touches them every millisecond, and asserts the
-// idle fast-path does not fire because every session has a fresh
-// last-activity timestamp at drain start. The drain still completes
-// via the deadline path because the closers block until ctx fires.
+// TestDrainIdleGraceLetsActiveSessionsRun registers stale sessions, touches
+// them immediately before draining, and asserts that the idle fast-path does
+// not fire. The drain still completes via the deadline path because the
+// closers block until ctx fires.
 func TestDrainIdleGraceLetsActiveSessionsRun(t *testing.T) {
 	t.Parallel()
 	buf := &bytes.Buffer{}
 	guard := &syncWriter{w: buf}
 	handler := slog.NewJSONHandler(guard, &slog.HandlerOptions{Level: slog.LevelDebug})
 	logger := slog.New(handler)
+	clock := newFakeClock()
 	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.idle_grace.active",
 		Log:         logger,
 		PollEvery:   5 * time.Millisecond,
 		CloserGrace: 200 * time.Millisecond,
+		Now:         clock.now,
 	})
 	const sessionCount = 3
 	closers := make([]*blockingCloser, sessionCount)
@@ -152,23 +153,10 @@ func TestDrainIdleGraceLetsActiveSessionsRun(t *testing.T) {
 		}
 		sessions[i] = sess
 	}
-	stopTouching := make(chan struct{})
-	touchingDone := make(chan struct{})
-	go func() {
-		defer close(touchingDone)
-		ticker := time.NewTicker(1 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopTouching:
-				return
-			case <-ticker.C:
-				for _, sess := range sessions {
-					sess.Touch()
-				}
-			}
-		}
-	}()
+	clock.advance(100 * time.Millisecond)
+	for _, sess := range sessions {
+		sess.Touch()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	drainDone := make(chan DrainResult, 1)
@@ -183,8 +171,6 @@ func TestDrainIdleGraceLetsActiveSessionsRun(t *testing.T) {
 		}
 	})
 	result := <-drainDone
-	close(stopTouching)
-	<-touchingDone
 	if result.Final != StateClosed {
 		t.Fatalf("final state: got %s, want closed", result.Final)
 	}

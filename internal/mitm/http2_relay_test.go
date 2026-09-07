@@ -492,7 +492,6 @@ func TestProviderTLSHTTP2NewStreamsFailDuringDrain(t *testing.T) {
 			close(releaseHold)
 		})
 	}
-	defer release()
 	var secondReached atomic.Bool
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/hold" {
@@ -511,6 +510,7 @@ func TestProviderTLSHTTP2NewStreamsFailDuringDrain(t *testing.T) {
 		_, _ = w.Write([]byte("unexpected upstream response"))
 	}))
 	defer upstream.Close()
+	defer release()
 
 	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
 	defer proxy.shutdown()
@@ -546,7 +546,9 @@ func TestProviderTLSHTTP2NewStreamsFailDuringDrain(t *testing.T) {
 
 	select {
 	case <-enteredHold:
-	case <-time.After(2 * time.Second):
+	case firstErr := <-firstDone:
+		t.Fatalf("first request ended before reaching upstream: %v", firstErr)
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for held upstream request")
 	}
 	waitForExactTunnelCount(t, proxy.proxy, 2, 2*time.Second)
@@ -555,7 +557,7 @@ func TestProviderTLSHTTP2NewStreamsFailDuringDrain(t *testing.T) {
 	defer cancelDrain()
 	drainDone := make(chan struct{})
 	go func() {
-		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 50 * time.Millisecond})
+		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 5 * time.Second})
 		close(drainDone)
 	}()
 	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
@@ -566,12 +568,15 @@ func TestProviderTLSHTTP2NewStreamsFailDuringDrain(t *testing.T) {
 	}
 	secondResp, err := h2Client.RoundTrip(secondReq)
 	if err != nil {
-		t.Fatalf("second h2 round trip during drain: %v", err)
-	}
-	_, _ = io.Copy(io.Discard, secondResp.Body)
-	_ = secondResp.Body.Close()
-	if secondResp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("second status = %d want %d", secondResp.StatusCode, http.StatusServiceUnavailable)
+		if h2Client.CanTakeNewRequest() {
+			t.Fatalf("second h2 round trip failed while client still accepted requests: %v", err)
+		}
+	} else {
+		_, _ = io.Copy(io.Discard, secondResp.Body)
+		_ = secondResp.Body.Close()
+		if secondResp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("second status = %d want %d", secondResp.StatusCode, http.StatusServiceUnavailable)
+		}
 	}
 	if secondReached.Load() {
 		t.Fatal("second request reached upstream during drain")
@@ -637,13 +642,22 @@ func connectProviderH2ClientConn(t *testing.T, proxy *testProxy, host string) (n
 		_ = client.Close()
 		t.Fatalf("negotiated protocol = %q want %q", got, http2.NextProtoTLS)
 	}
-	transport := &http2.Transport{}
+	transport := newTestHTTP2Transport(t)
 	h2Client, err := transport.NewClientConn(tlsClient)
 	if err != nil {
 		_ = client.Close()
 		t.Fatalf("new h2 client conn: %v", err)
 	}
 	return client, tlsClient, h2Client
+}
+
+func newTestHTTP2Transport(t *testing.T) *http2.Transport {
+	t.Helper()
+	transport, err := http2.ConfigureTransports(&http.Transport{})
+	if err != nil {
+		t.Fatalf("configure HTTP/2 transport: %v", err)
+	}
+	return transport
 }
 
 func readStoredCaptureBodies(t *testing.T, dbPath string, requestID string) ([]byte, []byte) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // TranscriptEntry is clyde's model of one line of a Claude Code transcript
@@ -195,7 +196,10 @@ func DecodeTranscriptEntry(line []byte) (TranscriptEntry, error) {
 	fields := entry.partialFields()
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) {
-		fields = append(fields, typeErr.Field)
+		field, _, _ := strings.Cut(typeErr.Field, ".")
+		if field != "" {
+			fields = append(fields, field)
+		}
 	}
 	entry.Decode = EntryDecode{Outcome: EntryDecodePartial, Fields: fields}
 	slog.Debug("providers.claude.parser.entry_field_type_mismatch",
