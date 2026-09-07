@@ -111,9 +111,14 @@ func recordCodexEgress(store *capture.Store, corr correlation.Context, in codexE
 		host = parsed.Host
 		path = parsed.Path
 	}
-	requestValues := capture.SensitiveHTTPHeaderValues(in.reqHeaders)
+	requestValues, requestValuesComplete := capture.SensitiveHTTPHeaderValuesWithStatus(in.reqHeaders)
 	requestHeaders, requestBody := capture.RedactHTTP(in.reqHeaders, in.reqBody)
-	responseHeaders, responseBody := capture.RedactHTTPWithSensitiveValues(in.respHeaders, in.respBody, requestValues)
+	responseHeaders, responseBody := capture.RedactHTTPWithSensitiveValuesStatus(
+		in.respHeaders,
+		in.respBody,
+		requestValues,
+		requestValuesComplete,
+	)
 	store.RecordExchange(corr, capture.Exchange{
 		Client:             captureClientCodex,
 		Provider:           "codex",

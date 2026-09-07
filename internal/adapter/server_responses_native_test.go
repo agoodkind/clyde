@@ -130,6 +130,40 @@ func TestNativeCodexResponsesZstdPreservesRawExchange(t *testing.T) {
 	}
 }
 
+func TestNativeCodexResponsesCompactionStreamingRequestPreservesJSONError(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	errorBody := zstdEncodeNativeResponseBody(t, []byte(`{"error":{"message":"upstream rejected"}}`))
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Encoding", "zstd")
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write(errorBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		bytes.NewReader(zstdEncodeNativeResponseBody(t, requestBody)),
+	)
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest || recorder.Header().Get("Content-Encoding") != "zstd" {
+		t.Fatalf("status=%d encoding=%q", recorder.Code, recorder.Header().Get("Content-Encoding"))
+	}
+	if !bytes.Equal(recorder.Body.Bytes(), errorBody) {
+		t.Fatalf("body=%x want=%x", recorder.Body.Bytes(), errorBody)
+	}
+}
+
 func TestNativeCodexResponsesZstdCapturesDecodedRedactedCopies(t *testing.T) {
 	requestSensitiveValue := "request-compressed-sensitive-marker"
 	requestBody, err := json.Marshal(map[string]string{
@@ -534,10 +568,8 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 
 func TestNativeCodexResponsesCompactionInjectsWithMultilineUnknownFrame(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
-	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`
-	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":" + item + "}\n\n"
+	itemDone, completed := nativeCompactionSSEFrames()
 	unknownFrame := "event: response.future\n: keep this exact comment\ndata: {\"type\":\"response.future\",\ndata: \"opaque\":true}\n\n"
-	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":{\"id\":\"resp-1\",\"output\":[" + item + "]}}\n\n"
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, itemDone+unknownFrame+completed)
@@ -561,7 +593,8 @@ func TestNativeCodexResponsesCompactionInjectsWithMultilineUnknownFrame(t *testi
 	if !bytes.Contains(body, []byte(unknownFrame)) {
 		t.Fatalf("multiline unknown frame changed: %s", body)
 	}
-	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) || !bytes.Contains(body, []byte("recent")) {
+	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) ||
+		!bytes.Contains(body, []byte("recent")) {
 		t.Fatalf("multiline unknown frame suppressed transcript injection: %s", body)
 	}
 }
@@ -570,14 +603,15 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	firstWritten := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
+	itemDone, completed := nativeCompactionSSEFrames()
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "event: response.created\ndata: {\"type\":\"response.created\",\"opaque\":true}\n\n")
 		writer.(http.Flusher).Flush()
 		close(firstWritten)
 		<-release
-		_, _ = io.WriteString(writer, "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n")
-		_, _ = io.WriteString(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+		_, _ = io.WriteString(writer, itemDone)
+		_, _ = io.WriteString(writer, completed)
 	}))
 	t.Cleanup(upstream.Close)
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
@@ -653,9 +687,7 @@ func TestNativeCodexResponsesZstdCompactionStreamsFirstFrameBeforeCompletion(t *
 	firstWritten := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
-	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`
-	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":" + item + "}\n\n"
-	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":{\"id\":\"resp-1\",\"output\":[" + item + "]}}\n\n"
+	itemDone, completed := nativeCompactionSSEFrames()
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Encoding", "zstd")
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -1003,6 +1035,13 @@ func nativeTurnMetadata(t *testing.T) string {
 
 func nativeCompactionTurnMetadata() string {
 	return `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses"}}`
+}
+
+func nativeCompactionSSEFrames() (string, string) {
+	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`
+	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":" + item + "}\n\n"
+	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":{\"id\":\"resp-1\",\"output\":[" + item + "]}}\n\n"
+	return itemDone, completed
 }
 
 func zstdEncodeNativeResponseBody(t *testing.T, body []byte) []byte {

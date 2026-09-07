@@ -274,7 +274,8 @@ func (s *Server) dispatchNativeCodexResponses(
 		s.respondAdapterError(w, r, codexProviderAdapterError(err))
 		return
 	}
-	streamingResponse := raw.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
+	streamingResponse := strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") ||
+		(raw.Stream && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices)
 	if compactionTransformer != nil {
 		response = transformNativeCodexCompactionResponse(response, compactionTransformer, streamingResponse)
 	}
@@ -465,7 +466,8 @@ func (s *Server) dispatchResponsesStream(
 		return
 	}
 	if beginErr := writer.begin(); beginErr != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.begin_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
+		s.log.LogAttrs(
+			ctx, slog.LevelWarn, "adapter.responses.begin_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
 			slog.String("model", alias),
 			slog.Any("err", beginErr),
 		)
@@ -485,7 +487,8 @@ func (s *Server) dispatchResponsesStream(
 	if runErr != nil {
 		mappedErr := responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr)
 		if failErr := writer.fail(mappedErr); failErr != nil {
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.fail_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
+			s.log.LogAttrs(
+				ctx, slog.LevelWarn, "adapter.responses.fail_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
 				slog.String("model", alias),
 				slog.Any("err", failErr),
 			)
@@ -493,7 +496,8 @@ func (s *Server) dispatchResponsesStream(
 		return
 	}
 	if finishErr := writer.finish(result); finishErr != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.finish_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
+		s.log.LogAttrs(
+			ctx, slog.LevelWarn, "adapter.responses.finish_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
 			slog.String("model", alias),
 			slog.Any("err", finishErr),
 		)

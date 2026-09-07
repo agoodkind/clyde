@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -48,55 +49,71 @@ const (
 	sensitiveBodyAccountID          sensitiveBodyField = "accountid"
 	sensitiveBodyAccountUUID        sensitiveBodyField = "accountuuid"
 	sensitiveBodyChatGPTAccountID   sensitiveBodyField = "chatgptaccountid"
+	sensitiveBodyPassword           sensitiveBodyField = "password"
 )
 
 // RedactHTTP removes credential and account headers and masks matching values
 // and sensitive JSON fields in a body copy. It never changes forwarded bytes.
 func RedactHTTP(headers http.Header, body []byte) (http.Header, []byte) {
-	return redactHTTP(headers, body, nil)
+	return redactHTTP(headers, body, nil, true)
 }
 
-// SensitiveHTTPHeaderValues returns the bounded credential values that body
-// redaction uses to remove echoed request credentials from later responses.
-func SensitiveHTTPHeaderValues(headers http.Header) []string {
+// SensitiveHTTPHeaderValuesWithStatus also reports whether every distinct
+// credential value fit within the collection bound.
+func SensitiveHTTPHeaderValuesWithStatus(headers http.Header) ([]string, bool) {
 	values := make([]string, 0)
+	complete := true
 	for name, headerValues := range headers {
 		if !sensitiveHTTPHeader(name) {
 			continue
 		}
 		for _, value := range headerValues {
-			values = appendSensitiveHeaderValues(values, name, value)
+			if containsShortSensitiveHeaderValue(name, value) {
+				complete = false
+			}
+			var valueComplete bool
+			values, valueComplete = appendSensitiveHeaderValuesWithStatus(values, name, value)
+			complete = complete && valueComplete
 		}
 	}
-	return values
+	return values, complete
 }
 
-// RedactHTTPWithSensitiveValues applies the header and body redaction policy
-// plus values discovered from a related request.
-func RedactHTTPWithSensitiveValues(headers http.Header, body []byte, additionalValues []string) (http.Header, []byte) {
-	return redactHTTP(headers, body, additionalValues)
+// RedactHTTPWithSensitiveValuesStatus fails closed for a related nonnil body
+// when bounded collection could not retain every distinct sensitive value.
+func RedactHTTPWithSensitiveValuesStatus(headers http.Header, body []byte, additionalValues []string, additionalValuesComplete bool) (http.Header, []byte) {
+	return redactHTTP(headers, body, additionalValues, additionalValuesComplete)
 }
 
-func redactHTTP(headers http.Header, body []byte, additionalValues []string) (http.Header, []byte) {
+func redactHTTP(headers http.Header, body []byte, additionalValues []string, additionalValuesComplete bool) (http.Header, []byte) {
 	redactedHeaders := headers.Clone()
 	sensitiveValues := make([]string, 0)
+	sensitiveValuesComplete := additionalValuesComplete
 	shortSensitiveValue := false
 	for _, value := range additionalValues {
-		sensitiveValues = appendSensitiveBodyValue(sensitiveValues, value)
+		if trimmed := strings.TrimSpace(value); trimmed != "" && len(trimmed) < 3 {
+			shortSensitiveValue = true
+		}
+		var valueComplete bool
+		sensitiveValues, valueComplete = appendSensitiveBodyValueWithStatus(sensitiveValues, value)
+		sensitiveValuesComplete = sensitiveValuesComplete && valueComplete
 	}
 	for name, values := range headers {
 		if !sensitiveHTTPHeader(name) {
 			continue
 		}
 		for _, value := range values {
-			if trimmed := strings.TrimSpace(value); trimmed != "" && len(trimmed) < 3 {
+			if containsShortSensitiveHeaderValue(name, value) {
 				shortSensitiveValue = true
 			}
-			sensitiveValues = appendSensitiveHeaderValues(sensitiveValues, name, value)
+			var valueComplete bool
+			sensitiveValues, valueComplete = appendSensitiveHeaderValuesWithStatus(sensitiveValues, name, value)
+			sensitiveValuesComplete = sensitiveValuesComplete && valueComplete
 		}
 		delete(redactedHeaders, name)
 	}
-	if body != nil && shortSensitiveValue {
+	if body != nil && (!sensitiveValuesComplete || shortSensitiveValue) {
+		redactedHeaders.Del("Content-Length")
 		return redactedHeaders, []byte(redactedValue)
 	}
 	redactionBody := body
@@ -115,7 +132,11 @@ func redactHTTP(headers http.Header, body []byte, additionalValues []string) (ht
 		}
 		redactionBody = decoded
 	}
-	return redactedHeaders, redactHTTPBody(redactionBody, sensitiveValues)
+	redactedBody := redactHTTPBody(redactionBody, sensitiveValues)
+	if !bytes.Equal(redactedBody, body) {
+		redactedHeaders.Del("Content-Length")
+	}
+	return redactedHeaders, redactedBody
 }
 
 func captureBodyUsesZstd(contentEncoding string) bool {
@@ -155,33 +176,90 @@ func sensitiveHTTPHeader(name string) bool {
 		strings.HasSuffix(normalized, "-auth-token")
 }
 
-func appendSensitiveHeaderValues(values []string, name string, value string) []string {
+func appendSensitiveHeaderValuesWithStatus(values []string, name string, value string) ([]string, bool) {
 	trimmed := strings.TrimSpace(value)
-	values = appendSensitiveBodyValue(values, trimmed)
+	complete := true
+	var valueComplete bool
+	values, valueComplete = appendSensitiveBodyValueWithStatus(values, trimmed)
+	complete = complete && valueComplete
 	if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "Proxy-Authorization") {
 		if _, token, found := strings.Cut(trimmed, " "); found && strings.TrimSpace(token) != "" {
-			values = appendSensitiveBodyValue(values, token)
+			values, valueComplete = appendSensitiveBodyCandidateWithStatus(values, token)
+			complete = complete && valueComplete
 		}
 	}
 	if strings.EqualFold(name, "Cookie") || strings.EqualFold(name, "Set-Cookie") {
-		for part := range strings.SplitSeq(trimmed, ";") {
+		for _, part := range sensitiveCookieParts(name, trimmed) {
 			if _, cookieValue, found := strings.Cut(part, "="); found && strings.TrimSpace(cookieValue) != "" {
-				values = appendSensitiveBodyValue(values, cookieValue)
+				values, valueComplete = appendSensitiveBodyCandidateWithStatus(values, unquotedSensitiveCookieValue(cookieValue))
+				complete = complete && valueComplete
 			}
 		}
 	}
-	return values
+	return values, complete
 }
 
-func appendSensitiveBodyValue(values []string, value string) []string {
+func appendSensitiveBodyCandidateWithStatus(values []string, value string) ([]string, bool) {
 	trimmed := strings.TrimSpace(value)
-	if len(trimmed) < 3 || len(values) >= maxSensitiveBodyValues {
-		return values
+	if trimmed == "" || slices.Contains(values, trimmed) {
+		return values, true
 	}
-	if slices.Contains(values, trimmed) {
-		return values
+	if len(values) >= maxSensitiveBodyValues {
+		return values, false
 	}
-	return append(values, trimmed)
+	return append(values, trimmed), true
+}
+
+func containsShortSensitiveHeaderValue(name string, value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed != "" && len(trimmed) < 3 {
+		return true
+	}
+	if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "Proxy-Authorization") {
+		_, token, found := strings.Cut(trimmed, " ")
+		return found && strings.TrimSpace(token) != "" && len(strings.TrimSpace(token)) < 3
+	}
+	if !strings.EqualFold(name, "Cookie") && !strings.EqualFold(name, "Set-Cookie") {
+		return false
+	}
+	for _, part := range sensitiveCookieParts(name, trimmed) {
+		_, cookieValue, found := strings.Cut(part, "=")
+		if !found {
+			continue
+		}
+		cookieValue = unquotedSensitiveCookieValue(cookieValue)
+		if cookieValue != "" && len(cookieValue) < 3 {
+			return true
+		}
+	}
+	return false
+}
+
+func sensitiveCookieParts(name string, value string) []string {
+	parts := strings.Split(value, ";")
+	if strings.EqualFold(name, "Set-Cookie") && len(parts) > 1 {
+		return parts[:1]
+	}
+	return parts
+}
+
+func unquotedSensitiveCookieValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if unquoted, err := strconv.Unquote(trimmed); err == nil {
+		return unquoted
+	}
+	return trimmed
+}
+
+func appendSensitiveBodyValueWithStatus(values []string, value string) ([]string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < 3 || slices.Contains(values, trimmed) {
+		return values, true
+	}
+	if len(values) >= maxSensitiveBodyValues {
+		return values, false
+	}
+	return append(values, trimmed), true
 }
 
 func redactHTTPBody(body []byte, sensitiveValues []string) []byte {
@@ -193,9 +271,9 @@ func redactHTTPBody(body []byte, sensitiveValues []string) []byte {
 		redacted = bytes.ReplaceAll(redacted, []byte(value), []byte(redactedValue))
 	}
 	if looksLikeJSONValue(redacted) {
-		return redactJSONCaptureBody(redacted)
+		return redactJSONCaptureBody(redacted, sensitiveValues)
 	}
-	if value, handled := redactSSEJSON(redacted); handled {
+	if value, handled := redactSSEJSON(redacted, sensitiveValues); handled {
 		if containsSensitiveSSENonDataMarker(value) {
 			return []byte(redactedValue)
 		}
@@ -207,9 +285,9 @@ func redactHTTPBody(body []byte, sensitiveValues []string) []byte {
 	return redacted
 }
 
-func redactJSONCaptureBody(body []byte) []byte {
+func redactJSONCaptureBody(body []byte, sensitiveValues []string) []byte {
 	if json.Valid(body) {
-		if value, changed := redactJSONValue(body); changed {
+		if value, changed := redactJSONValue(body, sensitiveValues); changed {
 			return value
 		}
 		if containsSensitiveBodyMarker(body) {
@@ -217,7 +295,7 @@ func redactJSONCaptureBody(body []byte) []byte {
 		}
 		return body
 	}
-	if value, valid := redactJSONLines(body); valid {
+	if value, valid := redactJSONLines(body, sensitiveValues); valid {
 		return value
 	}
 	return []byte(redactedValue)
@@ -229,14 +307,14 @@ func looksLikeJSONValue(body []byte) bool {
 		return false
 	}
 	switch trimmed[0] {
-	case '{', '[', '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'f', 'n':
+	case '{', '[', '"':
 		return true
 	default:
-		return false
+		return json.Valid(trimmed)
 	}
 }
 
-func redactJSONLines(body []byte) ([]byte, bool) {
+func redactJSONLines(body []byte, sensitiveValues []string) ([]byte, bool) {
 	lines := bytes.SplitAfter(body, []byte("\n"))
 	valueCount := 0
 	for index, line := range lines {
@@ -248,7 +326,7 @@ func redactJSONLines(body []byte) ([]byte, bool) {
 			return body, false
 		}
 		valueCount++
-		redacted, changed := redactJSONValue(value)
+		redacted, changed := redactJSONValue(value, sensitiveValues)
 		if !changed {
 			if containsSensitiveBodyMarker(value) {
 				return []byte(redactedValue), true
@@ -267,22 +345,26 @@ func redactJSONLines(body []byte) ([]byte, bool) {
 	return bytes.Join(lines, nil), true
 }
 
-func redactJSONValue(raw []byte) ([]byte, bool) {
+func redactJSONValue(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return raw, false
 	}
 	switch trimmed[0] {
 	case '{':
-		return redactJSONObject(raw)
+		return redactJSONObject(raw, sensitiveValues)
 	case '[':
-		return redactJSONArray(raw)
+		return redactJSONArray(raw, sensitiveValues)
 	default:
+		var value string
+		if json.Unmarshal(trimmed, &value) == nil && containsSensitiveValue(value, sensitiveValues) {
+			return []byte(`"` + redactedValue + `"`), true
+		}
 		return raw, false
 	}
 }
 
-func redactJSONObject(raw []byte) ([]byte, bool) {
+func redactJSONObject(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return raw, false
@@ -299,7 +381,7 @@ func redactJSONObject(raw []byte) ([]byte, bool) {
 			changed = true
 			continue
 		}
-		if redacted, nestedChanged := redactJSONValue(value); nestedChanged {
+		if redacted, nestedChanged := redactJSONValue(value, sensitiveValues); nestedChanged {
 			fields[name] = redacted
 			changed = true
 		}
@@ -314,14 +396,14 @@ func redactJSONObject(raw []byte) ([]byte, bool) {
 	return encoded, true
 }
 
-func redactJSONArray(raw []byte) ([]byte, bool) {
+func redactJSONArray(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return raw, false
 	}
 	changed := false
 	for index, item := range items {
-		if redacted, nestedChanged := redactJSONValue(item); nestedChanged {
+		if redacted, nestedChanged := redactJSONValue(item, sensitiveValues); nestedChanged {
 			items[index] = redacted
 			changed = true
 		}
@@ -336,22 +418,31 @@ func redactJSONArray(raw []byte) ([]byte, bool) {
 	return encoded, true
 }
 
+func containsSensitiveValue(value string, sensitiveValues []string) bool {
+	for _, sensitiveValue := range sensitiveValues {
+		if len(sensitiveValue) >= 3 && strings.Contains(value, sensitiveValue) {
+			return true
+		}
+	}
+	return false
+}
+
 func sensitiveJSONField(name string) bool {
 	normalized := strings.NewReplacer("-", "", "_", "", ".", "", " ", "").Replace(strings.ToLower(name))
 	switch sensitiveBodyField(normalized) {
 	case sensitiveBodyAuthorization, sensitiveBodyProxyAuthorization,
 		sensitiveBodyAccessToken, sensitiveBodyRefreshToken, sensitiveBodyIDToken,
-		sensitiveBodyToken, sensitiveBodyAPIKey, sensitiveBodyXAPIKey,
+		sensitiveBodyToken, sensitiveBodyField("authtoken"), sensitiveBodyAPIKey, sensitiveBodyXAPIKey,
 		sensitiveBodyCookie, sensitiveBodyCookies, sensitiveBodySetCookie,
 		sensitiveBodyAccountID, sensitiveBodyAccountUUID, sensitiveBodyChatGPTAccountID,
-		sensitiveBodyField("clientsecret"):
+		sensitiveBodyField("clientsecret"), sensitiveBodyPassword:
 		return true
 	}
 	return false
 }
 
-func redactSSEJSON(body []byte) ([]byte, bool) {
-	lines := bytes.SplitAfter(body, []byte("\n"))
+func redactSSEJSON(body []byte, sensitiveValues []string) ([]byte, bool) {
+	lines := splitCaptureLines(body)
 	changed := false
 	handled := false
 	for index, line := range lines {
@@ -365,9 +456,12 @@ func redactSSEJSON(body []byte) ([]byte, bool) {
 			continue
 		}
 		if !json.Valid(payload) {
-			return []byte(redactedValue), true
+			if looksLikeJSONValue(payload) || containsSensitiveBodyMarker(payload) {
+				return []byte(redactedValue), true
+			}
+			continue
 		}
-		redacted, payloadChanged := redactJSONValue(payload)
+		redacted, payloadChanged := redactJSONValue(payload, sensitiveValues)
 		if !payloadChanged {
 			redacted, payloadChanged = redactSensitiveSSEScalar(payload)
 		}
@@ -397,7 +491,7 @@ func redactSensitiveSSEScalar(payload []byte) ([]byte, bool) {
 }
 
 func containsSensitiveSSENonDataMarker(body []byte) bool {
-	for line := range bytes.SplitSeq(body, []byte("\n")) {
+	for _, line := range splitCaptureLines(body) {
 		trimmed := bytes.TrimSpace(line)
 		if bytes.HasPrefix(trimmed, []byte("data:")) {
 			continue
@@ -407,6 +501,27 @@ func containsSensitiveSSENonDataMarker(body []byte) bool {
 		}
 	}
 	return false
+}
+
+func splitCaptureLines(body []byte) [][]byte {
+	lines := make([][]byte, 0)
+	lineStart := 0
+	for index := 0; index < len(body); index++ {
+		if body[index] != '\r' && body[index] != '\n' {
+			continue
+		}
+		lineEnd := index + 1
+		if body[index] == '\r' && lineEnd < len(body) && body[lineEnd] == '\n' {
+			lineEnd++
+			index++
+		}
+		lines = append(lines, body[lineStart:lineEnd])
+		lineStart = lineEnd
+	}
+	if lineStart < len(body) {
+		lines = append(lines, body[lineStart:])
+	}
+	return lines
 }
 
 func containsSensitiveBodyMarker(body []byte) bool {
@@ -420,13 +535,14 @@ func containsSensitiveBodyMarker(body []byte) bool {
 		[]byte(`"access_token"`), []byte(`"accesstoken"`),
 		[]byte(`"refresh_token"`), []byte(`"refreshtoken"`),
 		[]byte(`"id_token"`), []byte(`"idtoken"`), []byte(`"token"`),
+		[]byte(`"password"`), []byte(`"client_secret"`),
 		[]byte(`"api_key"`), []byte(`"apikey"`), []byte(`"x-api-key"`),
 		[]byte(`"cookie"`), []byte(`"cookies"`), []byte(`"set-cookie"`),
 		[]byte(`"account_id"`), []byte(`"accountid"`),
 		[]byte(`"account_uuid"`), []byte(`"accountuuid"`),
 		[]byte(`"chatgpt-account-id"`),
 		[]byte("access_token="), []byte("refresh_token="), []byte("id_token="),
-		[]byte("token="), []byte("api_key="),
+		[]byte("token="), []byte("api_key="), []byte("password="), []byte("client_secret="),
 		[]byte("account_id="), []byte("account_uuid="),
 	}
 	for _, marker := range markers {
@@ -452,8 +568,11 @@ func containsSensitiveHTTPHeaderAssignment(body []byte, separator byte) bool {
 		for nameStart > 0 && sensitiveHTTPHeaderNameByte(remaining[nameStart-1]) {
 			nameStart--
 		}
-		if nameStart < nameEnd && sensitiveHTTPHeader(string(remaining[nameStart:nameEnd])) {
-			return true
+		if nameStart < nameEnd {
+			name := string(remaining[nameStart:nameEnd])
+			if sensitiveHTTPHeader(name) || sensitiveJSONField(name) {
+				return true
+			}
 		}
 		remaining = remaining[assignmentIndex+1:]
 	}
@@ -461,5 +580,5 @@ func containsSensitiveHTTPHeaderAssignment(body []byte, separator byte) bool {
 
 func sensitiveHTTPHeaderNameByte(value byte) bool {
 	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' ||
-		value >= '0' && value <= '9' || value == '-'
+		value >= '0' && value <= '9' || value == '-' || value == '_' || value == '.'
 }

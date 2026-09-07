@@ -110,8 +110,14 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 		}
 	}
 	conversationID, conversationSource := ingressConversationFields(corr)
+	requestSensitiveValues, requestSensitiveValuesComplete := capture.SensitiveHTTPHeaderValuesWithStatus(r.Header)
 	requestHeaders, requestBody := capture.RedactHTTP(r.Header, body)
-	responseHeaders, responseBody := capture.RedactHTTP(capW.Header(), capW.body.Bytes())
+	responseHeaders, responseBody := capture.RedactHTTPWithSensitiveValuesStatus(
+		capW.Header(),
+		capW.body.Bytes(),
+		requestSensitiveValues,
+		requestSensitiveValuesComplete,
+	)
 	s.deps.CaptureStore.RecordExchange(corr, capture.Exchange{
 		Client:             captureClientIngress,
 		Provider:           "",
