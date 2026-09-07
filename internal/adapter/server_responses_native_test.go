@@ -21,6 +21,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
@@ -698,6 +699,42 @@ func TestNativeCodexResponsesCompactionV2PassesThrough(t *testing.T) {
 	clientResponse := recorder.Body.Bytes()
 	if !bytes.Equal(clientResponse, upstreamResponse) {
 		t.Fatal("v2 response changed before persistence proof")
+	}
+}
+
+func TestNativeCodexResponsesCompactionV2UpstreamFailureDoesNotArmRecovery(t *testing.T) {
+	originalRequest := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"compaction_trigger"}]}`)
+	upstreamResponse := []byte(`{"output":[{"type":"compaction","encrypted_content":"failed-cipher"}]}`)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusInternalServerError)
+		_, _ = writer.Write(upstreamResponse)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	stages := make([]adapterruntime.RequestEvent, 0, 2)
+	srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) {
+		stages = append(stages, event)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalRequest))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError || !bytes.Equal(recorder.Body.Bytes(), upstreamResponse) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	if len(stages) != 2 || stages[1].Stage != adapterruntime.RequestStageFailed {
+		t.Fatalf("request stages = %+v", stages)
+	}
+	if _, matched := srv.compactionV2.Match("native-session", "failed-cipher"); matched {
+		t.Fatal("failed upstream response armed recovery")
 	}
 }
 
