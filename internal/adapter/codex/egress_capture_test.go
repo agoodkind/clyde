@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/clock"
@@ -171,5 +173,40 @@ func TestCodexEgressRedactsRequestCredentialEchoedByResponse(t *testing.T) {
 	}
 	if got := queryCodexRow(t, dbPath, "response"); bytes.Contains(got, []byte("request-credential")) {
 		t.Fatalf("response body leaked request credential: %q", got)
+	}
+}
+
+func TestCodexEgressFailsClosedWhenRequestCredentialCollectionOverflows(t *testing.T) {
+	store, dbPath := openCodexCaptureStore(t)
+	request, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	var cookies strings.Builder
+	lastValue := ""
+	for index := 0; index < 65; index++ {
+		if index > 0 {
+			cookies.WriteString("; ")
+		}
+		lastValue = fmt.Sprintf("cookie-value-%03d-suffix", index)
+		fmt.Fprintf(&cookies, "cookie%d=%s", index, lastValue)
+	}
+	request.Header.Set("Cookie", cookies.String())
+	response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}
+	recordCodexHTTPEgress(
+		store,
+		correlation.Context{},
+		request,
+		response,
+		[]byte(`{"input":"safe"}`),
+		[]byte(`{"echo":`+fmt.Sprintf("%q", lastValue)+`}`),
+		"conv-overflow",
+		clock.Now(),
+	)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	if got := queryCodexRow(t, dbPath, "response"); string(got) != "[REDACTED]" {
+		t.Fatalf("response body = %q, want fail-closed marker", got)
 	}
 }

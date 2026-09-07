@@ -3,7 +3,9 @@ package capture
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -177,6 +179,15 @@ func TestRedactHTTPRedactsScalarSSEData(t *testing.T) {
 	}
 }
 
+func TestRedactHTTPRedactsCredentialInCRDelimitedSSE(t *testing.T) {
+	headers := http.Header{"Authorization": {"Bearer cr-sensitive-value"}}
+	body := []byte("event: response.future\rdata: {\"safe\":true}\r\revent: response.future\rdata: \"\\u0063r-sensitive-value\"\r\r")
+	_, redacted := RedactHTTP(headers, body)
+	if bytes.Contains(redacted, []byte("cr-sensitive-value")) || bytes.Contains(redacted, []byte(`\u0063r-sensitive-value`)) {
+		t.Fatalf("CR-delimited credential survived: %q", redacted)
+	}
+}
+
 func TestRedactHTTPPreservesSafeScalarSSEData(t *testing.T) {
 	body := []byte("event: response.future\ndata: \"safe scalar\"\n\n")
 	_, redacted := RedactHTTP(nil, body)
@@ -317,6 +328,117 @@ func TestRedactHTTPRedactsFormTokenFields(t *testing.T) {
 	}
 }
 
+func TestRedactHTTPRedactsPasswordFields(t *testing.T) {
+	fieldName := "pass" + "word"
+	jsonSecret := "body-sensitive-marker"
+	formSecret := "form-sensitive-marker"
+	for _, body := range [][]byte{
+		[]byte(`{"` + fieldName + `":"` + jsonSecret + `","safe":"kept"}`),
+		[]byte(fieldName + "=" + formSecret),
+	} {
+		_, redacted := RedactHTTP(nil, body)
+		if bytes.Contains(redacted, []byte(jsonSecret)) || bytes.Contains(redacted, []byte(formSecret)) {
+			t.Fatalf("password persisted: %s", redacted)
+		}
+	}
+}
+
+func TestRedactHTTPRedactsClientSecretFormField(t *testing.T) {
+	fieldName := "client_" + "secret"
+	_, redacted := RedactHTTP(nil, []byte(fieldName+"=form-sensitive-marker"))
+	if string(redacted) != redactedValue {
+		t.Fatalf("client secret form body = %q", redacted)
+	}
+}
+
+func TestRedactHTTPRedactsEscapedCredentialEcho(t *testing.T) {
+	headers := http.Header{"Authorization": {"Bearer secret"}}
+	_, redacted := RedactHTTP(headers, []byte(`{"echo":"\u0073ecret","safe":"kept"}`))
+	var decoded map[string]string
+	if err := json.Unmarshal(redacted, &decoded); err != nil {
+		t.Fatalf("decode redacted body: %v", err)
+	}
+	if decoded["echo"] != redactedValue || decoded["safe"] != "kept" {
+		t.Fatalf("escaped echo redaction = %#v", decoded)
+	}
+}
+
+func TestRedactHTTPFailsClosedForShortCookieComponent(t *testing.T) {
+	headers := http.Header{"Cookie": {"a=xy"}}
+	_, redacted := RedactHTTP(headers, []byte(`{"echo":"xy","safe":"kept"}`))
+	if string(redacted) != redactedValue {
+		t.Fatalf("short cookie body = %q", redacted)
+	}
+}
+
+func TestRedactHTTPRedactsAuthTokenField(t *testing.T) {
+	_, redacted := RedactHTTP(nil, []byte(`{"auth_token":"secret","safe":"kept"}`))
+	if bytes.Contains(redacted, []byte("secret")) || !bytes.Contains(redacted, []byte("kept")) {
+		t.Fatalf("auth token field was not redacted: %s", redacted)
+	}
+}
+
+func TestRedactHTTPIgnoresSetCookieAttributes(t *testing.T) {
+	for _, path := range []string{"/", "/api"} {
+		t.Run(path, func(t *testing.T) {
+			headers := http.Header{"Set-Cookie": {"sid=abcdef; Path=" + path}}
+			body := []byte(`{"path":` + strconv.Quote(path) + `,"safe":"kept"}`)
+			_, redacted := RedactHTTP(headers, body)
+			if !bytes.Equal(redacted, body) {
+				t.Fatalf("Set-Cookie attribute changed safe body: got %s want %s", redacted, body)
+			}
+		})
+	}
+	headers := http.Header{"Set-Cookie": {"sid=abcdef; Path=/"}}
+	_, redacted := RedactHTTP(headers, []byte(`{"echo":"abcdef","safe":"kept"}`))
+	if bytes.Contains(redacted, []byte("abcdef")) {
+		t.Fatalf("Set-Cookie value survived: %s", redacted)
+	}
+}
+
+func TestRedactHTTPUnquotesCookieValuesForBodyRedaction(t *testing.T) {
+	headers := http.Header{"Cookie": {`session="secret"`}}
+	_, redacted := RedactHTTP(headers, []byte(`{"echo":"secret","safe":"kept"}`))
+	var decoded map[string]string
+	if err := json.Unmarshal(redacted, &decoded); err != nil {
+		t.Fatalf("decode redacted body: %v", err)
+	}
+	if decoded["echo"] != redactedValue || decoded["safe"] != "kept" {
+		t.Fatalf("quoted cookie redaction = %#v", decoded)
+	}
+}
+
+func TestRedactHTTPPreservesSafePlainText(t *testing.T) {
+	body := []byte("not found")
+	headers := http.Header{"Content-Length": {strconv.Itoa(len(body))}}
+	redactedHeaders, redacted := RedactHTTP(headers, body)
+	if !bytes.Equal(redacted, body) {
+		t.Fatalf("safe text changed: got %q want %q", redacted, body)
+	}
+	if redactedHeaders.Get("Content-Length") != strconv.Itoa(len(body)) {
+		t.Fatalf("safe content length = %q, want preserved", redactedHeaders.Get("Content-Length"))
+	}
+}
+
+func TestRedactHTTPDeletesContentLengthWhenBodyChanges(t *testing.T) {
+	headers := http.Header{"Content-Length": {"57"}}
+	redactedHeaders, redacted := RedactHTTP(headers, []byte(`{"access_token":"secret","safe":"kept"}`))
+	if redactedHeaders.Get("Content-Length") != "" {
+		t.Fatalf("changed body retained content length: %v", redactedHeaders)
+	}
+	if bytes.Contains(redacted, []byte("secret")) {
+		t.Fatalf("changed body retained secret: %s", redacted)
+	}
+}
+
+func TestRedactHTTPPreservesSafeNonJSONSSEData(t *testing.T) {
+	body := []byte("event: response.future\ndata: hello\n\n")
+	_, redacted := RedactHTTP(nil, body)
+	if !bytes.Equal(redacted, body) {
+		t.Fatalf("safe SSE changed: got %q want %q", redacted, body)
+	}
+}
+
 func TestSensitiveHTTPHeaderValuesBoundsAndDeduplicatesCookies(t *testing.T) {
 	var cookies strings.Builder
 	for i := 0; i < maxSensitiveBodyValues*4; i++ {
@@ -325,8 +447,90 @@ func TestSensitiveHTTPHeaderValuesBoundsAndDeduplicatesCookies(t *testing.T) {
 		}
 		cookies.WriteString("session=duplicate-cookie-value")
 	}
-	values := SensitiveHTTPHeaderValues(http.Header{"Cookie": {cookies.String()}})
+	values, complete := SensitiveHTTPHeaderValuesWithStatus(http.Header{"Cookie": {cookies.String()}})
 	if len(values) != 2 {
 		t.Fatalf("credential values = %d, want header and one cookie value", len(values))
+	}
+	if !complete {
+		t.Fatal("duplicate credential values incorrectly exhausted the collection bound")
+	}
+}
+
+func TestSensitiveHTTPHeaderValuesFailsClosedAfterUniqueCookieCap(t *testing.T) {
+	var cookies strings.Builder
+	lastValue := ""
+	for i := 0; i < maxSensitiveBodyValues; i++ {
+		if i > 0 {
+			cookies.WriteString("; ")
+		}
+		lastValue = fmt.Sprintf("cookie-value-%03d-suffix", i)
+		fmt.Fprintf(&cookies, "cookie%d=%s", i, lastValue)
+	}
+	values, complete := SensitiveHTTPHeaderValuesWithStatus(http.Header{"Cookie": {cookies.String()}})
+	if complete {
+		t.Fatal("unique credential values unexpectedly fit within the collection bound")
+	}
+	if len(values) != maxSensitiveBodyValues {
+		t.Fatalf("credential values = %d, want %d", len(values), maxSensitiveBodyValues)
+	}
+	body := []byte(`{"echo":"` + lastValue + `","safe":"kept"}`)
+	_, redacted := RedactHTTPWithSensitiveValuesStatus(nil, body, values, complete)
+	if string(redacted) != redactedValue {
+		t.Fatalf("incomplete collection body = %q, want fail-closed marker", redacted)
+	}
+}
+
+func TestSensitiveHTTPHeaderValuesMarksShortCredentialsIncomplete(t *testing.T) {
+	values, complete := SensitiveHTTPHeaderValuesWithStatus(http.Header{"X-API-Key": {"xy"}})
+	if complete {
+		t.Fatal("short credential collection reported complete")
+	}
+	_, redacted := RedactHTTPWithSensitiveValuesStatus(nil, []byte(`{"echo":"xy"}`), values, complete)
+	if string(redacted) != redactedValue {
+		t.Fatalf("short credential echo = %q, want fail-closed marker", redacted)
+	}
+}
+
+func TestRedactHTTPBoundsAdditionalSensitiveValues(t *testing.T) {
+	values := make([]string, maxSensitiveBodyValues+1)
+	for index := range values {
+		values[index] = fmt.Sprintf("additional-value-%03d", index)
+	}
+	lastValue := values[len(values)-1]
+	_, redacted := RedactHTTPWithSensitiveValuesStatus(
+		nil,
+		[]byte(`{"echo":`+strconv.Quote(lastValue)+`}`),
+		values,
+		true,
+	)
+	if string(redacted) != redactedValue {
+		t.Fatalf("overflowed additional values = %q, want fail-closed marker", redacted)
+	}
+	duplicates := make([]string, maxSensitiveBodyValues+1)
+	for index := range duplicates {
+		duplicates[index] = "duplicate-additional-value"
+	}
+	safeBody := []byte(`{"safe":"kept"}`)
+	_, redacted = RedactHTTPWithSensitiveValuesStatus(nil, safeBody, duplicates, true)
+	if !bytes.Equal(redacted, safeBody) {
+		t.Fatalf("duplicate additional values changed safe body: %s", redacted)
+	}
+}
+
+func TestRedactHTTPNormalizesSensitiveAssignmentNames(t *testing.T) {
+	for _, name := range []string{
+		"api_key", "api-key", "apikey", "apiKey",
+		"client_secret", "client-secret", "clientsecret", "clientSecret",
+		"access_token", "access-token", "accesstoken", "accessToken",
+		"refresh_token", "refresh-token", "refreshtoken", "refreshToken",
+		"id_token", "id-token", "idtoken", "idToken",
+		"password", "account_id", "accountId", "account_uuid", "accountUuid",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, redacted := RedactHTTP(nil, []byte(name+"=secret"))
+			if string(redacted) != redactedValue {
+				t.Fatalf("assignment %q was not redacted: %q", name, redacted)
+			}
+		})
 	}
 }

@@ -84,7 +84,7 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 	if len(listeners) == 0 {
 		return fmt.Errorf("adapter: no listeners to serve")
 	}
-	s.httpSrv = &http.Server{
+	httpSrv := &http.Server{
 		Addr:              listeners[0].Addr().String(),
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -93,6 +93,9 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 			return context.WithValue(connCtx, ingressLabelKey{}, s.ingressLabel(c))
 		},
 	}
+	s.httpSrvMu.Lock()
+	s.httpSrv = httpSrv
+	s.httpSrvMu.Unlock()
 	addrs := make([]string, 0, len(listeners))
 	for _, lis := range listeners {
 		addrs = append(addrs, lis.Addr().String())
@@ -113,7 +116,7 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 					errCh <- fmt.Errorf("adapter serve panic: %v", recovered)
 				}
 			}()
-			errCh <- s.httpSrv.Serve(lis)
+			errCh <- httpSrv.Serve(lis)
 		}(lis)
 	}
 	select {
@@ -137,8 +140,11 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 // runs ahead of the ingress registry drain, reproducing the keepalives-off
 // step the pre-refactor ShutdownWith ran first.
 func (s *Server) DisableKeepAlives() {
-	if s.httpSrv != nil {
-		s.httpSrv.SetKeepAlivesEnabled(false)
+	s.httpSrvMu.RLock()
+	httpSrv := s.httpSrv
+	s.httpSrvMu.RUnlock()
+	if httpSrv != nil {
+		httpSrv.SetKeepAlivesEnabled(false)
 	}
 }
 
@@ -149,10 +155,13 @@ func (s *Server) DisableKeepAlives() {
 // registers it as a PhaseEgress before-hook so it runs after ingress sessions
 // drain but before egress, matching the pre-refactor ShutdownWith ordering.
 func (s *Server) ShutdownHTTP(ctx context.Context) error {
-	if s.httpSrv == nil {
+	s.httpSrvMu.RLock()
+	httpSrv := s.httpSrv
+	s.httpSrvMu.RUnlock()
+	if httpSrv == nil {
 		return nil
 	}
-	if err := s.httpSrv.Shutdown(ctx); err != nil {
+	if err := httpSrv.Shutdown(ctx); err != nil {
 		s.log.WarnContext(ctx, "adapter.server.http_shutdown_failed", "concern", "adapter.http.ingress", "subcomponent", "adapter", "err", err)
 		return fmt.Errorf("adapter HTTP shutdown: %w", err)
 	}
