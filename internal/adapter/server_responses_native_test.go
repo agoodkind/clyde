@@ -21,6 +21,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
@@ -127,6 +128,35 @@ func TestNativeCodexResponsesZstdPreservesRawExchange(t *testing.T) {
 	}
 	if gotEncoding != "zstd" || !bytes.Equal(gotBody, compressedRequest) {
 		t.Fatalf("upstream encoding=%q body=%x want encoding=zstd body=%x", gotEncoding, gotBody, compressedRequest)
+	}
+}
+
+func TestNativeCodexResponsesZstdNativeContinuationReachesRawForwarding(t *testing.T) {
+	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
+	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
+	responseBody := []byte(`{"id":"resp-native","status":"completed"}`)
+	var upstreamBody []byte
+	var upstreamEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamBody, _ = io.ReadAll(request.Body)
+		upstreamEncoding = request.Header.Get("Content-Encoding")
+		_, _ = writer.Write(responseBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
+	request.Header.Set("Content-Encoding", "zstd")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), responseBody) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	if upstreamEncoding != "zstd" || !bytes.Equal(upstreamBody, compressedRequest) {
+		t.Fatalf("upstream encoding=%q body=%x want encoding=zstd body=%x", upstreamEncoding, upstreamBody, compressedRequest)
 	}
 }
 
