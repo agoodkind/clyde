@@ -31,16 +31,17 @@ const (
 )
 
 type rawCompactionSSEBody struct {
-	inner                  io.ReadCloser
-	reader                 *bufio.Reader
-	transcript             string
-	pending                []byte
-	pendingErr             error
-	candidate              []byte
-	following              []byte
-	disabled               bool
-	onMutated              func()
-	requireCompletedStatus bool
+	inner                    io.ReadCloser
+	reader                   *bufio.Reader
+	transcript               string
+	pending                  []byte
+	pendingErr               error
+	candidate                []byte
+	following                []byte
+	disabled                 bool
+	onMutated                func()
+	requireCompletedStatus   bool
+	rejectExistingTranscript bool
 }
 
 type rawCompactionMutation struct {
@@ -54,7 +55,12 @@ func NewRawResponsesCompactionV2FinalAnswerTransformer(request RawResponsesReque
 	if recovery == nil || !rawResponsesCompactionV2FinalAnswerTurn(request.Header) {
 		return nil
 	}
-	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}}
+	return &RawResponsesCompactionTransformer{
+		transcript:               recovery.transcript,
+		stream:                   request.Stream,
+		mutation:                 &rawCompactionMutation{mutated: atomic.Bool{}},
+		rejectExistingTranscript: true,
+	}
 }
 
 // DidMutateResponse reports whether this transformer produced tagged output.
@@ -82,18 +88,19 @@ func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {
 	return rawResponsesCompactionV2RegularTurn(header) && metadata.Compaction.Phase == "final_answer"
 }
 
-func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutated func(), requireCompletedStatus bool) *rawCompactionSSEBody {
+func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutated func(), requireCompletedStatus bool, rejectExistingTranscript bool) *rawCompactionSSEBody {
 	return &rawCompactionSSEBody{
-		inner:                  inner,
-		reader:                 bufio.NewReader(inner),
-		transcript:             transcriptText,
-		pending:                nil,
-		pendingErr:             nil,
-		candidate:              nil,
-		following:              nil,
-		disabled:               false,
-		onMutated:              onMutated,
-		requireCompletedStatus: requireCompletedStatus,
+		inner:                    inner,
+		reader:                   bufio.NewReader(inner),
+		transcript:               transcriptText,
+		pending:                  nil,
+		pendingErr:               nil,
+		candidate:                nil,
+		following:                nil,
+		disabled:                 false,
+		onMutated:                onMutated,
+		requireCompletedStatus:   requireCompletedStatus,
+		rejectExistingTranscript: rejectExistingTranscript,
 	}
 }
 
@@ -184,7 +191,11 @@ func (b *rawCompactionSSEBody) handleSSECandidateFrame(frame []byte, readErr err
 	if !rawCompactionSSEJSONFrameIsValid(frame, rawCompactionSSEOutputItemDone) {
 		return b.failOpenSSE(frame, readErr)
 	}
-	_, matched, valid := appendRawCompactionSSEFrame(frame, b.transcript)
+	_, matched, valid := appendRawCompactionSSEFrameWithPolicy(
+		frame,
+		b.transcript,
+		b.rejectExistingTranscript,
+	)
 	if !valid {
 		return b.failOpenSSE(frame, readErr)
 	}
@@ -224,7 +235,13 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 		b.pending = frame
 		return b.queueSSEError(readErr)
 	}
-	mutatedFrames, ok := appendRawCompactionSSEStreamEvents(b.candidate, b.following, frame, b.transcript)
+	mutatedFrames, ok := appendRawCompactionSSEStreamEvents(
+		b.candidate,
+		b.following,
+		frame,
+		b.transcript,
+		b.rejectExistingTranscript,
+	)
 	if !ok {
 		return b.failOpenSSE(frame, readErr)
 	}
@@ -419,7 +436,7 @@ func rawCompactionSSEBlankLine(line []byte) bool {
 	return bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n"))
 }
 
-func appendRawCompactionSSEFrame(frame []byte, transcriptText string) ([]byte, bool, bool) {
+func appendRawCompactionSSEFrameWithPolicy(frame []byte, transcriptText string, rejectExistingTranscript bool) ([]byte, bool, bool) {
 	eventName, data, dataCount := rawSSEFrameDataValue(frame)
 	if eventName != string(rawCompactionSSEOutputItemDone) {
 		return frame, false, true
@@ -431,7 +448,7 @@ func appendRawCompactionSSEFrame(frame []byte, transcriptText string) ([]byte, b
 	if !ok {
 		return frame, false, false
 	}
-	mutated, matched, valid := appendRawCompactionAssistantItem(data[itemStart:itemEnd], transcriptText)
+	mutated, matched, valid := appendRawCompactionAssistantItemWithPolicy(data[itemStart:itemEnd], transcriptText, rejectExistingTranscript)
 	if !valid || !matched {
 		return frame, matched, valid
 	}
@@ -473,7 +490,7 @@ type rawCompactionSSEItemIdentity struct {
 	sequence     int
 }
 
-func appendRawCompactionSSEStreamEvents(candidate, following, completed []byte, transcriptText string) ([]byte, bool) {
+func appendRawCompactionSSEStreamEvents(candidate, following, completed []byte, transcriptText string, rejectExistingTranscript bool) ([]byte, bool) {
 	candidateData, candidateItem, identity, ok := rawCompactionSSECandidateItem(candidate)
 	if !ok {
 		return nil, false
@@ -482,8 +499,8 @@ func appendRawCompactionSSEStreamEvents(candidate, following, completed []byte, 
 	if !ok || !rawCompactionSSEItemsHaveCoherentContent(candidateItem, completedItem) {
 		return nil, false
 	}
-	mutatedCandidateItem, candidateAppended, candidateValid := appendRawCompactionSSEContentPart(candidateItem, transcriptText)
-	mutatedCompletedItem, completedAppended, completedValid := appendRawCompactionSSEContentPart(completedItem, transcriptText)
+	mutatedCandidateItem, candidateAppended, candidateValid := appendRawCompactionSSEContentPart(candidateItem, transcriptText, rejectExistingTranscript)
+	mutatedCompletedItem, completedAppended, completedValid := appendRawCompactionSSEContentPart(completedItem, transcriptText, rejectExistingTranscript)
 	if !candidateValid || !completedValid || candidateAppended != completedAppended {
 		return nil, false
 	}
@@ -570,7 +587,7 @@ func rawCompactionSSECompletedItem(frame []byte, identity rawCompactionSSEItemId
 	return data, item, itemStart, itemEnd, true
 }
 
-func appendRawCompactionSSEContentPart(item []byte, transcriptText string) ([]byte, bool, bool) {
+func appendRawCompactionSSEContentPart(item []byte, transcriptText string, rejectExistingTranscript bool) ([]byte, bool, bool) {
 	var identity struct {
 		Type string `json:"type"`
 		Role string `json:"role"`
@@ -601,6 +618,9 @@ func appendRawCompactionSSEContentPart(item []byte, transcriptText string) ([]by
 			return item, false, false
 		}
 		if strings.Contains(text, transcriptText) {
+			return item, false, true
+		}
+		if rejectExistingTranscript && rawCompactionTextHasTranscriptWrapper(text) {
 			return item, false, true
 		}
 	}

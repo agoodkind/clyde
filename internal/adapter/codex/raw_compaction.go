@@ -73,9 +73,10 @@ func hasRawResponsesNativeContinuationItem(request RawResponsesRequest, wanted .
 // RawResponsesCompactionTransformer appends the removed native transcript to
 // the successful compaction response.
 type RawResponsesCompactionTransformer struct {
-	transcript string
-	stream     bool
-	mutation   *rawCompactionMutation
+	transcript               string
+	stream                   bool
+	mutation                 *rawCompactionMutation
+	rejectExistingTranscript bool
 }
 
 type rawCompactionContentEncoding string
@@ -159,9 +160,10 @@ func PrepareRawResponsesCompaction(
 	transformed := raw
 	transformed.Body = transformedBody
 	return transformed, &RawResponsesCompactionTransformer{
-		transcript: plan.transcript,
-		stream:     raw.Stream,
-		mutation:   nil,
+		transcript:               plan.transcript,
+		stream:                   raw.Stream,
+		mutation:                 nil,
+		rejectExistingTranscript: false,
 	}
 }
 
@@ -750,7 +752,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
-		clone.Body = newRawCompactionSSEBody(response.Body, wrapped, t.markMutated, t.mutation != nil)
+		clone.Body = newRawCompactionSSEBody(response.Body, wrapped, t.markMutated, t.mutation != nil, t.rejectExistingTranscript)
 		return &clone
 	}
 	originalBody := response.Body
@@ -761,7 +763,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	}
 	_ = originalBody.Close()
 	response.Body = io.NopCloser(bytes.NewReader(body))
-	transformed, ok := appendRawCompactionJSON(body, wrapped)
+	transformed, ok := appendRawCompactionJSONWithPolicy(body, wrapped, t.rejectExistingTranscript)
 	if !ok || bytes.Equal(transformed, body) {
 		return response
 	}
@@ -791,7 +793,7 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
 		clone.Body = newRawCompactionEncodedBody(
-			newRawCompactionSSEBody(decoded, transcriptText, t.markMutated, t.mutation != nil),
+			newRawCompactionSSEBody(decoded, transcriptText, t.markMutated, t.mutation != nil, t.rejectExistingTranscript),
 			encoding,
 		)
 		return &clone
@@ -809,7 +811,7 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
-	transformed, ok := appendRawCompactionJSON(decodedBody, transcriptText)
+	transformed, ok := appendRawCompactionJSONWithPolicy(decodedBody, transcriptText, t.rejectExistingTranscript)
 	if !ok || bytes.Equal(transformed, decodedBody) {
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
@@ -1024,7 +1026,7 @@ func wrappedRawCompactionTranscript(content string) string {
 	return "\n\n" + reorienttag.PreCompactionTranscriptOpen + "\n" + content + "\n" + reorienttag.PreCompactionTranscriptClose + "\n"
 }
 
-func appendRawCompactionJSON(body []byte, transcriptText string) ([]byte, bool) {
+func appendRawCompactionJSONWithPolicy(body []byte, transcriptText string, rejectExistingTranscript bool) ([]byte, bool) {
 	outputStart, outputEnd, ok := jsonObjectFieldValueRange(body, "output")
 	if !ok {
 		return body, false
@@ -1036,7 +1038,7 @@ func appendRawCompactionJSON(body []byte, transcriptText string) ([]byte, bool) 
 	for index := range slices.Backward(ranges) {
 		itemStart := outputStart + ranges[index].start
 		itemEnd := outputStart + ranges[index].end
-		mutated, matched, valid := appendRawCompactionAssistantItem(body[itemStart:itemEnd], transcriptText)
+		mutated, matched, valid := appendRawCompactionAssistantItemWithPolicy(body[itemStart:itemEnd], transcriptText, rejectExistingTranscript)
 		if !valid {
 			return body, false
 		}
@@ -1054,6 +1056,14 @@ func appendRawCompactionJSON(body []byte, transcriptText string) ([]byte, bool) 
 func appendRawCompactionAssistantItem(
 	item []byte,
 	transcriptText string,
+) ([]byte, bool, bool) {
+	return appendRawCompactionAssistantItemWithPolicy(item, transcriptText, false)
+}
+
+func appendRawCompactionAssistantItemWithPolicy(
+	item []byte,
+	transcriptText string,
+	rejectExistingTranscript bool,
 ) ([]byte, bool, bool) {
 	var identity struct {
 		Type string `json:"type"`
@@ -1099,6 +1109,9 @@ func appendRawCompactionAssistantItem(
 		if strings.Contains(text, transcriptText) {
 			return item, true, true
 		}
+		if rejectExistingTranscript && rawCompactionTextHasTranscriptWrapper(text) {
+			return item, true, true
+		}
 		if !hasTarget {
 			target = rawCompactionInterval{start: partStart, end: partEnd}
 			hasTarget = true
@@ -1122,6 +1135,11 @@ func appendRawCompactionAssistantItem(
 	}
 	mutatedPart := replaceByteRange(part, textStart, textEnd, encodedText)
 	return replaceByteRange(item, target.start, target.end, mutatedPart), true, true
+}
+
+func rawCompactionTextHasTranscriptWrapper(text string) bool {
+	_, following, found := strings.Cut(text, reorienttag.PreCompactionTranscriptOpen)
+	return found && strings.Contains(following, reorienttag.PreCompactionTranscriptClose)
 }
 
 func appendRawCompactionAssistantContentPart(
