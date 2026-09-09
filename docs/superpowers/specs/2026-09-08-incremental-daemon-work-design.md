@@ -3,7 +3,7 @@
 Clyde should discover, persist, synchronize, and aggregate changed data without
 repeatedly processing the entire retained corpus.
 
-Status: proposed design for [issue 315](https://github.com/agoodkind/clyde/issues/315).
+Status: approved September 9, 2026, for [issue 315](https://github.com/agoodkind/clyde/issues/315).
 This specification defines intended behavior. It does not claim implementation
 or deployment.
 
