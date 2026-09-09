@@ -63,7 +63,7 @@ acceptance proof.
 | Repeated Cursor workspace reads | Source confirms repeated discovery before cache reuse; stacks confirm Cursor content reads. | Share discovery and validate revisions before content work. |
 | Remote workspace warnings every minute | The encoded-authority probe reproduces the failure; one error logs at three layers. | Preserve remote identities and deduplicate unchanged failures. |
 | Semantic registration retries without opt-in | An absent search setting enables the connection even when feeding is disabled; existing tests reproduce that default. | Require explicit opt-in and perform no dependency work when disabled. |
-| Repeated warnings when the engine is absent | Retry delay already grows to a 30-second cap, but failed registration logs warnings at multiple layers. | Keep recovery for opted-in clients and report failure transitions once. |
+| Repeated warnings when the engine is absent | Retry delay already grows to a 30-second cap, but failed registration logs warnings at multiple layers. | Share an availability gate, lengthen repeated-failure cooldowns, and report failure transitions once. |
 | No discoverable profiling endpoint or status listener ports | Profiling is opt-in; status lacks a complete runtime listener inventory. | Keep profiling off by default and expose its effective state and actual address. |
 
 The additional cache, metrics, and large semantic-delivery workloads measured
@@ -279,18 +279,20 @@ different case reproduced.
 ### Define optional dependency behavior
 
 Semantic search is optional. Both directions default independently to false.
-The new fields name the operation and its external dependency:
+The fields name the two independent operations:
 
-| New TOML field under `conversation.semantic` | Behavior when true | Replaces |
+| TOML field under `conversation.semantic` | Behavior when true | Configuration change |
 | --- | --- | --- |
-| `sync_to_engine` | Send conversation manifests and content to the semantic engine for indexing. | `enabled` |
-| `query_engine` | Answer semantic conversation queries through the engine. | `search_enabled` |
+| `ingestion_enabled` | Send conversation manifests and content to the semantic engine for indexing. | Replaces `enabled`. |
+| `search_enabled` | Search previously indexed conversations through the semantic engine. | Retains this spelling but changes the omitted value to false. |
 
-Only explicit `sync_to_engine = true` enables feeding, and only explicit
-`query_engine = true` enables semantic queries. Enabling one direction never
-enables the other. Local conversation discovery remains independent of both.
+Only explicit `ingestion_enabled = true` enables feeding, and only explicit
+`search_enabled = true` enables semantic queries. Disabling ingestion does not
+disable search or delete previously indexed conversations. Both operations need
+an available semantic engine, but neither requires the other operation to be
+enabled. Local conversation discovery remains independent of both.
 
-| `sync_to_engine` | `query_engine` | Feeding | Search | Engine runtime |
+| `ingestion_enabled` | `search_enabled` | Feeding | Search | Engine runtime |
 | --- | --- | --- | --- | --- |
 | Omitted or false | Omitted | Off | Off | Not constructed |
 | False | False | Off | Off | Not constructed |
@@ -328,19 +330,23 @@ have no retry worker. Re-enabling creates exactly one runtime.
 
 ### Remove the old configuration keys
 
-This is a hard cut. The old `conversation.semantic.enabled` and
-`conversation.semantic.search_enabled` keys are invalid, including when false or
-present beside their replacements. There are no aliases, fallback reads,
-automatic translations, compatibility periods, or preserved implicit defaults.
+This is a hard cut for `conversation.semantic.enabled`: the key is invalid,
+including when false or present beside `ingestion_enabled`. `search_enabled`
+remains a canonical field with independent false-by-default semantics. The
+earlier proposed names `sync_to_engine` and `query_engine` are not accepted aliases.
+There are no fallback reads, automatic translations, compatibility periods, or
+preserved implicit defaults.
 Configuration loading fails before starting workers and names the rejected key
-and its replacement. It must not silently ignore the old keys.
+and its replacement. It must not silently ignore removed keys.
 
 The same cut applies to typed fields, supported serialized forms, schemas,
 examples, generated configurations, tests, and user-facing configuration output.
-The Go fields are `SyncToEngine` and `QueryEngine`; JSON uses `syncToEngine` and
-`queryEngine`. The former scoped JSON names `enabled` and `searchEnabled` are
-also rejected wherever configuration JSON is accepted. Unrelated `enabled`
-settings outside `conversation.semantic` retain their existing contracts.
+The Go fields are `IngestionEnabled` and `SearchEnabled`; JSON uses
+`ingestionEnabled` and `searchEnabled`. The former scoped JSON name `enabled`
+is rejected wherever configuration JSON is accepted. `searchEnabled` retains
+its spelling with the new default. The withdrawn JSON proposals `syncToEngine`
+and `queryEngine` are not aliases. Unrelated `enabled` settings outside
+`conversation.semantic` retain their existing contracts.
 
 Existing configuration is not a compatibility constraint. Operators replace old
 keys explicitly; Clyde never edits their TOML or infers consent from an installed
@@ -355,9 +361,11 @@ rejection of old keys, and the required manual edit. Its developer-facing notice
 must state:
 
 > Breaking change: Under `[conversation.semantic]`, replace `enabled` with
-> `sync_to_engine` and `search_enabled` with `query_engine`. Both new fields
-> default to `false` independently. Old keys now cause a configuration error,
-> even when set to `false`; existing TOML is not migrated automatically.
+> `ingestion_enabled`. `ingestion_enabled` and `search_enabled` both default to
+> `false` independently. Set `search_enabled = true` explicitly to search stored
+> conversations, even when ingestion is disabled. The removed `enabled` key now
+> causes a configuration error, including when false. Existing TOML is not
+> migrated automatically.
 
 The implementation is not review-ready without that notice. This specification
 records the required announcement; it does not claim a pull request was published.
@@ -374,10 +382,33 @@ their invocation must never create a persistent background retry loop.
 
 ### Recover only when explicitly enabled
 
-For opted-in clients, an unavailable engine remains retryable with the existing
-bounded attempt deadline and capped exponential backoff. The fix is not a longer
-timeout and does not turn absence into permanent disablement. Startup of unrelated
-daemon services must not wait for the first failed engine registration.
+For opted-in clients, ingestion and search share one engine-availability state
+and one connection attempt at a time. Configuration says which operations are
+allowed; availability says whether either can run now. Both flags false means
+no availability worker or probes. Either flag true permits recovery attempts,
+not independent retry loops for each operation.
+
+The first connection attempt runs asynchronously. After failure, the shared
+gate enters an unavailable cooldown. Proposed base delays are 30 seconds,
+one minute, two minutes, four minutes, and then five minutes. Positive jitter
+must keep actual delays between 30 seconds and five minutes. The existing
+10-second attempt deadline remains a separate bound. Repeated failure therefore
+does not settle into a connection attempt every 30 seconds indefinitely.
+
+During cooldown, search requests return unavailable immediately and ingestion
+does not build manifests, project documents, or submit batches. Local discovery
+continues. Status and repeated queries cannot reset the timer or initiate a dial.
+Socket readiness events may schedule a recheck but cannot bypass the shared
+not-before deadline. Transport reconnects and registration retries consume the
+same budget; hidden lower-level retries must not multiply connection attempts.
+
+A successful engine operation after connection restores readiness and resets
+the failure progression. A dial alone is not proof of recovery. Reconnects retain
+unknown delivery outcomes for reconciliation before resubmission. Disabling both
+flags cancels the shared attempt and timer; reload preserves an existing cooldown
+for unchanged opted-in settings. Startup of unrelated daemon services never waits
+for a failed registration. An absent engine stays recoverable without hammering
+it or requiring manual daemon restarts.
 
 One runtime boundary owns the warning for entering an unavailable state. Client
 helpers return typed errors without emitting the same warning again. Identical
@@ -545,7 +576,7 @@ writers.
 
 | Stage | Deliverable and gate |
 | --- | --- |
-| 1 | Replace the ambiguous semantic keys with `sync_to_engine` and `query_engine`, reject old keys, announce the breaking change in the implementation PR, and prove dependency-free startup, disable transitions, effective status, and subsystem work counters. |
+| 1 | Define independent `ingestion_enabled` and `search_enabled` fields, reject `enabled`, announce the breaking change, and prove dependency-free startup, shared availability backoff, disable transitions, effective status, and subsystem work counters. |
 | 2 | Correct remote identity handling, share workspace discovery, and skip unchanged stores before content reads. |
 | 3 | Add scheduler ownership, pure cached reads, atomic changed-generation persistence, and reload handoff tests. |
 | 4 | Add metrics byte cursors, recoverable output commits, migration, and retention scheduling. |
@@ -571,11 +602,14 @@ that mocked helpers were called.
 | --- | --- |
 | Missing config, omitted semantic section, or new direction fields false; package and socket absent | Start successfully; perform zero semantic dependency probes, dials, registrations, retry wakes, or feeder passes over at least five minutes. |
 | Same disabled cases with a sentinel engine socket present | Accept zero connections while raw operations, repeated status, and disabled semantic queries run. |
-| Each new direction pair and omitted query value | Match the configuration table; `sync_to_engine = true` with omitted `query_engine` feeds but never answers semantic queries, and query-only never feeds. |
-| Either old semantic key, including false, mixed old/new keys, or either former JSON spelling | Reject configuration with its replacement named before worker startup; do not translate or ignore it. |
-| Old keys introduced by a reload | Reject the new configuration, retain and identify the previous active generation, and apply a later corrected configuration normally. |
+| Each direction pair and omitted search value | Match the configuration table; `ingestion_enabled = true` with omitted `search_enabled` feeds but never answers semantic queries. |
+| Ingestion false, search true, and an available engine containing indexed conversations | Return stored search results without feeding, projecting, deleting, or reindexing those conversations. |
+| Removed `enabled` key, including false or mixed old/new keys, its scoped JSON spelling, or a withdrawn proposal | Reject configuration with its replacement named before worker startup; do not translate or ignore it. |
+| Removed keys introduced by a reload | Reject the new configuration, retain and identify the previous active generation, and apply a later corrected configuration normally. |
 | Enabled-to-disabled reload during dial, retry wait, or active connection | Apply disabled state, drain the old runtime, and perform zero later attempts or deliveries; re-enable creates one runtime. |
-| Enabled integration with initially absent engine | Keep unrelated daemon services usable, retain capped retries with one unavailable warning, and recover when the fixture engine appears. |
+| Either or both operations enabled with an absent engine and repeated queries/status calls | Keep unrelated services usable; one shared attempt follows the cooldown progression, queries fail fast, and ingestion preparation remains stopped. |
+| Prolonged outage, socket-event bursts, transport reconnects, and unchanged-config reload | Respect the same not-before deadline; do not create parallel retries or reset backoff. |
+| Engine returns during cooldown | Recover on the next eligible shared attempt and restore only configured operations; search-only recovery performs no ingestion. |
 | Default sandbox and examples | Do not silently enable semantic search; absent-setting tests exercise real omission. |
 | Profiling unset, explicitly enabled, invalid, or failing | Report the correct effective state; bind only when opted in and only on validated loopback. |
 | Profiling environment override, port zero, unchanged reload, or topology change | Report actual daemon-bound addresses and configuration source; exercise watcher rebind and explicit-reload rejection separately. |
