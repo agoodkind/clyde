@@ -278,17 +278,17 @@ different case reproduced.
 
 ### Define optional dependency behavior
 
-Semantic search is optional. The proposed resolver keeps the two existing
-directions but changes the omitted search setting to inherit `enabled`.
-An explicit `search_enabled` value takes precedence. This preserves an explicit
-read-only search configuration while removing implicit engine use.
+Semantic search is optional. Both directions default independently to false.
+Only explicit `enabled = true` enables feeding, and only explicit
+`search_enabled = true` enables search. Enabling one direction never enables
+the other. This preserves explicit search-only and feed-only configurations.
 
 | `enabled` | `search_enabled` | Feeding | Search | Engine runtime |
 | --- | --- | --- | --- | --- |
 | Omitted or false | Omitted | Off | Off | Not constructed |
 | False | False | Off | Off | Not constructed |
 | False or omitted | True | Off | On | Constructed |
-| True | Omitted | On | On | Constructed |
+| True | Omitted | On | Off | Constructed |
 | True | False | On | Off | Constructed |
 | True | True | On | On | Constructed |
 
@@ -308,7 +308,7 @@ result. This change does not promise a new local substitute for semantic search.
 
 The resolver is shared by startup, feeder admission, query admission, status, and
 configuration transitions. Status reports the two effective directions, whether
-each value was explicit or inherited, the loaded configuration generation, and
+each value was explicit or defaulted, the loaded configuration generation, and
 runtime state. It reports disabled from local state without checking installation.
 It must not reinterpret configuration using the CLI process's environment.
 
@@ -319,11 +319,12 @@ remote jobs are not deleted or falsely reported cancelled; local delivery state
 is retained for reconciliation after a later explicit enable. Inactive clients
 have no retry worker. Re-enabling creates exactly one runtime.
 
-The default change is intentional: clients that previously relied on
-`enabled = false` with omitted `search_enabled` must explicitly set
-`search_enabled = true` to retain search without feeding. Migration never rewrites
-their configuration or infers consent from an existing collection. Examples and
-generated default configurations must use the same off-by-default policy.
+The default change is intentional: every client with omitted `search_enabled`
+must explicitly set `search_enabled = true` to retain semantic queries, including
+clients with `enabled = true`. Feeding remains controlled independently by
+`enabled`. Migration never rewrites configuration or infers consent from an
+existing collection. Examples and generated default configurations must use
+the same off-by-default policy.
 
 The current sandbox template explicitly enables both directions and uses the live
 engine. Default sandbox validation must instead work without that dependency;
@@ -532,7 +533,7 @@ that mocked helpers were called.
 | --- | --- |
 | Missing config, omitted semantic section, or `enabled = false` alone; package and socket absent | Start successfully; perform zero semantic dependency probes, dials, registrations, retry wakes, or feeder passes over at least five minutes. |
 | Same disabled cases with a sentinel engine socket present | Accept zero connections while raw operations, repeated status, and disabled semantic queries run. |
-| Each explicit direction pair and inherited search value | Match the configuration table; search-only never feeds, and feed-only never answers semantic queries. |
+| Each explicit direction pair and omitted search value | Match the configuration table; `enabled = true` with omitted `search_enabled` feeds but never answers semantic queries, and search-only never feeds. |
 | Enabled-to-disabled reload during dial, retry wait, or active connection | Apply disabled state, drain the old runtime, and perform zero later attempts or deliveries; re-enable creates one runtime. |
 | Enabled integration with initially absent engine | Keep unrelated daemon services usable, retain capped retries with one unavailable warning, and recover when the fixture engine appears. |
 | Default sandbox and examples | Do not silently enable semantic search; absent-setting tests exercise real omission. |
