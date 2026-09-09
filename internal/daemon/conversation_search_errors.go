@@ -10,6 +10,7 @@ import (
 type conversationSearchFailureCode string
 
 const (
+	conversationSearchDisabled          conversationSearchFailureCode = "conversation_search_disabled"
 	conversationSearchSourceUnavailable conversationSearchFailureCode = "conversation_search_source_unavailable"
 	conversationSearchSourceRefused     conversationSearchFailureCode = "conversation_search_source_refused"
 	conversationSearchSourceFailed      conversationSearchFailureCode = "conversation_search_source_failed"
@@ -25,6 +26,8 @@ type conversationSearchSourceError struct {
 
 func (e conversationSearchSourceError) Error() string {
 	switch e.code {
+	case conversationSearchDisabled:
+		return string(e.code) + ": conversation search is disabled"
 	case conversationSearchSourceUnavailable:
 		return string(e.code) + ": conversation search is unavailable"
 	case conversationSearchSourceRefused:
@@ -45,6 +48,14 @@ func (e conversationSearchSourceError) grpcCode() codes.Code {
 		return codes.Internal
 	}
 	return e.rpcCode
+}
+
+func disabledConversationSearchSourceError(cause error) conversationSearchSourceError {
+	return conversationSearchSourceError{
+		code:    conversationSearchDisabled,
+		rpcCode: codes.FailedPrecondition,
+		cause:   cause,
+	}
 }
 
 func unavailableConversationSearchSourceError(cause error) conversationSearchSourceError {

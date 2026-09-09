@@ -323,7 +323,10 @@ func newControlServer(
 		return runtime.semantic.currentSearchClient()
 	}
 	searchSource := &semanticConversationSearchSource{
-		index:        index,
+		index: index,
+		searchEnabled: func() bool {
+			return cfg.Conversation.Semantic.AnswersSearch()
+		},
 		searchClient: semanticSearch,
 		collectionID: cfg.Conversation.Semantic.CollectionID,
 	}

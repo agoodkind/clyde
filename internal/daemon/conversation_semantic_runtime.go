@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"sync"
 	"time"
 
@@ -14,17 +16,27 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 )
 
-// Registration retry cadence. A boot-time dial or register failure no longer
-// disables semantic search for the process life: the runtime keeps retrying in
-// the background with bounded exponential backoff so a later engine recovery
-// makes search work again with no daemon reload.
-const (
-	semanticInitialRetryBackoff = time.Second
-	semanticMaxRetryBackoff     = 30 * time.Second
-	// semanticDialRegisterTimeout bounds each dial-and-register attempt so a
-	// slow or wedged engine cannot stall boot or a retry tick indefinitely.
-	semanticDialRegisterTimeout = 10 * time.Second
-)
+// semanticDialRegisterTimeout bounds each dial-and-register attempt so a slow
+// or wedged engine cannot stall boot or a retry tick indefinitely.
+const semanticDialRegisterTimeout = 10 * time.Second
+
+func semanticRetryDelay(failures uint32, jitter time.Duration) time.Duration {
+	delay := 30 * time.Second
+	for remaining := failures; remaining > 1 && delay < 5*time.Minute; remaining-- {
+		delay = min(2*delay, 5*time.Minute)
+	}
+	return min(delay+max(jitter, 0), 5*time.Minute)
+}
+
+func semanticRetryDelayWithJitter(failures uint32) time.Duration {
+	baseDelay := semanticRetryDelay(failures, 0)
+	jitterValue, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(baseDelay/5)+1))
+	if err != nil {
+		return baseDelay
+	}
+	jitter := time.Duration(jitterValue.Int64())
+	return semanticRetryDelay(failures, jitter)
+}
 
 // conversationSemanticRuntime owns the daemon's engine-backed semantic search
 // connection. It is created whenever semantic search is configured, even when
@@ -42,11 +54,9 @@ type conversationSemanticRuntime struct {
 	registry  *livetrack.Registry[conversationSemanticConnectionMeta]
 	meta      conversationSemanticConnectionMeta
 
-	// initialRetryBackoff and maxRetryBackoff bound the registration retry
-	// cadence. They are fields rather than direct constant reads so a test can
-	// drive the real retry loop without waiting on the production cadence.
-	initialRetryBackoff time.Duration
-	maxRetryBackoff     time.Duration
+	// retryDelay computes the wait after the failure count supplied to it. Tests
+	// replace it to drive the real retry loop without waiting on production time.
+	retryDelay func(failures uint32) time.Duration
 
 	// attemptMu serializes registration attempts so the initial boot attempt
 	// and the background retry loop never dial concurrently.
@@ -83,6 +93,18 @@ type semanticConnection struct {
 // ready connection or an error. Production dials the lm-semantic-search daemon;
 // tests inject a fake that fails and then succeeds.
 type semanticConnector func(ctx context.Context) (semanticConnection, error)
+
+type semanticConnectorError struct {
+	cause error
+}
+
+func (e semanticConnectorError) Error() string {
+	return "initialize semantic conversation search: " + e.cause.Error()
+}
+
+func (e semanticConnectorError) Unwrap() error {
+	return e.cause
+}
 
 type conversationSemanticConnectionMeta struct {
 	CollectionID string
@@ -124,31 +146,18 @@ func (c *conversationSemanticConnectionCloser) Close(reason string) error {
 // semsearchConnector builds the production connector: it dials the
 // lm-semantic-search daemon and registers the conversation collection, and on
 // success returns the concrete client as both the search and feeder surface.
-// Each failing external call is logged here, at the boundary that made it, so
-// the retry loop above only has to record the retry cadence.
-func semsearchConnector(socketPath, collectionID string, log *slog.Logger) semanticConnector {
+// The runtime owns unavailable and recovered logging across repeated attempts.
+func semsearchConnector(socketPath, collectionID string) semanticConnector {
 	return func(ctx context.Context) (semanticConnection, error) {
 		client, err := semsearch.Dial(ctx, socketPath)
 		if err != nil {
-			log.WarnContext(ctx, "daemon.conversation_semantic.dial_failed",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"socket_path", socketPath,
-				"err", err,
-			)
-			return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, fmt.Errorf("dial semantic search daemon: %w", err)
+			return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, semanticConnectorError{cause: err}
 		}
 		if registerErr := client.Register(ctx, collectionID); registerErr != nil {
 			if closeErr := client.Close(); closeErr != nil {
 				registerErr = errors.Join(registerErr, closeErr)
 			}
-			log.WarnContext(ctx, "daemon.conversation_semantic.collection_register_failed",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"collection_id", collectionID,
-				"err", registerErr,
-			)
-			return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, fmt.Errorf("register semantic conversation collection: %w", registerErr)
+			return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, semanticConnectorError{cause: registerErr}
 		}
 		return semanticConnection{
 			search:     client,
@@ -193,7 +202,7 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 		SocketPath:   semanticCfg.SocketPath,
 	}
 	meta.IsLivetrackMeta()
-	runtime := newConversationSemanticRuntime(log, semsearchConnector(semanticCfg.SocketPath, semanticCfg.CollectionID, log), registry, meta)
+	runtime := newConversationSemanticRuntime(log, semsearchConnector(semanticCfg.SocketPath, semanticCfg.CollectionID), registry, meta)
 	if err := runtime.attemptRegister(ctx); err != nil {
 		// A boot-time failure is transient (the engine is often briefly down
 		// during a co-restart), so keep the runtime alive and retry in the
@@ -202,7 +211,7 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"collection_id", semanticCfg.CollectionID,
-			"retry_backoff_ms", semanticInitialRetryBackoff.Milliseconds(),
+			"retry_backoff_ms", semanticRetryDelay(1, 0).Milliseconds(),
 			"err", err,
 		)
 		runtime.startRetryWorker(ctx, group)
@@ -227,20 +236,19 @@ func newConversationSemanticRuntime(
 	meta conversationSemanticConnectionMeta,
 ) *conversationSemanticRuntime {
 	return &conversationSemanticRuntime{
-		log:                 log,
-		connector:           connector,
-		registry:            registry,
-		meta:                meta,
-		initialRetryBackoff: semanticInitialRetryBackoff,
-		maxRetryBackoff:     semanticMaxRetryBackoff,
-		attemptMu:           sync.Mutex{},
-		retryMu:             sync.Mutex{},
-		retryCancel:         nil,
-		retryDone:           nil,
-		mu:                  sync.Mutex{},
-		search:              nil,
-		feeder:              nil,
-		registered:          false,
+		log:         log,
+		connector:   connector,
+		registry:    registry,
+		meta:        meta,
+		retryDelay:  semanticRetryDelayWithJitter,
+		attemptMu:   sync.Mutex{},
+		retryMu:     sync.Mutex{},
+		retryCancel: nil,
+		retryDone:   nil,
+		mu:          sync.Mutex{},
+		search:      nil,
+		feeder:      nil,
+		registered:  false,
 	}
 }
 
@@ -353,8 +361,7 @@ func (r *conversationSemanticRuntime) stopRetryWorker(ctx context.Context) error
 // grpc connection with livetrack, publishing the resolved client on success. It
 // is idempotent: once registered, later calls return nil without dialing. The
 // attempt is bounded by semanticDialRegisterTimeout so a wedged engine cannot
-// block the caller. The connector logs the failing external call it made, so
-// this function only adds context for the livetrack registration step.
+// block the caller.
 func (r *conversationSemanticRuntime) attemptRegister(ctx context.Context) error {
 	r.attemptMu.Lock()
 	defer r.attemptMu.Unlock()
@@ -417,9 +424,10 @@ func (r *conversationSemanticRuntime) retryRegisterLoop(ctx context.Context) {
 // and whether registration succeeded. It logs each failed retry at Debug and
 // leaves the success event to its caller, keeping the loop free of Info events.
 func (r *conversationSemanticRuntime) retryRegisterUntilReady(ctx context.Context) (int, bool) {
-	backoff := r.initialRetryBackoff
+	failures := uint32(1)
 	attempts := 0
 	for {
+		backoff := r.retryDelay(failures)
 		select {
 		case <-ctx.Done():
 			return attempts, false
@@ -445,7 +453,7 @@ func (r *conversationSemanticRuntime) retryRegisterUntilReady(ctx context.Contex
 			"backoff_ms", backoff.Milliseconds(),
 			"err", err,
 		)
-		backoff = min(backoff*2, r.maxRetryBackoff)
+		failures++
 	}
 }
 
