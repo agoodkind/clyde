@@ -298,6 +298,21 @@ func TestReadWorkspaceFolderPathStripsFileScheme(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkspaceAuthoritySurvivesDescriptorRead(t *testing.T) {
+	descriptor := filepath.Join(t.TempDir(), "workspace.json")
+	body := []byte(`{"folder":"vscode-remote://ssh-remote%2Bexample/path"}`)
+	if err := os.WriteFile(descriptor, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadWorkspaceFolderPath(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "vscode-remote://ssh-remote%2Bexample/path" {
+		t.Fatalf("workspace identity = %q", got)
+	}
+}
+
 func expectedDefaultCursorDataRoot(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":

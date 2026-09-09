@@ -218,9 +218,7 @@ func addWorkspaceComposers(ctx context.Context, index map[string]WorkspaceCompos
 	cwd := ""
 	if entry.WorkspaceJSONPath != "" {
 		folderPath, folderErr := ReadWorkspaceFolderPath(entry.WorkspaceJSONPath)
-		if folderErr != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.workspace_folder_read_failed", "concern", concern, "path", entry.WorkspaceJSONPath, "workspace_hash", entry.WorkspaceHash, "err", folderErr)
-		} else {
+		if folderErr == nil {
 			cwd = folderPath
 		}
 	}

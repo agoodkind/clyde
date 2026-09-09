@@ -165,7 +165,8 @@ func workspaceDescriptorPath(workspaceDir string) string {
 }
 
 // ReadWorkspaceFolderPath reads one Cursor workspace.json file and returns its
-// filesystem folder path.
+// workspace identity. Local file URIs become filesystem paths, while remote
+// identities remain encoded URIs.
 func ReadWorkspaceFolderPath(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -179,8 +180,7 @@ func ReadWorkspaceFolderPath(path string) (string, error) {
 	}
 	folderPath, err := fileURIToPath(descriptor.Folder)
 	if err != nil {
-		slog.Warn("providers.cursor.store.workspace_folder_decode_failed", "concern", concern, "path", path, "err", err)
-		return "", fmt.Errorf("decode cursor workspace folder %s: %w", path, err)
+		return "", err
 	}
 	return folderPath, nil
 }
@@ -302,6 +302,9 @@ func fileURIToPath(folder string) (string, error) {
 	trimmed := strings.TrimSpace(folder)
 	if trimmed == "" {
 		return "", nil
+	}
+	if !strings.HasPrefix(trimmed, "file:") {
+		return trimmed, nil
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
