@@ -21,6 +21,7 @@ const (
 	cursorWorkspaceStorageName = "workspaceStorage"
 	cursorWorkspaceDBName      = "state.vscdb"
 	cursorWorkspaceJSONName    = "workspace.json"
+	fileURIPrefix              = "file:"
 )
 
 // DataRoot names one local Cursor user data root and its known database paths.
@@ -303,7 +304,7 @@ func fileURIToPath(folder string) (string, error) {
 	if trimmed == "" {
 		return "", nil
 	}
-	if !strings.HasPrefix(trimmed, "file:") {
+	if len(trimmed) < len(fileURIPrefix) || !strings.EqualFold(trimmed[:len(fileURIPrefix)], fileURIPrefix) {
 		return trimmed, nil
 	}
 	parsed, err := url.Parse(trimmed)
