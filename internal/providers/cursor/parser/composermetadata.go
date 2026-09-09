@@ -3,6 +3,8 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"hash/fnv"
 	"log/slog"
 
 	"goodkind.io/clyde/internal/conversation"
@@ -54,10 +56,8 @@ func composerMetadataIndex(
 // Measured on a real store, the metadata timestamp runs ahead of the record's own
 // for 32 of 2,370 chats, and never behind it.
 //
-// A rename that moves no timestamp in either store is still missed. A stamp
-// carries a size and a time, the size is the chat's message count, and neither
-// can express that a title changed, so closing that gap needs a wider change than
-// this parser can make.
+// The size is a virtual change key and includes every metadata field, so a
+// rename or archive toggle is observed even when Cursor leaves timestamps alone.
 func stampCoveringMetadata(
 	stamp conversation.FileStamp,
 	metadata cursorstore.ComposerMetadata,
@@ -66,9 +66,18 @@ func stampCoveringMetadata(
 	if !hasMetadata {
 		return stamp
 	}
+	hasher := fnv.New64a()
+	_, _ = fmt.Fprintf(hasher, "%d\x00%+v", stamp.Size, metadata)
+	stamp.Size = int64(hasher.Sum64() & ((uint64(1) << 63) - 1))
 	metadataMtime := msToTime(metadata.LastUpdatedAt)
 	if metadataMtime.After(stamp.Mtime) {
 		stamp.Mtime = metadataMtime
 	}
 	return stamp
+}
+
+func legacyScanStamp(data cursorstore.WorkspaceDiscovery) conversation.FileStamp {
+	var metadata cursorstore.ComposerMetadata
+	metadata.WorkspaceRoot = data.WorkspaceRoot
+	return stampCoveringMetadata(conversation.FileStamp{Size: data.Revision, Mtime: data.Mtime}, metadata, true)
 }

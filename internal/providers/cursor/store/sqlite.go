@@ -44,6 +44,8 @@ type UnknownKVTableNameError struct {
 	TableName KVTableName
 }
 
+var readOnlyDriverName = "sqlite3"
+
 // Error renders the unsupported key-value table name.
 func (err UnknownKVTableNameError) Error() string {
 	return fmt.Sprintf("unsupported cursor kv table %q", err.TableName)
@@ -55,7 +57,7 @@ func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open cursor sqlite database %s: nil context", path)
 	}
 	dsn := readOnlyDatabaseDSN(path)
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open(readOnlyDriverName, dsn)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.sqlite_open_failed", "concern", concern, "path", path, "err", err)
 		return nil, fmt.Errorf("open cursor sqlite database %s: %w", path, err)

@@ -61,18 +61,27 @@ func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (Com
 	return header, true, nil
 }
 
-// ListComposerIDs lists composer ids present in a Cursor global database.
-func ListComposerIDs(ctx context.Context, db *sql.DB) ([]string, error) {
+// readComposerHeaders decodes the header range once rather than fetching each
+// listed row again. A malformed row retains its previous decoded header.
+func readComposerHeaders(ctx context.Context, db *sql.DB, prior map[string]ComposerHeader) (map[string]ComposerHeader, error) {
 	rows, err := ReadKVRowsByPrefix(ctx, db, KVTableCursorDiskKV, composerDataKeyPrefix)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_ids_list_failed", "concern", concern, "key_prefix", composerDataKeyPrefix, "err", err)
-		return nil, fmt.Errorf("list cursor composer ids: %w", err)
+		return nil, err
 	}
-	composerIDs := make([]string, 0, len(rows))
+	headers := make(map[string]ComposerHeader, len(rows))
 	for _, row := range rows {
-		composerIDs = append(composerIDs, strings.TrimPrefix(row.Key, composerDataKeyPrefix))
+		id := strings.TrimPrefix(row.Key, composerDataKeyPrefix)
+		header, err := DecodeComposerHeaderJSON(row.Value)
+		if err != nil {
+			slog.WarnContext(ctx, "providers.cursor.store.composer_header_decode_failed", "concern", concern, "composer_id", id, "err", err)
+			if previous, known := prior[id]; known {
+				headers[id] = previous
+			}
+			continue
+		}
+		headers[id] = header
 	}
-	return composerIDs, nil
+	return headers, nil
 }
 
 func composerDataKey(composerID string) string {

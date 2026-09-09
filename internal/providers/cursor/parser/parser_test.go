@@ -120,6 +120,15 @@ func TestParserDiscoversScansAndStreamsCursorSources(t *testing.T) {
 	if legacyRecord.ArtifactKind != "cursor_legacy_chat" {
 		t.Fatalf("legacy ArtifactKind = %q", legacyRecord.ArtifactKind)
 	}
+	repeated, err := parser.Discover(context.Background(), recordsByPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.EqualFunc(candidates, repeated, func(left, right conversation.ScanCandidate) bool {
+		return left.Path == right.Path && left.Selector == right.Selector && left.Stamp.Equal(right.Stamp)
+	}) {
+		t.Fatalf("unchanged discovery changed candidates: %#v", repeated)
+	}
 
 	jsonlMessages, err := conversation.CollectMessages(parser.Stream(sharedJSONLPath, conversation.LoadOptions{
 		IncludeSystemPrompts:  false,

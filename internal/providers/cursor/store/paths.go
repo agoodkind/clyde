@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -50,6 +51,10 @@ type WorkspaceEntry struct {
 // nothing about what that database holds.
 type WorkspaceListing struct {
 	Entries []WorkspaceEntry
+	// Retained holds previously listed workspaces that this pass could not
+	// examine. Discovery keeps their cached contributions without calling them
+	// readable; request lookup counts them in Unreadable instead.
+	Retained []WorkspaceEntry
 	// Unreadable counts directory entries this listing could not examine. A
 	// directory that simply holds no state.vscdb is not counted, because it holds
 	// nothing a search could have missed.
@@ -58,6 +63,14 @@ type WorkspaceListing struct {
 	// exist. That is an answer rather than a failure: this machine has no workspace
 	// databases, so a miss across them is a real absence rather than an unread one.
 	StorageDirMissing bool
+}
+
+// DiscoveryEntries includes prior unreadable workspaces in stable registry
+// precedence order. The caller owns the returned slice.
+func (listing WorkspaceListing) DiscoveryEntries() []WorkspaceEntry {
+	entries := append(slices.Clone(listing.Entries), listing.Retained...)
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].WorkspaceHash < entries[j].WorkspaceHash })
+	return entries
 }
 
 type workspaceDescriptor struct {
@@ -103,15 +116,21 @@ func ResolveDataRootsFromEnv(ctx context.Context) ([]DataRoot, error) {
 // quietly, so a search across the workspaces can tell a miss over everything from
 // a miss over what it managed to read.
 func (root DataRoot) ListWorkspaceEntries() (WorkspaceListing, error) {
-	listing := WorkspaceListing{Entries: nil, Unreadable: 0, StorageDirMissing: false}
+	sharedDiscovery.mu.Lock()
+	defer sharedDiscovery.mu.Unlock()
+	listing := WorkspaceListing{Entries: nil, Retained: nil, Unreadable: 0, StorageDirMissing: false}
+	prior := sharedDiscovery.listings[root.WorkspaceStorageDir]
 
 	entries, err := os.ReadDir(root.WorkspaceStorageDir)
 	if err != nil {
 		if StatSaysAbsent(err, root.WorkspaceStorageDir) {
 			listing.StorageDirMissing = true
+			sharedDiscovery.listings[root.WorkspaceStorageDir] = listing
 			return listing, nil
 		}
 		slog.Warn("providers.cursor.store.workspace_storage_read_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
+		listing.Retained = prior.DiscoveryEntries()
+		listing.Unreadable = max(1, len(listing.Retained))
 		return listing, fmt.Errorf("read cursor workspace storage dir %s: %w", root.WorkspaceStorageDir, err)
 	}
 
@@ -126,6 +145,11 @@ func (root DataRoot) ListWorkspaceEntries() (WorkspaceListing, error) {
 		present, statErr := filePresent(stateDBPath)
 		if statErr != nil {
 			listing.Unreadable++
+			for _, previous := range prior.DiscoveryEntries() {
+				if previous.WorkspaceHash == workspaceHash {
+					listing.Retained = append(listing.Retained, previous)
+				}
+			}
 			continue
 		}
 		if !present {
@@ -141,6 +165,7 @@ func (root DataRoot) ListWorkspaceEntries() (WorkspaceListing, error) {
 		return out[i].WorkspaceHash < out[j].WorkspaceHash
 	})
 	listing.Entries = out
+	sharedDiscovery.listings[root.WorkspaceStorageDir] = WorkspaceListing{Entries: slices.Clone(out), Retained: slices.Clone(listing.Retained), Unreadable: listing.Unreadable, StorageDirMissing: false}
 	return listing, nil
 }
 
@@ -169,6 +194,10 @@ func workspaceDescriptorPath(workspaceDir string) string {
 // workspace identity. Local file URIs become filesystem paths, while remote
 // identities remain encoded URIs.
 func ReadWorkspaceFolderPath(path string) (string, error) {
+	return sharedDiscovery.readDescriptor(path)
+}
+
+func readWorkspaceFolderPath(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Warn("providers.cursor.store.workspace_descriptor_read_failed", "concern", concern, "path", path, "err", err)

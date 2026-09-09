@@ -34,7 +34,6 @@ var (
 	_ = cursorstore.ReadKVRowsByPrefix
 	_ = cursorstore.DecodeComposerHeaderJSON
 	_ = cursorstore.ReadComposerHeader
-	_ = cursorstore.ListComposerIDs
 	_ = cursorstore.DecodeBackgroundComposerWindowMappingJSON
 	_ = cursorstore.ListBackgroundComposers
 	_ = cursorstore.DecodeBubbleJSON

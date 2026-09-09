@@ -205,21 +205,11 @@ func findGenerationEntryInWorkspace(
 ) (GenerationHit, bool, bool) {
 	var emptyHit GenerationHit
 
-	workspaceDB, err := OpenReadOnlyDatabase(ctx, entry.StateDBPath)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.generation_workspace_open_failed", "concern", concern, "path", entry.StateDBPath, "workspace_hash", entry.WorkspaceHash, "err", err)
+	data := ReadWorkspaceDiscovery(ctx, entry)
+	if data.GenerationsErr != nil {
 		return emptyHit, false, false
 	}
-	defer func() { _ = workspaceDB.Close() }()
-
-	generations, found, err := ReadGenerationEntries(ctx, workspaceDB)
-	if err != nil {
-		return emptyHit, false, false
-	}
-	if !found {
-		return emptyHit, false, true
-	}
-	for _, generation := range generations {
+	for _, generation := range data.Generations {
 		if generation.GenerationUUID != requestID {
 			continue
 		}

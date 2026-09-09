@@ -2,7 +2,6 @@ package parser
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -51,13 +50,13 @@ func composerUpdatedAt(header cursorstore.ComposerHeader) time.Time {
 // does not.
 func composerScanStamp(
 	ctx context.Context,
-	db *sql.DB,
 	globalDBPath string,
 	composerID string,
 	header cursorstore.ComposerHeader,
 	priorStamp conversation.FileStamp,
+	stock cursorstore.ComposerBubbleStock,
+	err error,
 ) (conversation.FileStamp, bool) {
-	stock, err := cursorstore.ReadComposerBubbleStock(ctx, db, composerID)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.composer_bubble_stock_failed", "concern", concern, "path", globalDBPath, "composer_id", composerID, "err", err)
 		return keepPriorComposer(ctx, globalDBPath, composerID, priorStamp)
@@ -132,6 +131,6 @@ func composerChangeKey(revision int64, header cursorstore.ComposerHeader) int64 
 	// same chat's previous key, never across chats, so a collision costs one
 	// missed refresh for one chat at odds of about one in four billion per change.
 	hasher := fnv.New32a()
-	_, _ = fmt.Fprintf(hasher, "%d\x00%d\x00%s", revision, header.LastUpdatedAt, header.LatestChatGenerationUUID)
+	_, _ = fmt.Fprintf(hasher, "%d\x00%+v", revision, header)
 	return int64(hasher.Sum32())
 }

@@ -972,7 +972,8 @@ func TestReadComposerBubbleStockSeparatesADraftFromAStoredChat(t *testing.T) {
 		{composerID: "c-stored", wantRows: 1, wantContent: true},
 		{composerID: "c-blank", wantRows: 1, wantContent: false},
 	} {
-		stock, err := ReadComposerBubbleStock(context.Background(), readonly, testCase.composerID)
+		stocks, err := ReadComposerBubbleStocks(context.Background(), readonly)
+		stock := stocks[testCase.composerID]
 		if err != nil {
 			t.Fatalf("ReadComposerBubbleStock(%q) returned error: %v", testCase.composerID, err)
 		}
@@ -1031,7 +1032,8 @@ func TestReadSnapshotPinsBubbleCountAndProjectionToOneWALRevision(t *testing.T) 
 		t.Fatalf("snapshot count = %d and projection = %d, want both to see the one-row revision", storedRows, projected)
 	}
 
-	freshStock, err := ReadComposerBubbleStock(context.Background(), readonly, "c")
+	freshStocks, err := ReadComposerBubbleStocks(context.Background(), readonly)
+	freshStock := freshStocks["c"]
 	if err != nil {
 		t.Fatalf("ReadComposerBubbleStock returned error: %v", err)
 	}
@@ -1065,7 +1067,7 @@ func TestReadComposerBubbleStockLogsCountFailureBeforeReturningIt(t *testing.T) 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logOutput, nil)))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
-	if _, err := ReadComposerBubbleStock(context.Background(), readonly, "c"); err == nil {
+	if _, err := ReadComposerBubbleStocks(context.Background(), readonly); err == nil {
 		t.Fatal("ReadComposerBubbleStock returned no error for a table without its key column")
 	}
 	if !strings.Contains(logOutput.String(), "providers.cursor.store.composer_bubble_count_failed") {
@@ -1211,7 +1213,8 @@ func TestReadComposerBubbleStockReportsInconclusiveForAnUnreadableChat(t *testin
 		{composerID: "c-empty", wantContent: false, wantConclusive: true},
 		{composerID: "c-full", wantContent: true, wantConclusive: true},
 	} {
-		stock, err := ReadComposerBubbleStock(context.Background(), readonly, testCase.composerID)
+		stocks, err := ReadComposerBubbleStocks(context.Background(), readonly)
+		stock := stocks[testCase.composerID]
 		if err != nil {
 			t.Fatalf("ReadComposerBubbleStock(%q) returned error: %v", testCase.composerID, err)
 		}
@@ -1236,7 +1239,8 @@ func TestAssembleTreatsAJSONNullToolFieldAsNoToolCall(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = readonly.Close() })
 
-	stock, err := ReadComposerBubbleStock(context.Background(), readonly, "c-null-tool")
+	stocks, err := ReadComposerBubbleStocks(context.Background(), readonly)
+	stock := stocks["c-null-tool"]
 	if err != nil {
 		t.Fatalf("ReadComposerBubbleStock returned error: %v", err)
 	}
