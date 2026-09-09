@@ -184,7 +184,7 @@ func TestDecodeTranscriptEntryReportsWhichFieldsDecodedPartially(t *testing.T) {
 	if partialEntry.Decode.Outcome != EntryDecodePartial {
 		t.Fatalf("outcome = %q, want %q", partialEntry.Decode.Outcome, EntryDecodePartial)
 	}
-	for _, want := range []string{"toolUseResult", "error", "imagePasteIds"} {
+	for _, want := range []string{"toolUseResult", "error", "imagePasteIds.0"} {
 		if !slices.Contains(partialEntry.Decode.Fields, want) {
 			t.Errorf("fields = %v, want it to name %q", partialEntry.Decode.Fields, want)
 		}
