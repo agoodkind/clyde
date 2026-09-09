@@ -63,6 +63,7 @@ func TestLoadConfigRejectsRemovedConversationSemanticEnabled(t *testing.T) {
 	for _, contents := range []string{
 		"[conversation.semantic]\nenabled = false\n",
 		"[conversation.semantic]\nenabled = true\ningestion_enabled = false\nsearch_enabled = true\n",
+		"[conversation.semantic]\nenabled = \"false\"\n",
 	} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(contents), 0o600); err != nil {

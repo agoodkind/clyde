@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,7 +18,16 @@ type removedConversationSection struct {
 }
 
 type removedConversationSemanticSection struct {
-	Enabled *bool `toml:"enabled"`
+	Enabled *removedConversationSemanticValue `toml:"enabled"`
+}
+
+type removedConversationSemanticValue struct {
+	present bool
+}
+
+func (value *removedConversationSemanticValue) UnmarshalTOML([]byte) error {
+	value.present = true
+	return nil
 }
 
 type removedConversationSemanticKeyError struct {
@@ -30,7 +40,8 @@ func (err *removedConversationSemanticKeyError) Error() string {
 
 func unmarshalRemovedConversationSemanticConfig(data []byte) error {
 	var removedConfig removedConversationSemanticConfig
-	if err := toml.Unmarshal(data, &removedConfig); err != nil {
+	decoder := toml.NewDecoder(bytes.NewReader(data)).EnableUnmarshalerInterface()
+	if err := decoder.Decode(&removedConfig); err != nil {
 		slog.Warn(
 			"config.load.removed_conversation_config_scan_failed",
 			"concern", "config",
@@ -41,7 +52,7 @@ func unmarshalRemovedConversationSemanticConfig(data []byte) error {
 		)
 		return fmt.Errorf("scan removed conversation semantic config: %w", err)
 	}
-	if removedConfig.Conversation.Semantic.Enabled != nil {
+	if enabled := removedConfig.Conversation.Semantic.Enabled; enabled != nil && enabled.present {
 		return &removedConversationSemanticKeyError{key: "conversation.semantic.enabled"}
 	}
 	return nil

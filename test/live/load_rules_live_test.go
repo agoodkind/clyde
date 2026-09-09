@@ -266,7 +266,8 @@ func (h *harness) waitForFeederDelivery(t *testing.T, deadline time.Duration) {
 // against the real engine: era A feeds under the default rules, the config
 // then opts system_messages in, era B re-delivers, and the store holds both
 // eras side by side, each hit resolving under its own tag. It needs the live
-// engine, so it runs only when CLYDE_TEST_CONVERSATION_SEMANTIC=true.
+// engine, so it runs only when both replacement semantic test variables are
+// true.
 func TestLoadRulesFeedErasEndToEnd(t *testing.T) {
 	home := writeLoadRulesFixtureHome(t)
 	h := newHarness(t)

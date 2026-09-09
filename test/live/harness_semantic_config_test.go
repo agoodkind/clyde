@@ -277,6 +277,9 @@ func TestWriteConfigCarriesConversationSemanticSettings(t *testing.T) {
 }
 
 func TestSemanticDirectionsKeepRawPathsEngineFreeAndSearchReadOnly(t *testing.T) {
+	t.Setenv("CLYDE_TEST_CONVERSATION_INGESTION", "false")
+	t.Setenv("CLYDE_TEST_CONVERSATION_SEARCH", "false")
+
 	home := writeLoadRulesFixtureHome(t)
 	results := []*lmsemanticsearchv1.ConversationSearchResult{{
 		ConversationId: loadRulesConversationID,
