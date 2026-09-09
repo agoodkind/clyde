@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash"
-	"log/slog"
 	"strconv"
 )
 
@@ -34,7 +33,8 @@ func ReadComposerBubbleStocks(ctx context.Context, db *sql.DB) (map[string]Compo
 	bounds := keyRangeForPrefix(bubbleKeyPrefix)
 	rows, err := snapshot.queryRange(ctx, "SELECT key FROM cursorDiskKV"+keyRangePredicate(bounds, ""), bounds, "bubble stock keys")
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_bubble_count_failed", "concern", concern, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.composer_bubble_count_failed", "concern", concern, "err", err)
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()

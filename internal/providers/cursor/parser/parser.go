@@ -427,8 +427,9 @@ func discoverSQLite(
 
 	candidates := make([]conversation.ScanCandidate, 0)
 	for _, root := range roots {
-		candidates = append(candidates, discoverComposersForRoot(ctx, root, priorStamps, prior, discovered, seenConversationIDs)...)
-		candidates = append(candidates, discoverLegacyForRoot(ctx, root, discovered)...)
+		inventory := cursorstore.ReadWorkspaceInventory(ctx, root)
+		candidates = append(candidates, discoverComposersForRoot(ctx, root, inventory, priorStamps, prior, discovered, seenConversationIDs)...)
+		candidates = append(candidates, discoverLegacyForRoot(root, inventory, discovered)...)
 	}
 	return candidates, nil
 }
@@ -436,6 +437,7 @@ func discoverSQLite(
 func discoverComposersForRoot(
 	ctx context.Context,
 	root cursorstore.DataRoot,
+	inventory cursorstore.WorkspaceInventory,
 	priorStamps map[string]conversation.FileStamp,
 	prior map[string]conversation.Record,
 	discovered map[string]discoveredArtifact,
@@ -451,7 +453,7 @@ func discoverComposersForRoot(
 	for _, composer := range global.Background {
 		backgroundIDs[composer.ComposerID] = true
 	}
-	metadataIndex := cursorstore.MergeWorkspaceComposerMetadata(ctx, root, global.Metadata)
+	metadataIndex := cursorstore.MergeWorkspaceComposerMetadata(ctx, root, global.Metadata, inventory)
 	rootHash := RootHash(root.RootDir)
 
 	candidates := make([]conversation.ScanCandidate, 0, len(composerIDs))
@@ -507,32 +509,24 @@ func discoverComposersForRoot(
 }
 
 func discoverLegacyForRoot(
-	ctx context.Context,
 	root cursorstore.DataRoot,
+	inventory cursorstore.WorkspaceInventory,
 	discovered map[string]discoveredArtifact,
 ) []conversation.ScanCandidate {
-	listing, err := root.ListWorkspaceEntries()
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.list_workspace_entries_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
-	}
-	if listing.Unreadable > 0 {
-		slog.WarnContext(ctx, "providers.cursor.parser.workspace_entries_partially_read", "concern", concern, "path", root.WorkspaceStorageDir, "listed", len(listing.Entries), "unreadable", listing.Unreadable)
-	}
 	rootHash := RootHash(root.RootDir)
 	candidates := make([]conversation.ScanCandidate, 0)
-	for _, entry := range listing.DiscoveryEntries() {
-		candidates = append(candidates, discoverLegacyForEntry(ctx, rootHash, entry, discovered)...)
+	for _, entry := range inventory.Entries {
+		candidates = append(candidates, discoverLegacyForEntry(rootHash, entry.Entry, entry.Data, discovered)...)
 	}
 	return candidates
 }
 
 func discoverLegacyForEntry(
-	ctx context.Context,
 	rootHash string,
 	entry cursorstore.WorkspaceEntry,
+	data cursorstore.WorkspaceDiscovery,
 	discovered map[string]discoveredArtifact,
 ) []conversation.ScanCandidate {
-	data := cursorstore.ReadWorkspaceDiscovery(ctx, entry)
 	chatData, workspaceRoot := data.Legacy, data.WorkspaceRoot
 	candidates := make([]conversation.ScanCandidate, 0, len(chatData.Tabs))
 	for _, tab := range chatData.Tabs {

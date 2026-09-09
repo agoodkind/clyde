@@ -197,11 +197,14 @@ func ReadWorkspaceFolderPath(path string) (string, error) {
 	return sharedDiscovery.readDescriptor(path)
 }
 
-func readWorkspaceFolderPath(path string) (string, error) {
+func readWorkspaceFolderPath(path string, previousError error) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		slog.Warn("providers.cursor.store.workspace_descriptor_read_failed", "concern", concern, "path", path, "err", err)
-		return "", fmt.Errorf("read cursor workspace descriptor %s: %w", path, err)
+		readError := fmt.Errorf("read cursor workspace descriptor %s: %w", path, err)
+		if previousError == nil || previousError.Error() != readError.Error() {
+			slog.Warn("providers.cursor.store.workspace_descriptor_read_failed", "concern", concern, "path", path, "err", err)
+		}
+		return "", readError
 	}
 	descriptor, err := decodeWorkspaceDescriptorJSON(data)
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 )
 
@@ -62,21 +61,12 @@ func DecodeAllComposersJSON(data []byte) (AllComposersDocument, error) {
 // BuildWorkspaceComposerIndex indexes Cursor workspace composer registry rows
 // by composer id. Unreadable workspaces retain previously decoded contributions
 // and report incomplete metadata without preventing other workspaces from reading.
-func BuildWorkspaceComposerIndex(ctx context.Context, root DataRoot) (map[string]WorkspaceComposerInfo, error) {
-	listing, err := root.ListWorkspaceEntries()
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.workspace_entries_list_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
-	}
-
+func BuildWorkspaceComposerIndex(inventory WorkspaceInventory) (map[string]WorkspaceComposerInfo, error) {
 	index := make(map[string]WorkspaceComposerInfo)
-	readErr := err
-	for _, entry := range listing.DiscoveryEntries() {
-		readErr = errors.Join(readErr, addWorkspaceComposers(ctx, index, entry))
+	for _, entry := range inventory.Entries {
+		addWorkspaceComposers(index, entry.Data)
 	}
-	if listing.Unreadable > 0 {
-		readErr = errors.Join(readErr, fmt.Errorf("%d cursor workspaces unreadable", listing.Unreadable))
-	}
-	return index, readErr
+	return index, inventory.Err
 }
 
 // BuildComposerMetadataIndex indexes every composer Cursor knows about by
@@ -104,15 +94,15 @@ func BuildComposerMetadataIndex(
 	root DataRoot,
 ) ComposerMetadataIndex {
 	globalIndex, globalErr := ReadComposerMetadataIndex(ctx, globalDB)
-	return MergeWorkspaceComposerMetadata(ctx, root, ComposerMetadataIndex{ByComposerID: globalIndex, Err: globalErr})
+	return MergeWorkspaceComposerMetadata(ctx, root, ComposerMetadataIndex{ByComposerID: globalIndex, Err: globalErr}, ReadWorkspaceInventory(ctx, root))
 }
 
 // MergeWorkspaceComposerMetadata joins cached global metadata with the shared
 // workspace discovery results, preserving the established field precedence.
-func MergeWorkspaceComposerMetadata(ctx context.Context, root DataRoot, globalMetadata ComposerMetadataIndex) ComposerMetadataIndex {
+func MergeWorkspaceComposerMetadata(ctx context.Context, root DataRoot, globalMetadata ComposerMetadataIndex, inventory WorkspaceInventory) ComposerMetadataIndex {
 	index := make(map[string]ComposerMetadata)
 
-	workspaceIndex, workspaceErr := BuildWorkspaceComposerIndex(ctx, root)
+	workspaceIndex, workspaceErr := BuildWorkspaceComposerIndex(inventory)
 	if workspaceErr != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.workspace_composer_index_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", workspaceErr)
 	}
@@ -187,7 +177,8 @@ func readWorkspaceComposerRegistry(ctx context.Context, db *sql.DB) (AllComposer
 	for _, key := range []string{workspaceComposerDataKey, legacyAllComposersKey} {
 		value, found, err := ReadKVValue(ctx, db, KVTableItemTable, key)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.workspace_registry_read_failed", "concern", concern, "key", key, "err", err)
+			logger := discoveryReadLogger(ctx)
+			logger.WarnContext(ctx, "providers.cursor.store.workspace_registry_read_failed", "concern", concern, "key", key, "err", err)
 			readErr = errors.Join(readErr, err)
 			continue
 		}
@@ -196,7 +187,8 @@ func readWorkspaceComposerRegistry(ctx context.Context, db *sql.DB) (AllComposer
 		}
 		document, err := DecodeAllComposersJSON(value)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.workspace_registry_decode_failed", "concern", concern, "key", key, "err", err)
+			logger := discoveryReadLogger(ctx)
+			logger.WarnContext(ctx, "providers.cursor.store.workspace_registry_decode_failed", "concern", concern, "key", key, "err", err)
 			readErr = errors.Join(readErr, err)
 			continue
 		}
@@ -209,8 +201,7 @@ func readWorkspaceComposerRegistry(ctx context.Context, db *sql.DB) (AllComposer
 	return emptyDocument, false, readErr
 }
 
-func addWorkspaceComposers(ctx context.Context, index map[string]WorkspaceComposerInfo, entry WorkspaceEntry) error {
-	data := ReadWorkspaceDiscovery(ctx, entry)
+func addWorkspaceComposers(index map[string]WorkspaceComposerInfo, data WorkspaceDiscovery) {
 	document, cwd := data.Registry, data.WorkspaceRoot
 
 	for _, composer := range document.AllComposers {
@@ -232,5 +223,4 @@ func addWorkspaceComposers(ctx context.Context, index map[string]WorkspaceCompos
 			LastUpdatedAt: composer.LastUpdatedAt,
 		}
 	}
-	return data.RegistryErr
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,18 +55,21 @@ type WorkspaceDiscovery struct {
 }
 
 type workspaceCacheEntry struct {
-	mu    sync.Mutex
-	known bool
-	stamp databaseMetadata
-	data  WorkspaceDiscovery
+	completed   atomic.Uint64
+	diagnostics cachedReadDiagnostics
+	mu          sync.Mutex
+	known       bool
+	stamp       databaseMetadata
+	data        WorkspaceDiscovery
 }
 
 type descriptorCacheEntry struct {
-	mu    sync.Mutex
-	known bool
-	stamp fileMetadata
-	path  string
-	err   error
+	completed atomic.Uint64
+	mu        sync.Mutex
+	known     bool
+	stamp     fileMetadata
+	path      string
+	err       error
 }
 
 type discoveryCache struct {
@@ -88,21 +92,29 @@ var sharedDiscovery = discoveryCache{
 // legacy chat discovery, and request-ring lookup. No connection survives the read.
 func ReadWorkspaceDiscovery(ctx context.Context, entry WorkspaceEntry) WorkspaceDiscovery {
 	cached := sharedDiscovery.workspaceEntry(entry.StateDBPath)
+	completed := cached.completed.Load()
 	cached.mu.Lock()
 	defer cached.mu.Unlock()
 	stamp := readDatabaseMetadata(entry.StateDBPath)
 	data := cached.data
-	if !cached.known || cached.stamp != stamp {
-		data = refreshWorkspace(ctx, entry.StateDBPath, data)
-		data.Mtime = stamp.database.mtime
-		if stamp.wal.mtime.After(data.Mtime) {
-			data.Mtime = stamp.wal.mtime
+	changed := !cached.known || cached.stamp != stamp
+	availability := isReadAvailabilityError(errors.Join(data.RegistryErr, data.LegacyErr, data.GenerationsErr))
+	if changed || availability && completed == cached.completed.Load() {
+		readCtx, attempt := cached.diagnostics.start(ctx, changed)
+		data = refreshWorkspace(readCtx, entry.StateDBPath, data)
+		cached.diagnostics.finish(attempt, errors.Join(data.RegistryErr, data.LegacyErr, data.GenerationsErr))
+		if data.LegacyErr == nil && (changed || cached.data.LegacyErr != nil) {
+			data.Mtime = stamp.database.mtime
+			if stamp.wal.mtime.After(data.Mtime) {
+				data.Mtime = stamp.wal.mtime
+			}
+			data.Revision++
 		}
-		data.Revision++
 		// Cancellation says nothing about this file state and must not poison it.
 		if ctx.Err() == nil {
 			cached.stamp, cached.data, cached.known = stamp, data, true
 		}
+		cached.completed.Add(1)
 	}
 	data = cloneWorkspaceDiscovery(data)
 	data.WorkspaceRoot, data.DescriptorErr = sharedDiscovery.readDescriptor(entry.WorkspaceJSONPath)
@@ -158,17 +170,23 @@ func (cache *discoveryCache) readDescriptor(path string) (string, error) {
 		return "", nil
 	}
 	cached := cache.descriptorEntry(path)
+	completed := cached.completed.Load()
 	cached.mu.Lock()
 	defer cached.mu.Unlock()
 	stamp := readFileMetadata(path)
-	if cached.known && cached.stamp == stamp {
+	if cached.known && cached.stamp == stamp && (!isReadAvailabilityError(cached.err) || completed != cached.completed.Load()) {
 		return cached.path, cached.err
 	}
-	folder, err := readWorkspaceFolderPath(path)
+	var previousError error
+	if cached.stamp == stamp {
+		previousError = cached.err
+	}
+	folder, err := readWorkspaceFolderPath(path, previousError)
 	if err != nil {
 		folder = cached.path
 	}
 	cached.stamp, cached.path, cached.err, cached.known = stamp, folder, err, true
+	cached.completed.Add(1)
 	return folder, err
 }
 
@@ -194,31 +212,40 @@ type GlobalDiscovery struct {
 }
 
 type globalCacheEntry struct {
-	mu    sync.Mutex
-	known bool
-	stamp databaseMetadata
-	data  GlobalDiscovery
+	completed   atomic.Uint64
+	diagnostics cachedReadDiagnostics
+	mu          sync.Mutex
+	known       bool
+	stamp       databaseMetadata
+	data        GlobalDiscovery
 }
 
-// ReadGlobalDiscovery refreshes only when the database or its WAL changes.
+// ReadGlobalDiscovery refreshes when database/WAL metadata changes or a prior
+// availability failure needs retrying. Overlapping consumers share that retry.
 // A failed refresh keeps prior contributions; confirmed file absence clears them.
 func ReadGlobalDiscovery(ctx context.Context, path string) GlobalDiscovery {
 	cached := sharedDiscovery.globalEntry(path)
+	completed := cached.completed.Load()
 	cached.mu.Lock()
 	defer cached.mu.Unlock()
 	stamp := readDatabaseMetadata(path)
-	if cached.known && cached.stamp == stamp {
+	changed := !cached.known || cached.stamp != stamp
+	availability := isReadAvailabilityError(errors.Join(cached.data.Err, cached.data.Metadata.Err))
+	if !changed && (!availability || completed != cached.completed.Load()) {
 		return cloneGlobalDiscovery(cached.data)
 	}
 	var data GlobalDiscovery
 	if stamp.database.absent {
 		data = GlobalDiscovery{Headers: nil, Stocks: nil, Background: nil, Metadata: ComposerMetadataIndex{ByComposerID: nil, Err: nil}, Err: nil}
 	} else {
-		data = refreshGlobal(ctx, path, cached.data)
+		readCtx, attempt := cached.diagnostics.start(ctx, changed)
+		data = refreshGlobal(readCtx, path, cached.data)
+		cached.diagnostics.finish(attempt, errors.Join(data.Err, data.Metadata.Err))
 	}
 	if ctx.Err() == nil {
 		cached.stamp, cached.data, cached.known = stamp, data, true
 	}
+	cached.completed.Add(1)
 	return cloneGlobalDiscovery(data)
 }
 

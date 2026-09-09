@@ -2,7 +2,9 @@ package cursorstore
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -19,6 +21,7 @@ type DiscoveryReadCounts struct{ Opens, SelectAuthorizations int }
 type DiscoveryReadCounter struct {
 	mu          sync.Mutex
 	counts      map[string]DiscoveryReadCounts
+	attempts    map[string]int
 	pausePath   string
 	readEntered chan bool
 	readRelease chan bool
@@ -29,9 +32,9 @@ var testDriverSequence atomic.Uint64
 // ObserveDiscoveryReads replaces only Clyde's readonly driver for this test.
 func ObserveDiscoveryReads(t *testing.T) *DiscoveryReadCounter {
 	t.Helper()
-	counter := &DiscoveryReadCounter{counts: make(map[string]DiscoveryReadCounts)}
+	counter := &DiscoveryReadCounter{counts: make(map[string]DiscoveryReadCounts), attempts: make(map[string]int)}
 	name := fmt.Sprintf("cursor-discovery-test-%d", testDriverSequence.Add(1))
-	sql.Register(name, &sqlite3.SQLiteDriver{ConnectHook: func(connection *sqlite3.SQLiteConn) error {
+	sql.Register(name, &observedSQLiteDriver{counter: counter, driver: &sqlite3.SQLiteDriver{ConnectHook: func(connection *sqlite3.SQLiteConn) error {
 		path := connection.GetFilename("main")
 		counter.mu.Lock()
 		value := counter.counts[path]
@@ -58,11 +61,45 @@ func ObserveDiscoveryReads(t *testing.T) *DiscoveryReadCounter {
 			return sqlite3.SQLITE_OK
 		})
 		return nil
-	}})
+	}}})
 	previous := readOnlyDriverName
 	readOnlyDriverName = name
 	t.Cleanup(func() { readOnlyDriverName = previous })
 	return counter
+}
+
+type observedSQLiteDriver struct {
+	driver  *sqlite3.SQLiteDriver
+	counter *DiscoveryReadCounter
+}
+
+func (observed *observedSQLiteDriver) Open(name string) (driver.Conn, error) {
+	parsed, err := url.Parse(name)
+	if err != nil {
+		return nil, err
+	}
+	path := parsed.Path
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		path = resolved
+	}
+	observed.counter.mu.Lock()
+	observed.counter.attempts[path]++
+	observed.counter.mu.Unlock()
+	return observed.driver.Open(name)
+}
+
+// TakeOpenAttempts includes driver opens that failed before ConnectHook ran.
+func (counter *DiscoveryReadCounter) TakeOpenAttempts(path string) int {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		path = resolved
+	}
+	counter.mu.Lock()
+	defer counter.mu.Unlock()
+	count := counter.attempts[path]
+	delete(counter.attempts, path)
+	return count
 }
 
 // PauseNextSelect holds one actual SQLite read while unrelated consumers run.

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -59,12 +58,14 @@ func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	dsn := readOnlyDatabaseDSN(path)
 	db, err := sql.Open(readOnlyDriverName, dsn)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.sqlite_open_failed", "concern", concern, "path", path, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.sqlite_open_failed", "concern", concern, "path", path, "err", err)
 		return nil, fmt.Errorf("open cursor sqlite database %s: %w", path, err)
 	}
 	if pingErr := db.PingContext(ctx); pingErr != nil {
 		_ = db.Close()
-		slog.WarnContext(ctx, "providers.cursor.store.sqlite_ping_failed", "concern", concern, "path", path, "err", pingErr)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.sqlite_ping_failed", "concern", concern, "path", path, "err", pingErr)
 		return nil, fmt.Errorf("ping cursor sqlite database %s: %w", path, pingErr)
 	}
 	return db, nil
@@ -116,7 +117,8 @@ func beginReadSnapshot(ctx context.Context, db *sql.DB) (readSnapshot, error) {
 	}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.read_snapshot_failed", "concern", concern, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.read_snapshot_failed", "concern", concern, "err", err)
 		return empty, fmt.Errorf("begin cursor read snapshot: %w", err)
 	}
 	return readSnapshot{tx: tx}, nil
@@ -134,7 +136,8 @@ func (snapshot readSnapshot) rollback() {
 func (snapshot readSnapshot) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
 	rows, err := snapshot.tx.QueryContext(ctx, tableColumnsQuery, table)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.table_columns_query_failed", "concern", concern, "table", table, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.table_columns_query_failed", "concern", concern, "table", table, "err", err)
 		return nil, fmt.Errorf("query cursor %s columns: %w", table, err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -146,7 +149,8 @@ func (snapshot readSnapshot) tableColumns(ctx context.Context, table string) (ma
 func (snapshot readSnapshot) tableExists(ctx context.Context, table string) (bool, error) {
 	var count int
 	if err := snapshot.tx.QueryRowContext(ctx, tableExistsQuery, table).Scan(&count); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.sqlite_master_query_failed", "concern", concern, "table", table, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.sqlite_master_query_failed", "concern", concern, "table", table, "err", err)
 		return false, fmt.Errorf("query sqlite_master for %s: %w", table, err)
 	}
 	return count > 0, nil
@@ -168,7 +172,8 @@ func (snapshot readSnapshot) queryRange(
 		rows, err = snapshot.tx.QueryContext(ctx, query, bounds.Lower)
 	}
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.kv_range_query_failed", "concern", concern, "reads", reads, "key_lower", bounds.Lower, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.kv_range_query_failed", "concern", concern, "reads", reads, "key_lower", bounds.Lower, "err", err)
 		return nil, fmt.Errorf("query cursor %s in key range %q: %w", reads, bounds.Lower, err)
 	}
 	return rows, nil
@@ -202,7 +207,8 @@ func (snapshot readSnapshot) countRange(ctx context.Context, bounds keyRange) (i
 		err = snapshot.tx.QueryRowContext(ctx, query, bounds.Lower).Scan(&count)
 	}
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.kv_rows_count_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.kv_rows_count_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
 		return 0, fmt.Errorf("count cursor %s rows in key range %q: %w", sqlTableName, bounds.Lower, err)
 	}
 	return count, nil
@@ -219,7 +225,8 @@ func TableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 	var count int
 	err := db.QueryRowContext(ctx, tableExistsQuery, table).Scan(&count)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.sqlite_master_query_failed", "concern", concern, "table", table, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.sqlite_master_query_failed", "concern", concern, "table", table, "err", err)
 		return false, fmt.Errorf("query sqlite_master for %s: %w", table, err)
 	}
 	return count > 0, nil
@@ -287,7 +294,8 @@ func readKVRowInKnownTable(
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, false, nil
 		}
-		slog.WarnContext(ctx, "providers.cursor.store.kv_value_scan_failed", "concern", concern, "table", sqlTableName, "key", key, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.kv_value_scan_failed", "concern", concern, "table", sqlTableName, "key", key, "err", err)
 		return nil, 0, false, fmt.Errorf("scan cursor %s value for key %q: %w", sqlTableName, key, err)
 	}
 	return append([]byte(nil), value...), writeOrder, true, nil
@@ -410,7 +418,8 @@ func forEachKVRowInKeyRange(
 	for rows.Next() {
 		var row KVRow
 		if err := rows.Scan(&row.RowID, &row.Key, &row.Value); err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.kv_row_scan_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
+			logger := discoveryReadLogger(ctx)
+			logger.WarnContext(ctx, "providers.cursor.store.kv_row_scan_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
 			return fmt.Errorf("scan cursor %s row in key range %q: %w", sqlTableName, bounds.Lower, err)
 		}
 		row.Value = append([]byte(nil), row.Value...)
@@ -419,7 +428,8 @@ func forEachKVRowInKeyRange(
 		}
 	}
 	if err := rows.Err(); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.kv_rows_iterate_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.kv_rows_iterate_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
 		return fmt.Errorf("iterate cursor %s rows in key range %q: %w", sqlTableName, bounds.Lower, err)
 	}
 	return nil
@@ -478,7 +488,8 @@ func queryKVRangeContext(
 		rows, err = db.QueryContext(ctx, query, bounds.Lower)
 	}
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.kv_range_query_failed", "concern", concern, "reads", reads, "key_lower", bounds.Lower, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.kv_range_query_failed", "concern", concern, "reads", reads, "key_lower", bounds.Lower, "err", err)
 		return nil, fmt.Errorf("query cursor %s in key range %q: %w", reads, bounds.Lower, err)
 	}
 	return rows, nil

@@ -104,7 +104,8 @@ func DecodeGenerationEntriesJSON(data []byte) ([]GenerationEntry, error) {
 func ReadGenerationEntries(ctx context.Context, workspaceDB *sql.DB) ([]GenerationEntry, bool, error) {
 	value, found, err := ReadKVValue(ctx, workspaceDB, KVTableItemTable, generationsItemKey)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.generations_read_failed", "concern", concern, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.generations_read_failed", "concern", concern, "err", err)
 		return nil, false, fmt.Errorf("read cursor generation entries: %w", err)
 	}
 	if !found {
@@ -113,7 +114,8 @@ func ReadGenerationEntries(ctx context.Context, workspaceDB *sql.DB) ([]Generati
 
 	entries, err := DecodeGenerationEntriesJSON(value)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.generations_decode_failed", "concern", concern, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.generations_decode_failed", "concern", concern, "err", err)
 		return nil, false, fmt.Errorf("decode cursor generation entries: %w", err)
 	}
 	return entries, true, nil

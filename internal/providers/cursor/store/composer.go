@@ -73,7 +73,8 @@ func readComposerHeaders(ctx context.Context, db *sql.DB, prior map[string]Compo
 		id := strings.TrimPrefix(row.Key, composerDataKeyPrefix)
 		header, err := DecodeComposerHeaderJSON(row.Value)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.composer_header_decode_failed", "concern", concern, "composer_id", id, "err", err)
+			logger := discoveryReadLogger(ctx)
+			logger.WarnContext(ctx, "providers.cursor.store.composer_header_decode_failed", "concern", concern, "composer_id", id, "err", err)
 			if previous, known := prior[id]; known {
 				headers[id] = previous
 			}

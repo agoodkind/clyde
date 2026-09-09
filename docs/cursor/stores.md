@@ -66,7 +66,9 @@ log metadata detect new commits before any content read. Workspace descriptors
 refresh independently, and composer metadata, legacy chats, and request lookup
 share the decoded workspace results.
 
-A changed global database still requires a full message projection pass. A
-failed read preserves previous contributions until the store changes again;
-confirmed removal clears them. Request lookup reads current global data to
+A changed global database still requires a full message projection pass.
+Unavailable stores and descriptors retain previous contributions and retry on
+the next ordinary operation, even when content metadata stays unchanged.
+Unchanged malformed content remains cached until it changes, and confirmed
+removal clears its contributions. Request lookup reads current global data to
 verify a request's conversation even when discovery results are cached.
