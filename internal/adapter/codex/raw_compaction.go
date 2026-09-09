@@ -85,13 +85,6 @@ const (
 	rawCompactionContentEncodingBrotli rawCompactionContentEncoding = "br"
 )
 
-type rawResponsesCompactionMetadata struct {
-	RequestKind string `json:"request_kind"`
-	Compaction  struct {
-		Implementation string `json:"implementation"`
-	} `json:"compaction"`
-}
-
 type rawCompactionPlan struct {
 	removedStart int
 	promptIndex  int
@@ -135,7 +128,11 @@ func PrepareRawResponsesCompaction(
 	raw RawResponsesRequest,
 	settings RawResponsesCompactionSettings,
 ) (RawResponsesRequest, *RawResponsesCompactionTransformer) {
-	if !settings.Enabled || !rawResponsesRequestIsLocalCompaction(raw.Header) {
+	protocol := DetectRawResponsesCompactionProtocol(raw.Header)
+	if protocol == RawResponsesCompactionV2 {
+		return raw, nil
+	}
+	if !settings.Enabled || protocol != RawResponsesCompactionV1 {
 		return raw, nil
 	}
 	inputStart, inputEnd, ok := jsonObjectFieldValueRange(raw.Body, "input")
@@ -168,22 +165,10 @@ func PrepareRawResponsesCompaction(
 	}
 }
 
-func rawResponsesRequestIsLocalCompaction(header http.Header) bool {
-	metadataValue := strings.TrimSpace(header.Get(CodexTurnMetadataHeader))
-	if metadataValue == "" {
-		return false
-	}
-	var metadata rawResponsesCompactionMetadata
-	if json.Unmarshal([]byte(metadataValue), &metadata) != nil {
-		return false
-	}
-	return metadata.RequestKind == "compaction" && metadata.Compaction.Implementation == "responses"
-}
-
 // IsRawResponsesV1CompactionRequest reports whether request carries the exact
 // local v1 compaction metadata accepted by PrepareRawResponsesCompaction.
 func IsRawResponsesV1CompactionRequest(request RawResponsesRequest) bool {
-	return rawResponsesRequestIsLocalCompaction(request.Header)
+	return DetectRawResponsesCompactionProtocol(request.Header) == RawResponsesCompactionV1
 }
 
 func rawCompactionMaxBytes(settings RawResponsesCompactionSettings) int {
