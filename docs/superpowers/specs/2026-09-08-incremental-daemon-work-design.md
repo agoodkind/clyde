@@ -1,666 +1,260 @@
-# Process daemon work incrementally
+# Reduce daemon background work
 
-Clyde should discover, persist, synchronize, and aggregate changed data without
-repeatedly processing the entire retained corpus.
+Clyde should spend less CPU and disk I/O on ordinary conversation use and fix the
+bugs demonstrated by issue 315.
 
-Status: approved September 9, 2026, for [issue 315](https://github.com/agoodkind/clyde/issues/315).
-This specification defines intended behavior. It does not claim implementation
-or deployment.
+Status: scope revised September 9, 2026, at the user's request.
+[Issue 315](https://github.com/agoodkind/clyde/issues/315) remains the scope anchor.
+This is a specification, not an implementation or deployment claim.
 
-## Establish the measured problem
+## Bound the change to observed bugs and normal use
 
-A four-minute observation on September 8, 2026, from 23:07:47 to 23:11:47 PDT
-captured 121 process-counter readings and a concurrent two-minute stack sample.
-The worker's version stamp and the inspected source reference were `1767db00`.
-The installed binary also reported `vcs.modified=true`, so its stamp alone does
-not establish exact source provenance.
+Performance takes priority over preserving Clyde-owned caches and derived state.
+Do not add durability machinery. Recent derived data may be lost, rebuilt, or
+processed again after termination. Provider-owned conversations remain read-only.
 
-| Observation | Result |
-| --- | --- |
-| Worker CPU | 46.94% of one core on average; 204.44% peak over two seconds |
-| Resident memory | 1,102.5 to 1,233.3 MiB |
-| OS-accounted disk bytes | 8.89 MiB read; 64.52 MiB written |
-| Complete conversation cache writes | Four, approximately 6.1 MiB each |
-| Cursor workspace failures | Six descriptors, three warnings each, four cycles |
-| Semantic delivery | Four accepted submissions totaling 954,175 document records |
-| Metrics aggregation | One 20,030 ms pass, with no new or pruned output records |
-
-The CPU counters were calibrated against process CPU time. This Mac uses
-24 million Mach ticks per second, not one billion counter units per second.
-Disk counters exclude reads satisfied by the filesystem cache. These
-measurements describe an active workstation and do not assign a cost percentage
-to each subsystem. The conversation count changed during the observation.
-
-Source inspection and sampled stacks establish several independent mechanisms:
-
-- Cursor performs composer and legacy workspace discovery separately, before
-  generic unchanged-record reuse. Composer revision discovery projects and
-  hashes historical message rows.
-- Every successful index refresh encodes and overwrites the complete cache.
-  Ordinary cached reads can request another discovery pass.
-- Metrics checkpoints identify a timestamp. They do not prevent reopening
-  selected logs at byte zero and decoding their historical records.
-- Semantic delivery materializes large sets of requested conversations.
-  Submission success is distinct from completion of the asynchronous job.
-
-The remote URI failure is independently reproducible:
-`vscode-remote://ssh-remote%2Bexample/path` fails with `invalid URL escape "%2B"`.
-The parser attempts host decoding before reaching its non-file URI branch.
-Local file URIs, escaped spaces in local paths, and an unescaped remote authority
-pass the same probe.
-
-Semantic registration failures did not recur on the sampled workstation, where
-the engine was running. That observation does not resolve the issue's report of
-retries on a client without semantic search enabled. The four batches also do
-not prove duplicate delivery: the evidence cannot distinguish advancing a backlog
-from requesting previously submitted revisions again. Both cases require separate
-acceptance proof.
-
-### Account for every reported symptom
-
-| Reported symptom | Investigation result | Required correction |
+| Condition | Classification and evidence | Decision |
 | --- | --- | --- |
-| Repeated Cursor workspace reads | Source confirms repeated discovery before cache reuse; stacks confirm Cursor content reads. | Share discovery and validate revisions before content work. |
-| Remote workspace warnings every minute | The encoded-authority probe reproduces the failure; one error logs at three layers. | Preserve remote identities and deduplicate unchanged failures. |
-| Semantic registration retries without opt-in | An absent search setting enables the connection even when feeding is disabled; existing tests reproduce that default. | Require explicit opt-in and perform no dependency work when disabled. |
-| Repeated warnings when the engine is absent | Retry delay already grows to a 30-second cap, but failed registration logs warnings at multiple layers. | Share an availability gate, lengthen repeated-failure cooldowns, and report failure transitions once. |
-| No discoverable profiling endpoint or status listener ports | Profiling is opt-in; status lacks a complete runtime listener inventory. | Keep profiling off by default and expose its effective state and actual address. |
+| Semantic search is not installed or configured | Expected optional setup. The issue reports repeated missing-socket registration failures. | Fix implicit activation and reduce the existing retry frequency. |
+| Ingestion disabled while search is enabled | Expected use explicitly requested by the user. | Keep the operations independent. |
+| Cursor remote workspaces | Expected use. The encoded-authority parse failure was reproduced. | Fix parsing and repeated warnings. |
+| Repeated scans of unchanged workspaces | Observed in source and sampled stacks. | Cache discovery before content reads. |
+| New messages, workspace changes, archive changes, and SQLite WAL updates | Normal application writes. | Detect them with existing metadata checks and ordinary refreshes. |
+| Full conversation-cache writes every refresh | Four writes observed in four minutes. | Skip writes when cached content and progress have not changed. |
+| Metrics repeatedly decoding old logs | One sampled pass took 20 seconds and produced no new records. | Resume from byte offsets and avoid unnecessary retention rewrites. |
+| Large semantic preparation batches | Four submissions contained 954,175 document records. Duplicate work was not established. | Bound preparation; investigate actual overlap before proposing deduplication changes. |
+| Missing profiling/port visibility in status | Reported in the issue; status lacks a complete listener view. | Show existing effective settings and bound addresses. |
+| Ordinary configuration changes and daemon reloads | Existing supported user operations. | Keep current lifecycle behavior and stop replaced workers normally. |
+| Power loss, system crash, torn writes, corrupt checkpoints, or lost delivery acknowledgements | No incident evidence in this workstream. | Exclude recovery guarantees and fault-injection work. |
+| Extended engine failure and transport failure combinations | Only the missing-engine retry loop was reported. | Do not build a general outage-recovery framework. |
 
-The additional cache, metrics, and large semantic-delivery workloads measured
-above remain in scope. A missing engine is distinct from an intentionally
-disabled integration, and an intentionally disabled profiler is distinct from
-a failed listener.
+Four-minute sampling recorded 46.94% average CPU relative to one core, a 204.44%
+two-second peak, 1,102.5 to 1,233.3 MiB resident memory, and OS-accounted reads and
+writes of 8.89 MiB and 64.52 MiB. CPU counter units were calibrated. This was an
+active workstation, so the sample does not assign a cost share to each subsystem.
 
-## Define scope and preserve contracts
+Source inspection used revision `1767db00`. The installed binary had that stamp
+but also reported modified build inputs. The measurements establish runtime
+activity; the stamp alone does not prove exact source provenance.
 
-The change covers conversation discovery, index persistence, Cursor workspace
-identity, semantic opt-in and delivery, metrics aggregation, diagnostic visibility,
-and their worker lifecycle.
-It does not change adapter behavior, provider-owned storage, or public
-conversation identifiers and export semantics.
+## Make ingestion and search independent opt-ins
 
-The existing [Cursor reading contract](../../cursor/stores.md) remains binding,
-including recovery of stored messages omitted from a composer's reference list.
-An optimization must not discard those messages or treat a failed read as a
-confirmed deletion.
+Under `conversation.semantic`:
 
-The scheduler extends existing stamp, append-offset, parser, and lifecycle
-primitives. It does not introduce a second conversation parser, a parallel
-shutdown mechanism, or a replacement daemon process architecture.
-
-## Give refresh one owner
-
-One scheduler owns discovery work and publication of index snapshots. A snapshot
-is an immutable set of records and source revisions identified by a monotonically
-increasing generation number within its cache epoch. A cache epoch changes when
-incompatible persisted state is rebuilt.
-
-The scheduler accepts typed work requests containing a provider, source identity,
-reason, and requested freshness. Repeated events merge by source. Work received
-during a pass remains pending for a later pass; publication must not erase it.
-When the pending set reaches its memory bound, it collapses to a dirty provider
-root rather than dropping events.
-
-| Trigger | Required behavior |
-| --- | --- |
-| Startup | Serve the last completed snapshot; reconcile sources in the background. |
-| Cached listing or semantic snapshot read | Return the published generation without scheduling discovery. |
-| Source event | Mark the affected source dirty and coalesce repeated notifications. |
-| Explicit freshness request | Wait for relevant pending work or receive a typed deadline or incomplete-read error. |
-| Unknown request or conversation identifier | Share one provider reconciliation; retain existing ambiguity and not-found semantics. |
-| Lost event, overflow, or watcher failure | Mark coverage incomplete and schedule reconciliation. |
-
-An explicit freshness request validates relevant source revisions after admission
-and captures that validation as its barrier. It waits until the required work is
-reflected in a published snapshot. An empty pending queue alone is not proof of
-freshness. A lookup with unknown source coverage, including request identifiers
-that may occur in several stores, requires provider-wide reconciliation.
-Simultaneous lookups share that work. Later appends do not extend an admitted
-barrier indefinitely. A deadline or incomplete validation returns an explicit
-error rather than stale data labeled fresh.
-
-Provider roots receive a lightweight metadata reconciliation at the existing
-one-minute cadence. This pass discovers new directories and validates source
-revisions; it must not parse unchanged content. Events make changed sources
-eligible sooner. Normal coalescing cannot postpone eligibility beyond the
-existing one-minute refresh interval. Explicit freshness bypasses coalescing.
-Queue age and freshness lag remain observable when a backlog exceeds that bound.
-
-Watchers are installed before startup reconciliation, and events arriving during
-it are retained. Directory replacement, newly created subdirectories, watcher
-resource exhaustion, and rename all enter the same reconciliation path.
-Correctness must not depend on receiving every notification.
-
-Scheduling is fair across providers. A large source cannot indefinitely starve
-small changed sources. Work units have cancellation points and bounds on bytes,
-rows, pending requests, and resident connections. Limits are named, centralized,
-and verified against the acceptance workloads; they do not silently truncate
-results. No public scheduler tuning settings are required by this design.
-
-## Cache discovery before reading content
-
-Each provider maintains a discovery snapshot separately from parsed conversation
-records. The snapshot records source identity, observed revision, completeness,
-and the records contributed by that source.
-
-Cursor shares one workspace inventory across composer metadata, legacy chats,
-and request lookup. A changed workspace database is opened once for its discovery
-snapshot, and the existing readers extract its supported records within that
-snapshot. Global and workspace metadata keep their existing merge behavior.
-
-Successful empty results are cached. Failed reads retain the last successful
-contribution and mark it stale. A source is removed only after a successful
-parent reconciliation proves absence. Access denial, database contention, and
-partial reads must not remove conversations.
-
-Revision validation includes database identity, database changes, write-ahead-log
-changes, descriptor changes, and source replacement. The write-ahead log (WAL) is
-the SQLite file that can contain committed changes before they reach the main
-database. Main-database size and modification time alone are insufficient.
-
-Read connections are bounded and read-only. A SQLite connection change counter
-may be compared only on the same retained connection. Reopening or evicting a
-connection invalidates that baseline. Reuse then requires a separately validated
-database/WAL revision token; otherwise the source receives a new reconciliation
-before it can be called unchanged. Persisted connection-local counters are never
-such a token. Tests with more stores than the connection budget must prove that
-eviction does not turn every idle minute into a content rescan. Failure of that
-test blocks the discovery optimization rather than weakening revision checks.
-Transactions are short enough to avoid holding old provider snapshots throughout
-idle periods or downstream delivery. No provider checkpoint, trigger, migration,
-or write is permitted.
-
-A change during a scan leaves the source dirty for another pass. A partial scan
-does not publish a supposedly complete replacement revision. Persisted discovery
-state includes parser/schema version so changed interpretation invalidates old
-positive and negative cache entries.
-
-### Bound changes inside a store
-
-An unchanged validated store requires no message projection or content hashing.
-For a changed global Cursor store, one consistent reconciliation groups supported
-rows by composer and computes the existing content-revision semantics. It
-replaces independent per-composer database passes where the query plan permits.
-Only changed composer contributions are reparsed and republished.
-
-The provider currently offers no verified row change feed. The design therefore
-does not promise append-only cost for arbitrary SQLite edits or deletions.
-A dirty global store may still require a complete key/content reconciliation.
-Its cost must be measured separately from unchanged-store and unrelated-workspace
-costs. A narrower changed-row path can replace it only after real provider writes
-prove detection of historical edits, deletions, metadata updates, and orphaned
-stored messages. The complete reconciliation remains the recovery oracle.
-
-Appendable transcript files reuse complete-line offsets and existing parser
-state. Resume-link extraction consumes the same incremental source progress
-rather than starting a second scan from byte zero. Truncation, replacement, or
-an invalid prefix restarts that source. An incomplete final line remains pending.
-
-## Preserve remote workspace identities
-
-Scheme recognition precedes local filesystem URI parsing. Valid remote workspace
-URIs retain their scheme, authority, and path without being converted into local
-paths. Encoded remote authorities such as `ssh-remote%2Bexample` remain valid
-remote identities. Local file URIs retain existing escaping and platform rules.
-
-The boundary uses explicit local, remote, absent, unsupported, and invalid
-outcomes. Remote identities are never passed to local filesystem operations.
-Malformed descriptors do not hide readable conversations from their databases.
-
-One boundary owns diagnostic logging. A repeat failure for an unchanged source
-revision increments a counter without another warning. A changed descriptor is
-retried; transient access failures use bounded retry scheduling even when its
-content revision is unchanged. Recovery produces one event. Retryable failures
-are never permanently negative-cached.
-
-## Publish and persist changed generations
-
-Publication compares records, metadata, deletion decisions, parser state, and
-source revisions. An unchanged pass advances in-memory observation state without
-rewriting the cache or emitting a semantic content change. Source-stamp changes
-alone do not imply changed transcript content.
-
-Changed generations retain the existing cache representation initially. The
-writer stages a complete replacement beside the cache, flushes it, atomically
-replaces the committed file, and completes the platform durability sequence.
-Readers observe either the previous complete generation or the new complete
-generation. They never read a partially overwritten file.
-
-Only one daemon generation owns persistence. A reload child may serve a completed
-snapshot while awaiting ownership, but it cannot scan and commit as a second
-writer. Ownership transfer follows the existing daemon process-lock lifecycle;
-it cannot depend on the child completing a refresh before reporting readiness.
-The child rereads the final committed generation after acquiring ownership and
-then reconciles events accumulated during handoff.
-
-Watchers, connections, and refresh work register through `livetrack`. Group drain
-stops admission, cancels active work, waits for it, and then releases storage.
-Background scans must not strip lifecycle cancellation. Existing inherited
-listeners and stream-drain behavior remain governed by the
-[reload contract](../../reload-and-hot-apply.md).
-
-A corrupt or incompatible cache is rebuilt from provider artifacts with an
-explicit diagnostic. A failed write preserves the previous durable cache and
-pending work. It does not report persistence success. Derived persistence may
-move to per-record transactions later only if measurements show that changed
-whole-cache generations remain a material cost.
-
-## Require semantic search opt-in
-
-### Establish the configuration and startup chain
-
-At source revision `1767db00`, the configuration split introduced by commit
-`03f7fadbb` on July 29, 2026, treats an omitted search setting as enabled.
-The following chain explains the reported retry pattern without assuming an
-explicit `search_enabled = false` was ignored.
-
-| Layer | Verified behavior |
-| --- | --- |
-| Missing configuration | The [loader](https://github.com/agoodkind/clyde/blob/1767db00db7fd91946cf2ed7517b1cb294131764/internal/config/load.go#L219) builds defaults; parsing an omitted semantic section leaves its fields at their zero values. |
-| Effective directions | The [direction resolver](https://github.com/agoodkind/clyde/blob/1767db00db7fd91946cf2ed7517b1cb294131764/internal/config/conversation_config.go#L65) returns false for feeding but true for an absent search setting; either direction enables engine use. |
-| Connection startup | The [runtime](https://github.com/agoodkind/clyde/blob/1767db00db7fd91946cf2ed7517b1cb294131764/internal/daemon/conversation_semantic_runtime.go#L162) starts for either direction, attempts collection registration, and starts its retry worker on failure. |
-| Feeder startup | The [daemon wiring](https://github.com/agoodkind/clyde/blob/1767db00db7fd91946cf2ed7517b1cb294131764/internal/daemon/run.go#L135) separately checks feeding, so connection retries do not prove that indexing is enabled. |
-| Retry behavior | Registration uses a 10-second attempt deadline and exponential delay from one second to a 30-second cap. The connector and client can both warn for one failed registration. |
-| Applying configuration | A semantic-setting change follows the existing reload route. Editing the file does not establish that the running generation has loaded it. |
-
-The current direction tests passed during this investigation, including
-`TestAnUnwrittenSearchSettingMeansOn`,
-`TestStoppingTheWritesKeepsSearchReachable`, and all explicit direction pairs.
-They demonstrate the defect's default policy, not the proposed fix. An omitted
-section and `enabled = false` alone permit retries today. Both direction flags
-explicitly false make the startup guard return without constructing a runtime.
-
-The reporter's effective configuration and loaded generation were not captured.
-If both flags were explicitly false in that generation, this default does not
-explain those retries; investigation must then establish configuration source,
-load success, and surviving worker ownership. The spec does not label that
-different case reproduced.
-
-### Define optional dependency behavior
-
-Semantic search is optional. Both directions default independently to false.
-The fields name the two independent operations:
-
-| TOML field under `conversation.semantic` | Behavior when true | Configuration change |
+| Field | Operation | Default |
 | --- | --- | --- |
-| `ingestion_enabled` | Send conversation manifests and content to the semantic engine for indexing. | Replaces `enabled`. |
-| `search_enabled` | Search previously indexed conversations through the semantic engine. | Retains this spelling but changes the omitted value to false. |
+| `ingestion_enabled` | Send conversations to the semantic engine for indexing. | `false` |
+| `search_enabled` | Search conversations already indexed by the engine. | `false` |
 
-Only explicit `ingestion_enabled = true` enables feeding, and only explicit
-`search_enabled = true` enables semantic queries. Disabling ingestion does not
-disable search or delete previously indexed conversations. Both operations need
-an available semantic engine, but neither requires the other operation to be
-enabled. Local conversation discovery remains independent of both.
+Neither field enables the other. Ingestion disabled does not disable search or
+delete indexed conversations. Both operations need the engine, but raw
+conversation discovery, listing, reading, context, and export do not.
 
-| `ingestion_enabled` | `search_enabled` | Feeding | Search | Engine runtime |
-| --- | --- | --- | --- | --- |
-| Omitted or false | Omitted | Off | Off | Not constructed |
-| False | False | Off | Off | Not constructed |
-| False or omitted | True | Off | On | Constructed |
-| True | Omitted | On | Off | Constructed |
-| True | False | On | Off | Constructed |
-| True | True | On | On | Constructed |
+| Ingestion | Search | Engine use |
+| --- | --- | --- |
+| Off | Off | No runtime, socket checks, connection attempts, or retries. |
+| On | Off | Ingest only; semantic queries report disabled. |
+| Off | On | Search only; no ingestion preparation or submission. |
+| On | On | Share the existing engine runtime. |
 
-Installing the engine, finding its socket, retaining an old collection, or
-configuring only an address or collection identifier never enables a direction.
-The disabled path performs no socket resolution, filesystem dependency probe,
-connection attempt, collection registration, retry scheduling, manifest request,
-semantic projection, or journal initialization. Repeated status calls and rejected
-semantic queries cannot start those operations indirectly.
+The current bug is a default policy: `enabled = false` stops feeding while an
+omitted `search_enabled` still resolves to true. Existing direction tests
+confirmed this behavior. The missing-engine report is not resolved merely because
+the engine happened to be available on the sampled workstation.
 
-Without the package installed, Clyde still starts and serves raw conversation
-listing, retrieval, context, and export. A semantic query while disabled returns
-a typed disabled result immediately. It does not report engine failure, attempt
-installation, silently enable the feature, or return an empty successful search.
-A query when explicitly enabled but unavailable returns a distinct unavailable
-result. This change does not promise a new local substitute for semantic search.
+Replace `conversation.semantic.enabled` with `ingestion_enabled` as a hard cut.
+Reject the removed key, including false or mixed old/new configurations. Keep
+`search_enabled` as the canonical spelling with its new false default. There are
+no aliases, automatic configuration edits, or compatibility defaults.
 
-The resolver is shared by startup, feeder admission, query admission, status, and
-configuration transitions. Status reports the two effective directions, whether
-each value was explicit or defaulted, the loaded configuration generation, and
-runtime state. It reports disabled from local state without checking installation.
-It must not reinterpret configuration using the CLI process's environment.
+Use Go fields `IngestionEnabled` and `SearchEnabled`, and JSON names
+`ingestionEnabled` and `searchEnabled`. Update existing configuration producers,
+examples, and tests together. Do not add another configuration input format.
+Unrelated `enabled` settings keep their current meaning.
 
-An enabled-to-disabled reload stops new admission in the old generation, cancels
-pending connection attempts and timers, joins the worker, and closes its client
-through the existing lifecycle before the change is reported applied. Existing
-remote jobs are not deleted or falsely reported cancelled; local delivery state
-is retained for reconciliation after a later explicit enable. Inactive clients
-have no retry worker. Re-enabling creates exactly one runtime.
-
-### Remove the old configuration keys
-
-This is a hard cut for `conversation.semantic.enabled`: the key is invalid,
-including when false or present beside `ingestion_enabled`. `search_enabled`
-remains a canonical field with independent false-by-default semantics. The
-earlier proposed names `sync_to_engine` and `query_engine` are not accepted aliases.
-There are no fallback reads, automatic translations, compatibility periods, or
-preserved implicit defaults.
-Configuration loading fails before starting workers and names the rejected key
-and its replacement. It must not silently ignore removed keys.
-
-The same cut applies to typed fields, supported serialized forms, schemas,
-examples, generated configurations, tests, and user-facing configuration output.
-The Go fields are `IngestionEnabled` and `SearchEnabled`; JSON uses
-`ingestionEnabled` and `searchEnabled`. The former scoped JSON name `enabled`
-is rejected wherever configuration JSON is accepted. `searchEnabled` retains
-its spelling with the new default. The withdrawn JSON proposals `syncToEngine`
-and `queryEngine` are not aliases. Unrelated `enabled` settings outside
-`conversation.semantic` retain their existing contracts.
-
-Existing configuration is not a compatibility constraint. Operators replace old
-keys explicitly; Clyde never edits their TOML or infers consent from an installed
-engine, retained collection, or previous configuration. Omitted new fields remain
-false. A rejected reload retains the previous running configuration and reports
-that the new configuration was not applied; it must not claim the integration
-was disabled. Corrected configuration then follows the normal lifecycle route.
-
-The implementation pull request must announce this breaking change in its
-description, including the replacement mapping, independent false defaults,
-rejection of old keys, and the required manual edit. Its developer-facing notice
-must state:
+The implementation PR description must include:
 
 > Breaking change: Under `[conversation.semantic]`, replace `enabled` with
-> `ingestion_enabled`. `ingestion_enabled` and `search_enabled` both default to
-> `false` independently. Set `search_enabled = true` explicitly to search stored
-> conversations, even when ingestion is disabled. The removed `enabled` key now
-> causes a configuration error, including when false. Existing TOML is not
-> migrated automatically.
+> `ingestion_enabled`. Both `ingestion_enabled` and `search_enabled` default
+> independently to `false`. Set `search_enabled = true` to search existing
+> indexed conversations without ingestion. The removed `enabled` key causes a
+> configuration error, even when false. Existing TOML is not migrated automatically.
 
-The implementation is not review-ready without that notice. This specification
-records the required announcement; it does not claim a pull request was published.
+Default sandbox configuration must also leave both operations off. Engine-backed
+sandbox testing requires explicit opt-in. Tests for omission must actually omit
+the fields rather than writing explicit false values.
 
-### Keep generated configurations optional
+## Stop repeated missing-engine attempts
 
-The current sandbox template explicitly enables both directions and uses the live
-engine. Default sandbox validation must instead work without that dependency;
-engine-backed validation requires an explicit sandbox opt-in. Tests for absent
-settings must omit the section rather than use the existing harness shortcut
-that writes both flags false. Otherwise the regression remains untested.
-Explicit engine-maintenance commands remain deliberate one-shot operations;
-their invocation must never create a persistent background retry loop.
+Reuse the existing shared runtime and retry worker. Do not create an
+availability framework, socket watcher, persisted cooldown, or second retry loop.
 
-### Recover only when explicitly enabled
+When both flags are false, construct no semantic runtime. Status and semantic
+queries cannot activate it indirectly. A disabled query returns a clear disabled
+result; an opted-in query with no current client returns unavailable promptly.
 
-For opted-in clients, ingestion and search share one engine-availability state
-and one connection attempt at a time. Configuration says which operations are
-allowed; availability says whether either can run now. Both flags false means
-no availability worker or probes. Either flag true permits recovery attempts,
-not independent retry loops for each operation.
+When an opted-in client cannot register because the engine is absent, use
+in-memory exponential backoff with base delays of 30 seconds, one minute, two
+minutes, four minutes, and five minutes. Jitter stays within 30 seconds and five
+minutes. Keep the existing separate 10-second attempt deadline. Repeated queries
+must not initiate attempts or reset the timer.
 
-The first connection attempt runs asynchronously. After failure, the shared
-gate enters an unavailable cooldown. Proposed base delays are 30 seconds,
-one minute, two minutes, four minutes, and then five minutes. Positive jitter
-must keep actual delays between 30 seconds and five minutes. The existing
-10-second attempt deadline remains a separate bound. Repeated failure therefore
-does not settle into a connection attempt every 30 seconds indefinitely.
+Record one warning for entering the unavailable state, then update counters
+without warning on every identical failure. Record recovery once. Remove duplicate
+warnings from lower helpers for the same returned error.
 
-During cooldown, search requests return unavailable immediately and ingestion
-does not build manifests, project documents, or submit batches. Local discovery
-continues. Status and repeated queries cannot reset the timer or initiate a dial.
-Socket readiness events may schedule a recheck but cannot bypass the shared
-not-before deadline. Transport reconnects and registration retries consume the
-same budget; hidden lower-level retries must not multiply connection attempts.
+Keep the existing startup path and the guard that stops ingestion preparation
+while no client is available. Disabling both flags stops the retry worker through
+the existing lifecycle.
+A new process may restart the retry schedule; preserving it across termination
+is not required.
 
-A successful engine operation after connection restores readiness and resets
-the failure progression. A dial alone is not proof of recovery. Reconnects retain
-unknown delivery outcomes for reconciliation before resubmission. Disabling both
-flags cancels the shared attempt and timer; reload preserves an existing cooldown
-for unchanged opted-in settings. Startup of unrelated daemon services never waits
-for a failed registration. An absent engine stays recoverable without hammering
-it or requiring manual daemon restarts.
+No new handling is planned for uncertain acceptance, transport failure sequences,
+or exact recovery after an engine rebuild. Existing behavior outside the reported
+missing-engine case stays unchanged unless normal-use measurements expose a bug.
 
-One runtime boundary owns the warning for entering an unavailable state. Client
-helpers return typed errors without emitting the same warning again. Identical
-failures update attempt counts, last error, and next attempt time in status rather
-than producing another warning every cycle. A materially different failure or
-recovery produces one transition event. Verbose per-attempt diagnostics remain
-opt-in. Disabling the integration stops retries rather than merely hiding logs.
+## Avoid unchanged Cursor content reads
 
-## Make enabled semantic delivery bounded and recoverable
+Keep the existing periodic refresh cadence and single-flight refresh owner.
+Do not add a filesystem-watcher framework, new scheduler, queue arbitration,
+source epochs, or a new public freshness API.
 
-The feeder consumes published generations without requesting discovery. It
-retains the existing engine policy, projection rules, suppression behavior, and
-busy-job gate. Discovery revisions and projected-content revisions are distinct:
-metadata-only changes must not force unchanged transcript projection repeatedly.
+Share workspace discovery across composer metadata, legacy chats, and request
+lookup. Cache each source's successful or empty result before expensive database
+reads. Use database, WAL, and descriptor metadata to decide what changed. A WAL
+is SQLite's write-ahead log; changes can be committed there while the main
+database file remains unchanged.
 
-Delivery state is keyed by collection identity, engine index epoch, projection
-version, conversation identity, and content revision. An index epoch identifies
-the receiver's current collection contents; rebuilding the receiver invalidates
-old delivery acknowledgements. A local revision match cannot suppress a valid
-receiver rebuild request.
+During a refresh, open a changed workspace store once for the existing readers.
+Reuse unchanged source results. Treat ordinary database contention or an unreadable
+descriptor as a failed read, not evidence that a conversation was deleted.
+Recheck it on a later ordinary pass. Remove a contribution when normal discovery
+confirms its source is gone.
 
-| Delivery state | Required behavior |
+Do not introduce retained connection pools or persistent `data_version` baselines.
+Keep the existing read-only database boundary and short snapshots. Use existing
+file stamps, including WAL and descriptor stamps, rather than designing a new
+cross-platform file-identity or integrity subsystem.
+
+For a changed global store, group work into one pass where practical and preserve
+the existing stored-message and metadata semantics. A changed store may still need
+a full pass. Measure that cost; do not invent a row-change feed or protocol project
+without evidence it is needed.
+
+Recognize remote URI schemes before local filesystem URI parsing. Preserve
+`vscode-remote://ssh-remote%2Bexample/path` as a remote identity. Local file paths
+and escaped spaces retain their current behavior. Keep readable conversations
+even if their workspace descriptor is invalid.
+
+Report an unchanged descriptor failure once at the owning boundary. Cache its
+result by descriptor stamp so every refresh does not parse and log it again.
+A changed descriptor or later successful read is processed normally.
+
+## Keep refresh and cache writes simple
+
+Cached list and status reads do not trigger extra discovery. Explicit freshness
+requests use the existing refresh method and share an in-flight pass. They keep
+current not-found and ambiguity behavior.
+
+Reuse existing append offsets where the parser supports them. Process complete
+new records and leave a partial final line for the next pass. Avoid the separate
+resume-link reread of an unchanged prefix when the same decoded records can
+supply those links. Normal truncation or replacement restarts that source.
+
+Do not add cryptographic prefix verification, serialized parser journals, or
+tests for arbitrary historical mutation hidden behind unchanged file metadata.
+
+Write the conversation cache only when records or saved progress change.
+Keep the existing cache format and ordinary write behavior. Do not add file sync,
+directory sync, backup generations, transaction manifests, or durability helpers.
+A fresh in-memory result must not require a durability guarantee.
+
+Use the current lifecycle to cancel and join refresh work during ordinary reload
+or shutdown. Do not add a generation handoff protocol. On startup, use the existing
+cache when readable and the existing rebuild behavior otherwise.
+
+## Read only new metrics log bytes
+
+Keep the existing event parser, aggregate calculations, output format, and
+retention period. Replace timestamp-only background replay with a file position
+and complete-line offset.
+
+Keep pending request aggregates in memory between passes. Retain simple source
+offsets in the existing checkpoint through ordinary writes, batched with useful
+work. Unchanged input does not rewrite the checkpoint. Log rotation and requests
+spanning ordinary passes remain covered.
+
+Do not coordinate output append and checkpoint replacement as a transaction.
+Do not add committed-length readers, output generations, recovery journals,
+pending-state persistence, shared reader locks, or crash-consistency tests.
+
+Use a valid saved offset when starting. If offset state is missing or incompatible,
+start from the current active log end and report that historical summary coverage
+is unavailable. Do not replay retained history solely to reconstruct derived state.
+Previously written summaries remain readable. Unfinished aggregates may be lost
+and some work may repeat after a restart; that tradeoff is accepted.
+Ordinary status reports missing summary coverage rather than silently rebuilding
+it through a full history scan.
+
+Only run retention work when data can expire. Avoid writing a temporary copy
+when nothing expires. Keep the ordinary existing retention mechanism.
+Explicit user requests for historical reports keep their current behavior.
+
+## Bound semantic preparation
+
+Do not materialize all requested conversations before sending any work.
+Prepare complete conversations into bounded batches using the existing projection
+and streaming client. Process a conversation larger than the usual batch target
+alone through the existing supported path; do not require a new receiver protocol.
+
+Preserve selected content, message indexes, and existing receiver replacement
+semantics. Keep the existing in-memory active-job guard and content memo.
+Investigate repeated work by comparing actual jobs and conversation revisions.
+Change deduplication only if that comparison demonstrates redundant work.
+
+Do not add durable delivery identities, collection epochs, accepted-job journals,
+lost-acknowledgement reconciliation, or exactly-once guarantees. A restart may
+repeat a batch. The scope is normal workload memory/CPU and directly reproduced
+redundant work.
+
+## Show existing diagnostic state
+
+Report effective ingestion/search flags, current semantic availability, next
+retry time, and existing bound listener addresses from the daemon's own state.
+Reading status does not probe semantic search or refresh conversations.
+Keep disabled distinct from unavailable.
+
+Profiling remains opt-in and uses the existing supported local configuration.
+Show disabled versus an actual bound endpoint, including its assigned port.
+Do not enable profiling to collect routine counters.
+
+Do not add a profiling lifecycle redesign, configuration provenance journal,
+new configuration generation protocol, or inherited-descriptor hardening.
+Changes to profiling behavior require a reproduced normal-use bug; the current
+reported problem is visibility.
+
+## Validate only the scoped behavior
+
+| Scenario | Required proof |
 | --- | --- |
-| Needed | Queue a revision for bounded preparation. |
-| Prepared | Persist a delivery identity before sending. |
-| Accepted | Persist the returned job identity; do not call it indexed. |
-| Unknown outcome | Reconcile acceptance or job status without immediately resending the whole batch. |
-| Completed | Advance acknowledged revisions only after receiver success. |
-| Failed or cancelled | Retain required revisions and retry under bounded backoff and existing policy. |
+| Missing semantic configuration and no engine installed | Raw operations work; zero semantic probes or retries. |
+| Ingestion off, search on, engine available | Stored search results return without ingestion work. |
+| Explicit opt-in with missing engine | The existing worker follows the reduced retry schedule; identical failures do not flood logs. |
+| Queries during the retry delay | Return promptly and do not cause another attempt. |
+| Remote Cursor workspace | The reproduced URI loads and its conversations remain visible. |
+| Repeated refresh without source changes | No unchanged database content reads or full-cache writes. |
+| Normal messages, metadata changes, and WAL writes | Updated conversations appear on the next normal refresh. |
+| Appended transcript and partial final line | New complete records appear without a second prefix scan. |
+| Ordinary reload/configuration change | Replaced workers stop and the new settings take effect. |
+| New metrics records and routine rotation | Read new bytes and preserve calculations across ordinary passes. |
+| No new metrics data and no expired output | No history reread, checkpoint rewrite, or retention rewrite. |
+| Large ordinary semantic backlog | Lower peak preparation memory without losing expected conversation content. |
+| Status and profiling visibility | Report existing runtime state without creating work. |
 
-Batch limits apply to serialized bytes and documents before materializing the
-entire needed set. Projection and transport consume bounded chunks. Splitting
-one conversation must preserve the receiver's replacement semantics; partial
-chunks cannot accidentally delete earlier chunks. Oversized conversations remain
-visible as deferred work until bounded complete-conversation delivery is
-supported. Permanent deferral is not an accepted implementation. Acceptance of
-this stage requires demonstrated progress for conversations larger than the
-batch limit. Backpressure limits outstanding accepted work as well as preparation.
+Repeat matched quiet and active samples of at least five minutes. Compare CPU,
+resident memory, source bytes/rows read, cache bytes written, retries, and
+semantic batch sizes. Keep raw-operation and returned-content controls.
 
-A failed status lookup is an unknown outcome, not proof of job completion.
-The opt-in and retry rules above also govern delivery reconnects.
-
-Receiver idempotency and collection-epoch support must be verified before
-implementing the durable-delivery stage. If the existing protocol cannot resolve
-a lost acceptance response or transfer an oversized conversation safely, that
-stage requires an explicit protocol extension before it can be accepted. Until
-then, unknown outcomes and deferred conversations retain their work and remain
-observable. They do not count as completed recovery. A client-side journal alone
-cannot establish exactly-once delivery. Other stages do not depend on that
-extension.
-
-Verification correlates accepted jobs, terminal states, acknowledged revisions,
-and needed revisions. The current ten-ID log preview cannot establish full batch
-overlap. Bounded diagnostic counters and revision digests must show backlog
-progress without logging transcript text or complete identity inventories.
-
-## Aggregate only new metrics records
-
-The background metrics worker resumes from source file identities and complete-line
-byte offsets. It reuses the existing metrics event parser and aggregation rules.
-Explicit historical reports retain their requested-window semantics; this change
-removes repeated background reads, not the ability to query retained history.
-
-The checkpoint includes source cursors, pending request aggregates, coverage
-state, output identity, and committed output length. Non-metric records still
-advance the cursor. Pending requests survive a pass and a restart, including
-requests whose start and terminal events occur in different rotations.
-
-Output append and checkpoint publication form one recoverable commit:
-
-1. The sole writer holds the existing rollup write lock and validates its
-   checkpoint against output identity and committed length.
-2. It reads bounded complete input records and stages aggregate and cursor changes.
-3. It appends output, flushes it, and durably replaces the checkpoint with the new
-   committed length and pending state.
-4. Readers use only the committed output boundary. After interruption, the writer
-   discards its uncommitted output tail before replaying input from the checkpoint.
-
-Generation markers use the same writer protocol. Recovery must never truncate
-provider files or output with an identity that does not match the checkpoint.
-Readers coordinate with the existing lock when snapshotting a checkpoint and
-output boundary, so they cannot pair different commits.
-
-Rotation completes the old file and discovers the new file by identity.
-Truncation and replacement invalidate that source cursor. Compressed closed
-rotations are processed once during migration or gap recovery, not on every pass.
-Partial final lines remain uncommitted. Missing retained input or corrupt
-checkpoint state reports incomplete coverage rather than inventing complete
-history. Pending aggregation is bounded in memory and may spill to Clyde-owned
-state; resource exhaustion must remain an explicit incomplete result.
-
-Retention runs only when data can expire. It never rewrites retained output just
-to discard an identical temporary copy. Retention writes and flushes a new output
-generation without replacing the old one. It atomically publishes a checkpoint
-selecting the new generation, identity, and committed boundary. The old generation
-remains available until that checkpoint is durable and existing readers release
-it. Recovery follows the committed checkpoint and cleans up only unreferenced
-generations. This prevents a crash between output replacement and checkpoint
-publication from destroying the last consistent pair. Cancellation is checked
-inside bounded read batches, not only between files.
-
-## Expose diagnostic state without enabling diagnostics
-
-The profiler is intentionally off by default. The effective address comes from
-`CLYDE_DEBUG_PPROF_ADDR` when nonempty, otherwise `debug.pprof_addr`. No resolved
-address means no profiling listener. The issue's binary string about an inherited
-listener being disabled is a conditional reload error; it does not establish
-that this error occurred on the reporter's machine.
-
-Current status output lacks a complete listener inventory. The revised status
-uses the daemon's existing runtime listener records, extending them where needed,
-and reports each surface as disabled, listening, failed, or unavailable. It
-includes configured and actual bound addresses, the effective configuration
-source, and daemon generation. A Unix control socket is reported as a socket,
-not a missing TCP port. An unreachable daemon is unavailable, not presumed
-disabled. CLI and MCP render the same typed status result.
-
-Profiling remains an explicit opt-in through the existing setting. Status can
-identify that setting when profiling is disabled, but viewing status never
-enables an endpoint, refreshes conversations, or probes semantic search.
-Routine subsystem counters remain available without profiling or an external
-search engine. Configured port zero reports the actual assigned port.
-
-Source inspection found no loopback validation before the profiler's generic TCP
-bind, despite the config comment describing a loopback endpoint. The revised
-path validates the final effective address, including environment overrides and
-inherited listeners, before serving profiles. `localhost` resolves and binds only
-to loopback. Wildcard and non-loopback addresses fail with a specific diagnostic.
-This specification does not enable an externally reachable profiler.
-
-Unchanged profiling settings preserve the inherited listener across reload.
-The current binder compares the configured address directly with the actual
-endpoint, which can differ for `localhost` or port zero. Handoff must preserve
-the requested bind identity separately from the resolved endpoint and validate
-both, rather than rejecting an unchanged setting because name resolution or
-port allocation changed its representation.
-Enable, disable, and address changes follow one explicit lifecycle contract:
-the existing config-watcher rebind route may change topology, while explicit
-listener-preserving reload rejects a topology change with an actionable error.
-Status reports pending versus applied configuration rather than claiming a
-listener changed before it did. Tests cover both routes. Profiling listener and
-server ownership use the existing lifecycle registry, and unexpected server exit
-changes status from listening to failed.
-
-## Migrate without changing provider state
-
-The conversation cache gains versioned discovery metadata. Existing caches remain
-readable for startup and receive a background reconciliation before the new
-revision baseline is trusted. Old derived state is not deleted before its
-replacement is committed.
-
-Metrics migration imports existing rollup output and the timestamp checkpoint
-under the writer lock. It performs one reconciliation of available history,
-deduplicates existing output using the established request/generation identity,
-and commits byte cursors and pending state together. It does not start at the
-current log end and silently skip earlier unaggregated work.
-
-Semantic delivery journals start with unknown receiver acknowledgements and
-reconcile them; migration cannot mark a backlog complete. Unsupported state
-versions fail clearly. Source-format rollback must use the last compatible
-committed derived state or a controlled rebuild, not concurrent old and new
-writers.
-
-## Deliver in independently verifiable stages
-
-| Stage | Deliverable and gate |
-| --- | --- |
-| 1 | Define independent `ingestion_enabled` and `search_enabled` fields, reject `enabled`, announce the breaking change, and prove dependency-free startup, shared availability backoff, disable transitions, effective status, and subsystem work counters. |
-| 2 | Correct remote identity handling, share workspace discovery, and skip unchanged stores before content reads. |
-| 3 | Add scheduler ownership, pure cached reads, atomic changed-generation persistence, and reload handoff tests. |
-| 4 | Add metrics byte cursors, recoverable output commits, migration, and retention scheduling. |
-| 5 | Verify receiver protocol capabilities; add bounded semantic preparation and durable job reconciliation. |
-| 6 | Measure active global-store reconciliation; add narrower row tracking only with proven provider semantics. |
-| 7 | Complete profiling status, loopback validation, and activation/rebind coverage without enabling profiling by default. |
-
-Stages 4 and 5 can follow independent implementation lanes after the shared
-lifecycle contracts are established. Each stage preserves existing behavior
-except the configuration hard cut, explicit opt-in, and diagnostic changes
-defined here, and carries its own regression and performance proof. No stage is
-accepted solely because warnings disappear.
-
-## Verify correctness and bounded work
-
-Tests exercise public index, parser, daemon, and reporting boundaries with real
-temporary files, writable fixture databases owned by the tests, and narrow fake
-external engines. Assertions cover returned conversations, persisted generations,
-delivered content, metrics totals, and measured I/O. Tests do not merely assert
-that mocked helpers were called.
-
-| Scenario | Required result |
-| --- | --- |
-| Missing config, omitted semantic section, or new direction fields false; package and socket absent | Start successfully; perform zero semantic dependency probes, dials, registrations, retry wakes, or feeder passes over at least five minutes. |
-| Same disabled cases with a sentinel engine socket present | Accept zero connections while raw operations, repeated status, and disabled semantic queries run. |
-| Each direction pair and omitted search value | Match the configuration table; `ingestion_enabled = true` with omitted `search_enabled` feeds but never answers semantic queries. |
-| Ingestion false, search true, and an available engine containing indexed conversations | Return stored search results without feeding, projecting, deleting, or reindexing those conversations. |
-| Removed `enabled` key, including false or mixed old/new keys, its scoped JSON spelling, or a withdrawn proposal | Reject configuration with its replacement named before worker startup; do not translate or ignore it. |
-| Removed keys introduced by a reload | Reject the new configuration, retain and identify the previous active generation, and apply a later corrected configuration normally. |
-| Enabled-to-disabled reload during dial, retry wait, or active connection | Apply disabled state, drain the old runtime, and perform zero later attempts or deliveries; re-enable creates one runtime. |
-| Either or both operations enabled with an absent engine and repeated queries/status calls | Keep unrelated services usable; one shared attempt follows the cooldown progression, queries fail fast, and ingestion preparation remains stopped. |
-| Prolonged outage, socket-event bursts, transport reconnects, and unchanged-config reload | Respect the same not-before deadline; do not create parallel retries or reset backoff. |
-| Engine returns during cooldown | Recover on the next eligible shared attempt and restore only configured operations; search-only recovery performs no ingestion. |
-| Default sandbox and examples | Do not silently enable semantic search; absent-setting tests exercise real omission. |
-| Profiling unset, explicitly enabled, invalid, or failing | Report the correct effective state; bind only when opted in and only on validated loopback. |
-| Profiling environment override, port zero, unchanged reload, or topology change | Report actual daemon-bound addresses and configuration source; exercise watcher rebind and explicit-reload rejection separately. |
-| Profiling bound through `localhost` or port zero followed by unchanged reload | Preserve the existing socket and assigned port; compare retained bind identity rather than literal configured and resolved address strings. |
-| Unchanged corpus with valid revision baselines and fully acknowledged semantic state | No content scans, message hashes, cache writes, or semantic projection; lightweight metadata validation is allowed. |
-| Connection eviction, restart, or invalid revision baseline | Revalidate before reuse; missing proof triggers reconciliation, while repeated idle connection churn cannot cause repeated content scans. |
-| One transcript append | Read only complete added content; preserve a partial tail and existing conversation identity. |
-| One changed workspace store | Do not open unrelated workspace stores for content; update all affected contributions. |
-| WAL-only commit, checkpoint, historical edit, or deletion | Detect the changed content without deleting unaffected conversations. |
-| Empty, remote, legacy, orphaned-message, or conflicting metadata case | Preserve existing coverage, ordering, deduplication, and ambiguity behavior. |
-| Access failure and recovery | Serve the last good contribution with explicit stale coverage; retry and publish recovery. |
-| Rename, truncate, replace, missed event, or watcher overflow | Reconcile to the same result as a clean full scan. |
-| Continuous event burst | Bound queue memory and make progress without starving another provider. |
-| Reload or shutdown during scan and persistence | Keep one writer, complete cache files, no orphaned work, and existing listener continuity. |
-| Semantic outage, lost acceptance, failed status lookup, receiver rebuild, restart, or oversized conversation | Preserve needed revisions and demonstrate bounded recovery using the verified receiver protocol; unresolved or permanently deferred work fails stage acceptance. |
-| Metrics request spanning passes and rotations | Preserve exact totals and pending state across restart. |
-| Interruption before append, after append, or during checkpoint publication | Commit each metrics result once or replay it without duplicate visible output. |
-| Interruption before or after retention output creation, checkpoint selection, or old-generation cleanup | Recover the selected complete output/checkpoint pair and preserve committed totals. |
-| Unchanged metrics input and no retention expiry | Read and write no history content and do not rewrite the checkpoint. |
-| First migration and incompatible or corrupt state | Preserve recoverable history; report any coverage gap explicitly. |
-
-Performance validation uses the same frozen corpus for baseline and candidate,
-with quiet and active windows of at least five minutes each. The active workload
-includes a growing transcript, a changing global Cursor database, repeated cached
-queries, and a metrics interval crossing. Repeat each condition to separate
-workload variation from the change.
-
-Run the dependency-free and engine-enabled cases separately. Exercise missing
-configuration and explicit values through the real loader and daemon entry point,
-using temporary state roots and a counting Unix-socket fixture. Zero accepted
-connections alone does not prove zero failed dials: also record dial/probe
-attempts and retry-worker admission. Startup, disable, and recovery tests must
-assert observable behavior and retain the raw-operation controls. The earlier
-active-workstation sample is not acceptance for clients without the engine.
-
-Acceptance requires zero redundant content work in the unchanged cases above.
-For active cases, record stores opened, rows and bytes examined, content hashes,
-cache bytes written, submitted and acknowledged semantic bytes/documents,
-metrics bytes consumed, queue age, freshness latency, CPU, and resident memory.
-Report median, 95th percentile, and maximum latency and memory, plus total CPU
-and I/O.
-Dirty global-store scans must appear separately so a corpus-sized fallback cannot
-be hidden by averages.
-
-No global percentage reduction is promised from the earlier active sample.
-The performance gate is the work contract and a paired comparison with unchanged
-coverage and bounded freshness. Idle memory must settle across repeated cycles;
-bounded queues and connections must plateau under sustained load.
-
-Implementation validation requires the normal repository checks, targeted race
-tests for shared snapshots and handoff, and the existing isolated daemon test
-harness. A live-service success claim additionally requires exact installed-build
-identity and a new sampling window. This specification authorizes neither
-installation nor deployment.
+Power-loss, system-crash, arbitrary corruption, interrupted-write, lost-acknowledgement,
+and rare transport-combination tests are excluded. Do not expand the scope because
+such cases are imaginable. No installation or deployment is authorized here.
