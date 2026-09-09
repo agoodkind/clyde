@@ -49,15 +49,33 @@ The parser attempts host decoding before reaching its non-file URI branch.
 Local file URIs, escaped spaces in local paths, and an unescaped remote authority
 pass the same probe.
 
-Semantic registration failures did not recur. The four batches do not prove
-duplicate delivery: the current evidence cannot distinguish advancing a backlog
-from requesting previously submitted revisions again. That distinction is a
-required semantic-delivery verification, not an assumed root cause.
+Semantic registration failures did not recur on the sampled workstation, where
+the engine was running. That observation does not resolve the issue's report of
+retries on a client without semantic search enabled. The four batches also do
+not prove duplicate delivery: the evidence cannot distinguish advancing a backlog
+from requesting previously submitted revisions again. Both cases require separate
+acceptance proof.
+
+### Account for every reported symptom
+
+| Reported symptom | Investigation result | Required correction |
+| --- | --- | --- |
+| Repeated Cursor workspace reads | Source confirms repeated discovery before cache reuse; stacks confirm Cursor content reads. | Share discovery and validate revisions before content work. |
+| Remote workspace warnings every minute | The encoded-authority probe reproduces the failure; one error logs at three layers. | Preserve remote identities and deduplicate unchanged failures. |
+| Semantic registration retries without opt-in | An absent search setting enables the connection even when feeding is disabled; existing tests reproduce that default. | Require explicit opt-in and perform no dependency work when disabled. |
+| Repeated warnings when the engine is absent | Retry delay already grows to a 30-second cap, but failed registration logs warnings at multiple layers. | Keep recovery for opted-in clients and report failure transitions once. |
+| No discoverable profiling endpoint or status listener ports | Profiling is opt-in; status lacks a complete runtime listener inventory. | Keep profiling off by default and expose its effective state and actual address. |
+
+The additional cache, metrics, and large semantic-delivery workloads measured
+above remain in scope. A missing engine is distinct from an intentionally
+disabled integration, and an intentionally disabled profiler is distinct from
+a failed listener.
 
 ## Define scope and preserve contracts
 
 The change covers conversation discovery, index persistence, Cursor workspace
-identity, semantic delivery, metrics aggregation, and their worker lifecycle.
+identity, semantic opt-in and delivery, metrics aggregation, diagnostic visibility,
+and their worker lifecycle.
 It does not change adapter behavior, provider-owned storage, or public
 conversation identifiers and export semantics.
 
@@ -227,7 +245,109 @@ pending work. It does not report persistence success. Derived persistence may
 move to per-record transactions later only if measurements show that changed
 whole-cache generations remain a material cost.
 
-## Make semantic delivery bounded and recoverable
+## Require semantic search opt-in
+
+### Establish the configuration and startup chain
+
+At source revision `1767db00`, the configuration split introduced by commit
+`03f7fadbb` on July 29, 2026, treats an omitted search setting as enabled.
+The following chain explains the reported retry pattern without assuming an
+explicit `search_enabled = false` was ignored.
+
+| Layer | Verified behavior |
+| --- | --- |
+| Missing configuration | The [loader](https://github.com/agoodkind/clyde/blob/1767db00db7fd91946cf2ed7517b1cb294131764/internal/config/load.go#L219) builds defaults; parsing an omitted semantic section leaves its fields at their zero values. |
+| Effective directions | The [direction resolver](https://github.com/agoodkind/clyde/blob/1767db00db7fd91946cf2ed7517b1cb294131764/internal/config/conversation_config.go#L65) returns false for feeding but true for an absent search setting; either direction enables engine use. |
+| Connection startup | The [runtime](https://github.com/agoodkind/clyde/blob/1767db00db7fd91946cf2ed7517b1cb294131764/internal/daemon/conversation_semantic_runtime.go#L162) starts for either direction, attempts collection registration, and starts its retry worker on failure. |
+| Feeder startup | The [daemon wiring](https://github.com/agoodkind/clyde/blob/1767db00db7fd91946cf2ed7517b1cb294131764/internal/daemon/run.go#L135) separately checks feeding, so connection retries do not prove that indexing is enabled. |
+| Retry behavior | Registration uses a 10-second attempt deadline and exponential delay from one second to a 30-second cap. The connector and client can both warn for one failed registration. |
+| Applying configuration | A semantic-setting change follows the existing reload route. Editing the file does not establish that the running generation has loaded it. |
+
+The current direction tests passed during this investigation, including
+`TestAnUnwrittenSearchSettingMeansOn`,
+`TestStoppingTheWritesKeepsSearchReachable`, and all explicit direction pairs.
+They demonstrate the defect's default policy, not the proposed fix. An omitted
+section and `enabled = false` alone permit retries today. Both direction flags
+explicitly false make the startup guard return without constructing a runtime.
+
+The reporter's effective configuration and loaded generation were not captured.
+If both flags were explicitly false in that generation, this default does not
+explain those retries; investigation must then establish configuration source,
+load success, and surviving worker ownership. The spec does not label that
+different case reproduced.
+
+### Define optional dependency behavior
+
+Semantic search is optional. The proposed resolver keeps the two existing
+directions but changes the omitted search setting to inherit `enabled`.
+An explicit `search_enabled` value takes precedence. This preserves an explicit
+read-only search configuration while removing implicit engine use.
+
+| `enabled` | `search_enabled` | Feeding | Search | Engine runtime |
+| --- | --- | --- | --- | --- |
+| Omitted or false | Omitted | Off | Off | Not constructed |
+| False | False | Off | Off | Not constructed |
+| False or omitted | True | Off | On | Constructed |
+| True | Omitted | On | On | Constructed |
+| True | False | On | Off | Constructed |
+| True | True | On | On | Constructed |
+
+Installing the engine, finding its socket, retaining an old collection, or
+configuring only an address or collection identifier never enables a direction.
+The disabled path performs no socket resolution, filesystem dependency probe,
+connection attempt, collection registration, retry scheduling, manifest request,
+semantic projection, or journal initialization. Repeated status calls and rejected
+semantic queries cannot start those operations indirectly.
+
+Without the package installed, Clyde still starts and serves raw conversation
+listing, retrieval, context, and export. A semantic query while disabled returns
+a typed disabled result immediately. It does not report engine failure, attempt
+installation, silently enable the feature, or return an empty successful search.
+A query when explicitly enabled but unavailable returns a distinct unavailable
+result. This change does not promise a new local substitute for semantic search.
+
+The resolver is shared by startup, feeder admission, query admission, status, and
+configuration transitions. Status reports the two effective directions, whether
+each value was explicit or inherited, the loaded configuration generation, and
+runtime state. It reports disabled from local state without checking installation.
+It must not reinterpret configuration using the CLI process's environment.
+
+An enabled-to-disabled reload stops new admission in the old generation, cancels
+pending connection attempts and timers, joins the worker, and closes its client
+through the existing lifecycle before the change is reported applied. Existing
+remote jobs are not deleted or falsely reported cancelled; local delivery state
+is retained for reconciliation after a later explicit enable. Inactive clients
+have no retry worker. Re-enabling creates exactly one runtime.
+
+The default change is intentional: clients that previously relied on
+`enabled = false` with omitted `search_enabled` must explicitly set
+`search_enabled = true` to retain search without feeding. Migration never rewrites
+their configuration or infers consent from an existing collection. Examples and
+generated default configurations must use the same off-by-default policy.
+
+The current sandbox template explicitly enables both directions and uses the live
+engine. Default sandbox validation must instead work without that dependency;
+engine-backed validation requires an explicit sandbox opt-in. Tests for absent
+settings must omit the section rather than use the existing harness shortcut
+that writes both flags false. Otherwise the regression remains untested.
+Explicit engine-maintenance commands remain deliberate one-shot operations;
+their invocation must never create a persistent background retry loop.
+
+### Recover only when explicitly enabled
+
+For opted-in clients, an unavailable engine remains retryable with the existing
+bounded attempt deadline and capped exponential backoff. The fix is not a longer
+timeout and does not turn absence into permanent disablement. Startup of unrelated
+daemon services must not wait for the first failed engine registration.
+
+One runtime boundary owns the warning for entering an unavailable state. Client
+helpers return typed errors without emitting the same warning again. Identical
+failures update attempt counts, last error, and next attempt time in status rather
+than producing another warning every cycle. A materially different failure or
+recovery produces one transition event. Verbose per-attempt diagnostics remain
+opt-in. Disabling the integration stops retries rather than merely hiding logs.
+
+## Make enabled semantic delivery bounded and recoverable
 
 The feeder consumes published generations without requesting discovery. It
 retains the existing engine policy, projection rules, suppression behavior, and
@@ -259,8 +379,7 @@ this stage requires demonstrated progress for conversations larger than the
 batch limit. Backpressure limits outstanding accepted work as well as preparation.
 
 A failed status lookup is an unknown outcome, not proof of job completion.
-Connection retry keeps its existing bounded exponential behavior and reports
-state transitions instead of unchanged warnings on every attempt.
+The opt-in and retry rules above also govern delivery reconnects.
 
 Receiver idempotency and collection-epoch support must be verified before
 implementing the durable-delivery stage. If the existing protocol cannot resolve
@@ -321,6 +440,49 @@ generations. This prevents a crash between output replacement and checkpoint
 publication from destroying the last consistent pair. Cancellation is checked
 inside bounded read batches, not only between files.
 
+## Expose diagnostic state without enabling diagnostics
+
+The profiler is intentionally off by default. The effective address comes from
+`CLYDE_DEBUG_PPROF_ADDR` when nonempty, otherwise `debug.pprof_addr`. No resolved
+address means no profiling listener. The issue's binary string about an inherited
+listener being disabled is a conditional reload error; it does not establish
+that this error occurred on the reporter's machine.
+
+Current status output lacks a complete listener inventory. The revised status
+uses the daemon's existing runtime listener records, extending them where needed,
+and reports each surface as disabled, listening, failed, or unavailable. It
+includes configured and actual bound addresses, the effective configuration
+source, and daemon generation. A Unix control socket is reported as a socket,
+not a missing TCP port. An unreachable daemon is unavailable, not presumed
+disabled. CLI and MCP render the same typed status result.
+
+Profiling remains an explicit opt-in through the existing setting. Status can
+identify that setting when profiling is disabled, but viewing status never
+enables an endpoint, refreshes conversations, or probes semantic search.
+Routine subsystem counters remain available without profiling or an external
+search engine. Configured port zero reports the actual assigned port.
+
+Source inspection found no loopback validation before the profiler's generic TCP
+bind, despite the config comment describing a loopback endpoint. The revised
+path validates the final effective address, including environment overrides and
+inherited listeners, before serving profiles. `localhost` resolves and binds only
+to loopback. Wildcard and non-loopback addresses fail with a specific diagnostic.
+This specification does not enable an externally reachable profiler.
+
+Unchanged profiling settings preserve the inherited listener across reload.
+The current binder compares the configured address directly with the actual
+endpoint, which can differ for `localhost` or port zero. Handoff must preserve
+the requested bind identity separately from the resolved endpoint and validate
+both, rather than rejecting an unchanged setting because name resolution or
+port allocation changed its representation.
+Enable, disable, and address changes follow one explicit lifecycle contract:
+the existing config-watcher rebind route may change topology, while explicit
+listener-preserving reload rejects a topology change with an actionable error.
+Status reports pending versus applied configuration rather than claiming a
+listener changed before it did. Tests cover both routes. Profiling listener and
+server ownership use the existing lifecycle registry, and unexpected server exit
+changes status from listening to failed.
+
 ## Migrate without changing provider state
 
 The conversation cache gains versioned discovery metadata. Existing caches remain
@@ -344,17 +506,19 @@ writers.
 
 | Stage | Deliverable and gate |
 | --- | --- |
-| 1 | Add subsystem work counters and reproduce the URI failure, no-change rewrites, and metrics rereads. |
+| 1 | Correct semantic opt-in, prove dependency-free startup and disable transitions, and add effective status plus subsystem counters. |
 | 2 | Correct remote identity handling, share workspace discovery, and skip unchanged stores before content reads. |
 | 3 | Add scheduler ownership, pure cached reads, atomic changed-generation persistence, and reload handoff tests. |
 | 4 | Add metrics byte cursors, recoverable output commits, migration, and retention scheduling. |
 | 5 | Verify receiver protocol capabilities; add bounded semantic preparation and durable job reconciliation. |
 | 6 | Measure active global-store reconciliation; add narrower row tracking only with proven provider semantics. |
+| 7 | Complete profiling status, loopback validation, and activation/rebind coverage without enabling profiling by default. |
 
 Stages 4 and 5 can follow independent implementation lanes after the shared
-lifecycle contracts are established. Each stage preserves the previous public
-behavior and carries its own regression and performance proof. No stage is
-accepted solely because warnings disappear.
+lifecycle contracts are established. Each stage preserves existing behavior
+except the explicit opt-in and diagnostic changes defined here, and carries its
+own regression and performance proof. No stage is accepted solely because
+warnings disappear.
 
 ## Verify correctness and bounded work
 
@@ -366,6 +530,15 @@ that mocked helpers were called.
 
 | Scenario | Required result |
 | --- | --- |
+| Missing config, omitted semantic section, or `enabled = false` alone; package and socket absent | Start successfully; perform zero semantic dependency probes, dials, registrations, retry wakes, or feeder passes over at least five minutes. |
+| Same disabled cases with a sentinel engine socket present | Accept zero connections while raw operations, repeated status, and disabled semantic queries run. |
+| Each explicit direction pair and inherited search value | Match the configuration table; search-only never feeds, and feed-only never answers semantic queries. |
+| Enabled-to-disabled reload during dial, retry wait, or active connection | Apply disabled state, drain the old runtime, and perform zero later attempts or deliveries; re-enable creates one runtime. |
+| Enabled integration with initially absent engine | Keep unrelated daemon services usable, retain capped retries with one unavailable warning, and recover when the fixture engine appears. |
+| Default sandbox and examples | Do not silently enable semantic search; absent-setting tests exercise real omission. |
+| Profiling unset, explicitly enabled, invalid, or failing | Report the correct effective state; bind only when opted in and only on validated loopback. |
+| Profiling environment override, port zero, unchanged reload, or topology change | Report actual daemon-bound addresses and configuration source; exercise watcher rebind and explicit-reload rejection separately. |
+| Profiling bound through `localhost` or port zero followed by unchanged reload | Preserve the existing socket and assigned port; compare retained bind identity rather than literal configured and resolved address strings. |
 | Unchanged corpus with valid revision baselines and fully acknowledged semantic state | No content scans, message hashes, cache writes, or semantic projection; lightweight metadata validation is allowed. |
 | Connection eviction, restart, or invalid revision baseline | Revalidate before reuse; missing proof triggers reconciliation, while repeated idle connection churn cannot cause repeated content scans. |
 | One transcript append | Read only complete added content; preserve a partial tail and existing conversation identity. |
@@ -388,6 +561,14 @@ with quiet and active windows of at least five minutes each. The active workload
 includes a growing transcript, a changing global Cursor database, repeated cached
 queries, and a metrics interval crossing. Repeat each condition to separate
 workload variation from the change.
+
+Run the dependency-free and engine-enabled cases separately. Exercise missing
+configuration and explicit values through the real loader and daemon entry point,
+using temporary state roots and a counting Unix-socket fixture. Zero accepted
+connections alone does not prove zero failed dials: also record dial/probe
+attempts and retry-worker admission. Startup, disable, and recovery tests must
+assert observable behavior and retain the raw-operation controls. The earlier
+active-workstation sample is not acceptance for clients without the engine.
 
 Acceptance requires zero redundant content work in the unchanged cases above.
 For active cases, record stores opened, rows and bytes examined, content hashes,
