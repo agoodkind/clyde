@@ -292,6 +292,10 @@ func (s *Server) dispatchNativeCodexResponses(
 	if v2Plan != nil {
 		response = adaptercodex.ObserveRawResponsesCompactionV2Response(response, *v2Plan, s.compactionV2)
 	}
+	v2Transformer := adaptercodex.NewRawResponsesCompactionV2FinalAnswerTransformer(raw, v2Recovery)
+	if v2Transformer != nil {
+		response = transformNativeCodexCompactionResponse(response, v2Transformer, streamingResponse)
+	}
 	defer func() { _ = response.Body.Close() }()
 	if streamingResponse {
 		lifecycle.streamOpened(ctx)
@@ -300,8 +304,15 @@ func (s *Server) dispatchNativeCodexResponses(
 	if copyErr == nil && v2Plan != nil {
 		adaptercodex.ArmRawResponsesCompactionV2Response(response)
 	}
+	if copyErr != nil && v2Plan != nil {
+		adaptercodex.ReleaseRawResponsesCompactionV2Response(response)
+	}
 	if v2Recovery != nil {
-		v2Recovery.ReleaseRecovery()
+		if copyErr == nil && v2Transformer != nil && v2Transformer.DidMutateResponse() {
+			v2Recovery.CompleteRecovery()
+		} else {
+			v2Recovery.ReleaseRecovery()
+		}
 	}
 	var result adapterprovider.Result
 	lifecycle.terminal(ctx, result, copyErr)
