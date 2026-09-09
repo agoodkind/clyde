@@ -164,7 +164,7 @@ func TestDecodeTranscriptEntryReportsWhichFieldsDecodedPartially(t *testing.T) {
 		`"toolUseResult":{"stdout":"ok"},"sessionId":"sess-8"}`)
 	partial := []byte(`{"type":"user","uuid":"entry-9","timestamp":"2026-07-25T18:54:58.775Z",` +
 		`"toolUseResult":{"stdout":"ok","timedOutAfterMs":1.5},"error":{"status":"529"},` +
-		`"imagePasteIds":["one"],"sessionId":"sess-9"}`)
+		`"imagePasteIds":[1,"two"],"sessionId":"sess-9"}`)
 
 	wholeEntry, err := DecodeTranscriptEntry(whole)
 	if err != nil {

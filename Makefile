@@ -8,7 +8,8 @@
 # clyde Makefile.
 # Build/lint/release/service pipeline lives in go-makefile and is fetched at
 # runtime. Project-local additions are the staticcheck-extra exclude for
-# generated protobuf code and ginkgo as an alternate test runner.
+# generated protobuf code, the Go 1.27 compatible vulnerability scanner, and
+# ginkgo as an alternate test runner.
 
 # Optional local overrides (signing creds, never committed). Copy config.mk.example.
 -include config.mk
@@ -28,6 +29,7 @@ GO_BUILD_LDFLAGS += -X goodkind.io/clyde/internal/daemonsupervisor.BuildFingerpr
 
 # Exclude protobuf-generated code under /api/ from staticcheck-extra.
 STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
+export GOVULNCHECK_INSTALL := golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
