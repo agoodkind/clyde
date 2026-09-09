@@ -11,11 +11,14 @@ import (
 	"slices"
 	"strings"
 
+	"goodkind.io/clyde/internal/adapter/anthropic"
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemonsupervisor"
 	"goodkind.io/clyde/internal/deploy"
 	"goodkind.io/clyde/internal/homedir"
+	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
 	zedstore "goodkind.io/clyde/internal/providers/zed/store"
@@ -217,7 +220,7 @@ func resetProtectedFiles(cfg *config.Config) []string {
 		cfg.Adapter.Codex.AuthFile, cfg.Logging.Paths.CLI, cfg.Logging.Paths.Daemon,
 		slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleCLI),
 		slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon),
-		os.Getenv("LOG_PATH"), os.Getenv("CLYDE_CODEX_LOG_PATH"), os.Getenv("CLYDE_ANTHROPIC_LOG_PATH"),
+		os.Getenv("LOG_PATH"), adaptercodex.LogPath(), anthropic.LogPath(),
 	}
 	for _, model := range cfg.Adapter.Models {
 		path := homedir.Expand(model.InstructionsFile)
@@ -288,7 +291,9 @@ func resetProtectedDirectories(ctx context.Context, cfg *config.Config) (_ []str
 		return nil, fmt.Errorf("resolve protected provider home: %w", err)
 	}
 	roots := []string{
-		codex.CodexHome, codex.SQLiteHome, filepath.Join(home, ".claude"),
+		codex.CodexHome, codex.SQLiteHome,
+		oauthcredentials.ResolveDirectory(home, ""),
+		oauthcredentials.ResolveDirectory(home, os.Getenv("CLAUDE_CONFIG_DIR")),
 		slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleCLI),
 		slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleDaemon),
 		filepath.Join(config.DefaultStateDir(), "exports"),

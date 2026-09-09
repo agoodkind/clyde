@@ -161,10 +161,26 @@ func normalizeReadOptions(options ReadOptions) ReadOptions {
 	return normalizeReadOptionsWithClock(options, time.Now)
 }
 
+// ResolveDirectory returns the configured credential directory, or the Claude
+// default under home. It expands a leading ~/ against home and reads no ambient
+// environment; callers choose whether an environment override applies.
+func ResolveDirectory(home, configured string) string {
+	if configured == "" {
+		return filepath.Join(home, ".claude")
+	}
+	if configured == "~" {
+		return filepath.Clean(home)
+	}
+	if relative, ok := strings.CutPrefix(configured, "~/"); ok {
+		return filepath.Join(home, relative)
+	}
+	return filepath.Clean(configured)
+}
+
 func normalizeReadOptionsWithClock(options ReadOptions, nowFunc func() time.Time) ReadOptions {
 	if options.CredentialsDir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			options.CredentialsDir = filepath.Join(home, ".claude")
+			options.CredentialsDir = ResolveDirectory(home, "")
 		}
 	}
 	if options.Platform == "" {

@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/adapter/anthropic"
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemonsupervisor"
@@ -48,6 +50,71 @@ func writeResetFixture(t *testing.T, path string, body []byte) {
 	}
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertResetProtectsPath(t *testing.T, path string) {
+	t.Helper()
+	protected := []byte("retained protected bytes")
+	writeResetFixture(t, path, protected)
+	configBody := []byte("[mitm.capture_store]\ndb_path = " + strconv.Quote(path) + "\n")
+	writeResetFixture(t, config.GlobalConfigPath(), configBody)
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stop before the public operation if preflight is broken: RED must never
+	// reach the machine's service manager.
+	if _, err := hardResetTargets(t.Context(), cfg); err == nil {
+		t.Fatalf("protected path accepted for deletion: %s", path)
+	}
+	var output bytes.Buffer
+	if err := HardReset(t.Context(), &output); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("expected protected-path refusal: %v", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("service removal ran before refusal: %s", &output)
+	}
+	for _, file := range []struct {
+		path string
+		body []byte
+	}{{path, protected}, {config.GlobalConfigPath(), configBody}} {
+		got, err := os.ReadFile(file.path)
+		if err != nil || !bytes.Equal(got, file.body) {
+			t.Fatalf("protected bytes changed at %s: %v", file.path, err)
+		}
+	}
+}
+
+func TestHardResetProtectsResolvedSidecarLogs(t *testing.T) {
+	resetTestRoots(t)
+	for _, sidecar := range []struct {
+		name, override string
+		path           func() string
+	}{
+		{"codex", "CLYDE_CODEX_LOG_PATH", adaptercodex.LogPath},
+		{"anthropic", "CLYDE_ANTHROPIC_LOG_PATH", anthropic.LogPath},
+	} {
+		t.Run(sidecar.name+"/default", func(t *testing.T) { assertResetProtectsPath(t, sidecar.path()) })
+		t.Run(sidecar.name+"/override", func(t *testing.T) {
+			t.Setenv(sidecar.override, filepath.Join(config.DefaultStateDir(), sidecar.name+"-custom.jsonl"))
+			assertResetProtectsPath(t, sidecar.path())
+		})
+	}
+}
+
+func TestHardResetProtectsConfiguredClaudeRoot(t *testing.T) {
+	resetTestRoots(t)
+	t.Setenv("HOME", config.DefaultStateDir())
+	for _, scenario := range []struct{ name, configured, directory string }{
+		{"default", "", filepath.Join(os.Getenv("HOME"), ".claude")},
+		{"custom", filepath.Join(config.DefaultStateDir(), "claude-custom"), filepath.Join(config.DefaultStateDir(), "claude-custom")},
+		{"expanded", "~/claude-expanded", filepath.Join(os.Getenv("HOME"), "claude-expanded")},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", scenario.configured)
+			assertResetProtectsPath(t, filepath.Join(scenario.directory, ".credentials.json"))
+		})
 	}
 }
 
@@ -307,6 +374,34 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 	if err != nil || len(oldProcesses) < 2 {
 		t.Fatalf("identify installed supervisor and worker: %v, %v", oldProcesses, err)
 	}
+	writeResetFixture(t, filepath.Join(root, "inventory"), nil)
+	replaceResetFixtureExecutable(t, bin)
+	for _, process := range oldProcesses {
+		alive, err := sameResetProcess(t.Context(), process)
+		if err != nil || !alive {
+			t.Fatalf("old process %d did not survive executable replacement: %v", process.PID, err)
+		}
+	}
+	oldSupervisorPID := status.SupervisorPID
+	command = exec.CommandContext(t.Context(), bin, "daemon", "hard-reset")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("reset after installed executable replacement: %v\n%s", err, output)
+	}
+	for _, process := range oldProcesses {
+		alive, err := sameResetProcess(t.Context(), process)
+		if err != nil || alive {
+			t.Fatalf("old inode process %d survived reset: %v", process.PID, err)
+		}
+	}
+	status = InspectStatus(t.Context())
+	if !status.SupervisorResponding || !status.DaemonResponding || status.SupervisorPID == oldSupervisorPID {
+		t.Fatalf("replacement executable did not start a new daemon: %+v", status)
+	}
+	t.Logf("same-path inode update: old supervisor %d exited; replacement supervisor %d is responding", oldSupervisorPID, status.SupervisorPID)
+	oldProcesses, err = hardResetProcesses(t.Context(), bin)
+	if err != nil || len(oldProcesses) < 2 {
+		t.Fatalf("identify replacement supervisor and worker: %v, %v", oldProcesses, err)
+	}
 	// Exercise failure after teardown while real old processes are still alive.
 	writeResetFixture(t, filepath.Join(root, "inventory"), nil)
 	t.Setenv("CLYDE_RESET_TEST_LATE_WORKER", "1")
@@ -357,6 +452,32 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("rerun changed protected bytes: %s: %v", path, err)
 		}
+	}
+}
+
+func replaceResetFixtureExecutable(t *testing.T, path string) {
+	t.Helper()
+	previous, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := path + ".updated"
+	if err := os.WriteFile(replacement, body, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(previous, current) {
+		t.Fatal("installed executable inode did not change")
 	}
 }
 
