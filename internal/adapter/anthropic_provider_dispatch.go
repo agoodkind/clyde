@@ -112,7 +112,12 @@ func (s *Server) dispatchAnthropicProviderStream(
 		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.chat.anthropic_stream_finalized",
+		slog.String("concern", "adapter.providers.anthropic.sse"),
+		slog.String("backend", "anthropic"),
 		slog.String("request_id", reqID),
 		slog.String("model", alias),
 		slog.Bool("include_usage", includeUsage),
@@ -143,7 +148,12 @@ func (s *Server) handleAnthropicStreamRunErr(
 ) error {
 	aerr := anthropicProviderAdapterError(runErr)
 	if !streamWriter.headersWritten {
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_pre_content_error", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
+		s.log.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"adapter.chat.anthropic_stream_pre_content_error",
+			slog.String("concern", "adapter.providers.anthropic.sse"),
+			slog.String("backend", "anthropic"),
 			slog.String("request_id", reqID),
 			slog.String("model", alias),
 			slog.String("run_err", sanitizeAnthropicRunErr(runErr)),
@@ -157,7 +167,12 @@ func (s *Server) handleAnthropicStreamRunErr(
 		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized_after_runerr", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.chat.anthropic_stream_finalized_after_runerr",
+		slog.String("concern", "adapter.providers.anthropic.sse"),
+		slog.String("backend", "anthropic"),
 		slog.String("request_id", reqID),
 		slog.String("model", alias),
 		slog.String("run_err", sanitizeAnthropicRunErr(runErr)),
@@ -167,7 +182,12 @@ func (s *Server) handleAnthropicStreamRunErr(
 		slog.Int("usage_total_tokens", result.Usage.TotalTokens),
 	)
 	if err := streamWriter.finalizeStream(ctx, result, includeUsage); err != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_after_runerr_failed", slog.String("concern", "adapter.chat.render"), slog.String("backend", "anthropic"),
+		s.log.LogAttrs(
+			ctx,
+			slog.LevelWarn,
+			"adapter.chat.stream_finalize_after_runerr_failed",
+			slog.String("concern", "adapter.chat.render"),
+			slog.String("backend", "anthropic"),
 			slog.String("request_id", reqID),
 			slog.Any("err", err),
 		)
@@ -242,16 +262,21 @@ func (s *Server) executeAnthropicPreparedRequest(
 	writer adapterprovider.EventWriter,
 ) (adapterprovider.Result, error) {
 	if s.anthr == nil {
-		return adapterprovider.Result{
-				Usage: adapteropenai.
-					Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+		result := adapterprovider.Result{
+			Usage: adapteropenai.Usage{
+				PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
+				PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
+				CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+			},
 
-				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
-			}, &anthropic.ExecuteError{
-				Status:  http.StatusInternalServerError,
-				Code:    "oauth_unconfigured",
-				Message: "adapter built without anthropic client; set adapter.direct_oauth=true and restart", Cause: nil,
-			}
+			FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+		}
+		executeErr := &anthropic.ExecuteError{
+			Status:  http.StatusInternalServerError,
+			Code:    "oauth_unconfigured",
+			Message: "adapter built without anthropic client; set adapter.direct_oauth=true and restart", Cause: nil,
+		}
+		return result, executeErr
 	}
 	if err := s.acquire(ctx); err != nil {
 		return adapterprovider.Result{}, &anthropic.ExecuteError{
@@ -276,31 +301,41 @@ func (s *Server) executeAnthropicPreparedCollect(
 	if prepared.NativeIngress {
 		nativeWriter, ok := writer.(*nativeAnthropicJSONWriter)
 		if !ok || nativeWriter == nil {
-			return adapterprovider.Result{
-					Usage: adapteropenai.
-						Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+			result := adapterprovider.Result{
+				Usage: adapteropenai.Usage{
+					PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
+					PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
+					CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+				},
 
-					FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
-				}, &anthropic.ExecuteError{
-					Status:  http.StatusInternalServerError,
-					Code:    "internal_error",
-					Message: "anthropic native collect path requires a native response writer", Cause: nil,
-				}
+				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+			}
+			executeErr := &anthropic.ExecuteError{
+				Status:  http.StatusInternalServerError,
+				Code:    "internal_error",
+				Message: "anthropic native collect path requires a native response writer", Cause: nil,
+			}
+			return result, executeErr
 		}
 		return adapterprovider.Result{}, s.executeAnthropicPreparedCollectNative(ctx, prepared, nativeWriter)
 	}
 	collector, ok := writer.(*providerCollectorWriter)
 	if !ok || collector == nil {
-		return adapterprovider.Result{
-				Usage: adapteropenai.
-					Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+		result := adapterprovider.Result{
+			Usage: adapteropenai.Usage{
+				PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
+				PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
+				CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+			},
 
-				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
-			}, &anthropic.ExecuteError{
-				Status:  http.StatusInternalServerError,
-				Code:    "internal_error",
-				Message: "anthropic collect provider requires a collector event writer", Cause: nil,
-			}
+			FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+		}
+		executeErr := &anthropic.ExecuteError{
+			Status:  http.StatusInternalServerError,
+			Code:    "internal_error",
+			Message: "anthropic collect provider requires a collector event writer", Cause: nil,
+		}
+		return result, executeErr
 	}
 	// Register this outbound Anthropic call in the egress registry so
 	// the daemon reload deadline can force-close a wedged HTTP
@@ -360,16 +395,21 @@ func (s *Server) executeAnthropicPreparedStream(
 	if prepared.NativeIngress {
 		nativeWriter, ok := writer.(*nativeAnthropicStreamWriter)
 		if !ok || nativeWriter == nil {
-			return adapterprovider.Result{
-					Usage: adapteropenai.
-						Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+			result := adapterprovider.Result{
+				Usage: adapteropenai.Usage{
+					PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
+					PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
+					CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+				},
 
-					FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
-				}, &anthropic.ExecuteError{
-					Status:  http.StatusInternalServerError,
-					Code:    "internal_error",
-					Message: "anthropic native stream path requires a native response writer", Cause: nil,
-				}
+				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+			}
+			executeErr := &anthropic.ExecuteError{
+				Status:  http.StatusInternalServerError,
+				Code:    "internal_error",
+				Message: "anthropic native stream path requires a native response writer", Cause: nil,
+			}
+			return result, executeErr
 		}
 		return s.executeAnthropicPreparedStreamNative(ctx, prepared, nativeWriter)
 	}
