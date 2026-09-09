@@ -21,6 +21,8 @@ previous durability and crash-recovery tasks.
   evidence table determines inclusion.
 - Performance takes priority over durable Clyde-owned caches and summaries.
   Recent derived state may be lost or rebuilt after termination.
+- This release is a data-format hard cut. Operators run `clyde daemon hard-reset`
+  once after updating. No old-data migration or compatibility support is required.
 - Do not add file/directory sync, journals, backup generations, transactional
   checkpoint readers, delivery IDs, collection epochs, or crash tests.
 - Keep provider-owned artifacts read-only. Preserve normal conversation content,
@@ -42,6 +44,7 @@ previous durability and crash-recovery tasks.
 | Task | Deliverable | Depends on |
 | --- | --- | --- |
 | 1 | Independent semantic opt-ins and configuration hard cut | None |
+| 1B | Clyde-only database reset, service removal, and native reinstall | 1 |
 | 2 | Less frequent missing-engine retries and no repeated warning flood | 1 |
 | 3 | Correct remote workspace parsing | None |
 | 4 | Shared cached Cursor discovery | 3 |
@@ -49,7 +52,7 @@ previous durability and crash-recovery tasks.
 | 6 | Incremental metrics reads and ordinary checkpoint writes | None |
 | 7 | Bounded semantic preparation and evidence for repeated work | 1, 2, 5 |
 | 8 | Passive semantic and listener status | 1, 2 |
-| 9 | Matched measurements, regression checks, and breaking-change PR | 1-8 |
+| 9 | Matched measurements, regression checks, and breaking-change PR | 1-8 and 1B |
 
 Tasks 3-6 can proceed independently of semantic-engine installation.
 No receiver protocol project is a prerequisite for this change.
@@ -114,6 +117,91 @@ search intent. `UsesEngine()` remains their logical OR. Both zero values are off
 - [ ] Run `go test ./internal/config ./internal/cli/daemon ./internal/daemon`,
   targeted live configuration tests, and `make check`. Commit as
   `Make semantic ingestion and search independent opt-ins`.
+
+### Task 1B: Add the operator hard-reset command
+
+**Modify:** [Native service deploy](../../../internal/deploy/deploy.go),
+[deploy tests](../../../internal/deploy/deploy_test.go),
+[macOS service template](../../../internal/deploy/templates/macos.plist.in),
+[Linux service template](../../../internal/deploy/templates/systemd.service.in),
+[daemon operation registry](../../../internal/clispec/daemon_ops.go), its registry
+registration, and existing state-path owners.
+**Create:** `internal/daemon/hard_reset.go`, `internal/daemon/hard_reset_test.go`,
+and `internal/clispec/daemon_hard_reset.go`.
+
+**Contract:** `clyde daemon hard-reset` is a CLI operator action in the new binary.
+It stops/unregisters Clyde, deletes its databases and derived index state,
+preserves configuration, and calls the existing Go service installer. It does
+not reset LMS or run a hook installer. Do not execute it on the user's machine
+while implementing or testing this task.
+
+- [ ] Add the CLI operation to the existing registry with a description stating
+  that local Clyde database contents are deleted. Keep it out of the MCP surface.
+  The command must not construct normal database stores or request the old daemon
+  to interpret incompatible database contents before it can reset them.
+- [ ] Build one typed inventory from current path constructors. Read and validate
+  the preserved configuration before teardown; never rewrite it. Include all
+  current and known retired Clyde database paths, without opening their schemas:
+
+  | Target | Existing owner/resolver |
+  | --- | --- |
+  | Capture SQLite database and `-wal`, `-shm`, `-journal` | `cfg.MITM.CaptureStore.DBPath`, resolved by configuration defaults |
+  | Conversation records and append offsets | Conversation index's `conversation-index.json` under `config.GlobalCacheDir()` |
+  | Metrics summaries and own `.lock`/`.tmp` | `metricsRollupPath()` |
+  | Metrics offset checkpoint and own `.tmp` | `metricsRollupCheckpointPath()` |
+  | Stale Clyde runtime sockets/locks, after shutdown | Existing daemon/supervisor runtime path constructors |
+
+  Keep filename ownership in those packages; expose their path functions where
+  needed instead of creating a second list of copied default directories. Any
+  new database introduced by this change must join the same reset inventory.
+
+- [ ] Enforce the requested boundary with exact owned targets. Never delete a
+  repository tree, broad `*.db` matches, or an entire app state/cache directory.
+  Preserve config, referenced secrets/instructions, CA material, logs, exports,
+  raw provider stores, and sibling applications even if paths share a parent.
+  Resolve configured paths using the same roots as the daemon. Reject a target
+  outside Clyde ownership or one resolving into protected data before teardown.
+- [ ] Add service removal to the native deploy package, reusing its resolved
+  service config, platform runner, and templates. On macOS, boot out and remove
+  only Clyde's LaunchAgent. On Linux, stop/disable and remove only Clyde's user
+  unit, then run the user service manager reload. Missing registration is already
+  unregistered; other errors stop the reset.
+- [ ] Stop the identified Clyde supervisor and workers, including draining old
+  workers, before deleting their files. Prevent service-manager respawn first.
+  Use existing process ownership/status helpers and exact executable/service
+  identity. Do not use `pkill` or a substring match for `clyde`.
+- [ ] Delete each inventoried database, sidecar, and derived state file. Missing
+  files are normal. Other deletion errors name the failed target and stop before
+  installation. Do not add backups, SQL migrations, or rollback machinery.
+- [ ] Call `deploy.RunFromEnv` with `reloadOnly=false` after removal. Reuse its
+  native install branch; do not invoke `make deploy`, a shell installer, package
+  installation, or `clyde install hooks`. Resolve the current executable and
+  ensure the installer registers that updated binary, not another version supplied
+  by a stale environment override. Keep installation and reset on the same
+  resolved configuration/data roots.
+- [ ] Update the native templates to retain supported root overrides in the
+  service environment. They currently emit only `HOME` and `PATH`; without the
+  overrides, the reinstalled daemon could read a different config or data tree.
+  Test that the launched fixture daemon resolves the same preserved config and
+  reset roots, including nondefault XDG locations.
+- [ ] Report removal results and the newly installed daemon status. A failed
+  native install leaves the data reset and reports the failure; it does not
+  restore old data or claim that Clyde is running. A rerun may finish the install.
+- [ ] Test the full command with real temporary data files and a recording
+  service-manager runner around the actual Go installer. Seed old database bytes
+  that the new store cannot decode, all sidecars, index/metrics data, and protected
+  config/credential/CA/log/provider/LMS/sibling-repo sentinels. Assert service
+  teardown precedes deletion and native installation follows it. Assert old
+  data is gone and protected bytes are unchanged.
+- [ ] Test macOS and Linux command selection, an already absent service/database,
+  supported custom Clyde roots, rejected outside-scope targets, and successful
+  fresh store creation after native installation. This tests the requested
+  destructive boundary, not power-loss or rollback behavior.
+- [ ] Assert reset makes no LMS service or administration calls. When the fixture
+  config explicitly enables ingestion/search, normal traffic from the reinstalled
+  Clyde is permitted; neither LMS data nor collection registration is reset.
+- [ ] Run reset, deploy, CLI registry, and isolated daemon tests plus `make check`.
+  Commit as `Add Clyde-only hard reset through the native service installer`.
 
 ### Task 2: Reduce the reported missing-engine retry loop
 
@@ -238,7 +326,7 @@ connection pool, row-change feed, or generic discovery protocol.
 and the current daemon startup wiring.
 
 **Contract:** Extend the existing refresh owner and cache. No new generations,
-epochs, scheduler, durability helper, or persistence format.
+epochs, scheduler, or durability helper. Old formats need no compatibility layer.
 
 - [ ] Make cached listing/status reads passive. Keep explicit `Refresh` and the
   existing single-flight waiter behavior. Reuse request-resolution tests for
@@ -246,7 +334,8 @@ epochs, scheduler, durability helper, or persistence format.
 - [ ] Carry a changed-result flag from scanning so an unchanged pass skips cache
   encoding and writing. Account for records, metadata, removed sources, and
   saved append progress. Both synchronous and background paths use the same rule.
-- [ ] Keep the existing cache format and ordinary writer. Do not add sync calls,
+- [ ] Use the ordinary cache writer and initialize current-format state after
+  the required operator reset. Do not add old-format readers or migrations. Do not add sync calls,
   backups, transaction selectors, or failure-injection hooks. Do not repeat a
   source scan merely to obtain stronger persistence guarantees.
 - [ ] Reuse existing complete-record offsets for normal transcript appends.
@@ -254,7 +343,8 @@ epochs, scheduler, durability helper, or persistence format.
   from already-decoded records rather than rereading an unchanged parent prefix.
   Reset the source on ordinary truncation or detected replacement.
 - [ ] Do not add prefix integrity hashes or serialized continuation journals.
-  Retain existing startup behavior when saved cache/progress cannot be used.
+  Later starts can use current-format cache/progress or rebuild it. Pre-upgrade
+  data remains unsupported.
 - [ ] Remove lifecycle cancellation suppression in the background refresh path.
   Register and join the existing worker through the existing daemon lifecycle.
   Change parser cancellation boundaries only where required to stop that work;
@@ -340,7 +430,7 @@ Reduce preparation size without adding durable delivery or outage machinery.
 
 **Modify:** [Daemon status](../../../internal/daemon/status.go),
 [control server](../../../internal/daemon/control_server.go),
-[operation registry](../../../internal/clispec/daemon_ops.go),
+the operation registry used by Task 1B,
 [CLI renderer](../../../internal/cli/daemon/daemon.go), and existing control
 protocol/status tests as needed.
 
@@ -386,6 +476,9 @@ only where implemented behavior changes.
 - [ ] Run `make check`, `make test`, focused race tests where shared state changed,
   and the scoped isolated live cases. Do not add power-loss, corruption,
   interrupted-write, or extended outage combinations.
+- [ ] Include the hard-reset test on incompatible old local data. New stores
+  initialize from empty after reset; do not add a migration or compatibility gate
+  for pre-upgrade databases. Keep reset execution isolated from the real system.
 - [ ] Update behavior documentation without copying dated measurements into it.
   Do not claim durable writes, guaranteed recovery, or exactly-once delivery.
 - [ ] Prepare the implementation PR through the repository workflow. Verify all
@@ -396,6 +489,10 @@ only where implemented behavior changes.
   > independently to `false`. Set `search_enabled = true` to search existing
   > indexed conversations without ingestion. The removed `enabled` key causes a
   > configuration error, even when false. Existing TOML is not migrated automatically.
+  > After updating and making the required configuration-key edits, run
+  > `clyde daemon hard-reset` once. It deletes Clyde's local databases and derived
+  > index state, preserves `config.toml`, and reinstalls Clyde through the native
+  > Go service routine. Old Clyde-local database formats are unsupported. LMS is not reset.
 
   State measured changes and which ordinary cases passed. Installation and
   deployment require separate authorization.

@@ -25,6 +25,7 @@ processed again after termination. Provider-owned conversations remain read-only
 | Large semantic preparation batches | Four submissions contained 954,175 document records. Duplicate work was not established. | Bound preparation; investigate actual overlap before proposing deduplication changes. |
 | Missing profiling/port visibility in status | Reported in the issue; status lacks a complete listener view. | Show existing effective settings and bound addresses. |
 | Ordinary configuration changes and daemon reloads | Existing supported user operations. | Keep current lifecycle behavior and stop replaced workers normally. |
+| Updating across this approved data-format break | The operator will run a one-time reset after updating. | Discard old Clyde databases and derived index state; preserve configuration and reinstall Clyde's service. |
 | Power loss, system crash, torn writes, corrupt checkpoints, or lost delivery acknowledgements | No incident evidence in this workstream. | Exclude recovery guarantees and fault-injection work. |
 | Extended engine failure and transport failure combinations | Only the missing-engine retry loop was reported. | Do not build a general outage-recovery framework. |
 
@@ -79,10 +80,82 @@ The implementation PR description must include:
 > independently to `false`. Set `search_enabled = true` to search existing
 > indexed conversations without ingestion. The removed `enabled` key causes a
 > configuration error, even when false. Existing TOML is not migrated automatically.
+> After updating and making the required configuration-key edits, run
+> `clyde daemon hard-reset` once. This deletes Clyde's local databases and derived
+> index state while preserving `config.toml`. Old Clyde-local database formats
+> are unsupported; LMS is not reset.
 
 Default sandbox configuration must also leave both operations off. Engine-backed
 sandbox testing requires explicit opt-in. Tests for omission must actually omit
 the fields rather than writing explicit false values.
+
+## Reset Clyde after the breaking update
+
+Provide the operator command `clyde daemon hard-reset` in the new version.
+It destroys Clyde-owned database contents and rebuildable index/metrics state.
+The operator runs it once after updating; old stored data is not migrated or
+expected to work. This document does not claim the command is implemented yet.
+
+The command performs this sequence:
+
+1. Read configuration and resolve Clyde's service registration and exact data
+   targets without opening any old database. Validate the new configuration
+   before teardown; a removed configuration key must be corrected manually.
+2. Stop and unregister Clyde's service so the service manager cannot respawn it.
+   Stop its supervisor and worker processes, including a draining old worker,
+   and wait until they no longer hold the data files.
+3. Delete every Clyde-owned database in the reset inventory, its SQLite sidecars,
+   and the derived index/metrics files that could retain incompatible state.
+4. Re-run the existing native Go daemon service installer using the updated
+   executable. Recreate Clyde's registration and start the daemon from the
+   preserved configuration. Do not download, rebuild, or replace the binary.
+5. Report the deleted targets and the fresh daemon's resulting status.
+
+Reuse the Go deploy path used by `clyde daemon deploy`, not a shell installer or
+`clyde install hooks`. The hook installer writes other applications' settings
+and is outside this command's scope. Factor service removal into the same native
+deploy package so install and reset share service paths and platform handling.
+The reinstalled service must resolve the same preserved config and Clyde data
+roots. Persist supported root overrides in its native service environment;
+preserving the file is insufficient if the new daemon reads a different path.
+
+On macOS, remove only Clyde's launchd job and its own LaunchAgent registration.
+On Linux, stop/disable only Clyde's user service, remove its unit registration,
+and refresh the user service manager. The relevant Clyde service registration
+files remain in scope even though the OS stores them outside Clyde's data folder.
+Never use a broad process-name match or remove another application's service.
+
+The typed reset inventory includes the capture database at the resolved Clyde
+capture-store path, its `-wal`, `-shm`, and `-journal` files, the conversation index
+and saved append offsets, and the metrics rollup/checkpoint with their own
+temporary or lock companions. The current source has one writable SQLite store;
+new Clyde-owned stores and known retired database paths must join this same
+inventory. Deletion uses paths, not an attempt to decode an old database schema.
+
+Use the existing Clyde path resolvers, including supported XDG and storage-path
+overrides. Remove exact owned files, not entire state, cache, config, runtime,
+or repository directories. If a target resolves outside Clyde's owned scope,
+reject that target before teardown rather than widening deletion scope. Never
+follow a deletion path into another application's data. These ownership checks
+enforce the command's requested boundary; they do not add recovery machinery.
+
+Preserve `config.toml` byte for byte, along with credentials, CA certificates and
+keys, raw logs, exported transcripts, provider settings, and provider databases.
+Do not touch repository checkouts or sibling tools such as `desktop-via-clyde`.
+Remove only Clyde's stale runtime socket/lock files after its processes stop.
+Do not wipe shared parent directories or the installed executable.
+
+Do not stop, unregister, reinstall, delete, reset, or migrate LMS, its files,
+collections, or registration. The reset path makes no LMS administration calls.
+The user explicitly permits the restarted Clyde daemon to resume ordinary
+ingestion/search traffic enabled by the preserved configuration. That normal
+traffic does not authorize an LMS reset or collection deletion.
+
+Missing reset targets are already cleared. A teardown, deletion, or install
+failure returns the failed step and does not claim completion. There are no
+backups, compatibility readers, data migrations, or rollback procedures. After
+deletion, an install failure may leave Clyde stopped; rerunning the command can
+finish installation.
 
 ## Stop repeated missing-engine attempts
 
@@ -165,13 +238,14 @@ Do not add cryptographic prefix verification, serialized parser journals, or
 tests for arbitrary historical mutation hidden behind unchanged file metadata.
 
 Write the conversation cache only when records or saved progress change.
-Keep the existing cache format and ordinary write behavior. Do not add file sync,
+Use ordinary writes; pre-upgrade formats need no compatibility support. Do not add file sync,
 directory sync, backup generations, transaction manifests, or durability helpers.
 A fresh in-memory result must not require a durability guarantee.
 
 Use the current lifecycle to cancel and join refresh work during ordinary reload
-or shutdown. Do not add a generation handoff protocol. On startup, use the existing
-cache when readable and the existing rebuild behavior otherwise.
+or shutdown. Do not add a generation handoff protocol. After the required upgrade
+reset, initialize current-format state. Later starts use that cache when readable
+and rebuild it otherwise; do not add readers for pre-upgrade formats.
 
 ## Read only new metrics log bytes
 
@@ -246,6 +320,8 @@ reported problem is visibility.
 | Normal messages, metadata changes, and WAL writes | Updated conversations appear on the next normal refresh. |
 | Appended transcript and partial final line | New complete records appear without a second prefix scan. |
 | Ordinary reload/configuration change | Replaced workers stop and the new settings take effect. |
+| Operator hard reset after updating | Clyde stops and unregisters before deletion; all inventoried databases/sidecars and derived state are removed, configuration is unchanged, and the native installer starts fresh Clyde state. |
+| Hard-reset ownership | LMS, provider stores, sibling tools, credentials, certificates, logs, exports, and repositories remain untouched by reset; normal configured traffic may resume after install. |
 | New metrics records and routine rotation | Read new bytes and preserve calculations across ordinary passes. |
 | No new metrics data and no expired output | No history reread, checkpoint rewrite, or retention rewrite. |
 | Large ordinary semantic backlog | Lower peak preparation memory without losing expected conversation content. |
@@ -257,4 +333,5 @@ semantic batch sizes. Keep raw-operation and returned-content controls.
 
 Power-loss, system-crash, arbitrary corruption, interrupted-write, lost-acknowledgement,
 and rare transport-combination tests are excluded. Do not expand the scope because
-such cases are imaginable. No installation or deployment is authorized here.
+such cases are imaginable. Reset tests use isolated fixtures; no live reset,
+installation, or deployment is authorized by this planning task.
