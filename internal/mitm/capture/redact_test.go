@@ -157,6 +157,56 @@ func TestRedactHTTPHandlesJSONLines(t *testing.T) {
 	}
 }
 
+func TestRedactHTTPFailsClosedForSensitiveStructuredScalarValues(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "top-level string", body: `"access_token=top-level-secret"`},
+		{name: "JSON Lines string", body: "\"refresh_token=json-lines-secret\"\n{\"safe\":\"kept\"}"},
+		{name: "object string", body: `{"safe":"api_key=object-secret"}`},
+		{name: "array string", body: `["account_id=array-secret"]`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, redacted := RedactHTTP(nil, []byte(testCase.body))
+			if string(redacted) != redactedValue {
+				t.Fatalf("redacted body = %q, want fail-closed marker", redacted)
+			}
+		})
+	}
+}
+
+func TestRedactHTTPFailsClosedForDuplicateJSONScalarValues(t *testing.T) {
+	body := []byte(`{"safe":"api_key=first-secret","safe":"kept"}`)
+	_, redacted := RedactHTTP(nil, body)
+	if string(redacted) != redactedValue {
+		t.Fatalf("duplicate JSON scalar body = %q, want fail-closed marker", redacted)
+	}
+}
+
+func TestRedactHTTPScansJSONScalarsAfterFieldRedaction(t *testing.T) {
+	body := []byte(`{"token":"field-secret","safe":"api_key=remaining-secret"}`)
+	_, redacted := RedactHTTP(nil, body)
+	if string(redacted) != redactedValue {
+		t.Fatalf("field-redacted JSON body = %q, want fail-closed marker", redacted)
+	}
+}
+
+func TestRedactHTTPFailsClosedForStructuredSSEJSONScalars(t *testing.T) {
+	tests := [][]byte{
+		[]byte("data: {\"safe\":\"api_key=sse-secret\"}\n\n"),
+		[]byte("data: {\"outer\":[\"account_id=nested-secret\"]}\n\n"),
+		[]byte("data: {\"label api_key=name-secret\":true}\n\n"),
+	}
+	for _, body := range tests {
+		_, redacted := RedactHTTP(nil, body)
+		if string(redacted) != redactedValue {
+			t.Fatalf("structured SSE body = %q, want fail-closed marker", redacted)
+		}
+	}
+}
+
 func TestRedactHTTPScansNonDataSSELinesAfterFrameRedaction(t *testing.T) {
 	tests := []struct {
 		name string
@@ -211,6 +261,17 @@ func TestRedactHTTPRedactsScalarSSEData(t *testing.T) {
 	if bytes.Contains(redacted, []byte("scalar-sensitive-marker")) ||
 		!bytes.Contains(redacted, []byte(`"[REDACTED]"`)) {
 		t.Fatalf("scalar SSE data was not redacted: %s", redacted)
+	}
+}
+
+func TestRedactHTTPRedactsEscapedCredentialScalarSSEData(t *testing.T) {
+	headers := http.Header{"Authorization": {"Bearer scalar-sensitive-value"}}
+	body := []byte("event: response.future\ndata: \"\\u0073calar-sensitive-value\"\n\n")
+	_, redacted := RedactHTTP(headers, body)
+	if bytes.Contains(redacted, []byte("scalar-sensitive-value")) ||
+		bytes.Contains(redacted, []byte(`\u0073calar-sensitive-value`)) ||
+		!bytes.Contains(redacted, []byte(`"[REDACTED]"`)) {
+		t.Fatalf("escaped credential scalar survived: %q", redacted)
 	}
 }
 
@@ -402,12 +463,24 @@ func TestRedactHTTPRedactsClientSecretFormField(t *testing.T) {
 func TestRedactHTTPRedactsEscapedCredentialEcho(t *testing.T) {
 	headers := http.Header{"Authorization": {"Bearer secret"}}
 	_, redacted := RedactHTTP(headers, []byte(`{"echo":"\u0073ecret","safe":"kept"}`))
-	var decoded map[string]string
-	if err := json.Unmarshal(redacted, &decoded); err != nil {
-		t.Fatalf("decode redacted body: %v", err)
+	if string(redacted) != redactedValue {
+		t.Fatalf("escaped echo redaction = %q", redacted)
 	}
-	if decoded["echo"] != redactedValue || decoded["safe"] != "kept" {
-		t.Fatalf("escaped echo redaction = %#v", decoded)
+}
+
+func TestRedactHTTPFailsClosedForEscapedCredentialInJSONKey(t *testing.T) {
+	headers := http.Header{"Authorization": {"Bearer unicode-key-secret"}}
+	_, redacted := RedactHTTP(headers, []byte(`{"\u0075nicode-key-secret":"value","safe":"kept"}`))
+	if string(redacted) != redactedValue {
+		t.Fatalf("escaped credential key redaction = %q", redacted)
+	}
+}
+
+func TestRedactHTTPPreservesEscapedSafeJSONKey(t *testing.T) {
+	body := []byte(`{"\u0073afe-key":"kept"}`)
+	_, redacted := RedactHTTP(nil, body)
+	if !bytes.Equal(redacted, body) {
+		t.Fatalf("safe escaped key changed: got %q want %q", redacted, body)
 	}
 }
 
