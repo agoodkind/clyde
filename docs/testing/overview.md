@@ -6,9 +6,13 @@ daemon stays untouched.
 
 ## Overview
 
-The `live` build tag gates the suite, so an ordinary test run never starts a
-daemon. Each test boots a throwaway daemon, drives its adapter or MITM listeners,
+The `live` build tag gates the adapter and MITM suite. Each test boots a
+throwaway daemon, drives its adapter or MITM listeners,
 and shuts it down. Every test confirms the production daemon survived unchanged.
+
+The ordinary reset tests also start an isolated supervisor and worker. Recording
+service managers exercise the native installer without contacting launchd or
+systemd, and all reset data and service registrations stay under temporary roots.
 
 ## Run the suite
 

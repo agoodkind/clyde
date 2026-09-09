@@ -76,6 +76,7 @@ type config struct {
 	LaunchdDomain   string
 	SystemdUnit     string
 	SystemdUserUnit string
+	Environment     []field
 }
 
 type field struct {
@@ -92,6 +93,7 @@ type fileSystem interface {
 	writeFile(path string, body []byte, perm os.FileMode) error
 	mkdirAll(path string, perm os.FileMode) error
 	pathExists(path string) (bool, error)
+	remove(path string) error
 }
 
 type runner interface {
@@ -241,6 +243,7 @@ func loadConfigFromEnv(targetPlatform platform, lookup func(string) (string, boo
 		LaunchdDomain:   "",
 		SystemdUnit:     "",
 		SystemdUserUnit: "",
+		Environment:     rootEnvironment(lookup),
 	}
 
 	switch targetPlatform {
@@ -267,7 +270,7 @@ func loadConfigFromEnv(targetPlatform platform, lookup func(string) (string, boo
 		}
 		unitPath := lookupString(lookup, "SYSTEMD_USER_UNIT")
 		if unitPath == "" {
-			unitPath = filepath.Join(homeDir, ".config", "systemd", "user", unit)
+			unitPath = systemdUnitPath(cfg, unit)
 		}
 		cfg.SystemdUnit = unit
 		cfg.SystemdUserUnit = unitPath
@@ -701,6 +704,7 @@ func (executor *executor) renderTemplate(template string, label string) []byte {
 		"@@HOME@@", executor.config.Home,
 		"@@LABEL@@", label,
 		"@@LOG_PATH@@", executor.config.LogPath,
+		"@@ROOT_ENV@@", executor.renderRootEnvironment(),
 	)
 	return []byte(replacer.Replace(template))
 }
@@ -758,6 +762,15 @@ func writeCommandOutput(writer io.Writer, output string) {
 }
 
 type osFileSystem struct{}
+
+func (osFileSystem) remove(path string) error {
+	slog.Debug("deploy.fs.remove", "path", path)
+	if err := os.Remove(path); err != nil {
+		slog.Warn("deploy.fs.remove_failed", "path", path, "err", err)
+		return fmt.Errorf("remove service file %s: %w", path, err)
+	}
+	return nil
+}
 
 func (osFileSystem) readFile(path string) ([]byte, error) {
 	body, err := os.ReadFile(path)

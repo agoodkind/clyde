@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -218,7 +219,7 @@ func newDeployFixture(t *testing.T, targetPlatform platform) *deployFixture {
 	switch targetPlatform {
 	case platformDarwin:
 		config.LaunchdLabel = defaultLaunchdLabel
-		config.LaunchdDomain = "gui/501"
+		config.LaunchdDomain = "gui/" + strconv.Itoa(os.Getuid())
 		config.LaunchdPlist = filepath.Join(homeDir, "Library", "LaunchAgents", defaultLaunchdLabel+".plist")
 	case platformLinux:
 		config.SystemdUnit = defaultSystemdUnit
@@ -308,6 +309,12 @@ func (fs *fakeFileSystem) mkdirAll(path string, perm os.FileMode) error {
 
 func (fs *fakeFileSystem) pathExists(path string) (bool, error) {
 	return fs.exists[path], nil
+}
+
+func (fs *fakeFileSystem) remove(path string) error {
+	delete(fs.exists, path)
+	delete(fs.files, path)
+	return nil
 }
 
 func (fs *fakeFileSystem) wrotePath(path string) bool {

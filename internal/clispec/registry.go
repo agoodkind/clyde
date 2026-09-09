@@ -20,6 +20,7 @@ func NewConversationRegistry() *Registry {
 	Register(reg, daemonFingerprintOp())
 	Register(reg, daemonReloadOp())
 	Register(reg, daemonDeployOp())
+	Register(reg, daemonHardResetOp())
 	Register(reg, mcpServeOp())
 	Register(reg, daemonRunOp())
 	Register(reg, daemonWorkerOp())
