@@ -66,6 +66,19 @@ type discoveredArtifact struct {
 	IsBackground     bool
 	LegacyTab        cursorstore.LegacyChatTab
 	WorkspaceRoot    string
+	TranscriptHeader *cursorjsonl.TranscriptHeader
+}
+
+func (artifact discoveredArtifact) readTranscriptHeader() (cursorjsonl.TranscriptHeader, error) {
+	if artifact.TranscriptHeader != nil {
+		return *artifact.TranscriptHeader, nil
+	}
+	header, err := cursorjsonl.ScanHeader(artifact.Path)
+	if err != nil {
+		slog.Warn("providers.cursor.parser.scan_header_failed", "concern", concern, "path", artifact.Path, "err", err)
+		return header, fmt.Errorf("scan cursor transcript header: %w", err)
+	}
+	return header, nil
 }
 
 // Parser discovers Cursor conversation artifacts and caches the rows needed by
@@ -124,6 +137,23 @@ func (p *Parser) Discover(ctx context.Context, prior map[string]conversation.Rec
 		return nil, err
 	}
 	candidates = append(candidates, sqliteCandidates...)
+	for i := range candidates {
+		artifact := discovered[candidates[i].Path]
+		previous, ok := prior[candidates[i].Path]
+		if !ok || artifact.Kind != discoveredKindJSONL {
+			continue
+		}
+		previousParent := ""
+		if previous.Lineage != nil {
+			previousParent = previous.Lineage.ParentNativeID
+		}
+		candidates[i].MetadataChanged = previous.Origin != artifact.Origin || previousParent != artifact.ParentConversationID
+		if artifact.TranscriptHeader != nil {
+			header := artifact.TranscriptHeader
+			title := firstNonEmptyString(truncateTitle(header.FirstUserText), untitledCursorConversationText)
+			candidates[i].MetadataChanged = candidates[i].MetadataChanged || previous.Title != title || previous.TitleUncertain != header.FirstUserTextUncertain
+		}
+	}
 
 	sort.SliceStable(candidates, func(i int, j int) bool {
 		return candidates[i].Path < candidates[j].Path
@@ -179,7 +209,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	}
 	switch discovered.Kind {
 	case discoveredKindJSONL:
-		header, err := cursorjsonl.ScanHeader(path)
+		header, err := discovered.readTranscriptHeader()
 		if err != nil {
 			slog.Warn("providers.cursor.parser.scan_header_failed", "concern", concern, "path", path, "err", err)
 			return emptyRecord(), false
@@ -343,7 +373,10 @@ func (p *Parser) discoverJSONL(
 		slog.WarnContext(ctx, "providers.cursor.parser.discover_transcripts_failed", "concern", concern, "err", err)
 		return nil, fmt.Errorf("discover cursor transcript files: %w", err)
 	}
-	resumeLinks := p.buildResumeLinkIndex(ctx, files)
+	resumeLinks, err := p.buildResumeLinkIndex(ctx, files)
+	if err != nil {
+		return nil, err
+	}
 	unexpectedResumeLinks := 0
 
 	candidates := make([]conversation.ScanCandidate, 0, len(files))
@@ -354,8 +387,9 @@ func (p *Parser) discoverJSONL(
 			continue
 		}
 		candidates = append(candidates, conversation.ScanCandidate{
-			Path:     file.Path,
-			Selector: "",
+			MetadataChanged: false,
+			Path:            file.Path,
+			Selector:        "",
 			Stamp: conversation.FileStamp{
 				Size:  info.Size(),
 				Mtime: info.ModTime(),
@@ -386,6 +420,11 @@ func (p *Parser) discoverJSONL(
 		artifact.ProjectKey = file.ProjectKey
 		artifact.Origin = origin
 		artifact.ParentConversationID = parentConversationID
+		p.mu.Lock()
+		if cached, ok := p.resumeLinks[file.Path]; ok {
+			artifact.TranscriptHeader = &cached.header
+		}
+		p.mu.Unlock()
 		discovered[file.Path] = artifact
 		seenConversationIDs[file.ConversationID] = true
 	}
@@ -486,9 +525,10 @@ func discoverComposersForRoot(
 			}
 		}
 		candidates = append(candidates, conversation.ScanCandidate{
-			Path:     path,
-			Selector: "",
-			Stamp:    stamp,
+			MetadataChanged: false,
+			Path:            path,
+			Selector:        "",
+			Stamp:           stamp,
 		})
 		priorRecord, hasPriorRecord := prior[path]
 		var artifact discoveredArtifact
@@ -539,9 +579,10 @@ func discoverLegacyForEntry(
 			continue
 		}
 		candidates = append(candidates, conversation.ScanCandidate{
-			Path:     path,
-			Selector: "",
-			Stamp:    legacyScanStamp(data),
+			MetadataChanged: false,
+			Path:            path,
+			Selector:        "",
+			Stamp:           legacyScanStamp(data),
 		})
 		var artifact discoveredArtifact
 		artifact.Kind = discoveredKindLegacy

@@ -24,7 +24,7 @@ func TestScanRecordsMapsSchemaVersionOneRootAndSubagent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, ok := New().ScanRecords(conversation.MultiConversationScan{
+	result, ok := New().ScanRecords(t.Context(), conversation.MultiConversationScan{
 		Candidate: conversation.ScanCandidate{
 			Path:  path,
 			Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
@@ -152,7 +152,7 @@ func TestScanRecordsRequiresSchemaVersionOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, ok := New().ScanRecords(conversation.MultiConversationScan{
+	result, ok := New().ScanRecords(t.Context(), conversation.MultiConversationScan{
 		Candidate:    conversation.ScanCandidate{Path: path, Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()}},
 		PriorRecords: nil,
 		StartOffset:  0,
@@ -383,7 +383,7 @@ func scanPath(
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, ok := New().ScanRecords(conversation.MultiConversationScan{
+	result, ok := New().ScanRecords(t.Context(), conversation.MultiConversationScan{
 		Candidate: conversation.ScanCandidate{
 			Path:     path,
 			Selector: "",

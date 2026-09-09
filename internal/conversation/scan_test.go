@@ -40,7 +40,7 @@ func (*recordingMultiScanParser) Stream(string, LoadOptions) iter.Seq2[transcrip
 	return func(func(transcript.Message, error) bool) {}
 }
 
-func (p *recordingMultiScanParser) ScanRecords(input MultiConversationScan) (MultiConversationScanResult, bool) {
+func (p *recordingMultiScanParser) ScanRecords(_ context.Context, input MultiConversationScan) (MultiConversationScanResult, bool) {
 	p.scans = append(p.scans, input)
 	return p.result, p.found
 }

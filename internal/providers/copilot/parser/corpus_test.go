@@ -22,7 +22,7 @@ func TestLocalCorpusReplay(t *testing.T) {
 	}
 	conversationCount := 0
 	for _, candidate := range candidates {
-		result, ok := parser.ScanRecords(conversation.MultiConversationScan{
+		result, ok := parser.ScanRecords(t.Context(), conversation.MultiConversationScan{
 			Candidate:    candidate,
 			PriorRecords: nil,
 			StartOffset:  0,

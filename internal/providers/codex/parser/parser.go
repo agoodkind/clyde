@@ -152,9 +152,10 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 	out := make([]conversation.ScanCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		out = append(out, conversation.ScanCandidate{
-			Path:     candidate.Path,
-			Selector: "",
-			Stamp:    conversation.FileStamp{Size: candidate.Stamp.Size, Mtime: candidate.Stamp.Mtime},
+			MetadataChanged: false,
+			Path:            candidate.Path,
+			Selector:        "",
+			Stamp:           conversation.FileStamp{Size: candidate.Stamp.Size, Mtime: candidate.Stamp.Mtime},
 		})
 	}
 	return out, nil

@@ -137,9 +137,10 @@ func (Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([
 			return nil
 		}
 		out = append(out, conversation.ScanCandidate{
-			Path:     path,
-			Selector: "",
-			Stamp:    conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+			MetadataChanged: false,
+			Path:            path,
+			Selector:        "",
+			Stamp:           conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
 		})
 		return nil
 	})
