@@ -193,6 +193,28 @@ func TestRawResponsesCompactionRejectsIncompleteToolPairs(t *testing.T) {
 	}
 }
 
+func TestRawResponsesCompactionRejectsDuplicateCallIDsAcrossTurns(t *testing.T) {
+	body := []byte(`{"model":"gpt-native","input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"old user"}]},
+		{"type":"function_call","name":"old","arguments":"{}","call_id":"call-1"},
+		{"type":"function_call_output","call_id":"call-1","output":"old result"},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},
+		{"type":"function_call","name":"recent","arguments":"{}","call_id":"call-1"},
+		{"type":"function_call_output","call_id":"call-1","output":"recent result"},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent assistant"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}
+	]}`)
+	settings := RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	transformed, transformer := PrepareRawResponsesCompaction(rawCompactionRequest(t, body), settings)
+	if transformer != nil || !bytes.Equal(transformed.Body, body) {
+		t.Fatalf("duplicate call IDs did not fail open: %s", transformed.Body)
+	}
+}
+
 func TestRawResponsesCompactionFailsOpenForMetadataAndMalformedRemovedItems(t *testing.T) {
 	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"future_item","value":1},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
 	settings := RawResponsesCompactionSettings{
@@ -311,7 +333,7 @@ func TestRawResponsesCompactionPreservesInterveningSSEFrames(t *testing.T) {
 	heartbeatIndex := bytes.Index(body, []byte(heartbeat))
 	interveningIndex := bytes.Index(body, []byte("response.future"))
 	completedIndex := bytes.Index(body, []byte("response.completed"))
-	if itemIndex < 0 || heartbeatIndex <= itemIndex || interveningIndex <= heartbeatIndex || completedIndex <= interveningIndex {
+	if heartbeatIndex < 0 || itemIndex <= heartbeatIndex || interveningIndex <= itemIndex || completedIndex <= interveningIndex {
 		t.Fatalf("intervening SSE frame order changed: %s", body)
 	}
 }
@@ -333,6 +355,50 @@ func TestRawSSEFrameEventUsesLastField(t *testing.T) {
 	frame := []byte("event: response.future\nevent: response.completed\n\n")
 	if event := rawSSEFrameEvent(frame); event != rawCompactionSSECompleted {
 		t.Fatalf("event = %q, want %q", event, rawCompactionSSECompleted)
+	}
+}
+
+func TestRawResponsesCompactionForwardsHeartbeatAfterCandidate(t *testing.T) {
+	transformer := rawResponseTransformerForTest(t)
+	itemDone, completed := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`, 0, 10, 11)
+	heartbeat := ": keepalive\n\n"
+	upstream, writer := io.Pipe()
+	release := make(chan struct{})
+	go func() {
+		_, _ = io.WriteString(writer, itemDone)
+		_, _ = io.WriteString(writer, heartbeat)
+		<-release
+		_, _ = io.WriteString(writer, completed)
+		_ = writer.Close()
+	}()
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       upstream,
+	}
+	body := transformer.TransformResponse(response).Body
+	t.Cleanup(func() { _ = body.Close() })
+	firstFrame := make([]byte, len(heartbeat))
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(body, firstFrame)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("read heartbeat: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("heartbeat after candidate did not reach live reader")
+	}
+	if string(firstFrame) != heartbeat {
+		t.Fatalf("first downstream frame = %q, want heartbeat", firstFrame)
+	}
+	close(release)
+	remainder := readResponseBody(t, &http.Response{Body: body})
+	if !bytes.Contains(remainder, []byte("<pre-compaction-transcript>")) {
+		t.Fatalf("completed response lost transcript: %s", remainder)
 	}
 }
 

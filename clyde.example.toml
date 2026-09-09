@@ -104,7 +104,9 @@ direct_oauth = true
 # Persist the raw OpenAI-shape ingress request and the rendered reply to
 # capture.db tagged client="adapter.ingress", alongside the always-on BYOK
 # egress capture. Off by default; it roughly doubles body volume against the
-# [mitm.capture_store] retention cap. Requires the capture store to be open.
+# [mitm.capture_store] retention cap. Enabling it opens the shared capture store
+# even when MITM listeners are disabled. Adapter capture copies redact tokens,
+# account identifiers, and cookies without changing forwarded bytes.
 capture_ingress = false
 # Provider-neutral list of capability tokens to drop from the outbound provider
 # capability header on egress (anthropic-beta on the Claude path,
@@ -422,6 +424,11 @@ aliases = [{ id = "claude-haiku-4-5", advertise = true }]
 
 [mitm]
 providers = ["claude", "codex", "conductor", "cursor"]
+
+# Inject pre-compaction transcript content into Claude MITM summaries and
+# authenticated native Codex Responses summaries. Both paths use the existing
+# reorient sizing defaults when the related keys are omitted.
+reorient_summary_injection = false
 
 # sentinel = "MYKEYWORD"
 # actual_user_sentinel = "ACTUAL_USER"

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"sync/atomic"
 )
 
 type rawCompactionSSEEvent string
@@ -37,6 +38,27 @@ type rawCompactionSSEBody struct {
 	candidate  []byte
 	following  []byte
 	disabled   bool
+}
+
+type rawCompactionMutation struct {
+	mutated atomic.Bool
+}
+
+// DidMutateResponse reports whether this transformer produced tagged output.
+func (t *RawResponsesCompactionTransformer) DidMutateResponse() bool {
+	return t != nil && t.mutation != nil && t.mutation.mutated.Load()
+}
+
+// RequiresTerminalValidation reports whether recovery completion depends on a
+// successful response mutation.
+func (t *RawResponsesCompactionTransformer) RequiresTerminalValidation() bool {
+	return t != nil && t.mutation != nil
+}
+
+func (t *RawResponsesCompactionTransformer) markMutated() {
+	if t != nil && t.mutation != nil {
+		t.mutation.mutated.Store(true)
+	}
 }
 
 func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCompactionSSEBody {
@@ -121,6 +143,10 @@ func (b *rawCompactionSSEBody) handleSSEOtherFrame(frame []byte, readErr error) 
 	if len(b.candidate) > 0 {
 		if readErr != nil || !rawCompactionUnknownSSEFrameIsValid(frame) {
 			return b.failOpenSSE(frame, readErr)
+		}
+		_, _, dataCount := rawSSEFrameDataValue(frame)
+		if dataCount == 0 && rawSSEFrameIsCommentOnly(frame) {
+			return b.queueSSEBytes(frame, readErr)
 		}
 		if !rawCompactionSSEPendingFits(b.candidate, b.following, frame) {
 			return b.failOpenSSE(frame, readErr)
@@ -236,7 +262,11 @@ func rawCompactionSSEJSONFrameIsValid(frame []byte, eventName rawCompactionSSEEv
 }
 
 func rawCompactionUnknownSSEFrameIsValid(frame []byte) bool {
-	return len(frame) > 0
+	_, data, dataCount := rawSSEFrameDataValue(frame)
+	if dataCount == 0 {
+		return true
+	}
+	return json.Valid(data)
 }
 
 func (b *rawCompactionSSEBody) Close() error {
@@ -626,8 +656,18 @@ func shiftRawCompactionSSEFrames(frames []byte, previousSequence int) ([]byte, i
 			shifted = append(shifted, frame...)
 			continue
 		}
-		sequence, ok := rawCompactionSSEIntegerField(data, "sequence_number")
-		if dataCount == 0 || !ok || sequence <= lastSequence {
+		if dataCount == 0 {
+			return nil, 0, false
+		}
+		sequence, hasSequence := rawCompactionSSEIntegerField(data, "sequence_number")
+		if !hasSequence {
+			if rawCompactionSSEEventRequiresSequence(rawSSEFrameEvent(frame)) {
+				return nil, 0, false
+			}
+			shifted = append(shifted, frame...)
+			continue
+		}
+		if sequence <= lastSequence {
 			return nil, 0, false
 		}
 		mutatedSequence, ok := addRawCompactionSSESyntheticEventCount(sequence)
@@ -648,6 +688,23 @@ func addRawCompactionSSESyntheticEventCount(sequence int) (int, bool) {
 		return 0, false
 	}
 	return sequence + rawCompactionSSESyntheticEventCount, true
+}
+
+func rawCompactionSSEEventRequiresSequence(event rawCompactionSSEEvent) bool {
+	switch event {
+	case rawCompactionSSEOutputItemDone,
+		rawCompactionSSEContentPartAdded,
+		rawCompactionSSEContentPartDone,
+		rawCompactionSSEOutputTextDelta,
+		rawCompactionSSEOutputTextDone,
+		rawCompactionSSECompleted,
+		rawCompactionSSEFailed,
+		rawCompactionSSEIncomplete,
+		rawCompactionSSEError:
+		return true
+	default:
+		return false
+	}
 }
 
 func rawSSEFrameIsCommentOnly(frame []byte) bool {
@@ -695,96 +752,6 @@ func rawCompactionSSEStringField(data []byte, field string) (string, bool) {
 		return "", false
 	}
 	return value, true
-}
-
-// selectRawCompactionStart renders only a logarithmic number of suffixes when
-// enforcing a byte limit. A longer suffix starts at a lower unit index.
-func selectRawCompactionStart(
-	units []rawCompactionInterval,
-	maxBytes int,
-	targetCount int,
-	render func(start int) (string, bool),
-) (int, string, bool) {
-	firstCandidate := len(units) - targetCount
-	if maxBytes <= 0 {
-		rendered, ok := render(units[firstCandidate].start)
-		return firstCandidate, rendered, ok && strings.TrimSpace(rendered) != ""
-	}
-
-	selected := -1
-	selectedTranscript := ""
-	lower := firstCandidate
-	upper := len(units) - 1
-	for lower <= upper {
-		middle := lower + (upper-lower)/2
-		rendered, ok := render(units[middle].start)
-		if !ok || strings.TrimSpace(rendered) == "" {
-			return 0, "", false
-		}
-		if len(rendered) > maxBytes {
-			lower = middle + 1
-			continue
-		}
-		selected = middle
-		selectedTranscript = rendered
-		upper = middle - 1
-	}
-	if selected < 0 {
-		return 0, "", false
-	}
-	return selected, selectedTranscript, true
-}
-
-func appendRawCompactionAssistantContentPart(
-	item []byte,
-	contentStart int,
-	contentEnd int,
-	hasContent bool,
-	transcriptText string,
-) ([]byte, bool, bool) {
-	encodedText, ok := marshalRawCompactionString(transcriptText)
-	if !ok {
-		return item, false, false
-	}
-	part := append([]byte(`{"type":"output_text","text":`), encodedText...)
-	part = append(part, '}')
-	if hasContent {
-		content := item[contentStart:contentEnd]
-		closing := len(content) - 1
-		for closing >= 0 && (content[closing] == ' ' || content[closing] == '\t' || content[closing] == '\r' || content[closing] == '\n') {
-			closing--
-		}
-		if closing < 0 || content[closing] != ']' {
-			return item, false, false
-		}
-		hasParts := len(bytes.TrimSpace(content[1:closing])) > 0
-		replacement := make([]byte, 0, len(content)+len(part)+1)
-		replacement = append(replacement, content[:closing]...)
-		if hasParts {
-			replacement = append(replacement, ',')
-		}
-		replacement = append(replacement, part...)
-		replacement = append(replacement, content[closing:]...)
-		return replaceByteRange(item, contentStart, contentEnd, replacement), true, true
-	}
-	closing := len(item) - 1
-	for closing >= 0 && (item[closing] == ' ' || item[closing] == '\t' || item[closing] == '\r' || item[closing] == '\n') {
-		closing--
-	}
-	if closing < 0 || item[closing] != '}' {
-		return item, false, false
-	}
-	hasFields := len(bytes.TrimSpace(item[1:closing])) > 0
-	replacement := make([]byte, 0, len(item)+len(part)+13)
-	replacement = append(replacement, item[:closing]...)
-	if hasFields {
-		replacement = append(replacement, ',')
-	}
-	replacement = append(replacement, `"content":[`...)
-	replacement = append(replacement, part...)
-	replacement = append(replacement, ']')
-	replacement = append(replacement, item[closing:]...)
-	return replacement, true, true
 }
 
 func rawSSEFrameEvent(frame []byte) rawCompactionSSEEvent {
