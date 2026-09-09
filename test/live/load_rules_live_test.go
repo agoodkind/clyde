@@ -117,15 +117,17 @@ func (h *harness) writeConversationOnlyConfig(t *testing.T, indexedContent []str
 	}
 	var content strings.Builder
 	err = parsed.Execute(&content, struct {
-		Enabled        bool
-		CollectionID   string
-		SocketPath     string
-		IndexedContent []string
+		IngestionEnabled bool
+		SearchEnabled    bool
+		CollectionID     string
+		SocketPath       string
+		IndexedContent   []string
 	}{
-		Enabled:        h.conversationSemantic.Enabled,
-		CollectionID:   h.conversationSemantic.CollectionID,
-		SocketPath:     socketPath,
-		IndexedContent: indexedContent,
+		IngestionEnabled: h.conversationSemantic.IngestionEnabled,
+		SearchEnabled:    h.conversationSemantic.SearchEnabled,
+		CollectionID:     h.conversationSemantic.CollectionID,
+		SocketPath:       socketPath,
+		IndexedContent:   indexedContent,
 	})
 	if err != nil {
 		t.Fatalf("render conversation config template: %v", err)
@@ -192,7 +194,6 @@ func (h *harness) aroundRead(t *testing.T, home string, index int, tag string) s
 func TestContextWindowLoadRulesPermutations(t *testing.T) {
 	home := writeLoadRulesFixtureHome(t)
 	h := newHarness(t)
-	h.conversationSemantic.Enabled = false
 	h.writeConversationOnlyConfig(t, nil, "")
 	h.extraEnv = []string{"HOME=" + home}
 	h.boot(t)
@@ -269,8 +270,8 @@ func (h *harness) waitForFeederDelivery(t *testing.T, deadline time.Duration) {
 func TestLoadRulesFeedErasEndToEnd(t *testing.T) {
 	home := writeLoadRulesFixtureHome(t)
 	h := newHarness(t)
-	if !h.conversationSemantic.Enabled {
-		t.Skip("set CLYDE_TEST_CONVERSATION_SEMANTIC=true to run the engine-backed era test")
+	if !h.conversationSemantic.IngestionEnabled || !h.conversationSemantic.SearchEnabled {
+		t.Skip("set CLYDE_TEST_CONVERSATION_INGESTION=true and CLYDE_TEST_CONVERSATION_SEARCH=true to run the engine-backed era test")
 	}
 	h.extraEnv = []string{"HOME=" + home}
 

@@ -1,6 +1,51 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestConversationSemanticDirectionsFromConfig(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		contents    string
+		wantFeeds   bool
+		wantAnswers bool
+		wantUses    bool
+	}{
+		{name: "omitted section", contents: "", wantFeeds: false, wantAnswers: false, wantUses: false},
+		{name: "explicit false", contents: "[conversation.semantic]\ningestion_enabled = false\nsearch_enabled = false\n", wantFeeds: false, wantAnswers: false, wantUses: false},
+		{name: "ingestion only", contents: "[conversation.semantic]\ningestion_enabled = true\n", wantFeeds: true, wantAnswers: false, wantUses: true},
+		{name: "search only", contents: "[conversation.semantic]\nsearch_enabled = true\n", wantFeeds: false, wantAnswers: true, wantUses: true},
+		{name: "both true", contents: "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = true\n", wantFeeds: true, wantAnswers: true, wantUses: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(testCase.contents), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := loadConfig(dir)
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			semantic := cfg.Conversation.Semantic
+			if got := semantic.FeedsEngine(); got != testCase.wantFeeds {
+				t.Fatalf("FeedsEngine() = %v, want %v", got, testCase.wantFeeds)
+			}
+			if got := semantic.AnswersSearch(); got != testCase.wantAnswers {
+				t.Fatalf("AnswersSearch() = %v, want %v", got, testCase.wantAnswers)
+			}
+			if got := semantic.UsesEngine(); got != testCase.wantUses {
+				t.Fatalf("UsesEngine() = %v, want %v", got, testCase.wantUses)
+			}
+		})
+	}
+}
 
 // TestStoppingTheWritesKeepsSearchReachable is the case this split exists for.
 //
@@ -13,7 +58,7 @@ import "testing"
 func TestStoppingTheWritesKeepsSearchReachable(t *testing.T) {
 	t.Parallel()
 
-	semantic := ConversationSemanticConfig{Enabled: false}
+	semantic := ConversationSemanticConfig{IngestionEnabled: false, SearchEnabled: true}
 
 	if semantic.FeedsEngine() {
 		t.Fatal("writes are off, so nothing should be offered to the engine")
@@ -31,9 +76,6 @@ func TestStoppingTheWritesKeepsSearchReachable(t *testing.T) {
 func TestEachDirectionCanBeStoppedOnItsOwn(t *testing.T) {
 	t.Parallel()
 
-	yes := true
-	no := false
-
 	for _, testCase := range []struct {
 		name        string
 		semantic    ConversationSemanticConfig
@@ -43,28 +85,28 @@ func TestEachDirectionCanBeStoppedOnItsOwn(t *testing.T) {
 	}{
 		{
 			name:        "both on",
-			semantic:    ConversationSemanticConfig{Enabled: true, SearchEnabled: &yes},
+			semantic:    ConversationSemanticConfig{IngestionEnabled: true, SearchEnabled: true},
 			wantFeeds:   true,
 			wantAnswers: true,
 			wantUses:    true,
 		},
 		{
 			name:        "writes on, search off",
-			semantic:    ConversationSemanticConfig{Enabled: true, SearchEnabled: &no},
+			semantic:    ConversationSemanticConfig{IngestionEnabled: true, SearchEnabled: false},
 			wantFeeds:   true,
 			wantAnswers: false,
 			wantUses:    true,
 		},
 		{
 			name:        "writes off, search on",
-			semantic:    ConversationSemanticConfig{Enabled: false, SearchEnabled: &yes},
+			semantic:    ConversationSemanticConfig{IngestionEnabled: false, SearchEnabled: true},
 			wantFeeds:   false,
 			wantAnswers: true,
 			wantUses:    true,
 		},
 		{
 			name:        "both off",
-			semantic:    ConversationSemanticConfig{Enabled: false, SearchEnabled: &no},
+			semantic:    ConversationSemanticConfig{IngestionEnabled: false, SearchEnabled: false},
 			wantFeeds:   false,
 			wantAnswers: false,
 			wantUses:    false,
@@ -86,23 +128,11 @@ func TestEachDirectionCanBeStoppedOnItsOwn(t *testing.T) {
 	}
 }
 
-// TestAnUnwrittenSearchSettingMeansOn pins the default, which is what makes this
-// change safe for a config that predates it: an operator who wrote only
-// `enabled = false` gets their search back without editing anything.
-func TestAnUnwrittenSearchSettingMeansOn(t *testing.T) {
+func TestAnUnwrittenSearchSettingMeansOff(t *testing.T) {
 	t.Parallel()
 
 	semantic := ConversationSemanticConfig{}
-	if semantic.SearchEnabled != nil {
-		t.Fatal("the fixture should leave the setting unwritten")
-	}
-	if !semantic.AnswersSearch() {
-		t.Fatal("an unwritten search setting must mean on")
-	}
-
-	explicit := false
-	semantic.SearchEnabled = &explicit
 	if semantic.AnswersSearch() {
-		t.Fatal("an explicit false must still turn search off, or the setting does nothing")
+		t.Fatal("an unwritten search setting must mean off")
 	}
 }

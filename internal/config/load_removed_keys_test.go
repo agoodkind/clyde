@@ -3,6 +3,9 @@ package config
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +53,29 @@ func TestWarnRemovedLoggingConfigWarnsOnRemovedAdapterWireCapture(t *testing.T) 
 	for _, want := range wantKeys {
 		if !gotKeys[want] {
 			t.Fatalf("missing removed-key warning for %q; got %v", want, gotKeys)
+		}
+	}
+}
+
+func TestLoadConfigRejectsRemovedConversationSemanticEnabled(t *testing.T) {
+	t.Parallel()
+
+	for _, contents := range []string{
+		"[conversation.semantic]\nenabled = false\n",
+		"[conversation.semantic]\nenabled = true\ningestion_enabled = false\nsearch_enabled = true\n",
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(contents), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		_, err := loadConfig(dir)
+		if err == nil {
+			t.Fatalf("loadConfig accepted removed enabled key:\n%s", contents)
+		}
+		for _, want := range []string{"conversation.semantic.enabled", "ingestion_enabled"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("loadConfig error = %q, want it to contain %q", err, want)
+			}
 		}
 	}
 }

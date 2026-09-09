@@ -51,7 +51,8 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Logging.Rotation.Compress).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
 		Expect(cfg.Daemon.GRPCAddress).To(Equal(config.DefaultDaemonGRPCAddress()))
-		Expect(cfg.Conversation.Semantic.Enabled).To(BeFalse())
+		Expect(cfg.Conversation.Semantic.IngestionEnabled).To(BeFalse())
+		Expect(cfg.Conversation.Semantic.SearchEnabled).To(BeFalse())
 		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("clyde-conversations"))
 	})
 
@@ -98,12 +99,13 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		configText := "[conversation.semantic]\nenabled = true\nsocket_path = \"/tmp/lm-semantic.sock\"\ncollection_id = \"custom-conversations\"\n"
+		configText := "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = true\nsocket_path = \"/tmp/lm-semantic.sock\"\ncollection_id = \"custom-conversations\"\n"
 		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Conversation.Semantic.Enabled).To(BeTrue())
+		Expect(cfg.Conversation.Semantic.IngestionEnabled).To(BeTrue())
+		Expect(cfg.Conversation.Semantic.SearchEnabled).To(BeTrue())
 		Expect(cfg.Conversation.Semantic.SocketPath).To(Equal("/tmp/lm-semantic.sock"))
 		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("custom-conversations"))
 	})
@@ -138,12 +140,12 @@ cc_entrypoint = "sdk-cli"
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		configText := "[conversation.semantic]\nenabled = true\ncollection_id = \"   \"\n"
+		configText := "[conversation.semantic]\ningestion_enabled = true\ncollection_id = \"   \"\n"
 		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Conversation.Semantic.Enabled).To(BeTrue())
+		Expect(cfg.Conversation.Semantic.IngestionEnabled).To(BeTrue())
 		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("clyde-conversations"))
 	})
 
