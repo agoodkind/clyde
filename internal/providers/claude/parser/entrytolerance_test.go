@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -165,6 +167,15 @@ func TestDecodeTranscriptEntryReportsWhichFieldsDecodedPartially(t *testing.T) {
 	partial := []byte(`{"type":"user","uuid":"entry-9","timestamp":"2026-07-25T18:54:58.775Z",` +
 		`"toolUseResult":{"stdout":"ok","timedOutAfterMs":1.5},"error":{"status":"529"},` +
 		`"imagePasteIds":["one"],"sessionId":"sess-9"}`)
+	var standardEntry struct {
+		ImagePasteIDs []int  `json:"imagePasteIds"`
+		SessionID     string `json:"sessionId"`
+	}
+	standardErr := json.Unmarshal(partial, &standardEntry)
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(standardErr, &typeErr) || typeErr.Field == "" {
+		t.Fatalf("standard decoder error = %v, want a field-specific type error", standardErr)
+	}
 
 	wholeEntry, err := DecodeTranscriptEntry(whole)
 	if err != nil {
@@ -184,14 +195,17 @@ func TestDecodeTranscriptEntryReportsWhichFieldsDecodedPartially(t *testing.T) {
 	if partialEntry.Decode.Outcome != EntryDecodePartial {
 		t.Fatalf("outcome = %q, want %q", partialEntry.Decode.Outcome, EntryDecodePartial)
 	}
-	for _, want := range []string{"toolUseResult", "error", "imagePasteIds.0"} {
-		if !slices.Contains(partialEntry.Decode.Fields, want) {
-			t.Errorf("fields = %v, want it to name %q", partialEntry.Decode.Fields, want)
-		}
+	wantFields := []string{"toolUseResult", "error", typeErr.Field}
+	if !slices.Equal(partialEntry.Decode.Fields, wantFields) {
+		t.Errorf("fields = %v, want exact custom and standard fields %v", partialEntry.Decode.Fields, wantFields)
 	}
 	if partialEntry.SessionID != "sess-9" {
 		t.Fatalf("sessionId = %q, want sess-9: a partial record still carries every other key", partialEntry.SessionID)
 	}
+	if standardEntry.SessionID != "sess-9" {
+		t.Fatalf("standard sessionId = %q, want the field after the mismatch preserved", standardEntry.SessionID)
+	}
+	t.Logf("standard field=%q; reported fields=%v", typeErr.Field, partialEntry.Decode.Fields)
 }
 
 // TestDecodeTranscriptEntryKeepsRecordAroundAnUnreadableTimestamp covers the
