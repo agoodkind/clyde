@@ -135,7 +135,7 @@ Scheduling is fair across providers. A large source cannot indefinitely starve
 small changed sources. Work units have cancellation points and bounds on bytes,
 rows, pending requests, and resident connections. Limits are named, centralized,
 and verified against the acceptance workloads; they do not silently truncate
-results. No new public configuration surface is required by this design.
+results. No public scheduler tuning settings are required by this design.
 
 ## Cache discovery before reading content
 
@@ -279,11 +279,18 @@ different case reproduced.
 ### Define optional dependency behavior
 
 Semantic search is optional. Both directions default independently to false.
-Only explicit `enabled = true` enables feeding, and only explicit
-`search_enabled = true` enables search. Enabling one direction never enables
-the other. This preserves explicit search-only and feed-only configurations.
+The new fields name the operation and its external dependency:
 
-| `enabled` | `search_enabled` | Feeding | Search | Engine runtime |
+| New TOML field under `conversation.semantic` | Behavior when true | Replaces |
+| --- | --- | --- |
+| `sync_to_engine` | Send conversation manifests and content to the semantic engine for indexing. | `enabled` |
+| `query_engine` | Answer semantic conversation queries through the engine. | `search_enabled` |
+
+Only explicit `sync_to_engine = true` enables feeding, and only explicit
+`query_engine = true` enables semantic queries. Enabling one direction never
+enables the other. Local conversation discovery remains independent of both.
+
+| `sync_to_engine` | `query_engine` | Feeding | Search | Engine runtime |
 | --- | --- | --- | --- | --- |
 | Omitted or false | Omitted | Off | Off | Not constructed |
 | False | False | Off | Off | Not constructed |
@@ -319,12 +326,43 @@ remote jobs are not deleted or falsely reported cancelled; local delivery state
 is retained for reconciliation after a later explicit enable. Inactive clients
 have no retry worker. Re-enabling creates exactly one runtime.
 
-The default change is intentional: every client with omitted `search_enabled`
-must explicitly set `search_enabled = true` to retain semantic queries, including
-clients with `enabled = true`. Feeding remains controlled independently by
-`enabled`. Migration never rewrites configuration or infers consent from an
-existing collection. Examples and generated default configurations must use
-the same off-by-default policy.
+### Remove the old configuration keys
+
+This is a hard cut. The old `conversation.semantic.enabled` and
+`conversation.semantic.search_enabled` keys are invalid, including when false or
+present beside their replacements. There are no aliases, fallback reads,
+automatic translations, compatibility periods, or preserved implicit defaults.
+Configuration loading fails before starting workers and names the rejected key
+and its replacement. It must not silently ignore the old keys.
+
+The same cut applies to typed fields, supported serialized forms, schemas,
+examples, generated configurations, tests, and user-facing configuration output.
+The Go fields are `SyncToEngine` and `QueryEngine`; JSON uses `syncToEngine` and
+`queryEngine`. The former scoped JSON names `enabled` and `searchEnabled` are
+also rejected wherever configuration JSON is accepted. Unrelated `enabled`
+settings outside `conversation.semantic` retain their existing contracts.
+
+Existing configuration is not a compatibility constraint. Operators replace old
+keys explicitly; Clyde never edits their TOML or infers consent from an installed
+engine, retained collection, or previous configuration. Omitted new fields remain
+false. A rejected reload retains the previous running configuration and reports
+that the new configuration was not applied; it must not claim the integration
+was disabled. Corrected configuration then follows the normal lifecycle route.
+
+The implementation pull request must announce this breaking change in its
+description, including the replacement mapping, independent false defaults,
+rejection of old keys, and the required manual edit. Its developer-facing notice
+must state:
+
+> Breaking change: Under `[conversation.semantic]`, replace `enabled` with
+> `sync_to_engine` and `search_enabled` with `query_engine`. Both new fields
+> default to `false` independently. Old keys now cause a configuration error,
+> even when set to `false`; existing TOML is not migrated automatically.
+
+The implementation is not review-ready without that notice. This specification
+records the required announcement; it does not claim a pull request was published.
+
+### Keep generated configurations optional
 
 The current sandbox template explicitly enables both directions and uses the live
 engine. Default sandbox validation must instead work without that dependency;
@@ -507,7 +545,7 @@ writers.
 
 | Stage | Deliverable and gate |
 | --- | --- |
-| 1 | Correct semantic opt-in, prove dependency-free startup and disable transitions, and add effective status plus subsystem counters. |
+| 1 | Replace the ambiguous semantic keys with `sync_to_engine` and `query_engine`, reject old keys, announce the breaking change in the implementation PR, and prove dependency-free startup, disable transitions, effective status, and subsystem work counters. |
 | 2 | Correct remote identity handling, share workspace discovery, and skip unchanged stores before content reads. |
 | 3 | Add scheduler ownership, pure cached reads, atomic changed-generation persistence, and reload handoff tests. |
 | 4 | Add metrics byte cursors, recoverable output commits, migration, and retention scheduling. |
@@ -517,9 +555,9 @@ writers.
 
 Stages 4 and 5 can follow independent implementation lanes after the shared
 lifecycle contracts are established. Each stage preserves existing behavior
-except the explicit opt-in and diagnostic changes defined here, and carries its
-own regression and performance proof. No stage is accepted solely because
-warnings disappear.
+except the configuration hard cut, explicit opt-in, and diagnostic changes
+defined here, and carries its own regression and performance proof. No stage is
+accepted solely because warnings disappear.
 
 ## Verify correctness and bounded work
 
@@ -531,9 +569,11 @@ that mocked helpers were called.
 
 | Scenario | Required result |
 | --- | --- |
-| Missing config, omitted semantic section, or `enabled = false` alone; package and socket absent | Start successfully; perform zero semantic dependency probes, dials, registrations, retry wakes, or feeder passes over at least five minutes. |
+| Missing config, omitted semantic section, or new direction fields false; package and socket absent | Start successfully; perform zero semantic dependency probes, dials, registrations, retry wakes, or feeder passes over at least five minutes. |
 | Same disabled cases with a sentinel engine socket present | Accept zero connections while raw operations, repeated status, and disabled semantic queries run. |
-| Each explicit direction pair and omitted search value | Match the configuration table; `enabled = true` with omitted `search_enabled` feeds but never answers semantic queries, and search-only never feeds. |
+| Each new direction pair and omitted query value | Match the configuration table; `sync_to_engine = true` with omitted `query_engine` feeds but never answers semantic queries, and query-only never feeds. |
+| Either old semantic key, including false, mixed old/new keys, or either former JSON spelling | Reject configuration with its replacement named before worker startup; do not translate or ignore it. |
+| Old keys introduced by a reload | Reject the new configuration, retain and identify the previous active generation, and apply a later corrected configuration normally. |
 | Enabled-to-disabled reload during dial, retry wait, or active connection | Apply disabled state, drain the old runtime, and perform zero later attempts or deliveries; re-enable creates one runtime. |
 | Enabled integration with initially absent engine | Keep unrelated daemon services usable, retain capped retries with one unavailable warning, and recover when the fixture engine appears. |
 | Default sandbox and examples | Do not silently enable semantic search; absent-setting tests exercise real omission. |
