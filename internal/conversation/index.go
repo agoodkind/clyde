@@ -101,10 +101,7 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 		run := idx.refreshRun
 		idx.mu.Unlock()
 		if run != nil {
-			select {
-			case <-run.done:
-			case <-ctx.Done():
-			}
+			<-run.done
 		}
 	}()
 	ticker := time.NewTicker(interval)

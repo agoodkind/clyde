@@ -156,10 +156,15 @@ func TestIndexStartJoinsCanceledScan(t *testing.T) {
 	<-canceled
 	select {
 	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Start did not return after cancellation")
+		t.Fatal("Start returned while the canceled scan was still running")
+	default:
 	}
 	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Start did not join the canceled scan")
+	}
 	if _, err := os.Stat(idx.cachePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("canceled worker wrote cache: %v", err)
 	}
