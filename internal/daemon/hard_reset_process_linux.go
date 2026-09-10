@@ -107,6 +107,7 @@ func resetProcessOwnedStart(pid int) (string, error) {
 	}
 	info, err = os.Stat(root)
 	if err != nil {
+		slog.Warn("daemon.hard_reset.process_ownership_recheck_failed", "concern", "process.daemon.lifecycle", "pid", pid, "err", err)
 		return "", fmt.Errorf("recheck reset process %d ownership: %w", pid, err)
 	}
 	stat, ok = info.Sys().(*syscall.Stat_t)
