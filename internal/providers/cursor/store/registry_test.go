@@ -208,8 +208,8 @@ func TestBuildWorkspaceComposerIndexKeepsComposerAndLogsDescriptorErrorOnce(t *t
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
 	index, err := BuildWorkspaceComposerIndex(ReadWorkspaceInventory(t.Context(), root))
-	if err == nil {
-		t.Fatal("BuildWorkspaceComposerIndex returned nil error for a corrupt descriptor")
+	if err != nil {
+		t.Fatalf("BuildWorkspaceComposerIndex returned error: %v", err)
 	}
 	info, found := index["composer-shared"]
 	if !found {
