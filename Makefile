@@ -73,7 +73,8 @@ coverage: ## Generate coverage report via ginkgo
 # runs it (build tag `live`). To run several isolated instances at once, export a
 # disjoint port set per run: CLYDE_TEST_ADAPTER_PORT, CLYDE_TEST_MITM_PORT,
 # CLYDE_TEST_CURSOR_PORT, CLYDE_TEST_TOPOLOGY_PORT, CLYDE_TEST_MOVED_MITM_PORT,
-# CLYDE_TEST_CONVERSATION_SEMANTIC, and CLYDE_TEST_COLLECTION_ID.
+# CLYDE_TEST_CONVERSATION_INGESTION, CLYDE_TEST_CONVERSATION_SEARCH,
+# and CLYDE_TEST_COLLECTION_ID.
 live: ## Run the live daemon validation suite (opt-in, build tag live)
 	@go test -tags live -count=1 ./test/live/
 

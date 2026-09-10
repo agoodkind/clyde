@@ -316,49 +316,55 @@ func readMetricsHistoryFile(path string, input MetricsHistoryInput, requests map
 	buffer := make([]byte, 64*1024)
 	scanner.Buffer(buffer, 2*1024*1024)
 	for scanner.Scan() {
-		var envelope metricsLogEnvelope
-		if err := json.Unmarshal(scanner.Bytes(), &envelope); err != nil {
-			report.invalidHistory = true
-			addMetricsWarning(report, "malformed daemon log record in "+filepath.Base(path))
-			continue
-		}
-		recordedAt, err := time.Parse(time.RFC3339Nano, envelope.Time)
-		if err != nil {
-			if isMetricsMessage(envelope.Message) {
-				report.invalidHistory = true
-				addMetricsWarning(report, "malformed relevant timestamp in "+filepath.Base(path))
-			}
-			continue
-		}
-		if recordedAt.After(input.Now) {
-			continue
-		}
-		report.sawCanonicalRecord = true
-		if !recordedAt.After(input.Since) {
-			report.historyCoversStart = true
-		}
-		if envelope.Message == "daemon.worker.ready" && !recordedAt.Before(input.Since) {
-			report.generationStable = false
-			addMetricsWarning(report, "daemon provider counter generation restarted inside the requested window")
-		}
-		if !isMetricsMessage(envelope.Message) {
-			continue
-		}
-		var record metricsLogRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			report.invalidHistory = true
-			addMetricsWarning(report, "malformed daemon metrics record in "+filepath.Base(path))
-			continue
-		}
-		if record.RequestID == "" {
-			continue
-		}
-		addMetricsHistoryRecord(record, recordedAt, requests, report)
+		readMetricsHistoryRecord(path, scanner.Bytes(), input, requests, report)
 	}
 	if err := scanner.Err(); err != nil {
 		report.invalidHistory = true
 		addMetricsWarning(report, "unreadable daemon log rotation: "+filepath.Base(path))
 	}
+}
+
+// readMetricsHistoryRecord shares event decoding and identity rules with the tail reader.
+// A zero Now retains records for a later pass instead of filtering their timestamps.
+func readMetricsHistoryRecord(path string, line []byte, input MetricsHistoryInput, requests map[string]*metricsRequest, report *MetricsHistoryReport) {
+	var envelope metricsLogEnvelope
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		report.invalidHistory = true
+		addMetricsWarning(report, "malformed daemon log record in "+filepath.Base(path))
+		return
+	}
+	recordedAt, err := time.Parse(time.RFC3339Nano, envelope.Time)
+	if err != nil {
+		if isMetricsMessage(envelope.Message) {
+			report.invalidHistory = true
+			addMetricsWarning(report, "malformed relevant timestamp in "+filepath.Base(path))
+		}
+		return
+	}
+	if !input.Now.IsZero() && recordedAt.After(input.Now) {
+		return
+	}
+	report.sawCanonicalRecord = true
+	if !recordedAt.After(input.Since) {
+		report.historyCoversStart = true
+	}
+	if envelope.Message == "daemon.worker.ready" && !recordedAt.Before(input.Since) {
+		report.generationStable = false
+		addMetricsWarning(report, "daemon provider counter generation restarted inside the requested window")
+	}
+	if !isMetricsMessage(envelope.Message) {
+		return
+	}
+	var record metricsLogRecord
+	if err := json.Unmarshal(line, &record); err != nil {
+		report.invalidHistory = true
+		addMetricsWarning(report, "malformed daemon metrics record in "+filepath.Base(path))
+		return
+	}
+	if record.RequestID == "" {
+		return
+	}
+	addMetricsHistoryRecord(record, recordedAt, requests, report)
 }
 
 func isMetricsMessage(message metricsMessage) bool {

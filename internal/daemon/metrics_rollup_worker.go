@@ -14,11 +14,6 @@ import (
 
 const (
 	// metricsRollupInterval is how often a pass distills the daemon log.
-	//
-	// Each pass re-reads the active log from one overlap behind its cursor, so
-	// a shorter interval repeats that read more often for the same result. A
-	// few minutes keeps the widest reported window current while leaving the
-	// status command reading a store that is never more than one pass stale.
 	metricsRollupInterval = 5 * time.Minute
 	// metricsRollupHookName owns the worker's stop in the lifecycle group.
 	metricsRollupHookName = "metrics-rollup"
@@ -27,13 +22,13 @@ const (
 // metricsRollupWorker distills finished requests out of the daemon log so the
 // status command can report several windows without replaying that log itself.
 type metricsRollupWorker struct {
-	logPath      string
-	rollupPath   string
-	interval     time.Duration
-	log          *slog.Logger
-	now          func() time.Time
-	lastRecordAt time.Time
-	pricing      adapterruntime.PricingTable
+	logPath    string
+	rollupPath string
+	interval   time.Duration
+	log        *slog.Logger
+	now        func() time.Time
+	state      metricsRollupState
+	pricing    adapterruntime.PricingTable
 }
 
 // newMetricsRollupWorker builds the worker from the daemon's own logging and
@@ -48,22 +43,28 @@ func newMetricsRollupWorker(log *slog.Logger) *metricsRollupWorker {
 		logPath = slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon)
 		pricing = adapterruntime.NewPricingTable(cfg.Adapter.ModelPricing())
 	}
+	var state metricsRollupState
 	return &metricsRollupWorker{
-		logPath:      logPath,
-		rollupPath:   metricsRollupPath(),
-		interval:     metricsRollupInterval,
-		log:          log,
-		now:          time.Now,
-		lastRecordAt: time.Time{},
-		pricing:      pricing,
+		logPath:    logPath,
+		rollupPath: metricsRollupPath(),
+		interval:   metricsRollupInterval,
+		log:        log,
+		now:        time.Now,
+		state:      state,
+		pricing:    pricing,
 	}
 }
 
 // run marks this daemon generation, then distills on an interval until the
 // context is cancelled.
 func (w *metricsRollupWorker) run(ctx context.Context) {
+	defer func() {
+		if err := w.state.closeSource(); err != nil {
+			w.log.WarnContext(ctx, "daemon.metrics_rollup.source_close_failed", "path", w.logPath, "err", err)
+		}
+	}()
 	w.recordGeneration(ctx)
-	w.lastRecordAt = w.resumeCursor()
+	w.state.checkpoint = readMetricsRollupCheckpoint(metricsRollupCheckpointPath())
 	w.runPassAndLog(ctx)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -75,17 +76,6 @@ func (w *metricsRollupWorker) run(ctx context.Context) {
 			w.runPassAndLog(ctx)
 		}
 	}
-}
-
-// resumeCursor reads how far a previous daemon generation had distilled, so a
-// restart neither rewrites records nor leaves a gap behind the cursor.
-func (w *metricsRollupWorker) resumeCursor() time.Time {
-	checkpoint := readMetricsRollupCheckpoint(metricsRollupCheckpointPath())
-	cursor, ok := parseRollupTime(checkpoint.LastRecordAt)
-	if !ok {
-		return time.Time{}
-	}
-	return cursor
 }
 
 // recordGeneration appends the marker that lets a window report how many
@@ -121,11 +111,11 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 	}
 	startedAt := w.now()
 	result, err := distillMetricsRollup(ctx, metricsRollupDistillInput{
-		LogPath:      w.logPath,
-		RollupPath:   w.rollupPath,
-		Now:          startedAt,
-		LastRecordAt: w.lastRecordAt,
-		Pricing:      w.pricing,
+		LogPath:    w.logPath,
+		RollupPath: w.rollupPath,
+		Now:        startedAt,
+		State:      &w.state,
+		Pricing:    w.pricing,
 	})
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.metrics_rollup.pass_failed",
@@ -137,11 +127,8 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 		)
 		return
 	}
-	w.lastRecordAt = result.LastRecordAt
-	if err := writeMetricsRollupCheckpoint(metricsRollupCheckpointPath(), metricsRollupCheckpoint{
-		LastRecordAt: formatRollupTime(result.LastRecordAt),
-		LastPassAt:   formatRollupTime(w.now()),
-	}); err != nil {
+	w.state.checkpoint.LastPassAt = formatRollupTime(w.now())
+	if err := writeMetricsRollupCheckpoint(metricsRollupCheckpointPath(), w.state.checkpoint); err != nil {
 		w.log.WarnContext(ctx, "daemon.metrics_rollup.checkpoint_write_failed",
 			"concern", "daemon.workers",
 			"component", "daemon",
@@ -155,6 +142,7 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 		"subcomponent", "metrics_rollup",
 		"count", result.Written,
 		"pruned", result.Pruned,
+		"bytes_read", result.BytesRead,
 		"duration_ms", w.now().Sub(startedAt).Milliseconds(),
 	)
 }

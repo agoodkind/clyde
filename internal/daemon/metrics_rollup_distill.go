@@ -1,128 +1,275 @@
 package daemon
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
-	"log/slog"
+	"io"
+	"os"
+	"strconv"
+	"syscall"
 	"time"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
-// metricsRollupOverlap is how far behind the checkpoint a pass re-reads.
-//
-// A request occupies several log lines between its start and its terminal
-// record. A pass that began exactly at the checkpoint would miss the start
-// line of any request that finished just after it, and the aggregation would
-// then see a terminal record with no retained start. Re-reading this much
-// history covers requests longer than any adapter call is expected to run,
-// and the checkpoint cursor drops whatever was already stored.
-const metricsRollupOverlap = 30 * time.Minute
-
-// metricsRollupDistillInput names one distill pass.
-type metricsRollupDistillInput struct {
-	LogPath      string
-	RollupPath   string
-	Now          time.Time
-	LastRecordAt time.Time
-	Pricing      adapterruntime.PricingTable
+// metricsRollupState retains the known log tail and unfinished requests between passes.
+type metricsRollupState struct {
+	checkpoint      metricsRollupCheckpoint
+	source          *os.File
+	requests        map[string]*metricsRequest
+	nextExpiry      time.Time
+	retentionLoaded bool
 }
 
-// metricsRollupDistillResult reports what one pass wrote.
+// metricsRollupDistillInput names one distill pass using worker-owned state.
+type metricsRollupDistillInput struct {
+	LogPath    string
+	RollupPath string
+	Now        time.Time
+	Pricing    adapterruntime.PricingTable
+	State      *metricsRollupState
+}
+
+// metricsRollupDistillResult reports one pass's ordinary reads and writes.
 type metricsRollupDistillResult struct {
 	Written      int
 	Pruned       int
+	BytesRead    int64
 	LastRecordAt time.Time
 }
 
-// distillMetricsRollup reads the recent daemon log and appends every finished
-// request the store does not already hold.
-//
-// It reuses the log replay that the historical report already uses, so the
-// rollup and a direct log read agree by construction rather than by two
-// parsers staying in step.
-//
-// A cold start with no checkpoint scans the full retention window, which can
-// be the largest single pass the distiller ever runs. ctx lets a reload's
-// drain interrupt that scan between log rotations instead of waiting for it
-// to finish or for the drain's own timeout to expire.
+// distillMetricsRollup processes complete new records with the history parser.
 func distillMetricsRollup(ctx context.Context, input metricsRollupDistillInput) (metricsRollupDistillResult, error) {
-	result := metricsRollupDistillResult{Written: 0, Pruned: 0, LastRecordAt: input.LastRecordAt}
-	since := input.LastRecordAt.Add(-metricsRollupOverlap)
-	if input.LastRecordAt.IsZero() {
-		since = input.Now.Add(-metricsRollupRetention)
+	var result metricsRollupDistillResult
+	if err := ctx.Err(); err != nil {
+		return result, rollupError("daemon.metrics_rollup.pass_canceled", input.LogPath, err, "distill metrics rollup")
 	}
-
-	report := newRollupReport(MetricsWindow{Since: since, Until: input.Now})
-	replay := MetricsHistoryInput{
-		Since:   since,
-		Now:     input.Now,
-		LogPath: input.LogPath,
-		Pricing: input.Pricing,
+	state := input.State
+	if err := state.openSource(input.LogPath, input.Now); err != nil {
+		return result, err
 	}
-	requests := make(map[string]*metricsRequest)
-	for _, path := range daemonLogHistoryPaths(input.LogPath, since) {
-		if err := ctx.Err(); err != nil {
-			slog.WarnContext(ctx, "daemon.metrics_rollup.pass_canceled",
-				"concern", "daemon.workers",
-				"component", "daemon",
-				"subcomponent", "metrics_rollup",
-				"path", input.RollupPath,
-				"err", err.Error(),
-			)
-			return result, fmt.Errorf("distill metrics rollup: %w", err)
+	if state.requests == nil {
+		state.requests = make(map[string]*metricsRequest)
+	}
+	var err error
+	result.BytesRead, err = state.readTail(ctx, input)
+	if err != nil {
+		return result, err
+	}
+	result.LastRecordAt, _ = parseRollupTime(state.checkpoint.LastRecordAt)
+	records := make([]metricsRollupRecord, 0, len(state.requests))
+	for requestID, request := range state.requests {
+		// IO follows handler return. Without a lifecycle start, this completed
+		// ingress cannot later produce a request summary.
+		if request.ioSeen && !request.lifecycleStarted {
+			delete(state.requests, requestID)
+			continue
 		}
-		readMetricsHistoryFile(path, replay, requests, &report)
-	}
-
-	records := make([]metricsRollupRecord, 0, len(requests))
-	newest := input.LastRecordAt
-	for requestID, request := range requests {
-		if !distillableRequest(request, input.LastRecordAt, input.Now) {
+		if !distillableRequest(request, input.Now) {
 			continue
 		}
 		records = append(records, requestToRollupRecord(requestID, request))
-		if request.terminalAt.After(newest) {
-			newest = request.terminalAt
+		if request.terminalAt.After(result.LastRecordAt) {
+			result.LastRecordAt = request.terminalAt
 		}
 	}
-
 	lock, err := acquireRollupWriteLock(input.RollupPath)
 	if err != nil {
 		return result, err
 	}
 	defer func() { _ = lock.Unlock() }()
-
-	if len(records) > 0 {
-		if err := appendMetricsRollupRecords(input.RollupPath, sortedRollupRecords(records)); err != nil {
+	if err := state.loadRetention(input.RollupPath); err != nil {
+		return result, err
+	}
+	if err := appendMetricsRollupRecords(input.RollupPath, sortedRollupRecords(records)); err != nil {
+		return result, err
+	}
+	for _, record := range records {
+		delete(state.requests, record.RequestID)
+		at, _ := parseRollupTime(record.TerminalAt)
+		state.rememberExpiry(at)
+	}
+	result.Written = len(records)
+	state.checkpoint.LastRecordAt = formatRollupTime(result.LastRecordAt)
+	if !state.nextExpiry.IsZero() && input.Now.After(state.nextExpiry) {
+		result.Pruned, err = pruneMetricsRollup(input.RollupPath, input.Now.Add(-metricsRollupRetention))
+		if err != nil {
+			return result, err
+		}
+		state.retentionLoaded = false
+		if err := state.loadRetention(input.RollupPath); err != nil {
 			return result, err
 		}
 	}
-	result.Written = len(records)
-	result.LastRecordAt = newest
-
-	pruned, err := pruneMetricsRollup(input.RollupPath, input.Now.Add(-metricsRollupRetention))
-	if err != nil {
-		return result, err
-	}
-	result.Pruned = pruned
 	return result, nil
 }
 
-// distillableRequest reports whether a replayed request belongs in the store.
-//
-// Only finished requests are stored, because the aggregation counts a request
-// in the window its terminal instant falls in. The checkpoint cursor is
-// exclusive, which is what keeps the overlap re-read from duplicating records.
-func distillableRequest(request *metricsRequest, lastRecordAt time.Time, now time.Time) bool {
-	if request == nil || !request.terminal || request.invalidLifecycle {
-		return false
+func (s *metricsRollupState) rememberExpiry(at time.Time) {
+	expiry := at.Add(metricsRollupRetention)
+	if s.nextExpiry.IsZero() || expiry.Before(s.nextExpiry) {
+		s.nextExpiry = expiry
 	}
-	if request.terminalAt.IsZero() || request.terminalAt.After(now) {
-		return false
+}
+
+func (s *metricsRollupState) loadRetention(path string) error {
+	if s.retentionLoaded {
+		return nil
 	}
-	if !lastRecordAt.IsZero() && !request.terminalAt.After(lastRecordAt) {
-		return false
+	// An empty window reuses the store reader without retaining request aggregates.
+	loaded, err := loadMetricsRollup(path, []MetricsWindow{{Since: time.Time{}, Until: time.Time{}}})
+	if err != nil {
+		return err
 	}
-	return true
+	s.nextExpiry = time.Time{}
+	if !loaded[0].EarliestSeen.IsZero() {
+		s.rememberExpiry(loaded[0].EarliestSeen)
+	}
+	s.retentionLoaded = true
+	return nil
+}
+
+func (s *metricsRollupState) closeSource() error {
+	if s.source == nil {
+		return nil
+	}
+	err := s.source.Close()
+	s.source = nil
+	if err != nil {
+		return rollupError("daemon.metrics_rollup.source_close_failed", s.checkpoint.Source.Path, err, "close metrics log")
+	}
+	return nil
+}
+
+func rollupSourcePosition(path string, info os.FileInfo) metricsRollupSourcePosition {
+	stat, _ := info.Sys().(*syscall.Stat_t)
+	return metricsRollupSourcePosition{Path: path, Device: strconv.Itoa(int(stat.Dev)), Inode: stat.Ino, Offset: info.Size()}
+}
+
+func (s *metricsRollupState) openSource(path string, now time.Time) error {
+	if s.source != nil {
+		return nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return rollupError("daemon.metrics_rollup.source_open_failed", path, err, "open metrics log")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return rollupError("daemon.metrics_rollup.source_stat_failed", path, err, "stat metrics log")
+	}
+	position := rollupSourcePosition(path, info)
+	saved := s.checkpoint.Source
+	if saved.Path == path && saved.Device == position.Device && saved.Inode == position.Inode &&
+		saved.Offset >= 0 && saved.Offset <= position.Offset {
+		position.Offset = saved.Offset
+	} else {
+		s.checkpoint.CoverageSince = formatRollupTime(now)
+	}
+	s.checkpoint.Source = position
+	s.source = file
+	return nil
+}
+
+func (s *metricsRollupState) readTail(ctx context.Context, input metricsRollupDistillInput) (int64, error) {
+	info, err := s.source.Stat()
+	if err != nil {
+		return 0, rollupError("daemon.metrics_rollup.source_stat_failed", input.LogPath, err, "stat metrics log")
+	}
+	report := newRollupReport(MetricsWindow{Since: input.Now.Add(-metricsRollupRetention), Until: input.Now})
+	// Lines appended after pass start must remain available for the next pass.
+	replay := MetricsHistoryInput{Since: report.Window.Since, Now: time.Time{}, LogPath: input.LogPath, Pricing: input.Pricing}
+	offset, count, err := readMetricsHistoryTail(ctx, s.source, s.checkpoint.Source.Offset, info.Size(), replay, s.requests, &report)
+	s.checkpoint.Source.Offset = offset
+	if err != nil {
+		return count, err
+	}
+	active, err := os.Stat(input.LogPath)
+	if err != nil {
+		return count, rollupError("daemon.metrics_rollup.source_stat_failed", input.LogPath, err, "stat active metrics log")
+	}
+	if os.SameFile(info, active) {
+		return count, nil
+	}
+	// Rotation can follow an append after the first size snapshot. The held
+	// descriptor still reads that final tail after rename and compression.
+	finalInfo, err := s.source.Stat()
+	if err != nil {
+		return count, rollupError("daemon.metrics_rollup.source_stat_failed", input.LogPath, err, "stat rotated metrics log")
+	}
+	finalOffset, finalCount, err := readMetricsHistoryTail(ctx, s.source, s.checkpoint.Source.Offset, finalInfo.Size(), replay, s.requests, &report)
+	s.checkpoint.Source.Offset = finalOffset
+	count += finalCount
+	if err != nil {
+		return count, err
+	}
+	if err := s.closeSource(); err != nil {
+		return count, err
+	}
+	s.checkpoint.Source = rollupSourcePosition(input.LogPath, active)
+	s.checkpoint.Source.Offset = 0
+	if err := s.openSource(input.LogPath, input.Now); err != nil {
+		return count, err
+	}
+	active, err = s.source.Stat()
+	if err != nil {
+		return count, rollupError("daemon.metrics_rollup.source_stat_failed", input.LogPath, err, "stat new metrics log")
+	}
+	offset, newCount, err := readMetricsHistoryTail(ctx, s.source, 0, active.Size(), replay, s.requests, &report)
+	s.checkpoint.Source.Offset = offset
+	return count + newCount, err
+}
+
+// readMetricsHistoryTail bounds a pass to the observed file size and each line
+// to the same limit as raw replay. An unterminated final line stays pending.
+func readMetricsHistoryTail(ctx context.Context, source io.ReadSeeker, offset int64, end int64, input MetricsHistoryInput, requests map[string]*metricsRequest, report *MetricsHistoryReport) (int64, int64, error) {
+	if _, err := source.Seek(offset, io.SeekStart); err != nil {
+		return offset, 0, rollupError("daemon.metrics_rollup.source_seek_failed", input.LogPath, err, "seek metrics log")
+	}
+	reader := &metricsTailReader{source: io.LimitReader(source, end-offset), bytes: 0}
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	scanner.Split(func(data []byte, _ bool) (int, []byte, error) {
+		if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
+			return newline + 1, data[:newline+1], nil
+		}
+		return 0, nil, nil
+	})
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return offset, reader.bytes, rollupError("daemon.metrics_rollup.pass_canceled", input.LogPath, err, "read metrics log")
+		}
+		line := scanner.Bytes()
+		readMetricsHistoryRecord(input.LogPath, line, input, requests, report)
+		offset += int64(len(line))
+	}
+	if err := scanner.Err(); err != nil {
+		return offset, reader.bytes, rollupError("daemon.metrics_rollup.source_read_failed", input.LogPath, err, "read metrics log")
+	}
+	return offset, reader.bytes, nil
+}
+
+type metricsTailReader struct {
+	source io.Reader
+	bytes  int64
+}
+
+func (r *metricsTailReader) Read(buffer []byte) (int, error) {
+	n, err := r.source.Read(buffer)
+	r.bytes += int64(n)
+	if err == io.EOF {
+		return n, io.EOF
+	}
+	if err != nil {
+		return n, fmt.Errorf("read metrics tail: %w", err)
+	}
+	return n, nil
+}
+
+// distillableRequest excludes unfinished or invalid request lifecycles.
+func distillableRequest(request *metricsRequest, now time.Time) bool {
+	return request != nil && request.terminal && !request.invalidLifecycle &&
+		!request.terminalAt.IsZero() && !request.terminalAt.After(now)
 }
