@@ -132,12 +132,10 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	defer runtime.shutdown(ctx)
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
-	if err := conversationIndex.Refresh(ctx); err != nil {
-		log.WarnContext(ctx, "daemon.conversation_index.initial_refresh_failed", "concern", "conversation.index", "component", "daemon", "err", err)
-		return fmt.Errorf("build initial conversation index: %w", err)
-	}
 	if cfg.Conversation.Semantic.UsesEngine() {
 		startConversationIndex(ctx, log, conversationIndex, runtime.group)
+	} else {
+		startConversationIndexOnce(ctx, log, conversationIndex, runtime.group)
 	}
 	semanticFreshness := newConversationSemanticFreshness()
 

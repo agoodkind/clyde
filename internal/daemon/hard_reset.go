@@ -183,8 +183,14 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 		}
 	}()
 	state, cache, runtime := config.DefaultStateDir(), config.GlobalCacheDir(), config.RuntimeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve Clyde fallback log: %w", err)
+	}
+	fallbackLogRoot := filepath.Join(home, "Library", "Logs")
 	cacheTargets := []resetTarget{resetFileTarget(conversation.CachePath(), cache)}
 	stateTargets := []resetTarget{
+		resetLogTarget(filepath.Join(fallbackLogRoot, "clyde-daemon.log"), fallbackLogRoot, false),
 		resetLogTarget(filepath.Join(state, "logs"), state, true),
 		resetLogTarget(filepath.Join(state, "mitm-launcher"), state, true),
 		resetLogTarget(filepath.Join(state, "clyde-daemon.jsonl"), state, false),
