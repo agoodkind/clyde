@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
+	"reflect"
 	"sort"
 )
 
@@ -20,6 +22,7 @@ type scanCache struct {
 // scanResult bundles the records a scan discovered with the file stamps it
 // captured, which become the next scan's prior cache.
 type scanResult struct {
+	changed     bool
 	records     []Record
 	stamps      map[string]FileStamp
 	multiStates map[string]MultiConversationScanState
@@ -53,7 +56,7 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 				slog.WarnContext(ctx, "conversation.scan.canceled", "concern", "conversation.scan", "component", "conversation", "provider", provider.String(), "err", ctx.Err())
 				return scanResult{}, fmt.Errorf("scan %s conversations canceled: %w", provider.String(), ctx.Err())
 			}
-			result := scanCandidate(parser, candidate, prior)
+			result := scanCandidate(ctx, parser, candidate, prior)
 			out = append(out, result.records...)
 			if result.multiState != nil {
 				multiStates[candidate.Path] = *result.multiState
@@ -69,7 +72,16 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 			}
 		}
 	}
-	return scanResult{records: out, stamps: stamps, multiStates: multiStates}, nil
+	if err := ctx.Err(); err != nil {
+		return scanResult{}, fmt.Errorf("scan conversations: %w", err)
+	}
+	changed := prior.stamps == nil ||
+		!maps.EqualFunc(prior.records, recordsByPath(out), func(a, b Record) bool { return reflect.DeepEqual(a, b) }) ||
+		!maps.EqualFunc(prior.stamps, stamps, FileStamp.Equal) ||
+		!maps.EqualFunc(prior.multiStates, multiStates, func(a, b MultiConversationScanState) bool {
+			return a.Stamp.Equal(b.Stamp) && a.CompleteOffset == b.CompleteOffset
+		})
+	return scanResult{changed: changed, records: out, stamps: stamps, multiStates: multiStates}, nil
 }
 
 type scanCandidateResult struct {
@@ -78,12 +90,12 @@ type scanCandidateResult struct {
 	multiState    *MultiConversationScanState
 }
 
-func scanCandidate(parser Parser, candidate ScanCandidate, prior scanCache) scanCandidateResult {
+func scanCandidate(ctx context.Context, parser Parser, candidate ScanCandidate, prior scanCache) scanCandidateResult {
 	if multi, ok := parser.(MultiConversationParser); ok {
-		return scanMultiConversationCandidate(multi, candidate, prior)
+		return scanMultiConversationCandidate(ctx, multi, candidate, prior)
 	}
 	key := recordKey(candidate.Path, candidate.Selector)
-	if previous, ok := prior.stamps[key]; ok && previous.Equal(candidate.Stamp) {
+	if previous, ok := prior.stamps[key]; ok && previous.Equal(candidate.Stamp) && !candidate.MetadataChanged {
 		record, found := prior.records[key]
 		if found {
 			return scanCandidateResult{records: []Record{record}, stampRecorded: true, multiState: nil}
@@ -100,13 +112,14 @@ func scanCandidate(parser Parser, candidate ScanCandidate, prior scanCache) scan
 }
 
 func scanMultiConversationCandidate(
+	ctx context.Context,
 	parser MultiConversationParser,
 	candidate ScanCandidate,
 	prior scanCache,
 ) scanCandidateResult {
 	priorRecords := recordsForArtifact(prior.records, candidate.Path)
 	state, stateFound := prior.multiStates[candidate.Path]
-	if stateFound && state.Stamp.Equal(candidate.Stamp) {
+	if stateFound && state.Stamp.Equal(candidate.Stamp) && !candidate.MetadataChanged {
 		return scanCandidateResult{
 			records:       priorRecords,
 			stampRecorded: true,
@@ -119,12 +132,12 @@ func scanMultiConversationCandidate(
 		PriorRecords: nil,
 		StartOffset:  0,
 	}
-	if stateFound && candidate.Stamp.Size > state.Stamp.Size &&
+	if stateFound && !candidate.MetadataChanged && candidate.Stamp.Size > state.Stamp.Size &&
 		state.CompleteOffset >= 0 && state.CompleteOffset <= state.Stamp.Size {
 		input.PriorRecords = priorRecords
 		input.StartOffset = state.CompleteOffset
 	}
-	result, found := parser.ScanRecords(input)
+	result, found := parser.ScanRecords(ctx, input)
 	if found {
 		currentState := MultiConversationScanState{
 			Stamp:          candidate.Stamp,

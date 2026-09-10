@@ -121,9 +121,10 @@ func (*Parser) Discover(
 			return nil, fmt.Errorf("stat Copilot event log %s: %w", path, err)
 		}
 		candidates = append(candidates, conversation.ScanCandidate{
-			Path:     path,
-			Selector: "",
-			Stamp:    conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+			MetadataChanged: false,
+			Path:            path,
+			Selector:        "",
+			Stamp:           conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
 		})
 	}
 	return candidates, nil
@@ -131,9 +132,9 @@ func (*Parser) Discover(
 
 // ScanRecord reads the root record from one Copilot event log.
 func (*Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
-	candidate := conversation.ScanCandidate{Path: path, Selector: "", Stamp: stamp}
+	candidate := conversation.ScanCandidate{Path: path, Selector: "", Stamp: stamp, MetadataChanged: false}
 	return scanRootRecord(candidate, func(visit func(event) bool) error {
-		_, err := readCompleteEvents(path, 0, scanRecordLineLimit, visit)
+		_, err := readCompleteEvents(context.Background(), path, 0, scanRecordLineLimit, visit)
 		return err
 	})
 }
@@ -158,10 +159,11 @@ func scanRootRecord(
 
 // ScanRecords reads every root and subagent record from one physical artifact.
 func (*Parser) ScanRecords(
+	ctx context.Context,
 	input conversation.MultiConversationScan,
 ) (conversation.MultiConversationScanResult, bool) {
 	metadata := newScanMetadata(input.PriorRecords)
-	completeOffset, err := readCompleteEvents(input.Candidate.Path, input.StartOffset, 0, func(item event) bool {
+	completeOffset, err := readCompleteEvents(ctx, input.Candidate.Path, input.StartOffset, 0, func(item event) bool {
 		metadata.add(item)
 		return true
 	})
@@ -381,6 +383,7 @@ func buildRecord(
 }
 
 func readCompleteEvents(
+	ctx context.Context,
 	path string,
 	startOffset int64,
 	maxCompleteLines int,
@@ -402,6 +405,9 @@ func readCompleteEvents(
 	completeOffset := startOffset
 	completeLines := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return completeOffset, fmt.Errorf("read Copilot event log: %w", err)
+		}
 		line, readErr := reader.ReadBytes('\n')
 		if bytes.HasSuffix(line, []byte{'\n'}) {
 			completeOffset += int64(len(line))

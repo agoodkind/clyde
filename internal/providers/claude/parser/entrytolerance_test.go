@@ -184,10 +184,9 @@ func TestDecodeTranscriptEntryReportsWhichFieldsDecodedPartially(t *testing.T) {
 	if partialEntry.Decode.Outcome != EntryDecodePartial {
 		t.Fatalf("outcome = %q, want %q", partialEntry.Decode.Outcome, EntryDecodePartial)
 	}
-	for _, want := range []string{"toolUseResult", "error", "imagePasteIds"} {
-		if !slices.Contains(partialEntry.Decode.Fields, want) {
-			t.Errorf("fields = %v, want it to name %q", partialEntry.Decode.Fields, want)
-		}
+	wantFields := []string{"toolUseResult", "error", "imagePasteIds"}
+	if !slices.Equal(partialEntry.Decode.Fields, wantFields) {
+		t.Errorf("fields = %v, want exact custom and standard fields %v", partialEntry.Decode.Fields, wantFields)
 	}
 	if partialEntry.SessionID != "sess-9" {
 		t.Fatalf("sessionId = %q, want sess-9: a partial record still carries every other key", partialEntry.SessionID)

@@ -105,9 +105,10 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 				continue
 			}
 			candidates = append(candidates, conversation.ScanCandidate{
-				Path:     path,
-				Selector: "",
-				Stamp:    conversation.FileStamp{Size: int64(len(row.Data)), Mtime: row.UpdatedAt},
+				MetadataChanged: false,
+				Path:            path,
+				Selector:        "",
+				Stamp:           conversation.FileStamp{Size: int64(len(row.Data)), Mtime: row.UpdatedAt},
 			})
 			discovered[path] = newNativeDiscoveredThread(row, thread, metadata.Metadata, root.RootDir, metadata.Channel)
 		}
@@ -118,9 +119,10 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 				continue
 			}
 			candidates = append(candidates, conversation.ScanCandidate{
-				Path:     path,
-				Selector: "",
-				Stamp:    terminalMetadataStamp(terminal.Metadata),
+				MetadataChanged: false,
+				Path:            path,
+				Selector:        "",
+				Stamp:           terminalMetadataStamp(terminal.Metadata),
 			})
 			discovered[path] = newTerminalDiscoveredThread(terminal.Metadata, root.RootDir, terminal.Channel)
 		}

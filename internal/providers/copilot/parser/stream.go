@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json"
 	"iter"
 	"strings"
@@ -61,7 +62,7 @@ func (*Parser) StreamSelected(
 			streamWithToolOutputs(path, selector, opts, yield)
 			return
 		}
-		_, err := readCompleteEvents(path, 0, 0, func(item event) bool {
+		_, err := readCompleteEvents(context.Background(), path, 0, 0, func(item event) bool {
 			if item.Ephemeral || item.AgentID != selector {
 				return true
 			}
@@ -84,7 +85,7 @@ func streamWithToolOutputs(
 	yield func(transcript.Message, error) bool,
 ) {
 	events := make([]event, 0)
-	_, err := readCompleteEvents(path, 0, 0, func(item event) bool {
+	_, err := readCompleteEvents(context.Background(), path, 0, 0, func(item event) bool {
 		if !item.Ephemeral && item.AgentID == selector {
 			events = append(events, item)
 		}

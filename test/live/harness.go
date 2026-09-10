@@ -58,6 +58,7 @@ type fakeConversationSemanticConfig struct {
 type harness struct {
 	stateRoot            string
 	configRoot           string
+	cacheRoot            string
 	runtimeRoot          string
 	cfg                  fakePorts
 	conversationSemantic fakeConversationSemanticConfig
@@ -206,6 +207,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{
 		stateRoot:            roots.State,
 		configRoot:           roots.Config,
+		cacheRoot:            roots.Cache,
 		runtimeRoot:          roots.Runtime,
 		cfg:                  resolveFakePorts(),
 		conversationSemantic: resolveFakeConversationSemanticConfig(t),
@@ -325,6 +327,7 @@ func (h *harness) env() []string {
 	base := append(os.Environ(),
 		"XDG_STATE_HOME="+h.stateRoot,
 		"XDG_CONFIG_HOME="+h.configRoot,
+		"XDG_CACHE_HOME="+h.cacheRoot,
 		"XDG_RUNTIME_DIR="+h.runtimeRoot,
 	)
 	return append(base, h.extraEnv...)

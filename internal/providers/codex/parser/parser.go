@@ -125,9 +125,9 @@ func emptyThreadSummary() codexstore.ThreadSummary {
 
 // Discover resolves the Codex store roots, reads the session index once for
 // durable thread names, and walks every rollout file into a scan candidate
-// without parsing it. prior is unused because the candidate stamps drive the
-// reuse decision in the conversation scan driver.
-func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
+// without parsing it. A changed session-index title forces a header refresh
+// even when the rollout itself is unchanged.
+func (p *Parser) Discover(ctx context.Context, prior map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
 	paths, err := codexstore.ResolveStorePathsFromEnv(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.codex.parser.paths_failed", "concern", concern, "component", "codex", "err", err)
@@ -151,10 +151,20 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 
 	out := make([]conversation.ScanCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
+		metadataChanged := false
+		threadID, _, identified := codexstore.RolloutIdentityFromFilename(filepath.Base(candidate.Path))
+		if previous, found := prior[candidate.Path]; found && identified {
+			title := index.ThreadName(threadID)
+			if title == "" {
+				title = threadID
+			}
+			metadataChanged = previous.Title != title
+		}
 		out = append(out, conversation.ScanCandidate{
-			Path:     candidate.Path,
-			Selector: "",
-			Stamp:    conversation.FileStamp{Size: candidate.Stamp.Size, Mtime: candidate.Stamp.Mtime},
+			MetadataChanged: metadataChanged,
+			Path:            candidate.Path,
+			Selector:        "",
+			Stamp:           conversation.FileStamp{Size: candidate.Stamp.Size, Mtime: candidate.Stamp.Mtime},
 		})
 	}
 	return out, nil

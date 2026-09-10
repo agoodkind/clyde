@@ -75,6 +75,9 @@ type ScanCandidate struct {
 	Path     string
 	Selector string
 	Stamp    FileStamp
+	// MetadataChanged forces record derivation when discovery changed metadata
+	// outside this artifact, such as its parent conversation or archive status.
+	MetadataChanged bool
 }
 
 // MultiConversationScan is one incremental read of an artifact that can hold
@@ -145,7 +148,7 @@ type Parser interface {
 // artifact contains several independently addressable conversations.
 type MultiConversationParser interface {
 	Parser
-	ScanRecords(input MultiConversationScan) (MultiConversationScanResult, bool)
+	ScanRecords(ctx context.Context, input MultiConversationScan) (MultiConversationScanResult, bool)
 	StreamSelected(path string, selector string, opts LoadOptions) iter.Seq2[transcript.Message, error]
 }
 

@@ -1,12 +1,16 @@
 package daemon
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/providerid"
 	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
 	codexparser "goodkind.io/clyde/internal/providers/codex/parser"
@@ -14,6 +18,34 @@ import (
 	cursorparser "goodkind.io/clyde/internal/providers/cursor/parser"
 	zedparser "goodkind.io/clyde/internal/providers/zed/parser"
 )
+
+// startConversationIndex installs lifecycle ownership before launching the worker.
+func startConversationIndex(ctx context.Context, log *slog.Logger, index *conversation.Index, group *livetrack.Group) {
+	if group == nil {
+		return
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	group.AddHookBefore(livetrack.PhaseWorkers, "conversation.index", func(stopCtx context.Context) error {
+		cancel()
+		select {
+		case <-done:
+			return nil
+		case <-stopCtx.Done():
+			return fmt.Errorf("wait for conversation index worker: %w", stopCtx.Err())
+		}
+	})
+	go func() {
+		defer close(done)
+		defer cancel()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.ErrorContext(ctx, "daemon.conversation_index.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
+			}
+		}()
+		index.Start(workerCtx, time.Minute)
+	}()
+}
 
 // newConversationRegistry builds the conversation parser registry the daemon
 // injects into its index. This is the one place the provider parser packages are

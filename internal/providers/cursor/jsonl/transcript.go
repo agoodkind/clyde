@@ -3,6 +3,7 @@ package cursorjsonl
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -222,6 +223,50 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 			slog.Warn("providers.cursor.jsonl.transcript_read_failed", "concern", concern, "path", path, "line", lineNumber, "err", readErr)
 			return TranscriptHeader{}, fmt.Errorf("read cursor transcript %s line %d: %w", path, lineNumber, readErr)
 		}
+	}
+}
+
+// ScanAppend decodes complete records from offset and updates the display header.
+// The callback receives each decoded record once, before turn reconstruction.
+// An unterminated final record remains at the returned offset for the next pass.
+func ScanAppend(ctx context.Context, path string, source io.ReadSeeker, offset int64, header TranscriptHeader, visit func(TranscriptMessage)) (TranscriptHeader, int64, error) {
+	if _, err := source.Seek(offset, io.SeekStart); err != nil {
+		slog.WarnContext(ctx, "providers.cursor.jsonl.transcript_seek_failed", "concern", concern, "path", path, "offset", offset, "err", err)
+		return header, offset, fmt.Errorf("seek cursor transcript %s: %w", path, err)
+	}
+	header.ConversationID = conversationIDFromPath(path)
+	reader := bufio.NewReader(source)
+	lineNumber := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return header, offset, fmt.Errorf("scan cursor transcript %s: %w", path, err)
+		}
+		line, err := reader.ReadBytes('\n')
+		if err == io.EOF {
+			return header, offset, nil
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "providers.cursor.jsonl.transcript_read_failed", "concern", concern, "path", path, "offset", offset, "err", err)
+			return header, offset, fmt.Errorf("read cursor transcript %s: %w", path, err)
+		}
+		offset += int64(len(line))
+		lineNumber++
+		record, kind, decodeErr := decodeLine(path, lineNumber, line)
+		if decodeErr != nil {
+			slog.WarnContext(ctx, "providers.cursor.jsonl.transcript_line_undecodable", "concern", concern, "path", path, "offset", offset-int64(len(line)), "err", errors.Unwrap(decodeErr))
+			if header.FirstUserText == "" {
+				header.FirstUserTextUncertain = true
+			}
+			continue
+		}
+		if kind != lineKindRecord || record.Type != LineTypeUnspecified {
+			continue
+		}
+		header.HasMessages = true
+		if header.FirstUserText == "" && record.Message.Role == RoleUser {
+			header.FirstUserText = firstTextPart(record.Message.Parts)
+		}
+		visit(record.Message)
 	}
 }
 
