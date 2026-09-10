@@ -28,14 +28,23 @@ func SemanticProjectionHash(docs []semsearch.SemDoc) string {
 		hasher.Write([]byte(value))
 	}
 	for _, doc := range docs {
+		writeField(doc.ConversationID)
+		writeField(doc.ParentConversationID)
 		writeField(strconv.Itoa(int(doc.MessageIndex)))
+		writeField(strconv.FormatInt(doc.TimestampUnix, 10))
+		writeField(doc.WorkspaceRoot)
+		writeField(strconv.FormatBool(doc.Archived))
+		writeField(doc.LoadRules)
 		writeField(doc.Role)
 		writeField(doc.Text)
 		writeField(doc.Thinking)
+		writeField(strconv.Itoa(len(doc.Tools)))
 		for _, tool := range doc.Tools {
 			writeField(tool.Name)
 			writeField(tool.Display)
+			writeField(tool.LangHint)
 			writeField(tool.Output)
+			writeField(strconv.FormatBool(tool.IsError))
 		}
 	}
 	return hex.EncodeToString(hasher.Sum(nil))

@@ -83,6 +83,9 @@ func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncSt
 const (
 	conversationSemanticSyncInterval = time.Minute
 	maxSemanticMessageIndex          = int32(1<<31 - 1)
+	// Admit artifacts before loading them, so preparing the next batch never
+	// retains the previous batch. A larger artifact is streamed alone.
+	conversationSemanticBatchBytes = 8 << 20
 	// failedLoadSuppressThreshold is how many consecutive load failures at one
 	// fingerprint a conversation gets before the manifest stops advertising it.
 	// Passes run a minute apart, so a transient failure such as a busy Cursor
@@ -692,8 +695,8 @@ type deliveredConversation struct {
 }
 
 // collectNeededDocuments loads the documents for the conversations the engine
-// asked for, bounded by the per-batch byte budget. Delivery order rotates from
-// the previous batch's last conversation so every needed conversation is
+// asked for, bounded by the per-batch raw artifact byte budget. Delivery order
+// rotates from the previous batch's last conversation so every needed conversation is
 // reached across passes, and a conversation whose transcript changed within
 // the last interval is deferred: it is still being appended to, and delivering
 // it now would re-send a growing transcript on every pass. The remaining
@@ -713,11 +716,8 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	ordered = rotateAfter(ordered, w.deliveryCursor)
 
 	docs := make([]semsearch.SemDoc, 0)
-	// Streaming carries the whole needed set in one client-streamed upsert, so a
-	// pass collects every needed conversation rather than splitting by a byte
-	// budget. The stream client frames the documents and the manifest into
-	// bounded chunks on the wire.
 	sent := make([]deliveredConversation, 0)
+	var artifactBytes int64
 	for _, conversationID := range ordered {
 		if semanticSyncContextDone(ctx) {
 			break
@@ -733,6 +733,10 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			stats.deferred++
 			continue
 		}
+		artifactSize := stampsByID[conversationID].Size
+		if len(docs) > 0 && artifactBytes+artifactSize > conversationSemanticBatchBytes {
+			break
+		}
 		built, loadErr := w.loadDocs(ctx, record)
 		if loadErr != nil {
 			stats.failed++
@@ -744,14 +748,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			// failure at a new fingerprint restarts the count, because the new
 			// bytes have not been tried yet.
 			if stamp, stamped := stampsByID[conversationID]; stamped {
-				fingerprint := conversation.ContentFingerprint(record, stamp)
-				failureRecord := w.failedLoad[conversationID]
-				if failureRecord.fingerprint == fingerprint {
-					failureRecord.failures++
-				} else {
-					failureRecord = failedLoadRecord{fingerprint: fingerprint, failures: 1}
-				}
-				w.failedLoad[conversationID] = failureRecord
+				w.recordLoadFailure(conversationID, conversation.ContentFingerprint(record, stamp))
 			}
 			continue
 		}
@@ -803,14 +800,28 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			continue
 		}
 		docs = append(docs, built.Docs...)
+		artifactBytes += artifactSize
 		sent = append(sent, deliveredConversation{
 			id:             conversationID,
 			fingerprint:    fingerprint,
 			projectionHash: projectionHash,
 		})
 		w.deliveryCursor = conversationID
+		if artifactBytes >= conversationSemanticBatchBytes {
+			break
+		}
 	}
 	return docs, sent
+}
+
+func (w *conversationSemanticSyncWorker) recordLoadFailure(conversationID, fingerprint string) {
+	failureRecord := w.failedLoad[conversationID]
+	if failureRecord.fingerprint == fingerprint {
+		failureRecord.failures++
+	} else {
+		failureRecord = failedLoadRecord{fingerprint: fingerprint, failures: 1}
+	}
+	w.failedLoad[conversationID] = failureRecord
 }
 
 // isActivelyGrowing reports whether a conversation's transcript changed within

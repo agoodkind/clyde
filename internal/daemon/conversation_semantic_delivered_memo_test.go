@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -103,5 +104,47 @@ func TestProjectionHashSeparatesContentFromBoundaries(t *testing.T) {
 	}
 	if SemanticProjectionHash(base) == SemanticProjectionHash(shifted) {
 		t.Fatal("boundary-shifted projection hashes equal, want a distinct hash")
+	}
+}
+
+func TestConversationSemanticSyncDeliversChangedMetadata(t *testing.T) {
+	for _, field := range []string{"archived", "workspace", "timestamp", "tool_language", "tool_error"} {
+		t.Run(field, func(t *testing.T) {
+			conversationID := "codex:metadata"
+			index := semanticTestIndexWithTexts(map[string]string{conversationID: "unchanged text"})
+			index.messagesByID[conversationID][0].Tools = []transcript.ToolCall{{Name: "shell", Display: "date", DisplayLang: "bash"}}
+			client := &fakeConversationSemanticClient{needed: []string{conversationID}}
+			worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+			if err := worker.runPass(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			index.records[0].Stamp = semanticTestStamp(100, 500)
+			switch field {
+			case "archived":
+				index.records[0].Record.Archived = true
+			case "workspace":
+				index.records[0].Record.WorkspaceRoot = "/moved-workspace"
+			case "timestamp":
+				index.messagesByID[conversationID][0].Timestamp = time.Unix(1710000100, 0)
+			case "tool_language":
+				index.messagesByID[conversationID][0].Tools[0].DisplayLang = "zsh"
+			case "tool_error":
+				index.messagesByID[conversationID][0].Tools[0].IsError = true
+			}
+			if err := worker.runPass(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(client.upsertCalls) != 2 {
+				t.Fatalf("upserts = %d, want metadata update after original delivery", len(client.upsertCalls))
+			}
+			actual := client.upsertCalls[1].Docs
+			expected, err := BuildSemanticConversationDocuments(index.records[0].Record, index.messagesByID[conversationID], semanticTestContentKinds())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(actual, expected.Docs) {
+				t.Fatalf("delivered metadata = %+v, want %+v", actual, expected.Docs)
+			}
+		})
 	}
 }
