@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/clock"
@@ -35,6 +36,7 @@ type controlServer struct {
 	loggingConfig config.LoggingConfig
 	mitmConfig    config.MITMConfig
 	mitmStatus    func() MITMStatus
+	runtimeStatus func() *clydev1.GetDaemonStatusResponse
 	showCapture   func(ctx context.Context, id string) (mitmshow.ShowOutput, error)
 	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 	rebind        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
@@ -52,6 +54,14 @@ type controlServer struct {
 	exportTokens       exportTokenConfig
 	providerStatsNow   func() time.Time
 	providerStatsTicks <-chan time.Time
+}
+
+// GetDaemonStatus reads only daemon-owned flags, connections, and listener handles.
+func (s *controlServer) GetDaemonStatus(context.Context, *emptypb.Empty) (*clydev1.GetDaemonStatusResponse, error) {
+	if s.runtimeStatus == nil {
+		return nil, status.Error(codes.Unavailable, "daemon runtime status is unavailable")
+	}
+	return s.runtimeStatus(), nil
 }
 
 // conversationSemanticSearchClient is the vector engine client adapted by

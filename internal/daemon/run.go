@@ -332,6 +332,7 @@ func newControlServer(
 		mitmStatus: func() MITMStatus {
 			return collectMITMStatus(cfg.MITM, runtime.mitmListeners)
 		},
+		runtimeStatus: runtime.statusSnapshot,
 		showCapture: func(showCtx context.Context, id string) (mitmshow.ShowOutput, error) {
 			return mitmshow.Lookup(showCtx, cfg, id)
 		},
