@@ -170,15 +170,12 @@ func sameResetProcess(ctx context.Context, expected resetProcess) (_ bool, err e
 	} else if err != nil {
 		return false, fmt.Errorf("probe reset process %d: %w", expected.PID, err)
 	}
-	current, err := resetProcessStart(expected.PID)
+	current, err := readResetProcess(ctx, expected.PID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 			return false, nil
 		}
 		return false, fmt.Errorf("verify Clyde process %d before deletion: %w", expected.PID, err)
 	}
-	// Ownership was established before teardown. Procargs can disappear while
-	// the same process is exiting; only the kernel identity decides when it is
-	// gone. A recycled PID never inherits the old process's signal authority.
-	return current == expected.Started, nil
+	return current.Started == expected.Started, nil
 }

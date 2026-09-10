@@ -33,6 +33,21 @@ func resetProcessDetails(pid int) (_ resetProcess, err error) {
 	if err != nil {
 		return resetProcess{}, err
 	}
+	info, err = os.Stat(root)
+	if err != nil {
+		return resetProcess{}, fmt.Errorf("recheck reset process %d ownership: %w", pid, err)
+	}
+	stat, ok = info.Sys().(*syscall.Stat_t)
+	if !ok || int64(stat.Uid) != int64(os.Getuid()) {
+		return resetProcess{}, fmt.Errorf("process %d belongs to another user", pid)
+	}
+	currentStarted, err := resetProcessStart(pid)
+	if err != nil {
+		return resetProcess{}, err
+	}
+	if currentStarted != started {
+		return resetProcess{}, os.ErrNotExist
+	}
 	executable, err := os.Readlink(filepath.Join(root, "exe"))
 	if err != nil {
 		return resetProcess{}, fmt.Errorf("read reset process executable %d: %w", pid, err)
