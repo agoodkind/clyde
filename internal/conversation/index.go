@@ -44,6 +44,7 @@ type Index struct {
 	prevRecords      map[string]Record
 	prevStamps       map[string]FileStamp
 	prevMultiStates  map[string]MultiConversationScanState
+	lastSkippedCount int
 	loaded           bool
 	refreshing       bool
 	// refreshRun is the refresh currently in flight and the outcome it finished
@@ -69,6 +70,7 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		prevRecords:      nil,
 		prevStamps:       nil,
 		prevMultiStates:  nil,
+		lastSkippedCount: -1,
 		loaded:           false,
 		refreshing:       false,
 		refreshRun:       nil,
@@ -658,19 +660,18 @@ func (idx *Index) installRefreshResult(result scanResult) {
 // nothing when the setting exposes subagent conversations or when the scan found
 // none.
 func (idx *Index) reportSkippedSubagents(ctx context.Context, records []Record) {
-	idx.mu.Lock()
-	includeSubagents := idx.includeSubagents
-	idx.mu.Unlock()
-	if includeSubagents {
-		return
-	}
 	skipped := 0
 	for _, record := range records {
 		if record.IsSubagent() {
 			skipped++
 		}
 	}
-	if skipped == 0 {
+	idx.mu.Lock()
+	includeSubagents := idx.includeSubagents
+	unchanged := skipped == idx.lastSkippedCount
+	idx.lastSkippedCount = skipped
+	idx.mu.Unlock()
+	if includeSubagents || skipped == 0 || unchanged {
 		return
 	}
 	slog.InfoContext(ctx, "conversation.index.subagent_conversations_skipped",
