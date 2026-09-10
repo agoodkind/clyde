@@ -78,6 +78,7 @@ func metricsWindowsFromRollupPath(
 
 	checkpoint := readMetricsRollupCheckpoint(checkpointPath)
 	lastPassAt, _ := parseRollupTime(checkpoint.LastPassAt)
+	coverageSince, hasCoverage := parseRollupTime(checkpoint.CoverageSince)
 
 	reports := make([]MetricsWindowReport, 0, len(durations))
 	loaded, loadErr := loadMetricsRollup(path, windows)
@@ -90,6 +91,10 @@ func metricsWindowsFromRollupPath(
 			continue
 		}
 		applyRollupWindow(&report, loaded[i], lastPassAt, pricing)
+		if !hasCoverage || coverageSince.After(windows[i].Since) {
+			report.Coverage.Complete = false
+			addMetricsWarning(&report, "historical summary coverage is unavailable before the current log continuation")
+		}
 		reports = append(reports, MetricsWindowReport{Label: metricsWindowLabel(duration), Report: report})
 	}
 	return reports

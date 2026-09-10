@@ -57,7 +57,7 @@ func TestRollupReportMatchesDirectLogReplay(t *testing.T) {
 
 	if _, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
-		LastRecordAt: time.Time{}, Pricing: pricing,
+		State: testRollupState(t, logPath), Pricing: pricing,
 	}); err != nil {
 		t.Fatalf("distill: %v", err)
 	}
@@ -123,9 +123,8 @@ func findStage(report MetricsHistoryReport, name string) (MetricsDuration, bool)
 	return MetricsDuration{}, false
 }
 
-// TestDistillIsIdempotentAcrossPasses proves the checkpoint cursor works: a
-// second pass over an unchanged log adds nothing, so counts cannot inflate
-// each time the background worker runs.
+// TestDistillIsIdempotentAcrossPasses verifies that saved source positions
+// prevent an unchanged log from inflating request counts.
 func TestDistillIsIdempotentAcrossPasses(t *testing.T) {
 	t.Parallel()
 	logPath := twoRequestLog(t)
@@ -133,9 +132,10 @@ func TestDistillIsIdempotentAcrossPasses(t *testing.T) {
 	now := time.Date(2026, 8, 8, 11, 0, 0, 0, time.UTC)
 	pricing := rollupPricingTable()
 
+	state := testRollupState(t, logPath)
 	first, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
-		LastRecordAt: time.Time{}, Pricing: pricing,
+		State: state, Pricing: pricing,
 	})
 	if err != nil {
 		t.Fatalf("first distill: %v", err)
@@ -146,7 +146,7 @@ func TestDistillIsIdempotentAcrossPasses(t *testing.T) {
 
 	second, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
-		LastRecordAt: first.LastRecordAt, Pricing: pricing,
+		State: state, Pricing: pricing,
 	})
 	if err != nil {
 		t.Fatalf("second distill: %v", err)
@@ -178,7 +178,7 @@ func TestDistillSkipsRequestsWithNoTerminalRecord(t *testing.T) {
 
 	result, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
-		LastRecordAt: time.Time{}, Pricing: rollupPricingTable(),
+		State: testRollupState(t, logPath), Pricing: rollupPricingTable(),
 	})
 	if err != nil {
 		t.Fatalf("distill: %v", err)
@@ -261,8 +261,9 @@ func writeRollupCheckpointFixture(t *testing.T, passCompletedAt time.Time) strin
 	t.Helper()
 	path := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
 	if err := writeMetricsRollupCheckpoint(path, metricsRollupCheckpoint{
-		LastRecordAt: "",
-		LastPassAt:   formatRollupTime(passCompletedAt),
+		LastRecordAt:  "",
+		LastPassAt:    formatRollupTime(passCompletedAt),
+		CoverageSince: formatRollupTime(passCompletedAt.Add(-metricsRollupRetention)),
 	}); err != nil {
 		t.Fatalf("write checkpoint fixture: %v", err)
 	}
@@ -337,9 +338,7 @@ func TestWindowReportsCompleteCoverageWhenDistillerIsCurrent(t *testing.T) {
 }
 
 // TestDistillMetricsRollupStopsPromptlyWhenCanceled is the cancellation
-// finding: a cold-start pass with no checkpoint scans the full retention
-// window, and a reload's drain must be able to interrupt that scan rather than
-// wait for it to finish.
+// finding: a reload's drain must stop a pass before it reads or writes.
 func TestDistillMetricsRollupStopsPromptlyWhenCanceled(t *testing.T) {
 	t.Parallel()
 	logPath := twoRequestLog(t)
@@ -351,7 +350,7 @@ func TestDistillMetricsRollupStopsPromptlyWhenCanceled(t *testing.T) {
 
 	_, err := distillMetricsRollup(ctx, metricsRollupDistillInput{
 		LogPath: logPath, RollupPath: rollupPath, Now: now,
-		LastRecordAt: time.Time{}, Pricing: rollupPricingTable(),
+		State: testRollupState(t, logPath), Pricing: rollupPricingTable(),
 	})
 	if err == nil {
 		t.Fatal("distill with a canceled context returned no error")
@@ -382,7 +381,7 @@ func TestDistillMetricsRollupWaitsForTheWriteLock(t *testing.T) {
 	go func() {
 		_, err := distillMetricsRollup(t.Context(), metricsRollupDistillInput{
 			LogPath: logPath, RollupPath: rollupPath, Now: now,
-			LastRecordAt: time.Time{}, Pricing: rollupPricingTable(),
+			State: testRollupState(t, logPath), Pricing: rollupPricingTable(),
 		})
 		done <- err
 	}()
