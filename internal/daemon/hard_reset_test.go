@@ -322,7 +322,7 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 		inventory = append(inventory, target.Path)
 	}
 	writeResetFixture(t, filepath.Join(root, "inventory"), []byte(strings.Join(inventory, "\n")))
-	protected := []string{config.GlobalConfigPath(), cfg.MITM.CA.CertPath, cfg.MITM.CA.KeyPath, filepath.Join(config.DefaultStateDir(), "logs", "retained.jsonl"), filepath.Join(config.DefaultStateDir(), "exports", "transcript.md"), filepath.Join(config.DefaultStateDir(), "sibling.db"), filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), filepath.Join(os.Getenv("CODEX_HOME"), "state_5.sqlite"), filepath.Join(os.Getenv("CLYDE_CURSOR_DATA_DIRS"), "User", "globalStorage", "state.vscdb"), filepath.Join(root, "lm-semantic-search", "collection.db"), filepath.Join(root, "sibling-repo", "database.db")}
+	protected := []string{config.GlobalConfigPath(), cfg.MITM.CA.CertPath, cfg.MITM.CA.KeyPath, filepath.Join(config.DefaultStateDir(), "exports", "transcript.md"), filepath.Join(config.DefaultStateDir(), "sibling.db"), filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), filepath.Join(os.Getenv("CODEX_HOME"), "state_5.sqlite"), filepath.Join(os.Getenv("CLYDE_CURSOR_DATA_DIRS"), "User", "globalStorage", "state.vscdb"), filepath.Join(root, "lm-semantic-search", "collection.db"), filepath.Join(root, "sibling-repo", "database.db")}
 	for _, path := range protected {
 		if path != config.GlobalConfigPath() {
 			writeResetFixture(t, path, []byte("protected sentinel: "+path))

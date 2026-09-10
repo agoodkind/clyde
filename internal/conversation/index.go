@@ -569,7 +569,9 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache) error {
 		}
 	}
 	idx.installRefreshResult(result)
-	idx.reportSkippedSubagents(ctx, result.records)
+	if result.changed {
+		idx.reportSkippedSubagents(ctx, result.records)
+	}
 	return nil
 }
 
