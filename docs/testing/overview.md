@@ -52,6 +52,18 @@ run`, so it gets a supervisor and a worker, because reload and rebind are among
 the behaviors it tests. A sandbox never reloads, so it runs the worker directly
 and has no supervisor at all.
 
+For performance measurements, copy representative provider artifacts and point
+the provider-root overrides at those copies before starting the sandbox. Apply
+append, SQLite, metadata, and rotation changes only to copies or private logs.
+Keep disabled and explicitly enabled semantic cases separate. For an unavailable
+engine fixture, pin the endpoint to an absent Unix socket under the private
+runtime root and verify that destination before launch.
+
+Measure unchanged controls more than once before comparing resource use. Each
+quiet or active window must include a real metrics-worker pass; its cadence is
+five minutes. Record actual source bytes and rows separately from operating
+system disk counters. Matching output and quiet logs do not prove zero reads.
+
 ## Parallel runs
 
 Several isolated instances run at once, one per worktree or terminal. Each run reads
