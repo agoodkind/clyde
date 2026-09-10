@@ -95,7 +95,8 @@ func resetProcessOwnedStart(pid int) (string, error) {
 	root := filepath.Join("/proc", strconv.Itoa(pid))
 	info, err := os.Stat(root)
 	if err != nil {
-		return "", err
+		slog.Warn("daemon.hard_reset.process_ownership_check_failed", "concern", "process.daemon.lifecycle", "pid", pid, "err", err)
+		return "", fmt.Errorf("check reset process %d ownership: %w", pid, err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || int64(stat.Uid) != int64(os.Getuid()) {

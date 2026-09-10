@@ -222,6 +222,18 @@ func TestHardResetScopesSelectOnlyTheirOwnedTargets(t *testing.T) {
 	}
 }
 
+func TestHardResetConfigScopeDoesNotRequireParsedConfig(t *testing.T) {
+	resetTestRoots(t)
+	writeResetFixture(t, config.GlobalConfigPath(), []byte("invalid = ["))
+	targets, err := hardResetTargetsForScope(t.Context(), nil, HardResetScopeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Path != filepath.Dir(config.GlobalConfigPath()) {
+		t.Fatalf("config targets = %+v", targets)
+	}
+}
+
 func TestHardResetRejectsRootResolvingIntoProviderData(t *testing.T) {
 	resetTestRoots(t)
 	provider := os.Getenv("CODEX_HOME")

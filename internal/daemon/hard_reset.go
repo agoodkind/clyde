@@ -73,12 +73,15 @@ func HardResetWithOptions(ctx context.Context, output io.Writer, options HardRes
 	slog.InfoContext(ctx, "daemon.hard_reset.started", "concern", "process.daemon.lifecycle")
 	defer func() {
 		if err != nil {
-			slog.WarnContext(ctx, "daemon.hard_reset.failed", "concern", "process.daemon.lifecycle", "err", err)
+			slog.WarnContext(ctx, "daemon.hard_reset.failed", "concern", "process.daemon.lifecycle")
 		}
 	}()
-	cfg, err := config.LoadGlobalOrDefault()
-	if err != nil {
-		return fmt.Errorf("validate preserved config: %w", err)
+	var cfg *config.Config
+	if options.Scope != HardResetScopeConfig {
+		cfg, err = config.LoadGlobalOrDefault()
+		if err != nil {
+			return fmt.Errorf("validate preserved config: %w", err)
+		}
 	}
 	targets, err := hardResetTargetsForScope(ctx, cfg, options.Scope)
 	if err != nil {
@@ -148,7 +151,7 @@ func HardResetWithOptions(ctx context.Context, output io.Writer, options HardRes
 func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope HardResetScope) (_ []resetTarget, err error) {
 	defer func() {
 		if err != nil {
-			slog.Warn("daemon.hard_reset.inventory_rejected", "concern", "process.daemon.lifecycle", "err", err)
+			slog.Warn("daemon.hard_reset.inventory_rejected", "concern", "process.daemon.lifecycle")
 		}
 	}()
 	state, cache, runtime := config.DefaultStateDir(), config.GlobalCacheDir(), config.RuntimeDir()
@@ -231,7 +234,7 @@ func withinResetRoot(path, root string) bool {
 func validateResetTarget(ctx context.Context, target resetTarget, cfg *config.Config) (err error) {
 	defer func() {
 		if err != nil {
-			slog.Warn("daemon.hard_reset.target_rejected", "concern", "process.daemon.lifecycle", "path", target.Path, "err", err)
+			slog.Warn("daemon.hard_reset.target_rejected", "concern", "process.daemon.lifecycle")
 		}
 	}()
 	if !withinResetRoot(target.Path, target.Root) {
@@ -311,7 +314,7 @@ func resetProtectedFiles(cfg *config.Config) []string {
 func resolvedResetPath(path string) (_ string, err error) {
 	defer func() {
 		if err != nil {
-			slog.Warn("daemon.hard_reset.path_resolution_failed", "concern", "process.daemon.lifecycle", "path", path, "err", err)
+			slog.Warn("daemon.hard_reset.path_resolution_failed", "concern", "process.daemon.lifecycle")
 		}
 	}()
 	path, err = filepath.Abs(path)
@@ -342,7 +345,7 @@ func resolvedResetPath(path string) (_ string, err error) {
 func resetProtectedDirectories(ctx context.Context, cfg *config.Config) (_ []string, err error) {
 	defer func() {
 		if err != nil {
-			slog.WarnContext(ctx, "daemon.hard_reset.protected_roots_failed", "concern", "process.daemon.lifecycle", "err", err)
+			slog.WarnContext(ctx, "daemon.hard_reset.protected_roots_failed", "concern", "process.daemon.lifecycle")
 		}
 	}()
 	codex, err := codexstore.ResolveStorePathsFromEnv(ctx)
