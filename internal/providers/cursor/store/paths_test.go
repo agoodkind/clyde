@@ -298,6 +298,37 @@ func TestReadWorkspaceFolderPathStripsFileScheme(t *testing.T) {
 	}
 }
 
+func TestReadWorkspaceFolderPathStripsUppercaseFileScheme(t *testing.T) {
+	workspaceJSONPath := filepath.Join(t.TempDir(), "workspace.json")
+	if err := os.WriteFile(workspaceJSONPath, []byte(`{"folder":"FILE:///Users/alice/source/cursor%20repo"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile workspace json: %v", err)
+	}
+
+	folderPath, err := ReadWorkspaceFolderPath(workspaceJSONPath)
+	if err != nil {
+		t.Fatalf("ReadWorkspaceFolderPath returned error: %v", err)
+	}
+	want := filepath.FromSlash("/Users/alice/source/cursor repo")
+	if folderPath != want {
+		t.Fatalf("folderPath = %q, want %q", folderPath, want)
+	}
+}
+
+func TestRemoteWorkspaceAuthoritySurvivesDescriptorRead(t *testing.T) {
+	descriptor := filepath.Join(t.TempDir(), "workspace.json")
+	body := []byte(`{"folder":"vscode-remote://ssh-remote%2Bexample/path"}`)
+	if err := os.WriteFile(descriptor, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadWorkspaceFolderPath(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "vscode-remote://ssh-remote%2Bexample/path" {
+		t.Fatalf("workspace identity = %q", got)
+	}
+}
+
 func expectedDefaultCursorDataRoot(homeDir string) string {
 	switch runtime.GOOS {
 	case "darwin":
