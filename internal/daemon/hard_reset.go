@@ -26,9 +26,32 @@ import (
 )
 
 type resetTarget struct {
-	Path string
-	Root string
+	Path           string
+	Root           string
+	RemoveTree     bool
+	AllowProtected bool
 }
+
+// HardResetScope names one Clyde-owned local data group.
+type HardResetScope string
+
+const (
+	// HardResetScopeAll resets every default Clyde data group while preserving configuration.
+	HardResetScopeAll HardResetScope = ""
+	// HardResetScopeDB resets the Clyde database files.
+	HardResetScopeDB HardResetScope = "db"
+	// HardResetScopeState resets the Clyde runtime and state files.
+	HardResetScopeState HardResetScope = "state"
+	// HardResetScopeCache resets the derived Clyde conversation cache.
+	HardResetScopeCache HardResetScope = "cache"
+	// HardResetScopeConfig removes the Clyde configuration directory.
+	HardResetScopeConfig HardResetScope = "config"
+	// HardResetScopeHooks removes the Clyde hook state directory.
+	HardResetScopeHooks HardResetScope = "hooks"
+)
+
+// HardResetOptions selects the Clyde-owned data removed by HardResetWithOptions.
+type HardResetOptions struct{ Scope HardResetScope }
 
 func daemonReloadLockPath() string {
 	return filepath.Join(config.RuntimeDir(), "daemon.reload.lock")
@@ -41,6 +64,12 @@ func resetFileTarget(path, root string) resetTarget {
 // HardReset deletes only Clyde's local databases and derived index state, then
 // reinstalls this executable through the native user service installer.
 func HardReset(ctx context.Context, output io.Writer) (err error) {
+	return HardResetWithOptions(ctx, output, HardResetOptions{Scope: HardResetScopeAll})
+}
+
+// HardResetWithOptions stops Clyde, removes the selected Clyde-owned data, and
+// reinstalls the native service. The default scope preserves configuration.
+func HardResetWithOptions(ctx context.Context, output io.Writer, options HardResetOptions) (err error) {
 	slog.InfoContext(ctx, "daemon.hard_reset.started", "concern", "process.daemon.lifecycle")
 	defer func() {
 		if err != nil {
@@ -51,7 +80,7 @@ func HardReset(ctx context.Context, output io.Writer) (err error) {
 	if err != nil {
 		return fmt.Errorf("validate preserved config: %w", err)
 	}
-	targets, err := hardResetTargets(ctx, cfg)
+	targets, err := hardResetTargetsForScope(ctx, cfg, options.Scope)
 	if err != nil {
 		return err
 	}
@@ -94,7 +123,12 @@ func HardReset(ctx context.Context, output io.Writer) (err error) {
 		if err := validateResetTarget(ctx, target, cfg); err != nil {
 			return err
 		}
-		if err := os.Remove(target.Path); err != nil {
+		if target.RemoveTree {
+			err = os.RemoveAll(target.Path)
+		} else {
+			err = os.Remove(target.Path)
+		}
+		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
@@ -111,28 +145,56 @@ func HardReset(ctx context.Context, output io.Writer) (err error) {
 	return nil
 }
 
-func hardResetTargets(ctx context.Context, cfg *config.Config) (_ []resetTarget, err error) {
+func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope HardResetScope) (_ []resetTarget, err error) {
 	defer func() {
 		if err != nil {
 			slog.Warn("daemon.hard_reset.inventory_rejected", "concern", "process.daemon.lifecycle", "err", err)
 		}
 	}()
 	state, cache, runtime := config.DefaultStateDir(), config.GlobalCacheDir(), config.RuntimeDir()
-	socket, err := config.DaemonSocketPathFromGRPCAddress(cfg.Daemon.GRPCAddress)
-	if err != nil {
-		return nil, fmt.Errorf("resolve daemon reset socket: %w", err)
+	cacheTargets := []resetTarget{resetFileTarget(conversation.CachePath(), cache)}
+	stateTargets := []resetTarget{
+		resetFileTarget(metricsRollupPath(), state),
+		resetFileTarget(metricsRollupPath()+".lock", state),
+		resetFileTarget(metricsRollupPath()+".tmp", state),
+		resetFileTarget(metricsRollupCheckpointPath(), state),
+		resetFileTarget(metricsRollupCheckpointPath()+".tmp", state),
+		resetFileTarget(config.DaemonSocketPath(), runtime),
+		resetFileTarget(daemonsupervisor.SocketPath(runtime), runtime),
+		resetFileTarget(daemonReloadLockPath(), runtime),
 	}
-	targets := []resetTarget{
-		{Path: conversation.CachePath(), Root: cache},
-		{Path: metricsRollupPath(), Root: state},
-		{Path: metricsRollupPath() + ".lock", Root: state},
-		{Path: metricsRollupPath() + ".tmp", Root: state},
-		{Path: metricsRollupCheckpointPath(), Root: state},
-		{Path: metricsRollupCheckpointPath() + ".tmp", Root: state},
-		{Path: socket, Root: runtime},
-		{Path: config.DaemonSocketPath(), Root: runtime},
-		{Path: daemonsupervisor.SocketPath(runtime), Root: runtime},
-		{Path: daemonReloadLockPath(), Root: runtime},
+	if scope == HardResetScopeAll || scope == HardResetScopeState {
+		socket, err := config.DaemonSocketPathFromGRPCAddress(cfg.Daemon.GRPCAddress)
+		if err != nil {
+			return nil, fmt.Errorf("resolve daemon reset socket: %w", err)
+		}
+		stateTargets = append(stateTargets, resetFileTarget(socket, runtime))
+	}
+	targets := make([]resetTarget, 0)
+	switch scope {
+	case HardResetScopeAll:
+		targets = append(targets, cacheTargets...)
+		targets = append(targets, stateTargets...)
+	case HardResetScopeCache:
+		targets = append(targets, cacheTargets...)
+	case HardResetScopeState:
+		targets = append(targets, stateTargets...)
+	case HardResetScopeHooks:
+		targets = append(targets, resetTarget{Path: filepath.Join(state, "hooks"), Root: state, RemoveTree: true, AllowProtected: false})
+	case HardResetScopeConfig:
+		configDir := filepath.Dir(config.GlobalConfigPath())
+		targets = append(targets, resetTarget{Path: configDir, Root: filepath.Dir(configDir), RemoveTree: true, AllowProtected: true})
+	case HardResetScopeDB:
+	default:
+		return nil, fmt.Errorf("unsupported hard-reset target %q", scope)
+	}
+	if scope != HardResetScopeAll && scope != HardResetScopeDB {
+		for _, target := range targets {
+			if err := validateResetTarget(ctx, target, cfg); err != nil {
+				return nil, err
+			}
+		}
+		return targets, nil
 	}
 	capturePath := cfg.MITM.CaptureStore.DBPath
 	root := ""
@@ -145,8 +207,10 @@ func hardResetTargets(ctx context.Context, cfg *config.Config) (_ []resetTarget,
 	if root == "" {
 		return nil, fmt.Errorf("capture reset target %s is outside Clyde ownership", capturePath)
 	}
-	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-		targets = append(targets, resetTarget{Path: capturePath + suffix, Root: root})
+	if scope == HardResetScopeAll || scope == HardResetScopeDB {
+		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+			targets = append(targets, resetFileTarget(capturePath+suffix, root))
+		}
 	}
 	for _, target := range targets {
 		if err := validateResetTarget(ctx, target, cfg); err != nil {
@@ -181,13 +245,16 @@ func validateResetTarget(ctx context.Context, target resetTarget, cfg *config.Co
 		if err != nil {
 			return fmt.Errorf("inspect reset target %s: %w", current, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 || (current == filepath.Clean(target.Path) && info.IsDir()) {
+		if info.Mode()&os.ModeSymlink != 0 || (current == filepath.Clean(target.Path) && info.IsDir() && !target.RemoveTree) {
 			return fmt.Errorf("refuse symlink or directory reset target %s", current)
 		}
 	}
 	resolvedTarget, err := resolvedResetPath(target.Path)
 	if err != nil {
 		return err
+	}
+	if target.AllowProtected {
+		return nil
 	}
 	for _, path := range resetProtectedFiles(cfg) {
 		if path == "" {

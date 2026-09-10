@@ -199,6 +199,29 @@ func TestHardResetInventoryPreservesConfigWithSharedRoots(t *testing.T) {
 	}
 }
 
+func TestHardResetScopesSelectOnlyTheirOwnedTargets(t *testing.T) {
+	resetTestRoots(t)
+	writeResetFixture(t, config.GlobalConfigPath(), []byte("# test\n"))
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []HardResetScope{HardResetScopeDB, HardResetScopeState, HardResetScopeCache, HardResetScopeConfig, HardResetScopeHooks} {
+		targets, err := hardResetTargetsForScope(t.Context(), cfg, scope)
+		if err != nil || len(targets) == 0 {
+			t.Fatalf("scope %q targets = %v, %v", scope, targets, err)
+		}
+		for _, target := range targets {
+			if scope == HardResetScopeConfig && !target.RemoveTree {
+				t.Fatalf("config target = %+v, want a directory removal", target)
+			}
+			if scope == HardResetScopeHooks && target.Path != filepath.Join(config.DefaultStateDir(), "hooks") {
+				t.Fatalf("hooks target = %+v", target)
+			}
+		}
+	}
+}
+
 func TestHardResetRejectsRootResolvingIntoProviderData(t *testing.T) {
 	resetTestRoots(t)
 	provider := os.Getenv("CODEX_HOME")
