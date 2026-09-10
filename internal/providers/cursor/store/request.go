@@ -104,7 +104,8 @@ func DecodeGenerationEntriesJSON(data []byte) ([]GenerationEntry, error) {
 func ReadGenerationEntries(ctx context.Context, workspaceDB *sql.DB) ([]GenerationEntry, bool, error) {
 	value, found, err := ReadKVValue(ctx, workspaceDB, KVTableItemTable, generationsItemKey)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.generations_read_failed", "concern", concern, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.generations_read_failed", "concern", concern, "err", err)
 		return nil, false, fmt.Errorf("read cursor generation entries: %w", err)
 	}
 	if !found {
@@ -113,7 +114,8 @@ func ReadGenerationEntries(ctx context.Context, workspaceDB *sql.DB) ([]Generati
 
 	entries, err := DecodeGenerationEntriesJSON(value)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.generations_decode_failed", "concern", concern, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.generations_decode_failed", "concern", concern, "err", err)
 		return nil, false, fmt.Errorf("decode cursor generation entries: %w", err)
 	}
 	return entries, true, nil
@@ -205,21 +207,11 @@ func findGenerationEntryInWorkspace(
 ) (GenerationHit, bool, bool) {
 	var emptyHit GenerationHit
 
-	workspaceDB, err := OpenReadOnlyDatabase(ctx, entry.StateDBPath)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.generation_workspace_open_failed", "concern", concern, "path", entry.StateDBPath, "workspace_hash", entry.WorkspaceHash, "err", err)
+	data := ReadWorkspaceDiscovery(ctx, entry)
+	if data.GenerationsErr != nil {
 		return emptyHit, false, false
 	}
-	defer func() { _ = workspaceDB.Close() }()
-
-	generations, found, err := ReadGenerationEntries(ctx, workspaceDB)
-	if err != nil {
-		return emptyHit, false, false
-	}
-	if !found {
-		return emptyHit, false, true
-	}
-	for _, generation := range generations {
+	for _, generation := range data.Generations {
 		if generation.GenerationUUID != requestID {
 			continue
 		}

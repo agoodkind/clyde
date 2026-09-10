@@ -361,7 +361,8 @@ func forEachComposerBubbleProjection(
 			&row.ToolCallJSONType, &row.ToolCallID, &row.ToolName, &row.ToolRawArgs,
 			&row.ToolResult, &row.ToolStatus,
 		); err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.bubble_projection_scan_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
+			logger := discoveryReadLogger(ctx)
+			logger.WarnContext(ctx, "providers.cursor.store.bubble_projection_scan_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
 			return fmt.Errorf("scan cursor bubble projection in key range %q: %w", bounds.Lower, err)
 		}
 		if err := visit(row); err != nil {
@@ -369,7 +370,8 @@ func forEachComposerBubbleProjection(
 		}
 	}
 	if err := rows.Err(); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.bubble_projection_iterate_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.bubble_projection_iterate_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
 		return fmt.Errorf("iterate cursor bubble projection in key range %q: %w", bounds.Lower, err)
 	}
 	return nil

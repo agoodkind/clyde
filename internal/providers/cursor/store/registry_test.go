@@ -63,7 +63,7 @@ func TestBuildWorkspaceComposerIndexMapsComposerToWorkspaceInfo(t *testing.T) {
 		t.Fatalf("WriteFile workspace json: %v", err)
 	}
 
-	index, err := BuildWorkspaceComposerIndex(t.Context(), root)
+	index, err := BuildWorkspaceComposerIndex(ReadWorkspaceInventory(t.Context(), root))
 	if err != nil {
 		t.Fatalf("BuildWorkspaceComposerIndex returned error: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestBuildWorkspaceComposerIndexReadsCurrentComposerDataKey(t *testing.T) {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
 
-	index, err := BuildWorkspaceComposerIndex(t.Context(), root)
+	index, err := BuildWorkspaceComposerIndex(ReadWorkspaceInventory(t.Context(), root))
 	if err != nil {
 		t.Fatalf("BuildWorkspaceComposerIndex returned error: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestBuildWorkspaceComposerIndexKeepsAKnownPathOverAnUnreadableOne(t *testin
 	writeSharedComposerWorkspace(t, root, "hash-a", `{"folder":"file:///Users/alice/source/real"}`)
 	writeSharedComposerWorkspace(t, root, "hash-b", `{not json`)
 
-	index, err := BuildWorkspaceComposerIndex(t.Context(), root)
+	index, err := BuildWorkspaceComposerIndex(ReadWorkspaceInventory(t.Context(), root))
 	if err != nil {
 		t.Fatalf("BuildWorkspaceComposerIndex returned error: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestBuildWorkspaceComposerIndexKeepsAKnownPathOverAnUnreadableOne(t *testin
 	}
 }
 
-func TestBuildWorkspaceComposerIndexKeepsComposerAndLogsDescriptorWarningOnce(t *testing.T) {
+func TestBuildWorkspaceComposerIndexKeepsComposerAndLogsDescriptorErrorOnce(t *testing.T) {
 	rootDir := t.TempDir()
 	root := DataRoot{
 		RootDir:             rootDir,
@@ -207,7 +207,7 @@ func TestBuildWorkspaceComposerIndexKeepsComposerAndLogsDescriptorWarningOnce(t 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
-	index, err := BuildWorkspaceComposerIndex(t.Context(), root)
+	index, err := BuildWorkspaceComposerIndex(ReadWorkspaceInventory(t.Context(), root))
 	if err != nil {
 		t.Fatalf("BuildWorkspaceComposerIndex returned error: %v", err)
 	}

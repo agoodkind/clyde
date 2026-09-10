@@ -10,6 +10,7 @@ import (
 	"iter"
 	"log/slog"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -426,8 +427,9 @@ func discoverSQLite(
 
 	candidates := make([]conversation.ScanCandidate, 0)
 	for _, root := range roots {
-		candidates = append(candidates, discoverComposersForRoot(ctx, root, priorStamps, prior, discovered, seenConversationIDs)...)
-		candidates = append(candidates, discoverLegacyForRoot(ctx, root, discovered)...)
+		inventory := cursorstore.ReadWorkspaceInventory(ctx, root)
+		candidates = append(candidates, discoverComposersForRoot(ctx, root, inventory, priorStamps, prior, discovered, seenConversationIDs)...)
+		candidates = append(candidates, discoverLegacyForRoot(root, inventory, discovered)...)
 	}
 	return candidates, nil
 }
@@ -435,24 +437,23 @@ func discoverSQLite(
 func discoverComposersForRoot(
 	ctx context.Context,
 	root cursorstore.DataRoot,
+	inventory cursorstore.WorkspaceInventory,
 	priorStamps map[string]conversation.FileStamp,
 	prior map[string]conversation.Record,
 	discovered map[string]discoveredArtifact,
 	seenConversationIDs map[string]bool,
 ) []conversation.ScanCandidate {
-	db, availability := openOptionalDatabase(ctx, root.GlobalDBPath, "global_db")
-	if availability != databaseAvailabilityOpen {
-		return nil
+	global := cursorstore.ReadGlobalDiscovery(ctx, root.GlobalDBPath)
+	composerIDs := make([]string, 0, len(global.Headers))
+	for id := range global.Headers {
+		composerIDs = append(composerIDs, id)
 	}
-	defer func() { _ = db.Close() }()
-
-	composerIDs, err := cursorstore.ListComposerIDs(ctx, db)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.list_composers_failed", "concern", concern, "path", root.GlobalDBPath, "err", err)
-		return nil
+	slices.Sort(composerIDs)
+	backgroundIDs := make(map[string]bool)
+	for _, composer := range global.Background {
+		backgroundIDs[composer.ComposerID] = true
 	}
-	backgroundIDs := backgroundComposerIDSet(ctx, db, root.GlobalDBPath)
-	metadataIndex := composerMetadataIndex(ctx, db, root)
+	metadataIndex := cursorstore.MergeWorkspaceComposerMetadata(ctx, root, global.Metadata, inventory)
 	rootHash := RootHash(root.RootDir)
 
 	candidates := make([]conversation.ScanCandidate, 0, len(composerIDs))
@@ -460,33 +461,40 @@ func discoverComposersForRoot(
 		if seenConversationIDs[composerID] {
 			continue
 		}
-		header, found, err := cursorstore.ReadComposerHeader(ctx, db, composerID)
-		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.parser.read_composer_header_failed", "concern", concern, "path", root.GlobalDBPath, "composer_id", composerID, "err", err)
-			continue
-		}
-		if !found {
-			continue
-		}
+		header := global.Headers[composerID]
 		path := BuildVirtualPath(rootHash, VirtualKindComposer, composerID)
 		if path == "" {
 			continue
 		}
-		stamp, admitted := composerScanStamp(ctx, db, root.GlobalDBPath, composerID, header, priorStamps[path])
+		stock, stored := global.Stocks[composerID]
+		if !stored {
+			stock.Conclusive = true
+		}
+		stamp, admitted := composerScanStamp(ctx, root.GlobalDBPath, composerID, header, priorStamps[path], stock, global.Err)
 		if !admitted {
 			continue
 		}
 		info, hasInfo := metadataIndex.ByComposerID[composerID]
+		if global.Err == nil && stock.Conclusive {
+			stamp = stampCoveringMetadata(stamp, info, hasInfo)
+		}
+		if metadataIndex.Err != nil {
+			if previous, known := priorStamps[path]; known {
+				// A partial metadata read returns the prior record below. Keep its
+				// stamp too, so recovery still triggers a scan of the current header.
+				stamp = previous
+			}
+		}
 		candidates = append(candidates, conversation.ScanCandidate{
 			Path:     path,
 			Selector: "",
-			Stamp:    stampCoveringMetadata(stamp, info, hasInfo),
+			Stamp:    stamp,
 		})
 		priorRecord, hasPriorRecord := prior[path]
 		var artifact discoveredArtifact
 		artifact.Kind = discoveredKindComposer
 		artifact.Path = path
-		artifact.MetadataComplete = metadataIndex.Err == nil
+		artifact.MetadataComplete = metadataIndex.Err == nil && global.Err == nil
 		artifact.PriorRecord = priorRecord
 		artifact.HasPriorRecord = hasPriorRecord
 		artifact.RootDir = root.RootDir
@@ -501,52 +509,25 @@ func discoverComposersForRoot(
 }
 
 func discoverLegacyForRoot(
-	ctx context.Context,
 	root cursorstore.DataRoot,
+	inventory cursorstore.WorkspaceInventory,
 	discovered map[string]discoveredArtifact,
 ) []conversation.ScanCandidate {
-	listing, err := root.ListWorkspaceEntries()
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.list_workspace_entries_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
-		return nil
-	}
-	if listing.Unreadable > 0 {
-		slog.WarnContext(ctx, "providers.cursor.parser.workspace_entries_partially_read", "concern", concern, "path", root.WorkspaceStorageDir, "listed", len(listing.Entries), "unreadable", listing.Unreadable)
-	}
 	rootHash := RootHash(root.RootDir)
 	candidates := make([]conversation.ScanCandidate, 0)
-	for _, entry := range listing.Entries {
-		candidates = append(candidates, discoverLegacyForEntry(ctx, rootHash, entry, discovered)...)
+	for _, entry := range inventory.Entries {
+		candidates = append(candidates, discoverLegacyForEntry(rootHash, entry.Entry, entry.Data, discovered)...)
 	}
 	return candidates
 }
 
 func discoverLegacyForEntry(
-	ctx context.Context,
 	rootHash string,
 	entry cursorstore.WorkspaceEntry,
+	data cursorstore.WorkspaceDiscovery,
 	discovered map[string]discoveredArtifact,
 ) []conversation.ScanCandidate {
-	db, availability := openOptionalDatabase(ctx, entry.StateDBPath, "workspace_db")
-	if availability != databaseAvailabilityOpen {
-		return nil
-	}
-	defer func() { _ = db.Close() }()
-
-	chatData, found, err := cursorstore.ReadLegacyChatData(ctx, db)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.read_legacy_chat_failed", "concern", concern, "path", entry.StateDBPath, "workspace_hash", entry.WorkspaceHash, "err", err)
-		return nil
-	}
-	if !found {
-		return nil
-	}
-	workspaceRoot := readWorkspaceRoot(ctx, entry)
-	stampMtime := time.Time{}
-	stateDBInfo, statErr := os.Stat(entry.StateDBPath)
-	if statErr == nil {
-		stampMtime = stateDBInfo.ModTime()
-	}
+	chatData, workspaceRoot := data.Legacy, data.WorkspaceRoot
 	candidates := make([]conversation.ScanCandidate, 0, len(chatData.Tabs))
 	for _, tab := range chatData.Tabs {
 		if len(tab.Bubbles) == 0 {
@@ -560,10 +541,7 @@ func discoverLegacyForEntry(
 		candidates = append(candidates, conversation.ScanCandidate{
 			Path:     path,
 			Selector: "",
-			Stamp: conversation.FileStamp{
-				Size:  int64(len(tab.Bubbles)),
-				Mtime: stampMtime,
-			},
+			Stamp:    legacyScanStamp(data),
 		})
 		var artifact discoveredArtifact
 		artifact.Kind = discoveredKindLegacy
@@ -795,7 +773,7 @@ func resolveLegacyDiscoveredForEntry(
 		artifact.Kind = discoveredKindLegacy
 		artifact.Path = path
 		artifact.LegacyTab = tab
-		artifact.WorkspaceRoot = readWorkspaceRoot(ctx, entry)
+		artifact.WorkspaceRoot = readWorkspaceRoot(entry)
 		return artifact, nil
 	}
 	return emptyDiscoveredArtifact(), fmt.Errorf("cursor legacy tab %q not found", tabID)
@@ -841,15 +819,11 @@ func openOptionalDatabase(ctx context.Context, path string, component string) (*
 // readWorkspaceRoot reads the folder a workspace is open on. A workspace stored
 // without a descriptor is a window opened on no folder, so it has no root rather
 // than an unreadable one, and saying so is not a failure worth a log line.
-func readWorkspaceRoot(ctx context.Context, entry cursorstore.WorkspaceEntry) string {
+func readWorkspaceRoot(entry cursorstore.WorkspaceEntry) string {
 	if entry.WorkspaceJSONPath == "" {
 		return ""
 	}
-	workspaceRoot, err := cursorstore.ReadWorkspaceFolderPath(entry.WorkspaceJSONPath)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.read_workspace_folder_failed", "concern", concern, "path", entry.WorkspaceJSONPath, "workspace_hash", entry.WorkspaceHash, "err", err)
-		return ""
-	}
+	workspaceRoot, _ := cursorstore.ReadWorkspaceFolderPath(entry.WorkspaceJSONPath)
 	return workspaceRoot
 }
 
