@@ -47,6 +47,17 @@ for the next append. Truncation or a detected file replacement rebuilds that
 transcript's derived state. Process startup rebuilds this in-memory continuation
 as needed. Only the current cache format is supported after the upgrade reset.
 
+Semantic ingestion and search are independent opt-ins. Raw listing, reading,
+context, and export remain available with both off. Search can use previously
+indexed conversations while ingestion is off. An unavailable engine leaves raw
+operations available and retries its connection in the background.
+
+Ingestion prepares one batch of whole conversations per worker pass and waits
+while the preceding engine job runs. A conversation larger than the preparation
+target travels alone. Larger backlogs therefore span multiple worker intervals;
+batching does not bound the memory needed to read one large conversation. Changed
+projected metadata is delivered even when the message text stays the same.
+
 ## Reading
 
 Use `clyde conversation info CONVERSATION_ID` before exporting when you need
