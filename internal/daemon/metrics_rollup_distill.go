@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -144,7 +143,7 @@ func (s *metricsRollupState) closeSource() error {
 
 func rollupSourcePosition(path string, info os.FileInfo) metricsRollupSourcePosition {
 	stat, _ := info.Sys().(*syscall.Stat_t)
-	return metricsRollupSourcePosition{Path: path, Device: strconv.Itoa(int(stat.Dev)), Inode: stat.Ino, Offset: info.Size()}
+	return metricsRollupSourcePosition{Path: path, Device: rollupDeviceID(stat), Inode: stat.Ino, Offset: info.Size()}
 }
 
 func (s *metricsRollupState) openSource(path string, now time.Time) error {
