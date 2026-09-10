@@ -62,7 +62,7 @@ func startConfiguredConversationSemanticSync(
 // The config loader leaves the list as written, and a Config built as a struct
 // literal never passes through the loader at all, so reading an unset list as
 // "index nothing" would quietly empty the corpus. Turning indexing off is
-// `enabled = false`.
+// `ingestion_enabled = false`.
 func SemanticContentKinds(semantic config.ConversationSemanticConfig) (conversation.ContentKindSet, error) {
 	if len(semantic.IndexedContent) == 0 {
 		return defaultSemanticContentKinds(), nil

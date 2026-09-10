@@ -28,7 +28,8 @@ func loadConfig(dir string) (*Config, error) {
 	var cfg Config
 	data, err := os.ReadFile(tomlPath)
 	if err != nil {
-		log.Warn("config.load.read_failed", "concern", "config", "component", "config",
+		log.Warn(
+			"config.load.read_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -36,20 +37,15 @@ func loadConfig(dir string) (*Config, error) {
 		)
 		return nil, fmt.Errorf("failed to read %s: %w", tomlPath, err)
 	}
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		log.Warn("config.load.parse_failed", "concern", "config", "component", "config",
-			"subcomponent", "load",
-			"path", tomlPath,
-			"format", "toml",
-			"err", err,
-		)
-		return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
+	if err := decodeConfigTOML(data, tomlPath, log, &cfg); err != nil {
+		return nil, err
 	}
 	resolveExportAPIKeyFiles(&cfg.Export, filepath.Dir(tomlPath))
 	pruneEmptyModelDeclarations(&cfg.Adapter)
 	warnRemovedLoggingConfig(data, tomlPath, log)
 	if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
-		log.Warn("config.load.instructions_failed", "concern", "config", "component", "config",
+		log.Warn(
+			"config.load.instructions_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -58,7 +54,8 @@ func loadConfig(dir string) (*Config, error) {
 		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
 	}
 	if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
-		log.Warn("config.load.validate_failed", "concern", "config", "component", "config",
+		log.Warn(
+			"config.load.validate_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -66,7 +63,8 @@ func loadConfig(dir string) (*Config, error) {
 		)
 		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
 	}
-	log.Debug("config.load.loaded", "concern", "config", "component", "config",
+	log.Debug(
+		"config.load.loaded", "concern", "config", "component", "config",
 		"subcomponent", "load",
 		"format", "toml",
 		"path", tomlPath,
@@ -122,7 +120,8 @@ func warnRemovedLoggingConfig(data []byte, tomlPath string, log *slog.Logger) {
 		return
 	}
 	emitRemovedLoggingKeyWarning := func(key string) {
-		log.Warn("config.load.removed_logging_key", "concern", "config", "component", "config",
+		log.Warn(
+			"config.load.removed_logging_key", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -152,7 +151,8 @@ func warnRemovedLoggingConfig(data []byte, tomlPath string, log *slog.Logger) {
 func unmarshalRemovedLoggingConfig(data []byte) (removedLoggingConfig, error) {
 	var removedConfig removedLoggingConfig
 	if err := toml.Unmarshal(data, &removedConfig); err != nil {
-		slog.Warn("config.load.removed_logging_config_scan_failed", "concern", "config", "component", "config",
+		slog.Warn(
+			"config.load.removed_logging_config_scan_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"format", "toml",
 			"err", err,
@@ -171,7 +171,8 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 	for name, model := range cfg.Adapter.Models {
 		contents, err := loadInstructionFile(configDir, model.InstructionsFile)
 		if err != nil {
-			log.Warn("config.load.instructions_file_failed", "concern", "config", "component", "config",
+			log.Warn(
+				"config.load.instructions_file_failed", "concern", "config", "component", "config",
 				"subcomponent", "load",
 				"scope", "adapter.models",
 				"name", name,
@@ -193,7 +194,8 @@ func loadInstructionFile(configDir string, configuredPath string) (string, error
 	}
 	contents, err := os.ReadFile(resolvedPath)
 	if err != nil {
-		slog.Warn("config.load.instructions_file_read_failed",
+		slog.Warn(
+			"config.load.instructions_file_read_failed",
 			"concern", "process.daemon.config",
 			"component", "config",
 			"subcomponent", "load",
@@ -204,7 +206,8 @@ func loadInstructionFile(configDir string, configuredPath string) (string, error
 	}
 	if len(contents) == 0 {
 		err := fmt.Errorf("read %q: file is empty", resolvedPath)
-		slog.Default().Warn("config.load.instructions_file_empty", "concern", "config", "component", "config",
+		slog.Default().Warn(
+			"config.load.instructions_file_empty", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", resolvedPath,
 			"err", err,
@@ -796,7 +799,8 @@ func normalizeMITMCaptureRouteRules(rules []MITMCaptureRouteRule) ([]MITMCapture
 	for i, rule := range rules {
 		normalizedRule, err := normalizeMITMCaptureRouteRule(rule)
 		if err != nil {
-			slog.Warn("config.mitm.capture_rule_invalid",
+			slog.Warn(
+				"config.mitm.capture_rule_invalid",
 				"concern", "process.daemon.config",
 				"component", "config",
 				"subcomponent", "mitm",

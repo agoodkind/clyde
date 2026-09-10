@@ -84,7 +84,7 @@ func policyTestMessages() []transcript.Message {
 // the turn carries nothing else, while the tool-only turn is still offered
 // because a tool call is content even with no text.
 func TestDefaultConfigSelectsChatAndToolCalls(t *testing.T) {
-	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestDefaultConfigSelectsChatAndToolCalls(t *testing.T) {
 // the transcript loader, so a withheld message must leave a gap rather than
 // renumber the turns after it.
 func TestSkippedMessageKeepsTheIndexOfEveryLaterMessage(t *testing.T) {
-	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestSkippedMessageKeepsTheIndexOfEveryLaterMessage(t *testing.T) {
 // TestNamingThinkingOffersTheReasoningOnlyTurn proves the opt-in works, using the
 // export surface's own selector name.
 func TestNamingThinkingOffersTheReasoningOnlyTurn(t *testing.T) {
-	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \"thinking\", \"tool_calls\"]\n")
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\", \"thinking\", \"tool_calls\"]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestNamingThinkingOffersTheReasoningOnlyTurn(t *testing.T) {
 // produced, so the nested-level assertions read against real config input.
 func projectedToolAt(t *testing.T, selector string) (int, string, string, string, bool) {
 	t.Helper()
-	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \""+selector+"\"]\n")
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\", \""+selector+"\"]\n")
 	if err != nil {
 		t.Fatalf("load config for %q: %v", selector, err)
 	}
@@ -247,7 +247,7 @@ func TestToolKindsAreNestedLevels(t *testing.T) {
 // selection naming no tool kind carries no tool calls, and the tool-only turn is
 // then withheld because nothing it holds is indexed.
 func TestSelectingNoToolKindDropsTheCall(t *testing.T) {
-	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\"]\n")
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\"]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestSelectingNoToolKindDropsTheCall(t *testing.T) {
 // TestUnknownContentKindFailsResolution proves a typo is rejected by the export
 // surface's own validator rather than silently narrowing the corpus.
 func TestUnknownContentKindFailsResolution(t *testing.T) {
-	_, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \"resoning\"]\n")
+	_, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\", \"resoning\"]\n")
 	if err == nil {
 		t.Fatal("resolution succeeded with an unknown content kind; a typo must fail")
 	}
@@ -285,7 +285,7 @@ func TestUnknownContentKindFailsResolution(t *testing.T) {
 // LoadOptions for the four kinds that have a field, so content nobody selected
 // is never parsed rather than parsed and discarded.
 func TestExcludedKindsNeverReachTheParser(t *testing.T) {
-	defaultKinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+	defaultKinds, err := loadKindsFromTOML(t, "[conversation.semantic]\n")
 	if err != nil {
 		t.Fatalf("load default config: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestExcludedKindsNeverReachTheParser(t *testing.T) {
 		t.Fatalf("default load options = %+v, want every gated kind off", defaultOptions)
 	}
 
-	optedIn, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\nindexed_content = [\"chat\", \"system_messages\", \"system_prompts\", \"tool_outputs\", \"injected\"]\n")
+	optedIn, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\", \"system_messages\", \"system_prompts\", \"tool_outputs\", \"injected\"]\n")
 	if err != nil {
 		t.Fatalf("load opted-in config: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestPolicySkipsAreCountedApartFromFailures(t *testing.T) {
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nenabled = true\n")
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}

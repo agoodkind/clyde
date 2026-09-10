@@ -46,8 +46,9 @@ type fakePorts struct {
 }
 
 type fakeConversationSemanticConfig struct {
-	Enabled      bool
-	CollectionID string
+	IngestionEnabled bool
+	SearchEnabled    bool
+	CollectionID     string
 }
 
 // harness owns the temp state/config/runtime roots, the fake config, and the
@@ -79,6 +80,7 @@ const (
 	reloadTriggeredKey             = "daemon.config_watch.reload_triggered"
 	classifiedMarker               = "daemon.config_watch.classified"
 	workerStartedKey               = "daemon.supervisor.worker_started"
+	workerReplacementStartedKey    = "daemon.supervisor.reload_replacement_started"
 	responsesRequestTimeout        = 30 * time.Second
 	responsesResponseHeaderTimeout = 10 * time.Second
 )
@@ -115,9 +117,21 @@ func resolveFakeConversationSemanticConfig(t *testing.T) fakeConversationSemanti
 		collectionID = randomCollectionID(t)
 	}
 	return fakeConversationSemanticConfig{
-		Enabled:      envBoolOr("CLYDE_TEST_CONVERSATION_SEMANTIC", false),
-		CollectionID: collectionID,
+		IngestionEnabled: envBoolOr("CLYDE_TEST_CONVERSATION_INGESTION", false),
+		SearchEnabled:    envBoolOr("CLYDE_TEST_CONVERSATION_SEARCH", false),
+		CollectionID:     collectionID,
 	}
+}
+
+func (semantic fakeConversationSemanticConfig) tomlSettings() string {
+	var settings strings.Builder
+	if semantic.IngestionEnabled {
+		settings.WriteString("ingestion_enabled = true\n")
+	}
+	if semantic.SearchEnabled {
+		settings.WriteString("search_enabled = true\n")
+	}
+	return settings.String()
 }
 
 // maxTCPPort is the highest valid TCP port, used to reject out-of-range overrides.
@@ -274,9 +288,7 @@ func (h *harness) writeConfig(t *testing.T, mitmPort int, providers []string) {
 level = "debug"
 
 [conversation.semantic]
-enabled = %t
-search_enabled = %t
-collection_id = %q
+%scollection_id = %q
 
 [adapter]
 enabled = false
@@ -297,8 +309,7 @@ db_path = %q
 host = "localhost"
 port = %d
 `,
-		h.conversationSemantic.Enabled,
-		h.conversationSemantic.Enabled,
+		h.conversationSemantic.tomlSettings(),
 		h.conversationSemantic.CollectionID,
 		captureDir, providerList,
 		filepath.Join(caDir, "ca.crt"), filepath.Join(caDir, "ca.key"),
@@ -379,9 +390,7 @@ port = %d
 level = "debug"
 
 [conversation.semantic]
-enabled = %t
-search_enabled = %t
-collection_id = %q
+%scollection_id = %q
 
 [adapter]
 enabled = true
@@ -424,8 +433,7 @@ cc_entrypoint = "test"
 
 %s
 %s`,
-		h.conversationSemantic.Enabled,
-		h.conversationSemantic.Enabled,
+		h.conversationSemantic.tomlSettings(),
 		h.conversationSemantic.CollectionID,
 		adapterPort,
 		h.cfg.CursorPort,
@@ -458,9 +466,9 @@ func (h *harness) writeCombinedReloadEdit(t *testing.T, passthroughURL string) {
 	h.writeCombinedAdapterMITMConfig(t, h.cfg.AdapterPort, passthroughURL)
 }
 
-// latestWorkerPid parses the most recent daemon.supervisor.worker_started pid
-// from the daemon log. It is the current worker pid: a hot apply leaves it
-// unchanged, a reload or rebind advances it.
+// latestWorkerPid parses the most recent initial or replacement worker pid from
+// the daemon log. It is the current worker pid: a hot apply leaves it unchanged,
+// and a reload advances it.
 func (h *harness) latestWorkerPid() int {
 	pid := 0
 	_ = filepath.WalkDir(h.stateRoot, func(path string, d os.DirEntry, err error) error {
@@ -476,7 +484,7 @@ func (h *harness) latestWorkerPid() int {
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.Contains(line, workerStartedKey) {
+			if !strings.Contains(line, workerStartedKey) && !strings.Contains(line, workerReplacementStartedKey) {
 				continue
 			}
 			if p := extractJSONInt(line, "pid"); p > 0 {

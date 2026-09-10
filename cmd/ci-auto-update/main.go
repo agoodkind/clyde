@@ -37,10 +37,6 @@ const (
 const daemonConfig = `[logging]
 level = "debug"
 
-[conversation.semantic]
-enabled = false
-search_enabled = false
-
 [adapter]
 enabled = false
 

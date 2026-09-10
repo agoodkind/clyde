@@ -31,16 +31,10 @@ type ConversationConfig struct {
 // exists and costs nothing, so stopping the writes does not put the stored
 // conversations out of reach.
 type ConversationSemanticConfig struct {
-	// Enabled offers conversations to the search engine. Turning it off stops
-	// new embedding and leaves everything already stored searchable.
-	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	// SearchEnabled answers conversation searches from the engine. It is a
-	// pointer so an absent setting stays distinguishable from an explicit
-	// false, and an absent setting means on: a corpus that exists should be
-	// reachable unless an operator says otherwise.
-	SearchEnabled *bool  `json:"searchEnabled,omitempty" toml:"search_enabled,omitempty"`
-	SocketPath    string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
-	CollectionID  string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
+	IngestionEnabled bool   `json:"ingestionEnabled,omitempty" toml:"ingestion_enabled,omitempty"`
+	SearchEnabled    bool   `json:"searchEnabled,omitempty" toml:"search_enabled,omitempty"`
+	SocketPath       string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
+	CollectionID     string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
 	// IndexedContent names the content kinds offered to the search engine, using
 	// the same selector vocabulary the export surface accepts. The names and their
 	// validation belong to the conversation package's content-kind taxonomy, which
@@ -54,24 +48,20 @@ type ConversationSemanticConfig struct {
 	//
 	// An absent or empty list means the indexing default. Naming no kinds is not
 	// how an operator turns indexing off, because that would quietly stop
-	// embedding everything; `enabled = false` is.
+	// embedding everything; `ingestion_enabled = false` is.
 	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
 }
 
 // FeedsEngine reports whether the daemon offers conversations to the search
 // engine.
 func (semantic ConversationSemanticConfig) FeedsEngine() bool {
-	return semantic.Enabled
+	return semantic.IngestionEnabled
 }
 
 // AnswersSearch reports whether the daemon answers conversation searches from
-// the engine. An unset value means yes, so a corpus that already exists stays
-// reachable when an operator stops the writes.
+// the engine.
 func (semantic ConversationSemanticConfig) AnswersSearch() bool {
-	if semantic.SearchEnabled == nil {
-		return true
-	}
-	return *semantic.SearchEnabled
+	return semantic.SearchEnabled
 }
 
 // UsesEngine reports whether either direction needs a connection to the engine,

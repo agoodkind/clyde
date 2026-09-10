@@ -14,8 +14,8 @@ import (
 	"goodkind.io/clyde/internal/sandbox"
 )
 
-// sandboxCollectionID names the search-engine collection every sandbox writes
-// into. It is one fixed name rather than one per run, because clyde can ask the
+// sandboxCollectionID names the search-engine collection every opted-in sandbox
+// uses. It is one fixed name rather than one per run, because clyde can ask the
 // engine to create a collection but has no call to drop one, so per-run names
 // would accumulate with no way to remove them from here. Reusing one name means
 // there is never more than a single sandbox collection however often the sandbox
@@ -26,23 +26,22 @@ import (
 const sandboxCollectionID = "clyde-sandbox"
 
 // sandboxConfigTemplate is the config a sandbox daemon boots with, with its
-// collection id substituted.
+// semantic directions and collection id substituted.
 //
 // The adapter and MITM listeners stay off because they would bind ports the
 // deployed daemon already owns and neither takes part in reading or searching
 // conversations.
 //
-// Semantic search is on, against the same engine the deployed daemon uses but a
-// collection of the sandbox's own. That is what makes this an end-to-end target
-// rather than a read check: a conversation is read, embedded, and searched back,
-// so a defect anywhere along that path shows up in the search result. Leaving the
-// socket path unset resolves the engine exactly as production does.
+// Semantic ingestion and search are independent opt-ins. When either is enabled,
+// it uses the same engine as the deployed daemon but a collection of the sandbox's
+// own. Leaving the socket path unset resolves the engine exactly as production
+// does.
 const sandboxConfigTemplate = `[logging]
 level = "debug"
 
 [conversation.semantic]
-enabled = true
-search_enabled = true
+ingestion_enabled = %t
+search_enabled = %t
 collection_id = %q
 
 [adapter]
@@ -66,6 +65,8 @@ enabled_default = false
 // what makes it useful for judging a change to how conversations are read.
 func newSandboxCmd(f *cli.Factory) *cobra.Command {
 	var keep bool
+	var ingestionEnabled bool
+	var searchEnabled bool
 	cmd := &cobra.Command{
 		Use:   "sandbox",
 		Short: "Run a throwaway second daemon for hands-on validation",
@@ -76,10 +77,12 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 		Example: "clyde daemon sandbox",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSandbox(cmd.Context(), f, keep)
+			return runSandbox(cmd.Context(), f, keep, ingestionEnabled, searchEnabled)
 		},
 	}
 	cmd.Flags().BoolVar(&keep, "keep", false, "keep the sandbox directories after exit instead of removing them")
+	cmd.Flags().BoolVar(&ingestionEnabled, "ingestion-enabled", false, "offer conversations to the semantic search engine")
+	cmd.Flags().BoolVar(&searchEnabled, "search-enabled", false, "answer conversation searches from the semantic search engine")
 	return cmd
 }
 
@@ -91,7 +94,7 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 // here: a sandbox never reloads or rebinds, and a supervisor's replacement
 // worker escapes the process group, so a wrapper killed without a signal leaves
 // a daemon serving with nothing left to stop it. One process cannot.
-func runSandbox(ctx context.Context, f *cli.Factory, keep bool) error {
+func runSandbox(ctx context.Context, f *cli.Factory, keep bool, ingestionEnabled bool, searchEnabled bool) error {
 	roots, err := sandbox.NewRoots()
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.root_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
@@ -112,13 +115,13 @@ func runSandbox(ctx context.Context, f *cli.Factory, keep bool) error {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_dir_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
 		return fmt.Errorf("create the sandbox config directory %s: %w", filepath.Dir(configPath), err)
 	}
-	sandboxConfig := fmt.Sprintf(sandboxConfigTemplate, sandboxCollectionID)
+	sandboxConfig := fmt.Sprintf(sandboxConfigTemplate, ingestionEnabled, searchEnabled, sandboxCollectionID)
 	if err := os.WriteFile(configPath, []byte(sandboxConfig), 0o600); err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_write_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
 		return fmt.Errorf("write the sandbox config %s: %w", configPath, err)
 	}
 
-	writeSandboxBanner(f, roots, configPath)
+	writeSandboxBanner(f, roots, configPath, ingestionEnabled, searchEnabled)
 
 	// The daemon reads these when it loads its config below, so they have to be
 	// set on this process rather than handed to a child.
@@ -151,13 +154,14 @@ func runSandbox(ctx context.Context, f *cli.Factory, keep bool) error {
 
 // writeSandboxBanner prints what the sandbox is and how to drive it, so the
 // operator does not have to derive the environment from the source.
-func writeSandboxBanner(f *cli.Factory, roots sandbox.Roots, configPath string) {
+func writeSandboxBanner(f *cli.Factory, roots sandbox.Roots, configPath string, ingestionEnabled bool, searchEnabled bool) {
 	out := f.IOStreams.Out
 	_, _ = fmt.Fprintln(out, "sandbox daemon")
 	_, _ = fmt.Fprintf(out, "  root:   %s\n", roots.Base)
 	_, _ = fmt.Fprintf(out, "  config: %s\n", configPath)
 	_, _ = fmt.Fprintln(out, "  reads:  the real provider conversation stores, with an empty cache")
-	_, _ = fmt.Fprintf(out, "  embeds: into the live search engine, collection %q\n", sandboxCollectionID)
+	_, _ = fmt.Fprintf(out, "  ingestion enabled: %t\n", ingestionEnabled)
+	_, _ = fmt.Fprintf(out, "  search enabled:    %t\n", searchEnabled)
 	_, _ = fmt.Fprintln(out, "  binds:  nothing, every listener is disabled")
 	_, _ = fmt.Fprintln(out, "  runs:   in this process, with no supervisor and no worker to outlive it")
 	_, _ = fmt.Fprintln(out, "")
