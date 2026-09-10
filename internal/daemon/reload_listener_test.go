@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"goodkind.io/clyde/internal/config"
@@ -33,11 +35,27 @@ func boundLoopbackListener(t *testing.T) (net.Listener, config.MITMListenerConfi
 // config (Host "localhost"), mirroring mitmBindAddrs's dual-stack expansion.
 func boundLocalhostListener(t *testing.T) ([]net.Listener, config.MITMListenerConfig) {
 	t.Helper()
+	for range 20 {
+		sockets, cfg, err := tryBoundLocalhostListener(t)
+		if err == nil {
+			return sockets, cfg
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatalf("bind both loopback stacks: %v", err)
+		}
+		// An IPv6 ephemeral port may already be occupied on IPv4.
+		// Release the first socket and ask the kernel for another pair.
+	}
+	t.Fatal("could not reserve one loopback port on both stacks after 20 attempts")
+	return nil, config.MITMListenerConfig{}
+}
+
+func tryBoundLocalhostListener(t *testing.T) ([]net.Listener, config.MITMListenerConfig, error) {
+	t.Helper()
 	v6, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("bind v6 loopback listener: %v", err)
 	}
-	t.Cleanup(func() { _ = v6.Close() })
 	tcpAddr, ok := v6.Addr().(*net.TCPAddr)
 	if !ok {
 		t.Fatalf("listener addr is %T, want *net.TCPAddr", v6.Addr())
@@ -45,10 +63,12 @@ func boundLocalhostListener(t *testing.T) ([]net.Listener, config.MITMListenerCo
 	port := tcpAddr.Port
 	v4, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
-		t.Fatalf("bind v4 loopback listener on port %d: %v", port, err)
+		_ = v6.Close()
+		return nil, config.MITMListenerConfig{}, err
 	}
+	t.Cleanup(func() { _ = v6.Close() })
 	t.Cleanup(func() { _ = v4.Close() })
-	return []net.Listener{v6, v4}, config.MITMListenerConfig{Host: "localhost", Port: port}
+	return []net.Listener{v6, v4}, config.MITMListenerConfig{Host: "localhost", Port: port}, nil
 }
 
 func TestMITMBindAddrsExpandsLocalhostToBothStacks(t *testing.T) {
