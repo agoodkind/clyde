@@ -107,7 +107,7 @@ func resetProcessOwnedStart(pid int) (string, error) {
 	}
 	info, err = os.Stat(root)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("recheck reset process %d ownership: %w", pid, err)
 	}
 	stat, ok = info.Sys().(*syscall.Stat_t)
 	if !ok || int64(stat.Uid) != int64(os.Getuid()) {

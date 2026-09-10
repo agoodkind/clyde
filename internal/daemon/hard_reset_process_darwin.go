@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"syscall"
@@ -15,23 +14,6 @@ import (
 	"golang.org/x/sys/unix"
 	"goodkind.io/clyde/internal/daemonsupervisor"
 )
-
-func resetProcessStart(pid int) (string, error) {
-	processes, err := unix.SysctlKinfoProcSlice("kern.proc.all")
-	if err != nil {
-		slog.Warn("daemon.hard_reset.process_table_failed", "concern", "process.daemon.lifecycle", "err", err)
-		return "", fmt.Errorf("read Darwin process table: %w", err)
-	}
-	for _, process := range processes {
-		if int(process.Proc.P_pid) == pid {
-			if process.Proc.P_stat == 5 {
-				return "", os.ErrNotExist
-			}
-			return fmt.Sprintf("%d:%d", process.Proc.P_starttime.Sec, process.Proc.P_starttime.Usec), nil
-		}
-	}
-	return "", os.ErrNotExist
-}
 
 func resetProcessOwnedStart(pid int) (string, error) {
 	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
