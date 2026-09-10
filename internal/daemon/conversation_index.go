@@ -21,6 +21,20 @@ import (
 
 // startConversationIndex installs lifecycle ownership before launching the worker.
 func startConversationIndex(ctx context.Context, log *slog.Logger, index *conversation.Index, group *livetrack.Group) {
+	startConversationIndexWorker(ctx, log, group, func(workerCtx context.Context) {
+		index.Start(workerCtx, time.Minute)
+	})
+}
+
+func startConversationIndexOnce(ctx context.Context, log *slog.Logger, index *conversation.Index, group *livetrack.Group) {
+	startConversationIndexWorker(ctx, log, group, func(workerCtx context.Context) {
+		if err := index.Refresh(workerCtx); err != nil {
+			log.WarnContext(workerCtx, "daemon.conversation_index.initial_refresh_failed", "concern", "conversation.index", "component", "daemon", "err", err)
+		}
+	})
+}
+
+func startConversationIndexWorker(ctx context.Context, log *slog.Logger, group *livetrack.Group, run func(context.Context)) {
 	if group == nil {
 		return
 	}
@@ -43,7 +57,7 @@ func startConversationIndex(ctx context.Context, log *slog.Logger, index *conver
 				log.ErrorContext(ctx, "daemon.conversation_index.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
-		index.Start(workerCtx, time.Minute)
+		run(workerCtx)
 	}()
 }
 
