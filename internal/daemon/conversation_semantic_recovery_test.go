@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,6 +75,42 @@ func (c *flakySemanticConnector) attemptCount() int {
 	return c.attempts
 }
 
+type semanticLogCapture struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (c *semanticLogCapture) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (c *semanticLogCapture) Handle(_ context.Context, record slog.Record) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.records = append(c.records, record.Clone())
+	return nil
+}
+
+func (c *semanticLogCapture) WithAttrs([]slog.Attr) slog.Handler {
+	return c
+}
+
+func (c *semanticLogCapture) WithGroup(string) slog.Handler {
+	return c
+}
+
+func (c *semanticLogCapture) warnings() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	messages := make([]string, 0, len(c.records))
+	for _, record := range c.records {
+		if record.Level >= slog.LevelWarn {
+			messages = append(messages, record.Message)
+		}
+	}
+	return messages
+}
+
 // newTestSemanticRuntime builds a semantic runtime over the given connector,
 // attached to its own lifecycle group exactly as the daemon attaches it, with a
 // retry cadence fast enough for a test.
@@ -97,9 +135,109 @@ func newTestSemanticRuntime(t *testing.T, connector semanticConnector) (*convers
 		CollectionID: "conversations",
 		SocketPath:   "/tmp/semantic-search-test.sock",
 	})
-	runtime.initialRetryBackoff = time.Millisecond
-	runtime.maxRetryBackoff = 5 * time.Millisecond
+	runtime.retryDelay = func(uint32) time.Duration { return time.Millisecond }
 	return runtime, group
+}
+
+func TestSemanticRetryDelay(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name     string
+		failures uint32
+		jitter   time.Duration
+		want     time.Duration
+	}{
+		{name: "first failure", failures: 1, jitter: 0, want: 30 * time.Second},
+		{name: "second failure", failures: 2, jitter: 0, want: time.Minute},
+		{name: "third failure", failures: 3, jitter: 0, want: 2 * time.Minute},
+		{name: "fourth failure", failures: 4, jitter: 0, want: 4 * time.Minute},
+		{name: "fifth failure", failures: 5, jitter: 0, want: 5 * time.Minute},
+		{name: "later failure", failures: 20, jitter: 0, want: 5 * time.Minute},
+		{name: "positive jitter", failures: 1, jitter: 6 * time.Second, want: 36 * time.Second},
+		{name: "negative jitter", failures: 1, jitter: -time.Second, want: 30 * time.Second},
+		{name: "jitter capped", failures: 4, jitter: time.Minute, want: 5 * time.Minute},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := semanticRetryDelay(testCase.failures, testCase.jitter); got != testCase.want {
+				t.Fatalf("semanticRetryDelay(%d, %s) = %s, want %s", testCase.failures, testCase.jitter, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestSemanticRetryDelayWithJitterStaysWithinOneFifth(t *testing.T) {
+	t.Parallel()
+	baseDelay := semanticRetryDelay(1, 0)
+	for i := 0; i < 100; i++ {
+		delay := semanticRetryDelayWithJitter(1)
+		if delay < baseDelay || delay > baseDelay+baseDelay/5 {
+			t.Fatalf("jittered delay = %s, want between %s and %s", delay, baseDelay, baseDelay+baseDelay/5)
+		}
+	}
+}
+
+func TestConversationSemanticRetryUsesFailureProgression(t *testing.T) {
+	t.Parallel()
+	connector := &flakySemanticConnector{
+		mu:                    sync.Mutex{},
+		attempts:              0,
+		failuresBeforeSuccess: 3,
+		search:                &fakeSemanticSearch{hits: nil, err: nil},
+		feeder:                nil,
+		conn:                  &fakeSemanticConn{mu: sync.Mutex{}, closes: 0},
+	}
+	runtime, group := newTestSemanticRuntime(t, connector.connect)
+	delays := make([]time.Duration, 0, 3)
+	runtime.retryDelay = func(failures uint32) time.Duration {
+		delays = append(delays, semanticRetryDelay(failures, 0))
+		return time.Millisecond
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.attemptRegister(ctx); err == nil {
+		t.Fatal("expected initial registration to fail")
+	}
+	if !runtime.startRetryWorker(ctx, group) {
+		t.Fatal("retry worker did not start")
+	}
+	awaitSearchClient(t, runtime)
+	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute}
+	if len(delays) != len(want) {
+		t.Fatalf("retry delays = %v, want %v", delays, want)
+	}
+	for i := range want {
+		if delays[i] != want[i] {
+			t.Fatalf("retry delays = %v, want %v", delays, want)
+		}
+	}
+	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 250 * time.Millisecond, IdleGrace: 0})
+}
+
+func TestConversationSemanticRuntimeWarnsOnceWhileEngineUnavailable(t *testing.T) {
+	capture := &semanticLogCapture{mu: sync.Mutex{}, records: nil}
+	log := slog.New(capture)
+	originalLog := slog.Default()
+	slog.SetDefault(log)
+	t.Cleanup(func() { slog.SetDefault(originalLog) })
+	group := newLifecycleGroup(log)
+	cfg := &config.Config{}
+	cfg.Conversation.Semantic.SearchEnabled = true
+	cfg.Conversation.Semantic.SocketPath = filepath.Join(t.TempDir(), "missing-semantic.sock")
+	cfg.Conversation.Semantic.CollectionID = "conversations"
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	runtime := startConversationSemanticRuntime(ctx, cfg, log, group)
+	if runtime == nil {
+		t.Fatal("opted-in semantic runtime was not constructed")
+	}
+	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+	warnings := capture.warnings()
+	if len(warnings) != 1 || warnings[0] != "daemon.conversation_semantic.initial_register_failed" {
+		t.Fatalf("warnings = %v, want one unavailable-state warning", warnings)
+	}
 }
 
 // awaitSearchClient waits for background registration to publish a search
@@ -554,4 +692,82 @@ func TestControlServerSearchConversationsUnreachableEngineFailsPrecondition(t *t
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("status code = %v (err %v), want FailedPrecondition", status.Code(err), err)
 	}
+}
+
+func TestControlServerSearchConversationsDisabledFailsPrecondition(t *testing.T) {
+	t.Parallel()
+	clientResolutions := 0
+	srv := &controlServer{
+		searchSource: &semanticConversationSearchSource{
+			index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
+			searchEnabled: func() bool {
+				return false
+			},
+			searchClient: func() conversationSemanticSearchClient {
+				clientResolutions++
+				return nil
+			},
+			collectionID: "conversations",
+		},
+	}
+	_, err := srv.SearchConversations(context.Background(), &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("status code = %v (err %v), want FailedPrecondition", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), string(conversationSearchDisabled)) {
+		t.Fatalf("error = %v, want disabled conversation search classification", err)
+	}
+	if clientResolutions != 0 {
+		t.Fatalf("client resolutions = %d, want 0 while search is disabled", clientResolutions)
+	}
+}
+
+func TestUnavailableQueriesDoNotTriggerSemanticRegistration(t *testing.T) {
+	t.Parallel()
+	connector := &flakySemanticConnector{
+		mu:                    sync.Mutex{},
+		attempts:              0,
+		failuresBeforeSuccess: 100,
+		search:                nil,
+		feeder:                nil,
+		conn:                  &fakeSemanticConn{mu: sync.Mutex{}, closes: 0},
+	}
+	runtime, group := newTestSemanticRuntime(t, connector.connect)
+	runtime.retryDelay = func(uint32) time.Duration { return time.Hour }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runtime.attemptRegister(ctx); err == nil {
+		t.Fatal("expected initial registration to fail")
+	}
+	if !runtime.startRetryWorker(ctx, group) {
+		t.Fatal("retry worker did not start")
+	}
+	srv := &controlServer{
+		searchSource: &semanticConversationSearchSource{
+			index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
+			searchClient: func() conversationSemanticSearchClient {
+				return runtime.currentSearchClient()
+			},
+			collectionID: "conversations",
+		},
+	}
+
+	queryCtx, queryCancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer queryCancel()
+	for i := 0; i < 20; i++ {
+		_, err := srv.SearchConversations(queryCtx, &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("query %d status = %v (err %v), want FailedPrecondition", i, status.Code(err), err)
+		}
+		if runtime.currentSearchClient() != nil {
+			t.Fatalf("status observation %d found an unexpected client", i)
+		}
+	}
+	if err := queryCtx.Err(); err != nil {
+		t.Fatalf("unavailable queries did not return promptly: %v", err)
+	}
+	if got := connector.attemptCount(); got != 1 {
+		t.Fatalf("connector attempts after queries and status observations = %d, want 1", got)
+	}
+	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
 }
