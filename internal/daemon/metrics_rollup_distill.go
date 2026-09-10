@@ -193,7 +193,18 @@ func (s *metricsRollupState) readTail(ctx context.Context, input metricsRollupDi
 	if os.SameFile(info, active) {
 		return count, nil
 	}
-	// The held descriptor still reads the old tail after rename and compression.
+	// Rotation can follow an append after the first size snapshot. The held
+	// descriptor still reads that final tail after rename and compression.
+	finalInfo, err := s.source.Stat()
+	if err != nil {
+		return count, rollupError("daemon.metrics_rollup.source_stat_failed", input.LogPath, err, "stat rotated metrics log")
+	}
+	finalOffset, finalCount, err := readMetricsHistoryTail(ctx, s.source, s.checkpoint.Source.Offset, finalInfo.Size(), replay, s.requests, &report)
+	s.checkpoint.Source.Offset = finalOffset
+	count += finalCount
+	if err != nil {
+		return count, err
+	}
 	if err := s.closeSource(); err != nil {
 		return count, err
 	}
