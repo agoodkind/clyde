@@ -55,6 +55,7 @@ type daemonStatusOutput struct {
 	SupervisorFingerprint  string                          `json:"supervisor_fingerprint,omitempty"`
 	WorkerPIDs             []int                           `json:"worker_pids,omitempty"`
 	WorkerError            string                          `json:"worker_error,omitempty"`
+	Runtime                *daemonsvc.RuntimeStatus        `json:"runtime,omitempty"`
 	Window                 *daemonsvc.MetricsWindow        `json:"window,omitempty"`
 	Coverage               *daemonsvc.MetricsCoverage      `json:"coverage,omitempty"`
 	Metrics                *daemonsvc.MetricsValues        `json:"metrics,omitempty"`
@@ -198,6 +199,7 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 				SupervisorFingerprint:  report.SupervisorFingerprint,
 				WorkerPIDs:             report.WorkerPIDs,
 				WorkerError:            report.WorkerError,
+				Runtime:                report.Runtime,
 				Window:                 nil,
 				Coverage:               nil,
 				Metrics:                nil,
@@ -232,6 +234,7 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 			// windows from the distilled rollup. That store is pre-aggregated,
 			// so this stays fast enough to run on every status invocation,
 			// which is why history no longer has to be asked for.
+			daemoncmd.WriteRuntimeStatusReport(&body, report.Runtime)
 			windows := daemonsvc.MetricsWindowsFromRollup(clock.Now())
 			daemoncmd.WriteMetricsWindowsReport(&body, windows)
 			output.Windows = windows
