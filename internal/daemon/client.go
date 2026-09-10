@@ -898,23 +898,6 @@ func daemonRPCError(ctx context.Context, operation string, err error) error {
 	return fmt.Errorf("daemon rpc: %w", err)
 }
 
-func probeDaemonRPC(ctx context.Context) error {
-	client, err := connectDaemon(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = client.conn.Close() }()
-	probeCtx, cancel := context.WithTimeout(ctx, daemonProbeTimeout)
-	defer cancel()
-	if _, err := client.rpc.GetProviderStats(probeCtx, &clydev1.GetProviderStatsRequest{}); err != nil {
-		slog.WarnContext(probeCtx, "daemon.client.probe.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"err", err,
-		)
-		return fmt.Errorf("daemon rpc probe: %w", err)
-	}
-	return nil
-}
-
 func connectDaemon(ctx context.Context) (*daemonClient, error) {
 	target := daemonGRPCAddress()
 	conn, err := grpc.NewClient(target,
