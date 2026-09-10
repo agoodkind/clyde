@@ -561,11 +561,8 @@ func semanticTestIndexWithTexts(textsByID map[string]string) *fakeConversationSe
 	}
 }
 
-// TestConversationSemanticSyncStreamsAllNeededInOnePass proves the worker no
-// longer splits the needed set by a byte budget: streaming carries every needed
-// conversation's documents in one upsert, which the stream client frames into
-// bounded chunks on the wire.
-func TestConversationSemanticSyncStreamsAllNeededInOnePass(t *testing.T) {
+// Small conversations share a preparation batch and retain their message order.
+func TestConversationSemanticSyncSharesBatchForSmallConversations(t *testing.T) {
 	firstID := "codex:aaa"
 	secondID := "codex:bbb"
 	index := semanticTestIndexWithTexts(map[string]string{
@@ -592,28 +589,74 @@ func TestConversationSemanticSyncStreamsAllNeededInOnePass(t *testing.T) {
 	}
 }
 
-// TestConversationSemanticSyncShipsLargeConversationWhole proves a single large
-// conversation ships in one upsert, never split: the engine replaces a
-// conversation atomically, so streaming must deliver all of its documents
-// together.
-func TestConversationSemanticSyncShipsLargeConversationWhole(t *testing.T) {
-	conversationID := "codex:oversized"
-	index := semanticTestIndexWithTexts(map[string]string{
-		conversationID: "0123456789012345678901234567890123456789",
-	})
-	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
+func TestConversationSemanticSyncSubmitsBeforePreparingNextBatch(t *testing.T) {
+	const artifactBytes = 5 << 20
+	ids := []string{"codex:aaa", "codex:bbb", "codex:ccc"}
+	index := semanticTestIndexWithTexts(map[string]string{ids[0]: "first", ids[1]: "second", ids[2]: "third"})
+	for i := range index.records {
+		index.records[i].Stamp.Size = artifactBytes
+	}
+	client := &fakeConversationSemanticClient{needed: ids, jobStates: map[string]string{"upsert-job": "running"}}
 	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
-
-	if err := worker.runPass(context.Background()); err != nil {
-		t.Fatalf("runPass returned error: %v", err)
+	for batch := range ids {
+		client.needed = ids[batch:]
+		client.jobStates["upsert-job"] = "completed"
+		if err := worker.runPass(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(index.loadOptions) != batch+1 {
+			t.Fatalf("batch %d loaded %d conversations before submission, want %d", batch, len(index.loadOptions), batch+1)
+		}
+		if len(client.upsertCalls) != batch+1 {
+			t.Fatalf("upserts = %d, want %d", len(client.upsertCalls), batch+1)
+		}
+		call := client.upsertCalls[batch]
+		if len(call.Docs) != 1 || call.Docs[0].ConversationID != ids[batch] || len(call.Manifest) != len(ids) {
+			t.Fatalf("batch %d = %+v", batch, call)
+		}
+		client.jobStates["upsert-job"] = "running"
+		if err := worker.runPass(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(index.loadOptions) != batch+1 || len(client.syncCalls) != batch+1 {
+			t.Fatal("active job allowed preparation or manifest work")
+		}
 	}
+}
 
-	if len(client.upsertCalls) != 1 {
-		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
+func TestConversationSemanticSyncIsolatesLargeConversation(t *testing.T) {
+	ids := []string{"codex:aaa", "codex:bbb", "codex:ccc"}
+	index := semanticTestIndexWithTexts(map[string]string{ids[0]: "first", ids[1]: "large", ids[2]: "last"})
+	for i := range index.records {
+		if index.records[i].Record.ID == ids[1] {
+			index.records[i].Stamp.Size = 12 << 20
+		}
 	}
-	docs := client.upsertCalls[0].Docs
-	if len(docs) != 1 || docs[0].ConversationID != conversationID {
-		t.Fatalf("delivered docs = %+v, want the large conversation whole", docs)
+	index.messagesByID[ids[1]] = nil
+	for i := range 20 {
+		index.messagesByID[ids[1]] = append(index.messagesByID[ids[1]], transcript.Message{
+			Role: "assistant", Text: strings.Repeat("text ", 100000), Timestamp: time.Unix(int64(i), 0),
+		})
+	}
+	client := &fakeConversationSemanticClient{needed: ids}
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	for batch := range ids {
+		client.needed = ids[batch:]
+		if err := worker.runPass(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(client.upsertCalls) != batch+1 || len(index.loadOptions) != batch+1 {
+			t.Fatalf("batch %d: upserts=%d loads=%d, want %d each", batch, len(client.upsertCalls), len(index.loadOptions), batch+1)
+		}
+		call := client.upsertCalls[batch]
+		if len(call.Docs) != len(index.messagesByID[ids[batch]]) {
+			t.Fatalf("batch %d delivered %d messages", batch, len(call.Docs))
+		}
+		for i, doc := range call.Docs {
+			if doc.ConversationID != ids[batch] || doc.MessageIndex != int32(i) || doc.Text != index.messagesByID[ids[batch]][i].Text {
+				t.Fatalf("batch %d changed message %d", batch, i)
+			}
+		}
 	}
 }
 
