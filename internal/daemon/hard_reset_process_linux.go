@@ -90,3 +90,35 @@ func resetProcessStart(pid int) (string, error) {
 	}
 	return fields[19], nil
 }
+
+func resetProcessOwnedStart(pid int) (string, error) {
+	root := filepath.Join("/proc", strconv.Itoa(pid))
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int64(stat.Uid) != int64(os.Getuid()) {
+		return "", fmt.Errorf("process %d belongs to another user", pid)
+	}
+	started, err := resetProcessStart(pid)
+	if err != nil {
+		return "", err
+	}
+	info, err = os.Stat(root)
+	if err != nil {
+		return "", err
+	}
+	stat, ok = info.Sys().(*syscall.Stat_t)
+	if !ok || int64(stat.Uid) != int64(os.Getuid()) {
+		return "", fmt.Errorf("process %d belongs to another user", pid)
+	}
+	currentStarted, err := resetProcessStart(pid)
+	if err != nil {
+		return "", err
+	}
+	if currentStarted != started {
+		return "", os.ErrNotExist
+	}
+	return started, nil
+}

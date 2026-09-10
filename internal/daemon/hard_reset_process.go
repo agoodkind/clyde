@@ -170,12 +170,12 @@ func sameResetProcess(ctx context.Context, expected resetProcess) (_ bool, err e
 	} else if err != nil {
 		return false, fmt.Errorf("probe reset process %d: %w", expected.PID, err)
 	}
-	current, err := readResetProcess(ctx, expected.PID)
+	current, err := resetProcessOwnedStart(expected.PID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 			return false, nil
 		}
 		return false, fmt.Errorf("verify Clyde process %d before deletion: %w", expected.PID, err)
 	}
-	return current.Started == expected.Started, nil
+	return current == expected.Started, nil
 }

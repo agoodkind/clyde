@@ -33,6 +33,20 @@ func resetProcessStart(pid int) (string, error) {
 	return "", os.ErrNotExist
 }
 
+func resetProcessOwnedStart(pid int) (string, error) {
+	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil {
+		return "", resetDarwinProcessError(pid, err)
+	}
+	if int64(info.Eproc.Ucred.Uid) != int64(os.Getuid()) {
+		return "", fmt.Errorf("process %d belongs to another user", pid)
+	}
+	if info.Proc.P_stat == 5 {
+		return "", os.ErrNotExist
+	}
+	return fmt.Sprintf("%d:%d", info.Proc.P_starttime.Sec, info.Proc.P_starttime.Usec), nil
+}
+
 func resetProcessDetails(pid int) (resetProcess, error) {
 	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil {

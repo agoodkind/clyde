@@ -11,3 +11,7 @@ func resetProcessDetails(pid int) (resetProcess, error) {
 func resetProcessStart(pid int) (string, error) {
 	return "", fmt.Errorf("hard-reset process inspection is unsupported on this platform")
 }
+
+func resetProcessOwnedStart(pid int) (string, error) {
+	return "", fmt.Errorf("hard-reset process inspection is unsupported on this platform")
+}
