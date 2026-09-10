@@ -1,12 +1,9 @@
 package conversation
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"iter"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,67 +15,8 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// TestReadCacheDropsStampsWrittenByAnOlderRecordShape pins the cache version to
-// the record shape. Record gained LatestRequestID, and a cache whose stamps
-// survive keeps its old records for every artifact that has not changed since,
-// so those conversations would resolve no request id at all.
-func TestReadCacheDropsStampsWrittenByAnOlderRecordShape(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), cacheFilename)
-	records := []Record{{
-		ID:              "cursor:chat",
-		Provider:        ProviderCursor,
-		NativeID:        "chat",
-		Lineage:         nil,
-		Origin:          OriginUnspecified,
-		Title:           "chat",
-		WorkspaceRoot:   "",
-		ArtifactPath:    "/tmp/chat",
-		ArtifactKind:    "composer",
-		Model:           "",
-		CreatedAt:       time.Time{},
-		UpdatedAt:       time.Time{},
-		SizeBytes:       0,
-		Archived:        false,
-		LatestRequestID: "",
-	}}
-	stamps := map[string]FileStamp{"/tmp/chat": {Size: 1, Mtime: time.Unix(0, 0).UTC()}}
-	if err := writeCache(path, records, stamps, nil); err != nil {
-		t.Fatalf("writeCache returned error: %v", err)
-	}
-
-	written, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
-	}
-	aged := bytes.Replace(
-		written,
-		fmt.Appendf(nil, `"version": %d`, cacheFormatVersion),
-		[]byte(`"version": 1`),
-		1,
-	)
-	if err := os.WriteFile(path, aged, 0o600); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-
-	gotRecords, gotStamps, _, err := readCache(path)
-	if err != nil {
-		t.Fatalf("readCache returned error: %v", err)
-	}
-	if len(gotRecords) != 1 {
-		t.Fatalf("records = %d, want the older cache still serving reads", len(gotRecords))
-	}
-	if len(gotStamps) != 0 {
-		t.Fatalf("stamps = %v, want them dropped so the next refresh re-derives the record", gotStamps)
-	}
-}
-
-// TestRefreshWaitsForTheRefreshAlreadyInFlight pins the contract a synchronous
-// Refresh carries. Every read path starts a debounced background refresh a moment
-// before it asks for a synchronous one, so a Refresh that returns while that scan
-// is still running hands the caller back the same snapshot it already failed
-// against.
+// TestRefreshWaitsForTheRefreshAlreadyInFlight verifies that explicit refreshes
+// wait for the existing worker's scan before returning a fresh snapshot.
 func TestRefreshWaitsForTheRefreshAlreadyInFlight(t *testing.T) {
 	t.Parallel()
 
@@ -124,10 +62,11 @@ func TestRefreshWaitsForTheRefreshAlreadyInFlight(t *testing.T) {
 		},
 	}
 
-	// List starts the background refresh, which is what leaves one in flight.
+	// The periodic worker starts the background refresh independently of reads.
 	if _, err := idx.List(context.Background()); err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
+	idx.refreshAsync(t.Context())
 	<-started
 
 	type outcome struct {
@@ -266,10 +205,11 @@ func TestWaitForRefreshReportsAFailedInFlightRefresh(t *testing.T) {
 		return scanResult{records: nil, stamps: nil}, scanErr
 	})
 
-	// List starts the background refresh, which is what leaves one in flight.
+	// The periodic worker starts the background refresh independently of reads.
 	if _, err := idx.List(context.Background()); err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
+	idx.refreshAsync(t.Context())
 	<-started
 
 	waited := make(chan error, 1)
@@ -418,19 +358,14 @@ func TestMergeRequestNotFoundReasonLetsInconclusiveOutrankAConfirmedMiss(t *test
 	}
 }
 
-// TestResolveRequestAnswersUnderADeadlineTheRescanCannotMeet is the named
-// symptom. The first lookup after a cache-format upgrade re-parses the whole
-// corpus in a background rescan that runs under a context without cancellation,
-// so a caller waiting on it under an RPC deadline waits for work it cannot
-// shorten. Answering from the records already held is the right trade; failing
-// the command is not, and neither is calling the miss confirmed.
+// A request deadline bounds the wait for a daemon-owned refresh. A stale miss
+// stays inconclusive while the worker continues under its own lifecycle context.
 func TestResolveRequestAnswersUnderADeadlineTheRescanCannotMeet(t *testing.T) {
 	t.Parallel()
 
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var startOnce sync.Once
-	t.Cleanup(func() { close(release) })
 	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
 		startOnce.Do(func() { close(started) })
 		<-release
@@ -443,11 +378,19 @@ func TestResolveRequestAnswersUnderADeadlineTheRescanCannotMeet(t *testing.T) {
 		Reason:               RequestNotFoundReasonNotRetained,
 	}, nil))
 
-	// List starts the rescan, which is what the deadline then runs out against.
+	// The worker's refresh remains in flight when the request deadline expires.
 	if _, err := idx.List(context.Background()); err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
+	idx.refreshAsync(t.Context())
 	<-started
+	idx.mu.Lock()
+	run := idx.refreshRun
+	idx.mu.Unlock()
+	t.Cleanup(func() {
+		close(release)
+		<-run.done
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	t.Cleanup(cancel)

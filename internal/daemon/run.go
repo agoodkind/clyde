@@ -132,6 +132,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	defer runtime.shutdown(ctx)
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
+	startConversationIndex(ctx, log, conversationIndex, runtime.group)
 	semanticFreshness := newConversationSemanticFreshness()
 
 	// Resolve the feeder client per pass rather than once here: when the engine
@@ -172,14 +173,6 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 
 	loopStops := startExtraLoops(log, extraLoops)
 	defer stopExtraLoops(loopStops)
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				log.ErrorContext(ctx, "daemon.conversation_index.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
-			}
-		}()
-		conversationIndex.Start(ctx, time.Minute)
-	}()
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {

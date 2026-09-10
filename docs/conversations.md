@@ -33,11 +33,19 @@ follow-up commands.
 ## Indexing
 
 The daemon loads the last completed conversation cache at startup, then refreshes
-conversation metadata in a debounced background worker. Refresh work is
-idempotent by provider, artifact path, file size, and modified time.
+conversation metadata in a debounced background worker. Cached listing and status
+reads do not start scans. Explicit refreshes wait for any refresh already running.
 
-A command can read stale cache data while a refresh is running. The refresh does
-not change provider files.
+A command can read stale cache data while a refresh is running. Unchanged passes
+skip cache encoding and writing. Changes to records, metadata, source membership,
+or saved append progress update the cache. Refreshes do not change provider files,
+and daemon shutdown and reload cancel and join the worker.
+
+Cursor parent transcripts reuse decoded headers and resume links in memory. A
+normal append reads from the last complete record; an unfinished final line waits
+for the next append. Truncation or a detected file replacement rebuilds that
+transcript's derived state. Process startup rebuilds this in-memory continuation
+as needed. Only the current cache format is supported after the upgrade reset.
 
 ## Reading
 

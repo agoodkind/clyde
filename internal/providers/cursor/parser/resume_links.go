@@ -1,24 +1,14 @@
 package parser
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	cursorjsonl "goodkind.io/clyde/internal/providers/cursor/jsonl"
-)
-
-const (
-	// cursorToolUseBlockType names the assistant content block that carries a tool
-	// call in a Cursor transcript.
-	cursorToolUseBlockType = "tool_use"
-	// resumeScanBufferMax bounds a single transcript line while scanning for
-	// resume links. A longer line is skipped rather than failing the scan.
-	resumeScanBufferMax = 4 * 1024 * 1024
 )
 
 // cursorSpawnToolNames are the tool calls through which a Cursor conversation
@@ -32,9 +22,10 @@ var cursorSpawnToolNames = map[string]bool{
 // remembered against the file state they were read from so an unchanged parent
 // is never re-read.
 type resumeLinkCacheEntry struct {
-	size       int64
-	mtime      time.Time
-	resumedIDs []string
+	info           os.FileInfo
+	completeOffset int64
+	header         cursorjsonl.TranscriptHeader
+	resumedIDs     []string
 }
 
 // resumeLinkIndex maps a conversation id a parent resumed to the parent's own
@@ -59,22 +50,6 @@ func (index resumeLinkIndex) parentOf(conversationID string) (string, bool) {
 	return parentID, true
 }
 
-// cursorTranscriptLine is the slice of a Cursor transcript record that can carry
-// a spawn tool call. Everything else in the record is ignored.
-type cursorTranscriptLine struct {
-	Message cursorTranscriptMessageBody `json:"message"`
-}
-
-type cursorTranscriptMessageBody struct {
-	Content []cursorTranscriptContentBlock `json:"content"`
-}
-
-type cursorTranscriptContentBlock struct {
-	Type  string                    `json:"type"`
-	Name  string                    `json:"name"`
-	Input cursorTranscriptToolInput `json:"input"`
-}
-
 // cursorTranscriptToolInput carries the one input field that names an existing
 // subagent conversation. Cursor writes it when a conversation resumes an agent
 // thread it started earlier; a first spawn names nothing, which is why the link
@@ -83,14 +58,9 @@ type cursorTranscriptToolInput struct {
 	Resume string `json:"resume"`
 }
 
-// buildResumeLinkIndex reads every parent transcript that changed since the last
-// refresh and collects the conversation ids their spawn tool calls resume.
-//
-// This is the one Cursor scan that reads a transcript end to end rather than a
-// bounded header, so its cost grows with corpus bytes. The per-file cache keyed on
-// size and modification time keeps the steady state near zero: only a parent that
-// actually changed is re-read.
-func (p *Parser) buildResumeLinkIndex(ctx context.Context, files []cursorjsonl.TranscriptFile) resumeLinkIndex {
+// buildResumeLinkIndex decodes new complete parent records once for both headers
+// and resume links. Continuation is in memory and rebuilt after process startup.
+func (p *Parser) buildResumeLinkIndex(ctx context.Context, files []cursorjsonl.TranscriptFile) (resumeLinkIndex, error) {
 	parentByResumedID := make(map[string]string)
 	fresh := make(map[string]resumeLinkCacheEntry, len(files))
 
@@ -103,8 +73,8 @@ func (p *Parser) buildResumeLinkIndex(ctx context.Context, files []cursorjsonl.T
 			// Only a conversation's own transcript spawns agents.
 			continue
 		}
-		if ctx.Err() != nil {
-			break
+		if err := ctx.Err(); err != nil {
+			return resumeLinkIndex{}, fmt.Errorf("scan cursor resume links: %w", err)
 		}
 		info, err := os.Stat(file.Path)
 		if err != nil {
@@ -112,21 +82,28 @@ func (p *Parser) buildResumeLinkIndex(ctx context.Context, files []cursorjsonl.T
 			continue
 		}
 		cached, ok := prior[file.Path]
-		if ok && cached.size == info.Size() && cached.mtime.Equal(info.ModTime()) {
+		if ok && os.SameFile(cached.info, info) && cached.info.Size() == info.Size() && cached.info.ModTime().Equal(info.ModTime()) {
 			fresh[file.Path] = cached
 			addResumeLinks(parentByResumedID, file.ConversationID, cached.resumedIDs)
 			continue
 		}
-		resumedIDs := readResumedConversationIDs(ctx, file.Path)
-		fresh[file.Path] = resumeLinkCacheEntry{size: info.Size(), mtime: info.ModTime(), resumedIDs: resumedIDs}
-		addResumeLinks(parentByResumedID, file.ConversationID, resumedIDs)
+		if !ok || !os.SameFile(cached.info, info) || info.Size() <= cached.info.Size() {
+			var empty resumeLinkCacheEntry
+			cached = empty
+		}
+		current, err := scanResumeLinks(ctx, file.Path, info, cached)
+		if err != nil {
+			return resumeLinkIndex{}, err
+		}
+		fresh[file.Path] = current
+		addResumeLinks(parentByResumedID, file.ConversationID, current.resumedIDs)
 	}
 
 	p.mu.Lock()
 	p.resumeLinks = fresh
 	p.mu.Unlock()
 
-	return resumeLinkIndex{parentByResumedID: parentByResumedID}
+	return resumeLinkIndex{parentByResumedID: parentByResumedID}, nil
 }
 
 // addResumeLinks records each resumed id against the conversation that resumed
@@ -143,41 +120,33 @@ func addResumeLinks(parentByResumedID map[string]string, parentConversationID st
 	}
 }
 
-// readResumedConversationIDs scans one parent transcript for the conversation ids
-// its Task and Subagent tool calls resume.
-func readResumedConversationIDs(ctx context.Context, path string) []string {
+func scanResumeLinks(ctx context.Context, path string, info os.FileInfo, prior resumeLinkCacheEntry) (resumeLinkCacheEntry, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.resume_open_failed", "concern", concern, "path", path, "err", err)
-		return nil
+		return resumeLinkCacheEntry{}, fmt.Errorf("open cursor resume transcript: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
-	var resumedIDs []string
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), resumeScanBufferMax)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var record cursorTranscriptLine
-		if err := json.Unmarshal(line, &record); err != nil {
-			continue
-		}
-		for _, block := range record.Message.Content {
-			if block.Type != cursorToolUseBlockType || !cursorSpawnToolNames[block.Name] {
+	resumedIDs := append([]string(nil), prior.resumedIDs...)
+	header, offset, err := cursorjsonl.ScanAppend(ctx, path, file, prior.completeOffset, prior.header, func(message cursorjsonl.TranscriptMessage) {
+		for _, part := range message.Parts {
+			if part.Type != cursorjsonl.PartTypeToolUse || !cursorSpawnToolNames[part.ToolName] {
 				continue
 			}
-			resumed := strings.TrimSpace(block.Input.Resume)
+			var input cursorTranscriptToolInput
+			if json.Unmarshal(part.ToolInput, &input) != nil {
+				continue
+			}
+			resumed := strings.TrimSpace(input.Resume)
 			if resumed == "" {
 				continue
 			}
 			resumedIDs = append(resumedIDs, resumed)
 		}
+	})
+	if err != nil {
+		return resumeLinkCacheEntry{}, fmt.Errorf("scan cursor resume links %s: %w", path, err)
 	}
-	if scanErr := scanner.Err(); scanErr != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resume_scan_failed", "concern", concern, "path", path, "err", scanErr)
-	}
-	return resumedIDs
+	return resumeLinkCacheEntry{info: info, completeOffset: offset, header: header, resumedIDs: resumedIDs}, nil
 }

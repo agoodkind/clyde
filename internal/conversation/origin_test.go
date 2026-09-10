@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,10 +11,7 @@ import (
 	"time"
 )
 
-// staleIndexServingCache builds an index over a cache file that is already
-// written and whose debounce window has not elapsed, so List serves the cached
-// records without scanning. It is the reader's view of a cache an older binary
-// left behind.
+// staleIndexServingCache serves a written cache through the public read boundary.
 func staleIndexServingCache(t *testing.T, cacheBody string, includeSubagents bool) *Index {
 	t.Helper()
 	cachePath := filepath.Join(t.TempDir(), cacheFilename)
@@ -39,12 +37,9 @@ func staleIndexServingCache(t *testing.T, cacheBody string, includeSubagents boo
 	}
 }
 
-// TestListDecodesCachedRecordsWrittenBeforeOriginExisted covers the cache an
-// older binary wrote: it carries no version and no origin key, and it must still
-// decode and serve rather than fail.
-func TestListDecodesCachedRecordsWrittenBeforeOriginExisted(t *testing.T) {
+func TestListKeepsUnclassifiedCachedRecordsVisible(t *testing.T) {
 	t.Parallel()
-	cacheBody := `{"records":[{"id":"claude:legacy","provider":"claude","native_id":"legacy","title":"written before origin","workspace_root":"/repo","artifact_path":"/repo/legacy.jsonl","artifact_kind":"transcript","model":"","created_at":"2026-05-01T10:00:00Z","updated_at":"2026-05-01T10:00:00Z","size_bytes":10,"archived":false}],"stamps":{}}`
+	cacheBody := fmt.Sprintf(`{"version":%d,"records":[{"id":"claude:legacy","provider":"claude","native_id":"legacy","title":"unclassified","workspace_root":"/repo","artifact_path":"/repo/legacy.jsonl","artifact_kind":"transcript","model":"","created_at":"2026-05-01T10:00:00Z","updated_at":"2026-05-01T10:00:00Z","size_bytes":10,"archived":false}],"stamps":{}}`, cacheFormatVersion)
 
 	idx := staleIndexServingCache(t, cacheBody, false)
 
@@ -58,37 +53,12 @@ func TestListDecodesCachedRecordsWrittenBeforeOriginExisted(t *testing.T) {
 	if records[0].ID != "claude:legacy" {
 		t.Fatalf("id = %q, want claude:legacy", records[0].ID)
 	}
-	// An unclassified record is not a subagent conversation, so a cache written
-	// before origin existed keeps showing everything it always showed.
+	// An unclassified record remains visible when the subagent filter is enabled.
 	if records[0].Origin != OriginUnspecified {
 		t.Fatalf("origin = %q, want unspecified", records[0].Origin)
 	}
 	if records[0].IsSubagent() {
 		t.Fatalf("IsSubagent = true, want false for an unclassified record")
-	}
-}
-
-// TestReadCacheDropsStampsFromAnOlderFormat proves the one-time re-parse that
-// fills in origin for a corpus indexed by an older binary: the records still load
-// so startup stays fast, but their stamps are dropped so the next scan re-reads
-// every artifact instead of reusing records that can never gain an origin.
-func TestReadCacheDropsStampsFromAnOlderFormat(t *testing.T) {
-	t.Parallel()
-	cachePath := filepath.Join(t.TempDir(), cacheFilename)
-	cacheBody := `{"records":[{"id":"claude:legacy","provider":"claude","native_id":"legacy","title":"legacy","artifact_path":"/repo/legacy.jsonl","artifact_kind":"transcript"}],"stamps":{"/repo/legacy.jsonl":{"size":10,"mtime":"2026-05-01T10:00:00Z"}}}`
-	if err := os.WriteFile(cachePath, []byte(cacheBody), 0o600); err != nil {
-		t.Fatalf("write conversation cache: %v", err)
-	}
-
-	records, stamps, _, err := readCache(cachePath)
-	if err != nil {
-		t.Fatalf("read conversation cache: %v", err)
-	}
-	if len(records) != 1 {
-		t.Fatalf("records = %d, want the one cached record", len(records))
-	}
-	if len(stamps) != 0 {
-		t.Fatalf("stamps = %v, want none so the next scan re-parses every artifact", stamps)
 	}
 }
 
@@ -145,11 +115,7 @@ func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 	}
 }
 
-// Blocker 1: composer records now derive a workspace root, an origin, an
-// archived flag, and a title fallback from a Cursor store the version-1 shape
-// never read. A cache written at version 1 must therefore lose its stamps so the
-// first refresh re-derives those fields, exactly as it does for an older shape.
-func TestReadCacheDropsStampsFromVersionOne(t *testing.T) {
+func TestReadCacheRejectsUnsupportedFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "conversation-index.json")
 	body := `{"version":1,"records":[{"id":"cursor:composer-a","provider":"cursor","native_id":"composer-a","artifact_path":"cursor://root/composer/composer-a"}],"stamps":{"cursor://root/composer/composer-a":{"size":3,"mtime":"2026-01-01T00:00:00Z"}}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -157,13 +123,7 @@ func TestReadCacheDropsStampsFromVersionOne(t *testing.T) {
 	}
 
 	records, stamps, _, err := readCache(path)
-	if err != nil {
-		t.Fatalf("readCache returned error: %v", err)
-	}
-	if len(records) != 1 {
-		t.Fatalf("records = %d, want the one cached record kept", len(records))
-	}
-	if len(stamps) != 0 {
-		t.Fatalf("stamps = %v, want none so the first refresh re-derives composer metadata", stamps)
+	if err == nil || len(records) != 0 || len(stamps) != 0 {
+		t.Fatalf("unsupported cache returned records=%v stamps=%v err=%v", records, stamps, err)
 	}
 }

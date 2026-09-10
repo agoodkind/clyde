@@ -25,32 +25,8 @@ import (
 const (
 	cacheFilename   = "conversation-index.json"
 	refreshDebounce = 30 * time.Second
-	// cacheFormatVersion is the record shape the current binary writes. A cache
-	// written by an older shape still loads its records, so startup stays fast,
-	// but its file stamps are dropped so the first refresh re-parses every
-	// artifact once and fills in the fields the old shape never stored. Raise it
-	// whenever a scan starts deriving a record field the old cache cannot supply.
-	//
-	// Version 2 covers fields added together, because the version marks the record
-	// shape rather than counting fields, and one raise re-parses the corpus once for
-	// all of them.
-	//
-	// A Cursor chat's workspace root, origin, archived flag, and fallback title come
-	// from a store version 1 never opened, and a chat's own artifact does not change
-	// when any of those change, so without the raise the overwhelming majority would
-	// keep a version 1 record with an empty workspace forever.
-	//
-	// Record.LatestRequestID is derived the same way: without the raise, an artifact
-	// whose stamp is unchanged keeps its version 1 record and never gains the field,
-	// so every conversation not written to since the upgrade resolves no request id.
-	//
-	// Version 3 covers the subagents/ twin rule: a top-level Cursor transcript
-	// whose uuid appears under a sibling conversation's subagents/ directory now
-	// derives subagent origin from that twin. A dispatched conversation's twin
-	// file is finished and never changes again, so without the raise every twin
-	// cached by version 2 keeps its user-origin record forever and stays in the
-	// index and the semantic feed.
-	cacheFormatVersion = 4
+	// Only the current format is supported; operators reset derived state on upgrade.
+	cacheFormatVersion = 5
 )
 
 // Index owns the derived raw conversation cache. It resolves each artifact's
@@ -71,10 +47,8 @@ type Index struct {
 	loaded           bool
 	refreshing       bool
 	// refreshRun is the refresh currently in flight and the outcome it finished
-	// with. A synchronous Refresh waits on it rather than returning, because every
-	// read path starts a background refresh a moment before it asks for a
-	// synchronous one, so returning early would hand the caller back the same stale
-	// snapshot it already failed against.
+	// with. A synchronous Refresh joins the existing worker's refresh so it never
+	// reports fresh records while that refresh is still running.
 	refreshRun   *refreshRun
 	lastRefresh  time.Time
 	cachePath    string
@@ -122,6 +96,17 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 		slog.WarnContext(ctx, "conversation.index.start_load_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 	}
 	idx.refreshAsync(ctx)
+	defer func() {
+		idx.mu.Lock()
+		run := idx.refreshRun
+		idx.mu.Unlock()
+		if run != nil {
+			select {
+			case <-run.done:
+			case <-ctx.Done():
+			}
+		}
+	}()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -134,12 +119,11 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// List returns the cached records and starts a debounced background refresh.
+// List returns the cached records without starting a refresh.
 func (idx *Index) List(ctx context.Context) ([]Record, error) {
 	if err := idx.loadOnce(); err != nil {
 		return nil, err
 	}
-	idx.refreshAsync(ctx)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	return idx.visibleRecords(), nil
@@ -166,13 +150,11 @@ func (idx *Index) visibleRecords() []Record {
 	return out
 }
 
-// ListWithStamps returns the cached records with their artifact file stamps and
-// starts a debounced background refresh.
+// ListWithStamps returns cached records and artifact stamps without a refresh.
 func (idx *Index) ListWithStamps(ctx context.Context) ([]StampedRecord, error) {
 	if err := idx.loadOnce(); err != nil {
 		return nil, err
 	}
-	idx.refreshAsync(ctx)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	return cloneStampedRecords(idx.visibleRecords(), idx.prevStamps), nil
@@ -260,12 +242,8 @@ const staleIndexNote = "the conversation index could not be refreshed, so this m
 // whether it managed to.
 //
 // A lookup wants fresh records and it wants an answer. Failing the whole command
-// because the refresh timed out or its scan errored trades the second for the
-// first, and does so exactly where the caller is under most pressure: the first
-// lookup after a cache-format upgrade re-parses the whole corpus under a
-// background rescan that runs uncancellably, so a caller under an RPC deadline
-// would get a deadline error where the records it already had would have
-// answered. The refresh is therefore best effort, it is logged when it fails, and
+// because the refresh timed out or its scan errored can discard an answer the
+// cache already holds. The refresh is therefore best effort and logged on failure;
 // the caller reports the miss as possibly stale rather than as a determination.
 func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 	if err := idx.Refresh(ctx); err != nil {
@@ -566,19 +544,32 @@ func recordByNativeID(records []Record, provider providerid.Provider, nativeID s
 // error means the records were rebuilt, whoever rebuilt them.
 func (idx *Index) Refresh(ctx context.Context) (err error) {
 	defer trace.Op(ctx, "conversation.index.refresh")(&err)
+	if err := idx.loadOnce(); err != nil {
+		return err
+	}
 	run, prior, claimed := idx.beginRefresh()
 	if !claimed {
 		return idx.waitForRefresh(ctx, run)
 	}
 	defer func() { idx.endRefresh(run, err) }()
 
+	return idx.refresh(ctx, prior)
+}
+
+func (idx *Index) refresh(ctx context.Context, prior scanCache) error {
 	result, err := idx.scanProvider(ctx, idx.registry, prior)
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		slog.WarnContext(ctx, "conversation.index.refresh_canceled", "concern", "conversation.index", "component", "conversation", "err", err)
+		return fmt.Errorf("refresh conversation index: %w", err)
+	}
 	sortRecords(result.records)
-	if err = writeCache(idx.cachePath, result.records, result.stamps, result.multiStates); err != nil {
-		return err
+	if result.changed {
+		if err := writeCache(idx.cachePath, result.records, result.stamps, result.multiStates); err != nil {
+			return err
+		}
 	}
 	idx.installRefreshResult(result)
 	idx.reportSkippedSubagents(ctx, result.records)
@@ -690,27 +681,27 @@ func (idx *Index) reportSkippedSubagents(ctx context.Context, records []Record) 
 
 func (idx *Index) loadOnce() error {
 	idx.mu.Lock()
+	defer idx.mu.Unlock()
 	if idx.loaded {
-		idx.mu.Unlock()
 		return nil
 	}
-	idx.mu.Unlock()
 
 	records, stamps, multiStates, err := readCache(idx.cachePath)
 	if err != nil {
 		return err
 	}
-	idx.mu.Lock()
 	idx.records = records
 	idx.prevRecords = recordsByPath(records)
 	idx.prevStamps = stamps
 	idx.prevMultiStates = multiStates
 	idx.loaded = true
-	idx.mu.Unlock()
 	return nil
 }
 
 func (idx *Index) refreshAsync(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	idx.mu.Lock()
 	debounced := clock.Now().Sub(idx.lastRefresh) < idx.debounce
 	idx.mu.Unlock()
@@ -732,17 +723,11 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 				slog.ErrorContext(ctx, "conversation.index.refresh_panic", "concern", "conversation.index", "component", "conversation", "err", err)
 			}
 		}()
-		result, err := idx.scanProvider(context.WithoutCancel(ctx), idx.registry, prior)
-		if err == nil {
-			sortRecords(result.records)
-			err = writeCache(idx.cachePath, result.records, result.stamps, result.multiStates)
-		}
+		err = idx.refresh(ctx, prior)
 		if err != nil {
 			slog.WarnContext(ctx, "conversation.index.background_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 			return
 		}
-		idx.installRefreshResult(result)
-		idx.reportSkippedSubagents(ctx, result.records)
 	}()
 }
 
@@ -781,28 +766,15 @@ func readCache(
 		return nil, nil, nil, fmt.Errorf("read conversation cache: %w", err)
 	}
 	var cache cacheFile
-	if err := json.Unmarshal(data, &cache); err == nil && cache.Records != nil {
-		sortRecords(cache.Records)
-		if cache.Version < cacheFormatVersion {
-			// The records still serve reads immediately, but their stamps are
-			// dropped so the first refresh re-parses every artifact once and
-			// derives the fields this shape added. Without that, an unchanged file
-			// would keep its old record forever and never gain an origin.
-			slog.Info("conversation.index.cache_format_upgraded", "concern", "conversation.index", "component", "conversation", "path", path, "from_version", cache.Version, "to_version", cacheFormatVersion, "records", len(cache.Records))
-			return cache.Records, nil, nil, nil
-		}
-		return cache.Records, cache.Stamps, cache.MultiStates, nil
-	}
-	// Fall back to the legacy records-only array. The next write upgrades the
-	// file to the stamped envelope, so the first refresh re-parses once and then
-	// the startup path is cheap.
-	var records []Record
-	if err := json.Unmarshal(data, &records); err != nil {
+	if err := json.Unmarshal(data, &cache); err != nil {
 		slog.Warn("conversation.index.cache_decode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
 		return nil, nil, nil, fmt.Errorf("decode conversation cache: %w", err)
 	}
-	sortRecords(records)
-	return records, nil, nil, nil
+	if cache.Version != cacheFormatVersion {
+		return nil, nil, nil, fmt.Errorf("unsupported conversation cache format %d: run clyde daemon hard-reset", cache.Version)
+	}
+	sortRecords(cache.Records)
+	return cache.Records, cache.Stamps, cache.MultiStates, nil
 }
 
 func writeCache(
