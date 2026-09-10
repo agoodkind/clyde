@@ -99,20 +99,23 @@ type metricsRollupRecord struct {
 	GenerationStartedAt string `json:"generation_started_at,omitempty"`
 }
 
-// metricsRollupCheckpoint records how far the writer has already distilled.
-//
-// The cursor is the newest request terminal instant written, not a byte
-// offset. A pass re-reads a small overlap behind that instant and drops
-// anything at or before it, which keeps the store free of duplicates without
-// having to map byte offsets across log rotations.
+// metricsRollupSourcePosition identifies the active plain file and its complete-line boundary.
+type metricsRollupSourcePosition struct {
+	Path   string `json:"path"`
+	Device string `json:"device"`
+	Inode  uint64 `json:"inode"`
+	Offset int64  `json:"offset"`
+}
+
+// metricsRollupCheckpoint saves source progress independently of summary output.
+// Pending request aggregates are held only by the running worker.
 type metricsRollupCheckpoint struct {
 	LastRecordAt string `json:"last_record_at"`
-	// LastPassAt is when the most recent pass completed, success or not. It is
-	// distinct from LastRecordAt: a quiet system with no new requests still
-	// completes passes, and LastPassAt is what tells a reader whether the store
-	// is caught up to the window's end rather than merely caught up to the last
-	// request it happened to see.
-	LastPassAt string `json:"last_pass_at"`
+	// LastPassAt is when the most recent successful pass completed.
+	LastPassAt string                      `json:"last_pass_at"`
+	Source     metricsRollupSourcePosition `json:"source"`
+	// CoverageSince marks the start of continuous observed summary coverage.
+	CoverageSince string `json:"coverage_since"`
 }
 
 // metricsRollupPath returns the rollup store path inside the clyde state dir.
@@ -145,9 +148,9 @@ func acquireRollupWriteLock(path string) (*flock.Flock, error) {
 }
 
 // readMetricsRollupCheckpoint loads the writer checkpoint. A missing or
-// unreadable checkpoint yields the zero value, which starts a full pass.
+// unreadable checkpoint yields the zero value, which starts at the active log end.
 func readMetricsRollupCheckpoint(path string) metricsRollupCheckpoint {
-	empty := metricsRollupCheckpoint{LastRecordAt: "", LastPassAt: ""}
+	var empty metricsRollupCheckpoint
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return empty

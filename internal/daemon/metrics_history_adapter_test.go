@@ -77,6 +77,29 @@ func TestAdapterHandlerIOLogFeedsMetricsHistory(t *testing.T) {
 	if _, err := file.Write(logBuffer.Bytes()); err != nil {
 		t.Fatalf("write adapter log: %v", err)
 	}
+	t.Run("rollup discards health request", func(t *testing.T) {
+		input := metricsRollupDistillInput{
+			LogPath: logPath, RollupPath: filepath.Join(t.TempDir(), metricsRollupFileName),
+			Now: now, Pricing: rollupPricingTable(), State: testRollupState(t, logPath),
+		}
+		for pass := range 3 {
+			result, err := distillMetricsRollup(t.Context(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Written != 0 || len(input.State.requests) != 0 {
+				t.Errorf("health-only pass %d wrote %d summaries and retained %d aggregates", pass+1, result.Written, len(input.State.requests))
+			}
+			input.Now = input.Now.Add(metricsRollupInterval)
+		}
+		input.Now = input.Now.Add(9 * 24 * time.Hour)
+		if _, err := distillMetricsRollup(t.Context(), input); err != nil {
+			t.Fatal(err)
+		}
+		if len(input.State.requests) != 0 {
+			t.Errorf("health-only log retained %d aggregates after nine days", len(input.State.requests))
+		}
+	})
 	encoder := json.NewEncoder(file)
 	for _, record := range []metricsHistoryRecord{
 		{Time: now.Add(-time.Second).Format(time.RFC3339Nano), Message: "adapter.request.started", RequestID: "history-io", ExecutionID: executionID},
