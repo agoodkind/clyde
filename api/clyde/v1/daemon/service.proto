@@ -5,8 +5,11 @@ package clyde.v1;
 option go_package = "goodkind.io/clyde/api/clyde/v1;clydev1";
 
 import "clyde/v1/daemon/provider.proto";
+import "google/protobuf/empty.proto";
 
 service ClydeService {
+  // GetDaemonStatus reads runtime state without probing engines or refreshing data.
+  rpc GetDaemonStatus(google.protobuf.Empty) returns (GetDaemonStatusResponse);
   rpc ReloadDaemon(ReloadDaemonRequest) returns (ReloadDaemonResponse);
   // RebindDaemon replaces the worker with one that binds listeners fresh from
   // config, for edits that change a listener address or the listener set.
@@ -545,4 +548,35 @@ message ListConversationsResponse {
   int64 limit = 5;
   int64 next_offset = 6;
   bool has_more = 7;
+}
+
+enum SemanticConnectionState {
+  SEMANTIC_CONNECTION_STATE_UNSPECIFIED = 0;
+  SEMANTIC_CONNECTION_STATE_DISABLED = 1;
+  SEMANTIC_CONNECTION_STATE_UNAVAILABLE = 2;
+  SEMANTIC_CONNECTION_STATE_CONNECTING = 3;
+  SEMANTIC_CONNECTION_STATE_READY = 4;
+  SEMANTIC_CONNECTION_STATE_IDLE = 5;
+  SEMANTIC_CONNECTION_STATE_SHUTDOWN = 6;
+}
+
+message SemanticStatus {
+  bool ingestion_enabled = 1;
+  bool search_enabled = 2;
+  SemanticConnectionState connection = 3;
+  int64 next_retry_unix = 4;
+  uint64 attempts = 5;
+}
+
+message BoundListenerStatus {
+  string name = 1;
+  string network = 2;
+  string address = 3;
+}
+
+message GetDaemonStatusResponse {
+  SemanticStatus semantic = 1;
+  repeated BoundListenerStatus listeners = 2;
+  // Absent when the daemon did not start a profiling listener.
+  BoundListenerStatus profiling = 3;
 }
