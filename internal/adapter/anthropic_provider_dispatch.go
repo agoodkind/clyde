@@ -113,11 +113,7 @@ func (s *Server) dispatchAnthropicProviderStream(
 	}
 	result.UsageNotices = notices
 	s.log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.chat.anthropic_stream_finalized",
-		slog.String("concern", "adapter.providers.anthropic.sse"),
-		slog.String("backend", "anthropic"),
+		ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
 		slog.String("request_id", reqID),
 		slog.String("model", alias),
 		slog.Bool("include_usage", includeUsage),
@@ -149,11 +145,7 @@ func (s *Server) handleAnthropicStreamRunErr(
 	aerr := anthropicProviderAdapterError(runErr)
 	if !streamWriter.headersWritten {
 		s.log.LogAttrs(
-			ctx,
-			slog.LevelInfo,
-			"adapter.chat.anthropic_stream_pre_content_error",
-			slog.String("concern", "adapter.providers.anthropic.sse"),
-			slog.String("backend", "anthropic"),
+			ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_pre_content_error", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
 			slog.String("request_id", reqID),
 			slog.String("model", alias),
 			slog.String("run_err", sanitizeAnthropicRunErr(runErr)),
@@ -168,11 +160,7 @@ func (s *Server) handleAnthropicStreamRunErr(
 	}
 	result.UsageNotices = notices
 	s.log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.chat.anthropic_stream_finalized_after_runerr",
-		slog.String("concern", "adapter.providers.anthropic.sse"),
-		slog.String("backend", "anthropic"),
+		ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized_after_runerr", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
 		slog.String("request_id", reqID),
 		slog.String("model", alias),
 		slog.String("run_err", sanitizeAnthropicRunErr(runErr)),
@@ -183,11 +171,7 @@ func (s *Server) handleAnthropicStreamRunErr(
 	)
 	if err := streamWriter.finalizeStream(ctx, result, includeUsage); err != nil {
 		s.log.LogAttrs(
-			ctx,
-			slog.LevelWarn,
-			"adapter.chat.stream_finalize_after_runerr_failed",
-			slog.String("concern", "adapter.chat.render"),
-			slog.String("backend", "anthropic"),
+			ctx, slog.LevelWarn, "adapter.chat.stream_finalize_after_runerr_failed", slog.String("concern", "adapter.chat.render"), slog.String("backend", "anthropic"),
 			slog.String("request_id", reqID),
 			slog.Any("err", err),
 		)
@@ -263,11 +247,7 @@ func (s *Server) executeAnthropicPreparedRequest(
 ) (adapterprovider.Result, error) {
 	if s.anthr == nil {
 		result := adapterprovider.Result{
-			Usage: adapteropenai.Usage{
-				PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
-				PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
-				CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
-			},
+			Usage: emptyAnthropicOpenAIUsage(),
 
 			FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 		}
@@ -302,11 +282,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 		nativeWriter, ok := writer.(*nativeAnthropicJSONWriter)
 		if !ok || nativeWriter == nil {
 			result := adapterprovider.Result{
-				Usage: adapteropenai.Usage{
-					PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
-					PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
-					CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
-				},
+				Usage: emptyAnthropicOpenAIUsage(),
 
 				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 			}
@@ -322,11 +298,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 	collector, ok := writer.(*providerCollectorWriter)
 	if !ok || collector == nil {
 		result := adapterprovider.Result{
-			Usage: adapteropenai.Usage{
-				PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
-				PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
-				CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
-			},
+			Usage: emptyAnthropicOpenAIUsage(),
 
 			FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 		}
@@ -396,11 +368,7 @@ func (s *Server) executeAnthropicPreparedStream(
 		nativeWriter, ok := writer.(*nativeAnthropicStreamWriter)
 		if !ok || nativeWriter == nil {
 			result := adapterprovider.Result{
-				Usage: adapteropenai.Usage{
-					PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
-					PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
-					CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
-				},
+				Usage: emptyAnthropicOpenAIUsage(),
 
 				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 			}
@@ -489,8 +457,7 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 		return adapterprovider.Result{}, fmt.Errorf("relay native anthropic stream response: %w", err)
 	}
 	return adapterprovider.Result{
-		Usage: adapteropenai.
-			Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+		Usage: emptyAnthropicOpenAIUsage(),
 
 		FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 	}, nil
@@ -624,16 +591,15 @@ func preparedRequestAlias(prepared anthropic.PreparedRequest) string {
 func anthropicProviderResultFromResponse(resp *adapteropenai.ChatResponse) adapterprovider.Result {
 	if resp == nil {
 		return adapterprovider.Result{
-			Usage: adapteropenai.
-				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+			Usage: emptyAnthropicOpenAIUsage(),
 
 			FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 		}
 	}
 	result := adapterprovider.Result{
 		FinalResponse:     resp,
-		SystemFingerprint: resp.SystemFingerprint, Usage: adapteropenai.
-					Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+		SystemFingerprint: resp.SystemFingerprint,
+		Usage:             emptyAnthropicOpenAIUsage(),
 
 		FinishReason: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 	}
@@ -649,6 +615,20 @@ func anthropicProviderResultFromResponse(resp *adapteropenai.ChatResponse) adapt
 		}
 	}
 	return result
+}
+
+func emptyAnthropicOpenAIUsage() adapteropenai.Usage {
+	return adapteropenai.Usage{
+		PromptTokens:        0,
+		CompletionTokens:    0,
+		TotalTokens:         0,
+		PromptTokensDetails: nil,
+		InputTokens:         0,
+		OutputTokens:        0,
+		CacheReadTokens:     0,
+		CacheWriteTokens:    0,
+		MaxTokens:           0,
+	}
 }
 
 func anthropicRequestWithUsageWindowCapture(req anthropic.Request) (anthropic.Request, func() []adapterruntime.UsageWindowNoticeInput) {

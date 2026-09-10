@@ -82,7 +82,7 @@ func TestTransparentRawTLSInterceptsAndCaptures(t *testing.T) {
 		t.Fatalf("negotiated protocol = %q want %q", got, http2.NextProtoTLS)
 	}
 
-	transport := &http2.Transport{}
+	transport := newTestHTTP2Transport(t)
 	h2Client, err := transport.NewClientConn(tlsClient)
 	if err != nil {
 		t.Fatalf("new h2 client conn: %v", err)
@@ -200,7 +200,7 @@ func TestTransparentRawTLSInterceptsUnclaimedHostAndCaptures(t *testing.T) {
 		t.Fatalf("negotiated protocol = %q want %q", got, http2.NextProtoTLS)
 	}
 
-	transport := &http2.Transport{}
+	transport := newTestHTTP2Transport(t)
 	h2Client, err := transport.NewClientConn(tlsClient)
 	if err != nil {
 		t.Fatalf("new h2 client conn: %v", err)

@@ -139,11 +139,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 func (p *Provider) ExecutePrepared(ctx context.Context, req PreparedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
 	if p == nil || p.executePrepared == nil {
 		result := adapterprovider.Result{
-			Usage: openai.Usage{
-				PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0,
-				PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0,
-				CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
-			},
+			Usage: emptyOpenAIUsage(),
 
 			FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 		}
@@ -155,4 +151,18 @@ func (p *Provider) ExecutePrepared(ctx context.Context, req PreparedRequest, w a
 		return result, executeErr
 	}
 	return p.executePrepared(ctx, req, w)
+}
+
+func emptyOpenAIUsage() openai.Usage {
+	return openai.Usage{
+		PromptTokens:        0,
+		CompletionTokens:    0,
+		TotalTokens:         0,
+		PromptTokensDetails: nil,
+		InputTokens:         0,
+		OutputTokens:        0,
+		CacheReadTokens:     0,
+		CacheWriteTokens:    0,
+		MaxTokens:           0,
+	}
 }
