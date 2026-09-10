@@ -18,6 +18,10 @@ func TestParserDiscoveryRecoversAfterOrdinaryContention(t *testing.T) {
 			name = "prior contribution"
 		}
 		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previousLogger) })
 			root, _, parser := discoveryFixture(t)
 			var records map[string]conversation.Record
 			if warm {
@@ -34,6 +38,9 @@ func TestParserDiscoveryRecoversAfterOrdinaryContention(t *testing.T) {
 				t.Fatal(err)
 			}
 			failed, records := discoverRecords(t, parser, records)
+			if count := strings.Count(logs.String(), "sqlite_ping_failed"); count != 1 {
+				t.Fatalf("contention warning count = %d, want one: %s", count, logs.String())
+			}
 			candidate, found := failed["composer-a"]
 			if found != warm {
 				t.Fatalf("failed discovery found composer = %v, prior = %v", found, warm)
