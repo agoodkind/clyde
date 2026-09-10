@@ -224,6 +224,31 @@ func TestScanReadsOnlyAppendedMultiConversationBytesAndKeepsSelectors(t *testing
 	}
 }
 
+func TestScanRestartsMultiConversationArtifactAfterMetadataChange(t *testing.T) {
+	const path = "/artifacts/events.jsonl"
+	priorStamp := FileStamp{Size: 20}
+	currentStamp := FileStamp{Size: 35}
+	root := Record{ID: "copilot:root", ArtifactPath: path}
+	parser := &recordingMultiScanParser{
+		candidate: ScanCandidate{Path: path, Stamp: currentStamp, MetadataChanged: true},
+		result:    MultiConversationScanResult{Records: []Record{root}, CompleteOffset: 34},
+		found:     true,
+	}
+	registry := NewRegistry()
+	registry.Register(parser)
+	_, err := scan(context.Background(), registry, scanCache{
+		records:     map[string]Record{recordKey(path, ""): root},
+		stamps:      map[string]FileStamp{recordKey(path, ""): priorStamp},
+		multiStates: map[string]MultiConversationScanState{path: {Stamp: priorStamp, CompleteOffset: 19}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parser.scans) != 1 || parser.scans[0].StartOffset != 0 || len(parser.scans[0].PriorRecords) != 0 {
+		t.Fatalf("metadata-changed scan = %+v, want a full restart", parser.scans)
+	}
+}
+
 func TestScanRestartsMultiConversationArtifactAfterTruncation(t *testing.T) {
 	const path = "/artifacts/events.jsonl"
 	priorStamp := FileStamp{Size: 20}

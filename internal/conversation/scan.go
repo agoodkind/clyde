@@ -132,7 +132,7 @@ func scanMultiConversationCandidate(
 		PriorRecords: nil,
 		StartOffset:  0,
 	}
-	if stateFound && candidate.Stamp.Size > state.Stamp.Size &&
+	if stateFound && !candidate.MetadataChanged && candidate.Stamp.Size > state.Stamp.Size &&
 		state.CompleteOffset >= 0 && state.CompleteOffset <= state.Stamp.Size {
 		input.PriorRecords = priorRecords
 		input.StartOffset = state.CompleteOffset
