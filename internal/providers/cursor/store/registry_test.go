@@ -1,10 +1,13 @@
 package cursorstore
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -187,6 +190,50 @@ func TestBuildWorkspaceComposerIndexKeepsAKnownPathOverAnUnreadableOne(t *testin
 	}
 	if info.Cwd != filepath.FromSlash("/Users/alice/source/real") {
 		t.Fatalf("Cwd = %q, want the path the readable workspace supplied", info.Cwd)
+	}
+}
+
+func TestBuildWorkspaceComposerIndexKeepsComposerAndLogsDescriptorWarningOnce(t *testing.T) {
+	rootDir := t.TempDir()
+	root := DataRoot{
+		RootDir:             rootDir,
+		GlobalDBPath:        filepath.Join(rootDir, "globalStorage", "state.vscdb"),
+		WorkspaceStorageDir: filepath.Join(rootDir, "workspaceStorage"),
+	}
+	writeSharedComposerWorkspace(t, root, "hash-broken", `{not json`)
+
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	index, err := BuildWorkspaceComposerIndex(t.Context(), root)
+	if err != nil {
+		t.Fatalf("BuildWorkspaceComposerIndex returned error: %v", err)
+	}
+	info, found := index["composer-shared"]
+	if !found {
+		t.Fatal("index[composer-shared] missing")
+	}
+	if info.Cwd != "" {
+		t.Fatalf("Cwd = %q, want empty for an unreadable descriptor", info.Cwd)
+	}
+	if info.Name != "Shared" {
+		t.Fatalf("Name = %q, want Shared", info.Name)
+	}
+
+	logBody := strings.TrimSpace(logs.String())
+	if count := strings.Count(logBody, "\n") + 1; count != 1 {
+		t.Fatalf("workspace descriptor warning count = %d, want 1; logs=%s", count, logBody)
+	}
+	if !strings.Contains(logBody, `"msg":"providers.cursor.store.workspace_descriptor_decode_failed"`) {
+		t.Fatalf("workspace descriptor warning missing: %s", logBody)
+	}
+	descriptorPath := filepath.Join(root.WorkspaceStorageDir, "hash-broken", "workspace.json")
+	for _, expected := range []string{descriptorPath, "decode cursor workspace descriptor json"} {
+		if !strings.Contains(logBody, expected) {
+			t.Fatalf("workspace descriptor warning missing %q: %s", expected, logBody)
+		}
 	}
 }
 
