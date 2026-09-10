@@ -61,6 +61,34 @@ func resetFileTarget(path, root string) resetTarget {
 	return resetTarget{Path: path, Root: root, RemoveTree: false, AllowProtected: false}
 }
 
+func resetLogTarget(path, root string, removeTree bool) resetTarget {
+	return resetTarget{Path: path, Root: root, RemoveTree: removeTree, AllowProtected: true}
+}
+
+func readRotatedLogTargets(state string) ([]resetTarget, error) {
+	entries, err := os.ReadDir(state)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		slog.Warn("daemon.hard_reset.state_logs_read_failed", "concern", "process.daemon.lifecycle", "path", state, "err", err)
+		return nil, fmt.Errorf("read Clyde state logs: %w", err)
+	}
+	targets := make([]resetTarget, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(entry.Name())
+		isLog := strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, ".jsonl.gz") || strings.HasSuffix(name, ".log") || strings.HasSuffix(name, ".log.gz")
+		isClydeLog := strings.HasPrefix(name, "clyde-") || strings.HasPrefix(name, "codex") || strings.HasPrefix(name, "anthropic") || strings.HasPrefix(name, "audit") || strings.HasPrefix(name, "daemon")
+		if isLog && isClydeLog {
+			targets = append(targets, resetLogTarget(filepath.Join(state, entry.Name()), state, false))
+		}
+	}
+	return targets, nil
+}
+
 // HardReset deletes only Clyde's local databases and derived index state, then
 // reinstalls this executable through the native user service installer.
 func HardReset(ctx context.Context, output io.Writer) (err error) {
@@ -157,6 +185,14 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 	state, cache, runtime := config.DefaultStateDir(), config.GlobalCacheDir(), config.RuntimeDir()
 	cacheTargets := []resetTarget{resetFileTarget(conversation.CachePath(), cache)}
 	stateTargets := []resetTarget{
+		resetLogTarget(filepath.Join(state, "logs"), state, true),
+		resetLogTarget(filepath.Join(state, "mitm-launcher"), state, true),
+		resetLogTarget(filepath.Join(state, "clyde-daemon.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "clyde-cli.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "codex.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "anthropic.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "audit.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "daemon.log"), state, false),
 		resetFileTarget(metricsRollupPath(), state),
 		resetFileTarget(metricsRollupPath()+".lock", state),
 		resetFileTarget(metricsRollupPath()+".tmp", state),
@@ -166,6 +202,11 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 		resetFileTarget(daemonsupervisor.SocketPath(runtime), runtime),
 		resetFileTarget(daemonReloadLockPath(), runtime),
 	}
+	rotatedLogs, err := readRotatedLogTargets(state)
+	if err != nil {
+		return nil, err
+	}
+	stateTargets = append(stateTargets, rotatedLogs...)
 	if scope == HardResetScopeAll || scope == HardResetScopeState {
 		socket, err := config.DaemonSocketPathFromGRPCAddress(cfg.Daemon.GRPCAddress)
 		if err != nil {

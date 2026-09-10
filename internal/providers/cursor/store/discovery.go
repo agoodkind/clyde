@@ -2,7 +2,11 @@ package cursorstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"errors"
+	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -217,7 +221,22 @@ type globalCacheEntry struct {
 	mu          sync.Mutex
 	known       bool
 	stamp       databaseMetadata
+	signature   globalDiscoverySignature
+	signed      bool
 	data        GlobalDiscovery
+}
+
+type globalDiscoverySignature struct {
+	composerDigest  [sha256.Size]byte
+	bubbleRows      int64
+	bubbleLastRow   int64
+	bubbleBytes     int64
+	backgroundValue string
+	metadataRows    int64
+	metadataLastRow int64
+	metadataUpdated int64
+	metadataFlags   int64
+	metadataBytes   int64
 }
 
 // ReadGlobalDiscovery refreshes when database/WAL metadata changes or a prior
@@ -235,18 +254,127 @@ func ReadGlobalDiscovery(ctx context.Context, path string) GlobalDiscovery {
 		return cloneGlobalDiscovery(cached.data)
 	}
 	var data GlobalDiscovery
+	var signature globalDiscoverySignature
+	var signatureErr error
 	if stamp.database.absent {
 		data = GlobalDiscovery{Headers: nil, Stocks: nil, Background: nil, Metadata: ComposerMetadataIndex{ByComposerID: nil, Err: nil}, Err: nil}
 	} else {
 		readCtx, attempt := cached.diagnostics.start(ctx, changed)
-		data = refreshGlobal(readCtx, path, cached.data)
+		var unchanged bool
+		data, signature, signatureErr, unchanged = readChangedGlobalDiscovery(readCtx, path, cached)
+		if unchanged {
+			cached.diagnostics.finish(attempt, nil)
+			cached.stamp = stamp
+			cached.completed.Add(1)
+			return cloneGlobalDiscovery(cached.data)
+		}
 		cached.diagnostics.finish(attempt, errors.Join(data.Err, data.Metadata.Err))
 	}
 	if ctx.Err() == nil {
 		cached.stamp, cached.data, cached.known = stamp, data, true
+		if signatureErr == nil && !stamp.database.absent {
+			cached.signature, cached.signed = signature, true
+		}
 	}
 	cached.completed.Add(1)
 	return cloneGlobalDiscovery(data)
+}
+
+func readChangedGlobalDiscovery(
+	ctx context.Context,
+	path string,
+	cached *globalCacheEntry,
+) (GlobalDiscovery, globalDiscoverySignature, error, bool) {
+	var signature globalDiscoverySignature
+	db, err := OpenReadOnlyDatabase(ctx, path)
+	if err != nil {
+		data := cached.data
+		data.Err = err
+		return data, signature, err, false
+	}
+	defer func() { _ = db.Close() }()
+	signature, signatureErr := readGlobalDiscoverySignature(ctx, db)
+	unchanged := signatureErr == nil && cached.known && cached.signed && signature == cached.signature
+	if unchanged {
+		return cached.data, signature, nil, true
+	}
+	return refreshGlobalDatabase(ctx, db, cached.data), signature, signatureErr, false
+}
+
+func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB) (globalDiscoverySignature, error) {
+	var signature globalDiscoverySignature
+	if err := readConversationRangeSignature(ctx, db, &signature); err != nil {
+		return signature, err
+	}
+	if err := readBackgroundSignature(ctx, db, &signature); err != nil {
+		return signature, err
+	}
+	if err := readComposerMetadataSignature(ctx, db, &signature); err != nil {
+		return signature, err
+	}
+	return signature, nil
+}
+
+func readConversationRangeSignature(ctx context.Context, db *sql.DB, signature *globalDiscoverySignature) error {
+	composerRows, err := ReadKVRowsByPrefix(ctx, db, KVTableCursorDiskKV, composerDataKeyPrefix)
+	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_signature_failed", "concern", concern, "err", err)
+		return fmt.Errorf("read cursor composer signature: %w", err)
+	}
+	hasher := sha256.New()
+	for _, row := range composerRows {
+		writeFingerprintField(hasher, row.Key)
+		writeFingerprintField(hasher, string(row.Value))
+	}
+	copy(signature.composerDigest[:], hasher.Sum(nil))
+
+	bubbleBounds := keyRangeForPrefix(bubbleKeyPrefix)
+	query := "SELECT count(*), COALESCE(max(rowid), 0), COALESCE(sum(length(value)), 0) FROM cursorDiskKV WHERE " +
+		"key >= ? AND key < ?"
+	err = db.QueryRowContext(ctx, query,
+		bubbleBounds.Lower, bubbleBounds.Upper,
+	).Scan(&signature.bubbleRows, &signature.bubbleLastRow, &signature.bubbleBytes)
+	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.conversation_signature_failed", "concern", concern, "err", err)
+		return fmt.Errorf("read cursor conversation signature: %w", err)
+	}
+	return nil
+}
+
+func readBackgroundSignature(ctx context.Context, db *sql.DB, signature *globalDiscoverySignature) error {
+	value, found, err := ReadKVValue(ctx, db, KVTableItemTable, backgroundComposerWindowMappingKey)
+	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.background_signature_failed", "concern", concern, "err", err)
+		return fmt.Errorf("read cursor background signature: %w", err)
+	}
+	if found {
+		signature.backgroundValue = string(value)
+	}
+	return nil
+}
+
+func readComposerMetadataSignature(ctx context.Context, db *sql.DB, signature *globalDiscoverySignature) error {
+	exists, err := TableExists(ctx, db, composerHeadersTable)
+	if err != nil || !exists {
+		return err
+	}
+	query := "SELECT count(*), COALESCE(max(rowid), 0), " +
+		"COALESCE(max(CAST(lastUpdatedAt AS INTEGER)), 0), " +
+		"COALESCE(sum(CAST(isArchived AS INTEGER) + CAST(isSubagent AS INTEGER)), 0), " +
+		"COALESCE(sum(length(composerId) + length(workspaceId) + length(value)), 0) " +
+		"FROM composerHeaders"
+	err = db.QueryRowContext(ctx, query).Scan(
+		&signature.metadataRows,
+		&signature.metadataLastRow,
+		&signature.metadataUpdated,
+		&signature.metadataFlags,
+		&signature.metadataBytes,
+	)
+	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_metadata_signature_failed", "concern", concern, "err", err)
+		return fmt.Errorf("read cursor composer metadata signature: %w", err)
+	}
+	return nil
 }
 
 func (cache *discoveryCache) globalEntry(path string) *globalCacheEntry {
@@ -260,13 +388,7 @@ func (cache *discoveryCache) globalEntry(path string) *globalCacheEntry {
 	return &entry
 }
 
-func refreshGlobal(ctx context.Context, path string, data GlobalDiscovery) GlobalDiscovery {
-	db, err := OpenReadOnlyDatabase(ctx, path)
-	if err != nil {
-		data.Err = err
-		return data
-	}
-	defer func() { _ = db.Close() }()
+func refreshGlobalDatabase(ctx context.Context, db *sql.DB, data GlobalDiscovery) GlobalDiscovery {
 	headers, headerErr := readComposerHeaders(ctx, db, data.Headers)
 	stocks, stockErr := ReadComposerBubbleStocks(ctx, db)
 	background, backgroundErr := ListBackgroundComposers(ctx, db)
