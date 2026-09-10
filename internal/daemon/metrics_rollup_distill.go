@@ -61,6 +61,12 @@ func distillMetricsRollup(ctx context.Context, input metricsRollupDistillInput) 
 	result.LastRecordAt, _ = parseRollupTime(state.checkpoint.LastRecordAt)
 	records := make([]metricsRollupRecord, 0, len(state.requests))
 	for requestID, request := range state.requests {
+		// IO follows handler return. Without a lifecycle start, this completed
+		// ingress cannot later produce a request summary.
+		if request.ioSeen && !request.lifecycleStarted {
+			delete(state.requests, requestID)
+			continue
+		}
 		if !distillableRequest(request, input.Now) {
 			continue
 		}
