@@ -101,6 +101,28 @@ func WriteStatusReport(out io.Writer, report daemonsvc.StatusReport) {
 	_, _ = fmt.Fprintln(out, "worker: none")
 }
 
+// WriteRuntimeStatusReport writes the passive semantic and listener snapshot.
+func WriteRuntimeStatusReport(out io.Writer, snapshot *daemonsvc.RuntimeStatus) {
+	if snapshot == nil {
+		_, _ = fmt.Fprintln(out, "runtime: unavailable")
+		return
+	}
+	semantic := snapshot.Semantic
+	nextRetry := "none"
+	if semantic.NextRetryUnix != 0 {
+		nextRetry = time.Unix(semantic.NextRetryUnix, 0).Format(time.RFC3339)
+	}
+	_, _ = fmt.Fprintf(out, "semantic: ingestion_enabled=%t search_enabled=%t connection=%s attempts=%d next_retry=%s\n", semantic.IngestionEnabled, semantic.SearchEnabled, semantic.Connection, semantic.Attempts, nextRetry)
+	for _, listener := range snapshot.Listeners {
+		_, _ = fmt.Fprintf(out, "listener: name=%s network=%s address=%s\n", listener.Name, listener.Network, listener.Address)
+	}
+	if snapshot.Profiling == nil {
+		_, _ = fmt.Fprintln(out, "profiling: disabled")
+	} else {
+		_, _ = fmt.Fprintf(out, "profiling: address=%s\n", snapshot.Profiling.Address)
+	}
+}
+
 // WriteMetricsHistoryReport appends a concise retained-log metrics report.
 func WriteMetricsHistoryReport(out io.Writer, report daemonsvc.MetricsHistoryReport) {
 	_, _ = fmt.Fprintf(out, "metrics_window: since=%s until=%s\n", report.Window.Since.Format(time.RFC3339), report.Window.Until.Format(time.RFC3339))
