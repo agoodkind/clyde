@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/connectivity"
+
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/livetrack"
@@ -71,10 +74,18 @@ type conversationSemanticRuntime struct {
 	retryDone   <-chan struct{}
 
 	// mu guards the resolved-connection state below.
-	mu         sync.Mutex
-	search     conversationSemanticSearchClient
-	feeder     conversationSemanticClient
-	registered bool
+	mu              sync.Mutex
+	search          conversationSemanticSearchClient
+	feeder          conversationSemanticClient
+	registered      bool
+	connecting      bool
+	attempts        uint64
+	nextRetry       time.Time
+	connectionState semanticConnectionStateReader
+}
+
+type semanticConnectionStateReader interface {
+	GetState() connectivity.State
 }
 
 // semanticConnection is one established, collection-registered engine
@@ -236,19 +247,23 @@ func newConversationSemanticRuntime(
 	meta conversationSemanticConnectionMeta,
 ) *conversationSemanticRuntime {
 	return &conversationSemanticRuntime{
-		log:         log,
-		connector:   connector,
-		registry:    registry,
-		meta:        meta,
-		retryDelay:  semanticRetryDelayWithJitter,
-		attemptMu:   sync.Mutex{},
-		retryMu:     sync.Mutex{},
-		retryCancel: nil,
-		retryDone:   nil,
-		mu:          sync.Mutex{},
-		search:      nil,
-		feeder:      nil,
-		registered:  false,
+		log:             log,
+		connector:       connector,
+		registry:        registry,
+		meta:            meta,
+		retryDelay:      semanticRetryDelayWithJitter,
+		attemptMu:       sync.Mutex{},
+		retryMu:         sync.Mutex{},
+		retryCancel:     nil,
+		retryDone:       nil,
+		mu:              sync.Mutex{},
+		search:          nil,
+		feeder:          nil,
+		registered:      false,
+		connecting:      false,
+		attempts:        0,
+		nextRetry:       time.Time{},
+		connectionState: nil,
 	}
 }
 
@@ -372,6 +387,16 @@ func (r *conversationSemanticRuntime) attemptRegister(ctx context.Context) error
 	if alreadyRegistered {
 		return nil
 	}
+	r.mu.Lock()
+	r.connecting = true
+	r.attempts++
+	r.nextRetry = time.Time{}
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.connecting = false
+		r.mu.Unlock()
+	}()
 
 	attemptCtx, cancel := context.WithTimeout(ctx, semanticDialRegisterTimeout)
 	defer cancel()
@@ -399,6 +424,7 @@ func (r *conversationSemanticRuntime) attemptRegister(ctx context.Context) error
 	r.search = connection.search
 	r.feeder = connection.feeder
 	r.registered = true
+	r.connectionState, _ = connection.connCloser.(semanticConnectionStateReader)
 	r.mu.Unlock()
 	return nil
 }
@@ -424,10 +450,18 @@ func (r *conversationSemanticRuntime) retryRegisterLoop(ctx context.Context) {
 // and whether registration succeeded. It logs each failed retry at Debug and
 // leaves the success event to its caller, keeping the loop free of Info events.
 func (r *conversationSemanticRuntime) retryRegisterUntilReady(ctx context.Context) (int, bool) {
+	defer func() {
+		r.mu.Lock()
+		r.nextRetry = time.Time{}
+		r.mu.Unlock()
+	}()
 	failures := uint32(1)
 	attempts := 0
 	for {
 		backoff := r.retryDelay(failures)
+		r.mu.Lock()
+		r.nextRetry = clock.Now().Add(backoff)
+		r.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return attempts, false
