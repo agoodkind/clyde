@@ -37,7 +37,8 @@ That runs one daemon on the same isolated roots, with every listener disabled, a
 prints the environment prefix for driving it from a second terminal. It is one
 process: ending the command ends the daemon, and it also stops if whatever
 launched it dies without signalling it. Pass `--keep` to leave the directories in
-place afterwards.
+place afterwards. Pass `--ingestion-enabled` to offer conversations to the
+semantic engine. Pass `--search-enabled` to answer searches from it.
 
 Run the printed prefix followed by `clyde conversation search` to browse the
 sandbox conversation metadata.
@@ -60,14 +61,16 @@ concurrent runs distinct values to keep them apart.
 | `CLYDE_TEST_CURSOR_PORT` | 21435 | cursor ingress |
 | `CLYDE_TEST_TOPOLOGY_PORT` | 21436 | moved adapter port |
 | `CLYDE_TEST_MOVED_MITM_PORT` | MITM port plus one | moved MITM port |
-| `CLYDE_TEST_CONVERSATION_SEMANTIC` | false | conversation semantic enabled and search_enabled |
+| `CLYDE_TEST_CONVERSATION_INGESTION` | false | conversation semantic ingestion_enabled |
+| `CLYDE_TEST_CONVERSATION_SEARCH` | false | conversation semantic search_enabled |
 | `CLYDE_TEST_COLLECTION_ID` | fresh random id per run | conversation semantic collection_id |
 
 A second run sets a disjoint set before it starts:
 
     CLYDE_TEST_ADAPTER_PORT=22434 CLYDE_TEST_MITM_PORT=59723 \
     CLYDE_TEST_CURSOR_PORT=22435 CLYDE_TEST_TOPOLOGY_PORT=22436 \
-    CLYDE_TEST_MOVED_MITM_PORT=59724 CLYDE_TEST_CONVERSATION_SEMANTIC=true \
+    CLYDE_TEST_MOVED_MITM_PORT=59724 CLYDE_TEST_CONVERSATION_INGESTION=true \
+    CLYDE_TEST_CONVERSATION_SEARCH=true \
     CLYDE_TEST_COLLECTION_ID=clyde-live-run-2 make live
 
 ## The production-untouched invariant

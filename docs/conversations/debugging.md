@@ -38,16 +38,17 @@ Apply these to every reading, on every surface.
 ### Config
 
 `[conversation]` and `[conversation.semantic]` in the clyde config own
-`enabled`, `search_enabled`, `indexed_content`, `collection_id`, `socket_path`,
-and `include_subagent_conversations`. See
+`ingestion_enabled`, `search_enabled`, `indexed_content`, `collection_id`,
+`socket_path`, and `include_subagent_conversations`. See
 [reload and hot apply](../reload-and-hot-apply.md) for which fields apply in
 process and which need a reload.
 
 - A config edit is not a deploy. The watcher classifies the change; confirm the
   running daemon holds the value by reading the config-applied events in the
   daemon log, not by reading the file.
-- `enabled = false` stops new embedding only. Search keeps answering from the
-  existing corpus, so a working search proves nothing about the feeder.
+- `ingestion_enabled = false` stops new embedding. `search_enabled = true`
+  still answers from the existing corpus, so a working search proves nothing
+  about the feeder.
 - An empty `indexed_content` means the default kind set (chat plus tool calls),
   not "index nothing".
 
