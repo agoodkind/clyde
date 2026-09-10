@@ -28,6 +28,7 @@ type StatusReport struct {
 	SupervisorFingerprint  string
 	WorkerPIDs             []int
 	WorkerError            string
+	Runtime                *RuntimeStatus
 }
 
 // InspectStatus reports the current supervisor and worker status.
@@ -54,6 +55,7 @@ func InspectStatus(ctx context.Context) StatusReport {
 		SupervisorFingerprint:  "",
 		WorkerPIDs:             nil,
 		WorkerError:            "",
+		Runtime:                nil,
 	}
 	status, err := daemonsupervisor.RequestStatus(ctx, supervisorSocketPath)
 	if err != nil {
@@ -63,10 +65,12 @@ func InspectStatus(ctx context.Context) StatusReport {
 		report.SupervisorPID = status.PID
 		report.SupervisorFingerprint = status.Fingerprint
 	}
-	if err := probeDaemonRPC(ctx); err != nil {
+	runtimeStatus, err := currentRuntimeStatus(ctx)
+	if err != nil {
 		report.DaemonError = err.Error()
 	} else {
 		report.DaemonResponding = true
+		report.Runtime = runtimeStatus
 	}
 	if runtime.GOOS == "darwin" {
 		report.LaunchdTarget = "gui/" + strconv.Itoa(os.Getuid()) + "/io.goodkind.clyde.daemon"
