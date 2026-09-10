@@ -69,6 +69,17 @@ Reload a running daemon after local config changes:
 clyde daemon reload
 ```
 
+After a database format cut, `clyde daemon hard-reset --apply` deletes Clyde's local
+database contents and derived conversation and metrics state. It stops the
+native user service and its identified workers, then registers the executable
+running the command. Configuration, credentials, certificate authority material,
+logs, exports, provider artifacts, and LMS data remain intact.
+
+Run the command with the daemon's existing XDG root overrides. It preserves those
+overrides in the reinstalled service and rejects targets outside Clyde's roots or
+overlapping protected data before teardown. If installation fails, the deleted
+data stays deleted; correct the reported service error and rerun the command.
+
 State, logs, caches, adapter records, and MITM captures follow Clyde's XDG path
 resolution. Use `clyde logs --help` for current paths and retention behavior.
 

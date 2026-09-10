@@ -43,6 +43,33 @@ func TestReadCandidates_ReadsFileCredential(t *testing.T) {
 	}
 }
 
+func TestReadCandidatesPreservesDirectorySelectionWithAmbientClaudeRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "ambient"))
+	for _, directory := range []string{ResolveDirectory(home, ""), ResolveDirectory(home, "~/explicit"), os.Getenv("CLAUDE_CONFIG_DIR")} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeTestCredentials(t, directory, &Tokens{AccessToken: "fixture-token", SubscriptionType: filepath.Base(directory)})
+	}
+	for _, scenario := range []struct{ name, directory, want string }{
+		{"default", "", ".claude"},
+		{"explicit", ResolveDirectory(home, "~/explicit"), "explicit"},
+		{"configured", ResolveDirectory(home, os.Getenv("CLAUDE_CONFIG_DIR")), "ambient"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			results := ReadCandidates(t.Context(), ReadOptions{CredentialsDir: scenario.directory, Platform: "linux"})
+			if len(results) != 1 || results[0].Err != nil || results[0].Tokens == nil {
+				t.Fatal("expected the selected file credential")
+			}
+			if results[0].Tokens.SubscriptionType != scenario.want {
+				t.Fatalf("selected directory marker = %q, want %q", results[0].Tokens.SubscriptionType, scenario.want)
+			}
+		})
+	}
+}
+
 func TestReadCandidates_DarwinKeychainPolicyDoesNotFallBackToFile(t *testing.T) {
 	dir := t.TempDir()
 	writeTestCredentials(t, dir, &Tokens{

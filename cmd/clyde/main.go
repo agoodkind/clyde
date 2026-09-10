@@ -41,6 +41,16 @@ func main() {
 
 func run() int {
 	rootCtx := correlation.WithContext(context.Background(), correlation.New(""))
+	f := cli.NewSystemFactory(cli.BuildInfo{Version: version.Version, Commit: version.Commit, Date: version.BuildTime})
+	root := newRoot(f)
+	root.SetContext(rootCtx)
+	root.SetArgs(os.Args[1:])
+	command, _, findErr := root.Find(os.Args[1:])
+	if findErr == nil && command.CommandPath() == "clyde daemon hard-reset" {
+		// Reset validates preserved configuration before opening stores or log
+		// sinks, so a configured path collision cannot overwrite protected data.
+		return executeRoot(rootCtx, root, f)
+	}
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		_ = response.WriteText(rootCtx, os.Stderr, "config load failed: "+err.Error()+"\n")
@@ -59,10 +69,10 @@ func run() int {
 	defer func() { _ = closer.Close() }()
 
 	slog.Info("cli.main.start", "concern", "cmd.dispatch", "component", "cli")
-	f := cli.NewSystemFactory(cli.BuildInfo{Version: version.Version, Commit: version.Commit, Date: version.BuildTime})
-	root := newRoot(f)
-	root.SetContext(rootCtx)
-	root.SetArgs(os.Args[1:])
+	return executeRoot(rootCtx, root, f)
+}
+
+func executeRoot(rootCtx context.Context, root *cobra.Command, f *cli.Factory) int {
 	if err := root.Execute(); err != nil {
 		_ = response.WriteText(rootCtx, f.IOStreams.Err, "Error: "+err.Error()+"\n")
 		return 1

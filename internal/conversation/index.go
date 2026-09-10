@@ -99,10 +99,15 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		refreshing:       false,
 		refreshRun:       nil,
 		lastRefresh:      time.Time{},
-		cachePath:        filepath.Join(config.GlobalCacheDir(), cacheFilename),
+		cachePath:        CachePath(),
 		debounce:         refreshDebounce,
 		scanProvider:     scan,
 	}
+}
+
+// CachePath returns the owned conversation records and scan-offset cache.
+func CachePath() string {
+	return filepath.Join(config.GlobalCacheDir(), cacheFilename)
 }
 
 // Start runs a periodic debounced cache refresh until ctx is canceled.
