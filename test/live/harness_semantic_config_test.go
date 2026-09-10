@@ -11,12 +11,15 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
@@ -75,6 +78,29 @@ type countingSemanticService struct {
 	results []*lmsemanticsearchv1.ConversationSearchResult
 }
 
+type pendingRegistrationSemanticService struct {
+	lmsemanticsearchv1.UnimplementedSemanticSearchDaemonServiceServer
+	counter    *semanticMethodCounter
+	started    chan struct{}
+	cancelled  chan struct{}
+	startOnce  sync.Once
+	cancelOnce sync.Once
+}
+
+func (service *pendingRegistrationSemanticService) RegisterConversationCollection(
+	ctx context.Context,
+	_ *lmsemanticsearchv1.RegisterConversationCollectionRequest,
+) (*lmsemanticsearchv1.RegisterConversationCollectionResponse, error) {
+	attempt := service.counter.count(lmsemanticsearchv1.SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName)
+	if attempt == 1 {
+		return nil, status.Error(codes.Unavailable, "fixture initial registration failure")
+	}
+	service.startOnce.Do(func() { close(service.started) })
+	<-ctx.Done()
+	service.cancelOnce.Do(func() { close(service.cancelled) })
+	return nil, status.Error(codes.Canceled, "fixture registration cancelled")
+}
+
 func (service *countingSemanticService) RegisterConversationCollection(
 	context.Context,
 	*lmsemanticsearchv1.RegisterConversationCollectionRequest,
@@ -93,6 +119,33 @@ func startCountingSemanticService(
 	t *testing.T,
 	results []*lmsemanticsearchv1.ConversationSearchResult,
 ) (string, *semanticMethodCounter) {
+	t.Helper()
+	counter := &semanticMethodCounter{mu: sync.Mutex{}, calls: make(map[string]int)}
+	service := &countingSemanticService{results: results}
+	return startSemanticService(t, counter, service), counter
+}
+
+func startPendingRegistrationSemanticService(
+	t *testing.T,
+) (string, *semanticMethodCounter, <-chan struct{}, <-chan struct{}) {
+	t.Helper()
+	counter := &semanticMethodCounter{mu: sync.Mutex{}, calls: make(map[string]int)}
+	service := &pendingRegistrationSemanticService{
+		counter:    counter,
+		started:    make(chan struct{}),
+		cancelled:  make(chan struct{}),
+		startOnce:  sync.Once{},
+		cancelOnce: sync.Once{},
+	}
+	socketPath := startSemanticService(t, counter, service)
+	return socketPath, counter, service.started, service.cancelled
+}
+
+func startSemanticService(
+	t *testing.T,
+	counter *semanticMethodCounter,
+	service lmsemanticsearchv1.SemanticSearchDaemonServiceServer,
+) string {
 	t.Helper()
 
 	socketFile, err := os.CreateTemp("/tmp", "clyde-semantic-*.sock")
@@ -115,14 +168,11 @@ func startCountingSemanticService(
 	if err != nil {
 		t.Fatalf("listen on fake semantic socket: %v", err)
 	}
-	counter := &semanticMethodCounter{mu: sync.Mutex{}, calls: make(map[string]int)}
 	server := grpc.NewServer(
 		grpc.UnaryInterceptor(counter.unaryInterceptor),
 		grpc.StreamInterceptor(counter.streamInterceptor),
 	)
-	lmsemanticsearchv1.RegisterSemanticSearchDaemonServiceServer(server, &countingSemanticService{
-		results: results,
-	})
+	lmsemanticsearchv1.RegisterSemanticSearchDaemonServiceServer(server, service)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- server.Serve(listener)
@@ -134,7 +184,7 @@ func startCountingSemanticService(
 			t.Errorf("serve fake semantic service: %v", serveErr)
 		}
 	})
-	return socketPath, counter
+	return socketPath
 }
 
 func TestResolveFakeConversationSemanticConfigDefaults(t *testing.T) {
@@ -371,6 +421,78 @@ enabled_default = false
 		t.Fatalf("running search returned %d matches after config rejection, want 1", len(searchResponse.GetMatches()))
 	}
 	assertNoSemanticWrites(t, counter)
+}
+
+func TestSemanticRetryStopsWhenBothDirectionsBecomeDisabled(t *testing.T) {
+	t.Setenv("CLYDE_TEST_CONVERSATION_INGESTION", "true")
+	t.Setenv("CLYDE_TEST_CONVERSATION_SEARCH", "true")
+
+	socketPath, counter, retryStarted, retryCancelled := startPendingRegistrationSemanticService(t)
+	home := t.TempDir()
+	h := newHarness(t)
+	h.extraEnv = []string{"HOME=" + home}
+	h.writeConversationOnlyConfig(t, nil, socketPath)
+	h.boot(t)
+	oldWorkerPID := h.latestWorkerPid()
+	if oldWorkerPID == 0 {
+		t.Fatal("could not read worker pid before disabling semantic directions")
+	}
+	select {
+	case <-retryStarted:
+	case <-time.After(45 * time.Second):
+		dump := h.dumpLogsOnFailure(t)
+		t.Fatalf("semantic registration retry did not start; logs dumped to %s", dump)
+	}
+	registerMethod := lmsemanticsearchv1.SemanticSearchDaemonService_RegisterConversationCollection_FullMethodName
+	if attempts := counter.count(registerMethod); attempts != 2 {
+		t.Fatalf("registration attempts before config edit = %d, want 2", attempts)
+	}
+
+	h.conversationSemantic.IngestionEnabled = false
+	h.conversationSemantic.SearchEnabled = false
+	h.writeConversationOnlyConfig(t, nil, socketPath)
+	if !h.waitForDaemonLog(reloadTriggeredKey, 15*time.Second) {
+		dump := h.dumpLogsOnFailure(t)
+		t.Fatalf("disabling semantic directions did not trigger reload; logs dumped to %s", dump)
+	}
+	newWorkerPID := waitForWorkerPIDChange(t, h, oldWorkerPID)
+	select {
+	case <-retryCancelled:
+	case <-time.After(15 * time.Second):
+		dump := h.dumpLogsOnFailure(t)
+		t.Fatalf("pending semantic registration was not cancelled; logs dumped to %s", dump)
+	}
+	if !waitForProcessExit(oldWorkerPID, 15*time.Second) {
+		dump := h.dumpLogsOnFailure(t)
+		t.Fatalf("old worker %d did not exit after replacement %d became ready; logs dumped to %s", oldWorkerPID, newWorkerPID, dump)
+	}
+	if !h.waitForDaemonLog(`"conversation_semantic_enabled":false`, 15*time.Second) {
+		dump := h.dumpLogsOnFailure(t)
+		t.Fatalf("replacement worker constructed a semantic runtime; logs dumped to %s", dump)
+	}
+	if _, err := h.runCLI(t, home, "conversation", "search", "--query", "disabled retry probe"); err == nil ||
+		!strings.Contains(err.Error(), "conversation_search_disabled") {
+		t.Fatalf("search after disabling both directions = %v, want disabled", err)
+	}
+	attemptsAfterReload := counter.count(registerMethod)
+	if attemptsAfterReload != 2 {
+		t.Fatalf("registration attempts after retry cancellation = %d, want 2", attemptsAfterReload)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if attempts := counter.count(registerMethod); attempts != attemptsAfterReload {
+		t.Fatalf("registration attempts after retry cancellation = %d, want %d", attempts, attemptsAfterReload)
+	}
+}
+
+func waitForProcessExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
 }
 
 func searchRunningDaemon(t *testing.T, h *harness, query string) *clydev1.SearchConversationsResponse {

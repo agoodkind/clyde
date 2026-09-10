@@ -155,6 +155,19 @@ type Client struct {
 	daemon lmsemanticsearchv1.SemanticSearchDaemonServiceClient
 }
 
+type operationError struct {
+	operation string
+	cause     error
+}
+
+func (e operationError) Error() string {
+	return e.operation + ": " + e.cause.Error()
+}
+
+func (e operationError) Unwrap() error {
+	return e.cause
+}
+
 // Dial opens a gRPC connection to the lm-semantic-search daemon.
 func Dial(ctx context.Context, socketPath string) (*Client, error) {
 	resolvedSocketPath := strings.TrimSpace(socketPath)
@@ -166,12 +179,7 @@ func Dial(ctx context.Context, socketPath string) (*Client, error) {
 	}
 	conn, daemonClient, err := lmclient.DialDaemon(ctx, resolvedSocketPath)
 	if err != nil {
-		slog.WarnContext(ctx, "conversation.semsearch.dial_failed",
-			"concern", "conversation.semantic",
-			"component", "conversation",
-			"err", err,
-		)
-		return nil, fmt.Errorf("dial semantic search daemon: %w", err)
+		return nil, operationError{operation: "dial semantic search daemon", cause: err}
 	}
 	return &Client{conn: conn, daemon: daemonClient}, nil
 }
@@ -197,13 +205,8 @@ func (c *Client) Register(ctx context.Context, collectionID string) error {
 		CollectionId: trimmedCollectionID,
 	})
 	if err != nil {
-		slog.WarnContext(ctx, "conversation.semsearch.register_failed",
-			"concern", "conversation.semantic",
-			"component", "conversation",
-			"collection_id", trimmedCollectionID,
-			"err", err,
-		)
-		return fmt.Errorf("register semantic conversation collection %q: %w", trimmedCollectionID, err)
+		operation := fmt.Sprintf("register semantic conversation collection %q", trimmedCollectionID)
+		return operationError{operation: operation, cause: err}
 	}
 	return nil
 }

@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"log/slog"
 
 	"goodkind.io/clyde/internal/conversation"
 )
@@ -25,35 +24,25 @@ type conversationSearchIndex interface {
 // search-source boundary. The client resolves per call so a recovered engine
 // connection becomes available without rebuilding the control server.
 type semanticConversationSearchSource struct {
-	index        conversationSearchIndex
-	searchClient func() conversationSemanticSearchClient
-	collectionID string
+	index         conversationSearchIndex
+	searchEnabled func() bool
+	searchClient  func() conversationSemanticSearchClient
+	collectionID  string
 }
 
 func (s *semanticConversationSearchSource) SearchConversations(
 	ctx context.Context,
 	options conversation.SearchConversationsOptions,
 ) (conversation.SearchConversationsResult, error) {
+	if s != nil && s.searchEnabled != nil && !s.searchEnabled() {
+		return conversation.SearchConversationsResult{}, disabledConversationSearchSourceError(nil)
+	}
 	if s == nil || s.searchClient == nil {
-		failure := unavailableConversationSearchSourceError(nil)
-		slog.WarnContext(ctx, "daemon.search_conversations.source_unavailable",
-			"concern", "process.daemon.lifecycle",
-			"component", "daemon",
-			"source", conversation.SearchSourceSemantic.String(),
-			"err", failure,
-		)
-		return conversation.SearchConversationsResult{}, failure
+		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
 	}
 	client := s.searchClient()
 	if client == nil {
-		failure := unavailableConversationSearchSourceError(nil)
-		slog.WarnContext(ctx, "daemon.search_conversations.source_unavailable",
-			"concern", "process.daemon.lifecycle",
-			"component", "daemon",
-			"source", conversation.SearchSourceSemantic.String(),
-			"err", failure,
-		)
-		return conversation.SearchConversationsResult{}, failure
+		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
 	}
 	return semanticSearchResult(ctx, s.index, client, s.collectionID, options)
 }
