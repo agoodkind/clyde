@@ -93,7 +93,7 @@ func TestReadComposerHeaderWrapsComposerIDOnDecodeError(t *testing.T) {
 	}
 }
 
-func TestListComposerIDsReturnsComposerDataSuffixes(t *testing.T) {
+func TestReadComposerHeadersUsesKeyIdentityAndDecodesTheRange(t *testing.T) {
 	dbPath := createCursorStoreTestDatabase(t)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
@@ -101,17 +101,17 @@ func TestListComposerIDsReturnsComposerDataSuffixes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = readonly.Close() })
 
-	composerIDs, err := ListComposerIDs(context.Background(), readonly)
+	headers, err := readComposerHeaders(context.Background(), readonly, nil)
 	if err != nil {
-		t.Fatalf("ListComposerIDs returned error: %v", err)
+		t.Fatalf("readComposerHeaders returned error: %v", err)
 	}
-	if len(composerIDs) != 2 {
-		t.Fatalf("composerIDs len = %d, want 2", len(composerIDs))
+	if len(headers) != 2 {
+		t.Fatalf("headers len = %d, want 2", len(headers))
 	}
-	if composerIDs[0] != "composer-a" {
-		t.Fatalf("composerIDs[0] = %q, want composer-a", composerIDs[0])
+	if headers["composer-a"].Name != "Investigate Cursor" {
+		t.Fatalf("composer-a = %+v", headers["composer-a"])
 	}
-	if composerIDs[1] != "composer-b" {
-		t.Fatalf("composerIDs[1] = %q, want composer-b", composerIDs[1])
+	if headers["composer-b"].ComposerID != "composer-b" {
+		t.Fatalf("composer-b = %+v", headers["composer-b"])
 	}
 }

@@ -7,9 +7,91 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash"
-	"log/slog"
 	"strconv"
 )
+
+type composerStockBuilder struct {
+	stock     ComposerBubbleStock
+	projected int64
+	hasher    hash.Hash
+}
+
+// ReadComposerBubbleStocks projects the global bubble range once. Counts and
+// projections share a snapshot, including bubbles absent from header references.
+// A missing map entry means the composer has no stored bubble rows.
+func ReadComposerBubbleStocks(ctx context.Context, db *sql.DB) (map[string]ComposerBubbleStock, error) {
+	snapshot, err := beginReadSnapshot(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	defer snapshot.rollback()
+	stocks := make(map[string]ComposerBubbleStock)
+	exists, err := snapshot.tableExists(ctx, string(KVTableCursorDiskKV))
+	if err != nil || !exists {
+		return stocks, err
+	}
+	bounds := keyRangeForPrefix(bubbleKeyPrefix)
+	rows, err := snapshot.queryRange(ctx, "SELECT key FROM cursorDiskKV"+keyRangePredicate(bounds, ""), bounds, "bubble stock keys")
+	if err != nil {
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.composer_bubble_count_failed", "concern", concern, "err", err)
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	builders := make(map[string]*composerStockBuilder)
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("scan cursor bubble stock key: %w", err)
+		}
+		id, _, ok := parseBubbleKey(key)
+		if !ok {
+			continue
+		}
+		if builders[id] == nil {
+			builders[id] = &composerStockBuilder{stock: ComposerBubbleStock{StoredRows: 0, Revision: 0, HasContent: false, Conclusive: false}, projected: 0, hasher: sha256.New()}
+		}
+		builders[id].stock.StoredRows++
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, fmt.Errorf("iterate cursor bubble stock keys: %w", err)
+	}
+	for _, builder := range builders {
+		writeFingerprintField(builder.hasher, strconv.FormatInt(builder.stock.StoredRows, 10))
+	}
+	err = forEachComposerBubbleProjection(ctx, snapshot, bounds, func(row bubbleProjection) error {
+		id, _, ok := parseBubbleKey(row.Key)
+		if !ok {
+			return nil
+		}
+		builder := builders[id]
+		builder.projected++
+		bubble := row.bubble()
+		digest := newBubbleDigest(row.Key, bubble, row.RowID)
+		writeStockFingerprint(builder.hasher, row, digest, bubble)
+		builder.stock.HasContent = builder.stock.HasContent || bubble.HasContent()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for id, builder := range builders {
+		builder.stock.Revision = revisionFromHasher(builder.hasher)
+		builder.stock.Conclusive = builder.stock.HasContent || builder.projected >= builder.stock.StoredRows
+		stocks[id] = builder.stock
+	}
+	return stocks, nil
+}
+
+func writeStockFingerprint(hasher hash.Hash, row bubbleProjection, digest bubbleDigest, bubble Bubble) {
+	writeFingerprintField(hasher, row.Key)
+	writeFingerprintField(hasher, strconv.FormatInt(row.RowID, 10))
+	writeFingerprintField(hasher, digest.ServerBubbleID)
+	writeFingerprintField(hasher, bubble.CreatedAt)
+	writeFingerprintField(hasher, string(digest.Fingerprint[:]))
+}
 
 // ComposerBubbleStock summarises what one chat holds in its own bubble key range,
 // for a caller deciding whether the chat is a conversation at all.
@@ -37,69 +119,6 @@ type ComposerBubbleStock struct {
 	// drops a chat does not merely skip it, it takes the chat's existing record
 	// out of the index with it.
 	Conclusive bool
-}
-
-// ReadComposerBubbleStock counts one chat's stored bubble rows, reports whether
-// any carries content, and derives a revision from every projected row.
-//
-// A negative answer is only conclusive when every stored row was read. Finding
-// content is conclusive whatever went unread, but the scan still visits every
-// projected row because the revision must change when any stored content changes.
-func ReadComposerBubbleStock(
-	ctx context.Context,
-	db *sql.DB,
-	composerID string,
-) (ComposerBubbleStock, error) {
-	stock := ComposerBubbleStock{StoredRows: 0, Revision: 0, HasContent: false, Conclusive: false}
-	bounds := keyRangeForPrefix(bubbleKeyPrefix + composerID + ":")
-
-	// One snapshot for both statements, so a row Cursor appends between them
-	// cannot make the projection reach the count while a row it could not read
-	// goes unnoticed.
-	snapshot, err := beginReadSnapshot(ctx, db)
-	if err != nil {
-		return stock, err
-	}
-	defer snapshot.rollback()
-
-	storedRows, err := snapshot.countRange(ctx, bounds)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_bubble_count_failed", "concern", concern, "composer_id", composerID, "err", err)
-		return stock, fmt.Errorf("count cursor bubbles for composer %q: %w", composerID, err)
-	}
-	stock.StoredRows = int64(storedRows)
-	if storedRows == 0 {
-		stock.Conclusive = true
-		return stock, nil
-	}
-
-	revisionHasher := sha256.New()
-	writeFingerprintField(revisionHasher, strconv.Itoa(storedRows))
-	projected := 0
-	err = forEachComposerBubbleProjection(ctx, snapshot, bounds, func(row bubbleProjection) error {
-		projected++
-		bubble := row.bubble()
-		digest := newBubbleDigest(row.Key, bubble, row.RowID)
-		writeFingerprintField(revisionHasher, row.Key)
-		writeFingerprintField(revisionHasher, strconv.FormatInt(row.RowID, 10))
-		writeFingerprintField(revisionHasher, digest.ServerBubbleID)
-		writeFingerprintField(revisionHasher, bubble.CreatedAt)
-		writeFingerprintField(revisionHasher, string(digest.Fingerprint[:]))
-		if bubble.HasContent() {
-			stock.HasContent = true
-		}
-		return nil
-	})
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_bubble_stock_failed", "concern", concern, "composer_id", composerID, "err", err)
-		return stock, fmt.Errorf("read cursor bubble stock for composer %q: %w", composerID, err)
-	}
-	stock.Revision = revisionFromHasher(revisionHasher)
-	stock.Conclusive = stock.HasContent || projected >= storedRows
-	if !stock.Conclusive {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_bubble_stock_inconclusive", "concern", concern, "composer_id", composerID, "stored", storedRows, "projected", projected)
-	}
-	return stock, nil
 }
 
 func revisionFromHasher(hasher hash.Hash) int64 {

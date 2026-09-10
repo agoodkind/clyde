@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 )
 
 const legacyChatDataKey = "workbench.panel.aichat.view.aichat.chatdata"
@@ -52,7 +51,8 @@ func ReadLegacyChatData(ctx context.Context, workspaceDB *sql.DB) (LegacyChatDat
 
 	value, found, err := ReadKVValue(ctx, workspaceDB, KVTableItemTable, legacyChatDataKey)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.legacy_chat_read_failed", "concern", concern, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.legacy_chat_read_failed", "concern", concern, "err", err)
 		return emptyData, false, fmt.Errorf("read cursor legacy chat data: %w", err)
 	}
 	if !found {
@@ -61,7 +61,8 @@ func ReadLegacyChatData(ctx context.Context, workspaceDB *sql.DB) (LegacyChatDat
 
 	chatData, err := DecodeLegacyChatDataJSON(value)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.legacy_chat_decode_failed", "concern", concern, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.legacy_chat_decode_failed", "concern", concern, "err", err)
 		return emptyData, false, fmt.Errorf("decode cursor legacy chat data: %w", err)
 	}
 	return chatData, true, nil

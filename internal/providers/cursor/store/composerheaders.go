@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"strings"
 )
@@ -110,7 +109,8 @@ func ReadComposerMetadataIndex(ctx context.Context, db *sql.DB) (map[string]Comp
 	// is worth, and leaves the rest readable.
 	rows, err := db.QueryContext(ctx, "SELECT composerId, CAST(createdAt AS INTEGER), CAST(lastUpdatedAt AS INTEGER), CAST(isArchived AS INTEGER), CAST(isSubagent AS INTEGER), value FROM composerHeaders")
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_query_failed", "concern", concern, "table", composerHeadersTable, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.composer_headers_query_failed", "concern", concern, "table", composerHeadersTable, "err", err)
 		return nil, fmt.Errorf("query cursor %s rows: %w", composerHeadersTable, err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -126,7 +126,8 @@ func ReadComposerMetadataIndex(ctx context.Context, db *sql.DB) (map[string]Comp
 		index[metadata.ComposerID] = metadata
 	}
 	if err := rows.Err(); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_iterate_failed", "concern", concern, "table", composerHeadersTable, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.composer_headers_iterate_failed", "concern", concern, "table", composerHeadersTable, "err", err)
 		return nil, fmt.Errorf("iterate cursor %s rows: %w", composerHeadersTable, err)
 	}
 	return index, nil
@@ -148,7 +149,8 @@ func scanComposerMetadataRow(ctx context.Context, rows *sql.Rows) (ComposerMetad
 	var value []byte
 
 	if err := rows.Scan(&composerIDColumn, &createdAt, &lastUpdatedAt, &isArchived, &isSubagent, &value); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_scan_failed", "concern", concern, "table", composerHeadersTable, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.composer_headers_scan_failed", "concern", concern, "table", composerHeadersTable, "err", err)
 		return emptyComposerMetadata(), false, fmt.Errorf("scan cursor %s row: %w", composerHeadersTable, err)
 	}
 	composerID := strings.TrimSpace(composerIDColumn.String)
@@ -169,7 +171,8 @@ func scanComposerMetadataRow(ctx context.Context, rows *sql.Rows) (ComposerMetad
 
 	decoded, err := decodeComposerHeadersValueJSON(value)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_decode_failed", "concern", concern, "composer_id", composerID, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.composer_headers_decode_failed", "concern", concern, "composer_id", composerID, "err", err)
 		return metadata, true, nil
 	}
 	metadata.Name = decoded.Name

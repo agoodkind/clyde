@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strconv"
 )
@@ -85,7 +84,8 @@ func DecodeBackgroundComposerWindowMappingJSON(data []byte) (BackgroundComposerW
 func ListBackgroundComposers(ctx context.Context, globalDB *sql.DB) ([]BackgroundComposer, error) {
 	value, found, err := ReadKVValue(ctx, globalDB, KVTableItemTable, backgroundComposerWindowMappingKey)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.background_composers_read_failed", "concern", concern, "key", backgroundComposerWindowMappingKey, "err", err)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.background_composers_read_failed", "concern", concern, "key", backgroundComposerWindowMappingKey, "err", err)
 		return nil, fmt.Errorf("read cursor background composer window mapping: %w", err)
 	}
 	if !found {
@@ -93,7 +93,8 @@ func ListBackgroundComposers(ctx context.Context, globalDB *sql.DB) ([]Backgroun
 	}
 	mapping, decodeErr := DecodeBackgroundComposerWindowMappingJSON(value)
 	if decodeErr != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.background_composers_decode_failed", "concern", concern, "key", backgroundComposerWindowMappingKey, "err", decodeErr)
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.background_composers_decode_failed", "concern", concern, "key", backgroundComposerWindowMappingKey, "err", decodeErr)
 		return []BackgroundComposer{}, nil
 	}
 	return backgroundComposersFromWindowMapping(mapping), nil
