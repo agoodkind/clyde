@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -955,7 +954,7 @@ func lockDaemonReload(ctx context.Context) (func(), error) {
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return nil, fmt.Errorf("ensure runtime dir for reload lock: %w", err)
 	}
-	lockPath := filepath.Join(config.RuntimeDir(), "daemon.reload.lock")
+	lockPath := daemonReloadLockPath()
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.client.reload_lock.open_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
