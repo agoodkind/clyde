@@ -73,8 +73,9 @@ func TestRemoveNativeServiceUsesExactPlatformCommands(t *testing.T) {
 				} else {
 					want = []command{{name: "systemctl", args: []string{"--user", "show", defaultSystemdUnit, "--property=LoadState", "--value"}}}
 					if !absent {
-						want = append(want, command{name: "systemctl", args: []string{"--user", "stop", defaultSystemdUnit}}, command{name: "systemctl", args: []string{"--user", "disable", defaultSystemdUnit}})
+						want = append(want, command{name: "systemctl", args: []string{"--user", "stop", defaultSystemdUnit}})
 					}
+					want = append(want, command{name: "systemctl", args: []string{"--user", "disable", defaultSystemdUnit}})
 					want = append(want, command{name: "systemctl", args: []string{"--user", "daemon-reload"}})
 				}
 				if !reflect.DeepEqual(runner.commands, want) {

@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"os"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +31,8 @@ const (
 	discoveredKindJSONL            = "jsonl"
 	discoveredKindComposer         = "composer"
 	discoveredKindLegacy           = "legacy"
+	discoveredKindCheckpoint       = "checkpoint"
+	checkpointPrefix               = "cursor-checkpoint://"
 	resolveLookupTimeout           = 5 * time.Second
 	untitledCursorConversationText = "Untitled Cursor Conversation"
 	untitledCursorChatText         = "Untitled Cursor Chat"
@@ -98,7 +99,10 @@ type Parser struct {
 	composerStamps map[string]conversation.FileStamp
 }
 
-var _ conversation.Parser = (*Parser)(nil)
+var (
+	_ conversation.Parser                = (*Parser)(nil)
+	_ conversation.CachedDiscoveryParser = (*Parser)(nil)
+)
 
 // New returns a Cursor conversation parser.
 func New() *Parser {
@@ -118,60 +122,56 @@ func (*Parser) Provider() providerid.Provider {
 // Discover resolves local Cursor transcript and SQLite data roots, then returns
 // scan candidates for modern JSONL transcripts, composers, and legacy chats.
 func (p *Parser) Discover(ctx context.Context, prior map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
+	return p.discover(ctx, prior, nil, false)
+}
+
+// DiscoverCached reuses the prior scan's provider input stamps when Cursor's
+// files and stores have not changed. The normal Parser contract remains useful
+// to callers that do not retain scan stamps.
+func (p *Parser) DiscoverCached(
+	ctx context.Context,
+	prior map[string]conversation.Record,
+	priorStamps map[string]conversation.FileStamp,
+) ([]conversation.ScanCandidate, error) {
+	return p.discover(ctx, prior, priorStamps, true)
+}
+
+func (p *Parser) discover(
+	ctx context.Context,
+	prior map[string]conversation.Record,
+	priorStamps map[string]conversation.FileStamp,
+	useCheckpoints bool,
+) ([]conversation.ScanCandidate, error) {
 	candidates := make([]conversation.ScanCandidate, 0)
 	discovered := make(map[string]discoveredArtifact)
 	seenConversationIDs := make(map[string]bool)
 
-	jsonlCandidates, err := p.discoverJSONL(ctx, discovered, seenConversationIDs)
+	jsonlCandidates, err := p.discoverJSONL(ctx, prior, priorStamps, discovered, seenConversationIDs)
 	if err != nil {
 		return nil, err
 	}
 	candidates = append(candidates, jsonlCandidates...)
 
-	p.mu.Lock()
-	priorStamps := p.composerStamps
-	p.mu.Unlock()
+	if priorStamps != nil {
+		if cachedCandidates, sourceCandidates, ok := p.discoverCachedSQLite(ctx, prior, priorStamps, seenConversationIDs); ok {
+			candidates = append(candidates, cachedCandidates...)
+			candidates = append(candidates, sourceCandidates...)
+			return p.finishDiscovery(candidates, prior, discovered)
+		}
+	}
 
-	sqliteCandidates, err := discoverSQLite(ctx, priorStamps, prior, discovered, seenConversationIDs)
+	p.mu.Lock()
+	composerStamps := p.composerStamps
+	p.mu.Unlock()
+	sqliteCandidates, err := discoverSQLite(ctx, composerStamps, prior, discovered, seenConversationIDs)
 	if err != nil {
 		return nil, err
 	}
 	candidates = append(candidates, sqliteCandidates...)
-	for i := range candidates {
-		artifact := discovered[candidates[i].Path]
-		previous, ok := prior[candidates[i].Path]
-		if !ok || artifact.Kind != discoveredKindJSONL {
-			continue
-		}
-		previousParent := ""
-		if previous.Lineage != nil {
-			previousParent = previous.Lineage.ParentNativeID
-		}
-		candidates[i].MetadataChanged = previous.Origin != artifact.Origin || previousParent != artifact.ParentConversationID
-		if artifact.TranscriptHeader != nil {
-			header := artifact.TranscriptHeader
-			title := firstNonEmptyString(truncateTitle(header.FirstUserText), untitledCursorConversationText)
-			candidates[i].MetadataChanged = candidates[i].MetadataChanged || previous.Title != title || previous.TitleUncertain != header.FirstUserTextUncertain
-		}
+	if useCheckpoints {
+		candidates = append(candidates, p.sourceCheckpointCandidates(ctx)...)
 	}
-
-	sort.SliceStable(candidates, func(i int, j int) bool {
-		return candidates[i].Path < candidates[j].Path
-	})
-
-	composerStamps := make(map[string]conversation.FileStamp, len(candidates))
-	for _, candidate := range candidates {
-		if discovered[candidate.Path].Kind == discoveredKindComposer {
-			composerStamps[candidate.Path] = candidate.Stamp
-		}
-	}
-
-	p.mu.Lock()
-	p.discovered = discovered
-	p.composerStamps = composerStamps
-	p.mu.Unlock()
-
-	return candidates, nil
+	return p.finishDiscovery(candidates, prior, discovered)
 }
 
 // ScanRecord turns one discovered Cursor artifact into a derived Clyde record
@@ -208,6 +208,8 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		return emptyRecord(), false
 	}
 	switch discovered.Kind {
+	case discoveredKindCheckpoint:
+		return emptyRecord(), false
 	case discoveredKindJSONL:
 		header, err := discovered.readTranscriptHeader()
 		if err != nil {
@@ -360,6 +362,8 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 
 func (p *Parser) discoverJSONL(
 	ctx context.Context,
+	prior map[string]conversation.Record,
+	priorStamps map[string]conversation.FileStamp,
 	discovered map[string]discoveredArtifact,
 	seenConversationIDs map[string]bool,
 ) ([]conversation.ScanCandidate, error) {
@@ -373,7 +377,7 @@ func (p *Parser) discoverJSONL(
 		slog.WarnContext(ctx, "providers.cursor.parser.discover_transcripts_failed", "concern", concern, "err", err)
 		return nil, fmt.Errorf("discover cursor transcript files: %w", err)
 	}
-	resumeLinks, err := p.buildResumeLinkIndex(ctx, files)
+	resumeLinks, err := p.buildResumeLinkIndex(ctx, files, prior, priorStamps)
 	if err != nil {
 		return nil, err
 	}
@@ -637,6 +641,12 @@ func streamComposer(
 
 func (p *Parser) resolveDiscovered(path string) (discoveredArtifact, error) {
 	var emptyDiscovered discoveredArtifact
+	if strings.HasPrefix(path, checkpointPrefix) {
+		checkpoint := emptyDiscovered
+		checkpoint.Kind = discoveredKindCheckpoint
+		checkpoint.Path = path
+		return checkpoint, nil
+	}
 
 	p.mu.Lock()
 	discovered, ok := p.discovered[path]

@@ -132,10 +132,8 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	defer runtime.shutdown(ctx)
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
-	if cfg.Conversation.Semantic.UsesEngine() {
+	if cfg.Conversation.Semantic.FeedsEngine() {
 		startConversationIndex(ctx, log, conversationIndex, runtime.group)
-	} else {
-		startConversationIndexOnce(ctx, log, conversationIndex, runtime.group)
 	}
 	semanticFreshness := newConversationSemanticFreshness()
 

@@ -147,12 +147,15 @@ func checkData(root string, wantPresent bool) error {
 		if path == "" {
 			continue
 		}
-		_, err := os.Stat(path)
+		data, err := os.ReadFile(path)
 		if wantPresent && err != nil {
 			return fmt.Errorf("data deleted before teardown: %s: %w", path, err)
 		}
-		if !wantPresent && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("data remains at installation: %s", path)
+		if !wantPresent && err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect data at installation: %s: %w", path, err)
+		}
+		if !wantPresent && bytes.Contains(data, []byte("old incompatible store bytes")) {
+			return fmt.Errorf("old data remains at installation: %s", path)
 		}
 	}
 	return nil

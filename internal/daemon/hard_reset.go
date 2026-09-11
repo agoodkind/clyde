@@ -167,6 +167,12 @@ func HardResetWithOptions(ctx context.Context, output io.Writer, options HardRes
 		}
 		_, _ = fmt.Fprintln(output, "Removed Clyde data:", target.Path)
 	}
+	if err := RunInitialConversationIndex(ctx, output, func(completed int, total int) {
+		_, _ = fmt.Fprintf(output, "Initial indexing: %d/%d conversations\n", completed, total)
+	}); err != nil {
+		slog.WarnContext(ctx, "daemon.hard_reset.initial_index_failed", "concern", "conversation.index", "component", "daemon", "err", err)
+		return fmt.Errorf("clyde data reset; initial conversation index failed: %w", err)
+	}
 	if err := deploy.RunFromEnv(ctx, lookup, false, output, output, deploy.Fingerprints{
 		Compiled: CompiledSupervisorFingerprint, Running: RunningSupervisorFingerprint,
 	}); err != nil {

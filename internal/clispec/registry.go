@@ -21,6 +21,7 @@ func NewConversationRegistry() *Registry {
 	Register(reg, daemonReloadOp())
 	Register(reg, daemonDeployOp())
 	Register(reg, daemonHardResetOp())
+	Register(reg, daemonUninstallOp())
 	Register(reg, mcpServeOp())
 	Register(reg, daemonRunOp())
 	Register(reg, daemonWorkerOp())

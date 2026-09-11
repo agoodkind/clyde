@@ -547,38 +547,29 @@ func TestResolveRequestDoesNotClaimUnindexedOverAFailedRefresh(t *testing.T) {
 	}
 }
 
-// TestResolveRequestDoesNotAnswerFromACacheThatPredatesTheDuplicate covers the
-// uniqueness the index path asserts when it answers. How many conversations carry
-// a request id is a question about the corpus as it is now, and the cached
-// records are the corpus as it was at the last scan. A chat the operator
-// duplicated since then carries the request as truly as the original does, so an
-// answer read off the old snapshot names one conversation for an id the current
-// corpus cannot narrow to one.
-func TestResolveRequestDoesNotAnswerFromACacheThatPredatesTheDuplicate(t *testing.T) {
+func TestResolveRequestAnswersSingleCachedCarrierWithoutRefresh(t *testing.T) {
 	t.Parallel()
 
 	requestID := "0e3f0000-0000-4000-8000-000000000000"
-	original := testRecord("cursor:original", ProviderCursor, "original", "the chat")
-	original.LatestRequestID = requestID
-	duplicate := testRecord("cursor:duplicate", ProviderCursor, "duplicate", "(1) the chat")
-	duplicate.LatestRequestID = requestID
-
+	record := testRecord("cursor:cached", ProviderCursor, "cached", "the chat")
+	record.LatestRequestID = requestID
+	refreshes := 0
 	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{original, duplicate}, stamps: nil}, nil
+		refreshes++
+		return scanResult{}, nil
 	})
-	// The cache as it stood before the chat was duplicated.
-	idx.records = []Record{original}
+	idx.records = []Record{record}
 	idx.loaded = true
 
 	resolution, err := idx.ResolveRequest(context.Background(), requestID, RequestLookupOptions{AllowFullScan: false})
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
-	if resolution.Found {
-		t.Fatalf("resolution = %+v, want no answer: the cached snapshot showed one carrier and the corpus now holds two", resolution.Record)
+	if !resolution.Found || resolution.Record.ID != record.ID {
+		t.Fatalf("resolution = %+v, want cached record %q", resolution, record.ID)
 	}
-	if resolution.Reason != RequestNotFoundReasonAmbiguousConversation {
-		t.Fatalf("reason = %v, want ambiguous_conversation", resolution.Reason)
+	if refreshes != 0 {
+		t.Fatalf("refreshes = %d, want 0", refreshes)
 	}
 }
 

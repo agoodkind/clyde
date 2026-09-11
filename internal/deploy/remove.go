@@ -77,16 +77,16 @@ func (executor *executor) removeDarwinRegistration(ctx context.Context) error {
 func (executor *executor) removeLinuxRegistration(ctx context.Context) error {
 	probeCommand := command{name: "systemctl", args: []string{"--user", "show", executor.config.SystemdUnit, "--property=LoadState", "--value"}}
 	probe := executor.runner.run(ctx, probeCommand)
-	if !probe.success() {
+	if !probe.success() && !strings.Contains(strings.ToLower(probe.output), "not-found") {
 		return newCommandRunError("inspect systemd registration", probeCommand, probe)
 	}
-	if strings.TrimSpace(probe.output) == "not-found" {
-		return nil
-	}
-	for _, action := range []string{"stop", "disable"} {
-		if err := executor.runActionCommand(ctx, "remove."+action, command{name: "systemctl", args: []string{"--user", action, executor.config.SystemdUnit}}); err != nil {
+	if !strings.Contains(strings.ToLower(probe.output), "not-found") {
+		if err := executor.runActionCommand(ctx, "remove.stop", command{name: "systemctl", args: []string{"--user", "stop", executor.config.SystemdUnit}}); err != nil {
 			return err
 		}
+	}
+	if err := executor.runActionCommand(ctx, "remove.disable", command{name: "systemctl", args: []string{"--user", "disable", executor.config.SystemdUnit}}); err != nil {
+		return err
 	}
 	return nil
 }

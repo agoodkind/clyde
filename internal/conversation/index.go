@@ -257,10 +257,9 @@ func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 // ids, Codex thread ids, and Cursor composer ids.
 //
 // The shape check cannot tell those apart, so the cheap index paths run first
-// and in full. A refresh and a second exact pass come before the provider is
-// asked anything, which is what a native id absent from a stale cache relies on
-// and what keeps an id the index already knows off the provider's live store
-// entirely.
+// and in full. The provider gets a bounded lookup before a refresh when the
+// cached records do not already identify the selector. A refresh remains the
+// fallback for a live match that is not yet in the cache.
 //
 // Only after that does the provider's bounded request-id lookup run. The
 // exhaustive provider scan is never reached from here: it is opt-in and lives on
@@ -275,8 +274,27 @@ func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 // every selector surface answers a request id the same way `resolve-request`
 // does, ambiguity included.
 func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string) (Record, error) {
-	fresh := idx.refreshBeforeLookup(ctx)
 	records := idx.recordsSnapshot()
+	if record, ok := resolveRecordIdentity(records, selector); ok {
+		return record, nil
+	}
+	switch record, carriers := recordByLatestRequestID(records, selector); {
+	case carriers == 1:
+		return record, nil
+	case carriers > 1:
+		return Record{}, fmt.Errorf("conversation %q not found: %s", selector,
+			notFoundNote(RequestNotFoundReasonAmbiguousConversation, true))
+	}
+
+	match := idx.resolveRequestMatch(ctx, selector, RequestLookupOptions{AllowFullScan: false})
+	if match.Found {
+		if record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID); ok {
+			return record, nil
+		}
+	}
+
+	fresh := idx.refreshBeforeLookup(ctx)
+	records = idx.recordsSnapshot()
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
@@ -287,8 +305,6 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 		return Record{}, fmt.Errorf("conversation %q not found: %s", selector,
 			notFoundNote(RequestNotFoundReasonAmbiguousConversation, fresh))
 	}
-
-	match := idx.resolveRequestMatch(ctx, selector, RequestLookupOptions{AllowFullScan: false})
 	if !match.Found {
 		return Record{}, fmt.Errorf("conversation %q not found: %s", selector, notFoundNote(match.Reason, fresh))
 	}
@@ -320,14 +336,9 @@ func notFoundNote(reason RequestNotFoundReason, fresh bool) string {
 // the provider's live store. The exhaustive provider scan runs only when the
 // caller sets opts.AllowFullScan, because it costs tens of seconds.
 //
-// The index pass runs after the refresh rather than before it. Answering from
-// the cached records first would be answering a question about how many
-// conversations carry the id over a snapshot that predates the duplicate: a chat
-// the operator copied since the last scan carries the request as truly as the
-// original does, and the cache still shows one carrier, so the cheap path would
-// name a conversation the current corpus calls ambiguous. The refresh is also
-// what a cold cache relies on to know the id at all, so running it first costs a
-// rebuild the fall-through was going to pay for anyway.
+// A cached carrier answers without refreshing the corpus. When the cache has no
+// carrier, the provider lookup runs first and avoids a full scan when it maps to
+// an already cached conversation.
 //
 // An id no path resolves reports not found with the reason, never a nearby
 // conversation.
@@ -340,21 +351,52 @@ func (idx *Index) ResolveRequest(
 	if requestID == "" {
 		return RequestResolution{}, errors.New("request id is required")
 	}
-	// List is what loads the cache, which the refresh then scans incrementally
-	// against. Its records are deliberately not consulted here.
+	// List loads the cache. A request absent from that snapshot gets a targeted
+	// provider lookup first, so a normal request hit does not pay for a full scan.
 	if _, err := idx.List(ctx); err != nil {
 		return RequestResolution{}, err
 	}
-	// A refresh that does not finish is not fatal; it makes a miss inconclusive,
-	// because the records the miss was established over may be the stale ones.
-	fresh := idx.refreshBeforeLookup(ctx)
 	records := idx.recordsSnapshot()
 	if record, carriers := recordByLatestRequestID(records, requestID); carriers == 1 {
 		return foundRequestResolution(requestID, RequestOriginIndex, record), nil
 	} else if carriers > 1 {
 		return ambiguousRequestResolution(ctx, requestID, carriers), nil
 	}
-	return idx.resolveRequestLive(ctx, requestID, opts, records, fresh), nil
+
+	boundedOptions := opts
+	boundedOptions.AllowFullScan = false
+	match := idx.resolveRequestMatch(ctx, requestID, boundedOptions)
+	if match.Found {
+		if record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID); ok {
+			return foundRequestResolution(requestID, match.Origin, record), nil
+		}
+	}
+
+	// A refresh that does not finish is not fatal; it makes a miss inconclusive,
+	// because the records the miss was established over may be stale.
+	fresh := idx.refreshBeforeLookup(ctx)
+	records = idx.recordsSnapshot()
+	if record, carriers := recordByLatestRequestID(records, requestID); carriers == 1 {
+		return foundRequestResolution(requestID, RequestOriginIndex, record), nil
+	} else if carriers > 1 {
+		return ambiguousRequestResolution(ctx, requestID, carriers), nil
+	}
+	if !match.Found && opts.AllowFullScan {
+		match = idx.resolveRequestMatch(ctx, requestID, opts)
+	}
+	if match.Found {
+		if record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID); ok {
+			return foundRequestResolution(requestID, match.Origin, record), nil
+		}
+		if !fresh {
+			return missingRequestResolution(requestID, RequestNotFoundReasonInconclusive), nil
+		}
+		return missingRequestResolution(requestID, RequestNotFoundReasonUnindexedConversation), nil
+	}
+	if !fresh {
+		match.Reason = MergeRequestNotFoundReason(match.Reason, RequestNotFoundReasonInconclusive)
+	}
+	return missingRequestResolution(requestID, match.Reason), nil
 }
 
 // ambiguousRequestResolution reports a request id several conversations carry.
@@ -363,38 +405,6 @@ func (idx *Index) ResolveRequest(
 func ambiguousRequestResolution(ctx context.Context, requestID string, carriers int) RequestResolution {
 	slog.InfoContext(ctx, "conversation.index.request_carried_by_several_conversations", "concern", "conversation.index", "component", "conversation", "request_id", requestID, "count", carriers)
 	return missingRequestResolution(requestID, RequestNotFoundReasonAmbiguousConversation)
-}
-
-// resolveRequestLive asks the providers, then maps the native conversation id
-// they report back onto an index record.
-func (idx *Index) resolveRequestLive(
-	ctx context.Context,
-	requestID string,
-	opts RequestLookupOptions,
-	records []Record,
-	fresh bool,
-) RequestResolution {
-	match := idx.resolveRequestMatch(ctx, requestID, opts)
-	if !match.Found {
-		reason := match.Reason
-		if !fresh {
-			reason = MergeRequestNotFoundReason(reason, RequestNotFoundReasonInconclusive)
-		}
-		return missingRequestResolution(requestID, reason)
-	}
-	record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID)
-	if !ok {
-		// "The index does not hold it" is a claim about the index, and it can only
-		// be made over an index that is current. A refresh that did not finish is
-		// the likelier reason the conversation is missing than the provider having
-		// invented it.
-		reason := RequestNotFoundReasonUnindexedConversation
-		if !fresh {
-			reason = MergeRequestNotFoundReason(reason, RequestNotFoundReasonInconclusive)
-		}
-		return missingRequestResolution(requestID, reason)
-	}
-	return foundRequestResolution(requestID, match.Origin, record)
 }
 
 // resolveRequestMatch asks each registered provider resolver, in a stable
