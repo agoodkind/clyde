@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"goodkind.io/clyde/internal/conversation"
 	cursorjsonl "goodkind.io/clyde/internal/providers/cursor/jsonl"
 )
 
@@ -60,7 +61,12 @@ type cursorTranscriptToolInput struct {
 
 // buildResumeLinkIndex decodes new complete parent records once for both headers
 // and resume links. Continuation is in memory and rebuilt after process startup.
-func (p *Parser) buildResumeLinkIndex(ctx context.Context, files []cursorjsonl.TranscriptFile) (resumeLinkIndex, error) {
+func (p *Parser) buildResumeLinkIndex(
+	ctx context.Context,
+	files []cursorjsonl.TranscriptFile,
+	priorRecords map[string]conversation.Record,
+	priorStamps map[string]conversation.FileStamp,
+) (resumeLinkIndex, error) {
 	parentByResumedID := make(map[string]string)
 	fresh := make(map[string]resumeLinkCacheEntry, len(files))
 
@@ -79,6 +85,14 @@ func (p *Parser) buildResumeLinkIndex(ctx context.Context, files []cursorjsonl.T
 		info, err := os.Stat(file.Path)
 		if err != nil {
 			slog.WarnContext(ctx, "providers.cursor.parser.resume_stat_failed", "concern", concern, "path", file.Path, "err", err)
+			continue
+		}
+		if cached, reused, reuseErr := p.resumeLinksFromPrior(ctx, file, info, prior, priorRecords, priorStamps); reused {
+			if reuseErr != nil {
+				return resumeLinkIndex{}, reuseErr
+			}
+			fresh[file.Path] = cached
+			addResumeLinks(parentByResumedID, file.ConversationID, cached.resumedIDs)
 			continue
 		}
 		cached, ok := prior[file.Path]
@@ -104,6 +118,65 @@ func (p *Parser) buildResumeLinkIndex(ctx context.Context, files []cursorjsonl.T
 	p.mu.Unlock()
 
 	return resumeLinkIndex{parentByResumedID: parentByResumedID}, nil
+}
+
+func (p *Parser) resumeLinksFromPrior(
+	ctx context.Context,
+	file cursorjsonl.TranscriptFile,
+	info os.FileInfo,
+	prior map[string]resumeLinkCacheEntry,
+	priorRecords map[string]conversation.Record,
+	priorStamps map[string]conversation.FileStamp,
+) (resumeLinkCacheEntry, bool, error) {
+	var empty resumeLinkCacheEntry
+	if _, inMemory := prior[file.Path]; inMemory {
+		return empty, false, nil
+	}
+	stamp, found := priorStamps[file.Path]
+	if !found || stamp.Size > info.Size() {
+		return empty, false, nil
+	}
+	cached := resumeLinkEntryFromPrior(file, info, stamp, priorRecords)
+	if stamp.Size == info.Size() {
+		return cached, true, nil
+	}
+	current, err := scanResumeLinks(ctx, file.Path, info, cached)
+	if err != nil {
+		return empty, true, err
+	}
+	return current, true, nil
+}
+
+func resumeLinkEntryFromPrior(
+	file cursorjsonl.TranscriptFile,
+	info os.FileInfo,
+	stamp conversation.FileStamp,
+	priorRecords map[string]conversation.Record,
+) resumeLinkCacheEntry {
+	header := cursorjsonl.TranscriptHeader{
+		ConversationID:         file.ConversationID,
+		FirstUserText:          "",
+		HasMessages:            false,
+		FirstUserTextUncertain: false,
+	}
+	if record, ok := priorRecords[file.Path]; ok {
+		header.FirstUserText = record.Title
+		header.HasMessages = record.Title != ""
+		header.FirstUserTextUncertain = record.TitleUncertain
+	}
+	resumedIDs := make([]string, 0)
+	for _, record := range priorRecords {
+		if record.Lineage == nil || record.Lineage.ParentNativeID != file.ConversationID {
+			continue
+		}
+		resumedIDs = append(resumedIDs, record.NativeID)
+	}
+	return resumeLinkCacheEntry{
+		info:           info,
+		completeOffset: stamp.Size,
+		header:         header,
+		resumedIDs:     resumedIDs,
+	}
 }
 
 // addResumeLinks records each resumed id against the conversation that resumed

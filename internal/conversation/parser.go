@@ -144,6 +144,13 @@ type Parser interface {
 	Stream(path string, opts LoadOptions) iter.Seq2[transcript.Message, error]
 }
 
+// CachedDiscoveryParser can reuse provider input stamps persisted by the scan
+// cache before opening a provider store again.
+type CachedDiscoveryParser interface {
+	Parser
+	DiscoverCached(ctx context.Context, prior map[string]Record, priorStamps map[string]FileStamp) ([]ScanCandidate, error)
+}
+
 // MultiConversationParser is implemented by providers whose one physical
 // artifact contains several independently addressable conversations.
 type MultiConversationParser interface {

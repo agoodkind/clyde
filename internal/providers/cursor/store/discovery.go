@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -232,11 +233,7 @@ type globalDiscoverySignature struct {
 	bubbleLastRow   int64
 	bubbleBytes     int64
 	backgroundValue string
-	metadataRows    int64
-	metadataLastRow int64
-	metadataUpdated int64
-	metadataFlags   int64
-	metadataBytes   int64
+	metadataDigest  [sha256.Size]byte
 }
 
 // ReadGlobalDiscovery refreshes when database/WAL metadata changes or a prior
@@ -316,20 +313,41 @@ func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB) (globalDiscov
 }
 
 func readConversationRangeSignature(ctx context.Context, db *sql.DB, signature *globalDiscoverySignature) error {
-	composerRows, err := ReadKVRowsByPrefix(ctx, db, KVTableCursorDiskKV, composerDataKeyPrefix)
+	composerBounds := keyRangeForPrefix(composerDataKeyPrefix)
+	query := "SELECT rowid, key, COALESCE(length(value), -1), json_valid(value), " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.name') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.createdAt') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.lastUpdatedAt') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.status') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.unifiedMode') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.forceMode') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.latestChatGenerationUUID') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.fullConversationHeadersOnly') AS TEXT), '') ELSE '' END " +
+		"FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key"
+	rows, err := db.QueryContext(ctx, query, composerBounds.Lower, composerBounds.Upper)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.composer_signature_failed", "concern", concern, "err", err)
 		return fmt.Errorf("read cursor composer signature: %w", err)
 	}
-	hasher := sha256.New()
-	for _, row := range composerRows {
-		writeFingerprintField(hasher, row.Key)
-		writeFingerprintField(hasher, string(row.Value))
+	defer func() { _ = rows.Close() }()
+	digest := sha256.New()
+	for rows.Next() {
+		var rowID, valueLength, valid int64
+		var key, name, createdAt, lastUpdatedAt, status, unifiedMode, forceMode, requestID, headers string
+		if err := rows.Scan(&rowID, &key, &valueLength, &valid, &name, &createdAt, &lastUpdatedAt, &status, &unifiedMode, &forceMode, &requestID, &headers); err != nil {
+			return fmt.Errorf("scan cursor composer signature: %w", err)
+		}
+		for _, field := range []string{strconv.FormatInt(rowID, 10), key, strconv.FormatInt(valueLength, 10), strconv.FormatInt(valid, 10), name, createdAt, lastUpdatedAt, status, unifiedMode, forceMode, requestID, headers} {
+			writeFingerprintField(digest, field)
+		}
 	}
-	copy(signature.composerDigest[:], hasher.Sum(nil))
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate cursor composer signature: %w", err)
+	}
+	copy(signature.composerDigest[:], digest.Sum(nil))
 
 	bubbleBounds := keyRangeForPrefix(bubbleKeyPrefix)
-	query := "SELECT count(*), COALESCE(max(rowid), 0), COALESCE(sum(length(value)), 0) FROM cursorDiskKV WHERE " +
+	query = "SELECT count(*), COALESCE(max(rowid), 0), COALESCE(sum(length(value)), 0) FROM cursorDiskKV WHERE " +
 		"key >= ? AND key < ?"
 	err = db.QueryRowContext(ctx, query,
 		bubbleBounds.Lower, bubbleBounds.Upper,
@@ -358,22 +376,38 @@ func readComposerMetadataSignature(ctx context.Context, db *sql.DB, signature *g
 	if err != nil || !exists {
 		return err
 	}
-	query := "SELECT count(*), COALESCE(max(rowid), 0), " +
-		"COALESCE(max(CAST(lastUpdatedAt AS INTEGER)), 0), " +
-		"COALESCE(sum(CAST(isArchived AS INTEGER) + CAST(isSubagent AS INTEGER)), 0), " +
-		"COALESCE(sum(length(composerId) + length(workspaceId) + length(value)), 0) " +
-		"FROM composerHeaders"
-	err = db.QueryRowContext(ctx, query).Scan(
-		&signature.metadataRows,
-		&signature.metadataLastRow,
-		&signature.metadataUpdated,
-		&signature.metadataFlags,
-		&signature.metadataBytes,
-	)
+	query := "SELECT rowid, COALESCE(composerId, ''), COALESCE(CAST(createdAt AS TEXT), ''), " +
+		"COALESCE(CAST(lastUpdatedAt AS TEXT), ''), COALESCE(CAST(isArchived AS TEXT), ''), " +
+		"COALESCE(CAST(isSubagent AS TEXT), ''), json_valid(value), " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.name') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.subtitle') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.isArchived') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.workspaceIdentifier.uri.fsPath') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.workspaceIdentifier.uri.path') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.workspaceIdentifier.configPath.fsPath') AS TEXT), '') ELSE '' END, " +
+		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.workspaceIdentifier.configPath.path') AS TEXT), '') ELSE '' END " +
+		"FROM composerHeaders ORDER BY rowid"
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.composer_metadata_signature_failed", "concern", concern, "err", err)
 		return fmt.Errorf("read cursor composer metadata signature: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
+	digest := sha256.New()
+	for rows.Next() {
+		var rowID, valid int64
+		var composerID, createdAt, lastUpdatedAt, archived, subagent, name, subtitle, jsonArchived, uriFsPath, uriPath, configFsPath, configPath string
+		if err := rows.Scan(&rowID, &composerID, &createdAt, &lastUpdatedAt, &archived, &subagent, &valid, &name, &subtitle, &jsonArchived, &uriFsPath, &uriPath, &configFsPath, &configPath); err != nil {
+			return fmt.Errorf("scan cursor composer metadata signature: %w", err)
+		}
+		for _, field := range []string{strconv.FormatInt(rowID, 10), composerID, createdAt, lastUpdatedAt, archived, subagent, strconv.FormatInt(valid, 10), name, subtitle, jsonArchived, uriFsPath, uriPath, configFsPath, configPath} {
+			writeFingerprintField(digest, field)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate cursor composer metadata signature: %w", err)
+	}
+	copy(signature.metadataDigest[:], digest.Sum(nil))
 	return nil
 }
 

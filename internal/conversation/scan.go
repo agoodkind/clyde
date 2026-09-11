@@ -9,6 +9,8 @@ import (
 	"os"
 	"reflect"
 	"sort"
+
+	"goodkind.io/clyde/internal/providerid"
 )
 
 // scanCache is the prior scan's output. Records and stamps are keyed by artifact
@@ -43,13 +45,9 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 		if err != nil {
 			return scanResult{}, fmt.Errorf("lookup parser for %s: %w", provider.String(), err)
 		}
-		candidates, err := parser.Discover(ctx, prior.records)
+		candidates, err := discoverCandidates(ctx, parser, provider, prior)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			slog.WarnContext(ctx, "conversation.scan.discover_failed", "concern", "conversation.scan", "component", "conversation", "provider", provider.String(), "err", err)
-			return scanResult{}, fmt.Errorf("discover %s conversations: %w", provider.String(), err)
+			return scanResult{}, err
 		}
 		for _, candidate := range candidates {
 			if ctx.Err() != nil {
@@ -82,6 +80,31 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 			return a.Stamp.Equal(b.Stamp) && a.CompleteOffset == b.CompleteOffset
 		})
 	return scanResult{changed: changed, records: out, stamps: stamps, multiStates: multiStates}, nil
+}
+
+func discoverCandidates(
+	ctx context.Context,
+	parser Parser,
+	provider providerid.Provider,
+	prior scanCache,
+) ([]ScanCandidate, error) {
+	var (
+		candidates []ScanCandidate
+		err        error
+	)
+	if cached, ok := parser.(CachedDiscoveryParser); ok {
+		candidates, err = cached.DiscoverCached(ctx, prior.records, prior.stamps)
+	} else {
+		candidates, err = parser.Discover(ctx, prior.records)
+	}
+	if err == nil {
+		return candidates, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	slog.WarnContext(ctx, "conversation.scan.discover_failed", "concern", "conversation.scan", "component", "conversation", "provider", provider.String(), "err", err)
+	return nil, fmt.Errorf("discover %s conversations: %w", provider.String(), err)
 }
 
 type scanCandidateResult struct {
