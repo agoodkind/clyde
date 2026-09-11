@@ -238,8 +238,8 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 		gotChildren = append(gotChildren, child.Name())
 	}
 	sort.Strings(gotChildren)
-	if strings.Join(gotChildren, ",") != "deploy,fingerprint,hard-reset,reload,run,status,worker" {
-		t.Fatalf("daemon children: got %v, want [deploy fingerprint hard-reset reload run status worker]", gotChildren)
+	if strings.Join(gotChildren, ",") != "deploy,fingerprint,hard-reset,reload,run,status,uninstall,worker" {
+		t.Fatalf("daemon children: got %v, want [deploy fingerprint hard-reset reload run status uninstall worker]", gotChildren)
 	}
 
 	mcpParent := parents["mcp"]
