@@ -364,6 +364,14 @@ func daemonDeployOp() Operation[daemonDeployInput, daemonDeployPayload] {
 				Compiled: daemonsvc.CompiledSupervisorFingerprint,
 				Running:  daemonsvc.RunningSupervisorFingerprint,
 			}
+			if !p.ReloadOnly {
+				if err := daemonsvc.RunInitialConversationIndex(ctx, outputSink.out, func(completed int, total int) {
+					_, _ = fmt.Fprintf(outputSink.out, "Initial indexing: %d/%d conversations\n", completed, total)
+				}); err != nil {
+					slog.WarnContext(ctx, "cli.daemon.deploy.initial_index_failed", "concern", "cli.daemon", "component", "clispec", "err", err)
+					return fmt.Errorf("daemon deploy: initial conversation index: %w", err)
+				}
+			}
 			if err := deploy.RunFromEnv(ctx, os.LookupEnv, p.ReloadOnly, outputSink.out, outputSink.out, fingerprints); err != nil {
 				slog.WarnContext(ctx, "cli.daemon.deploy.failed", "concern", "cli.daemon", "component", "clispec", "err", err)
 				return fmt.Errorf("daemon deploy: %w", err)

@@ -303,7 +303,7 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 	t.Setenv("CLYDE_RESET_TEST_ROOT", root)
 	t.Setenv("INSTALL_BIN", filepath.Join(root, "stale-must-not-run"))
 	t.Setenv("LOG_PATH", filepath.Join(root, "native.log"))
-	configBody := []byte("# Preserve these exact bytes.\n[logging.cleanup]\nenabled = false\n[mitm.capture_store]\ndb_path = " + strconv.Quote(filepath.Join(config.DefaultStateDir(), "custom", "capture.db")) + "\n")
+	configBody := []byte("# Preserve these exact bytes.\n[logging.cleanup]\nenabled = false\n[conversation.semantic]\ningestion_enabled = true\n[mitm.capture_store]\ndb_path = " + strconv.Quote(filepath.Join(config.DefaultStateDir(), "custom", "capture.db")) + "\n")
 	writeResetFixture(t, config.GlobalConfigPath(), configBody)
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
