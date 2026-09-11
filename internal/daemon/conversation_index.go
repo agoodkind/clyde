@@ -26,14 +26,6 @@ func startConversationIndex(ctx context.Context, log *slog.Logger, index *conver
 	})
 }
 
-func startConversationIndexOnce(ctx context.Context, log *slog.Logger, index *conversation.Index, group *livetrack.Group) {
-	startConversationIndexWorker(ctx, log, group, func(workerCtx context.Context) {
-		if err := index.Refresh(workerCtx); err != nil {
-			log.WarnContext(workerCtx, "daemon.conversation_index.initial_refresh_failed", "concern", "conversation.index", "component", "daemon", "err", err)
-		}
-	})
-}
-
 func startConversationIndexWorker(ctx context.Context, log *slog.Logger, group *livetrack.Group, run func(context.Context)) {
 	if group == nil {
 		return
@@ -98,4 +90,21 @@ func NewConversationIndex() *conversation.Index {
 		return conversation.NewIndex(newConversationRegistry(), config.NewConfigWithDefaults().Conversation)
 	}
 	return conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
+}
+
+// ExportTranscriptLocal resolves and exports one conversation without the
+// daemon control socket. CLI callers use this path when the daemon is stopped.
+func ExportTranscriptLocal(ctx context.Context, conversationID string, options conversation.ExportOptions) ([]byte, error) {
+	index := NewConversationIndex()
+	record, err := index.Resolve(ctx, conversationID)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.conversation_export.resolve_failed", "concern", "conversation.export", "component", "daemon", "conversation_id", conversationID, "err", err)
+		return nil, fmt.Errorf("resolve conversation: %w", err)
+	}
+	body, err := index.Export(record, options)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.conversation_export.export_failed", "concern", "conversation.export", "component", "daemon", "conversation_id", conversationID, "err", err)
+		return nil, fmt.Errorf("export transcript: %w", err)
+	}
+	return body, nil
 }

@@ -279,7 +279,13 @@ func exportWorkingDirectory(ctx context.Context) (string, error) {
 }
 
 func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, error) {
-	body, err := daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
+	var body []byte
+	var err error
+	if surfaceFromContext(ctx) == SurfaceCLI {
+		body, err = daemon.ExportTranscriptLocal(ctx, p.ConversationID, p.Options)
+	} else {
+		body, err = daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
+	}
 	if err != nil {
 		return nil, logOperationError(ctx, "export transcript", err)
 	}
@@ -375,7 +381,13 @@ func runExportTranscript(
 	surface Surface,
 	sink ResultSink,
 ) error {
-	body, err := daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
+	var body []byte
+	var err error
+	if surface == SurfaceCLI {
+		body, err = daemon.ExportTranscriptLocal(ctx, p.ConversationID, p.Options)
+	} else {
+		body, err = daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
+	}
 	if err != nil {
 		return logFail(ctx, surface, "export_failed", "export transcript", err)
 	}
