@@ -21,6 +21,9 @@ func TestDaemonHardResetIsCLIOnly(t *testing.T) {
 				if !strings.Contains(child.Short, "delete") {
 					t.Fatalf("reset help must describe deletion: %s", child.Short)
 				}
+				if !strings.Contains(child.Long, "Use config only") {
+					t.Fatalf("reset help must reserve config deletion for explicit scope: %s", child.Long)
+				}
 			}
 		}
 	}
