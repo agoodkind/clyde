@@ -44,6 +44,7 @@ func TestRunDarwinConfigMismatchInstallsService(t *testing.T) {
 	fixture := newDeployFixture(t, platformDarwin)
 	fixture.fs.exists[fixture.config.LaunchdPlist] = true
 	fixture.fs.files[fixture.config.LaunchdPlist] = []byte("mismatch")
+	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"enable", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "")
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"bootout", fixture.config.LaunchdDomain, fixture.config.LaunchdPlist}}, "")
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"bootstrap", fixture.config.LaunchdDomain, fixture.config.LaunchdPlist}}, "")
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "loaded")

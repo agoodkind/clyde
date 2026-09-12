@@ -468,6 +468,9 @@ func (executor *executor) installDarwinService(ctx context.Context, currentReaso
 		slog.WarnContext(ctx, "deploy.install_darwin.write_plist_failed", "path", executor.config.LaunchdPlist, "err", err)
 		return fmt.Errorf("write launchd plist %s: %w", executor.config.LaunchdPlist, err)
 	}
+	if err := executor.runActionCommand(ctx, "action.install_service.darwin.enable", command{name: "launchctl", args: []string{"enable", executor.darwinTarget()}}); err != nil {
+		return err
+	}
 	_ = executor.runActionCommand(ctx, "action.install_service.darwin.bootout", command{name: "launchctl", args: []string{"bootout", executor.config.LaunchdDomain, executor.config.LaunchdPlist}})
 	if err := executor.runActionCommand(ctx, "action.install_service.darwin.bootstrap", command{name: "launchctl", args: []string{"bootstrap", executor.config.LaunchdDomain, executor.config.LaunchdPlist}}); err != nil {
 		return err
