@@ -107,13 +107,13 @@ func refreshInitialConversationIndex(
 	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 	heartbeatDone := make(chan struct{})
 	go func() {
+		defer close(heartbeatDone)
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				slog.ErrorContext(ctx, "daemon.initial_index.heartbeat_panic", "concern", "conversation.index", "component", "daemon", "err", fmt.Errorf("panic: %v", recovered))
 			}
 		}()
 		writeInitialIndexHeartbeats(heartbeatCtx, output, start, initialIndexHeartbeatInterval)
-		close(heartbeatDone)
 	}()
 	defer func() {
 		stopHeartbeat()

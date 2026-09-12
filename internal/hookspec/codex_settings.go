@@ -74,6 +74,32 @@ func removeCodexCommandHookGroups(input string, signatures [][]string) string {
 	return strings.Join(out, "\n")
 }
 
+func removeCodexCommandHookGroupsExact(input string, signatures [][]string, knownCommands []string) string {
+	if len(signatures) == 0 || strings.TrimSpace(input) == "" {
+		return input
+	}
+	lines := strings.Split(input, "\n")
+	out := make([]string, 0, len(lines))
+	for index := 0; index < len(lines); {
+		if !isCodexHookGroupHeader(lines[index]) {
+			out = append(out, lines[index])
+			index++
+			continue
+		}
+		end := index + 1
+		for end < len(lines) && !isCodexHookGroupHeader(lines[end]) && !isNonHookTableHeader(lines[end]) {
+			end++
+		}
+		if codexGroupContainsCommandExact(lines[index:end], signatures, knownCommands) {
+			index = end
+			continue
+		}
+		out = append(out, lines[index:end]...)
+		index = end
+	}
+	return strings.Join(out, "\n")
+}
+
 func isCodexHookGroupHeader(line string) bool {
 	trimmed := tomlHeaderText(line)
 	return strings.HasPrefix(trimmed, "[[hooks.") && strings.HasSuffix(trimmed, "]]") && !strings.Contains(trimmed, ".hooks")
@@ -97,6 +123,19 @@ func codexGroupContainsCommand(lines []string, signatures [][]string) bool {
 			continue
 		}
 		if commandHasManagedArgs(value, signatures) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexGroupContainsCommandExact(lines []string, signatures [][]string, knownCommands []string) bool {
+	for _, line := range lines {
+		key, value, ok := parseTomlAssignment(line)
+		if !ok || key != "command" {
+			continue
+		}
+		if commandHasExactManagedArgs(value, signatures, knownCommands) {
 			return true
 		}
 	}

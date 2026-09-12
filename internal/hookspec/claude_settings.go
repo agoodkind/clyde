@@ -92,6 +92,10 @@ func (document *claudeSettingsDocument) unmarshalClaudeCodeHooks() (map[string][
 }
 
 func removeClaudeHookHandlers(groups []rawClaudeHookGroup, signatures [][]string) []rawClaudeHookGroup {
+	return removeClaudeHookHandlersWithMatcher(groups, signatures, nil)
+}
+
+func removeClaudeHookHandlersWithMatcher(groups []rawClaudeHookGroup, signatures [][]string, knownCommands []string) []rawClaudeHookGroup {
 	out := make([]rawClaudeHookGroup, 0, len(groups))
 	for _, group := range groups {
 		handlers, ok := group.handlers()
@@ -102,7 +106,7 @@ func removeClaudeHookHandlers(groups []rawClaudeHookGroup, signatures [][]string
 		filtered := make([]rawClaudeHookHandler, 0, len(handlers))
 		removed := false
 		for _, handler := range handlers {
-			if handler.matchesHookSignature(signatures) {
+			if handler.matchesHookSignature(signatures, knownCommands) {
 				removed = true
 				continue
 			}
@@ -242,10 +246,10 @@ func (handler *rawClaudeHookHandler) command() string {
 	return command
 }
 
-func (handler *rawClaudeHookHandler) matchesHookSignature(signatures [][]string) bool {
+func (handler *rawClaudeHookHandler) matchesHookSignature(signatures [][]string, knownCommands []string) bool {
 	args := handler.args()
 	for _, signature := range signatures {
-		if slices.Equal(args, signature) {
+		if slices.Equal(args, signature) && (len(knownCommands) == 0 || knownClydeExecutable(handler.command(), knownCommands)) {
 			return true
 		}
 	}
@@ -253,7 +257,10 @@ func (handler *rawClaudeHookHandler) matchesHookSignature(signatures [][]string)
 	if command == "" {
 		return false
 	}
-	return commandHasManagedArgs(command, signatures)
+	if len(knownCommands) == 0 {
+		return commandHasManagedArgs(command, signatures)
+	}
+	return commandHasExactManagedArgs(command, signatures, knownCommands)
 }
 
 func (handler *rawClaudeHookHandler) setString(key string, value string) {

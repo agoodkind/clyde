@@ -79,3 +79,14 @@ func TestConversationHelpIncludesRegisteredProviders(t *testing.T) {
 	}
 	t.Fatal("provider parameter missing")
 }
+
+func TestConversationHelpDocumentsDaemonRequirements(t *testing.T) {
+	t.Parallel()
+	if !strings.Contains(searchOp().Long, "daemon") {
+		t.Fatal("search help must state that search uses the daemon")
+	}
+	exportHelp := exportTranscriptOp().Long
+	if !strings.Contains(exportHelp, "Terminal export reads local") || !strings.Contains(exportHelp, "MCP export uses the daemon") {
+		t.Fatalf("export help does not distinguish terminal and MCP dependencies: %s", exportHelp)
+	}
+}

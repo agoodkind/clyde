@@ -93,9 +93,17 @@ func (document *cursorHooksDocument) setInt(key string, value int) {
 }
 
 func removeCursorHookHandlers(handlers []rawCursorHookHandler, signatures [][]string) []rawCursorHookHandler {
+	return removeCursorHookHandlersWithMatcher(handlers, signatures, nil)
+}
+
+func removeCursorHookHandlersWithMatcher(handlers []rawCursorHookHandler, signatures [][]string, knownCommands []string) []rawCursorHookHandler {
 	filtered := make([]rawCursorHookHandler, 0, len(handlers))
 	for _, handler := range handlers {
-		if commandHasManagedArgs(handler.command(), signatures) {
+		if len(knownCommands) == 0 {
+			if commandHasManagedArgs(handler.command(), signatures) {
+				continue
+			}
+		} else if commandHasExactManagedArgs(handler.command(), signatures, knownCommands) {
 			continue
 		}
 		filtered = append(filtered, handler)
