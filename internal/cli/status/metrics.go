@@ -69,18 +69,18 @@ func buildMetrics(snapshot statusSnapshot) []statusMetric {
 	}
 
 	if snapshot.freshnessErr != nil {
-		metrics = append(metrics, quotedError("freshness", "freshness.error", snapshot.freshnessErr))
+		metrics = append(metrics, quotedError("semantic_freshness", "semantic_freshness.error", snapshot.freshnessErr))
 	} else {
 		lastSync := "null"
 		if snapshot.freshness.LastSyncUnix > 0 {
 			lastSync = time.Unix(snapshot.freshness.LastSyncUnix, 0).Format(time.RFC3339)
 		}
 		metrics = append(metrics,
-			intMetric("freshness", "freshness.manifest", int64(snapshot.freshness.Manifest), "conversations"),
-			intMetric("freshness", "freshness.needed", int64(snapshot.freshness.Needed), "conversations"),
-			intMetric("freshness", "freshness.embedded", int64(snapshot.freshness.Embedded), "conversations"),
-			intMetric("freshness", "freshness.pending", int64(snapshot.freshness.Pending), "conversations"),
-			textMetric("freshness", "freshness.last_sync", lastSync),
+			intMetric("semantic_freshness", "semantic_freshness.manifest", int64(snapshot.freshness.Manifest), "conversations"),
+			intMetric("semantic_freshness", "semantic_freshness.needed", int64(snapshot.freshness.Needed), "conversations"),
+			intMetric("semantic_freshness", "semantic_freshness.embedded", int64(snapshot.freshness.Embedded), "conversations"),
+			intMetric("semantic_freshness", "semantic_freshness.pending", int64(snapshot.freshness.Pending), "conversations"),
+			textMetric("semantic_freshness", "semantic_freshness.last_sync", lastSync),
 		)
 	}
 

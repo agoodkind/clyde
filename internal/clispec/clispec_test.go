@@ -803,6 +803,40 @@ func TestMCPHandlerStructuredContent(t *testing.T) {
 	}
 }
 
+func TestSearchStructuredSurfacesLabelSemanticFreshness(t *testing.T) {
+	t.Parallel()
+	payload := searchConversationsOutputFromDomain(conv.SearchConversationsResult{
+		Freshness: conv.SearchFreshness{Manifest: 7, Needed: 2, Embedded: 5, Pending: 2, LastSyncUnix: 123},
+	})
+	result := valueResult{Payload: payload, Text: "search result"}
+
+	var terminal bytes.Buffer
+	if err := renderCLIResult(context.Background(), &terminal, &bytes.Buffer{}, output.FormatJSON, resultKindValue, result); err != nil {
+		t.Fatal(err)
+	}
+	assertSemanticFreshnessField(t, terminal.Bytes(), "terminal")
+
+	mcpResult, err := renderMCPResult(context.Background(), resultKindValue, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := mcpResult.StructuredContent.(json.RawMessage)
+	if !ok {
+		t.Fatalf("MCP structured content type = %T, want json.RawMessage", mcpResult.StructuredContent)
+	}
+	assertSemanticFreshnessField(t, raw, "MCP")
+}
+
+func assertSemanticFreshnessField(t *testing.T, body []byte, surface string) {
+	t.Helper()
+	if !bytes.Contains(body, []byte(`"semantic_freshness":{"manifest":7`)) {
+		t.Fatalf("%s output missing semantic freshness: %s", surface, body)
+	}
+	if bytes.Contains(body, []byte(`"freshness":`)) {
+		t.Fatalf("%s output retained generic freshness: %s", surface, body)
+	}
+}
+
 func TestSearchMCPHandlerMarksEngineRefusalAsToolError(t *testing.T) {
 	t.Parallel()
 	operation := searchOp()

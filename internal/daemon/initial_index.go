@@ -65,7 +65,10 @@ func RunInitialConversationIndex(ctx context.Context, output io.Writer, progress
 	_, _ = fmt.Fprintf(output, "Initial indexing: raw conversation discovery elapsed %s\n", clock.Since(start).Truncate(time.Second))
 
 	index := conversation.NewIndex(registry, cfg.Conversation)
-	if err := refreshInitialConversationIndex(ctx, output, start, index.Refresh); err != nil {
+	installRefresh := func(refreshCtx context.Context) error {
+		return index.RefreshWithReason(refreshCtx, conversation.RefreshReasonInstall)
+	}
+	if err := refreshInitialConversationIndex(ctx, output, start, installRefresh); err != nil {
 		return err
 	}
 

@@ -41,19 +41,19 @@ service ClydeService {
   rpc ShowCapture(ShowCaptureRequest) returns (ShowCaptureResponse);
   rpc SeedBaseline(SeedBaselineRequest) returns (SeedBaselineResponse);
   rpc LogsInventory(LogsInventoryRequest) returns (LogsInventoryResponse);
-  // GetSearchFreshness returns the conversation feeder's latest sync snapshot,
+  // GetSemanticSearchFreshness returns the conversation feeder's latest sync snapshot,
   // the same freshness that rides each search response, so a status view can
   // read it without running a search.
-  rpc GetSearchFreshness(GetSearchFreshnessRequest) returns (GetSearchFreshnessResponse);
+  rpc GetSemanticSearchFreshness(GetSemanticSearchFreshnessRequest) returns (GetSemanticSearchFreshnessResponse);
 }
 
-message GetSearchFreshnessRequest {
+message GetSemanticSearchFreshnessRequest {
   // Reserved for future scoping; the daemon serves one feeder snapshot today.
   reserved 1;
 }
 
-message GetSearchFreshnessResponse {
-  SearchFreshness freshness = 1;
+message GetSemanticSearchFreshnessResponse {
+  SemanticSearchFreshness semantic_freshness = 1;
 }
 
 message LogsInventoryRequest {
@@ -311,9 +311,9 @@ message SearchFacets {
   repeated SearchFacetCount models = 3;
 }
 
-// SearchFreshness is the conversation-index sync state at query time, so the
+// SemanticSearchFreshness is the conversation-index sync state at query time, so the
 // caller can tell whether a thin result means a cold index versus a true miss.
-message SearchFreshness {
+message SemanticSearchFreshness {
   int64 manifest = 1;
   int64 needed = 2;
   int64 embedded = 3;
@@ -341,7 +341,7 @@ message SearchConversationsResponse {
   bool has_more = 5;
   SearchSource source = 6;
   SearchFacets facets = 7;
-  SearchFreshness freshness = 8;
+  SemanticSearchFreshness semantic_freshness = 8;
   FilterAccounting filter_accounting = 9;
   int64 offset = 10;
   int64 next_offset = 11;

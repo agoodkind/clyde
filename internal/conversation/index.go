@@ -97,7 +97,7 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 	if err := idx.loadOnce(); err != nil {
 		slog.WarnContext(ctx, "conversation.index.start_load_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 	}
-	idx.refreshAsync(ctx)
+	idx.refreshAsync(ctx, RefreshReasonPeriodic)
 	defer func() {
 		idx.mu.Lock()
 		run := idx.refreshRun
@@ -113,7 +113,7 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			idx.refreshAsync(ctx)
+			idx.refreshAsync(ctx, RefreshReasonPeriodic)
 		}
 	}
 }
@@ -245,7 +245,7 @@ const staleIndexNote = "the conversation index could not be refreshed, so this m
 // cache already holds. The refresh is therefore best effort and logged on failure;
 // the caller reports the miss as possibly stale rather than as a determination.
 func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
-	if err := idx.Refresh(ctx); err != nil {
+	if err := idx.refreshWithReason(ctx, RefreshReasonLookupMiss); err != nil {
 		slog.WarnContext(ctx, "conversation.index.lookup_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 		return false
 	}
@@ -552,6 +552,15 @@ func recordByNativeID(records []Record, provider providerid.Provider, nativeID s
 // Waiting on someone else's rebuild reports that rebuild's outcome, so a nil
 // error means the records were rebuilt, whoever rebuilt them.
 func (idx *Index) Refresh(ctx context.Context) (err error) {
+	return idx.refreshWithReason(ctx, RefreshReasonExplicit)
+}
+
+// RefreshWithReason rebuilds the cache under an explicit trigger attribution.
+func (idx *Index) RefreshWithReason(ctx context.Context, reason RefreshReason) (err error) {
+	return idx.refreshWithReason(ctx, reason)
+}
+
+func (idx *Index) refreshWithReason(ctx context.Context, reason RefreshReason) (err error) {
 	defer trace.Op(ctx, "conversation.index.refresh")(&err)
 	if err := idx.loadOnce(); err != nil {
 		return err
@@ -562,11 +571,46 @@ func (idx *Index) Refresh(ctx context.Context) (err error) {
 	}
 	defer func() { idx.endRefresh(run, err) }()
 
-	return idx.refresh(ctx, prior)
+	return idx.refresh(ctx, prior, reason)
 }
 
-func (idx *Index) refresh(ctx context.Context, prior scanCache) error {
-	result, err := idx.scanProvider(ctx, idx.registry, prior)
+func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshReason) (err error) {
+	startedAt := clock.Now()
+	provider := idx.refreshProviderLabel()
+	result := scanResult{changed: false, records: nil, stamps: nil, multiStates: nil}
+	cacheChanged := false
+	slog.InfoContext(ctx, "conversation.index.refresh_started",
+		"concern", "conversation.index",
+		"component", "conversation",
+		"reason", reason.String(),
+		"provider", provider,
+		"duration_ms", 0,
+		"outcome", "in_progress",
+		"record_count", 0,
+		"cache_changed", false,
+	)
+	defer func() {
+		recovered := recover()
+		outcome := "success"
+		if err != nil || recovered != nil {
+			outcome = "failed"
+		}
+		slog.InfoContext(ctx, "conversation.index.refresh_finished",
+			"concern", "conversation.index",
+			"component", "conversation",
+			"reason", reason.String(),
+			"provider", provider,
+			"duration_ms", clock.Since(startedAt).Milliseconds(),
+			"outcome", outcome,
+			"record_count", len(result.records),
+			"cache_changed", cacheChanged,
+		)
+		if recovered != nil {
+			err = fmt.Errorf("conversation index refresh panicked: %v", recovered)
+		}
+	}()
+
+	result, err = idx.scanProvider(ctx, idx.registry, prior)
 	if err != nil {
 		return err
 	}
@@ -581,10 +625,21 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache) error {
 		}
 	}
 	idx.installRefreshResult(result)
+	cacheChanged = result.changed
 	if result.changed {
 		idx.reportSkippedSubagents(ctx, result.records)
 	}
 	return nil
+}
+
+func (idx *Index) refreshProviderLabel() string {
+	providers := idx.registry.Providers()
+	slices.Sort(providers)
+	labels := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		labels = append(labels, provider.String())
+	}
+	return strings.Join(labels, ",")
 }
 
 // refreshRun is one rebuild in flight and what it produced. The outcome travels
@@ -708,9 +763,13 @@ func (idx *Index) loadOnce() error {
 	return nil
 }
 
-func (idx *Index) refreshAsync(ctx context.Context) {
+func (idx *Index) refreshAsync(ctx context.Context, reasons ...RefreshReason) {
 	if ctx.Err() != nil {
 		return
+	}
+	reason := RefreshReasonPeriodic
+	if len(reasons) > 0 {
+		reason = reasons[0]
 	}
 	idx.mu.Lock()
 	debounced := clock.Now().Sub(idx.lastRefresh) < idx.debounce
@@ -733,7 +792,7 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 				slog.ErrorContext(ctx, "conversation.index.refresh_panic", "concern", "conversation.index", "component", "conversation", "err", err)
 			}
 		}()
-		err = idx.refresh(ctx, prior)
+		err = idx.refresh(ctx, prior, reason)
 		if err != nil {
 			slog.WarnContext(ctx, "conversation.index.background_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 			return

@@ -10,7 +10,7 @@ import (
 type statusJSON struct {
 	ReadAt    string             `json:"read_at"`
 	Daemon    daemonJSON         `json:"daemon"`
-	Freshness *freshnessJSON     `json:"freshness,omitempty"`
+	Freshness *freshnessJSON     `json:"semantic_freshness,omitempty"`
 	Providers []providerJSON     `json:"providers,omitempty"`
 	MITM      []mitmListenerJSON `json:"mitm_listeners,omitempty"`
 	Errors    sectionErrorsJSON  `json:"errors"`
@@ -56,7 +56,7 @@ type sectionErrorsJSON struct {
 	Daemon     string `json:"daemon,omitempty"`
 	Supervisor string `json:"supervisor,omitempty"`
 	Worker     string `json:"worker,omitempty"`
-	Freshness  string `json:"freshness,omitempty"`
+	Freshness  string `json:"semantic_freshness,omitempty"`
 	Providers  string `json:"providers,omitempty"`
 	MITM       string `json:"mitm,omitempty"`
 }

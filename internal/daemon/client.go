@@ -268,7 +268,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		HasMore:              resp.GetHasMore(),
 		Source:               searchSourceFromProto(resp.GetSource()),
 		Facets:               searchFacetsFromProto(resp.GetFacets()),
-		Freshness:            searchFreshnessFromProto(resp.GetFreshness()),
+		Freshness:            searchFreshnessFromProto(resp.GetSemanticFreshness()),
 		FilterAccounting:     filterAccountingFromProto(resp.GetFilterAccounting()),
 	}, nil
 }
@@ -343,7 +343,7 @@ func facetCountsFromProto(counts []*clydev1.SearchFacetCount) []conversation.Sea
 
 // searchFreshnessFromProto maps the wire freshness onto the domain form. A nil
 // message yields the zero value.
-func searchFreshnessFromProto(freshness *clydev1.SearchFreshness) conversation.SearchFreshness {
+func searchFreshnessFromProto(freshness *clydev1.SemanticSearchFreshness) conversation.SearchFreshness {
 	return conversation.SearchFreshness{
 		Manifest:     int(freshness.GetManifest()),
 		Needed:       int(freshness.GetNeeded()),

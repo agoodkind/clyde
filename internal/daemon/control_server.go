@@ -235,12 +235,12 @@ func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.R
 	return protoReorientPage(page), nil
 }
 
-// GetSearchFreshness returns the feeder's latest sync snapshot, the same
+// GetSemanticSearchFreshness returns the feeder's latest sync snapshot, the same
 // freshness each search response carries, so a status view reads it without
 // running a search.
-func (s *controlServer) GetSearchFreshness(_ context.Context, _ *clydev1.GetSearchFreshnessRequest) (*clydev1.GetSearchFreshnessResponse, error) {
-	return &clydev1.GetSearchFreshnessResponse{
-		Freshness: protoSearchFreshness(s.freshnessSnapshot()),
+func (s *controlServer) GetSemanticSearchFreshness(_ context.Context, _ *clydev1.GetSemanticSearchFreshnessRequest) (*clydev1.GetSemanticSearchFreshnessResponse, error) {
+	return &clydev1.GetSemanticSearchFreshnessResponse{
+		SemanticFreshness: protoSearchFreshness(s.freshnessSnapshot()),
 	}, nil
 }
 
@@ -321,7 +321,7 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 		HasMore:              result.HasMore,
 		Source:               protoSearchSource(result.Source),
 		Facets:               protoSearchFacets(result.Facets),
-		Freshness:            protoSearchFreshness(result.Freshness),
+		SemanticFreshness:    protoSearchFreshness(result.Freshness),
 		FilterAccounting:     protoFilterAccounting(result.FilterAccounting),
 	}
 }
@@ -358,8 +358,8 @@ func protoFacetCounts(counts []conversation.SearchFacetCount) []*clydev1.SearchF
 }
 
 // protoSearchFreshness maps the domain freshness onto its wire form.
-func protoSearchFreshness(freshness conversation.SearchFreshness) *clydev1.SearchFreshness {
-	return &clydev1.SearchFreshness{
+func protoSearchFreshness(freshness conversation.SearchFreshness) *clydev1.SemanticSearchFreshness {
+	return &clydev1.SemanticSearchFreshness{
 		Manifest:     int64(freshness.Manifest),
 		Needed:       int64(freshness.Needed),
 		Embedded:     int64(freshness.Embedded),

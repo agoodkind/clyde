@@ -19,7 +19,8 @@ import (
 	zedparser "goodkind.io/clyde/internal/providers/zed/parser"
 )
 
-// startConversationIndex installs lifecycle ownership before launching the worker.
+// startConversationIndex installs lifecycle ownership before launching the raw
+// provider refresh worker. Semantic configuration does not control this cache.
 func startConversationIndex(ctx context.Context, log *slog.Logger, index *conversation.Index, group *livetrack.Group) {
 	startConversationIndexWorker(ctx, log, group, func(workerCtx context.Context) {
 		index.Start(workerCtx, time.Minute)
@@ -92,10 +93,12 @@ func NewConversationIndex() *conversation.Index {
 	return conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
 }
 
+var newLocalConversationIndex = NewConversationIndex
+
 // ExportTranscriptLocal resolves and exports one conversation without the
 // daemon control socket. CLI callers use this path when the daemon is stopped.
 func ExportTranscriptLocal(ctx context.Context, conversationID string, options conversation.ExportOptions) ([]byte, error) {
-	index := NewConversationIndex()
+	index := newLocalConversationIndex()
 	record, err := index.Resolve(ctx, conversationID)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.conversation_export.resolve_failed", "concern", "conversation.export", "component", "daemon", "conversation_id", conversationID, "err", err)

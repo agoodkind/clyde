@@ -7,6 +7,25 @@ import (
 	"goodkind.io/clyde/internal/providerid"
 )
 
+// RefreshReason names the trigger for one raw provider refresh.
+type RefreshReason string
+
+const (
+	// RefreshReasonInstall marks the synchronous raw cache build during daemon installation.
+	RefreshReasonInstall RefreshReason = "install"
+	// RefreshReasonPeriodic marks the background periodic refresh.
+	RefreshReasonPeriodic RefreshReason = "periodic"
+	// RefreshReasonLookupMiss marks a refresh triggered by a cache lookup miss.
+	RefreshReasonLookupMiss RefreshReason = "lookup_miss"
+	// RefreshReasonExplicit marks a caller-requested synchronous refresh.
+	RefreshReasonExplicit RefreshReason = "explicit"
+)
+
+// String returns the stable log value for the trigger.
+func (reason RefreshReason) String() string {
+	return string(reason)
+}
+
 // RequestOrigin names which path answered a request-id lookup. The two paths
 // read different stores and can disagree, so every answer carries the origin
 // that produced it.
