@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 )
 
 type serviceControl string
@@ -26,10 +27,12 @@ func DisableFromEnv(ctx context.Context, lookup func(string) (string, bool), out
 func controlFromEnv(ctx context.Context, lookup func(string) (string, bool), output io.Writer, control serviceControl) error {
 	targetPlatform, err := detectPlatform()
 	if err != nil {
+		slog.WarnContext(ctx, "deploy.control_detect_platform_failed", "err", err)
 		return fmt.Errorf("detect platform: %w", err)
 	}
 	cfg, err := loadConfigFromEnv(targetPlatform, lookup)
 	if err != nil {
+		slog.WarnContext(ctx, "deploy.control_load_config_failed", "err", err)
 		return fmt.Errorf("load deploy config: %w", err)
 	}
 	executor := executor{
