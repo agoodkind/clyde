@@ -100,7 +100,14 @@ func installTestRepositoryRoot(t *testing.T) string {
 }
 
 func installTestEnvironment(fakeBin string, values ...string) []string {
-	environment := []string{"PATH=" + fakeBin + ":/usr/bin:/bin"}
+	environment := make([]string, 0, len(os.Environ())+1+len(values))
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "PATH=") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	environment = append(environment, "PATH="+fakeBin+":/usr/bin:/bin")
 	environment = append(environment, values...)
 	return environment
 }

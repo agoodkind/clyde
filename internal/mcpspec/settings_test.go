@@ -14,9 +14,11 @@ func TestInstallPreservesUnrelatedSettingsAndIsIdempotent(t *testing.T) {
 	homeDir := t.TempDir()
 	writeTestFile(t, filepath.Join(homeDir, ".claude.json"), `{
   "theme": "dark",
+  "enabled": true,
   "mcpServers": {"other": {"command": "/bin/other"}}
 }`)
 	writeTestFile(t, filepath.Join(homeDir, ".cursor", "mcp.json"), `{
+  "theme": "dark",
   "enabled": true,
   "mcpServers": {"other": {"command": "/bin/other"}}
 }`)
@@ -59,7 +61,7 @@ command = "/bin/other"
 		if err := json.Unmarshal(body, &document); err != nil {
 			t.Fatalf("Unmarshal %s: %v", path, err)
 		}
-		if string(document.Theme) != `"dark"` && string(document.Enabled) != "true" {
+		if string(document.Theme) != `"dark"` || string(document.Enabled) != "true" {
 			t.Fatalf("unrelated JSON setting missing from %s: %s", path, body)
 		}
 		if _, ok := document.MCPServers["other"]; !ok {
