@@ -3,22 +3,50 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"goodkind.io/clyde/internal/conversation"
 )
 
-func TestRunInitialConversationIndexSkipsWhenIngestionIsDisabled(t *testing.T) {
+func TestRunInitialConversationIndexBuildsRawIndexWhenIngestionIsDisabled(t *testing.T) {
 	configureInitialIndexTest(t, false)
+
+	previousDial := dialInitialSemantic
+	calls := 0
+	dialInitialSemantic = func(context.Context, string) (initialSemanticClient, error) {
+		calls++
+		return nil, fmt.Errorf("should not call semantic when disabled")
+	}
+	t.Cleanup(func() { dialInitialSemantic = previousDial })
 
 	var output bytes.Buffer
 	if err := RunInitialConversationIndex(context.Background(), &output, nil); err != nil {
 		t.Fatalf("RunInitialConversationIndex: %v", err)
 	}
-	if got := output.String(); got != "Initial indexing: skipped because ingestion_enabled=false\n" {
-		t.Fatalf("output = %q", got)
+	if calls != 0 {
+		t.Fatalf("semantic dial calls = %d, want 0", calls)
+	}
+	got := output.String()
+	if !strings.Contains(got, "Initial indexing: complete with 0 conversations") {
+		t.Fatalf("output = %q, missing completion count", got)
+	}
+	if !strings.Contains(got, "Initial indexing: discovering raw conversations from claude") {
+		t.Fatalf("output = %q, missing scoped discovery output", got)
+	}
+	if !strings.Contains(got, "Initial indexing: finished raw conversation discovery for claude") {
+		t.Fatalf("output = %q, missing scoped discovery completion", got)
+	}
+	if !strings.Contains(got, "Initial indexing: raw conversation discovery elapsed ") {
+		t.Fatalf("output = %q, missing heartbeat output", got)
+	}
+	if _, err := os.Stat(conversation.CachePath()); err != nil {
+		t.Fatalf("conversation cache not created: %v", err)
 	}
 }
 
@@ -39,15 +67,76 @@ func TestRunInitialConversationIndexReportsProgress(t *testing.T) {
 		t.Fatalf("RunInitialConversationIndex: %v", err)
 	}
 	for _, want := range []string{
-		"Initial indexing: starting\n",
+		"Initial indexing: starting raw conversation discovery\n",
 		"Initial indexing: 0/",
-		"Initial indexing: complete\n",
+		"Initial indexing: complete with",
 		"conversations\n",
+		"discovering raw conversations from",
+		"finished raw conversation discovery for",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output = %q, missing %q", output.String(), want)
 		}
 	}
+}
+
+func TestInitialIndexRefreshFailureNamesRawDiscovery(t *testing.T) {
+	wantErr := errors.New("store unreadable")
+	var output bytes.Buffer
+	err := refreshInitialConversationIndex(
+		t.Context(),
+		&output,
+		time.Now(),
+		func(context.Context) error { return wantErr },
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("refresh error = %v, want %v", err, wantErr)
+	}
+	if got := output.String(); !strings.Contains(got, "Initial indexing: raw conversation discovery failed: store unreadable") {
+		t.Fatalf("output = %q, missing scoped discovery failure", got)
+	}
+}
+
+func TestInitialIndexHeartbeatProductionInterval(t *testing.T) {
+	if initialIndexHeartbeatInterval != 5*time.Second {
+		t.Fatalf("initialIndexHeartbeatInterval = %s, want 5s", initialIndexHeartbeatInterval)
+	}
+}
+
+func TestInitialIndexHeartbeatStopsWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	output := make(initialIndexHeartbeatOutput, 1)
+	done := make(chan struct{})
+	go func() {
+		writeInitialIndexHeartbeats(ctx, output, time.Now(), time.Millisecond)
+		close(done)
+	}()
+
+	select {
+	case got := <-output:
+		if !strings.Contains(got, "Initial indexing: raw conversation discovery elapsed ") {
+			t.Fatalf("heartbeat output = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not report progress")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not stop")
+	}
+}
+
+type initialIndexHeartbeatOutput chan string
+
+func (output initialIndexHeartbeatOutput) Write(payload []byte) (int, error) {
+	select {
+	case output <- string(payload):
+	default:
+	}
+	return len(payload), nil
 }
 
 type fakeInitialSemanticClient struct {

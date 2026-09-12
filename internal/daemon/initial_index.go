@@ -6,13 +6,17 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 )
 
 type initialIndexProgress func(completed int, total int)
+
+const initialIndexHeartbeatInterval = 5 * time.Second
 
 type initialSemanticClient interface {
 	conversationSemanticClient
@@ -39,10 +43,6 @@ func RunInitialConversationIndex(ctx context.Context, output io.Writer, progress
 		slog.WarnContext(ctx, "daemon.initial_index.config_load_failed", "concern", "conversation.index", "component", "daemon", "err", err)
 		return fmt.Errorf("load config for initial conversation indexing: %w", err)
 	}
-	if !cfg.Conversation.Semantic.FeedsEngine() {
-		_, _ = fmt.Fprintln(output, "Initial indexing: skipped because ingestion_enabled=false")
-		return nil
-	}
 	if _, err := os.Stat(conversation.CachePath()); err == nil {
 		_, _ = fmt.Fprintln(output, "Initial indexing: already complete")
 		return nil
@@ -51,12 +51,28 @@ func RunInitialConversationIndex(ctx context.Context, output io.Writer, progress
 		return fmt.Errorf("check conversation index cache: %w", err)
 	}
 
-	_, _ = fmt.Fprintln(output, "Initial indexing: starting")
-	index := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
-	if err := index.Refresh(ctx); err != nil {
-		_, _ = fmt.Fprintf(output, "Initial indexing: failed: %v\n", err)
-		return fmt.Errorf("refresh initial conversation index: %w", err)
+	registry := newConversationRegistry()
+	providers := registry.Providers()
+	if len(providers) == 0 {
+		_, _ = fmt.Fprintln(output, "Initial indexing: no raw conversation providers configured")
 	}
+	for _, provider := range providers {
+		_, _ = fmt.Fprintf(output, "Initial indexing: discovering raw conversations from %s\n", provider)
+	}
+
+	_, _ = fmt.Fprintln(output, "Initial indexing: starting raw conversation discovery")
+	start := clock.Now()
+	_, _ = fmt.Fprintf(output, "Initial indexing: raw conversation discovery elapsed %s\n", clock.Since(start).Truncate(time.Second))
+
+	index := conversation.NewIndex(registry, cfg.Conversation)
+	if err := refreshInitialConversationIndex(ctx, output, start, index.Refresh); err != nil {
+		return err
+	}
+
+	for _, provider := range providers {
+		_, _ = fmt.Fprintf(output, "Initial indexing: finished raw conversation discovery for %s\n", provider)
+	}
+
 	records, err := index.List(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintf(output, "Initial indexing: failed: %v\n", err)
@@ -68,15 +84,62 @@ func RunInitialConversationIndex(ctx context.Context, output io.Writer, progress
 			progress(completed+1, len(records))
 		}
 	}
-	semanticIndexed, err := runInitialSemanticIndex(ctx, cfg, index, output)
-	if err != nil {
-		return err
+	if cfg.Conversation.Semantic.FeedsEngine() {
+		var err error
+		_, err = runInitialSemanticIndex(ctx, cfg, index, output)
+		if err != nil {
+			return err
+		}
 	}
-	if !semanticIndexed {
-		return nil
-	}
-	_, _ = fmt.Fprintln(output, "Initial indexing: complete")
+	_, _ = fmt.Fprintf(output, "Initial indexing: complete with %d conversations\n", len(records))
 	return nil
+}
+
+func refreshInitialConversationIndex(
+	ctx context.Context,
+	output io.Writer,
+	start time.Time,
+	refresh func(context.Context) error,
+) error {
+	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.ErrorContext(ctx, "daemon.initial_index.heartbeat_panic", "concern", "conversation.index", "component", "daemon", "err", fmt.Errorf("panic: %v", recovered))
+			}
+		}()
+		writeInitialIndexHeartbeats(heartbeatCtx, output, start, initialIndexHeartbeatInterval)
+		close(heartbeatDone)
+	}()
+	defer func() {
+		stopHeartbeat()
+		<-heartbeatDone
+	}()
+	if err := refresh(ctx); err != nil {
+		_, _ = fmt.Fprintf(output, "Initial indexing: raw conversation discovery failed: %v\n", err)
+		slog.WarnContext(ctx, "daemon.initial_index.raw_refresh_failed", "concern", "conversation.index", "component", "daemon", "err", err)
+		return fmt.Errorf("refresh initial conversation index: %w", err)
+	}
+	return nil
+}
+
+func writeInitialIndexHeartbeats(
+	ctx context.Context,
+	output io.Writer,
+	start time.Time,
+	interval time.Duration,
+) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case at := <-ticker.C:
+			_, _ = fmt.Fprintf(output, "Initial indexing: raw conversation discovery elapsed %s\n", at.Sub(start).Truncate(time.Second))
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func runInitialSemanticIndex(
