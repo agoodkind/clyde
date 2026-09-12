@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -734,6 +736,124 @@ func createCursorParserGlobalDBWithStatements(t *testing.T, dbPath string, extra
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close global db: %v", err)
+	}
+}
+
+func TestDiscoverComposersReportsSharedStockFailureOnce(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+	globalDBPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+	composerIDs := []string{
+		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		"cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+	}
+	statements := make([]string, 0, len(composerIDs)*2)
+	for _, composerID := range composerIDs {
+		statements = append(statements,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+composerID+`', '{"composerId":"`+composerID+`","name":"Composer","createdAt":1710000000000,"fullConversationHeadersOnly":[{"bubbleId":"bubble-1","type":1}]}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:`+composerID+`:bubble-1', '{"_v":3,"bubbleId":"bubble-1","type":1,"text":"question"}')`,
+		)
+	}
+	createCursorParserGlobalDBWithStatements(t, globalDBPath, statements)
+
+	parser := New()
+	initial, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("initial Discover returned error: %v", err)
+	}
+	initialComposers := 0
+	for _, candidate := range initial {
+		if strings.Contains(candidate.Path, "/composer/") {
+			initialComposers++
+		}
+	}
+	if initialComposers != len(composerIDs) {
+		t.Fatalf("initial composer candidates = %d, want %d", initialComposers, len(composerIDs))
+	}
+	priorStamps := make(map[string]conversation.FileStamp, len(initial)-1)
+	priorComposerCount := 0
+	omittedPath := ""
+	for _, candidate := range initial {
+		if !strings.Contains(candidate.Path, "/composer/") {
+			continue
+		}
+		if priorComposerCount == 2 {
+			omittedPath = candidate.Path
+			continue
+		}
+		priorStamps[candidate.Path] = candidate.Stamp
+		priorComposerCount++
+	}
+	parser.mu.Lock()
+	delete(parser.composerStamps, omittedPath)
+	parser.mu.Unlock()
+
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	execCursorParserStatements(t, globalDBPath, `UPDATE cursorDiskKV SET value = '{"composerId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"Changed","createdAt":1710000000000,"fullConversationHeadersOnly":[{"bubbleId":"bubble-1","type":1}]}' WHERE key = 'composerData:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`)
+	writer, err := sql.Open("sqlite3", "file:"+globalDBPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open locking database: %v", err)
+	}
+	if _, err := writer.Exec("BEGIN EXCLUSIVE"); err != nil {
+		_ = writer.Close()
+		t.Fatalf("lock global database: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = writer.Exec("ROLLBACK")
+		_ = writer.Close()
+	})
+
+	current, err := parser.DiscoverCached(t.Context(), nil, nil)
+	if err != nil {
+		t.Fatalf("failed DiscoverCached returned error: %v", err)
+	}
+	composerCandidates := make([]conversation.ScanCandidate, 0, len(current))
+	for _, candidate := range current {
+		if strings.Contains(candidate.Path, "/composer/") {
+			composerCandidates = append(composerCandidates, candidate)
+		}
+	}
+	if len(composerCandidates) != len(priorStamps) {
+		t.Fatalf("failed composer candidates = %d, want %d preserved composers: %#v logs=%s", len(composerCandidates), len(priorStamps), candidatePaths(current), logs.String())
+	}
+	for _, candidate := range composerCandidates {
+		prior, ok := priorStamps[candidate.Path]
+		if !ok || !candidate.Stamp.Equal(prior) {
+			t.Fatalf("candidate %q stamp = %+v, want prior %+v", candidate.Path, candidate.Stamp, prior)
+		}
+	}
+	logBody := logs.String()
+	if count := strings.Count(logBody, "composer_global_discovery_failed"); count != 1 {
+		t.Fatalf("shared warning count = %d, want 1: %s", count, logBody)
+	}
+	for _, want := range []string{
+		globalDBPath,
+		`"preserved":2`,
+		`"omitted":1`,
+		`"err":`,
+	} {
+		if !strings.Contains(logBody, want) {
+			t.Fatalf("shared warning missing %q: %s", want, logBody)
+		}
+	}
+}
+
+func execCursorParserStatements(t *testing.T, dbPath string, statements ...string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("exec statement %q: %v", statement, err)
+		}
 	}
 }
 

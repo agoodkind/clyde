@@ -500,6 +500,8 @@ func discoverComposersForRoot(
 	rootHash := RootHash(root.RootDir)
 
 	candidates := make([]conversation.ScanCandidate, 0, len(composerIDs))
+	preserved := 0
+	omitted := 0
 	for _, composerID := range composerIDs {
 		if seenConversationIDs[composerID] {
 			continue
@@ -513,7 +515,18 @@ func discoverComposersForRoot(
 		if !stored {
 			stock.Conclusive = true
 		}
-		stamp, admitted := composerScanStamp(ctx, root.GlobalDBPath, composerID, header, priorStamps[path], stock, global.Err)
+		var stamp conversation.FileStamp
+		var admitted bool
+		if global.Err != nil {
+			stamp, admitted = preserveComposerAfterGlobalFailure(priorStamps[path])
+			if admitted {
+				preserved++
+			} else {
+				omitted++
+			}
+		} else {
+			stamp, admitted = composerScanStamp(ctx, root.GlobalDBPath, composerID, header, priorStamps[path], stock, nil)
+		}
 		if !admitted {
 			continue
 		}
@@ -548,6 +561,9 @@ func discoverComposersForRoot(
 		artifact.HasInfo = hasInfo
 		artifact.IsBackground = backgroundIDs[composerID]
 		discovered[path] = artifact
+	}
+	if global.Err != nil {
+		warnGlobalComposerDiscoveryFailure(ctx, root.GlobalDBPath, global.Err, preserved, omitted)
 	}
 	return candidates
 }

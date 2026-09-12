@@ -77,6 +77,29 @@ func composerScanStamp(
 	return composerStamp(header, stock), true
 }
 
+func preserveComposerAfterGlobalFailure(priorStamp conversation.FileStamp) (conversation.FileStamp, bool) {
+	if priorStamp.Size == 0 && priorStamp.Mtime.IsZero() {
+		return conversation.FileStamp{Size: 0, Mtime: time.Time{}}, false
+	}
+	return priorStamp, true
+}
+
+func warnGlobalComposerDiscoveryFailure(
+	ctx context.Context,
+	globalDBPath string,
+	err error,
+	preserved int,
+	omitted int,
+) {
+	slog.WarnContext(ctx, "providers.cursor.parser.composer_global_discovery_failed",
+		"concern", concern,
+		"path", globalDBPath,
+		"preserved", preserved,
+		"omitted", omitted,
+		"err", err,
+	)
+}
+
 // composerStamp carries the bubble range's content revision beside the header's
 // last update time.
 func composerStamp(
