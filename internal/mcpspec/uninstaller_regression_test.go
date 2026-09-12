@@ -33,7 +33,7 @@ command = "/bin/other"
 	if string(body) == "" || containsAny(string(body), "[mcp_servers.clyde]", "[mcp_servers.clyde.env]") {
 		t.Fatalf("managed Codex tables survived:\n%s", body)
 	}
-	if !containsAny(string(body), "[mcp_servers.other]", `command = "/bin/other"`) {
+	if !strings.Contains(string(body), "[mcp_servers.other]") || !strings.Contains(string(body), `command = "/bin/other"`) {
 		t.Fatalf("unrelated Codex table was removed:\n%s", body)
 	}
 }
