@@ -115,6 +115,9 @@ func HardResetWithOptions(ctx context.Context, output io.Writer, options HardRes
 	if err != nil {
 		return err
 	}
+	if err := printResetPlan(ctx, output, targets, cfg); err != nil {
+		return err
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve current executable: %w", err)
@@ -205,6 +208,10 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 		resetLogTarget(filepath.Join(state, "anthropic.jsonl"), state, false),
 		resetLogTarget(filepath.Join(state, "audit.jsonl"), state, false),
 		resetLogTarget(filepath.Join(state, "daemon.log"), state, false),
+		resetFileTarget(filepath.Join(state, "clyde-cli.jsonl.lock"), state),
+		resetFileTarget(filepath.Join(state, "clyde-daemon.jsonl.lock"), state),
+		resetFileTarget(filepath.Join(state, "update.lock"), state),
+		{Path: filepath.Join(state, "hooks"), Root: state, RemoveTree: true, AllowProtected: false},
 		resetFileTarget(metricsRollupPath(), state),
 		resetFileTarget(metricsRollupPath()+".lock", state),
 		resetFileTarget(metricsRollupPath()+".tmp", state),
@@ -274,6 +281,37 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 		}
 	}
 	return targets, nil
+}
+
+func printResetPlan(ctx context.Context, output io.Writer, targets []resetTarget, cfg *config.Config) error {
+	if _, err := fmt.Fprintln(output, "Clyde hard reset removal targets:"); err != nil {
+		slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		return fmt.Errorf("print hard reset removal targets: %w", err)
+	}
+	for _, target := range targets {
+		if _, err := fmt.Fprintln(output, "  "+target.Path); err != nil {
+			slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "path", target.Path, "err", err)
+			return fmt.Errorf("print hard reset removal target: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintln(output, "Clyde hard reset preserved roots:"); err != nil {
+		slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		return fmt.Errorf("print hard reset preserved roots: %w", err)
+	}
+	if cfg == nil {
+		return nil
+	}
+	roots, err := resetProtectedDirectories(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	for _, root := range roots {
+		if _, err := fmt.Fprintln(output, "  "+root); err != nil {
+			slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "path", root, "err", err)
+			return fmt.Errorf("print hard reset preserved root: %w", err)
+		}
+	}
+	return nil
 }
 
 func withinResetRoot(path, root string) bool {

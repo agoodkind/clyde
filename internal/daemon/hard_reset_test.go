@@ -222,6 +222,37 @@ func TestHardResetScopesSelectOnlyTheirOwnedTargets(t *testing.T) {
 	}
 }
 
+func TestHardResetDefaultInventoryIncludesHooksLogsAndLocks(t *testing.T) {
+	resetTestRoots(t)
+	writeResetFixture(t, config.GlobalConfigPath(), []byte("# test\n"))
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := hardResetTargetsForScope(t.Context(), cfg, HardResetScopeAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(config.DefaultStateDir(), "hooks"),
+		filepath.Join(config.DefaultStateDir(), "clyde-cli.jsonl.lock"),
+		filepath.Join(config.DefaultStateDir(), "clyde-daemon.jsonl.lock"),
+		filepath.Join(config.DefaultStateDir(), "update.lock"),
+	}
+	for _, path := range want {
+		found := false
+		for _, target := range targets {
+			if target.Path == path {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("default reset target list lacks %s", path)
+		}
+	}
+}
+
 func TestHardResetConfigScopeDoesNotRequireParsedConfig(t *testing.T) {
 	resetTestRoots(t)
 	writeResetFixture(t, config.GlobalConfigPath(), []byte("invalid = ["))
@@ -363,6 +394,11 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 	}
 	if !strings.Contains(string(output), "installation and status check succeeded") {
 		t.Fatalf("missing installed status: %s", output)
+	}
+	for _, marker := range []string{"Clyde hard reset removal targets:", "Clyde hard reset preserved roots:", filepath.Join(config.DefaultStateDir(), "hooks"), filepath.Join(config.DefaultStateDir(), "clyde-cli.jsonl.lock"), filepath.Join(config.DefaultStateDir(), "clyde-daemon.jsonl.lock"), filepath.Join(config.DefaultStateDir(), "update.lock")} {
+		if !strings.Contains(string(output), marker) {
+			t.Fatalf("hard reset output missing %q: %s", marker, output)
+		}
 	}
 	for _, path := range inventory {
 		body, err := os.ReadFile(path)
