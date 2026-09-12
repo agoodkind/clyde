@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"errors"
 	"iter"
 	"log/slog"
@@ -306,9 +307,13 @@ func decodeRefreshEvents(t *testing.T, body []byte) []refreshEvent {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	events := make([]refreshEvent, 0, 2)
-	for decoder.More() {
+	for {
 		var fields map[string]json.RawMessage
-		if err := decoder.Decode(&fields); err != nil {
+		err := decoder.Decode(&fields)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		encoded, err := json.Marshal(fields)
