@@ -36,12 +36,15 @@ func controlFromEnv(ctx context.Context, lookup func(string) (string, bool), out
 		return fmt.Errorf("load deploy config: %w", err)
 	}
 	executor := executor{
-		config: cfg,
-		files:  osFileSystem{},
-		runner: execRunner{},
-		logger: newLogger(output),
-		stdout: output,
-		stderr: output,
+		config:              cfg,
+		files:               osFileSystem{},
+		runner:              execRunner{},
+		logger:              newLogger(output),
+		stdout:              output,
+		stderr:              output,
+		outcome:             outcome{action: actionUnset, reason: "", cause: causeUnset},
+		compiledFingerprint: nil,
+		runningFingerprint:  nil,
 	}
 	return executor.controlService(ctx, control)
 }
