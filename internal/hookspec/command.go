@@ -1,6 +1,10 @@
 package hookspec
 
-import "strings"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 func shellCommand(clydeBin string, args []string) string {
 	parts := make([]string, 0, len(args)+1)
@@ -112,4 +116,46 @@ func commandHasManagedArgs(command string, signatures [][]string) bool {
 		}
 	}
 	return false
+}
+
+func commandHasExactManagedArgs(command string, signatures [][]string, knownCommands []string) bool {
+	words, ok := shellWords(command)
+	if !ok || len(words) <= 1 || !knownClydeExecutable(words[0], knownCommands) {
+		return false
+	}
+	commandArgs := words[1:]
+	for _, signature := range signatures {
+		if len(signature) != len(commandArgs) {
+			continue
+		}
+		matched := true
+		for index, argument := range signature {
+			if commandArgs[index] != argument {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func knownClydeExecutable(command string, knownCommands []string) bool {
+	command = filepath.Clean(command)
+	for _, knownCommand := range knownCommands {
+		if command == filepath.Clean(knownCommand) {
+			return true
+		}
+	}
+	return false
+}
+
+func managedClydeExecutables(homeDir string) []string {
+	knownCommands := []string{"/usr/local/bin/clyde", "/opt/homebrew/bin/clyde", filepath.Join(homeDir, ".local", "bin", "clyde")}
+	if executable, err := os.Executable(); err == nil {
+		knownCommands = append(knownCommands, executable)
+	}
+	return knownCommands
 }

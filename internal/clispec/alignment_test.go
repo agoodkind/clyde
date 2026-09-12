@@ -114,8 +114,8 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	roots := RenderCobra(NewConversationRegistry(), testFactory(&out))
-	if len(roots) != 7 {
-		t.Fatalf("root commands: got %d, want 7 (conversation, install, logs, mitm, daemon, mcp, update)", len(roots))
+	if len(roots) != 8 {
+		t.Fatalf("root commands: got %d, want 8 (conversation, uninstall, install, logs, mitm, daemon, mcp, update)", len(roots))
 	}
 	parents := map[string]*cobra.Command{}
 	for _, root := range roots {

@@ -104,12 +104,12 @@ func TestMisuseRendersFullHelp(t *testing.T) {
 		{
 			name:     "unsupported provider value",
 			args:     []string{"conversation", "search", "--provider", "bogus"},
-			wantHelp: "One operation over indexed " + providerList + " conversations",
+			wantHelp: "One daemon-backed operation over indexed " + providerList + " conversations",
 		},
 		{
 			name:     "unparseable search time bound",
 			args:     []string{"conversation", "search", "--query", "auth", "--after", "nope"},
-			wantHelp: "One operation over indexed " + providerList + " conversations",
+			wantHelp: "One daemon-backed operation over indexed " + providerList + " conversations",
 		},
 	}
 	for _, tc := range cases {

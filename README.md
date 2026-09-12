@@ -68,6 +68,16 @@ clyde logs --help
 clyde mitm --help
 ```
 
+Conversation search and MCP export use the daemon. Terminal export reads local
+provider artifacts and does not require the daemon.
+
+Run `clyde uninstall --apply` to remove the daemon service, Clyde hooks, and
+Clyde MCP registrations. Use `--daemon`, `--hooks`, `--mcp`, or `--binary` to
+remove only selected components. The default preserves the binary plus Clyde
+configuration, cache, state, logs, exports, credentials, provider data,
+repositories, and LMS data. Running the command without `--apply` prints help
+and changes nothing.
+
 Reload a running daemon after local config changes:
 
 ```bash

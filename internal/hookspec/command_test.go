@@ -60,3 +60,25 @@ func TestCommandHasManagedArgsMatchesLegacySessionStartCommand(t *testing.T) {
 		t.Fatalf("commandHasManagedArgs(%q) = false, want true", command)
 	}
 }
+
+func TestCommandHasExactManagedArgsPreservesForeignClydeExecutable(t *testing.T) {
+	t.Parallel()
+
+	command := "/opt/other/clyde hook sessionstart"
+	signatures := [][]string{{"hook", "sessionstart"}}
+	knownCommands := []string{"/usr/local/bin/clyde"}
+	if commandHasExactManagedArgs(command, signatures, knownCommands) {
+		t.Fatalf("commandHasExactManagedArgs(%q) = true, want false", command)
+	}
+}
+
+func TestCommandHasExactManagedArgsMatchesKnownClydeExecutable(t *testing.T) {
+	t.Parallel()
+
+	command := "/usr/local/bin/clyde hook sessionstart"
+	signatures := [][]string{{"hook", "sessionstart"}}
+	knownCommands := []string{"/usr/local/bin/clyde"}
+	if !commandHasExactManagedArgs(command, signatures, knownCommands) {
+		t.Fatalf("commandHasExactManagedArgs(%q) = false, want true", command)
+	}
+}

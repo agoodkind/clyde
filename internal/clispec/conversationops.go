@@ -230,8 +230,8 @@ func searchOp() Operation[searchInput, searchPayload] {
 		Group:      conversationGroup,
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindValue,
-		Short:      "Search, read, or browse " + ConversationProviderList() + " conversations.",
-		Long:       "One operation over indexed " + ConversationProviderList() + " conversations. Set --query to search the corpus, or pass CONVERSATION_ID plus --query to search within one conversation. Pass CONVERSATION_ID without --query to read a whole transcript, or add --around to read a context window. Set neither --query nor CONVERSATION_ID to browse conversation metadata.",
+		Short:      "Search, read, or browse " + ConversationProviderList() + " conversations through the daemon.",
+		Long:       "One daemon-backed operation over indexed " + ConversationProviderList() + " conversations. Set --query to search the corpus, or pass CONVERSATION_ID plus --query to search within one conversation. Pass CONVERSATION_ID without --query to read a whole transcript, or add --around to read a context window. Set neither --query nor CONVERSATION_ID to browse conversation metadata.",
 		Examples: []string{
 			browseCommand + " --query \"auth timeout\" --limit 10",
 			browseCommand + " --query \"auth timeout\" --after 2026-05-01 --before 2026-05-21",
