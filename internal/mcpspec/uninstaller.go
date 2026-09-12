@@ -40,7 +40,7 @@ func (Uninstaller) Uninstall(ctx context.Context, options UninstallOptions) (Uni
 		slog.WarnContext(ctx, "mcp.settings.uninstall_failed", "component", "mcpspec", "err", err)
 		return UninstallResult{}, fmt.Errorf("uninstall MCP settings canceled: %w", err)
 	}
-	homeDir, err := installHomeDir(options.HomeDir)
+	homeDir, err := installHomeDir(ctx, options.HomeDir)
 	if err != nil {
 		slog.WarnContext(ctx, "mcp.settings.uninstall_failed", "component", "mcpspec", "err", err)
 		return UninstallResult{}, err
