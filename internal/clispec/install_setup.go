@@ -3,6 +3,7 @@ package clispec
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"goodkind.io/clyde/internal/hookspec"
@@ -56,7 +57,7 @@ func installSetupOpWithDependencies(dependencies installSetupDependencies) Opera
 			BoolParam("mcp", "Register Clyde's MCP server in supported clients.", false,
 				func(input *installSetupInput, value bool) { input.MCP = value }),
 		},
-		New:            func() installSetupInput { return installSetupInput{} },
+		New:            func() installSetupInput { return installSetupInput{Daemon: false, Hooks: false, MCP: false} },
 		Children:       nil,
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
@@ -65,16 +66,19 @@ func installSetupOpWithDependencies(dependencies installSetupDependencies) Opera
 		Run: func(ctx context.Context, payload installSetupPayload, _ Surface, sink ResultSink) error {
 			if payload.Daemon {
 				if err := dependencies.installDaemon(ctx, sink); err != nil {
+					slog.WarnContext(ctx, "clispec.install_setup.daemon_failed", "err", err)
 					return fmt.Errorf("install daemon: %w", err)
 				}
 			}
 			if payload.Hooks {
 				if err := dependencies.installHooks(ctx, sink); err != nil {
+					slog.WarnContext(ctx, "clispec.install_setup.hooks_failed", "err", err)
 					return fmt.Errorf("install hooks: %w", err)
 				}
 			}
 			if payload.MCP {
 				if err := dependencies.installMCP(ctx, sink); err != nil {
+					slog.WarnContext(ctx, "clispec.install_setup.mcp_failed", "err", err)
 					return fmt.Errorf("install MCP: %w", err)
 				}
 			}
@@ -99,16 +103,18 @@ func defaultInstallSetupDependencies() installSetupDependencies {
 		},
 		installHooks: func(ctx context.Context, sink ResultSink) error {
 			installer := hookspec.Installer{Registry: hookspec.NewRegistry()}
-			result, err := installer.Install(ctx, hookspec.InstallOptions{})
+			result, err := installer.Install(ctx, hookspec.InstallOptions{HomeDir: "", ClydeBin: "", Client: hookspec.ClientAll, DryRun: false})
 			if err != nil {
-				return err
+				slog.WarnContext(ctx, "clispec.install_setup.hooks_failed", "err", err)
+				return fmt.Errorf("install Clyde hooks: %w", err)
 			}
 			return sink.Text(renderInstallHooksText(result))
 		},
 		installMCP: func(ctx context.Context, sink ResultSink) error {
-			result, err := (mcpspec.Installer{}).Install(ctx, mcpspec.InstallOptions{})
+			result, err := (mcpspec.Installer{}).Install(ctx, mcpspec.InstallOptions{HomeDir: "", ClydeBin: ""})
 			if err != nil {
-				return err
+				slog.WarnContext(ctx, "clispec.install_setup.mcp_failed", "err", err)
+				return fmt.Errorf("install Clyde MCP settings: %w", err)
 			}
 			return sink.Text(renderInstallMCPText(result))
 		},
