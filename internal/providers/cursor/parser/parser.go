@@ -83,7 +83,7 @@ func (artifact discoveredArtifact) readTranscriptHeader() (cursorjsonl.Transcrip
 }
 
 // Parser discovers Cursor conversation artifacts and caches the rows needed by
-// later scan stages.
+// later raw scan stages.
 type Parser struct {
 	mu         sync.Mutex
 	discovered map[string]discoveredArtifact
