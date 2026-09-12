@@ -132,9 +132,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	defer runtime.shutdown(ctx)
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
-	if cfg.Conversation.Semantic.FeedsEngine() {
-		startConversationIndex(ctx, log, conversationIndex, runtime.group)
-	}
+	startConversationIndex(ctx, log, conversationIndex, runtime.group)
 	semanticFreshness := newConversationSemanticFreshness()
 
 	// Resolve the feeder client per pass rather than once here: when the engine
@@ -300,13 +298,13 @@ func runStartupCleanup(log *slog.Logger, cfg *config.Config) {
 
 // newControlServer builds the gRPC control server, wiring the closures that
 // reach back into the daemon runtime for MITM status, capture rendering,
-// conversation-index freshness, and reload.
+// semantic search freshness, and reload.
 func newControlServer(
 	cfg *config.Config,
 	log *slog.Logger,
 	stats *providerStatsRecorder,
 	index *conversation.Index,
-	freshness func() conversation.SearchFreshness,
+	semanticFreshness func() conversation.SearchFreshness,
 	grpcServer *grpc.Server,
 	runtime *runtimeServices,
 	exportTokens exportTokenConfig,
@@ -346,7 +344,7 @@ func newControlServer(
 		},
 		searchSource:       searchSource,
 		captureStore:       runtime.captureStore,
-		freshness:          freshness,
+		freshness:          semanticFreshness,
 		exportTokens:       exportTokens,
 		providerStatsNow:   nil,
 		providerStatsTicks: nil,

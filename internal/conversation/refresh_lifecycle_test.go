@@ -1,12 +1,22 @@
 package conversation
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"iter"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/providerid"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 func TestCanceledBackgroundRefreshDoesNotRecreateCache(t *testing.T) {
@@ -18,7 +28,7 @@ func TestCanceledBackgroundRefreshDoesNotRecreateCache(t *testing.T) {
 		return scanResult{changed: true, records: []Record{{ID: "cursor:controlled", ArtifactPath: "controlled"}}}, nil
 	})
 	ctx, cancel := context.WithCancel(t.Context())
-	idx.refreshAsync(ctx)
+	idx.refreshAsync(ctx, RefreshReasonPeriodic)
 	scanContext := <-started
 	idx.mu.Lock()
 	run := idx.refreshRun
@@ -52,7 +62,7 @@ func TestUnchangedRefreshDoesNotRewriteCache(t *testing.T) {
 		}
 	}
 	idx.debounce = 0
-	idx.refreshAsync(t.Context())
+	idx.refreshAsync(t.Context(), RefreshReasonPeriodic)
 	if err := idx.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -167,5 +177,180 @@ func TestIndexStartJoinsCanceledScan(t *testing.T) {
 	}
 	if _, err := os.Stat(idx.cachePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("canceled worker wrote cache: %v", err)
+	}
+}
+
+func TestRefreshReasonValuesAndLifecycleFields(t *testing.T) {
+	for reason, want := range map[RefreshReason]string{
+		RefreshReasonInstall:    "install",
+		RefreshReasonPeriodic:   "periodic",
+		RefreshReasonLookupMiss: "lookup_miss",
+		RefreshReasonExplicit:   "explicit",
+	} {
+		if reason.String() != want {
+			t.Fatalf("reason = %q, want %q", reason.String(), want)
+		}
+	}
+
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	parser := &cachedRefreshParser{discoveries: &atomic.Int64{}}
+	idx := testIndex(t, scan, parser)
+	if err := idx.RefreshWithReason(t.Context(), RefreshReasonInstall); err != nil {
+		t.Fatal(err)
+	}
+
+	events := decodeRefreshEvents(t, output.Bytes())
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want start and finish: %s", len(events), output.String())
+	}
+	for _, event := range events {
+		if event.Reason != "install" || event.Provider != "cursor" {
+			t.Fatalf("attribution = reason %q provider %q", event.Reason, event.Provider)
+		}
+	}
+	start := events[0]
+	if start.Message != "conversation.index.refresh_started" || start.Outcome != "in_progress" || start.DurationMS != 0 || start.RecordCount != 0 || start.CacheChanged {
+		t.Fatalf("start = %+v", start)
+	}
+	for _, field := range []string{"duration_ms", "outcome", "record_count", "cache_changed"} {
+		if _, ok := start.Fields[field]; !ok {
+			t.Fatalf("start missing %q: %+v", field, start)
+		}
+	}
+	finish := events[1]
+	if finish.Message != "conversation.index.refresh_finished" || finish.Outcome != "success" || finish.RecordCount != 0 || !finish.CacheChanged {
+		t.Fatalf("finish = %+v", finish)
+	}
+}
+
+func TestRefreshPanicEmitsFailedFinishAndPreservesRecovery(t *testing.T) {
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
+		close(started)
+		<-release
+		panic("controlled refresh panic")
+	})
+	idx.debounce = 0
+	idx.refreshAsync(t.Context(), RefreshReasonPeriodic)
+	<-started
+	idx.mu.Lock()
+	run := idx.refreshRun
+	idx.mu.Unlock()
+	close(release)
+	<-run.done
+	if run.err == nil {
+		t.Fatal("background recovery did not record the panic")
+	}
+
+	events := decodeRefreshEvents(t, output.Bytes())
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want start and finish: %s", len(events), output.String())
+	}
+	finish := events[1]
+	if finish.Message != "conversation.index.refresh_finished" || finish.Outcome != "failed" || finish.CacheChanged {
+		t.Fatalf("finish = %+v", finish)
+	}
+}
+
+func TestCachedRequestHookAndTerminalExportSkipProviderDiscovery(t *testing.T) {
+	discoveries := &atomic.Int64{}
+	parser := &cachedRefreshParser{discoveries: discoveries}
+	idx := testIndex(t, scan, parser)
+	record := testRecord("cursor:cached", ProviderCursor, "cached", "cached conversation")
+	record.LatestRequestID = "0e3f0000-0000-4000-8000-000000000000"
+	idx.records = []Record{record}
+	idx.loaded = true
+
+	resolved, err := idx.Resolve(t.Context(), record.LatestRequestID)
+	if err != nil || resolved.ID != record.ID {
+		t.Fatalf("cached hook resolution = %q, %v", resolved.ID, err)
+	}
+	resolved, err = idx.Resolve(t.Context(), record.ID)
+	if err != nil {
+		t.Fatalf("cached terminal resolution: %v", err)
+	}
+	body, err := idx.Export(resolved, ExportOptions{
+		Format:     ExportFormatMarkdown,
+		Whitespace: WhitespacePreserve,
+		Content:    NewContentKindSet(ContentKindChat),
+	})
+	if err != nil || !strings.Contains(string(body), "cached export") {
+		t.Fatalf("cached terminal export = %q, %v", string(body), err)
+	}
+	if discoveries.Load() != 0 {
+		t.Fatalf("provider discoveries = %d, want 0", discoveries.Load())
+	}
+}
+
+type refreshEvent struct {
+	Message      string                     `json:"msg"`
+	Reason       string                     `json:"reason"`
+	Provider     string                     `json:"provider"`
+	DurationMS   int64                      `json:"duration_ms"`
+	Outcome      string                     `json:"outcome"`
+	RecordCount  int                        `json:"record_count"`
+	CacheChanged bool                       `json:"cache_changed"`
+	Fields       map[string]json.RawMessage `json:"-"`
+}
+
+func decodeRefreshEvents(t *testing.T, body []byte) []refreshEvent {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	events := make([]refreshEvent, 0, 2)
+	for {
+		var fields map[string]json.RawMessage
+		err := decoder.Decode(&fields)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var event refreshEvent
+		if err := json.Unmarshal(encoded, &event); err != nil {
+			t.Fatal(err)
+		}
+		event.Fields = fields
+		if event.Message == "conversation.index.refresh_started" || event.Message == "conversation.index.refresh_finished" {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+type cachedRefreshParser struct {
+	discoveries *atomic.Int64
+}
+
+func (*cachedRefreshParser) Provider() providerid.Provider {
+	return providerid.ProviderCursor
+}
+
+func (parser *cachedRefreshParser) Discover(context.Context, map[string]Record) ([]ScanCandidate, error) {
+	parser.discoveries.Add(1)
+	return nil, nil
+}
+
+func (*cachedRefreshParser) ScanRecord(string, FileStamp) (Record, bool) {
+	return emptyRecord(), false
+}
+
+func (*cachedRefreshParser) Stream(string, LoadOptions) iter.Seq2[transcript.Message, error] {
+	return func(yield func(transcript.Message, error) bool) {
+		yield(exportChatMessage("cached", "user", "cached export", 1), nil)
 	}
 }

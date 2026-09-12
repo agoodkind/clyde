@@ -19,9 +19,9 @@ func GetSearchFreshness(ctx context.Context) (conversation.SearchFreshness, erro
 
 	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.GetSearchFreshness(rpcCtx, &clydev1.GetSearchFreshnessRequest{})
+	resp, err := client.rpc.GetSemanticSearchFreshness(rpcCtx, &clydev1.GetSemanticSearchFreshnessRequest{})
 	if err != nil {
 		return empty, daemonRPCError(rpcCtx, "get search freshness", err)
 	}
-	return searchFreshnessFromProto(resp.GetFreshness()), nil
+	return searchFreshnessFromProto(resp.GetSemanticFreshness()), nil
 }

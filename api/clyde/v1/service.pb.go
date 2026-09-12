@@ -258,26 +258,26 @@ func (SemanticConnectionState) EnumDescriptor() ([]byte, []int) {
 	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{3}
 }
 
-type GetSearchFreshnessRequest struct {
+type GetSemanticSearchFreshnessRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetSearchFreshnessRequest) Reset() {
-	*x = GetSearchFreshnessRequest{}
+func (x *GetSemanticSearchFreshnessRequest) Reset() {
+	*x = GetSemanticSearchFreshnessRequest{}
 	mi := &file_clyde_v1_daemon_service_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetSearchFreshnessRequest) String() string {
+func (x *GetSemanticSearchFreshnessRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetSearchFreshnessRequest) ProtoMessage() {}
+func (*GetSemanticSearchFreshnessRequest) ProtoMessage() {}
 
-func (x *GetSearchFreshnessRequest) ProtoReflect() protoreflect.Message {
+func (x *GetSemanticSearchFreshnessRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_clyde_v1_daemon_service_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -289,32 +289,32 @@ func (x *GetSearchFreshnessRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetSearchFreshnessRequest.ProtoReflect.Descriptor instead.
-func (*GetSearchFreshnessRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetSemanticSearchFreshnessRequest.ProtoReflect.Descriptor instead.
+func (*GetSemanticSearchFreshnessRequest) Descriptor() ([]byte, []int) {
 	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{0}
 }
 
-type GetSearchFreshnessResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Freshness     *SearchFreshness       `protobuf:"bytes,1,opt,name=freshness,proto3" json:"freshness,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+type GetSemanticSearchFreshnessResponse struct {
+	state             protoimpl.MessageState   `protogen:"open.v1"`
+	SemanticFreshness *SemanticSearchFreshness `protobuf:"bytes,1,opt,name=semantic_freshness,json=semanticFreshness,proto3" json:"semantic_freshness,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
-func (x *GetSearchFreshnessResponse) Reset() {
-	*x = GetSearchFreshnessResponse{}
+func (x *GetSemanticSearchFreshnessResponse) Reset() {
+	*x = GetSemanticSearchFreshnessResponse{}
 	mi := &file_clyde_v1_daemon_service_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetSearchFreshnessResponse) String() string {
+func (x *GetSemanticSearchFreshnessResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetSearchFreshnessResponse) ProtoMessage() {}
+func (*GetSemanticSearchFreshnessResponse) ProtoMessage() {}
 
-func (x *GetSearchFreshnessResponse) ProtoReflect() protoreflect.Message {
+func (x *GetSemanticSearchFreshnessResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_clyde_v1_daemon_service_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -326,14 +326,14 @@ func (x *GetSearchFreshnessResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetSearchFreshnessResponse.ProtoReflect.Descriptor instead.
-func (*GetSearchFreshnessResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetSemanticSearchFreshnessResponse.ProtoReflect.Descriptor instead.
+func (*GetSemanticSearchFreshnessResponse) Descriptor() ([]byte, []int) {
 	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *GetSearchFreshnessResponse) GetFreshness() *SearchFreshness {
+func (x *GetSemanticSearchFreshnessResponse) GetSemanticFreshness() *SemanticSearchFreshness {
 	if x != nil {
-		return x.Freshness
+		return x.SemanticFreshness
 	}
 	return nil
 }
@@ -2467,9 +2467,9 @@ func (x *SearchFacets) GetModels() []*SearchFacetCount {
 	return nil
 }
 
-// SearchFreshness is the conversation-index sync state at query time, so the
+// SemanticSearchFreshness is the conversation-index sync state at query time, so the
 // caller can tell whether a thin result means a cold index versus a true miss.
-type SearchFreshness struct {
+type SemanticSearchFreshness struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Manifest      int64                  `protobuf:"varint,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
 	Needed        int64                  `protobuf:"varint,2,opt,name=needed,proto3" json:"needed,omitempty"`
@@ -2480,20 +2480,20 @@ type SearchFreshness struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SearchFreshness) Reset() {
-	*x = SearchFreshness{}
+func (x *SemanticSearchFreshness) Reset() {
+	*x = SemanticSearchFreshness{}
 	mi := &file_clyde_v1_daemon_service_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SearchFreshness) String() string {
+func (x *SemanticSearchFreshness) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SearchFreshness) ProtoMessage() {}
+func (*SemanticSearchFreshness) ProtoMessage() {}
 
-func (x *SearchFreshness) ProtoReflect() protoreflect.Message {
+func (x *SemanticSearchFreshness) ProtoReflect() protoreflect.Message {
 	mi := &file_clyde_v1_daemon_service_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2505,40 +2505,40 @@ func (x *SearchFreshness) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SearchFreshness.ProtoReflect.Descriptor instead.
-func (*SearchFreshness) Descriptor() ([]byte, []int) {
+// Deprecated: Use SemanticSearchFreshness.ProtoReflect.Descriptor instead.
+func (*SemanticSearchFreshness) Descriptor() ([]byte, []int) {
 	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{31}
 }
 
-func (x *SearchFreshness) GetManifest() int64 {
+func (x *SemanticSearchFreshness) GetManifest() int64 {
 	if x != nil {
 		return x.Manifest
 	}
 	return 0
 }
 
-func (x *SearchFreshness) GetNeeded() int64 {
+func (x *SemanticSearchFreshness) GetNeeded() int64 {
 	if x != nil {
 		return x.Needed
 	}
 	return 0
 }
 
-func (x *SearchFreshness) GetEmbedded() int64 {
+func (x *SemanticSearchFreshness) GetEmbedded() int64 {
 	if x != nil {
 		return x.Embedded
 	}
 	return 0
 }
 
-func (x *SearchFreshness) GetPending() int64 {
+func (x *SemanticSearchFreshness) GetPending() int64 {
 	if x != nil {
 		return x.Pending
 	}
 	return 0
 }
 
-func (x *SearchFreshness) GetLastSyncUnix() int64 {
+func (x *SemanticSearchFreshness) GetLastSyncUnix() int64 {
 	if x != nil {
 		return x.LastSyncUnix
 	}
@@ -2653,7 +2653,7 @@ type SearchConversationsResponse struct {
 	HasMore              bool                       `protobuf:"varint,5,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
 	Source               SearchSource               `protobuf:"varint,6,opt,name=source,proto3,enum=clyde.v1.SearchSource" json:"source,omitempty"`
 	Facets               *SearchFacets              `protobuf:"bytes,7,opt,name=facets,proto3" json:"facets,omitempty"`
-	Freshness            *SearchFreshness           `protobuf:"bytes,8,opt,name=freshness,proto3" json:"freshness,omitempty"`
+	SemanticFreshness    *SemanticSearchFreshness   `protobuf:"bytes,8,opt,name=semantic_freshness,json=semanticFreshness,proto3" json:"semantic_freshness,omitempty"`
 	FilterAccounting     *FilterAccounting          `protobuf:"bytes,9,opt,name=filter_accounting,json=filterAccounting,proto3" json:"filter_accounting,omitempty"`
 	Offset               int64                      `protobuf:"varint,10,opt,name=offset,proto3" json:"offset,omitempty"`
 	NextOffset           int64                      `protobuf:"varint,11,opt,name=next_offset,json=nextOffset,proto3" json:"next_offset,omitempty"`
@@ -2740,9 +2740,9 @@ func (x *SearchConversationsResponse) GetFacets() *SearchFacets {
 	return nil
 }
 
-func (x *SearchConversationsResponse) GetFreshness() *SearchFreshness {
+func (x *SearchConversationsResponse) GetSemanticFreshness() *SemanticSearchFreshness {
 	if x != nil {
-		return x.Freshness
+		return x.SemanticFreshness
 	}
 	return nil
 }
@@ -4202,10 +4202,10 @@ var File_clyde_v1_daemon_service_proto protoreflect.FileDescriptor
 
 const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1dclyde/v1/daemon/service.proto\x12\bclyde.v1\x1a\x1eclyde/v1/daemon/provider.proto\x1a\x1bgoogle/protobuf/empty.proto\"!\n" +
-	"\x19GetSearchFreshnessRequestJ\x04\b\x01\x10\x02\"U\n" +
-	"\x1aGetSearchFreshnessResponse\x127\n" +
-	"\tfreshness\x18\x01 \x01(\v2\x19.clyde.v1.SearchFreshnessR\tfreshness\"w\n" +
+	"\x1dclyde/v1/daemon/service.proto\x12\bclyde.v1\x1a\x1eclyde/v1/daemon/provider.proto\x1a\x1bgoogle/protobuf/empty.proto\")\n" +
+	"!GetSemanticSearchFreshnessRequestJ\x04\b\x01\x10\x02\"v\n" +
+	"\"GetSemanticSearchFreshnessResponse\x12P\n" +
+	"\x12semantic_freshness\x18\x01 \x01(\v2!.clyde.v1.SemanticSearchFreshnessR\x11semanticFreshness\"w\n" +
 	"\x14LogsInventoryRequest\x12\x1d\n" +
 	"\n" +
 	"state_root\x18\x01 \x01(\tR\tstateRoot\x12,\n" +
@@ -4402,8 +4402,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"workspaces\x18\x01 \x03(\v2\x1a.clyde.v1.SearchFacetCountR\n" +
 	"workspaces\x128\n" +
 	"\tproviders\x18\x02 \x03(\v2\x1a.clyde.v1.SearchFacetCountR\tproviders\x122\n" +
-	"\x06models\x18\x03 \x03(\v2\x1a.clyde.v1.SearchFacetCountR\x06models\"\xa1\x01\n" +
-	"\x0fSearchFreshness\x12\x1a\n" +
+	"\x06models\x18\x03 \x03(\v2\x1a.clyde.v1.SearchFacetCountR\x06models\"\xa9\x01\n" +
+	"\x17SemanticSearchFreshness\x12\x1a\n" +
 	"\bmanifest\x18\x01 \x01(\x03R\bmanifest\x12\x16\n" +
 	"\x06needed\x18\x02 \x01(\x03R\x06needed\x12\x1a\n" +
 	"\bembedded\x18\x03 \x01(\x03R\bembedded\x12\x18\n" +
@@ -4413,7 +4413,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tremaining\x18\x02 \x01(\x03R\tremaining\"A\n" +
 	"\x10FilterAccounting\x12-\n" +
-	"\x06stages\x18\x01 \x03(\v2\x15.clyde.v1.FilterStageR\x06stages\"\x82\x04\n" +
+	"\x06stages\x18\x01 \x03(\v2\x15.clyde.v1.FilterStageR\x06stages\"\x9b\x04\n" +
 	"\x1bSearchConversationsResponse\x12;\n" +
 	"\amatches\x18\x01 \x03(\v2!.clyde.v1.ConversationSearchMatchR\amatches\x123\n" +
 	"\x15conversations_scanned\x18\x02 \x01(\x03R\x14conversationsScanned\x12%\n" +
@@ -4421,8 +4421,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x05limit\x18\x04 \x01(\x03R\x05limit\x12\x19\n" +
 	"\bhas_more\x18\x05 \x01(\bR\ahasMore\x12.\n" +
 	"\x06source\x18\x06 \x01(\x0e2\x16.clyde.v1.SearchSourceR\x06source\x12.\n" +
-	"\x06facets\x18\a \x01(\v2\x16.clyde.v1.SearchFacetsR\x06facets\x127\n" +
-	"\tfreshness\x18\b \x01(\v2\x19.clyde.v1.SearchFreshnessR\tfreshness\x12G\n" +
+	"\x06facets\x18\a \x01(\v2\x16.clyde.v1.SearchFacetsR\x06facets\x12P\n" +
+	"\x12semantic_freshness\x18\b \x01(\v2!.clyde.v1.SemanticSearchFreshnessR\x11semanticFreshness\x12G\n" +
 	"\x11filter_accounting\x18\t \x01(\v2\x1a.clyde.v1.FilterAccountingR\x10filterAccounting\x12\x16\n" +
 	"\x06offset\x18\n" +
 	" \x01(\x03R\x06offset\x12\x1f\n" +
@@ -4590,7 +4590,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"$SEMANTIC_CONNECTION_STATE_CONNECTING\x10\x03\x12#\n" +
 	"\x1fSEMANTIC_CONNECTION_STATE_READY\x10\x04\x12\"\n" +
 	"\x1eSEMANTIC_CONNECTION_STATE_IDLE\x10\x05\x12&\n" +
-	"\"SEMANTIC_CONNECTION_STATE_SHUTDOWN\x10\x062\xf0\f\n" +
+	"\"SEMANTIC_CONNECTION_STATE_SHUTDOWN\x10\x062\x88\r\n" +
 	"\fClydeService\x12L\n" +
 	"\x0fGetDaemonStatus\x12\x16.google.protobuf.Empty\x1a!.clyde.v1.GetDaemonStatusResponse\x12M\n" +
 	"\fReloadDaemon\x12\x1d.clyde.v1.ReloadDaemonRequest\x1a\x1e.clyde.v1.ReloadDaemonResponse\x12M\n" +
@@ -4608,8 +4608,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\rGetMITMStatus\x12\x1e.clyde.v1.GetMITMStatusRequest\x1a\x1f.clyde.v1.GetMITMStatusResponse\x12J\n" +
 	"\vShowCapture\x12\x1c.clyde.v1.ShowCaptureRequest\x1a\x1d.clyde.v1.ShowCaptureResponse\x12M\n" +
 	"\fSeedBaseline\x12\x1d.clyde.v1.SeedBaselineRequest\x1a\x1e.clyde.v1.SeedBaselineResponse\x12P\n" +
-	"\rLogsInventory\x12\x1e.clyde.v1.LogsInventoryRequest\x1a\x1f.clyde.v1.LogsInventoryResponse\x12_\n" +
-	"\x12GetSearchFreshness\x12#.clyde.v1.GetSearchFreshnessRequest\x1a$.clyde.v1.GetSearchFreshnessResponseB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
+	"\rLogsInventory\x12\x1e.clyde.v1.LogsInventoryRequest\x1a\x1f.clyde.v1.LogsInventoryResponse\x12w\n" +
+	"\x1aGetSemanticSearchFreshness\x12+.clyde.v1.GetSemanticSearchFreshnessRequest\x1a,.clyde.v1.GetSemanticSearchFreshnessResponseB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
 
 var (
 	file_clyde_v1_daemon_service_proto_rawDescOnce sync.Once
@@ -4630,8 +4630,8 @@ var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(RequestResolutionOrigin)(0),               // 1: clyde.v1.RequestResolutionOrigin
 	(RequestResolutionNotFoundReason)(0),       // 2: clyde.v1.RequestResolutionNotFoundReason
 	(SemanticConnectionState)(0),               // 3: clyde.v1.SemanticConnectionState
-	(*GetSearchFreshnessRequest)(nil),          // 4: clyde.v1.GetSearchFreshnessRequest
-	(*GetSearchFreshnessResponse)(nil),         // 5: clyde.v1.GetSearchFreshnessResponse
+	(*GetSemanticSearchFreshnessRequest)(nil),  // 4: clyde.v1.GetSemanticSearchFreshnessRequest
+	(*GetSemanticSearchFreshnessResponse)(nil), // 5: clyde.v1.GetSemanticSearchFreshnessResponse
 	(*LogsInventoryRequest)(nil),               // 6: clyde.v1.LogsInventoryRequest
 	(*LogsInventoryRotation)(nil),              // 7: clyde.v1.LogsInventoryRotation
 	(*LogsInventoryCleanup)(nil),               // 8: clyde.v1.LogsInventoryCleanup
@@ -4661,7 +4661,7 @@ var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(*ConversationSearchMatch)(nil),            // 32: clyde.v1.ConversationSearchMatch
 	(*SearchFacetCount)(nil),                   // 33: clyde.v1.SearchFacetCount
 	(*SearchFacets)(nil),                       // 34: clyde.v1.SearchFacets
-	(*SearchFreshness)(nil),                    // 35: clyde.v1.SearchFreshness
+	(*SemanticSearchFreshness)(nil),            // 35: clyde.v1.SemanticSearchFreshness
 	(*FilterStage)(nil),                        // 36: clyde.v1.FilterStage
 	(*FilterAccounting)(nil),                   // 37: clyde.v1.FilterAccounting
 	(*SearchConversationsResponse)(nil),        // 38: clyde.v1.SearchConversationsResponse
@@ -4690,7 +4690,7 @@ var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(*ProviderStatsEvent)(nil),                 // 61: clyde.v1.ProviderStatsEvent
 }
 var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
-	35, // 0: clyde.v1.GetSearchFreshnessResponse.freshness:type_name -> clyde.v1.SearchFreshness
+	35, // 0: clyde.v1.GetSemanticSearchFreshnessResponse.semantic_freshness:type_name -> clyde.v1.SemanticSearchFreshness
 	7,  // 1: clyde.v1.LogsInventoryCategory.rotation:type_name -> clyde.v1.LogsInventoryRotation
 	8,  // 2: clyde.v1.LogsInventoryCategory.cleanup:type_name -> clyde.v1.LogsInventoryCleanup
 	9,  // 3: clyde.v1.LogsInventoryCategory.largest_files:type_name -> clyde.v1.LogsInventoryFileSummary
@@ -4713,7 +4713,7 @@ var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	32, // 20: clyde.v1.SearchConversationsResponse.matches:type_name -> clyde.v1.ConversationSearchMatch
 	0,  // 21: clyde.v1.SearchConversationsResponse.source:type_name -> clyde.v1.SearchSource
 	34, // 22: clyde.v1.SearchConversationsResponse.facets:type_name -> clyde.v1.SearchFacets
-	35, // 23: clyde.v1.SearchConversationsResponse.freshness:type_name -> clyde.v1.SearchFreshness
+	35, // 23: clyde.v1.SearchConversationsResponse.semantic_freshness:type_name -> clyde.v1.SemanticSearchFreshness
 	37, // 24: clyde.v1.SearchConversationsResponse.filter_accounting:type_name -> clyde.v1.FilterAccounting
 	49, // 25: clyde.v1.GetConversationInfoResponse.conversation:type_name -> clyde.v1.ConversationRecord
 	39, // 26: clyde.v1.GetConversationInfoResponse.stats:type_name -> clyde.v1.ConversationInfoStats
@@ -4748,7 +4748,7 @@ var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	15, // 55: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
 	13, // 56: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
 	6,  // 57: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
-	4,  // 58: clyde.v1.ClydeService.GetSearchFreshness:input_type -> clyde.v1.GetSearchFreshnessRequest
+	4,  // 58: clyde.v1.ClydeService.GetSemanticSearchFreshness:input_type -> clyde.v1.GetSemanticSearchFreshnessRequest
 	53, // 59: clyde.v1.ClydeService.GetDaemonStatus:output_type -> clyde.v1.GetDaemonStatusResponse
 	59, // 60: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
 	59, // 61: clyde.v1.ClydeService.RebindDaemon:output_type -> clyde.v1.ReloadDaemonResponse
@@ -4766,7 +4766,7 @@ var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	21, // 73: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
 	14, // 74: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
 	12, // 75: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
-	5,  // 76: clyde.v1.ClydeService.GetSearchFreshness:output_type -> clyde.v1.GetSearchFreshnessResponse
+	5,  // 76: clyde.v1.ClydeService.GetSemanticSearchFreshness:output_type -> clyde.v1.GetSemanticSearchFreshnessResponse
 	59, // [59:77] is the sub-list for method output_type
 	41, // [41:59] is the sub-list for method input_type
 	41, // [41:41] is the sub-list for extension type_name

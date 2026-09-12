@@ -1,6 +1,7 @@
 package status
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -65,9 +66,9 @@ func TestRenderLinesEmitsOneRawFactPerLine(t *testing.T) {
 		"daemon.responding true",
 		"supervisor.pid 321",
 		"worker.pids 654",
-		"freshness.manifest 2900 conversations",
-		"freshness.needed 3 conversations",
-		"freshness.pending 3 conversations",
+		"semantic_freshness.manifest 2900 conversations",
+		"semantic_freshness.needed 3 conversations",
+		"semantic_freshness.pending 3 conversations",
 		"mitm.claude-code.address [::1]:48723",
 		"mitm.claude-code.up true",
 	} {
@@ -87,7 +88,7 @@ func TestRenderLinesShowsSectionErrorsWithoutHidingOthers(t *testing.T) {
 	snapshot.freshnessErr = errors.New("engine unavailable")
 	lines := renderPlainLines(buildMetrics(snapshot))
 	body := strings.Join(lines, "\n")
-	if !strings.Contains(body, `freshness.error "engine unavailable"`) {
+	if !strings.Contains(body, `semantic_freshness.error "engine unavailable"`) {
 		t.Fatalf("rendered status lacks the freshness error line:\n%s", body)
 	}
 	if !strings.Contains(body, "daemon.responding true") {
@@ -111,5 +112,12 @@ func TestSnapshotOutputCarriesSectionErrors(t *testing.T) {
 	}
 	if out.Freshness == nil || out.Freshness.Manifest != 2900 {
 		t.Fatalf("Freshness = %+v, want the gathered snapshot", out.Freshness)
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"semantic_freshness":`) || strings.Contains(string(body), `"freshness":`) {
+		t.Fatalf("JSON freshness label is not semantic: %s", body)
 	}
 }

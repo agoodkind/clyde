@@ -70,7 +70,7 @@ type searchConversationsOutput struct {
 	HasMore              bool                             `json:"has_more"`
 	Source               string                           `json:"source"`
 	Facets               searchFacetsOutput               `json:"facets"`
-	Freshness            searchFreshnessOutput            `json:"freshness"`
+	SemanticFreshness    searchFreshnessOutput            `json:"semantic_freshness"`
 	FilterAccounting     []filterStageOutput              `json:"filter_accounting,omitempty"`
 	Matches              []searchConversationsMatchOutput `json:"matches"`
 }
@@ -209,7 +209,7 @@ func searchConversationsOutputFromDomain(result conv.SearchConversationsResult) 
 		HasMore:              result.HasMore,
 		Source:               result.Source.String(),
 		Facets:               searchFacetsOutputFromDomain(result.Facets),
-		Freshness:            searchFreshnessOutputFromDomain(result.Freshness),
+		SemanticFreshness:    searchFreshnessOutputFromDomain(result.Freshness),
 		FilterAccounting:     filterStageOutputsFromDomain(result.FilterAccounting),
 		Matches:              matches,
 	}

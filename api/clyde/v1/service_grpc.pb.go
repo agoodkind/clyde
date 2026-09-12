@@ -37,7 +37,7 @@ const (
 	ClydeService_ShowCapture_FullMethodName                = "/clyde.v1.ClydeService/ShowCapture"
 	ClydeService_SeedBaseline_FullMethodName               = "/clyde.v1.ClydeService/SeedBaseline"
 	ClydeService_LogsInventory_FullMethodName              = "/clyde.v1.ClydeService/LogsInventory"
-	ClydeService_GetSearchFreshness_FullMethodName         = "/clyde.v1.ClydeService/GetSearchFreshness"
+	ClydeService_GetSemanticSearchFreshness_FullMethodName = "/clyde.v1.ClydeService/GetSemanticSearchFreshness"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -77,10 +77,10 @@ type ClydeServiceClient interface {
 	ShowCapture(ctx context.Context, in *ShowCaptureRequest, opts ...grpc.CallOption) (*ShowCaptureResponse, error)
 	SeedBaseline(ctx context.Context, in *SeedBaselineRequest, opts ...grpc.CallOption) (*SeedBaselineResponse, error)
 	LogsInventory(ctx context.Context, in *LogsInventoryRequest, opts ...grpc.CallOption) (*LogsInventoryResponse, error)
-	// GetSearchFreshness returns the conversation feeder's latest sync snapshot,
+	// GetSemanticSearchFreshness returns the conversation feeder's latest sync snapshot,
 	// the same freshness that rides each search response, so a status view can
 	// read it without running a search.
-	GetSearchFreshness(ctx context.Context, in *GetSearchFreshnessRequest, opts ...grpc.CallOption) (*GetSearchFreshnessResponse, error)
+	GetSemanticSearchFreshness(ctx context.Context, in *GetSemanticSearchFreshnessRequest, opts ...grpc.CallOption) (*GetSemanticSearchFreshnessResponse, error)
 }
 
 type clydeServiceClient struct {
@@ -297,10 +297,10 @@ func (c *clydeServiceClient) LogsInventory(ctx context.Context, in *LogsInventor
 	return out, nil
 }
 
-func (c *clydeServiceClient) GetSearchFreshness(ctx context.Context, in *GetSearchFreshnessRequest, opts ...grpc.CallOption) (*GetSearchFreshnessResponse, error) {
+func (c *clydeServiceClient) GetSemanticSearchFreshness(ctx context.Context, in *GetSemanticSearchFreshnessRequest, opts ...grpc.CallOption) (*GetSemanticSearchFreshnessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetSearchFreshnessResponse)
-	err := c.cc.Invoke(ctx, ClydeService_GetSearchFreshness_FullMethodName, in, out, cOpts...)
+	out := new(GetSemanticSearchFreshnessResponse)
+	err := c.cc.Invoke(ctx, ClydeService_GetSemanticSearchFreshness_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -344,10 +344,10 @@ type ClydeServiceServer interface {
 	ShowCapture(context.Context, *ShowCaptureRequest) (*ShowCaptureResponse, error)
 	SeedBaseline(context.Context, *SeedBaselineRequest) (*SeedBaselineResponse, error)
 	LogsInventory(context.Context, *LogsInventoryRequest) (*LogsInventoryResponse, error)
-	// GetSearchFreshness returns the conversation feeder's latest sync snapshot,
+	// GetSemanticSearchFreshness returns the conversation feeder's latest sync snapshot,
 	// the same freshness that rides each search response, so a status view can
 	// read it without running a search.
-	GetSearchFreshness(context.Context, *GetSearchFreshnessRequest) (*GetSearchFreshnessResponse, error)
+	GetSemanticSearchFreshness(context.Context, *GetSemanticSearchFreshnessRequest) (*GetSemanticSearchFreshnessResponse, error)
 }
 
 // UnimplementedClydeServiceServer should be embedded to have
@@ -408,8 +408,8 @@ func (UnimplementedClydeServiceServer) SeedBaseline(context.Context, *SeedBaseli
 func (UnimplementedClydeServiceServer) LogsInventory(context.Context, *LogsInventoryRequest) (*LogsInventoryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method LogsInventory not implemented")
 }
-func (UnimplementedClydeServiceServer) GetSearchFreshness(context.Context, *GetSearchFreshnessRequest) (*GetSearchFreshnessResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetSearchFreshness not implemented")
+func (UnimplementedClydeServiceServer) GetSemanticSearchFreshness(context.Context, *GetSemanticSearchFreshnessRequest) (*GetSemanticSearchFreshnessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSemanticSearchFreshness not implemented")
 }
 func (UnimplementedClydeServiceServer) testEmbeddedByValue() {}
 
@@ -709,20 +709,20 @@ func _ClydeService_LogsInventory_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ClydeService_GetSearchFreshness_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetSearchFreshnessRequest)
+func _ClydeService_GetSemanticSearchFreshness_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSemanticSearchFreshnessRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ClydeServiceServer).GetSearchFreshness(ctx, in)
+		return srv.(ClydeServiceServer).GetSemanticSearchFreshness(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ClydeService_GetSearchFreshness_FullMethodName,
+		FullMethod: ClydeService_GetSemanticSearchFreshness_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClydeServiceServer).GetSearchFreshness(ctx, req.(*GetSearchFreshnessRequest))
+		return srv.(ClydeServiceServer).GetSemanticSearchFreshness(ctx, req.(*GetSemanticSearchFreshnessRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -787,8 +787,8 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClydeService_LogsInventory_Handler,
 		},
 		{
-			MethodName: "GetSearchFreshness",
-			Handler:    _ClydeService_GetSearchFreshness_Handler,
+			MethodName: "GetSemanticSearchFreshness",
+			Handler:    _ClydeService_GetSemanticSearchFreshness_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
