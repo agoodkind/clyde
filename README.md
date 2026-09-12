@@ -34,8 +34,13 @@ both CLI and MCP surfaces, and alignment tests keep them consistent.
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/agoodkind/clyde/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/agoodkind/clyde/main/install.sh \
+  | bash -s -- --daemon --hooks --mcp
 ```
+
+The installer changes only the components you select. Use `--daemon`, `--hooks`,
+or `--mcp` alone or together. Use `--binary-only` to install the Clyde binary
+without changing a service or client setting.
 
 ## Configuration
 

@@ -12,6 +12,7 @@ func NewConversationRegistry() *Registry {
 	Register(reg, resolveRequestOp())
 	Register(reg, exportTranscriptOp())
 	Register(reg, installHooksOp())
+	Register(reg, installSetupOp())
 	Register(reg, logsInventoryOp())
 	Register(reg, mitmShowOp())
 	Register(reg, mitmStatusOp())
