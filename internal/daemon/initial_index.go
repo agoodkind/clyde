@@ -29,7 +29,7 @@ var dialInitialSemantic = func(ctx context.Context, socketPath string) (initialS
 }
 
 // RunInitialConversationIndex builds the first raw conversation cache during
-// native installation. It reports the decision and the result on output so an
+// native daemon installation. It reports the decision and the result on output so an
 // operator can see whether the install performed indexing.
 //
 // A present cache means the daemon already completed an initial index. The
