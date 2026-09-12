@@ -135,6 +135,14 @@ type rawCompactedContextCompactionItem struct {
 	EncryptedContent string `json:"encrypted_content"`
 }
 
+// NormalizeResponseInputItems decodes raw Responses input through the same
+// durable representation used for persisted replacement history.
+func NormalizeResponseInputItems(
+	rawItems []json.RawMessage,
+) []transcript.CompactedContextItem {
+	return normalizeCompactedContextItems(rawItems)
+}
+
 func normalizeCompactedContextItems(
 	rawItems []json.RawMessage,
 ) []transcript.CompactedContextItem {
