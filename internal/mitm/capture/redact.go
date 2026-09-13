@@ -30,6 +30,8 @@ const (
 	sensitiveHeaderClydeToken         sensitiveHeaderName = "x-clyde-token"
 	sensitiveHeaderOpenAIIdentity     sensitiveHeaderName = "openai-api-" + "key"
 	sensitiveHeaderAWSSecurity        sensitiveHeaderName = "x-amz-security-" + "token"
+	sensitiveHeaderAPIKey             sensitiveHeaderName = "api-key"
+	sensitiveHeaderXAuthToken         sensitiveHeaderName = "x-auth-" + "token"
 )
 
 type sensitiveBodyField string
@@ -167,12 +169,15 @@ func sensitiveHTTPHeader(name string) bool {
 		sensitiveHeaderCookie, sensitiveHeaderSetCookie,
 		sensitiveHeaderChatGPTAccountID, sensitiveHeaderXAPIKey,
 		sensitiveHeaderClydeToken, sensitiveHeaderOpenAIIdentity,
-		sensitiveHeaderAWSSecurity:
+		sensitiveHeaderAWSSecurity, sensitiveHeaderAPIKey,
+		sensitiveHeaderXAuthToken:
 		return true
 	}
-	return normalized == "api-key" || normalized == "access-token" ||
+	return normalized == "access-token" || normalized == "refresh-token" || normalized == "id-token" ||
 		strings.HasSuffix(normalized, "-api-key") ||
 		strings.HasSuffix(normalized, "-access-token") ||
+		strings.HasSuffix(normalized, "-refresh-token") ||
+		strings.HasSuffix(normalized, "-id-token") ||
 		strings.HasSuffix(normalized, "-auth-token")
 }
 
