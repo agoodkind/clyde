@@ -132,6 +132,38 @@ func TestParserSharedDiscoveryReadCounts(t *testing.T) {
 	}
 }
 
+func TestReadGlobalDiscoveryRefreshesUnicodeByteLengthChange(t *testing.T) {
+	root, _, _ := discoveryFixture(t)
+	execDiscoveryStatements(t, root.GlobalDBPath,
+		`DELETE FROM cursorDiskKV WHERE key = 'bubbleId:composer-a:bubble-2'`,
+		`UPDATE cursorDiskKV SET value = json_set(value, '$.text', ' ') WHERE key = 'bubbleId:composer-a:bubble-1'`)
+	writer := openDiscoveryWriter(t, root.GlobalDBPath)
+	for _, statement := range []string{"PRAGMA journal_mode=WAL", "PRAGMA wal_autocheckpoint=0", "PRAGMA wal_checkpoint(TRUNCATE)"} {
+		if _, err := writer.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := cursorstore.ReadGlobalDiscovery(t.Context(), root.GlobalDBPath)
+	if before.Err != nil || before.Metadata.Err != nil {
+		t.Fatalf("initial discovery failed: %v, %v", before.Err, before.Metadata.Err)
+	}
+	initial := before.Stocks["composer-a"]
+	if initial.StoredRows != 1 || initial.HasContent || !initial.Conclusive {
+		t.Fatalf("initial stock = %+v", initial)
+	}
+	if _, err := writer.Exec(`UPDATE cursorDiskKV SET value = json_set(value, '$.text', 'é') WHERE key = 'bubbleId:composer-a:bubble-1'`); err != nil {
+		t.Fatal(err)
+	}
+	after := cursorstore.ReadGlobalDiscovery(t.Context(), root.GlobalDBPath)
+	if after.Err != nil || after.Metadata.Err != nil {
+		t.Fatalf("updated discovery failed: %v, %v", after.Err, after.Metadata.Err)
+	}
+	updated := after.Stocks["composer-a"]
+	if updated.StoredRows != 1 || !updated.HasContent || !updated.Conclusive || updated.Revision == initial.Revision {
+		t.Fatalf("Unicode byte-length change did not refresh stock: before=%+v after=%+v", initial, updated)
+	}
+}
+
 func TestParserDiscoveryRefreshesWALAndMetadata(t *testing.T) {
 	root, entry, parser := discoveryFixture(t)
 	before, records := discoverRecords(t, parser, nil)

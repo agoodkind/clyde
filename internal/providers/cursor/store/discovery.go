@@ -347,7 +347,7 @@ func readConversationRangeSignature(ctx context.Context, db *sql.DB, signature *
 	copy(signature.composerDigest[:], digest.Sum(nil))
 
 	bubbleBounds := keyRangeForPrefix(bubbleKeyPrefix)
-	query = "SELECT count(*), COALESCE(max(rowid), 0), COALESCE(sum(length(value)), 0) FROM cursorDiskKV WHERE " +
+	query = "SELECT count(*), COALESCE(max(rowid), 0), COALESCE(sum(octet_length(value)), 0) FROM cursorDiskKV WHERE " +
 		"key >= ? AND key < ?"
 	err = db.QueryRowContext(ctx, query,
 		bubbleBounds.Lower, bubbleBounds.Upper,
