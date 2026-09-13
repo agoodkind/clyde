@@ -50,7 +50,7 @@ func NewRawResponsesCompactionV2FinalAnswerTransformer(request RawResponsesReque
 	if recovery == nil || !rawResponsesCompactionV2FinalAnswer(request.Header) {
 		return nil
 	}
-	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{}}
+	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}}
 }
 
 // DidMutateResponse reports whether this transformer produced tagged output.
@@ -70,14 +70,6 @@ func rawResponsesCompactionV2FinalAnswer(header http.Header) bool {
 		return false
 	}
 	return metadata.Compaction.Phase == "final_answer"
-}
-
-func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {
-	var metadata rawResponsesCompactionMetadata
-	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
-		return false
-	}
-	return rawResponsesCompactionV2RegularTurn(header) && metadata.Compaction.Phase == "final_answer"
 }
 
 func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutatedCallbacks ...func()) *rawCompactionSSEBody {
