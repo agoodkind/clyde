@@ -121,6 +121,27 @@ func TestProviderOpenRawResponsesPreservesBytesAndStripsInboundCredentials(t *te
 	}
 }
 
+func TestRawResponsesHeadersForcesIdentityForV1Compaction(t *testing.T) {
+	raw := RawResponsesRequest{
+		Body: nil,
+		Header: http.Header{
+			"Accept-Encoding":       {"zstd, deflate"},
+			CodexTurnMetadataHeader: {`{"session_id":"s","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses"}}`},
+		},
+		RequestID:   "",
+		Correlation: correlation.Context{},
+		Stream:      false,
+	}
+	if got := rawResponsesHeaders(raw, "token", "account").Get("Accept-Encoding"); got != "identity" {
+		t.Fatalf("v1 Accept-Encoding = %q, want identity", got)
+	}
+
+	raw.Header.Set(CodexTurnMetadataHeader, `{"session_id":"s","thread_source":"user","sandbox":"none","request_kind":"turn"}`)
+	if got := rawResponsesHeaders(raw, "token", "account").Get("Accept-Encoding"); got != "zstd, deflate" {
+		t.Fatalf("regular Accept-Encoding = %q, want preserved", got)
+	}
+}
+
 func TestProviderOpenRawResponsesRefreshesOnceAfterUnauthorized(t *testing.T) {
 	auth := &rawResponsesAuth{}
 	var requests atomic.Int32
