@@ -226,7 +226,7 @@ func rawResponsesCompactionV2InjectedCompactionTrace(input []json.RawMessage) (i
 			return 0, "", true, compactionItemCount, false
 		}
 		index = itemIndex
-		encryptedContent = item.Compaction.EncryptedContent
+		encryptedContent = candidate
 	}
 	return index, encryptedContent, true, compactionItemCount, index >= 0
 }
