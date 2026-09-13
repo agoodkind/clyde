@@ -66,7 +66,10 @@ log metadata detect new commits before any content read. Workspace descriptors
 refresh independently, and composer metadata, legacy chats, and request lookup
 share the decoded workspace results.
 
-A changed global database still requires a full message projection pass.
+After a global database change, Clyde projects messages only for composers whose
+message keys, row ids, or stored byte lengths changed.
+An in-place edit that preserves byte length remains cached until one of those
+selectors changes because Cursor exposes no reliable message modification marker.
 Unavailable stores and descriptors retain previous contributions and retry on
 the next ordinary operation, even when content metadata stays unchanged.
 Unchanged malformed content remains cached until it changes, and confirmed

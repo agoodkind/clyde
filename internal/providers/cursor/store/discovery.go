@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"goodkind.io/clyde/internal/clock"
 )
 
 type fileMetadata struct {
@@ -214,6 +216,7 @@ type GlobalDiscovery struct {
 	Background []BackgroundComposer
 	Metadata   ComposerMetadataIndex
 	Err        error
+	selectors  map[string]composerBubbleSelector
 }
 
 type globalCacheEntry struct {
@@ -229,6 +232,7 @@ type globalCacheEntry struct {
 
 type globalDiscoverySignature struct {
 	composerDigest  [sha256.Size]byte
+	bubbleDigest    [sha256.Size]byte
 	bubbleRows      int64
 	bubbleLastRow   int64
 	bubbleBytes     int64
@@ -254,7 +258,7 @@ func ReadGlobalDiscovery(ctx context.Context, path string) GlobalDiscovery {
 	var signature globalDiscoverySignature
 	var signatureErr error
 	if stamp.database.absent {
-		data = GlobalDiscovery{Headers: nil, Stocks: nil, Background: nil, Metadata: ComposerMetadataIndex{ByComposerID: nil, Err: nil}, Err: nil}
+		data = GlobalDiscovery{Headers: nil, Stocks: nil, Background: nil, Metadata: ComposerMetadataIndex{ByComposerID: nil, Err: nil}, Err: nil, selectors: nil}
 	} else {
 		readCtx, attempt := cached.diagnostics.start(ctx, changed)
 		var unchanged bool
@@ -291,25 +295,72 @@ func readChangedGlobalDiscovery(
 	}
 	defer func() { _ = db.Close() }()
 	signature, signatureErr := readGlobalDiscoverySignature(ctx, db)
+	snapshot, err := beginReadSnapshot(ctx, db)
+	if err != nil {
+		data := cached.data
+		data.Err = err
+		return data, signature, err, false
+	}
+	selectorStarted := clock.Now()
+	inventory, selectorErr := readComposerBubbleSelectors(ctx, snapshot)
+	selectorDuration := clock.Since(selectorStarted)
+	if selectorErr == nil {
+		signature.bubbleDigest = inventory.digest
+		signature.bubbleRows = inventory.rows
+		signature.bubbleLastRow = inventory.lastRow
+		signature.bubbleBytes = inventory.bytes
+	}
+	signatureErr = errors.Join(signatureErr, selectorErr)
 	unchanged := signatureErr == nil && cached.known && cached.signed && signature == cached.signature
 	if unchanged {
+		snapshot.rollback()
 		return cached.data, signature, nil, true
 	}
-	return refreshGlobalDatabase(ctx, db, cached.data), signature, signatureErr, false
+	var stocks map[string]ComposerBubbleStock
+	var selectors map[string]composerBubbleSelector
+	var stockStats composerStockRefreshStats
+	stockErr := selectorErr
+	if stockErr == nil {
+		projectionStarted := clock.Now()
+		stocks, selectors, stockStats, stockErr = refreshComposerBubbleStocksInSnapshot(
+			ctx,
+			snapshot,
+			inventory.selectors,
+			cached.data.Stocks,
+			cached.data.selectors,
+		)
+		if stockErr == nil {
+			discoveryReadLogger(ctx).InfoContext(ctx,
+				"providers.cursor.store.composer_stock_refresh_completed",
+				"concern", concern,
+				"selector_duration_ms", selectorDuration.Milliseconds(),
+				"projection_duration_ms", clock.Since(projectionStarted).Milliseconds(),
+				"total_composers", stockStats.totalComposers,
+				"reused_composers", stockStats.reusedComposers,
+				"projected_composers", stockStats.projectedComposers,
+				"projected_rows", stockStats.projectedRows,
+				"projection_queries", stockStats.projectionQueries,
+			)
+		}
+	}
+	snapshot.rollback()
+	return refreshGlobalDatabase(ctx, db, cached.data, stocks, selectors, stockErr), signature, signatureErr, false
 }
 
 func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB) (globalDiscoverySignature, error) {
 	var signature globalDiscoverySignature
-	if err := readConversationRangeSignature(ctx, db, &signature); err != nil {
-		return signature, err
+	conversationErr := readConversationRangeSignature(ctx, db, &signature)
+	backgroundErr := readBackgroundSignature(ctx, db, &signature)
+	metadataErr := readComposerMetadataSignature(ctx, db, &signature)
+	err := errors.Join(conversationErr, backgroundErr, metadataErr)
+	if err != nil {
+		discoveryReadLogger(ctx).WarnContext(ctx,
+			"providers.cursor.store.global_signature_failed",
+			"concern", concern,
+			"err", err,
+		)
 	}
-	if err := readBackgroundSignature(ctx, db, &signature); err != nil {
-		return signature, err
-	}
-	if err := readComposerMetadataSignature(ctx, db, &signature); err != nil {
-		return signature, err
-	}
-	return signature, nil
+	return signature, err
 }
 
 func readConversationRangeSignature(ctx context.Context, db *sql.DB, signature *globalDiscoverySignature) error {
@@ -346,16 +397,6 @@ func readConversationRangeSignature(ctx context.Context, db *sql.DB, signature *
 	}
 	copy(signature.composerDigest[:], digest.Sum(nil))
 
-	bubbleBounds := keyRangeForPrefix(bubbleKeyPrefix)
-	query = "SELECT count(*), COALESCE(max(rowid), 0), COALESCE(sum(octet_length(value)), 0) FROM cursorDiskKV WHERE " +
-		"key >= ? AND key < ?"
-	err = db.QueryRowContext(ctx, query,
-		bubbleBounds.Lower, bubbleBounds.Upper,
-	).Scan(&signature.bubbleRows, &signature.bubbleLastRow, &signature.bubbleBytes)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.conversation_signature_failed", "concern", concern, "err", err)
-		return fmt.Errorf("read cursor conversation signature: %w", err)
-	}
 	return nil
 }
 
@@ -422,9 +463,15 @@ func (cache *discoveryCache) globalEntry(path string) *globalCacheEntry {
 	return &entry
 }
 
-func refreshGlobalDatabase(ctx context.Context, db *sql.DB, data GlobalDiscovery) GlobalDiscovery {
+func refreshGlobalDatabase(
+	ctx context.Context,
+	db *sql.DB,
+	data GlobalDiscovery,
+	stocks map[string]ComposerBubbleStock,
+	selectors map[string]composerBubbleSelector,
+	stockErr error,
+) GlobalDiscovery {
 	headers, headerErr := readComposerHeaders(ctx, db, data.Headers)
-	stocks, stockErr := ReadComposerBubbleStocks(ctx, db)
 	background, backgroundErr := ListBackgroundComposers(ctx, db)
 	metadata, metadataErr := ReadComposerMetadataIndex(ctx, db)
 	if headerErr == nil {
@@ -432,6 +479,7 @@ func refreshGlobalDatabase(ctx context.Context, db *sql.DB, data GlobalDiscovery
 	}
 	if stockErr == nil {
 		data.Stocks = stocks
+		data.selectors = selectors
 	}
 	if backgroundErr == nil {
 		data.Background = background
@@ -451,6 +499,7 @@ func cloneGlobalDiscovery(data GlobalDiscovery) GlobalDiscovery {
 		data.Headers[id] = header
 	}
 	data.Stocks = maps.Clone(data.Stocks)
+	data.selectors = maps.Clone(data.selectors)
 	data.Background = slices.Clone(data.Background)
 	data.Metadata.ByComposerID = maps.Clone(data.Metadata.ByComposerID)
 	return data
