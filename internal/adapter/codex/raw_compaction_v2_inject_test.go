@@ -64,7 +64,7 @@ func TestInjectRawResponsesCompactionV2RecoveryFailsOpen(t *testing.T) {
 		name    string
 		request RawResponsesRequest
 	}{
-		{name: "wrong session", request: RawResponsesRequest{Body: base.Body, Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"other","thread_source":"user","sandbox":"none"}`}}}},
+		{name: "wrong session", request: RawResponsesRequest{Body: base.Body, Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"other","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}},
 		{name: "wrong digest", request: RawResponsesRequest{Body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`), Header: base.Header}},
 		{name: "malformed request", request: RawResponsesRequest{Body: []byte(`{"input":[`), Header: base.Header}},
 		{name: "duplicate compaction", request: RawResponsesRequest{Body: []byte(`{"input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), Header: base.Header}},
