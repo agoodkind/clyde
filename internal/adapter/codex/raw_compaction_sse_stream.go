@@ -87,15 +87,16 @@ func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutat
 		onMutated = onMutatedCallbacks[0]
 	}
 	return &rawCompactionSSEBody{
-		inner:      inner,
-		reader:     bufio.NewReader(inner),
-		transcript: transcriptText,
-		pending:    nil,
-		pendingErr: nil,
-		candidate:  nil,
-		following:  nil,
-		disabled:   false,
-		onMutated:  onMutated,
+		inner:             inner,
+		reader:            bufio.NewReader(inner),
+		transcript:        transcriptText,
+		pending:           nil,
+		pendingErr:        nil,
+		candidate:         nil,
+		following:         nil,
+		disabled:          false,
+		onMutated:         onMutated,
+		strictFinalAnswer: false,
 	}
 }
 
