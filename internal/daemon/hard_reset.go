@@ -284,13 +284,17 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 }
 
 func printResetPlan(ctx context.Context, output io.Writer, targets []resetTarget, cfg *config.Config) error {
+	removals, preserved, err := resetPlanPaths(ctx, targets, cfg)
+	if err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintln(output, "Clyde hard reset removal targets:"); err != nil {
 		slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return fmt.Errorf("print hard reset removal targets: %w", err)
 	}
-	for _, target := range targets {
-		if _, err := fmt.Fprintln(output, "  "+target.Path); err != nil {
-			slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "path", target.Path, "err", err)
+	for _, path := range removals {
+		if _, err := fmt.Fprintln(output, "  "+path); err != nil {
+			slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "path", path, "err", err)
 			return fmt.Errorf("print hard reset removal target: %w", err)
 		}
 	}
@@ -298,20 +302,55 @@ func printResetPlan(ctx context.Context, output io.Writer, targets []resetTarget
 		slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return fmt.Errorf("print hard reset preserved roots: %w", err)
 	}
-	if cfg == nil {
-		return nil
-	}
-	roots, err := resetProtectedDirectories(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	for _, root := range roots {
+	for _, root := range preserved {
 		if _, err := fmt.Fprintln(output, "  "+root); err != nil {
 			slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "path", root, "err", err)
 			return fmt.Errorf("print hard reset preserved root: %w", err)
 		}
 	}
 	return nil
+}
+
+func resetPlanPaths(ctx context.Context, targets []resetTarget, cfg *config.Config) ([]string, []string, error) {
+	var removals, preserved []string
+	removedTrees := make(map[string]bool)
+	for _, target := range targets {
+		path, err := resolvedResetPath(target.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, found := removedTrees[path]; !found {
+			removals = append(removals, path)
+		}
+		removedTrees[path] = removedTrees[path] || target.RemoveTree
+	}
+	if cfg == nil {
+		return removals, preserved, nil
+	}
+	roots, err := resetProtectedDirectories(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, root := range roots {
+		path, err := resolvedResetPath(root)
+		if err != nil {
+			return nil, nil, err
+		}
+		if slices.Contains(preserved, path) {
+			continue
+		}
+		overlaps := false
+		for removed, removeTree := range removedTrees {
+			if path == removed || (removeTree && withinResetRoot(path, removed)) || withinResetRoot(removed, path) {
+				overlaps = true
+				break
+			}
+		}
+		if !overlaps {
+			preserved = append(preserved, path)
+		}
+	}
+	return removals, preserved, nil
 }
 
 func withinResetRoot(path, root string) bool {
