@@ -360,6 +360,9 @@ func (h *harness) writeCodexAdapterConfig(t *testing.T, upstreamURL, authFile st
 		"[adapter]\nenabled = true\nreorient_summary_injection = true\n",
 		1,
 	)
+	if updated == string(content) {
+		t.Fatalf("writeCodexAdapterConfig: did not inject reorient_summary_injection into %s", h.configPath)
+	}
 	updated += fmt.Sprintf(`
 [adapter.codex]
 enabled = true
