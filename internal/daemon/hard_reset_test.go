@@ -334,6 +334,8 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 	t.Setenv("CLYDE_RESET_TEST_ROOT", root)
 	t.Setenv("INSTALL_BIN", filepath.Join(root, "stale-must-not-run"))
 	t.Setenv("LOG_PATH", filepath.Join(root, "native.log"))
+	rotatedLog := filepath.Join(config.DefaultStateDir(), "clyde-daemon-old.jsonl.gz")
+	writeResetFixture(t, rotatedLog, []byte("old incompatible store bytes"))
 	configBody := []byte("# Preserve these exact bytes.\n[logging.cleanup]\nenabled = false\n[conversation.semantic]\ningestion_enabled = true\n[mitm.capture_store]\ndb_path = " + strconv.Quote(filepath.Join(config.DefaultStateDir(), "custom", "capture.db")) + "\n")
 	writeResetFixture(t, config.GlobalConfigPath(), configBody)
 	cfg, err := config.LoadGlobalOrDefault()
@@ -349,8 +351,12 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 		if target.Path == config.DaemonSocketPath() || target.Path == daemonsupervisor.SocketPath(config.RuntimeDir()) {
 			continue
 		}
-		writeResetFixture(t, target.Path, []byte("old incompatible store bytes"))
-		inventory = append(inventory, target.Path)
+		path := target.Path
+		if target.RemoveTree {
+			path = filepath.Join(path, "old-sentinel.jsonl")
+		}
+		writeResetFixture(t, path, []byte("old incompatible store bytes"))
+		inventory = append(inventory, path)
 	}
 	writeResetFixture(t, filepath.Join(root, "inventory"), []byte(strings.Join(inventory, "\n")))
 	protected := []string{config.GlobalConfigPath(), cfg.MITM.CA.CertPath, cfg.MITM.CA.KeyPath, filepath.Join(config.DefaultStateDir(), "exports", "transcript.md"), filepath.Join(config.DefaultStateDir(), "sibling.db"), filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), filepath.Join(os.Getenv("CODEX_HOME"), "state_5.sqlite"), filepath.Join(os.Getenv("CLYDE_CURSOR_DATA_DIRS"), "User", "globalStorage", "state.vscdb"), filepath.Join(root, "lm-semantic-search", "collection.db"), filepath.Join(root, "sibling-repo", "database.db")}
@@ -394,6 +400,24 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 	}
 	if !strings.Contains(string(output), "installation and status check succeeded") {
 		t.Fatalf("missing installed status: %s", output)
+	}
+	removalPaths := resetPlanSection(t, output, "Clyde hard reset removal targets:")
+	preservedPaths := resetPlanSection(t, output, "Clyde hard reset preserved roots:")
+	for _, path := range []string{filepath.Join(config.DefaultStateDir(), "logs"), filepath.Join(config.DefaultStateDir(), "clyde-cli.jsonl"), filepath.Join(config.DefaultStateDir(), "clyde-daemon.jsonl"), rotatedLog} {
+		resolved, err := resolvedResetPath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !removalPaths[resolved] || preservedPaths[resolved] {
+			t.Errorf("log path must appear only in removal targets: %s", resolved)
+		}
+	}
+	for path := range preservedPaths {
+		for removed := range removalPaths {
+			if path == removed || withinResetRoot(path, removed) || withinResetRoot(removed, path) {
+				t.Errorf("preserved root %s overlaps removal target %s", path, removed)
+			}
+		}
 	}
 	for _, marker := range []string{"Clyde hard reset removal targets:", "Clyde hard reset preserved roots:", filepath.Join(config.DefaultStateDir(), "hooks"), filepath.Join(config.DefaultStateDir(), "clyde-cli.jsonl.lock"), filepath.Join(config.DefaultStateDir(), "clyde-daemon.jsonl.lock"), filepath.Join(config.DefaultStateDir(), "update.lock")} {
 		if !strings.Contains(string(output), marker) {
@@ -524,6 +548,79 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 			t.Fatalf("rerun changed protected bytes: %s: %v", path, err)
 		}
 	}
+}
+
+func TestHardResetPlanFiltersOverlappingRoots(t *testing.T) {
+	root := resetTestRoots(t)
+	provider := os.Getenv("CODEX_HOME")
+	writeResetFixture(t, filepath.Join(provider, "auth.json"), []byte("protected bytes"))
+	alias := filepath.Join(root, "provider-alias")
+	if err := os.Symlink(provider, alias); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedProvider, err := filepath.EvalSymlinks(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		name, path string
+		removeTree bool
+		preserved  bool
+	}{
+		{"equal", alias, true, false},
+		{"removed ancestor", root, true, false},
+		{"removed content", filepath.Join(alias, "auth.json"), false, false},
+		{"sibling", provider + "-sibling", true, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			target := resetTarget{Path: scenario.path, RemoveTree: scenario.removeTree}
+			canonical := target
+			canonical.Path, err = resolvedResetPath(target.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if err := printResetPlan(t.Context(), &output, []resetTarget{target, canonical}, cfg); err != nil {
+				t.Fatal(err)
+			}
+			removed := resetPlanSection(t, output.Bytes(), "Clyde hard reset removal targets:")
+			preserved := resetPlanSection(t, output.Bytes(), "Clyde hard reset preserved roots:")
+			if len(removed) != 1 || preserved[resolvedProvider] != scenario.preserved {
+				t.Fatalf("unexpected reset plan: %s", &output)
+			}
+		})
+	}
+}
+
+func resetPlanSection(t *testing.T, output []byte, heading string) map[string]bool {
+	t.Helper()
+	_, section, found := strings.Cut(string(output), heading+"\n")
+	if !found {
+		t.Fatalf("missing reset plan section %q: %s", heading, output)
+	}
+	paths := make(map[string]bool)
+	for _, line := range strings.Split(section, "\n") {
+		path, ok := strings.CutPrefix(line, "  ")
+		if !ok {
+			break
+		}
+		resolved, err := resolvedResetPath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path != resolved {
+			t.Errorf("reset plan path %s is not canonical: want %s", path, resolved)
+		}
+		if paths[resolved] {
+			t.Errorf("duplicate reset plan path in %s: %s", heading, resolved)
+		}
+		paths[resolved] = true
+	}
+	return paths
 }
 
 func replaceResetFixtureExecutable(t *testing.T, path string) {
