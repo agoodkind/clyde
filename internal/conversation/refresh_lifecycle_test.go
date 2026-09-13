@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -91,9 +92,9 @@ func TestRefreshPersistsMetadataProgressAndRemovals(t *testing.T) {
 	if err := idx.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	records, _, states, err := readCache(idx.cachePath)
-	if err != nil || len(records) != 1 || records[0].Title != "renamed" || !records[0].Archived || states[path].CompleteOffset != 8 {
-		t.Fatalf("metadata was not persisted: records=%+v states=%+v err=%v", records, states, err)
+	cache, _, err := readCache(idx.cachePath)
+	if err != nil || len(cache.Records) != 1 || cache.Records[0].Title != "renamed" || !cache.Records[0].Archived || cache.MultiStates[path].CompleteOffset != 8 {
+		t.Fatalf("metadata was not persisted: records=%+v states=%+v err=%v", cache.Records, cache.MultiStates, err)
 	}
 	parser.candidate.MetadataChanged = false
 	parser.candidate.Stamp.Size = 12
@@ -101,9 +102,9 @@ func TestRefreshPersistsMetadataProgressAndRemovals(t *testing.T) {
 	if err := idx.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	_, _, states, err = readCache(idx.cachePath)
-	if err != nil || states[path].CompleteOffset != 12 {
-		t.Fatalf("append progress was not persisted: states=%+v err=%v", states, err)
+	cache, _, err = readCache(idx.cachePath)
+	if err != nil || cache.MultiStates[path].CompleteOffset != 12 {
+		t.Fatalf("append progress was not persisted: states=%+v err=%v", cache.MultiStates, err)
 	}
 	reloaded := testIndex(t, scan, parser)
 	reloaded.cachePath = idx.cachePath
@@ -117,9 +118,9 @@ func TestRefreshPersistsMetadataProgressAndRemovals(t *testing.T) {
 	if err := idx.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	records, stamps, states, err := readCache(idx.cachePath)
-	if err != nil || len(records) != 0 || len(stamps) != 0 || len(states) != 0 {
-		t.Fatalf("removed source remained in cache: records=%+v stamps=%+v states=%+v err=%v", records, stamps, states, err)
+	cache, _, err = readCache(idx.cachePath)
+	if err != nil || len(cache.Records) != 0 || len(cache.Stamps) != 0 || len(cache.MultiStates) != 0 {
+		t.Fatalf("removed source remained in cache: cache=%+v err=%v", cache, err)
 	}
 }
 
@@ -180,6 +181,126 @@ func TestIndexStartJoinsCanceledScan(t *testing.T) {
 	}
 }
 
+func TestIndexStartWaitsUntilCompletedCacheIsDue(t *testing.T) {
+	for _, records := range [][]Record{nil, {{ID: "cursor:cached", ArtifactPath: "cached"}}} {
+		var installedRecord *Record
+		if len(records) > 0 {
+			installedRecord = &records[0]
+		}
+		installDiscoveries := &atomic.Int64{}
+		installed := testIndex(t, scan, &cachedRefreshParser{
+			discoveries: installDiscoveries,
+			record:      installedRecord,
+		})
+		if err := installed.RefreshWithReason(t.Context(), RefreshReasonInstall); err != nil {
+			t.Fatal(err)
+		}
+		if installDiscoveries.Load() != 1 {
+			t.Fatalf("install discoveries = %d, want 1", installDiscoveries.Load())
+		}
+		cache, _, err := readCache(installed.cachePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cache.Records) != len(records) {
+			t.Fatalf("installed records = %d, want %d", len(cache.Records), len(records))
+		}
+		if err := writeCache(installed.cachePath, cache.Records, cache.Stamps, cache.MultiStates, clock.Now().Add(-150*time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+
+		discoveries := &atomic.Int64{}
+		restarted := testIndex(t, scan, &cachedRefreshParser{
+			discoveries: discoveries,
+			record:      installedRecord,
+		})
+		restarted.cachePath = installed.cachePath
+		restarted.debounce = 0
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			restarted.Start(ctx, 250*time.Millisecond)
+		}()
+		time.Sleep(30 * time.Millisecond)
+		if discoveries.Load() != 0 {
+			t.Fatalf("discoveries before saved deadline = %d, want 0", discoveries.Load())
+		}
+		waitForDiscoveriesWithin(t, discoveries, 1, 150*time.Millisecond)
+		cancel()
+		<-done
+	}
+}
+
+func TestIndexStartCacheAgeControlsFirstRefresh(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		write     func(*testing.T, string)
+		immediate bool
+	}{
+		{name: "missing", write: func(*testing.T, string) {}, immediate: true},
+		{name: "expired", write: func(t *testing.T, path string) {
+			t.Helper()
+			if err := writeCache(path, nil, nil, nil, time.Unix(1, 0)); err != nil {
+				t.Fatal(err)
+			}
+		}, immediate: true},
+		{name: "legacy", write: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := []byte(`{"version":5,"records":[],"stamps":{}}`)
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, immediate: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			discoveries := &atomic.Int64{}
+			idx := testIndex(t, scan, &cachedRefreshParser{discoveries: discoveries})
+			testCase.write(t, idx.cachePath)
+			idx.debounce = 0
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				idx.Start(ctx, 200*time.Millisecond)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				<-done
+			})
+			if testCase.immediate {
+				waitForDiscoveries(t, discoveries, 1)
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+			if discoveries.Load() != 0 {
+				t.Fatalf("legacy discoveries before interval = %d, want 0", discoveries.Load())
+			}
+			waitForDiscoveries(t, discoveries, 1)
+		})
+	}
+}
+
+func waitForDiscoveries(t *testing.T, discoveries *atomic.Int64, want int64) {
+	t.Helper()
+	waitForDiscoveriesWithin(t, discoveries, want, time.Second)
+}
+
+func waitForDiscoveriesWithin(t *testing.T, discoveries *atomic.Int64, want int64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for discoveries.Load() < want {
+		select {
+		case <-deadline:
+			t.Fatalf("discoveries = %d, want %d", discoveries.Load(), want)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func TestRefreshReasonValuesAndLifecycleFields(t *testing.T) {
 	for reason, want := range map[RefreshReason]string{
 		RefreshReasonInstall:    "install",
@@ -197,7 +318,7 @@ func TestRefreshReasonValuesAndLifecycleFields(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
-	parser := &cachedRefreshParser{discoveries: &atomic.Int64{}}
+	parser := &cachedRefreshParser{discoveries: &atomic.Int64{}, record: nil}
 	idx := testIndex(t, scan, parser)
 	if err := idx.RefreshWithReason(t.Context(), RefreshReasonInstall); err != nil {
 		t.Fatal(err)
@@ -264,12 +385,17 @@ func TestRefreshPanicEmitsFailedFinishAndPreservesRecovery(t *testing.T) {
 
 func TestCachedRequestHookAndTerminalExportSkipProviderDiscovery(t *testing.T) {
 	discoveries := &atomic.Int64{}
-	parser := &cachedRefreshParser{discoveries: discoveries}
-	idx := testIndex(t, scan, parser)
+	parser := &cachedRefreshParser{discoveries: discoveries, record: nil}
 	record := testRecord("cursor:cached", ProviderCursor, "cached", "cached conversation")
 	record.LatestRequestID = "0e3f0000-0000-4000-8000-000000000000"
-	idx.records = []Record{record}
-	idx.loaded = true
+	installed := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
+		return scanResult{changed: true, records: []Record{record}}, nil
+	}, parser)
+	if err := installed.RefreshWithReason(t.Context(), RefreshReasonInstall); err != nil {
+		t.Fatal(err)
+	}
+	idx := testIndex(t, scan, parser)
+	idx.cachePath = installed.cachePath
 
 	resolved, err := idx.Resolve(t.Context(), record.LatestRequestID)
 	if err != nil || resolved.ID != record.ID {
@@ -334,6 +460,7 @@ func decodeRefreshEvents(t *testing.T, body []byte) []refreshEvent {
 
 type cachedRefreshParser struct {
 	discoveries *atomic.Int64
+	record      *Record
 }
 
 func (*cachedRefreshParser) Provider() providerid.Provider {
@@ -342,10 +469,16 @@ func (*cachedRefreshParser) Provider() providerid.Provider {
 
 func (parser *cachedRefreshParser) Discover(context.Context, map[string]Record) ([]ScanCandidate, error) {
 	parser.discoveries.Add(1)
+	if parser.record != nil {
+		return []ScanCandidate{{Path: parser.record.ArtifactPath, Stamp: FileStamp{Size: 1}}}, nil
+	}
 	return nil, nil
 }
 
-func (*cachedRefreshParser) ScanRecord(string, FileStamp) (Record, bool) {
+func (parser *cachedRefreshParser) ScanRecord(string, FileStamp) (Record, bool) {
+	if parser.record != nil {
+		return *parser.record, true
+	}
 	return emptyRecord(), false
 }
 

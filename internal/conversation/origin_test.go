@@ -84,7 +84,8 @@ func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 		SizeBytes:     0,
 		Archived:      false,
 	}}
-	if err := writeCache(cachePath, written, nil, nil); err != nil {
+	completedAt := time.Unix(100, 0).UTC()
+	if err := writeCache(cachePath, written, nil, nil, completedAt); err != nil {
 		t.Fatalf("write conversation cache: %v", err)
 	}
 
@@ -99,19 +100,25 @@ func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 	if cache.Version != cacheFormatVersion {
 		t.Fatalf("version = %d, want %d", cache.Version, cacheFormatVersion)
 	}
+	if !cache.RefreshCompletedAt.Equal(completedAt) {
+		t.Fatalf("refresh completed at = %v, want %v", cache.RefreshCompletedAt, completedAt)
+	}
 	if len(cache.Records) != 1 || cache.Records[0].Origin != OriginSubagent {
 		t.Fatalf("cached records = %#v, want one subagent-origin record", cache.Records)
 	}
 
-	roundTripped, stamps, _, err := readCache(cachePath)
+	roundTripped, present, err := readCache(cachePath)
 	if err != nil {
 		t.Fatalf("re-read conversation cache: %v", err)
 	}
-	if len(stamps) != 0 {
-		t.Fatalf("stamps = %v, want none; none were written", stamps)
+	if len(roundTripped.Stamps) != 0 {
+		t.Fatalf("stamps = %v, want none; none were written", roundTripped.Stamps)
 	}
-	if len(roundTripped) != 1 || !roundTripped[0].IsSubagent() {
-		t.Fatalf("re-read records = %#v, want the subagent origin preserved", roundTripped)
+	if !present || !roundTripped.RefreshCompletedAt.Equal(completedAt) {
+		t.Fatalf("cache metadata = present %t completed %v", present, roundTripped.RefreshCompletedAt)
+	}
+	if len(roundTripped.Records) != 1 || !roundTripped.Records[0].IsSubagent() {
+		t.Fatalf("re-read records = %#v, want the subagent origin preserved", roundTripped.Records)
 	}
 }
 
@@ -122,8 +129,8 @@ func TestReadCacheRejectsUnsupportedFormat(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	records, stamps, _, err := readCache(path)
-	if err == nil || len(records) != 0 || len(stamps) != 0 {
-		t.Fatalf("unsupported cache returned records=%v stamps=%v err=%v", records, stamps, err)
+	cache, _, err := readCache(path)
+	if err == nil || len(cache.Records) != 0 || len(cache.Stamps) != 0 {
+		t.Fatalf("unsupported cache returned records=%v stamps=%v err=%v", cache.Records, cache.Stamps, err)
 	}
 }
