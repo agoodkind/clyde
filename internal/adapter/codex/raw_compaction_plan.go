@@ -147,9 +147,10 @@ func PrepareRawResponsesCompaction(
 	transformed := raw
 	transformed.Body = transformedBody
 	return transformed, &RawResponsesCompactionTransformer{
-		transcript: plan.transcript,
-		stream:     raw.Stream,
-		mutation:   nil,
+		transcript:        plan.transcript,
+		stream:            raw.Stream,
+		mutation:          nil,
+		strictFinalAnswer: false,
 	}
 }
 
