@@ -152,8 +152,10 @@ func TestNativeCodexResponsesZstdNativeContinuationReachesRawForwarding(t *testi
 	recorder := httptest.NewRecorder()
 	srv.mux.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), responseBody) {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	if recorder.Code != http.StatusOK ||
+		recorder.Header().Get("Content-Encoding") != "" ||
+		!bytes.Equal(recorder.Body.Bytes(), responseBody) {
+		t.Fatalf("status=%d content-encoding=%q body=%s", recorder.Code, recorder.Header().Get("Content-Encoding"), recorder.Body.Bytes())
 	}
 	if upstreamEncoding != "zstd" || !bytes.Equal(upstreamBody, compressedRequest) {
 		t.Fatalf("upstream encoding=%q body=%x want encoding=zstd body=%x", upstreamEncoding, upstreamBody, compressedRequest)
