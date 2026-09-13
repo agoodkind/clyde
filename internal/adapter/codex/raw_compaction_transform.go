@@ -36,7 +36,9 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
-		clone.Body = newRawCompactionSSEBody(response.Body, wrapped, t.markMutated)
+		streamBody := newRawCompactionSSEBody(response.Body, wrapped, t.markMutated)
+		streamBody.strictFinalAnswer = t.strictFinalAnswer
+		clone.Body = streamBody
 		return &clone
 	}
 	originalBody := response.Body
@@ -50,6 +52,9 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	}
 	_ = originalBody.Close()
 	response.Body = io.NopCloser(bytes.NewReader(body))
+	if t.strictFinalAnswer && !rawCompactionStrictFinalAnswerJSON(body) {
+		return response
+	}
 	transformed, ok := appendRawCompactionJSON(body, wrapped)
 	if !ok || bytes.Equal(transformed, body) {
 		return response
@@ -79,8 +84,10 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
+		streamBody := newRawCompactionSSEBody(decoded, transcriptText, t.markMutated)
+		streamBody.strictFinalAnswer = t.strictFinalAnswer
 		clone.Body = newRawCompactionEncodedBody(
-			newRawCompactionSSEBody(decoded, transcriptText),
+			streamBody,
 			encoding,
 		)
 		return &clone

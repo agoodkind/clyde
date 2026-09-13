@@ -29,15 +29,16 @@ const (
 )
 
 type rawCompactionSSEBody struct {
-	inner      io.ReadCloser
-	reader     *bufio.Reader
-	transcript string
-	pending    []byte
-	pendingErr error
-	candidate  []byte
-	following  []byte
-	disabled   bool
-	onMutated  func()
+	inner             io.ReadCloser
+	reader            *bufio.Reader
+	transcript        string
+	pending           []byte
+	pendingErr        error
+	candidate         []byte
+	following         []byte
+	disabled          bool
+	onMutated         func()
+	strictFinalAnswer bool
 }
 
 type rawCompactionMutation struct {
@@ -50,7 +51,7 @@ func NewRawResponsesCompactionV2FinalAnswerTransformer(request RawResponsesReque
 	if recovery == nil || !rawResponsesCompactionV2FinalAnswer(request.Header) {
 		return nil
 	}
-	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}}
+	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}, strictFinalAnswer: rawResponsesCompactionV2FinalAnswerTurn(request.Header)}
 }
 
 // DidMutateResponse reports whether this transformer produced tagged output.
@@ -70,6 +71,14 @@ func rawResponsesCompactionV2FinalAnswer(header http.Header) bool {
 		return false
 	}
 	return metadata.Compaction.Phase == "final_answer"
+}
+
+func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {
+	var metadata rawResponsesCompactionMetadata
+	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
+		return false
+	}
+	return metadata.RequestKind == "turn" && metadata.Compaction.Phase == "final_answer"
 }
 
 func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutatedCallbacks ...func()) *rawCompactionSSEBody {
@@ -216,6 +225,9 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 	if len(b.candidate) == 0 {
 		b.pending = frame
 		return b.queueSSEError(readErr)
+	}
+	if b.strictFinalAnswer && !rawCompactionStrictFinalAnswerSSEFrame(frame) {
+		return b.failOpenSSE(frame, readErr)
 	}
 	mutatedFrames, ok := appendRawCompactionSSEStreamEvents(b.candidate, b.following, frame, b.transcript)
 	if !ok {

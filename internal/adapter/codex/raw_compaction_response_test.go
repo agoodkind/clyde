@@ -145,7 +145,7 @@ func TestRawResponsesCompactionPreservesInterveningSSEFrames(t *testing.T) {
 	heartbeatIndex := bytes.Index(body, []byte(heartbeat))
 	interveningIndex := bytes.Index(body, []byte("response.future"))
 	completedIndex := bytes.Index(body, []byte("response.completed"))
-	if itemIndex < 0 || heartbeatIndex <= itemIndex || interveningIndex <= heartbeatIndex || completedIndex <= interveningIndex {
+	if heartbeatIndex < 0 || itemIndex <= heartbeatIndex || interveningIndex <= itemIndex || completedIndex <= interveningIndex {
 		t.Fatalf("intervening SSE frame order changed: %s", body)
 	}
 }

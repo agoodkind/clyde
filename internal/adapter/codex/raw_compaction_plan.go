@@ -61,9 +61,10 @@ func hasRawResponsesNativeContinuationItem(request RawResponsesRequest, wanted .
 // RawResponsesCompactionTransformer appends the removed native transcript to
 // the successful compaction response.
 type RawResponsesCompactionTransformer struct {
-	transcript string
-	stream     bool
-	mutation   *rawCompactionMutation
+	transcript        string
+	stream            bool
+	mutation          *rawCompactionMutation
+	strictFinalAnswer bool
 }
 
 type rawCompactionContentEncoding string
