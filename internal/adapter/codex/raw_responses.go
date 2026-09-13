@@ -227,6 +227,9 @@ func rawResponsesHeaders(raw RawResponsesRequest, token, accountID string) http.
 	} {
 		headers.Del(header)
 	}
+	if rawResponsesRequestIsLocalCompaction(raw.Header) {
+		headers.Set("Accept-Encoding", "identity")
+	}
 	headers.Set("Authorization", "Bearer "+token)
 	if strings.TrimSpace(accountID) != "" {
 		headers.Set("Chatgpt-Account-Id", accountID)
