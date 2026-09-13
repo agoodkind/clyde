@@ -29,11 +29,8 @@ const (
 type KVRow struct {
 	Key   string
 	Value []byte
-	// RowID is SQLite's own row identifier. Cursor's key-value tables declare
-	// `key TEXT UNIQUE ON CONFLICT REPLACE`, so a rewritten row is reinserted and
-	// takes a new, higher rowid. That makes the rowid the store's record of write
-	// order, which is the only ordering signal left when two rows share a
-	// millisecond-coarse timestamp.
+	// RowID is SQLite's own row identifier. It orders inserted rows, but Cursor
+	// can update a value in place without changing it.
 	RowID int64
 }
 
@@ -269,10 +266,9 @@ func readKVValueInKnownTable(
 	return value, found, err
 }
 
-// readKVRowInKnownTable reads one exact key and the row's rowid, which is what a
-// caller comparing this read against an earlier one needs: a rewritten row is
-// reinserted under a new rowid, so an unchanged rowid is the store's own evidence
-// that the value is the same one.
+// readKVRowInKnownTable reads one exact key and the row's rowid. The rowid orders
+// inserts but can survive an in-place value update, so callers that need change
+// detection must also compare the value or another content selector.
 func readKVRowInKnownTable(
 	ctx context.Context,
 	db *sql.DB,

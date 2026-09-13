@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/mattn/go-sqlite3"
+	"goodkind.io/gklog"
 )
 
 // Availability can recover without a content stamp change. Malformed JSON,
@@ -59,7 +60,7 @@ func (diagnostics *cachedReadDiagnostics) start(ctx context.Context, changed boo
 		diagnostics.previous = nil
 	}
 	attempt := &cachedReadAttempt{mu: sync.Mutex{}, previous: diagnostics.previous, current: make(map[cachedReadDiagnostic]bool)}
-	logger := slog.New(&cachedReadHandler{next: slog.Default().Handler(), attempt: attempt, scope: ""})
+	logger := slog.New(&cachedReadHandler{next: gklog.LoggerFromContext(ctx).Handler(), attempt: attempt, scope: ""})
 	return context.WithValue(ctx, cachedReadLoggerKey(0), logger), attempt
 }
 
@@ -76,7 +77,7 @@ func discoveryReadLogger(ctx context.Context) *slog.Logger {
 			return logger
 		}
 	}
-	return slog.Default()
+	return gklog.LoggerFromContext(ctx)
 }
 
 // cachedReadHandler only wraps a cache refresh. Outside that read the original

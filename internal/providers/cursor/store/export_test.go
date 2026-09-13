@@ -1,6 +1,7 @@
 package cursorstore
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
@@ -28,6 +29,20 @@ type DiscoveryReadCounter struct {
 }
 
 var testDriverSequence atomic.Uint64
+
+func readComposerBubbleStocksForTest(ctx context.Context, db *sql.DB) (map[string]ComposerBubbleStock, error) {
+	snapshot, err := beginReadSnapshot(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	defer snapshot.rollback()
+	inventory, err := readComposerBubbleSelectors(ctx, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	stocks, _, _, err := refreshComposerBubbleStocksInSnapshot(ctx, snapshot, inventory.selectors, nil, nil)
+	return stocks, err
+}
 
 // ObserveDiscoveryReads replaces only Clyde's readonly driver for this test.
 func ObserveDiscoveryReads(t *testing.T) *DiscoveryReadCounter {

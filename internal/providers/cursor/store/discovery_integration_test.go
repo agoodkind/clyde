@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	cursorparser "goodkind.io/clyde/internal/providers/cursor/parser"
 	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
+	"goodkind.io/gklog"
 )
 
 func discoveryFixture(t *testing.T) (cursorstore.DataRoot, cursorstore.WorkspaceEntry, *cursorparser.Parser) {
@@ -76,6 +79,59 @@ func discoverRecords(t *testing.T, parser *cursorparser.Parser, prior map[string
 		records[candidate.Path] = record
 	}
 	return byID, records
+}
+
+type stockRefreshEvent struct {
+	Message              string `json:"msg"`
+	SelectorDurationMS   *int64 `json:"selector_duration_ms"`
+	ProjectionDurationMS *int64 `json:"projection_duration_ms"`
+	TotalComposers       int    `json:"total_composers"`
+	ReusedComposers      int    `json:"reused_composers"`
+	ProjectedComposers   int    `json:"projected_composers"`
+	ProjectedRows        int64  `json:"projected_rows"`
+	ProjectionQueries    int    `json:"projection_queries"`
+}
+
+func takeStockRefreshEvent(t *testing.T, logs *bytes.Buffer) stockRefreshEvent {
+	t.Helper()
+	decoder := json.NewDecoder(logs)
+	for {
+		var event stockRefreshEvent
+		err := decoder.Decode(&event)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode stock refresh event: %v", err)
+		}
+		if event.Message == "providers.cursor.store.composer_stock_refresh_completed" {
+			return event
+		}
+	}
+	t.Fatal("stock refresh completion event missing")
+	return stockRefreshEvent{}
+}
+
+func assertStockRefreshEvent(
+	t *testing.T,
+	event stockRefreshEvent,
+	totalComposers int,
+	reusedComposers int,
+	projectedComposers int,
+	projectedRows int64,
+	projectionQueries int,
+) {
+	t.Helper()
+	if event.SelectorDurationMS == nil || event.ProjectionDurationMS == nil {
+		t.Fatalf("stock refresh durations missing: %+v", event)
+	}
+	if event.TotalComposers != totalComposers ||
+		event.ReusedComposers != reusedComposers ||
+		event.ProjectedComposers != projectedComposers ||
+		event.ProjectedRows != projectedRows ||
+		event.ProjectionQueries != projectionQueries {
+		t.Fatalf("stock refresh event = %+v", event)
+	}
 }
 
 func TestParserSharedDiscoveryReadCounts(t *testing.T) {
@@ -161,6 +217,77 @@ func TestReadGlobalDiscoveryRefreshesUnicodeByteLengthChange(t *testing.T) {
 	updated := after.Stocks["composer-a"]
 	if updated.StoredRows != 1 || !updated.HasContent || !updated.Conclusive || updated.Revision == initial.Revision {
 		t.Fatalf("Unicode byte-length change did not refresh stock: before=%+v after=%+v", initial, updated)
+	}
+}
+
+func TestReadGlobalDiscoveryReusesUnchangedComposerStocks(t *testing.T) {
+	root, _, _ := discoveryFixture(t)
+	var logs bytes.Buffer
+	ctx := gklog.WithLogger(t.Context(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	execDiscoveryStatements(t, root.GlobalDBPath,
+		`INSERT INTO composerHeaders VALUES ('composer-b', 'workspace', 1710000000200, 1710000000300, 0, 0, '{"name":"Headerless B"}')`,
+		`UPDATE cursorDiskKV SET value = '{"composerId":"composer-b","createdAt":1710000000200,"lastUpdatedAt":1710000000300,"fullConversationHeadersOnly":[]}' WHERE key = 'composerData:composer-b'`,
+		`INSERT INTO cursorDiskKV VALUES ('bubbleId:composer-b:bubble-1', '{"_v":3,"bubbleId":"bubble-1","type":1,"text":"headerless question"}')`)
+
+	initial := cursorstore.ReadGlobalDiscovery(ctx, root.GlobalDBPath)
+	if initial.Err != nil || initial.Metadata.Err != nil {
+		t.Fatalf("initial discovery failed: %v, %v", initial.Err, initial.Metadata.Err)
+	}
+	assertStockRefreshEvent(t, takeStockRefreshEvent(t, &logs), 2, 0, 2, 3, 1)
+	initialA := initial.Stocks["composer-a"]
+	initialB := initial.Stocks["composer-b"]
+	if initialB.StoredRows != 1 || !initialB.HasContent || !initialB.Conclusive || len(initial.Headers["composer-b"].FullConversationHeadersOnly) != 0 {
+		t.Fatalf("headerless composer stock = %+v header = %+v", initialB, initial.Headers["composer-b"])
+	}
+
+	execDiscoveryStatements(t, root.GlobalDBPath,
+		`UPDATE composerHeaders SET value = '{"name":"Renamed B"}' WHERE composerId = 'composer-b'`)
+	metadataOnly := cursorstore.ReadGlobalDiscovery(ctx, root.GlobalDBPath)
+	if metadataOnly.Err != nil || metadataOnly.Metadata.Err != nil {
+		t.Fatalf("metadata discovery failed: %v, %v", metadataOnly.Err, metadataOnly.Metadata.Err)
+	}
+	assertStockRefreshEvent(t, takeStockRefreshEvent(t, &logs), 2, 2, 0, 0, 0)
+	if metadataOnly.Metadata.ByComposerID["composer-b"].Name != "Renamed B" {
+		t.Fatalf("metadata-only refresh did not publish rename: %+v", metadataOnly.Metadata.ByComposerID["composer-b"])
+	}
+	if metadataOnly.Stocks["composer-a"].Revision != initialA.Revision || metadataOnly.Stocks["composer-b"].Revision != initialB.Revision {
+		t.Fatal("metadata-only refresh changed a composer revision")
+	}
+
+	execDiscoveryStatements(t, root.GlobalDBPath,
+		`INSERT INTO cursorDiskKV VALUES ('bubbleId:composer-a:bubble-3', '{"_v":3,"bubbleId":"bubble-3","type":2,"text":"appended"}')`)
+	appended := cursorstore.ReadGlobalDiscovery(ctx, root.GlobalDBPath)
+	assertStockRefreshEvent(t, takeStockRefreshEvent(t, &logs), 2, 1, 1, 3, 1)
+	if appended.Stocks["composer-a"].Revision == initialA.Revision || appended.Stocks["composer-a"].StoredRows != 3 {
+		t.Fatalf("append did not update composer-a: before=%+v after=%+v", initialA, appended.Stocks["composer-a"])
+	}
+	if appended.Stocks["composer-b"].Revision != initialB.Revision {
+		t.Fatal("append in composer-a changed composer-b revision")
+	}
+
+	execDiscoveryStatements(t, root.GlobalDBPath,
+		`UPDATE cursorDiskKV SET value = json_set(value, '$.text', 'first message made longer') WHERE key = 'bubbleId:composer-a:bubble-1'`)
+	replaced := cursorstore.ReadGlobalDiscovery(ctx, root.GlobalDBPath)
+	assertStockRefreshEvent(t, takeStockRefreshEvent(t, &logs), 2, 1, 1, 3, 1)
+	if replaced.Stocks["composer-a"].Revision == appended.Stocks["composer-a"].Revision {
+		t.Fatal("different-byte-length replacement did not change composer-a revision")
+	}
+	if replaced.Stocks["composer-b"].Revision != initialB.Revision {
+		t.Fatal("replacement in composer-a changed composer-b revision")
+	}
+
+	execDiscoveryStatements(t, root.GlobalDBPath,
+		`DELETE FROM cursorDiskKV WHERE key = 'bubbleId:composer-a:bubble-3'`)
+	deleted := cursorstore.ReadGlobalDiscovery(ctx, root.GlobalDBPath)
+	assertStockRefreshEvent(t, takeStockRefreshEvent(t, &logs), 2, 1, 1, 2, 1)
+	if deleted.Stocks["composer-a"].Revision == replaced.Stocks["composer-a"].Revision || deleted.Stocks["composer-a"].StoredRows != 2 {
+		t.Fatalf("delete did not update composer-a: before=%+v after=%+v", replaced.Stocks["composer-a"], deleted.Stocks["composer-a"])
+	}
+	if deleted.Stocks["composer-b"].Revision != initialB.Revision || !deleted.Stocks["composer-b"].HasContent {
+		t.Fatal("composer-b did not remain unchanged and content-bearing")
+	}
+	if strings.Contains(logs.String(), "composer_stock_refresh_completed") {
+		t.Fatalf("unexpected extra stock refresh completion: %s", logs.String())
 	}
 }
 
