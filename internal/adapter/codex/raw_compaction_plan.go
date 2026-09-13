@@ -2,7 +2,6 @@ package codex
 
 import (
 	"encoding/json"
-	"net/http"
 	"slices"
 	"strings"
 	"time"
