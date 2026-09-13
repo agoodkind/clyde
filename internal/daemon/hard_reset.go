@@ -311,48 +311,6 @@ func printResetPlan(ctx context.Context, output io.Writer, targets []resetTarget
 	return nil
 }
 
-func resetPlanPaths(ctx context.Context, targets []resetTarget, cfg *config.Config) ([]string, []string, error) {
-	var removals, preserved []string
-	removedTrees := make(map[string]bool)
-	for _, target := range targets {
-		path, err := resolvedResetPath(target.Path)
-		if err != nil {
-			return nil, nil, err
-		}
-		if _, found := removedTrees[path]; !found {
-			removals = append(removals, path)
-		}
-		removedTrees[path] = removedTrees[path] || target.RemoveTree
-	}
-	if cfg == nil {
-		return removals, preserved, nil
-	}
-	roots, err := resetProtectedDirectories(ctx, cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, root := range roots {
-		path, err := resolvedResetPath(root)
-		if err != nil {
-			return nil, nil, err
-		}
-		if slices.Contains(preserved, path) {
-			continue
-		}
-		overlaps := false
-		for removed, removeTree := range removedTrees {
-			if path == removed || (removeTree && withinResetRoot(path, removed)) || withinResetRoot(removed, path) {
-				overlaps = true
-				break
-			}
-		}
-		if !overlaps {
-			preserved = append(preserved, path)
-		}
-	}
-	return removals, preserved, nil
-}
-
 func withinResetRoot(path, root string) bool {
 	if !filepath.IsAbs(path) || !filepath.IsAbs(root) {
 		return false
@@ -470,6 +428,48 @@ func resolvedResetPath(path string) (_ string, err error) {
 		}
 		path = parent
 	}
+}
+
+func resetPlanPaths(ctx context.Context, targets []resetTarget, cfg *config.Config) ([]string, []string, error) {
+	var removals, preserved []string
+	removedTrees := make(map[string]bool)
+	for _, target := range targets {
+		path, err := resolvedResetPath(target.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, found := removedTrees[path]; !found {
+			removals = append(removals, path)
+		}
+		removedTrees[path] = removedTrees[path] || target.RemoveTree
+	}
+	if cfg == nil {
+		return removals, preserved, nil
+	}
+	roots, err := resetProtectedDirectories(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, root := range roots {
+		path, err := resolvedResetPath(root)
+		if err != nil {
+			return nil, nil, err
+		}
+		if slices.Contains(preserved, path) {
+			continue
+		}
+		overlaps := false
+		for removed, removeTree := range removedTrees {
+			if path == removed || (removeTree && withinResetRoot(path, removed)) || withinResetRoot(removed, path) {
+				overlaps = true
+				break
+			}
+		}
+		if !overlaps {
+			preserved = append(preserved, path)
+		}
+	}
+	return removals, preserved, nil
 }
 
 func resetProtectedDirectories(ctx context.Context, cfg *config.Config) (_ []string, err error) {
