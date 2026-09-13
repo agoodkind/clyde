@@ -45,6 +45,8 @@ func TestRawResponsesCompactionV2RecoveryResponseRejectsDuplicateFields(t *testi
 		{name: "role", item: strings.Replace(item, `"role":"assistant"`, `"role":"user","role":"assistant"`, 1)},
 		{name: "type", item: strings.Replace(item, `"type":"message"`, `"type":"reasoning","type":"message"`, 1)},
 		{name: "phase", item: strings.Replace(item, `"phase":"final_answer"`, `"phase":"commentary","phase":"final_answer"`, 1)},
+		{name: "mixed case phase", item: strings.Replace(item, `"phase":"final_answer"`, `"phase":"commentary","Phase":"final_answer"`, 1)},
+		{name: "mixed case text", item: strings.Replace(item, `"text":"answer"`, `"text":"ignored-first","Text":"client-visible-last"`, 1)},
 		{name: "id", item: strings.Replace(item, `"id":"message-1"`, `"id":"other","id":"message-1"`, 1)},
 	} {
 		for _, stream := range []bool{false, true} {
@@ -59,6 +61,23 @@ func TestRawResponsesCompactionV2RecoveryResponseRejectsDuplicateFields(t *testi
 			body = strings.Replace(body, `"`+field+`":`, `"`+field+`":null,"`+field+`":`, 1)
 			assertRecoveryResponsePreserved(t, body, false)
 		})
+	}
+}
+
+func TestRawResponsesCompactionPreservesEscapedUnrelatedKeys(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"summarize"}]}],"opaque\/key":{"kept":true}}`)
+	request, transformer := PrepareRawResponsesCompaction(rawCompactionRequest(t, body), RawResponsesCompactionSettings{Enabled: true})
+	if transformer == nil || bytes.Equal(request.Body, body) {
+		t.Fatal("escaped unrelated request key prevented compaction")
+	}
+	if !bytes.Contains(request.Body, []byte(`"opaque\/key":{"kept":true}`)) {
+		t.Fatalf("escaped request key changed: %s", request.Body)
+	}
+	original := `{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}],"opaque\/key":{"kept":true}}`
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(original))}
+	got := readResponseBody(t, transformer.TransformResponse(response))
+	if !bytes.Contains(got, []byte("recent user")) || !bytes.Contains(got, []byte(`"opaque\/key":{"kept":true}`)) {
+		t.Fatalf("escaped unrelated response key prevented recovery or changed: %s", got)
 	}
 }
 
