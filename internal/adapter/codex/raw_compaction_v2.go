@@ -66,7 +66,7 @@ func PlanRawResponsesCompactionV2(
 	plan, ok := planRawResponsesCompactionTail(
 		transcriptRawItems[:completeEnd],
 		transcriptItems[:completeEnd],
-		maxRawResponsesCompactionV2RecoveryBytes,
+		min(rawCompactionMaxBytes(settings), maxRawResponsesCompactionV2RecoveryBytes),
 		normalizedRecentFraction(settings.RecentFraction),
 	)
 	if !ok {
@@ -193,6 +193,9 @@ func rawResponsesCompactionV2CompletePrefixEnd(items []transcript.CompactedConte
 	completeEnd := 0
 	for itemIndex, item := range items {
 		if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil || item.Message.Role != "assistant" {
+			continue
+		}
+		if item.Message.Phase != "" && item.Message.Phase != "final_answer" {
 			continue
 		}
 		completeEnd = itemIndex + 1
