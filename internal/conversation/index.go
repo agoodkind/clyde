@@ -52,6 +52,7 @@ type Index struct {
 	// reports fresh records while that refresh is still running.
 	refreshRun   *refreshRun
 	lastRefresh  time.Time
+	cachePresent bool
 	cachePath    string
 	debounce     time.Duration
 	scanProvider func(context.Context, *Registry, scanCache) (scanResult, error)
@@ -75,6 +76,7 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		refreshing:       false,
 		refreshRun:       nil,
 		lastRefresh:      time.Time{},
+		cachePresent:     false,
 		cachePath:        CachePath(),
 		debounce:         refreshDebounce,
 		scanProvider:     scan,
@@ -91,13 +93,20 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Minute
 	}
-	// Load the cached records and their file stamps before the first refresh so
-	// the worker reuses unchanged transcripts and re-parses only what changed,
-	// rather than re-reading the whole corpus on every start.
+	// Load cached records and stamps before scheduling the first refresh so the
+	// worker can reuse unchanged transcripts when the cache becomes due.
 	if err := idx.loadOnce(); err != nil {
 		slog.WarnContext(ctx, "conversation.index.start_load_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 	}
-	idx.refreshAsync(ctx, RefreshReasonPeriodic)
+	idx.mu.Lock()
+	firstRefreshDelay := interval
+	if !idx.cachePresent {
+		firstRefreshDelay = 0
+	} else if !idx.lastRefresh.IsZero() {
+		firstRefreshDelay = idx.lastRefresh.Add(interval).Sub(clock.Now())
+		firstRefreshDelay = max(firstRefreshDelay, 0)
+	}
+	idx.mu.Unlock()
 	defer func() {
 		idx.mu.Lock()
 		run := idx.refreshRun
@@ -106,14 +115,15 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 			<-run.done
 		}
 	}()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(firstRefreshDelay)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			idx.refreshAsync(ctx, RefreshReasonPeriodic)
+			timer.Reset(interval)
 		}
 	}
 }
@@ -619,12 +629,13 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshRe
 		return fmt.Errorf("refresh conversation index: %w", err)
 	}
 	sortRecords(result.records)
+	completedAt := clock.Now()
 	if result.changed {
-		if err := writeCache(idx.cachePath, result.records, result.stamps, result.multiStates); err != nil {
+		if err := writeCache(idx.cachePath, result.records, result.stamps, result.multiStates, completedAt); err != nil {
 			return err
 		}
 	}
-	idx.installRefreshResult(result)
+	idx.installRefreshResult(result, completedAt)
 	cacheChanged = result.changed
 	if result.changed {
 		idx.reportSkippedSubagents(ctx, result.records)
@@ -642,10 +653,7 @@ func (idx *Index) refreshProviderLabel() string {
 	return strings.Join(labels, ",")
 }
 
-// refreshRun is one rebuild in flight and what it produced. The outcome travels
-// with the channel because a caller that waits on someone else's rebuild is
-// asking whether the records are now rebuilt, and a closed channel alone answers
-// only that the rebuild stopped.
+// refreshRun is one rebuild in flight and the outcome reported to waiters.
 type refreshRun struct {
 	done chan struct{}
 	// err is the rebuild's outcome, written once before done is closed and read
@@ -671,9 +679,7 @@ func (idx *Index) beginRefresh() (*refreshRun, scanCache, bool) {
 	}, true
 }
 
-// endRefresh records the rebuild's outcome, releases the refresh slot, and wakes
-// every caller waiting on it. It runs after the records are installed, so a woken
-// caller reads the new snapshot rather than the one it was waiting to replace.
+// endRefresh releases the refresh slot after the new records are installed.
 func (idx *Index) endRefresh(run *refreshRun, err error) {
 	run.err = err
 	idx.mu.Lock()
@@ -685,13 +691,7 @@ func (idx *Index) endRefresh(run *refreshRun, err error) {
 	close(run.done)
 }
 
-// waitForRefresh blocks until the refresh already in flight finishes, and
-// reports what it produced.
-//
-// A rebuild that returned an error installed nothing, so reporting the wait as a
-// success would tell the caller the records are rebuilt when they are the same
-// ones it was waiting to replace. The background rebuild logs its own failure,
-// but the waiter is a different caller and the log is not an answer to it.
+// waitForRefresh reports the outcome of the refresh already in flight.
 func (idx *Index) waitForRefresh(ctx context.Context, run *refreshRun) error {
 	if run == nil {
 		return nil
@@ -709,7 +709,7 @@ func (idx *Index) waitForRefresh(ctx context.Context, run *refreshRun) error {
 	}
 }
 
-func (idx *Index) installRefreshResult(result scanResult) {
+func (idx *Index) installRefreshResult(result scanResult, completedAt time.Time) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.records = result.records
@@ -717,7 +717,8 @@ func (idx *Index) installRefreshResult(result scanResult) {
 	idx.prevStamps = result.stamps
 	idx.prevMultiStates = result.multiStates
 	idx.loaded = true
-	idx.lastRefresh = clock.Now()
+	idx.lastRefresh = completedAt
+	idx.cachePresent = true
 }
 
 // reportSkippedSubagents names how many conversations the setting is hiding, so
@@ -751,14 +752,16 @@ func (idx *Index) loadOnce() error {
 		return nil
 	}
 
-	records, stamps, multiStates, err := readCache(idx.cachePath)
+	cache, present, err := readCache(idx.cachePath)
 	if err != nil {
 		return err
 	}
-	idx.records = records
-	idx.prevRecords = recordsByPath(records)
-	idx.prevStamps = stamps
-	idx.prevMultiStates = multiStates
+	idx.records = cache.Records
+	idx.prevRecords = recordsByPath(cache.Records)
+	idx.prevStamps = cache.Stamps
+	idx.prevMultiStates = cache.MultiStates
+	idx.lastRefresh = cache.RefreshCompletedAt
+	idx.cachePresent = present
 	idx.loaded = true
 	return nil
 }
@@ -810,40 +813,39 @@ func recordsByPath(records []Record) map[string]Record {
 	return byPath
 }
 
-// cacheFile is the on-disk index cache. It persists the per-file stamps next to
-// the records so a freshly started worker reuses them on its first refresh and
-// re-parses only changed transcripts, instead of re-reading the whole corpus on
-// every start.
+// cacheFile is the on-disk index cache. It persists the successful refresh time
+// and per-file stamps next to the records so a freshly started worker waits
+// until the cache is due and then re-parses only changed transcripts.
 type cacheFile struct {
 	// Version is the record shape the writing binary used. A file written before
 	// the field existed decodes to zero, which is older than every real version.
-	Version     int                                   `json:"version"`
-	Records     []Record                              `json:"records"`
-	Stamps      map[string]FileStamp                  `json:"stamps"`
-	MultiStates map[string]MultiConversationScanState `json:"multi_conversation_scan_states,omitempty"`
+	Version            int                                   `json:"version"`
+	Records            []Record                              `json:"records"`
+	Stamps             map[string]FileStamp                  `json:"stamps"`
+	MultiStates        map[string]MultiConversationScanState `json:"multi_conversation_scan_states,omitempty"`
+	RefreshCompletedAt time.Time                             `json:"refresh_completed_at,omitzero"`
 }
 
-func readCache(
-	path string,
-) ([]Record, map[string]FileStamp, map[string]MultiConversationScanState, error) {
+func readCache(path string) (cacheFile, bool, error) {
+	var empty cacheFile
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil, nil, nil
+			return empty, false, nil
 		}
 		slog.Warn("conversation.index.cache_read_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
-		return nil, nil, nil, fmt.Errorf("read conversation cache: %w", err)
+		return empty, false, fmt.Errorf("read conversation cache: %w", err)
 	}
 	var cache cacheFile
 	if err := json.Unmarshal(data, &cache); err != nil {
 		slog.Warn("conversation.index.cache_decode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
-		return nil, nil, nil, fmt.Errorf("decode conversation cache: %w", err)
+		return empty, false, fmt.Errorf("decode conversation cache: %w", err)
 	}
 	if cache.Version != cacheFormatVersion {
-		return nil, nil, nil, fmt.Errorf("unsupported conversation cache format %d: run clyde daemon hard-reset", cache.Version)
+		return empty, false, fmt.Errorf("unsupported conversation cache format %d: run clyde daemon hard-reset", cache.Version)
 	}
 	sortRecords(cache.Records)
-	return cache.Records, cache.Stamps, cache.MultiStates, nil
+	return cache, true, nil
 }
 
 func writeCache(
@@ -851,16 +853,18 @@ func writeCache(
 	records []Record,
 	stamps map[string]FileStamp,
 	multiStates map[string]MultiConversationScanState,
+	refreshCompletedAt time.Time,
 ) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		slog.Warn("conversation.index.cache_mkdir_failed", "concern", "conversation.index", "component", "conversation", "path", filepath.Dir(path), "err", err)
 		return fmt.Errorf("create conversation cache dir: %w", err)
 	}
 	data, err := json.MarshalIndent(cacheFile{
-		Version:     cacheFormatVersion,
-		Records:     records,
-		Stamps:      stamps,
-		MultiStates: multiStates,
+		Version:            cacheFormatVersion,
+		Records:            records,
+		Stamps:             stamps,
+		MultiStates:        multiStates,
+		RefreshCompletedAt: refreshCompletedAt,
 	}, "", "  ")
 	if err != nil {
 		slog.Warn("conversation.index.cache_encode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
