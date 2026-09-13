@@ -209,21 +209,22 @@ func TestPlanRawResponsesCompactionV2RendersDeveloperMessages(t *testing.T) {
 }
 
 func TestPlanRawResponsesCompactionV2BoundsRecoveryTranscript(t *testing.T) {
+	settings := RawResponsesCompactionSettings{Enabled: true, ContextWindowTokens: 2_000_000, MaxTokens: 2_000_000, ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5}
 	underRequest := rawResponsesCompactionV2DeveloperRequest(t, "x")
-	basePlan, ok := PlanRawResponsesCompactionV2(underRequest, RawResponsesCompactionSettings{Enabled: true, RecentFraction: 0.5})
+	basePlan, ok := PlanRawResponsesCompactionV2(underRequest, settings)
 	if !ok {
 		t.Fatal("plan developer boundary fixture")
 	}
 	underText := strings.Repeat("x", maxRawResponsesCompactionV2RecoveryBytes-len(basePlan.Transcript)+1)
 	underRequest = rawResponsesCompactionV2DeveloperRequest(t, underText)
-	underPlan, ok := PlanRawResponsesCompactionV2(underRequest, RawResponsesCompactionSettings{Enabled: true, RecentFraction: 0.5})
+	underPlan, ok := PlanRawResponsesCompactionV2(underRequest, settings)
 	if !ok || len(underPlan.Transcript) > maxRawResponsesCompactionV2RecoveryBytes {
 		t.Fatalf("under-cap v2 recovery plan ok=%t bytes=%d", ok, len(underPlan.Transcript))
 	}
 
 	overText := underText + "xx"
 	overRequest := rawResponsesCompactionV2DeveloperRequest(t, overText)
-	if _, ok := PlanRawResponsesCompactionV2(overRequest, RawResponsesCompactionSettings{Enabled: true, RecentFraction: 0.5}); ok {
+	if _, ok := PlanRawResponsesCompactionV2(overRequest, settings); ok {
 		t.Fatal("over-cap v2 recovery plan unexpectedly succeeded")
 	}
 }
