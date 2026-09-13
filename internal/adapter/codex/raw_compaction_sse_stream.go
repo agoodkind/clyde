@@ -238,7 +238,7 @@ func rawCompactionUnknownSSEFrameIsValid(frame []byte) bool {
 	if dataCount == 0 {
 		return true
 	}
-	return dataCount == 1 && json.Valid(data)
+	return json.Valid(data)
 }
 
 func (b *rawCompactionSSEBody) Close() error {

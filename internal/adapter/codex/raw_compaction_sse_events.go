@@ -267,8 +267,15 @@ func shiftRawCompactionSSEFrames(frames []byte, previousSequence int) ([]byte, i
 			shifted = append(shifted, frame...)
 			continue
 		}
+		if dataCount == 0 {
+			return nil, 0, false
+		}
 		sequence, ok := rawCompactionSSEIntegerField(data, "sequence_number")
-		if dataCount == 0 || !ok || sequence <= lastSequence {
+		if !ok {
+			shifted = append(shifted, frame...)
+			continue
+		}
+		if sequence <= lastSequence {
 			return nil, 0, false
 		}
 		mutatedSequence, ok := addRawCompactionSSESyntheticEventCount(sequence)
