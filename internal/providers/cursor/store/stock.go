@@ -3,12 +3,31 @@ package cursorstore
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash"
+	"maps"
 	"sort"
 	"strconv"
+	"strings"
 )
+
+type bubbleRefreshPath string
+
+const (
+	bubbleRefreshPathDelta         bubbleRefreshPath = "delta"
+	bubbleRefreshPathActiveInPlace bubbleRefreshPath = "active_in_place"
+	bubbleRefreshPathFull          bubbleRefreshPath = "full_reconciliation"
+	changedComposerRowsQuery                         = "SELECT rowid, key FROM cursorDiskKV NOT INDEXED WHERE rowid > ? ORDER BY rowid"
+)
+
+type bubbleChangeState struct {
+	rows    int64
+	lastRow int64
+	lastKey string
+}
 
 type composerStockBuilder struct {
 	stock     ComposerBubbleStock
@@ -40,6 +59,184 @@ type composerStockRefreshStats struct {
 	projectedComposers int
 	projectedRows      int64
 	projectionQueries  int
+	selectorQueries    int
+}
+
+func readBubbleChangeState(ctx context.Context, snapshot readSnapshot) (bubbleChangeState, error) {
+	var state bubbleChangeState
+	logger := discoveryReadLogger(ctx)
+	exists, err := snapshot.tableExists(ctx, string(KVTableCursorDiskKV))
+	if err != nil {
+		logger.WarnContext(ctx, "providers.cursor.store.bubble_change_table_failed", "concern", concern, "err", err)
+		return state, err
+	}
+	if !exists {
+		return state, nil
+	}
+	bounds := keyRangeForPrefix(bubbleKeyPrefix)
+	countQuery := "SELECT count(*) FROM cursorDiskKV" + keyRangePredicate(bounds, "")
+	if err := snapshot.tx.QueryRowContext(ctx, countQuery, bounds.Lower, bounds.Upper).Scan(&state.rows); err != nil {
+		logger.WarnContext(ctx, "providers.cursor.store.bubble_change_count_failed", "concern", concern, "err", err)
+		return state, fmt.Errorf("count cursor bubble change rows: %w", err)
+	}
+	err = snapshot.tx.QueryRowContext(ctx,
+		"SELECT rowid, key FROM cursorDiskKV NOT INDEXED ORDER BY rowid DESC LIMIT 1",
+	).Scan(&state.lastRow, &state.lastKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return state, nil
+	}
+	if err != nil {
+		logger.WarnContext(ctx, "providers.cursor.store.change_high_water_failed", "concern", concern, "err", err)
+		return state, fmt.Errorf("read cursor change high water row: %w", err)
+	}
+	return state, nil
+}
+
+func readChangedComposerIDs(
+	ctx context.Context,
+	snapshot readSnapshot,
+	afterRow int64,
+) (map[string]bool, int64, error) {
+	logger := discoveryReadLogger(ctx)
+	rows, err := snapshot.tx.QueryContext(ctx, changedComposerRowsQuery, afterRow)
+	if err != nil {
+		logger.WarnContext(ctx, "providers.cursor.store.changed_rows_query_failed", "concern", concern, "after_row", afterRow, "err", err)
+		return nil, 0, fmt.Errorf("query cursor changed rows after %d: %w", afterRow, err)
+	}
+	defer func() { _ = rows.Close() }()
+	changed := make(map[string]bool)
+	var newRows int64
+	for rows.Next() {
+		var rowID int64
+		var key string
+		if err := rows.Scan(&rowID, &key); err != nil {
+			logger.WarnContext(ctx, "providers.cursor.store.changed_row_scan_failed", "concern", concern, "err", err)
+			return nil, 0, fmt.Errorf("scan cursor changed row: %w", err)
+		}
+		newRows++
+		if composerID, _, ok := parseBubbleKey(key); ok {
+			changed[composerID] = true
+			continue
+		}
+		if composerID, ok := strings.CutPrefix(key, composerDataKeyPrefix); ok && composerID != "" {
+			changed[composerID] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		logger.WarnContext(ctx, "providers.cursor.store.changed_rows_iterate_failed", "concern", concern, "err", err)
+		return nil, 0, fmt.Errorf("iterate cursor changed rows: %w", err)
+	}
+	return changed, newRows, nil
+}
+
+func readMostRecentlyActiveComposerID(ctx context.Context, snapshot readSnapshot) (string, int, error) {
+	logger := discoveryReadLogger(ctx)
+	exists, err := snapshot.tableExists(ctx, composerHeadersTable)
+	if err != nil {
+		logger.WarnContext(ctx, "providers.cursor.store.active_composer_table_failed", "concern", concern, "err", err)
+		return "", 1, err
+	}
+	if !exists {
+		return "", 1, nil
+	}
+	var composerID string
+	err = snapshot.tx.QueryRowContext(ctx,
+		"SELECT composerId FROM composerHeaders ORDER BY CAST(lastUpdatedAt AS INTEGER) DESC, rowid DESC LIMIT 1",
+	).Scan(&composerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 2, nil
+	}
+	if err != nil {
+		logger.WarnContext(ctx, "providers.cursor.store.active_composer_query_failed", "concern", concern, "err", err)
+		return "", 2, fmt.Errorf("read cursor active composer: %w", err)
+	}
+	return composerID, 2, nil
+}
+
+func expectedBubbleRows(
+	priorRows int64,
+	changed map[string]bool,
+	prior map[string]composerBubbleSelector,
+	current map[string]composerBubbleSelector,
+) int64 {
+	expected := priorRows
+	for composerID := range changed {
+		expected -= prior[composerID].storedRows
+		expected += current[composerID].storedRows
+	}
+	return expected
+}
+
+func refreshChangedComposerBubbleSelectors(
+	ctx context.Context,
+	snapshot readSnapshot,
+	changed map[string]bool,
+	prior map[string]composerBubbleSelector,
+	queryCount int,
+) (map[string]composerBubbleSelector, int, error) {
+	selectors := make(map[string]composerBubbleSelector, len(prior))
+	maps.Copy(selectors, prior)
+	composerIDs := make([]string, 0, len(changed))
+	for composerID := range changed {
+		composerIDs = append(composerIDs, composerID)
+	}
+	sort.Strings(composerIDs)
+	for _, composerID := range composerIDs {
+		selector, found, err := readComposerBubbleSelector(ctx, snapshot, composerID)
+		queryCount++
+		if err != nil {
+			return nil, queryCount, err
+		}
+		if !found {
+			delete(selectors, composerID)
+			continue
+		}
+		selectors[composerID] = selector
+	}
+	return selectors, queryCount, nil
+}
+
+func readComposerBubbleSelector(
+	ctx context.Context,
+	snapshot readSnapshot,
+	composerID string,
+) (composerBubbleSelector, bool, error) {
+	var selector composerBubbleSelector
+	logger := discoveryReadLogger(ctx)
+	bounds := keyRangeForPrefix(bubbleKeyPrefix + composerID + ":")
+	rows, err := snapshot.queryRange(ctx,
+		"SELECT key, rowid, COALESCE(octet_length(value), -1) FROM cursorDiskKV"+
+			keyRangePredicate(bounds, "")+" ORDER BY key",
+		bounds,
+		"composer bubble stock selector",
+	)
+	if err != nil {
+		return selector, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	hasher := sha256.New()
+	for rows.Next() {
+		var key string
+		var rowID int64
+		var valueLength int64
+		if err := rows.Scan(&key, &rowID, &valueLength); err != nil {
+			logger.WarnContext(ctx, "providers.cursor.store.composer_bubble_selector_scan_failed", "concern", concern, "composer_id", composerID, "err", err)
+			return selector, false, fmt.Errorf("scan cursor composer bubble selector: %w", err)
+		}
+		selector.storedRows++
+		writeFingerprintField(hasher, key)
+		writeFingerprintField(hasher, strconv.FormatInt(rowID, 10))
+		writeFingerprintField(hasher, strconv.FormatInt(valueLength, 10))
+	}
+	if err := rows.Err(); err != nil {
+		logger.WarnContext(ctx, "providers.cursor.store.composer_bubble_selector_iterate_failed", "concern", concern, "composer_id", composerID, "err", err)
+		return selector, false, fmt.Errorf("iterate cursor composer bubble selector: %w", err)
+	}
+	if selector.storedRows == 0 {
+		return selector, false, nil
+	}
+	copy(selector.digest[:], hasher.Sum(nil))
+	return selector, true, nil
 }
 
 func readComposerBubbleSelectors(ctx context.Context, snapshot readSnapshot) (bubbleSelectorInventory, error) {
@@ -126,6 +323,7 @@ func refreshComposerBubbleStocksInSnapshot(
 		projectedComposers: 0,
 		projectedRows:      0,
 		projectionQueries:  0,
+		selectorQueries:    0,
 	}
 	composerIDs := make([]string, 0, len(selectors))
 	for composerID := range selectors {
@@ -166,6 +364,47 @@ func refreshComposerBubbleStocksInSnapshot(
 		stats.projectionQueries++
 	}
 	return stocks, selectors, stats, nil
+}
+
+func refreshChangedComposerBubbleStocks(
+	ctx context.Context,
+	snapshot readSnapshot,
+	changed map[string]bool,
+	selectors map[string]composerBubbleSelector,
+	priorStocks map[string]ComposerBubbleStock,
+) (map[string]ComposerBubbleStock, composerStockRefreshStats, error) {
+	stocks := make(map[string]ComposerBubbleStock, len(priorStocks))
+	maps.Copy(stocks, priorStocks)
+	stats := composerStockRefreshStats{
+		totalComposers:     len(selectors),
+		reusedComposers:    0,
+		projectedComposers: 0,
+		projectedRows:      0,
+		projectionQueries:  0,
+		selectorQueries:    0,
+	}
+	composerIDs := make([]string, 0, len(changed))
+	for composerID := range changed {
+		composerIDs = append(composerIDs, composerID)
+	}
+	sort.Strings(composerIDs)
+	for _, composerID := range composerIDs {
+		selector, found := selectors[composerID]
+		if !found {
+			delete(stocks, composerID)
+			continue
+		}
+		stock, projected, err := projectComposerBubbleStock(ctx, snapshot, composerID, selector.storedRows)
+		if err != nil {
+			return nil, composerStockRefreshStats{}, err
+		}
+		stocks[composerID] = stock
+		stats.projectedComposers++
+		stats.projectedRows += projected
+		stats.projectionQueries++
+	}
+	stats.reusedComposers = stats.totalComposers - stats.projectedComposers
+	return stocks, stats, nil
 }
 
 func projectAllComposerBubbleStocks(

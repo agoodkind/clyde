@@ -234,10 +234,17 @@ type globalDiscoverySignature struct {
 	composerDigest  [sha256.Size]byte
 	bubbleDigest    [sha256.Size]byte
 	bubbleRows      int64
-	bubbleLastRow   int64
 	bubbleBytes     int64
+	tableLastRow    int64
+	tableLastKey    string
 	backgroundValue string
 	metadataDigest  [sha256.Size]byte
+}
+
+func (signature globalDiscoverySignature) sameNonBubble(other globalDiscoverySignature) bool {
+	return signature.composerDigest == other.composerDigest &&
+		signature.backgroundValue == other.backgroundValue &&
+		signature.metadataDigest == other.metadataDigest
 }
 
 // ReadGlobalDiscovery refreshes when database/WAL metadata changes or a prior
@@ -266,6 +273,7 @@ func ReadGlobalDiscovery(ctx context.Context, path string) GlobalDiscovery {
 		if unchanged {
 			cached.diagnostics.finish(attempt, nil)
 			cached.stamp = stamp
+			cached.signature, cached.signed = signature, true
 			cached.completed.Add(1)
 			return cloneGlobalDiscovery(cached.data)
 		}
@@ -302,49 +310,208 @@ func readChangedGlobalDiscovery(
 		return data, signature, err, false
 	}
 	selectorStarted := clock.Now()
-	inventory, selectorErr := readComposerBubbleSelectors(ctx, snapshot)
-	selectorDuration := clock.Since(selectorStarted)
+	selection := selectComposerBubbleRefresh(ctx, snapshot, cached)
+	state := selection.state
+	refreshPath := selection.refreshPath
+	newRows := selection.newRows
+	changedComposerIDs := selection.changedComposerIDs
+	selectors := selection.selectors
+	selectorQueries := selection.selectorQueries
+	selectorErr := selection.err
 	if selectorErr == nil {
-		signature.bubbleDigest = inventory.digest
-		signature.bubbleRows = inventory.rows
-		signature.bubbleLastRow = inventory.lastRow
-		signature.bubbleBytes = inventory.bytes
+		signature.bubbleRows = state.rows
+		signature.tableLastRow = state.lastRow
+		signature.tableLastKey = state.lastKey
+		signature.bubbleDigest = selection.digest
+		signature.bubbleBytes = selection.bytes
 	}
+	selectorDuration := clock.Since(selectorStarted)
 	signatureErr = errors.Join(signatureErr, selectorErr)
-	unchanged := signatureErr == nil && cached.known && cached.signed && signature == cached.signature
+	unchanged := refreshPath == bubbleRefreshPathDelta && signatureErr == nil && cached.known && cached.signed &&
+		signature.sameNonBubble(cached.signature) &&
+		state.rows == cached.signature.bubbleRows && len(changedComposerIDs) == 0
 	if unchanged {
+		logComposerStockRefresh(ctx, refreshPath, newRows, 0, selectorDuration, 0, composerStockRefreshStats{
+			totalComposers:     len(cached.data.selectors),
+			reusedComposers:    len(cached.data.selectors),
+			projectedComposers: 0,
+			projectedRows:      0,
+			projectionQueries:  0,
+			selectorQueries:    selectorQueries,
+		})
 		snapshot.rollback()
 		return cached.data, signature, nil, true
 	}
 	var stocks map[string]ComposerBubbleStock
-	var selectors map[string]composerBubbleSelector
 	var stockStats composerStockRefreshStats
 	stockErr := selectorErr
 	if stockErr == nil {
 		projectionStarted := clock.Now()
-		stocks, selectors, stockStats, stockErr = refreshComposerBubbleStocksInSnapshot(
-			ctx,
-			snapshot,
-			inventory.selectors,
-			cached.data.Stocks,
-			cached.data.selectors,
-		)
-		if stockErr == nil {
-			discoveryReadLogger(ctx).InfoContext(ctx,
-				"providers.cursor.store.composer_stock_refresh_completed",
-				"concern", concern,
-				"selector_duration_ms", selectorDuration.Milliseconds(),
-				"projection_duration_ms", clock.Since(projectionStarted).Milliseconds(),
-				"total_composers", stockStats.totalComposers,
-				"reused_composers", stockStats.reusedComposers,
-				"projected_composers", stockStats.projectedComposers,
-				"projected_rows", stockStats.projectedRows,
-				"projection_queries", stockStats.projectionQueries,
+		if refreshPath == bubbleRefreshPathFull {
+			stocks, selectors, stockStats, stockErr = refreshComposerBubbleStocksInSnapshot(
+				ctx, snapshot, selectors, cached.data.Stocks, cached.data.selectors,
 			)
+		} else {
+			stocks, stockStats, stockErr = refreshChangedComposerBubbleStocks(
+				ctx, snapshot, changedComposerIDs, selectors, cached.data.Stocks,
+			)
+		}
+		if stockErr == nil {
+			stockStats.selectorQueries = selectorQueries
+			logComposerStockRefresh(ctx, refreshPath, newRows, len(changedComposerIDs), selectorDuration, clock.Since(projectionStarted), stockStats)
 		}
 	}
 	snapshot.rollback()
-	return refreshGlobalDatabase(ctx, db, cached.data, stocks, selectors, stockErr), signature, signatureErr, false
+	data := refreshGlobalDatabase(ctx, db, cached.data, stocks, selectors, stockErr)
+	refreshErr := errors.Join(signatureErr, data.Err, data.Metadata.Err)
+	if refreshErr != nil {
+		logger := discoveryReadLogger(ctx)
+		logger.WarnContext(ctx, "providers.cursor.store.global_refresh_failed", "concern", concern, "err", refreshErr)
+	}
+	return data, signature, refreshErr, false
+}
+
+type bubbleRefreshSelection struct {
+	state              bubbleChangeState
+	refreshPath        bubbleRefreshPath
+	newRows            int64
+	changedComposerIDs map[string]bool
+	selectors          map[string]composerBubbleSelector
+	selectorQueries    int
+	digest             [sha256.Size]byte
+	bytes              int64
+	err                error
+}
+
+func selectComposerBubbleRefresh(
+	ctx context.Context,
+	snapshot readSnapshot,
+	cached *globalCacheEntry,
+) bubbleRefreshSelection {
+	state, err := readBubbleChangeState(ctx, snapshot)
+	selection := bubbleRefreshSelection{
+		state:              state,
+		refreshPath:        bubbleRefreshPathDelta,
+		newRows:            0,
+		changedComposerIDs: nil,
+		selectors:          cached.data.selectors,
+		selectorQueries:    3,
+		digest:             cached.signature.bubbleDigest,
+		bytes:              cached.signature.bubbleBytes,
+		err:                err,
+	}
+	if err != nil {
+		return selection
+	}
+	needsFullReconciliation := !cached.known || !cached.signed ||
+		state.rows < cached.signature.bubbleRows ||
+		state.lastRow < cached.signature.tableLastRow ||
+		state.lastRow == cached.signature.tableLastRow && state.lastKey != cached.signature.tableLastKey
+	if needsFullReconciliation {
+		return selectFullComposerBubbleRefresh(ctx, snapshot, selection)
+	}
+	sameChangeSignals := state.rows == cached.signature.bubbleRows &&
+		state.lastRow == cached.signature.tableLastRow &&
+		state.lastKey == cached.signature.tableLastKey
+	if sameChangeSignals {
+		selection = selectActiveComposerBubbleRefresh(ctx, snapshot, selection)
+		return selectTargetedComposerBubbleRefresh(ctx, snapshot, cached, selection)
+	}
+	selection.changedComposerIDs, selection.newRows, selection.err = readChangedComposerIDs(
+		ctx, snapshot, cached.signature.tableLastRow,
+	)
+	selection.selectorQueries++
+	if selection.err == nil && len(selection.changedComposerIDs) == 0 && state.rows == cached.signature.bubbleRows {
+		selection = selectActiveComposerBubbleRefresh(ctx, snapshot, selection)
+	}
+	return selectTargetedComposerBubbleRefresh(ctx, snapshot, cached, selection)
+}
+
+func selectActiveComposerBubbleRefresh(
+	ctx context.Context,
+	snapshot readSnapshot,
+	selection bubbleRefreshSelection,
+) bubbleRefreshSelection {
+	selection.refreshPath = bubbleRefreshPathActiveInPlace
+	activeComposerID, queryCount, err := readMostRecentlyActiveComposerID(ctx, snapshot)
+	selection.selectorQueries += queryCount
+	selection.err = err
+	if err == nil && activeComposerID != "" {
+		selection.changedComposerIDs = map[string]bool{activeComposerID: true}
+	}
+	return selection
+}
+
+func selectTargetedComposerBubbleRefresh(
+	ctx context.Context,
+	snapshot readSnapshot,
+	cached *globalCacheEntry,
+	selection bubbleRefreshSelection,
+) bubbleRefreshSelection {
+	if selection.err != nil {
+		return selection
+	}
+	if len(selection.changedComposerIDs) > 0 {
+		selection.selectors, selection.selectorQueries, selection.err = refreshChangedComposerBubbleSelectors(
+			ctx, snapshot, selection.changedComposerIDs, cached.data.selectors, selection.selectorQueries,
+		)
+	}
+	if selection.err != nil {
+		return selection
+	}
+	expectedRows := expectedBubbleRows(
+		cached.signature.bubbleRows,
+		selection.changedComposerIDs,
+		cached.data.selectors,
+		selection.selectors,
+	)
+	if expectedRows != selection.state.rows {
+		return selectFullComposerBubbleRefresh(ctx, snapshot, selection)
+	}
+	return selection
+}
+
+func selectFullComposerBubbleRefresh(
+	ctx context.Context,
+	snapshot readSnapshot,
+	selection bubbleRefreshSelection,
+) bubbleRefreshSelection {
+	selection.refreshPath = bubbleRefreshPathFull
+	inventory, err := readComposerBubbleSelectors(ctx, snapshot)
+	selection.selectorQueries += 2
+	selection.err = err
+	if err == nil {
+		selection.selectors = inventory.selectors
+		selection.digest = inventory.digest
+		selection.bytes = inventory.bytes
+	}
+	return selection
+}
+
+func logComposerStockRefresh(
+	ctx context.Context,
+	path bubbleRefreshPath,
+	newRows int64,
+	changedComposers int,
+	selectorDuration time.Duration,
+	projectionDuration time.Duration,
+	stats composerStockRefreshStats,
+) {
+	discoveryReadLogger(ctx).InfoContext(ctx,
+		"providers.cursor.store.composer_stock_refresh_completed",
+		"concern", concern,
+		"refresh_path", path,
+		"new_rows", newRows,
+		"changed_composers", changedComposers,
+		"selector_duration_ms", selectorDuration.Milliseconds(),
+		"projection_duration_ms", projectionDuration.Milliseconds(),
+		"total_composers", stats.totalComposers,
+		"reused_composers", stats.reusedComposers,
+		"projected_composers", stats.projectedComposers,
+		"projected_rows", stats.projectedRows,
+		"projection_queries", stats.projectionQueries,
+		"query_count", stats.selectorQueries+2*stats.projectionQueries,
+	)
 }
 
 func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB) (globalDiscoverySignature, error) {
