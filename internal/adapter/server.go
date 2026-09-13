@@ -195,6 +195,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		sem:            make(chan struct{}, maxConcurrent),
 		token:          token,
 		mux:            nil,
+		httpSrvMu:      sync.RWMutex{},
 		httpSrv:        nil,
 		requests:       newAdapterIngressRegistry(group, adapterLog),
 		anthr:          nil,
