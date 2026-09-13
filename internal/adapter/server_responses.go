@@ -290,21 +290,35 @@ func (s *Server) dispatchNativeCodexResponses(
 	if v2Plan != nil {
 		response = adaptercodex.ObserveRawResponsesCompactionV2Response(response, *v2Plan, s.compactionV2)
 	}
+	v2Transformer := adaptercodex.NewRawResponsesCompactionV2FinalAnswerTransformer(raw, v2Recovery)
+	if v2Transformer != nil {
+		response = transformNativeCodexCompactionResponse(response, v2Transformer, streamingResponse)
+	}
 	defer func() { _ = response.Body.Close() }()
 	if streamingResponse {
 		lifecycle.streamOpened(ctx)
 	}
-	_, copyErr := s.copyPassthroughResponse(ctx, w, response, streamingResponse)
+	copyResult, copyErr := s.copyPassthroughResponse(ctx, w, response, streamingResponse)
 	responseSucceeded := response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
 	if copyErr == nil && responseSucceeded && v2Plan != nil {
 		adaptercodex.ArmRawResponsesCompactionV2Response(response)
 	}
+	if copyErr != nil && v2Plan != nil {
+		adaptercodex.ReleaseRawResponsesCompactionV2Response(response)
+	}
 	if v2Recovery != nil {
-		v2Recovery.ReleaseRecovery()
+		if copyErr == nil && v2Transformer != nil && v2Transformer.DidMutateResponse() {
+			v2Recovery.CompleteRecovery()
+		} else {
+			v2Recovery.ReleaseRecovery()
+		}
 	}
 	terminalErr := copyErr
 	if terminalErr == nil && !responseSucceeded {
-		terminalErr = &adaptercodex.UpstreamStatusError{Status: response.StatusCode}
+		terminalErr = &adaptercodex.UpstreamStatusError{
+			Status:  response.StatusCode,
+			Snippet: strings.TrimSpace(string(copyResult.body)),
+		}
 	}
 	var result adapterprovider.Result
 	lifecycle.terminal(ctx, result, terminalErr)

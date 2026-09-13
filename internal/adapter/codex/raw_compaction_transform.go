@@ -18,7 +18,7 @@ import (
 // RequiresTerminalValidation reports whether streamed mutation state must be
 // validated before accepting the response.
 func (t *RawResponsesCompactionTransformer) RequiresTerminalValidation() bool {
-	return false
+	return t != nil && t.mutation != nil
 }
 
 // TransformResponse appends the removed transcript to one successful response.
@@ -36,7 +36,9 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
-		clone.Body = newRawCompactionSSEBody(response.Body, wrapped)
+		streamBody := newRawCompactionSSEBody(response.Body, wrapped, t.markMutated)
+		streamBody.strictFinalAnswer = t.strictFinalAnswer
+		clone.Body = streamBody
 		return &clone
 	}
 	originalBody := response.Body
@@ -47,10 +49,17 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	}
 	_ = originalBody.Close()
 	response.Body = io.NopCloser(bytes.NewReader(body))
+	if t.mutation != nil && bytes.Contains(body, []byte(reorienttag.PreCompactionTranscriptOpen)) {
+		return response
+	}
+	if t.strictFinalAnswer && !rawCompactionStrictFinalAnswerJSON(body) {
+		return response
+	}
 	transformed, ok := appendRawCompactionJSON(body, wrapped)
 	if !ok || bytes.Equal(transformed, body) {
 		return response
 	}
+	t.markMutated()
 	clone := *response
 	clone.Header = rawCompactionMutatedHeaders(response.Header)
 	clone.ContentLength = -1
@@ -75,8 +84,10 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
+		streamBody := newRawCompactionSSEBody(decoded, transcriptText, t.markMutated)
+		streamBody.strictFinalAnswer = t.strictFinalAnswer
 		clone.Body = newRawCompactionEncodedBody(
-			newRawCompactionSSEBody(decoded, transcriptText),
+			streamBody,
 			encoding,
 		)
 		return &clone
