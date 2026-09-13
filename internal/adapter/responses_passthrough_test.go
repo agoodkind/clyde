@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -599,6 +600,30 @@ func TestPassthroughStreamCaptureMarksDownstreamWriteFailureTruncated(t *testing
 	}
 	if got := writer.body.String(); got != firstChunk {
 		t.Fatalf("downstream body = %q, want %q", got, firstChunk)
+	}
+}
+
+func TestNativeCompactionV2DoesNotArmAfterFinalByteWriteFailure(t *testing.T) {
+	registry := adaptercodex.NewRawResponsesCompactionV2Registry(nil)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body: &passthroughTestReadCloser{steps: []passthroughStreamReadStep{{
+			body: []byte(`{"output":[{"type":"compaction","encrypted_content":"cipher"}]}`), err: io.EOF,
+		}}},
+	}
+	observed := adaptercodex.ObserveRawResponsesCompactionV2Response(
+		response,
+		adaptercodex.RawResponsesCompactionV2Plan{SessionID: "session", Transcript: "transcript"},
+		registry,
+	)
+	writer := &passthroughPartialWriter{header: make(http.Header), failAfter: 0}
+	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if _, err := srv.copyPassthroughResponse(context.Background(), writer, observed, false); !errors.Is(err, errPassthroughDownstreamWrite) {
+		t.Fatalf("copy error = %v, want downstream write error", err)
+	}
+	if _, ok := registry.Match("session", "cipher"); ok {
+		t.Fatal("recovery armed after undelivered final byte")
 	}
 }
 
