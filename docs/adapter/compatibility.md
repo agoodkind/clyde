@@ -20,7 +20,7 @@ Native compaction implementations use separate protocol handlers, and unknown
 implementations pass through unchanged. `responses_compaction_v2` remains
 byte-preserving pass-through. A wire-equivalent Codex 0.151.0 probe preserved
 the encrypted item but discarded the added plaintext assistant item. Activating
-v2 transcript recovery requires a supported persistence mechanism and a
+v2 transcript recovery relies on Clyde's process-local staging window and a
 reviewed production handler.
 
 Invalid metadata and non-Codex models stay on the generic projection path. The
