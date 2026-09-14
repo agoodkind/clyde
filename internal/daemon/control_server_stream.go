@@ -119,7 +119,7 @@ func (s *controlServer) StreamExportTranscript(req *clydev1.ExportTranscriptRequ
 		)
 		return status.Errorf(codes.Internal, "export transcript: %v", err)
 	}
-	body, err = capExportBodyTokens(ctx, body, req.GetMaxTokens(), req.GetTokenModel(), record, s.exportTokens, s.buildExactCounter)
+	body, err = finalizeExportBody(ctx, body, options, record, s.exportTokens)
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "max tokens: %v", err)
 	}
@@ -270,31 +270,55 @@ func capExportBodyTokens(
 	return []byte(capped), nil
 }
 
-// buildExactCounter returns the authoritative count client for a tokenizer
-// family, or nil when exact counting is disabled or no API key is set. The
-// Anthropic path uses x-api-key auth isolated from the subscription OAuth token.
-func (s *controlServer) buildExactCounter(family tokencount.Family) tokencount.ExactCounter {
-	if !s.exportTokens.exactEnabled {
+func (cfg exportTokenConfig) buildExactCounter(
+	family tokencount.Family,
+) tokencount.ExactCounter {
+	if !cfg.exactEnabled {
 		return nil
 	}
 	switch family {
 	case tokencount.FamilyClaude:
-		key := s.exportTokens.anthropicAPIKey
-		if key == "" || s.exportTokens.anthropicURL == "" {
+		if cfg.anthropicAPIKey == "" || cfg.anthropicURL == "" {
 			return nil
 		}
-		return tokencount.NewAnthropicExactCounter(s.exportTokens.httpClient, key, s.exportTokens.anthropicURL, s.exportTokens.anthropicVersion)
+		return tokencount.NewAnthropicExactCounter(
+			cfg.httpClient,
+			cfg.anthropicAPIKey,
+			cfg.anthropicURL,
+			cfg.anthropicVersion,
+		)
 	case tokencount.FamilyGPT:
-		key := s.exportTokens.openAIAPIKey
-		if key == "" {
+		if cfg.openAIAPIKey == "" {
 			return nil
 		}
-		return tokencount.NewOpenAIExactCounter(s.exportTokens.httpClient, key, s.exportTokens.openAIURL)
+		return tokencount.NewOpenAIExactCounter(
+			cfg.httpClient,
+			cfg.openAIAPIKey,
+			cfg.openAIURL,
+		)
 	case tokencount.FamilyUnknown:
 		return nil
 	default:
 		return nil
 	}
+}
+
+func finalizeExportBody(
+	ctx context.Context,
+	body []byte,
+	options conversation.ExportOptions,
+	record conversation.Record,
+	cfg exportTokenConfig,
+) ([]byte, error) {
+	return capExportBodyTokens(
+		ctx,
+		body,
+		options.MaxTokens,
+		options.TokenModel,
+		record,
+		cfg,
+		cfg.buildExactCounter,
+	)
 }
 
 // tokenFamilyForProvider maps a conversation provider to the tokenizer family
