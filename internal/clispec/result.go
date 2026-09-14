@@ -8,12 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"goodkind.io/clyde/internal/cli/clipboard"
 	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/clyde/internal/response"
+	"goodkind.io/clyde/internal/util"
 )
 
 type resultKind uint8
@@ -152,7 +154,7 @@ var clipboardCopy = clipboard.Copy
 // copyResultToClipboard honors the global --copy flag. It is layered on top of
 // normal output, so the terminal still writes the result to stdout or a file;
 // copy is additive, never a replacement. The copied bytes match the selected
-// format, so --format json copies the JSON a reader would see. The line-count
+// format, so --format json copies the JSON a reader would see. The size
 // confirmation goes to errOut (stderr) so it never corrupts piped stdout data.
 // This is the single place copy is applied, so no command implements copy.
 func copyResultToClipboard(ctx context.Context, errOut io.Writer, format output.Format, result Result) error {
@@ -164,12 +166,7 @@ func copyResultToClipboard(ctx context.Context, errOut io.Writer, format output.
 		slog.WarnContext(ctx, "clispec.result.copy_failed", "concern", "cli.output", "component", "clispec", "err", err)
 		return fmt.Errorf("copy output to clipboard: %w", err)
 	}
-	count := copyLineCount(body)
-	unit := "lines"
-	if count == 1 {
-		unit = "line"
-	}
-	if _, err := fmt.Fprintf(errOut, "copied %d %s\n", count, unit); err != nil {
+	if _, err := fmt.Fprint(errOut, copyConfirmation(body)); err != nil {
 		slog.WarnContext(ctx, "clispec.result.copy_confirm_failed", "concern", "cli.output", "component", "clispec", "err", err)
 		return fmt.Errorf("write copy confirmation: %w", err)
 	}
@@ -222,6 +219,31 @@ func copyLineCount(body []byte) int {
 		count++
 	}
 	return count
+}
+
+// bodySizeSummary describes a copied or written body as line, character, and
+// byte counts. Characters are Unicode runes, so they can differ from bytes.
+func bodySizeSummary(body []byte) string {
+	count := copyLineCount(body)
+	unit := "lines"
+	if count == 1 {
+		unit = "line"
+	}
+	return fmt.Sprintf(
+		"%d %s, %d chars, %s",
+		count,
+		unit,
+		utf8.RuneCount(body),
+		util.FormatHumanBytes(int64(len(body))),
+	)
+}
+
+func copyConfirmation(body []byte) string {
+	return "copied " + bodySizeSummary(body) + "\n"
+}
+
+func wroteConfirmation(path string, body []byte) string {
+	return "wrote: " + path + " (" + bodySizeSummary(body) + ")\n"
 }
 
 func renderCLIInlineArtifactResult(

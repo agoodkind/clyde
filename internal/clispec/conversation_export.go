@@ -296,7 +296,7 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 	}
 	text := ""
 	if path != "" {
-		text = "wrote: " + path + "\n"
+		text = wroteConfirmation(path, body)
 	}
 	return artifactResult{
 		Payload: exportTranscriptOutput{
@@ -432,7 +432,7 @@ func writeCLIExportFile(
 		slog.WarnContext(ctx, "cli.conversation.export_write_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)
 		return fmt.Errorf("export transcript: write output %s: %w", path, err)
 	}
-	if err := sink.Text("wrote: " + path + "\n"); err != nil {
+	if err := sink.Text(wroteConfirmation(path, body)); err != nil {
 		return fmt.Errorf("export transcript: write confirmation: %w", err)
 	}
 	return nil

@@ -376,6 +376,39 @@ func TestCopyLineCount(t *testing.T) {
 	}
 }
 
+func TestBodySizeSummary(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "two ascii lines", body: "alpha\nbeta\n", want: "2 lines, 11 chars, 11 B"},
+		{name: "one line no newline", body: "value text", want: "1 line, 10 chars, 10 B"},
+		{name: "empty", body: "", want: "0 lines, 0 chars, 0 B"},
+		{name: "unicode runes differ from bytes", body: "é\n", want: "1 line, 2 chars, 3 B"},
+		{name: "kibibyte", body: strings.Repeat("x", 1024), want: "1 line, 1024 chars, 1.0 KB"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := bodySizeSummary([]byte(tc.body)); got != tc.want {
+				t.Fatalf("bodySizeSummary() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWroteConfirmation(t *testing.T) {
+	t.Parallel()
+	path := "/tmp/out.md"
+	got := wroteConfirmation(path, []byte("alpha\nbeta\n"))
+	want := "wrote: /tmp/out.md (2 lines, 11 chars, 11 B)\n"
+	if got != want {
+		t.Fatalf("wroteConfirmation() = %q, want %q", got, want)
+	}
+}
+
 func TestRenderCLIResultTextWritesMetadataToErrOut(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
@@ -459,7 +492,7 @@ func TestRenderCLIResultPipeWritesMetadataToErrOut(t *testing.T) {
 }
 
 // TestRenderCopyResultCopiesArtifactBody asserts --copy is additive: the normal
-// output still renders to stdout, the artifact body is copied, and the line-count
+// output still renders to stdout, the artifact body is copied, and the size
 // confirmation lands on stderr, not stdout.
 func TestRenderCopyResultCopiesArtifactBody(t *testing.T) {
 	body := []byte("alpha\nbeta\n")
@@ -498,8 +531,8 @@ func TestRenderCopyResultCopiesArtifactBody(t *testing.T) {
 	if got := out.String(); got != "human-text" {
 		t.Fatalf("normal output = %q, want %q", got, "human-text")
 	}
-	if got := errOut.String(); got != "copied 2 lines\n" {
-		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines\n")
+	if got := errOut.String(); got != "copied 2 lines, 11 chars, 11 B\n" {
+		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines, 11 chars, 11 B\n")
 	}
 }
 
@@ -564,8 +597,8 @@ func TestRenderCopyOnlyArtifactWritesNoFile(t *testing.T) {
 	if !bytes.Equal(copied, []byte("a\nb\n")) {
 		t.Fatalf("copied body = %q, want %q", string(copied), "a\nb\n")
 	}
-	if got := errOut.String(); got != "copied 2 lines\n" {
-		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines\n")
+	if got := errOut.String(); got != "copied 2 lines, 4 chars, 4 B\n" {
+		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines, 4 chars, 4 B\n")
 	}
 }
 
@@ -603,8 +636,8 @@ func TestRenderCopyResultCopiesValueText(t *testing.T) {
 	if got := out.String(); got != "value text" {
 		t.Fatalf("normal output = %q, want %q", got, "value text")
 	}
-	if got := errOut.String(); got != "copied 1 line\n" {
-		t.Fatalf("copy confirmation = %q, want %q", got, "copied 1 line\n")
+	if got := errOut.String(); got != "copied 1 line, 10 chars, 10 B\n" {
+		t.Fatalf("copy confirmation = %q, want %q", got, "copied 1 line, 10 chars, 10 B\n")
 	}
 }
 
@@ -646,6 +679,10 @@ func TestRenderCopyResultJSONCopiesJSON(t *testing.T) {
 	}
 	if got := out.String(); got != string(copied) {
 		t.Fatalf("copied JSON %q does not match rendered stdout %q", string(copied), got)
+	}
+	wantConfirm := "copied " + bodySizeSummary(copied) + "\n"
+	if got := errOut.String(); got != wantConfirm {
+		t.Fatalf("copy confirmation = %q, want %q", got, wantConfirm)
 	}
 }
 
@@ -689,8 +726,8 @@ func TestRenderCopyResultAdditiveWithStdout(t *testing.T) {
 	if !bytes.Equal(copied, body) {
 		t.Fatalf("copied body = %q, want %q", string(copied), string(body))
 	}
-	if got := errOut.String(); got != "copied 3 lines\n" {
-		t.Fatalf("copy confirmation = %q, want %q", got, "copied 3 lines\n")
+	if got := errOut.String(); got != "copied 3 lines, 18 chars, 18 B\n" {
+		t.Fatalf("copy confirmation = %q, want %q", got, "copied 3 lines, 18 chars, 18 B\n")
 	}
 }
 
@@ -730,6 +767,35 @@ func TestRenderCopyResultSurfacesClipboardError(t *testing.T) {
 	}
 	if got := errOut.String(); got != "" {
 		t.Fatalf("no confirmation should print on copy failure, got %q", got)
+	}
+}
+
+func TestRenderCLIArtifactWriteIncludesSize(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "out.md")
+	body := []byte("alpha\nbeta\n")
+	var out, errOut bytes.Buffer
+	result := artifactResult{
+		Payload:     artifactProbePayload{Text: "json-text"},
+		Body:        body,
+		DefaultPath: path,
+		Pipe:        false,
+		Text:        wroteConfirmation(path, body),
+		InlineText:  string(body),
+	}
+	if err := renderCLIResult(context.Background(), &out, &errOut, output.FormatText, resultKindArtifact, result); err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	gotBody, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export file: %v", err)
+	}
+	if !bytes.Equal(gotBody, body) {
+		t.Fatalf("export file body = %q, want %q", string(gotBody), string(body))
+	}
+	want := "wrote: " + path + " (2 lines, 11 chars, 11 B)\n"
+	if got := out.String(); got != want {
+		t.Fatalf("write confirmation = %q, want %q", got, want)
 	}
 }
 
@@ -1188,6 +1254,35 @@ func TestExportDestinationPathUsesExplicitMCPOutput(t *testing.T) {
 	}
 	if path != want {
 		t.Fatalf("MCP export path = %q, want %q", path, want)
+	}
+}
+
+func TestWriteCLIExportFileConfirmationIncludesSize(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "out.md")
+	body := []byte("alpha\nbeta\n")
+	var out, errOut bytes.Buffer
+	sink := NewCLISink(context.Background(), &out, &errOut)
+	err := writeCLIExportFile(context.Background(), exportPayload{
+		ConversationID: "claude:probe",
+		Options: conv.ExportOptions{
+			Format: conv.ExportFormatMarkdown,
+		},
+		OutputPath: path,
+	}, body, sink)
+	if err != nil {
+		t.Fatalf("writeCLIExportFile: %v", err)
+	}
+	gotBody, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export file: %v", err)
+	}
+	if !bytes.Equal(gotBody, body) {
+		t.Fatalf("export file body = %q, want %q", string(gotBody), string(body))
+	}
+	want := "wrote: " + path + " (2 lines, 11 chars, 11 B)\n"
+	if got := out.String(); got != want {
+		t.Fatalf("write confirmation = %q, want %q", got, want)
 	}
 }
 
