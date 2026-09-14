@@ -109,5 +109,20 @@ func ExportTranscriptLocal(ctx context.Context, conversationID string, options c
 		slog.WarnContext(ctx, "daemon.conversation_export.export_failed", "concern", "conversation.export", "component", "daemon", "conversation_id", conversationID, "err", err)
 		return nil, fmt.Errorf("export transcript: %w", err)
 	}
+	if options.MaxTokens == "" {
+		return body, nil
+	}
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return nil, fmt.Errorf("load export config: %w", err)
+	}
+	exportTokens, err := newExportTokenConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("load export token config: %w", err)
+	}
+	body, err = finalizeExportBody(ctx, body, options, record, exportTokens)
+	if err != nil {
+		return nil, fmt.Errorf("cap export transcript: %w", err)
+	}
 	return body, nil
 }

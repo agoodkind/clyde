@@ -193,8 +193,8 @@ type ExportOptions struct {
 	// content lines.
 	MaxLines int
 	// MaxTokens is a human-friendly size string (for example "200k") that caps
-	// the rendered body to a token budget. Empty leaves the output uncapped. The
-	// daemon parses and applies it after render, so Export itself ignores it.
+	// the rendered body to a token budget. Empty leaves the output uncapped.
+	// Local CLI and daemon export apply it after render. Export itself ignores it.
 	MaxTokens string
 	// TokenModel overrides the model whose tokenizer counts MaxTokens. Empty
 	// derives the tokenizer from the conversation's provider and model.

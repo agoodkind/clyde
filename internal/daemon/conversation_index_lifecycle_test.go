@@ -16,15 +16,23 @@ import (
 	"goodkind.io/clyde/internal/hookspec"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/providerid"
+	"goodkind.io/clyde/internal/tokencount"
 	"goodkind.io/clyde/internal/transcript"
 )
 
 type cachedBoundaryParser struct {
 	discoveries *atomic.Int64
 	record      conversation.Record
+	provider    providerid.Provider
+	text        string
 }
 
-func (*cachedBoundaryParser) Provider() providerid.Provider { return providerid.ProviderCursor }
+func (parser *cachedBoundaryParser) Provider() providerid.Provider {
+	if parser.provider != providerid.ProviderUnspecified {
+		return parser.provider
+	}
+	return providerid.ProviderCursor
+}
 
 func (parser *cachedBoundaryParser) Discover(context.Context, map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
 	parser.discoveries.Add(1)
@@ -35,9 +43,13 @@ func (parser *cachedBoundaryParser) ScanRecord(string, conversation.FileStamp) (
 	return parser.record, true
 }
 
-func (*cachedBoundaryParser) Stream(string, conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+func (parser *cachedBoundaryParser) Stream(string, conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
-		yield(transcript.Message{Role: "user", Text: "cached boundary transcript"}, nil)
+		text := parser.text
+		if text == "" {
+			text = "cached boundary transcript"
+		}
+		yield(transcript.Message{Role: "user", Text: text}, nil)
 	}
 }
 
@@ -144,5 +156,130 @@ func TestConversationIndexJoinsRefreshDuringLifecycleDrain(t *testing.T) {
 	}
 	if _, err := os.Stat(conversation.CachePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("canceled scan persisted cache: %v", err)
+	}
+}
+
+func TestExportTranscriptLocalAppliesMaxTokens(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(envAnthropic, "")
+	t.Setenv(envOpenAI, "")
+
+	var text strings.Builder
+	for i := 0; i < 200; i++ {
+		text.WriteString("one short transcript line\n")
+	}
+
+	parser := &cachedBoundaryParser{
+		discoveries: &atomic.Int64{},
+		record: conversation.Record{
+			ID:           "codex:token-cap",
+			Provider:     conversation.ProviderCodex,
+			NativeID:     "token-cap",
+			ArtifactPath: "/tmp/token-cap.jsonl",
+			ArtifactKind: "rollout",
+			Model:        "gpt-5.4",
+		},
+		provider: providerid.ProviderCodex,
+		text:     text.String(),
+	}
+	registry := conversation.NewRegistry()
+	registry.Register(parser)
+	index := conversation.NewIndex(registry, config.ConversationConfig{})
+	if err := index.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	previousFactory := newLocalConversationIndex
+	newLocalConversationIndex = func() *conversation.Index {
+		return index
+	}
+	t.Cleanup(func() {
+		newLocalConversationIndex = previousFactory
+	})
+
+	options := conversation.ExportOptions{
+		Format:       conversation.ExportFormatMarkdown,
+		HistoryStart: 0,
+		LastN:        0,
+		MaxLines:     0,
+		MaxTokens:    "",
+		TokenModel:   "",
+		Whitespace:   conversation.WhitespaceDense,
+		Content:      conversation.NewContentKindSet(conversation.ContentKindChat),
+		Compaction: conversation.CompactionExportOptions{
+			IncludeSelector: "0",
+			FullHistory:     false,
+		},
+	}
+	uncapped, err := ExportTranscriptLocal(t.Context(), parser.record.ID, options)
+	if err != nil {
+		t.Fatalf("uncapped export: %v", err)
+	}
+
+	options.MaxTokens = "20"
+	capped, err := ExportTranscriptLocal(t.Context(), parser.record.ID, options)
+	if err != nil {
+		t.Fatalf("capped export: %v", err)
+	}
+	if len(capped) >= len(uncapped) {
+		t.Fatalf("capped bytes = %d, uncapped bytes = %d", len(capped), len(uncapped))
+	}
+	if !strings.HasSuffix(string(uncapped), string(capped)) {
+		t.Fatal("capped export is not a suffix of the final rendered body")
+	}
+
+	counter := tokencount.LocalCounter(
+		tokencount.FamilyGPT,
+		parser.record.Model,
+		tokencount.Settings{},
+	)
+	if count := counter.Estimate(string(capped)); count > 20 {
+		t.Fatalf("capped token count = %d, want <= 20", count)
+	}
+}
+
+func TestExportTranscriptLocalRejectsInvalidMaxTokens(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(envAnthropic, "")
+	t.Setenv(envOpenAI, "")
+
+	parser := &cachedBoundaryParser{
+		discoveries: &atomic.Int64{},
+		record: conversation.Record{
+			ID:           "codex:invalid-max-tokens",
+			Provider:     conversation.ProviderCodex,
+			NativeID:     "invalid-max-tokens",
+			ArtifactPath: "/tmp/invalid-max-tokens.jsonl",
+			ArtifactKind: "rollout",
+			Model:        "gpt-5.4",
+		},
+		provider: providerid.ProviderCodex,
+	}
+	registry := conversation.NewRegistry()
+	registry.Register(parser)
+	index := conversation.NewIndex(registry, config.ConversationConfig{})
+	if err := index.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	previousFactory := newLocalConversationIndex
+	newLocalConversationIndex = func() *conversation.Index {
+		return index
+	}
+	t.Cleanup(func() {
+		newLocalConversationIndex = previousFactory
+	})
+
+	_, err := ExportTranscriptLocal(t.Context(), parser.record.ID, conversation.ExportOptions{
+		Format:     conversation.ExportFormatMarkdown,
+		Whitespace: conversation.WhitespaceDense,
+		Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
+		MaxTokens:  "not-a-token-count",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid max tokens")
+	}
+	if !strings.Contains(err.Error(), "parse max tokens") {
+		t.Fatalf("error = %q, want parse max tokens", err)
 	}
 }
