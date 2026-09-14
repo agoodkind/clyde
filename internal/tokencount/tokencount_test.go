@@ -106,6 +106,41 @@ func TestLocalCounterSelection(t *testing.T) {
 	}
 }
 
+func TestCountNamesTokenizerAndTokens(t *testing.T) {
+	t.Parallel()
+	text := "func main() { fmt.Println(\"hello, tokens\") }"
+	settings := Settings{SafetyFactor: 1.3, CharsPerToken: 3.5}
+
+	gpt := Spec{Family: FamilyGPT, Settings: settings}.Count(text)
+	if gpt.Tokenizer != "o200k" {
+		t.Fatalf("gpt tokenizer = %q, want %q", gpt.Tokenizer, "o200k")
+	}
+	if gpt.Tokens != LocalCounter(FamilyGPT, "", settings).Estimate(text) {
+		t.Fatalf("gpt tokens = %d, want local estimate", gpt.Tokens)
+	}
+
+	claude := Spec{Family: FamilyClaude, Settings: settings}.Count(text)
+	if claude.Tokenizer != "o200k x 1.3" {
+		t.Fatalf("claude tokenizer = %q, want %q", claude.Tokenizer, "o200k x 1.3")
+	}
+	if claude.Tokens != LocalCounter(FamilyClaude, "", settings).Estimate(text) {
+		t.Fatalf("claude tokens = %d, want local estimate", claude.Tokens)
+	}
+
+	inferred := Spec{Family: FamilyUnknown, Model: "claude-3", Settings: settings}.Count(text)
+	if inferred != claude {
+		t.Fatalf("unknown+claude Count = %+v, want %+v", inferred, claude)
+	}
+
+	heuristic := Spec{Family: FamilyUnknown, Model: "llama", Settings: settings}.Count(text)
+	if heuristic.Tokenizer != "heuristic (3.5 chars/token)" {
+		t.Fatalf("heuristic tokenizer = %q, want %q", heuristic.Tokenizer, "heuristic (3.5 chars/token)")
+	}
+	if heuristic.Tokens != (heuristicCounter{charsPerToken: 3.5}).Estimate(text) {
+		t.Fatalf("heuristic tokens = %d, want heuristic estimate", heuristic.Tokens)
+	}
+}
+
 func TestCapToLastTokens(t *testing.T) {
 	// charsPerToken 1 makes each byte one token, so per-line estimates are
 	// predictable: each "lineN\n" is 6 tokens.

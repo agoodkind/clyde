@@ -15,6 +15,7 @@ import (
 	"goodkind.io/clyde/internal/cli/clipboard"
 	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/clyde/internal/response"
+	"goodkind.io/clyde/internal/tokencount"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -59,6 +60,7 @@ type artifactResult struct {
 	Pipe        bool
 	Text        string
 	InlineText  string
+	Tokens      *tokencount.Spec
 }
 
 func (valueResult) isClispecResult()    {}
@@ -166,7 +168,7 @@ func copyResultToClipboard(ctx context.Context, errOut io.Writer, format output.
 		slog.WarnContext(ctx, "clispec.result.copy_failed", "concern", "cli.output", "component", "clispec", "err", err)
 		return fmt.Errorf("copy output to clipboard: %w", err)
 	}
-	if _, err := fmt.Fprint(errOut, copyConfirmation(body)); err != nil {
+	if _, err := fmt.Fprint(errOut, copyConfirmation(body, tokenEstimate(result, body))); err != nil {
 		slog.WarnContext(ctx, "clispec.result.copy_confirm_failed", "concern", "cli.output", "component", "clispec", "err", err)
 		return fmt.Errorf("write copy confirmation: %w", err)
 	}
@@ -238,12 +240,28 @@ func bodySizeSummary(body []byte) string {
 	)
 }
 
-func copyConfirmation(body []byte) string {
-	return "copied " + bodySizeSummary(body) + "\n"
+func copyConfirmation(body []byte, estimate tokencount.Estimate) string {
+	return "copied " + sizeAndTokenSummary(body, estimate) + "\n"
 }
 
-func wroteConfirmation(path string, body []byte) string {
-	return "wrote: " + path + " (" + bodySizeSummary(body) + ")\n"
+func wroteConfirmation(path string, body []byte, estimate tokencount.Estimate) string {
+	return "wrote: " + path + " (" + sizeAndTokenSummary(body, estimate) + ")\n"
+}
+
+func sizeAndTokenSummary(body []byte, estimate tokencount.Estimate) string {
+	summary := bodySizeSummary(body)
+	if estimate.Tokenizer == "" {
+		return summary
+	}
+	return fmt.Sprintf("%s, %d tokens (%s)", summary, estimate.Tokens, estimate.Tokenizer)
+}
+
+func tokenEstimate(result Result, body []byte) tokencount.Estimate {
+	typed, ok := result.(artifactResult)
+	if !ok || typed.Tokens == nil {
+		return tokencount.Estimate{Tokenizer: "", Tokens: 0}
+	}
+	return typed.Tokens.Count(string(body))
 }
 
 func renderCLIInlineArtifactResult(

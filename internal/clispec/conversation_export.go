@@ -11,6 +11,7 @@ import (
 
 	conv "goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/tokencount"
 )
 
 type exportInput struct {
@@ -289,6 +290,7 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 	if err != nil {
 		return nil, logOperationError(ctx, "export transcript", err)
 	}
+	spec := exportTokenSpec(ctx, p.ConversationID, p.Options.TokenModel)
 	path, err := exportDestinationPath(ctx, p)
 	if err != nil {
 		slog.WarnContext(ctx, "clispec.export_destination_invalid", "concern", "cli.conversation", "component", "clispec", "err", err)
@@ -296,7 +298,7 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 	}
 	text := ""
 	if path != "" {
-		text = wroteConfirmation(path, body)
+		text = wroteConfirmation(path, body, tokenEstimateFromSpec(spec, body))
 	}
 	return artifactResult{
 		Payload: exportTranscriptOutput{
@@ -311,6 +313,7 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 		Pipe:        p.Stdout,
 		Text:        text,
 		InlineText:  string(body),
+		Tokens:      spec,
 	}, nil
 }
 
@@ -432,7 +435,8 @@ func writeCLIExportFile(
 		slog.WarnContext(ctx, "cli.conversation.export_write_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)
 		return fmt.Errorf("export transcript: write output %s: %w", path, err)
 	}
-	if err := sink.Text(wroteConfirmation(path, body)); err != nil {
+	spec := exportTokenSpec(ctx, p.ConversationID, p.Options.TokenModel)
+	if err := sink.Text(wroteConfirmation(path, body, tokenEstimateFromSpec(spec, body))); err != nil {
 		return fmt.Errorf("export transcript: write confirmation: %w", err)
 	}
 	return nil
@@ -488,4 +492,22 @@ func exportExtension(format conv.ExportFormat) string {
 	default:
 		return ".md"
 	}
+}
+
+var lookupExportTokenSpec = daemon.ExportTokenSpec
+
+func exportTokenSpec(ctx context.Context, conversationID, tokenModel string) *tokencount.Spec {
+	spec, err := lookupExportTokenSpec(ctx, conversationID, tokenModel)
+	if err != nil {
+		slog.WarnContext(ctx, "clispec.export_token_spec_failed", "concern", "cli.conversation", "component", "clispec", "conversation_id", conversationID, "err", err)
+		return nil
+	}
+	return spec
+}
+
+func tokenEstimateFromSpec(spec *tokencount.Spec, body []byte) tokencount.Estimate {
+	if spec == nil {
+		return tokencount.Estimate{Tokenizer: "", Tokens: 0}
+	}
+	return spec.Count(string(body))
 }
