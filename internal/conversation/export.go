@@ -379,11 +379,7 @@ func prependCompactionBlock(
 	if format == ExportFormatHTML {
 		separator = []byte("\n")
 	}
-	out := make([]byte, 0, len(prefix)+len(separator)+len(trimmedBody))
-	out = append(out, prefix...)
-	out = append(out, separator...)
-	out = append(out, trimmedBody...)
-	return out, nil
+	return append(append(prefix, separator...), trimmedBody...), nil
 }
 
 func renderCompactionBlock(
