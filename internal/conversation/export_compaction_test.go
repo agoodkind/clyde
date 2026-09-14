@@ -11,6 +11,125 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
+const encryptedExportSentinel = "EXPORT_ENCRYPTED_SENTINEL"
+
+func exportEncryptedReasoningContextItem() transcript.CompactedContextItem {
+	raw := json.RawMessage(
+		`{"type":"reasoning","summary":[{"type":"summary_text","text":"readable reasoning summary"}],"encrypted_content":"` +
+			encryptedExportSentinel +
+			`"}`,
+	)
+	return transcript.CompactedContextItem{
+		Kind:    transcript.CompactedContextItemKindReasoning,
+		Message: nil,
+		Reasoning: &transcript.CompactedReasoningItem{
+			Summary: []transcript.CompactedReasoningSummary{
+				{
+					Type: "summary_text",
+					Text: "readable reasoning summary",
+					Raw: json.RawMessage(
+						`{"type":"summary_text","text":"readable reasoning summary"}`,
+					),
+				},
+			},
+			SummaryRaw: json.RawMessage(
+				`[{"type":"summary_text","text":"readable reasoning summary"}]`,
+			),
+			ContentRaw:       nil,
+			EncryptedContent: encryptedExportSentinel,
+			Raw:              raw,
+		},
+		LocalShellCall:       nil,
+		FunctionCall:         nil,
+		ToolSearchCall:       nil,
+		FunctionCallOutput:   nil,
+		CustomToolCall:       nil,
+		CustomToolCallOutput: nil,
+		ToolSearchOutput:     nil,
+		WebSearchCall:        nil,
+		ImageGenerationCall:  nil,
+		Compaction:           nil,
+		CompactionTrigger:    nil,
+		ContextCompaction:    nil,
+		Other:                nil,
+	}
+}
+
+func TestExportOmitsEncryptedCompactionContent(t *testing.T) {
+	t.Parallel()
+	formats := []ExportFormat{
+		ExportFormatMarkdown,
+		ExportFormatHTML,
+		ExportFormatPlainText,
+		ExportFormatJSON,
+	}
+	for _, format := range formats {
+		t.Run(string(format), func(t *testing.T) {
+			t.Parallel()
+			index, record, _ := newCompactionExportIndex()
+			body, err := index.Export(record, ExportOptions{
+				Format:       format,
+				HistoryStart: 0,
+				LastN:        0,
+				MaxLines:     0,
+				MaxTokens:    "",
+				TokenModel:   "",
+				Whitespace:   WhitespacePreserve,
+				Content:      NewContentKindSet(ContentKindChat),
+				Compaction: CompactionExportOptions{
+					IncludeSelector: "0",
+					FullHistory:     false,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Export: %v", err)
+			}
+			text := string(body)
+			if strings.Contains(text, encryptedExportSentinel) {
+				t.Fatal("export included encrypted payload sentinel")
+			}
+			if strings.Contains(text, `"encrypted_content"`) {
+				t.Fatal("export included encrypted_content field")
+			}
+			if !strings.Contains(text, "readable reasoning summary") {
+				t.Fatal("export removed readable reasoning summary")
+			}
+		})
+	}
+}
+
+func TestExportRawJSONOmitsEncryptedCompactionContent(t *testing.T) {
+	t.Parallel()
+	index, record, _ := newCompactionExportIndex()
+	body, err := index.Export(record, ExportOptions{
+		Format:       ExportFormatJSON,
+		HistoryStart: 0,
+		LastN:        0,
+		MaxLines:     0,
+		MaxTokens:    "",
+		TokenModel:   "",
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindSystemMessages, ContentKindRawJSONMetadata),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "0",
+			FullHistory:     false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	text := string(body)
+	if strings.Contains(text, encryptedExportSentinel) {
+		t.Fatal("export included encrypted payload sentinel")
+	}
+	if strings.Contains(text, `"encrypted_content"`) {
+		t.Fatal("export included encrypted_content field")
+	}
+	if !strings.Contains(text, "readable reasoning summary") {
+		t.Fatal("export removed readable reasoning summary")
+	}
+}
+
 func TestExportDefaultUsesLatestCompactionSegment(t *testing.T) {
 	t.Parallel()
 	idx, record, loadOptions := newCompactionExportIndex()
@@ -294,6 +413,7 @@ func compactionExportMessages() []transcript.Message {
 			"latest boundary text",
 			[]transcript.CompactedContextItem{
 				exportOrdinaryContextItem("latest boundary context"),
+				exportEncryptedReasoningContextItem(),
 			},
 			6,
 		),

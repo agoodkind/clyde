@@ -48,8 +48,18 @@ func exportMessages(record Record, messages []transcript.Message, options Export
 		return nil, err
 	}
 	selection = applyLastNToSegmentSelection(messages, selection, options.LastN)
+	selection, err = sanitizeCompactionSelectionForExport(selection)
+	if err != nil {
+		slog.Warn("conversation.export.sanitize_selection_failed", "concern", "conversation.export", "component", "conversation", "err", err)
+		return nil, fmt.Errorf("sanitize compaction selection: %w", err)
+	}
 	selectedMessages := selectedCompactionSegmentMessages(messages, selection)
 	selectedMessages = filterMessages(selectedMessages, options)
+	selectedMessages, err = sanitizeCompactionMessagesForExport(selectedMessages)
+	if err != nil {
+		slog.Warn("conversation.export.sanitize_messages_failed", "concern", "conversation.export", "component", "conversation", "err", err)
+		return nil, fmt.Errorf("sanitize compaction messages: %w", err)
+	}
 	if options.Format == ExportFormatJSON && !options.Content.Has(ContentKindRawJSONMetadata) {
 		clearMetadata(selectedMessages)
 	}

@@ -92,7 +92,7 @@ type CompactedReasoningItem struct {
 	Summary          []CompactedReasoningSummary `json:"summary,omitempty"`
 	SummaryRaw       json.RawMessage             `json:"summary_raw,omitempty"`
 	ContentRaw       json.RawMessage             `json:"content_raw,omitempty"`
-	EncryptedContent string                      `json:"encrypted_content"`
+	EncryptedContent string                      `json:"encrypted_content,omitempty"`
 	Raw              json.RawMessage             `json:"raw,omitempty"`
 }
 
@@ -181,7 +181,7 @@ type CompactedImageGenerationCallItem struct {
 
 // CompactedCompactionItem preserves a compacted nested compaction item.
 type CompactedCompactionItem struct {
-	EncryptedContent string          `json:"encrypted_content"`
+	EncryptedContent string          `json:"encrypted_content,omitempty"`
 	Raw              json.RawMessage `json:"raw,omitempty"`
 }
 
@@ -192,7 +192,7 @@ type CompactedCompactionTriggerItem struct {
 
 // CompactedContextCompactionItem preserves a compacted context-compaction item.
 type CompactedContextCompactionItem struct {
-	EncryptedContent string          `json:"encrypted_content"`
+	EncryptedContent string          `json:"encrypted_content,omitempty"`
 	Raw              json.RawMessage `json:"raw,omitempty"`
 }
 
