@@ -118,3 +118,30 @@ func TestTokenFamilyForProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestSpecForExport(t *testing.T) {
+	t.Parallel()
+	settings := tokencount.Settings{SafetyFactor: 1.3, CharsPerToken: 3.5}
+	claude := conversation.Record{Provider: providerid.ProviderClaude, Model: "claude-opus-4-8"}
+	got := specForExport(claude, "", settings)
+	if got.Family != tokencount.FamilyClaude || got.Model != "claude-opus-4-8" {
+		t.Fatalf("claude spec = %+v, want FamilyClaude and conversation model", got)
+	}
+	if name := got.Count("hi").Tokenizer; name != "o200k x 1.3" {
+		t.Fatalf("claude tokenizer = %q, want %q", name, "o200k x 1.3")
+	}
+
+	override := specForExport(claude, "gpt-4o", settings)
+	if override.Family != tokencount.FamilyUnknown || override.Model != "gpt-4o" {
+		t.Fatalf("override spec = %+v, want FamilyUnknown gpt-4o", override)
+	}
+	if name := override.Count("hi").Tokenizer; name != "o200k" {
+		t.Fatalf("override tokenizer = %q, want %q", name, "o200k")
+	}
+
+	codex := conversation.Record{Provider: providerid.ProviderCodex, Model: "gpt-5-codex"}
+	got = specForExport(codex, "", settings)
+	if got.Family != tokencount.FamilyGPT || got.Count("hi").Tokenizer != "o200k" {
+		t.Fatalf("codex spec = %+v tokenizer %q", got, got.Count("hi").Tokenizer)
+	}
+}

@@ -239,12 +239,9 @@ func capExportBodyTokens(
 	if budget <= 0 {
 		return body, nil
 	}
-	family := tokenFamilyForProvider(record.Provider)
-	model := record.Model
-	if tokenModel != "" {
-		family = tokencount.FamilyUnknown
-		model = tokenModel
-	}
+	spec := specForExport(record, tokenModel, cfg.settings)
+	family := spec.Family
+	model := spec.Model
 	effectiveFamily := family
 	if effectiveFamily == tokencount.FamilyUnknown {
 		effectiveFamily = tokencount.FamilyFromModel(model)
@@ -331,6 +328,43 @@ func tokenFamilyForProvider(provider conversation.Provider) tokencount.Family {
 		return tokencount.FamilyGPT
 	default:
 		return tokencount.FamilyUnknown
+	}
+}
+
+// specForExport selects the local tokenizer used to count an export body. A
+// non-empty tokenModel overrides the conversation model and re-infers family.
+func specForExport(record conversation.Record, tokenModel string, settings tokencount.Settings) tokencount.Spec {
+	family := tokenFamilyForProvider(record.Provider)
+	model := record.Model
+	if tokenModel != "" {
+		family = tokencount.FamilyUnknown
+		model = tokenModel
+	}
+	return tokencount.Spec{Family: family, Model: model, Settings: settings}
+}
+
+// ExportTokenSpec resolves the conversation and returns the local tokenizer spec
+// used to count its export body. Callers that cannot resolve the conversation
+// omit the token clause from copy and write confirmations.
+func ExportTokenSpec(ctx context.Context, conversationID, tokenModel string) (*tokencount.Spec, error) {
+	index := newLocalConversationIndex()
+	record, err := index.Resolve(ctx, conversationID)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.conversation_export.token_spec_resolve_failed", "concern", "conversation.export", "component", "daemon", "conversation_id", conversationID, "err", err)
+		return nil, fmt.Errorf("resolve conversation: %w", err)
+	}
+	spec := specForExport(record, tokenModel, exportTokenSettings())
+	return &spec, nil
+}
+
+func exportTokenSettings() tokencount.Settings {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return tokencount.Settings{SafetyFactor: 0, CharsPerToken: 0}
+	}
+	return tokencount.Settings{
+		SafetyFactor:  cfg.Export.TokenSafetyFactor,
+		CharsPerToken: cfg.Export.HeuristicCharsPerToken,
 	}
 }
 

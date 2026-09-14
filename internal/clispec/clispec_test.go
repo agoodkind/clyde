@@ -17,6 +17,7 @@ import (
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/output"
 	conv "goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/tokencount"
 	"goodkind.io/gklog/correlation"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -402,10 +403,35 @@ func TestBodySizeSummary(t *testing.T) {
 func TestWroteConfirmation(t *testing.T) {
 	t.Parallel()
 	path := "/tmp/out.md"
-	got := wroteConfirmation(path, []byte("alpha\nbeta\n"))
+	got := wroteConfirmation(path, []byte("alpha\nbeta\n"), tokencount.Estimate{Tokenizer: "", Tokens: 0})
 	want := "wrote: /tmp/out.md (2 lines, 11 chars, 11 B)\n"
 	if got != want {
 		t.Fatalf("wroteConfirmation() = %q, want %q", got, want)
+	}
+}
+
+func TestWroteConfirmationIncludesTokens(t *testing.T) {
+	t.Parallel()
+	path := "/tmp/out.md"
+	got := wroteConfirmation(path, []byte("alpha\nbeta\n"), tokencount.Estimate{
+		Tokenizer: "o200k x 1.3",
+		Tokens:    42,
+	})
+	want := "wrote: /tmp/out.md (2 lines, 11 chars, 11 B, 42 tokens (o200k x 1.3))\n"
+	if got != want {
+		t.Fatalf("wroteConfirmation() = %q, want %q", got, want)
+	}
+}
+
+func TestCopyConfirmationIncludesTokens(t *testing.T) {
+	t.Parallel()
+	got := copyConfirmation([]byte("alpha\nbeta\n"), tokencount.Estimate{
+		Tokenizer: "o200k",
+		Tokens:    7,
+	})
+	want := "copied 2 lines, 11 chars, 11 B, 7 tokens (o200k)\n"
+	if got != want {
+		t.Fatalf("copyConfirmation() = %q, want %q", got, want)
 	}
 }
 
@@ -770,6 +796,92 @@ func TestRenderCopyResultSurfacesClipboardError(t *testing.T) {
 	}
 }
 
+func TestRenderCopyResultIncludesTokenizer(t *testing.T) {
+	body := []byte("alpha\nbeta\n")
+	spec := &tokencount.Spec{Family: tokencount.FamilyGPT}
+	wantEstimate := spec.Count(string(body))
+	var copied []byte
+	originalClipboardCopy := clipboardCopy
+	clipboardCopy = func(_ context.Context, got []byte) error {
+		copied = append([]byte(nil), got...)
+		return nil
+	}
+	t.Cleanup(func() { clipboardCopy = originalClipboardCopy })
+
+	var out, errOut bytes.Buffer
+	result := artifactResult{
+		Payload:     artifactProbePayload{Text: "json-text"},
+		Body:        body,
+		DefaultPath: "",
+		Pipe:        false,
+		Text:        "human-text",
+		InlineText:  "inline-text",
+		Tokens:      spec,
+	}
+	if err := renderCLIResult(
+		withCopy(context.Background(), true),
+		&out,
+		&errOut,
+		output.FormatText,
+		resultKindArtifact,
+		result,
+	); err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	if !bytes.Equal(copied, body) {
+		t.Fatalf("copied body = %q, want %q", string(copied), string(body))
+	}
+	want := copyConfirmation(body, wantEstimate)
+	if got := errOut.String(); got != want {
+		t.Fatalf("copy confirmation = %q, want %q", got, want)
+	}
+}
+
+func TestRenderCopyJSONRecountsCopiedBytes(t *testing.T) {
+	body := []byte("alpha\nbeta\n")
+	spec := &tokencount.Spec{Family: tokencount.FamilyGPT}
+	var copied []byte
+	originalClipboardCopy := clipboardCopy
+	clipboardCopy = func(_ context.Context, got []byte) error {
+		copied = append([]byte(nil), got...)
+		return nil
+	}
+	t.Cleanup(func() { clipboardCopy = originalClipboardCopy })
+
+	var out, errOut bytes.Buffer
+	result := artifactResult{
+		Payload: exportTranscriptOutput{
+			ConversationID: "claude:probe",
+			Format:         "markdown",
+			Bytes:          len(body),
+		},
+		Body:       body,
+		InlineText: string(body),
+		Tokens:     spec,
+	}
+	if err := renderCLIResult(
+		withCopy(context.Background(), true),
+		&out,
+		&errOut,
+		output.FormatJSON,
+		resultKindArtifact,
+		result,
+	); err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	if bytes.Equal(copied, body) {
+		t.Fatal("copied the transcript body, want the JSON document")
+	}
+	want := copyConfirmation(copied, spec.Count(string(copied)))
+	if got := errOut.String(); got != want {
+		t.Fatalf("copy confirmation = %q, want %q", got, want)
+	}
+	transcriptWant := copyConfirmation(body, spec.Count(string(body)))
+	if errOut.String() == transcriptWant {
+		t.Fatal("copy confirmation used transcript tokens, want JSON document tokens")
+	}
+}
+
 func TestRenderCLIArtifactWriteIncludesSize(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "out.md")
@@ -780,7 +892,7 @@ func TestRenderCLIArtifactWriteIncludesSize(t *testing.T) {
 		Body:        body,
 		DefaultPath: path,
 		Pipe:        false,
-		Text:        wroteConfirmation(path, body),
+		Text:        wroteConfirmation(path, body, tokencount.Estimate{Tokenizer: "", Tokens: 0}),
 		InlineText:  string(body),
 	}
 	if err := renderCLIResult(context.Background(), &out, &errOut, output.FormatText, resultKindArtifact, result); err != nil {
@@ -1281,6 +1393,34 @@ func TestWriteCLIExportFileConfirmationIncludesSize(t *testing.T) {
 		t.Fatalf("export file body = %q, want %q", string(gotBody), string(body))
 	}
 	want := "wrote: " + path + " (2 lines, 11 chars, 11 B)\n"
+	if got := out.String(); got != want {
+		t.Fatalf("write confirmation = %q, want %q", got, want)
+	}
+}
+
+func TestWriteCLIExportFileConfirmationIncludesTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.md")
+	body := []byte("alpha\nbeta\n")
+	spec := &tokencount.Spec{Family: tokencount.FamilyClaude, Settings: tokencount.Settings{SafetyFactor: 1.3}}
+	originalLookup := lookupExportTokenSpec
+	lookupExportTokenSpec = func(_ context.Context, _, _ string) (*tokencount.Spec, error) {
+		return spec, nil
+	}
+	t.Cleanup(func() { lookupExportTokenSpec = originalLookup })
+
+	var out, errOut bytes.Buffer
+	sink := NewCLISink(context.Background(), &out, &errOut)
+	err := writeCLIExportFile(context.Background(), exportPayload{
+		ConversationID: "claude:probe",
+		Options: conv.ExportOptions{
+			Format: conv.ExportFormatMarkdown,
+		},
+		OutputPath: path,
+	}, body, sink)
+	if err != nil {
+		t.Fatalf("writeCLIExportFile: %v", err)
+	}
+	want := wroteConfirmation(path, body, spec.Count(string(body)))
 	if got := out.String(); got != want {
 		t.Fatalf("write confirmation = %q, want %q", got, want)
 	}
