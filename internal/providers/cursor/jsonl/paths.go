@@ -122,6 +122,13 @@ func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {
 				return walkErr
 			}
 			if entry.IsDir() {
+				relativePath, err := filepath.Rel(root.Path, path)
+				if err != nil {
+					return fmt.Errorf("relativize transcript path %s: %w", path, err)
+				}
+				if shouldSkipTranscriptDirectory(relativePath) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			file, ok := transcriptFileFromPath(root.Path, path)
@@ -141,6 +148,21 @@ func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {
 	})
 	fillTwinSubagentParents(files)
 	return files, nil
+}
+
+func shouldSkipTranscriptDirectory(relativePath string) bool {
+	if relativePath == "." {
+		return false
+	}
+	parts := strings.Split(relativePath, string(filepath.Separator))
+	depth := len(parts)
+	if depth == 2 {
+		return parts[1] != agentTranscriptsDirName
+	}
+	if depth == 4 {
+		return parts[3] != subagentsDirName
+	}
+	return depth >= 5
 }
 
 // projectConversationKey scopes a conversation uuid to the project it was
