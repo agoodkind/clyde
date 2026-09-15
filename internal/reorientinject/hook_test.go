@@ -909,3 +909,62 @@ func TestHookInjectionOmitsToolResultImageData(t *testing.T) {
 		t.Fatalf("injected summary carries %d bytes of base64 image data", len(body))
 	}
 }
+
+// compactWithNeutralPartsBody carries the content kinds only a real mapping
+// reaches: an assistant thinking block, a top-level image block, and a tool
+// result whose nested blocks include an image. A renderer that knows only
+// text, tool_use, and tool_result drops the first two entirely.
+var compactWithNeutralPartsBody = `{"messages":[` +
+	`{"role":"user","content":"m1-oldest"},` +
+	`{"role":"assistant","content":"m2-old"},` +
+	`{"role":"user","content":"m3-old"},` +
+	`{"role":"assistant","content":[` +
+	`{"type":"thinking","thinking":"weighing the approach","signature":"sig"},` +
+	`{"type":"text","text":"m4-answer"}` +
+	`]},` +
+	`{"role":"user","content":[` +
+	`{"type":"text","text":"look at this"},` +
+	`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + screenshotBase64 + `"}}` +
+	`]},` +
+	`{"role":"assistant","content":"m6-newest"},` +
+	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
+	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
+
+// TestHookInjectionRendersNeutralContentKinds pins the mapping the injection
+// reads: reasoning and a standalone image are real content kinds, not unknown
+// blocks. Rendering them proves the recent half goes through the provider
+// mapping into neutral parts rather than a local switch over a few wire type
+// strings, which silently dropped every kind it did not name.
+func TestHookInjectionRendersNeutralContentKinds(t *testing.T) {
+	t.Parallel()
+	hook := New(nil, Sizing{})
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
+		Body:   staticHookBody{body: []byte(compactWithNeutralPartsBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if match.RequestTransformer == nil {
+		t.Fatal("expected the conversation to split")
+	}
+	out, err := match.Transformer.TransformResponse(context.Background(), eventStreamResponse(summarySSEResponse))
+	if err != nil {
+		t.Fatalf("TransformResponse err = %v", err)
+	}
+	body := readBody(t, out)
+	if !strings.Contains(body, "weighing the approach") {
+		t.Fatalf("injected summary dropped the assistant's reasoning: %s", body)
+	}
+	if !strings.Contains(body, "look at this") {
+		t.Fatalf("injected summary dropped the user's words beside the image: %s", body)
+	}
+	if !strings.Contains(body, "[image]") {
+		t.Fatalf("injected summary dropped the standalone image placeholder: %s", body)
+	}
+	if strings.Contains(body, screenshotBase64[:64]) {
+		t.Fatal("injected summary carries base64 image data")
+	}
+}
