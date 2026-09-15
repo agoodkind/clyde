@@ -44,14 +44,15 @@ type ComposerBubbleRef struct {
 func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (ComposerHeader, bool, error) {
 	var emptyHeader ComposerHeader
 
-	value, found, err := ReadKVValue(ctx, db, KVTableCursorDiskKV, composerDataKey(composerID))
+	rows, err := ReadKVRowsByPrefix(ctx, db, KVTableCursorDiskKV, composerDataKey(composerID))
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.composer_header_read_failed", "concern", concern, "composer_id", composerID, "err", err)
 		return emptyHeader, false, fmt.Errorf("read cursor composer header %q: %w", composerID, err)
 	}
-	if !found {
+	if len(rows) == 0 {
 		return emptyHeader, false, nil
 	}
+	value := rows[0].Value
 
 	header, err := DecodeComposerHeaderJSON(value)
 	if err != nil {
@@ -64,12 +65,8 @@ func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (Com
 // readComposerHeaders decodes the header range once rather than fetching each
 // listed row again. A malformed row retains its previous decoded header.
 func readComposerHeaders(ctx context.Context, db *sql.DB, prior map[string]ComposerHeader) (map[string]ComposerHeader, error) {
-	rows, err := ReadKVRowsByPrefix(ctx, db, KVTableCursorDiskKV, composerDataKeyPrefix)
-	if err != nil {
-		return nil, err
-	}
-	headers := make(map[string]ComposerHeader, len(rows))
-	for _, row := range rows {
+	headers := make(map[string]ComposerHeader)
+	err := forEachKVRowInKeyRange(ctx, db, KVTableCursorDiskKV, keyRangeForPrefix(composerDataKeyPrefix), "", func(row KVRow) error {
 		id := strings.TrimPrefix(row.Key, composerDataKeyPrefix)
 		header, err := DecodeComposerHeaderJSON(row.Value)
 		if err != nil {
@@ -78,10 +75,14 @@ func readComposerHeaders(ctx context.Context, db *sql.DB, prior map[string]Compo
 			if previous, known := prior[id]; known {
 				headers[id] = previous
 			}
-			continue
+			return nil
 		}
 		header.ComposerID = id
 		headers[id] = header
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return headers, nil
 }
