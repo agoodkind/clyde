@@ -677,12 +677,7 @@ func (idx *Index) beginRefresh() (*refreshRun, scanCache, bool) {
 	}
 	idx.refreshing = true
 	idx.refreshRun = &refreshRun{done: make(chan struct{}), err: nil}
-	return idx.refreshRun, scanCache{
-		records:       idx.prevRecords,
-		stamps:        idx.prevStamps,
-		multiStates:   idx.prevMultiStates,
-		skipProviders: nil,
-	}, true
+	return idx.refreshRun, scanCache{records: idx.prevRecords, stamps: idx.prevStamps, multiStates: idx.prevMultiStates, skipProviders: nil}, true
 }
 
 // endRefresh releases the refresh slot after the new records are installed.
