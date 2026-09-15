@@ -858,3 +858,54 @@ func TestTransformPassesThroughNonStreamingResponse(t *testing.T) {
 		}
 	}
 }
+
+// screenshotBase64 stands in for a real screenshot's base64 payload. A live
+// /compact reattached seven of these, 1.5 MB of base64 counted as 1.55M tokens,
+// and the next turn failed with "prompt is too long".
+var screenshotBase64 = strings.Repeat("iVBORw0KGgoAAAANSUhEUg", 10_000)
+
+// compactWithScreenshotBody has a screenshot tool result in the recent half, the
+// part the hook removes from the request and injects into the summary as text.
+var compactWithScreenshotBody = `{"messages":[` +
+	`{"role":"user","content":"m1-oldest"},` +
+	`{"role":"assistant","content":"m2-old"},` +
+	`{"role":"user","content":"m3-old"},` +
+	`{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"computer","input":{"action":"screenshot"}}]},` +
+	`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":[` +
+	`{"type":"text","text":"screenshot captured"},` +
+	`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + screenshotBase64 + `"}}` +
+	`]}]},` +
+	`{"role":"assistant","content":"m6-newest"},` +
+	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
+	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
+
+func TestHookInjectionOmitsToolResultImageData(t *testing.T) {
+	t.Parallel()
+	hook := New(nil, Sizing{})
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
+		Body:   staticHookBody{body: []byte(compactWithScreenshotBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if match.RequestTransformer == nil {
+		t.Fatal("expected the screenshot conversation to split")
+	}
+	out, err := match.Transformer.TransformResponse(context.Background(), eventStreamResponse(summarySSEResponse))
+	if err != nil {
+		t.Fatalf("TransformResponse err = %v", err)
+	}
+	body := readBody(t, out)
+	if !strings.Contains(body, "screenshot captured") || !strings.Contains(body, "m6-newest") {
+		t.Fatalf("injected summary lost the recent half's text: %s", body)
+	}
+	if !strings.Contains(body, "[image]") {
+		t.Fatalf("injected summary has no image placeholder: %s", body)
+	}
+	if strings.Contains(body, screenshotBase64[:64]) {
+		t.Fatalf("injected summary carries %d bytes of base64 image data", len(body))
+	}
+}
