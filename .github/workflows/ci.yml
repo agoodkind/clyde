@@ -17,6 +17,7 @@ jobs:
     uses: agoodkind/go-makefile/.github/workflows/_ci.yml@main
     with:
       golangci_lint_install_mode: goinstall
+      cgo: true
     permissions:
       contents: read
       id-token: write
