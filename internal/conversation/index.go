@@ -79,7 +79,12 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		cachePresent:     false,
 		cachePath:        CachePath(),
 		debounce:         refreshDebounce,
-		scanProvider:     scan,
+		scanProvider: func(ctx context.Context, registry *Registry, prior scanCache) (scanResult, error) {
+			if !conversationConfig.Cursor.RawIndexingEnabled() {
+				prior.skipProviders = map[providerid.Provider]bool{providerid.ProviderCursor: true}
+			}
+			return scan(ctx, registry, prior)
+		},
 	}
 }
 
@@ -668,15 +673,11 @@ func (idx *Index) beginRefresh() (*refreshRun, scanCache, bool) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	if idx.refreshing {
-		return idx.refreshRun, scanCache{records: nil, stamps: nil, multiStates: nil}, false
+		return idx.refreshRun, scanCache{records: nil, stamps: nil, multiStates: nil, skipProviders: nil}, false
 	}
 	idx.refreshing = true
 	idx.refreshRun = &refreshRun{done: make(chan struct{}), err: nil}
-	return idx.refreshRun, scanCache{
-		records:     idx.prevRecords,
-		stamps:      idx.prevStamps,
-		multiStates: idx.prevMultiStates,
-	}, true
+	return idx.refreshRun, scanCache{records: idx.prevRecords, stamps: idx.prevStamps, multiStates: idx.prevMultiStates, skipProviders: nil}, true
 }
 
 // endRefresh releases the refresh slot after the new records are installed.

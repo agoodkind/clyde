@@ -16,9 +16,10 @@ import (
 // scanCache is the prior scan's output. Records and stamps are keyed by artifact
 // path plus selector, while multi-conversation scan state is keyed by artifact.
 type scanCache struct {
-	records     map[string]Record
-	stamps      map[string]FileStamp
-	multiStates map[string]MultiConversationScanState
+	records       map[string]Record
+	stamps        map[string]FileStamp
+	multiStates   map[string]MultiConversationScanState
+	skipProviders map[providerid.Provider]bool
 }
 
 // scanResult bundles the records a scan discovered with the file stamps it
@@ -39,8 +40,12 @@ type scanResult struct {
 func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult, error) {
 	out := make([]Record, 0, len(prior.records))
 	stamps := make(map[string]FileStamp, len(prior.stamps))
-	multiStates := make(map[string]MultiConversationScanState, len(prior.multiStates))
+	multiStates := copySkippedMultiStates(prior)
 	for _, provider := range registry.Providers() {
+		if prior.skipProviders[provider] {
+			out, stamps = appendSkippedProviderRecords(out, stamps, provider, prior)
+			continue
+		}
 		parser, err := registry.Lookup(provider)
 		if err != nil {
 			return scanResult{}, fmt.Errorf("lookup parser for %s: %w", provider.String(), err)
@@ -80,6 +85,33 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 			return a.Stamp.Equal(b.Stamp) && a.CompleteOffset == b.CompleteOffset
 		})
 	return scanResult{changed: changed, records: out, stamps: stamps, multiStates: multiStates}, nil
+}
+
+func copySkippedMultiStates(prior scanCache) map[string]MultiConversationScanState {
+	multiStates := make(map[string]MultiConversationScanState, len(prior.multiStates))
+	if !prior.skipProviders[providerid.ProviderCursor] {
+		return multiStates
+	}
+	maps.Copy(multiStates, prior.multiStates)
+	return multiStates
+}
+
+func appendSkippedProviderRecords(
+	out []Record,
+	stamps map[string]FileStamp,
+	provider providerid.Provider,
+	prior scanCache,
+) ([]Record, map[string]FileStamp) {
+	for key, record := range prior.records {
+		if record.Provider != provider {
+			continue
+		}
+		out = append(out, record)
+		if stamp, found := prior.stamps[key]; found {
+			stamps[key] = stamp
+		}
+	}
+	return out, stamps
 }
 
 func discoverCandidates(

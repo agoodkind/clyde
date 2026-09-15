@@ -19,7 +19,18 @@ type ConversationConfig struct {
 	// absent from every clyde surface, and the engine retains whatever a short
 	// manifest omits, so hiding one removes nothing already stored.
 	IncludeSubagentConversations bool                       `json:"includeSubagentConversations,omitempty" toml:"include_subagent_conversations,omitempty"`
+	Cursor                       CursorConversationConfig   `json:"cursor,omitzero" toml:"cursor,omitempty"`
 	Semantic                     ConversationSemanticConfig `json:"semantic,omitzero" toml:"semantic,omitempty"`
+}
+
+// CursorConversationConfig configures Cursor raw transcript indexing.
+type CursorConversationConfig struct {
+	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+}
+
+// RawIndexingEnabled reports whether Cursor discovery and projection run.
+func (cursor CursorConversationConfig) RawIndexingEnabled() bool {
+	return cursor.Enabled == nil || *cursor.Enabled
 }
 
 // ConversationSemanticConfig configures conversation semantic search: offering

@@ -113,6 +113,11 @@ func WriteRuntimeStatusReport(out io.Writer, snapshot *daemonsvc.RuntimeStatus) 
 		nextRetry = time.Unix(semantic.NextRetryUnix, 0).Format(time.RFC3339)
 	}
 	_, _ = fmt.Fprintf(out, "semantic: ingestion_enabled=%t search_enabled=%t connection=%s attempts=%d next_retry=%s\n", semantic.IngestionEnabled, semantic.SearchEnabled, semantic.Connection, semantic.Attempts, nextRetry)
+	if snapshot.CursorRawIndexingEnabled == nil {
+		_, _ = fmt.Fprintln(out, "cursor_raw_indexing: unknown")
+	} else {
+		_, _ = fmt.Fprintf(out, "cursor_raw_indexing: enabled=%t\n", *snapshot.CursorRawIndexingEnabled)
+	}
 	for _, listener := range snapshot.Listeners {
 		_, _ = fmt.Fprintf(out, "listener: name=%s network=%s address=%s\n", listener.Name, listener.Network, listener.Address)
 	}

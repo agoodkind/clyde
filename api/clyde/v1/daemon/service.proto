@@ -579,4 +579,5 @@ message GetDaemonStatusResponse {
   repeated BoundListenerStatus listeners = 2;
   // Absent when the daemon did not start a profiling listener.
   BoundListenerStatus profiling = 3;
+  optional bool cursor_raw_indexing_enabled = 4;
 }
