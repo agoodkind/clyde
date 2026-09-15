@@ -122,6 +122,24 @@ func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {
 				return walkErr
 			}
 			if entry.IsDir() {
+				relativePath, err := filepath.Rel(root.Path, path)
+				if err != nil {
+					return err
+				}
+				if relativePath == "." {
+					return nil
+				}
+				parts := strings.Split(relativePath, string(filepath.Separator))
+				depth := len(parts)
+				if depth == 2 && parts[1] != agentTranscriptsDirName {
+					return filepath.SkipDir
+				}
+				if depth == 4 && parts[3] != subagentsDirName {
+					return filepath.SkipDir
+				}
+				if depth >= 5 {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			file, ok := transcriptFileFromPath(root.Path, path)
