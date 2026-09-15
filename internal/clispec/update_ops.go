@@ -186,8 +186,8 @@ func defaultUpdateRunner() updateRunner {
 	}
 }
 
-func baseUpdateOptions(log *slog.Logger, dryRun bool) selfupdate.Options {
-	return updateopts.Options(updateopts.Overrides{
+func baseUpdateOptions(ctx context.Context, log *slog.Logger, dryRun bool) selfupdate.Options {
+	return updateopts.NetworkOptions(ctx, updateopts.Overrides{
 		Client:      nil,
 		InstallPath: "",
 		DryRun:      dryRun,
@@ -196,7 +196,7 @@ func baseUpdateOptions(log *slog.Logger, dryRun bool) selfupdate.Options {
 }
 
 func (runner updateRunner) runCheck(ctx context.Context, _ updateCheckPayload) (Result, error) {
-	options := baseUpdateOptions(slog.Default().With("component", "update"), false)
+	options := baseUpdateOptions(ctx, slog.Default().With("component", "update"), false)
 	result, err := runner.check(ctx, options)
 	if err != nil {
 		slog.WarnContext(ctx, "cli.update.check_failed", "concern", updateLogConcern, "component", "clispec", "err", err)
@@ -207,7 +207,7 @@ func (runner updateRunner) runCheck(ctx context.Context, _ updateCheckPayload) (
 }
 
 func (runner updateRunner) runApply(ctx context.Context, payload updateApplyPayload) (Result, error) {
-	options := baseUpdateOptions(slog.Default().With("component", "update"), payload.DryRun)
+	options := baseUpdateOptions(ctx, slog.Default().With("component", "update"), payload.DryRun)
 	result, err := runner.apply(ctx, options)
 	if err != nil {
 		slog.WarnContext(ctx, "cli.update.apply_failed", "concern", updateLogConcern, "component", "clispec", "err", err)
@@ -236,7 +236,7 @@ func (runner updateRunner) runApply(ctx context.Context, payload updateApplyPayl
 }
 
 func (runner updateRunner) runStatus(ctx context.Context, _ updateStatusPayload) (Result, error) {
-	options := baseUpdateOptions(slog.Default().With("component", "update"), false)
+	options := baseUpdateOptions(ctx, slog.Default().With("component", "update"), false)
 	resolvedOptions := resolveStatusOptions(options)
 	state, err := runner.loadState(resolvedOptions.StatePath)
 	if err != nil {
