@@ -304,7 +304,7 @@ func readChangedGlobalDiscovery(
 	}
 	defer func() { _ = db.Close() }()
 	signature, headers, signatureErr := readGlobalDiscoverySignature(ctx, db, cached.data.Headers)
-	if signatureErr != nil {
+	if headers == nil {
 		headers = cached.data.Headers
 	}
 	snapshot, err := beginReadSnapshot(ctx, db)
