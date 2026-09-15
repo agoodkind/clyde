@@ -92,26 +92,3 @@ func TestReadComposerHeaderWrapsComposerIDOnDecodeError(t *testing.T) {
 		t.Fatalf("error = %q, want composer id", err)
 	}
 }
-
-func TestReadComposerHeadersUsesKeyIdentityAndDecodesTheRange(t *testing.T) {
-	dbPath := createCursorStoreTestDatabase(t)
-	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
-	if err != nil {
-		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
-	}
-	t.Cleanup(func() { _ = readonly.Close() })
-
-	headers, err := readComposerHeaders(context.Background(), readonly, nil)
-	if err != nil {
-		t.Fatalf("readComposerHeaders returned error: %v", err)
-	}
-	if len(headers) != 2 {
-		t.Fatalf("headers len = %d, want 2", len(headers))
-	}
-	if headers["composer-a"].Name != "Investigate Cursor" {
-		t.Fatalf("composer-a = %+v", headers["composer-a"])
-	}
-	if headers["composer-b"].ComposerID != "composer-b" {
-		t.Fatalf("composer-b = %+v", headers["composer-b"])
-	}
-}

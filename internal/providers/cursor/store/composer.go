@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"strings"
 )
 
 const composerDataKeyPrefix = "composerData:"
@@ -60,31 +59,6 @@ func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (Com
 		return emptyHeader, false, fmt.Errorf("decode cursor composer header %q: %w", composerID, err)
 	}
 	return header, true, nil
-}
-
-// readComposerHeaders decodes the header range once rather than fetching each
-// listed row again. A malformed row retains its previous decoded header.
-func readComposerHeaders(ctx context.Context, db *sql.DB, prior map[string]ComposerHeader) (map[string]ComposerHeader, error) {
-	headers := make(map[string]ComposerHeader)
-	err := forEachKVRowInKeyRange(ctx, db, KVTableCursorDiskKV, keyRangeForPrefix(composerDataKeyPrefix), "", func(row KVRow) error {
-		id := strings.TrimPrefix(row.Key, composerDataKeyPrefix)
-		header, err := DecodeComposerHeaderJSON(row.Value)
-		if err != nil {
-			logger := discoveryReadLogger(ctx)
-			logger.WarnContext(ctx, "providers.cursor.store.composer_header_decode_failed", "concern", concern, "composer_id", id, "err", err)
-			if previous, known := prior[id]; known {
-				headers[id] = previous
-			}
-			return nil
-		}
-		header.ComposerID = id
-		headers[id] = header
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return headers, nil
 }
 
 func composerDataKey(composerID string) string {
