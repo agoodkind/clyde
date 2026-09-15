@@ -74,20 +74,6 @@ func NormalizeContent(raw json.RawMessage) ([]content.Part, content.Kind) {
 	return parts, content.KindParts
 }
 
-// FlattenContent is the lossy text view of an Anthropic content field: text and
-// reasoning contribute their words, an image contributes its placeholder, and a
-// tool result contributes its own flattened content.
-func FlattenContent(raw json.RawMessage) string {
-	parts, kind := NormalizeContent(raw)
-	if kind == content.KindString {
-		if len(parts) == 0 {
-			return ""
-		}
-		return parts[0].Text
-	}
-	return content.FlattenParts(parts)
-}
-
 func normalizeBlock(block inboundBlock) content.Part {
 	part := emptyPart(strings.TrimSpace(block.Type))
 	switch wireBlockType(part.WireType) {

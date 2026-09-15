@@ -156,7 +156,11 @@ func codexContentFromParts(
 				Type: textType,
 				Text: text,
 			})
-		case adaptercontent.PartAudio, adaptercontent.PartToolResult, adaptercontent.PartToolUse, adaptercontent.PartUnsupported:
+		// PartThinking never arrives here: NormalizeRaw classifies the OpenAI
+		// content dialect, which has no reasoning wire type, and Codex reasoning
+		// round-trip is owned by the materialization strategy rather than by a
+		// content part.
+		case adaptercontent.PartAudio, adaptercontent.PartThinking, adaptercontent.PartToolResult, adaptercontent.PartToolUse, adaptercontent.PartUnsupported:
 			continue
 		}
 	}

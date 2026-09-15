@@ -104,18 +104,6 @@ func TestNormalizeContentToolResultBlocksKeepImagesOutOfText(t *testing.T) {
 	}
 }
 
-func TestFlattenContentRendersImagePlaceholder(t *testing.T) {
-	t.Parallel()
-	raw := json.RawMessage(`[` +
-		`{"type":"text","text":"look at this"},` +
-		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + screenshotBase64 + `"}}` +
-		`]`)
-	flat := FlattenContent(raw)
-	if flat != "look at this[image]" {
-		t.Fatalf("FlattenContent = %q, want the words plus the placeholder", flat)
-	}
-}
-
 func TestNormalizeContentEmptyAndUndecodable(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"", "null", "{"} {
