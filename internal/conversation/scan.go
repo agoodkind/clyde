@@ -40,24 +40,10 @@ type scanResult struct {
 func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult, error) {
 	out := make([]Record, 0, len(prior.records))
 	stamps := make(map[string]FileStamp, len(prior.stamps))
-	multiStates := make(map[string]MultiConversationScanState, len(prior.multiStates))
-	for provider := range prior.skipProviders {
-		if provider == providerid.ProviderCursor {
-			for path, state := range prior.multiStates {
-				multiStates[path] = state
-			}
-		}
-	}
+	multiStates := copySkippedMultiStates(prior)
 	for _, provider := range registry.Providers() {
 		if prior.skipProviders[provider] {
-			for key, record := range prior.records {
-				if record.Provider == provider {
-					out = append(out, record)
-					if stamp, found := prior.stamps[key]; found {
-						stamps[key] = stamp
-					}
-				}
-			}
+			out, stamps = appendSkippedProviderRecords(out, stamps, provider, prior)
 			continue
 		}
 		parser, err := registry.Lookup(provider)
@@ -99,6 +85,33 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 			return a.Stamp.Equal(b.Stamp) && a.CompleteOffset == b.CompleteOffset
 		})
 	return scanResult{changed: changed, records: out, stamps: stamps, multiStates: multiStates}, nil
+}
+
+func copySkippedMultiStates(prior scanCache) map[string]MultiConversationScanState {
+	multiStates := make(map[string]MultiConversationScanState, len(prior.multiStates))
+	if !prior.skipProviders[providerid.ProviderCursor] {
+		return multiStates
+	}
+	maps.Copy(multiStates, prior.multiStates)
+	return multiStates
+}
+
+func appendSkippedProviderRecords(
+	out []Record,
+	stamps map[string]FileStamp,
+	provider providerid.Provider,
+	prior scanCache,
+) ([]Record, map[string]FileStamp) {
+	for key, record := range prior.records {
+		if record.Provider != provider {
+			continue
+		}
+		out = append(out, record)
+		if stamp, found := prior.stamps[key]; found {
+			stamps[key] = stamp
+		}
+	}
+	return out, stamps
 }
 
 func discoverCandidates(
