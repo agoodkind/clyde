@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -302,7 +303,10 @@ func readChangedGlobalDiscovery(
 		return data, signature, err, false
 	}
 	defer func() { _ = db.Close() }()
-	signature, signatureErr := readGlobalDiscoverySignature(ctx, db)
+	signature, headers, signatureErr := readGlobalDiscoverySignature(ctx, db, cached.data.Headers)
+	if headers == nil {
+		headers = cached.data.Headers
+	}
 	snapshot, err := beginReadSnapshot(ctx, db)
 	if err != nil {
 		data := cached.data
@@ -362,7 +366,7 @@ func readChangedGlobalDiscovery(
 		}
 	}
 	snapshot.rollback()
-	data := refreshGlobalDatabase(ctx, db, cached.data, stocks, selectors, stockErr)
+	data := refreshGlobalDatabase(ctx, db, cached.data, headers, stocks, selectors, stockErr)
 	refreshErr := errors.Join(signatureErr, data.Err, data.Metadata.Err)
 	if refreshErr != nil {
 		logger := discoveryReadLogger(ctx)
@@ -514,9 +518,9 @@ func logComposerStockRefresh(
 	)
 }
 
-func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB) (globalDiscoverySignature, error) {
+func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB, prior map[string]ComposerHeader) (globalDiscoverySignature, map[string]ComposerHeader, error) {
 	var signature globalDiscoverySignature
-	conversationErr := readConversationRangeSignature(ctx, db, &signature)
+	headers, conversationErr := readConversationRangeSignature(ctx, db, prior, &signature)
 	backgroundErr := readBackgroundSignature(ctx, db, &signature)
 	metadataErr := readComposerMetadataSignature(ctx, db, &signature)
 	err := errors.Join(conversationErr, backgroundErr, metadataErr)
@@ -527,44 +531,34 @@ func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB) (globalDiscov
 			"err", err,
 		)
 	}
-	return signature, err
+	return signature, headers, err
 }
 
-func readConversationRangeSignature(ctx context.Context, db *sql.DB, signature *globalDiscoverySignature) error {
-	composerBounds := keyRangeForPrefix(composerDataKeyPrefix)
-	query := "SELECT rowid, key, COALESCE(length(value), -1), json_valid(value), " +
-		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.name') AS TEXT), '') ELSE '' END, " +
-		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.createdAt') AS TEXT), '') ELSE '' END, " +
-		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.lastUpdatedAt') AS TEXT), '') ELSE '' END, " +
-		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.status') AS TEXT), '') ELSE '' END, " +
-		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.unifiedMode') AS TEXT), '') ELSE '' END, " +
-		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.forceMode') AS TEXT), '') ELSE '' END, " +
-		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.latestChatGenerationUUID') AS TEXT), '') ELSE '' END, " +
-		"CASE WHEN json_valid(value) THEN COALESCE(CAST(json_extract(value, '$.fullConversationHeadersOnly') AS TEXT), '') ELSE '' END " +
-		"FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key"
-	rows, err := db.QueryContext(ctx, query, composerBounds.Lower, composerBounds.Upper)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_signature_failed", "concern", concern, "err", err)
-		return fmt.Errorf("read cursor composer signature: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
+func readConversationRangeSignature(ctx context.Context, db *sql.DB, prior map[string]ComposerHeader, signature *globalDiscoverySignature) (map[string]ComposerHeader, error) {
+	headers := make(map[string]ComposerHeader, len(prior))
 	digest := sha256.New()
-	for rows.Next() {
-		var rowID, valueLength, valid int64
-		var key, name, createdAt, lastUpdatedAt, status, unifiedMode, forceMode, requestID, headers string
-		if err := rows.Scan(&rowID, &key, &valueLength, &valid, &name, &createdAt, &lastUpdatedAt, &status, &unifiedMode, &forceMode, &requestID, &headers); err != nil {
-			return fmt.Errorf("scan cursor composer signature: %w", err)
+	err := forEachKVRowInKeyRange(ctx, db, KVTableCursorDiskKV, keyRangeForPrefix(composerDataKeyPrefix), "", func(row KVRow) error {
+		id := strings.TrimPrefix(row.Key, composerDataKeyPrefix)
+		writeFingerprintField(digest, strconv.FormatInt(row.RowID, 10))
+		writeFingerprintField(digest, row.Key)
+		writeFingerprintField(digest, strconv.Itoa(len(row.Value)))
+		_, _ = digest.Write(row.Value)
+		header, decodeErr := DecodeComposerHeaderJSON(row.Value)
+		if decodeErr != nil {
+			if previous, found := prior[id]; found {
+				headers[id] = previous
+			}
+			return nil
 		}
-		for _, field := range []string{strconv.FormatInt(rowID, 10), key, strconv.FormatInt(valueLength, 10), strconv.FormatInt(valid, 10), name, createdAt, lastUpdatedAt, status, unifiedMode, forceMode, requestID, headers} {
-			writeFingerprintField(digest, field)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate cursor composer signature: %w", err)
+		header.ComposerID = id
+		headers[id] = header
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	copy(signature.composerDigest[:], digest.Sum(nil))
-
-	return nil
+	return headers, nil
 }
 
 func readBackgroundSignature(ctx context.Context, db *sql.DB, signature *globalDiscoverySignature) error {
@@ -634,16 +628,14 @@ func refreshGlobalDatabase(
 	ctx context.Context,
 	db *sql.DB,
 	data GlobalDiscovery,
+	headers map[string]ComposerHeader,
 	stocks map[string]ComposerBubbleStock,
 	selectors map[string]composerBubbleSelector,
 	stockErr error,
 ) GlobalDiscovery {
-	headers, headerErr := readComposerHeaders(ctx, db, data.Headers)
 	background, backgroundErr := ListBackgroundComposers(ctx, db)
 	metadata, metadataErr := ReadComposerMetadataIndex(ctx, db)
-	if headerErr == nil {
-		data.Headers = headers
-	}
+	data.Headers = headers
 	if stockErr == nil {
 		data.Stocks = stocks
 		data.selectors = selectors
@@ -655,7 +647,7 @@ func refreshGlobalDatabase(
 		data.Metadata.ByComposerID = metadata
 	}
 	data.Metadata.Err = metadataErr
-	data.Err = errors.Join(headerErr, stockErr, backgroundErr)
+	data.Err = errors.Join(stockErr, backgroundErr)
 	return data
 }
 
