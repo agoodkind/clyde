@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	adaptercontent "goodkind.io/clyde/internal/adapter/content"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/reorienttag"
 )
@@ -456,7 +457,11 @@ func renderContentBlock(block anthropicContentBlock) string {
 	case anthropicBlockToolUse:
 		return "[tool_use " + block.Name + "] " + strings.TrimSpace(string(block.Input))
 	case anthropicBlockToolResult:
-		return "[tool_result] " + strings.TrimSpace(string(block.Content))
+		// The injected text is re-sent as plain text on every later turn, so a
+		// base64 image inside a tool result must not be copied through: the model
+		// cannot see an image from its encoding, and base64 costs about one token per
+		// byte, which lets a byte cap sized for prose overflow the context window.
+		return "[tool_result] " + strings.TrimSpace(adaptercontent.FlattenRaw(block.Content))
 	default:
 		return ""
 	}
