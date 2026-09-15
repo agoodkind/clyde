@@ -418,7 +418,6 @@ func forEachKVRowInKeyRange(
 			logger.WarnContext(ctx, "providers.cursor.store.kv_row_scan_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
 			return fmt.Errorf("scan cursor %s row in key range %q: %w", sqlTableName, bounds.Lower, err)
 		}
-		row.Value = append([]byte(nil), row.Value...)
 		if err := visit(row); err != nil {
 			return err
 		}
