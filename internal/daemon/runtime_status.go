@@ -54,7 +54,8 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 	if r.pprofListener != nil {
 		profiling = boundListenerStatus(listenerNamePProf, r.pprofListener.Addr())
 	}
-	return &clydev1.GetDaemonStatusResponse{Semantic: semantic, Listeners: listeners, Profiling: profiling}
+	cursorRawIndexingEnabled := cfg.Conversation.Cursor.RawIndexingEnabled()
+	return &clydev1.GetDaemonStatusResponse{Semantic: semantic, Listeners: listeners, Profiling: profiling, CursorRawIndexingEnabled: &cursorRawIndexingEnabled}
 }
 
 func boundListenerStatus(name string, addr net.Addr) *clydev1.BoundListenerStatus {

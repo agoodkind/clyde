@@ -10,9 +10,10 @@ import (
 
 // RuntimeStatus is the passive semantic and listener snapshot returned by the daemon.
 type RuntimeStatus struct {
-	Semantic  SemanticStatus        `json:"semantic"`
-	Listeners []BoundListenerStatus `json:"listeners"`
-	Profiling *BoundListenerStatus  `json:"profiling"`
+	Semantic                 SemanticStatus        `json:"semantic"`
+	Listeners                []BoundListenerStatus `json:"listeners"`
+	Profiling                *BoundListenerStatus  `json:"profiling"`
+	CursorRawIndexingEnabled *bool                 `json:"cursor_raw_indexing_enabled,omitempty"`
 }
 
 // SemanticStatus reports effective flags and the existing engine connection.
@@ -53,8 +54,9 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 			Connection:    SemanticConnectionState(strings.ToLower(strings.TrimPrefix(semantic.GetConnection().String(), "SEMANTIC_CONNECTION_STATE_"))),
 			NextRetryUnix: semantic.GetNextRetryUnix(), Attempts: semantic.GetAttempts(),
 		},
-		Listeners: make([]BoundListenerStatus, 0, len(response.GetListeners())),
-		Profiling: nil,
+		Listeners:                make([]BoundListenerStatus, 0, len(response.GetListeners())),
+		Profiling:                nil,
+		CursorRawIndexingEnabled: response.CursorRawIndexingEnabled,
 	}
 	for _, listener := range response.GetListeners() {
 		result.Listeners = append(result.Listeners, listenerStatusFromProto(listener))

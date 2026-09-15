@@ -4142,9 +4142,10 @@ type GetDaemonStatusResponse struct {
 	Semantic  *SemanticStatus        `protobuf:"bytes,1,opt,name=semantic,proto3" json:"semantic,omitempty"`
 	Listeners []*BoundListenerStatus `protobuf:"bytes,2,rep,name=listeners,proto3" json:"listeners,omitempty"`
 	// Absent when the daemon did not start a profiling listener.
-	Profiling     *BoundListenerStatus `protobuf:"bytes,3,opt,name=profiling,proto3" json:"profiling,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Profiling                *BoundListenerStatus `protobuf:"bytes,3,opt,name=profiling,proto3" json:"profiling,omitempty"`
+	CursorRawIndexingEnabled *bool                `protobuf:"varint,4,opt,name=cursor_raw_indexing_enabled,json=cursorRawIndexingEnabled,proto3,oneof" json:"cursor_raw_indexing_enabled,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *GetDaemonStatusResponse) Reset() {
@@ -4196,6 +4197,13 @@ func (x *GetDaemonStatusResponse) GetProfiling() *BoundListenerStatus {
 		return x.Profiling
 	}
 	return nil
+}
+
+func (x *GetDaemonStatusResponse) GetCursorRawIndexingEnabled() bool {
+	if x != nil && x.CursorRawIndexingEnabled != nil {
+		return *x.CursorRawIndexingEnabled
+	}
+	return false
 }
 
 var File_clyde_v1_daemon_service_proto protoreflect.FileDescriptor
@@ -4562,11 +4570,13 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x13BoundListenerStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\anetwork\x18\x02 \x01(\tR\anetwork\x12\x18\n" +
-	"\aaddress\x18\x03 \x01(\tR\aaddress\"\xc9\x01\n" +
+	"\aaddress\x18\x03 \x01(\tR\aaddress\"\xad\x02\n" +
 	"\x17GetDaemonStatusResponse\x124\n" +
 	"\bsemantic\x18\x01 \x01(\v2\x18.clyde.v1.SemanticStatusR\bsemantic\x12;\n" +
 	"\tlisteners\x18\x02 \x03(\v2\x1d.clyde.v1.BoundListenerStatusR\tlisteners\x12;\n" +
-	"\tprofiling\x18\x03 \x01(\v2\x1d.clyde.v1.BoundListenerStatusR\tprofiling*U\n" +
+	"\tprofiling\x18\x03 \x01(\v2\x1d.clyde.v1.BoundListenerStatusR\tprofiling\x12B\n" +
+	"\x1bcursor_raw_indexing_enabled\x18\x04 \x01(\bH\x00R\x18cursorRawIndexingEnabled\x88\x01\x01B\x1e\n" +
+	"\x1c_cursor_raw_indexing_enabled*U\n" +
 	"\fSearchSource\x12\x1d\n" +
 	"\x19SEARCH_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SEARCH_SOURCE_SEMANTIC\x10\x01\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x03*\xb6\x01\n" +
@@ -4783,6 +4793,7 @@ func file_clyde_v1_daemon_service_proto_init() {
 	file_clyde_v1_daemon_service_proto_msgTypes[3].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[4].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[7].OneofWrappers = []any{}
+	file_clyde_v1_daemon_service_proto_msgTypes[49].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

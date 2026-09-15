@@ -16,9 +16,10 @@ import (
 // scanCache is the prior scan's output. Records and stamps are keyed by artifact
 // path plus selector, while multi-conversation scan state is keyed by artifact.
 type scanCache struct {
-	records     map[string]Record
-	stamps      map[string]FileStamp
-	multiStates map[string]MultiConversationScanState
+	records       map[string]Record
+	stamps        map[string]FileStamp
+	multiStates   map[string]MultiConversationScanState
+	skipProviders map[providerid.Provider]bool
 }
 
 // scanResult bundles the records a scan discovered with the file stamps it
@@ -40,7 +41,25 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 	out := make([]Record, 0, len(prior.records))
 	stamps := make(map[string]FileStamp, len(prior.stamps))
 	multiStates := make(map[string]MultiConversationScanState, len(prior.multiStates))
+	for provider := range prior.skipProviders {
+		if provider == providerid.ProviderCursor {
+			for path, state := range prior.multiStates {
+				multiStates[path] = state
+			}
+		}
+	}
 	for _, provider := range registry.Providers() {
+		if prior.skipProviders[provider] {
+			for key, record := range prior.records {
+				if record.Provider == provider {
+					out = append(out, record)
+					if stamp, found := prior.stamps[key]; found {
+						stamps[key] = stamp
+					}
+				}
+			}
+			continue
+		}
 		parser, err := registry.Lookup(provider)
 		if err != nil {
 			return scanResult{}, fmt.Errorf("lookup parser for %s: %w", provider.String(), err)
