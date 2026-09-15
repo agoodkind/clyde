@@ -21,7 +21,7 @@ func TestStartSelfUpdateSchedulerUsesSupervisorApplyModeAndDeployHandoff(t *test
 	stop := startSelfUpdateSchedulerWith(
 		ctx,
 		log,
-		func(overrides updateopts.Overrides) selfupdate.Options {
+		func(_ context.Context, overrides updateopts.Overrides) selfupdate.Options {
 			if overrides.Log == nil {
 				t.Fatal("Options override Log = nil, want supervisor logger")
 			}

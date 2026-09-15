@@ -13,7 +13,7 @@ import (
 )
 
 type (
-	updateOptionsFunc func(updateopts.Overrides) selfupdate.Options
+	updateOptionsFunc func(context.Context, updateopts.Overrides) selfupdate.Options
 	deployHandoffFunc func(context.Context, io.Writer, io.Writer) error
 	schedulerRunFunc  func(context.Context, selfupdate.SchedulerHooks)
 )
@@ -22,7 +22,7 @@ func startSelfUpdateScheduler(ctx context.Context, log *slog.Logger) func() {
 	return startSelfUpdateSchedulerWith(
 		ctx,
 		log,
-		updateopts.Options,
+		updateopts.NetworkOptions,
 		updatehandoff.Deploy,
 		selfupdate.RunScheduler,
 	)
@@ -53,7 +53,7 @@ func startSelfUpdateSchedulerWith(
 				return selfupdate.ModeApply
 			},
 			Options: func() selfupdate.Options {
-				return options(updateopts.Overrides{
+				return options(schedulerCtx, updateopts.Overrides{
 					Client:      nil,
 					InstallPath: "",
 					DryRun:      false,
