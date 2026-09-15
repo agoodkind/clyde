@@ -14,7 +14,8 @@ import (
 	"slices"
 	"strings"
 
-	adaptercontent "goodkind.io/clyde/internal/adapter/content"
+	"goodkind.io/clyde/internal/adapter/anthropic"
+	"goodkind.io/clyde/internal/adapter/content"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/reorienttag"
 )
@@ -363,105 +364,81 @@ func (r anthropicSummaryRequest) sessionID() string {
 	return strings.TrimSpace(uid.SessionID)
 }
 
-// anthropicBlockType enumerates the content block types the recent-half renderer
-// understands. Other types render empty.
-type anthropicBlockType string
-
-const (
-	anthropicBlockText       anthropicBlockType = "text"
-	anthropicBlockToolUse    anthropicBlockType = "tool_use"
-	anthropicBlockToolResult anthropicBlockType = "tool_result"
-)
-
-// anthropicContentBlock decodes one content block of a message so the recent half
-// can be rendered verbatim. It covers the block types that carry conversation
-// detail (text, tool_use, tool_result); other block types render empty.
-type anthropicContentBlock struct {
-	Type anthropicBlockType `json:"type"`
-	Text string             `json:"text"`
-	Name string             `json:"name"`
-	// ID is the tool_use block's id; ToolUseID is the tool_result block's reference
-	// back to the tool_use it answers. Both drive the tool-pairing split so a trim
-	// never separates a tool_use from its tool_result.
-	ID        string          `json:"id"`
-	ToolUseID string          `json:"tool_use_id"`
-	Input     json.RawMessage `json:"input"`
-	Content   json.RawMessage `json:"content"`
+// parts maps this message's content into the neutral content parts the adapter
+// boundary defines. The provider package owns the Anthropic block shapes; every
+// split and render step below reads only the neutral parts, so a second
+// provider supplies its own mapping and reuses the same steps.
+func (m anthropicMessage) parts() []content.Part {
+	parts, _ := anthropic.NormalizeContent(m.Content)
+	return parts
 }
 
-// toolIDs returns the tool_use ids this message declares (from tool_use blocks) and
-// the tool_use ids its tool_result blocks answer. Used to pair tool calls across
-// wire messages so the split never orphans one side.
+// toolIDs returns the tool_use ids this message declares and the tool_use ids
+// its tool results answer. Used to pair tool calls across wire messages so the
+// split never orphans one side.
 func (m anthropicMessage) toolIDs() (uses []string, results []string) {
-	trimmed := strings.TrimSpace(string(m.Content))
-	if trimmed == "" || trimmed[0] != '[' {
-		return nil, nil
-	}
-	var blocks []anthropicContentBlock
-	if err := json.Unmarshal(m.Content, &blocks); err != nil {
-		return nil, nil
-	}
-	for _, block := range blocks {
-		switch block.Type {
-		case anthropicBlockToolUse:
-			if block.ID != "" {
-				uses = append(uses, block.ID)
+	return toolIDsOfParts(m.parts())
+}
+
+func toolIDsOfParts(parts []content.Part) (uses []string, results []string) {
+	for _, part := range parts {
+		switch part.Kind {
+		case content.PartToolUse:
+			if part.ID != "" {
+				uses = append(uses, part.ID)
 			}
-		case anthropicBlockToolResult:
-			if block.ToolUseID != "" {
-				results = append(results, block.ToolUseID)
+		case content.PartToolResult:
+			if part.ToolUseID != "" {
+				results = append(results, part.ToolUseID)
 			}
-		case anthropicBlockText:
+		case content.PartText,
+			content.PartThinking,
+			content.PartImage,
+			content.PartAudio,
+			content.PartRefusal,
+			content.PartUnsupported:
 		}
 	}
 	return uses, results
 }
 
-// renderBlocks renders a message's content to text, handling both the plain-string
-// content form and the array-of-blocks form, and preserving tool calls and tool
-// results (not just text) so the injected recent half stays faithful.
+// renderBlocks renders a message's content to text, preserving tool calls and
+// tool results (not just text) so the injected recent half stays faithful.
 func (m anthropicMessage) renderBlocks() string {
-	trimmed := strings.TrimSpace(string(m.Content))
-	if trimmed == "" || trimmed == "null" {
-		return ""
-	}
-	if trimmed[0] == '"' {
-		var plain string
-		if err := json.Unmarshal(m.Content, &plain); err != nil {
-			return ""
-		}
-		return plain
-	}
-	var blocks []anthropicContentBlock
-	if err := json.Unmarshal(m.Content, &blocks); err != nil {
-		return ""
-	}
+	return renderParts(m.parts())
+}
+
+// renderParts renders neutral content parts to the text the injection carries.
+// It is provider-neutral: it names no wire type and decodes no provider JSON.
+func renderParts(parts []content.Part) string {
 	var builder strings.Builder
-	for _, block := range blocks {
-		part := renderContentBlock(block)
-		if part == "" {
+	for _, part := range parts {
+		rendered := renderPart(part)
+		if rendered == "" {
 			continue
 		}
 		if builder.Len() > 0 {
 			builder.WriteByte('\n')
 		}
-		builder.WriteString(part)
+		builder.WriteString(rendered)
 	}
 	return builder.String()
 }
 
-func renderContentBlock(block anthropicContentBlock) string {
-	switch block.Type {
-	case anthropicBlockText:
-		return block.Text
-	case anthropicBlockToolUse:
-		return "[tool_use " + block.Name + "] " + strings.TrimSpace(string(block.Input))
-	case anthropicBlockToolResult:
-		// The injected text is re-sent as plain text on every later turn, so a
-		// base64 image inside a tool result must not be copied through: the model
-		// cannot see an image from its encoding, and base64 costs about one token per
-		// byte, which lets a byte cap sized for prose overflow the context window.
-		return "[tool_result] " + strings.TrimSpace(adaptercontent.FlattenRaw(block.Content))
+func renderPart(part content.Part) string {
+	switch part.Kind {
+	case content.PartText, content.PartThinking:
+		return part.Text
+	case content.PartToolUse:
+		return "[tool_use " + part.Name + "] " + strings.TrimSpace(string(part.Input))
+	case content.PartToolResult:
+		// The injected text is re-sent as plain text on every later turn, so an
+		// image inside a tool result reaches the model as a placeholder: the model
+		// cannot see an image from its encoding, and inline bytes cost about one
+		// token each, which lets a cap sized for prose overflow the context window.
+		return "[tool_result] " + strings.TrimSpace(part.Text)
+	case content.PartImage, content.PartAudio, content.PartRefusal, content.PartUnsupported:
+		return strings.TrimSpace(content.FlattenParts([]content.Part{part}))
 	default:
 		return ""
 	}

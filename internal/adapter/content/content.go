@@ -52,6 +52,11 @@ const (
 	PartToolResult PartKind = "tool_result"
 	// PartToolUse is part of Clyde's typed adapter surface.
 	PartToolUse PartKind = "tool_use"
+	// PartThinking is model reasoning content. Providers name it differently on
+	// the wire (Anthropic thinking blocks, Codex reasoning items), so the neutral
+	// model carries the body in Text and leaves the provider mapper to decide
+	// what, if anything, the signature or opaque payload means.
+	PartThinking PartKind = "thinking"
 	// PartUnsupported is part of Clyde's typed adapter surface.
 	PartUnsupported PartKind = "unsupported"
 )
@@ -234,6 +239,8 @@ func FlattenParts(parts []Part) string {
 	for _, part := range parts {
 		switch part.Kind {
 		case PartText:
+			b.WriteString(part.Text)
+		case PartThinking:
 			b.WriteString(part.Text)
 		case PartImage:
 			b.WriteString("[image]")
