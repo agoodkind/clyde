@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -493,6 +494,29 @@ func TestSensitiveHTTPHeaderValuesMarksShortCredentialsIncomplete(t *testing.T) 
 	_, redacted := RedactHTTPWithSensitiveValuesStatus(nil, []byte(`{"echo":"xy"}`), values, complete)
 	if string(redacted) != redactedValue {
 		t.Fatalf("short credential echo = %q, want fail-closed marker", redacted)
+	}
+}
+
+func TestSensitiveHTTPBodyValuesCollectsNumericAndArrayValues(t *testing.T) {
+	body := []byte(`{"account_id":123456,"token":["array-secret",987654],"safe":"kept"}`)
+	values, complete := SensitiveHTTPBodyValuesWithStatus(body)
+	if !complete {
+		t.Fatal("numeric and array credentials reported incomplete")
+	}
+	for _, value := range []string{"123456", "array-secret", "987654"} {
+		if !slices.Contains(values, value) {
+			t.Fatalf("credential values = %v, missing %q", values, value)
+		}
+	}
+	_, redacted := RedactHTTPWithSensitiveValuesStatus(
+		nil,
+		[]byte(`{"echo":123456,"echo_array":["array-secret",987654]}`),
+		values,
+		complete,
+	)
+	if string(redacted) == `{"echo":123456,"echo_array":["array-secret",987654]}` ||
+		bytes.Contains(redacted, []byte("array-secret")) || bytes.Contains(redacted, []byte("123456")) {
+		t.Fatalf("sensitive values leaked: %s", redacted)
 	}
 }
 
