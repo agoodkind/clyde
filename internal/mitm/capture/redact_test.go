@@ -360,12 +360,8 @@ func TestRedactHTTPRedactsClientSecretFormField(t *testing.T) {
 func TestRedactHTTPRedactsEscapedCredentialEcho(t *testing.T) {
 	headers := http.Header{"Authorization": {"Bearer secret"}}
 	_, redacted := RedactHTTP(headers, []byte(`{"echo":"\u0073ecret","safe":"kept"}`))
-	var decoded map[string]string
-	if err := json.Unmarshal(redacted, &decoded); err != nil {
-		t.Fatalf("decode redacted body: %v", err)
-	}
-	if decoded["echo"] != redactedValue || decoded["safe"] != "kept" {
-		t.Fatalf("escaped echo redaction = %#v", decoded)
+	if string(redacted) != redactedValue {
+		t.Fatalf("escaped echo redaction = %q", redacted)
 	}
 }
 
