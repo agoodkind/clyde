@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -8,9 +9,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -622,28 +625,30 @@ func TestPassthroughStreamCaptureLeavesSuccessfulBelowCapStreamComplete(t *testi
 	}
 }
 
-func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
-	nextBody := make(chan []byte, 1)
+func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
+	firstHeaders := make(chan struct{})
+	releaseBody := make(chan struct{})
+	firstFinished := make(chan struct{})
+	secondBody := make(chan []byte, 1)
 	var requestCount atomic.Int32
-	compactionResponseBody := []byte(`{"id":"resp-compact","status":"completed","output":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
-	candidatePrefix := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":{\"id\":\"msg-final\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"provider answer " + strings.Repeat("x", 64*1024) + "\"}]}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":{\"status\":\"completed\",\"output\":[{\"id\":\"msg-final\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"provider answer " + strings.Repeat("x", 64*1024) + "\"}]}]}}\n\n")
+	candidatePrefix := []byte(`{"output":[{"type":"compaction","encrypted_content":"encrypted-state"}],"padding":"`)
+	candidateSuffix := []byte(strings.Repeat("x", 2*1024*1024) + `"}`)
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		count := requestCount.Add(1)
 		if count == 1 {
-			_, _ = writer.Write(compactionResponseBody)
-			return
-		}
-		if count == 2 {
-			_, _ = writer.Write(compactionResponseBody)
-			return
-		}
-		if count == 3 {
-			writer.Header().Set("Content-Type", "text/event-stream")
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusOK)
+			writer.(http.Flusher).Flush()
 			_, _ = writer.Write(candidatePrefix)
+			writer.(http.Flusher).Flush()
+			close(firstHeaders)
+			<-releaseBody
+			_, _ = writer.Write(candidateSuffix)
+			close(firstFinished)
 			return
 		}
 		body, _ := io.ReadAll(request.Body)
-		nextBody <- body
+		secondBody <- body
 		_, _ = io.WriteString(writer, `{"output":[]}`)
 	}))
 	t.Cleanup(upstream.Close)
@@ -660,62 +665,68 @@ func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
 	}
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
-	compactionRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"oldest"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"oldest answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
-	compactionRequestBody = bytes.Replace(compactionRequestBody, []byte(`{"model":"gpt-native","input":`), []byte(`{"model":"gpt-native","stream":true,"input":`), 1)
-	var compactionFixture struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(compactionRequestBody, &compactionFixture); err != nil {
+	compactionRequestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
+	if err := json.Unmarshal(compactionRequestBody, &struct{}{}); err != nil {
 		t.Fatalf("compaction request fixture is invalid JSON: %v", err)
 	}
-	if !compactionFixture.Stream {
-		t.Fatal("compaction request fixture must exercise streaming")
+	address := strings.TrimPrefix(front.URL, "http://")
+	connection, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatalf("dial public response boundary: %v", err)
 	}
-	failedCompactionRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compactionRequestBody))
-	failedCompactionRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
-	failedWriter := &passthroughPartialWriter{header: make(http.Header), failAfter: 0}
-	srv.mux.ServeHTTP(failedWriter, failedCompactionRequest)
-	if _, ok := srv.compactionV2.Match("native-session", "encrypted-state"); ok {
-		t.Fatal("failed compaction write armed recovery")
+	tcpConnection, ok := connection.(*net.TCPConn)
+	if !ok {
+		_ = connection.Close()
+		t.Fatal("public response boundary is not TCP")
+	}
+	request := "POST /v1/responses HTTP/1.1\r\nHost: " + address + "\r\nContent-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(compactionRequestBody)) + "\r\n" + adaptercodex.CodexTurnMetadataHeader + ": " + nativeCompactionV2TurnMetadata() + "\r\n\r\n"
+	if _, err := io.WriteString(tcpConnection, request); err != nil {
+		_ = tcpConnection.Close()
+		t.Fatalf("write public request headers: %v", err)
+	}
+	if _, err := tcpConnection.Write(compactionRequestBody); err != nil {
+		_ = tcpConnection.Close()
+		t.Fatalf("write public request body: %v", err)
+	}
+	reader := bufio.NewReader(tcpConnection)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		_ = tcpConnection.Close()
+		t.Fatalf("read public response status: %v", err)
+	}
+	if !strings.HasPrefix(statusLine, "HTTP/1.1 200 ") {
+		_ = tcpConnection.Close()
+		t.Fatalf("public response status = %q", statusLine)
+	}
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			_ = tcpConnection.Close()
+			t.Fatalf("read public response headers: %v", readErr)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	if err := tcpConnection.SetLinger(0); err != nil {
+		_ = tcpConnection.Close()
+		t.Fatalf("set response reset: %v", err)
+	}
+	if err := tcpConnection.Close(); err != nil {
+		t.Fatalf("close failed response: %v", err)
 	}
 	select {
-	case event := <-terminalEvents:
-		if event.Stage != adapterruntime.RequestStageFailed && event.Stage != adapterruntime.RequestStageCancelled {
-			t.Fatalf("failed compaction terminal stage = %s, want failed or cancelled", event.Stage)
-		}
+	case <-firstHeaders:
+		close(releaseBody)
 	case <-time.After(5 * time.Second):
-		t.Fatal("failed compaction request did not finish")
-	}
-	compactionRequest, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", bytes.NewReader(compactionRequestBody))
-	if err != nil {
-		t.Fatalf("build compaction request: %v", err)
-	}
-	compactionRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
-	compactionResponse, err := http.DefaultClient.Do(compactionRequest)
-	if err != nil {
-		t.Fatalf("post compaction request: %v", err)
-	}
-	compactionResponseBodyRead, err := io.ReadAll(compactionResponse.Body)
-	_ = compactionResponse.Body.Close()
-	if err != nil || compactionResponse.StatusCode != http.StatusOK || !bytes.Equal(compactionResponseBodyRead, compactionResponseBody) {
-		t.Fatalf("compaction response status=%d body=%s err=%v", compactionResponse.StatusCode, compactionResponseBodyRead, err)
-	}
-	if _, ok := srv.compactionV2.Match("native-session", "encrypted-state"); !ok {
-		t.Fatal("successful compaction response did not arm recovery")
+		close(releaseBody)
+		t.Fatal("upstream did not send the first response headers")
 	}
 	select {
-	case event := <-terminalEvents:
-		if event.Stage != adapterruntime.RequestStageCompleted {
-			t.Fatalf("compaction response terminal stage = %s, want completed", event.Stage)
-		}
+	case <-firstFinished:
 	case <-time.After(5 * time.Second):
-		t.Fatal("compaction response lifecycle did not finish")
+		t.Fatal("upstream did not finish the failed response")
 	}
-	finalRequestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
-	finalRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(finalRequestBody))
-	finalRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`)
-	failingWriter := &passthroughPartialWriter{header: make(http.Header), failAfter: 0}
-	srv.mux.ServeHTTP(failingWriter, finalRequest)
 	select {
 	case event := <-terminalEvents:
 		if event.Stage != adapterruntime.RequestStageFailed && event.Stage != adapterruntime.RequestStageCancelled {
@@ -724,15 +735,12 @@ func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("public response handler did not finish after downstream failure")
 	}
-	if _, ok := srv.compactionV2.Match("native-session", "encrypted-state"); !ok {
-		t.Fatal("public write failure consumed recovery")
-	}
-	nextRequestBody := []byte(`{"model":"gpt-native","stream":false,"input":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
-	secondRequest, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", bytes.NewReader(nextRequestBody))
+	finalRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
+	secondRequest, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", bytes.NewReader(finalRequestBody))
 	if err != nil {
 		t.Fatalf("build matching request: %v", err)
 	}
-	secondRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}}`)
+	secondRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`)
 	secondResponse, err := http.DefaultClient.Do(secondRequest)
 	if err != nil {
 		t.Fatalf("post matching request: %v", err)
@@ -742,14 +750,14 @@ func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read matching response: %v", err)
 	}
-	var gotNextBody []byte
+	var gotSecondBody []byte
 	select {
-	case gotNextBody = <-nextBody:
+	case gotSecondBody = <-secondBody:
 	case <-time.After(5 * time.Second):
 		t.Fatal("matching request did not reach upstream")
 	}
-	if secondResponse.StatusCode != http.StatusOK || !bytes.Equal(secondResponseBody, []byte(`{"output":[]}`)) || !bytes.Equal(gotNextBody, nextRequestBody) {
-		t.Fatalf("next response status=%d body=%s upstream=%s", secondResponse.StatusCode, secondResponseBody, gotNextBody)
+	if secondResponse.StatusCode != http.StatusOK || !bytes.Equal(secondResponseBody, []byte(`{"output":[]}`)) || !bytes.Equal(gotSecondBody, finalRequestBody) {
+		t.Fatalf("matching response status=%d body=%s upstream=%s", secondResponse.StatusCode, secondResponseBody, gotSecondBody)
 	}
 }
 
