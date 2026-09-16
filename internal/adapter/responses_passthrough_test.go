@@ -634,6 +634,10 @@ func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
 			return
 		}
 		if count == 2 {
+			_, _ = writer.Write(compactionResponseBody)
+			return
+		}
+		if count == 3 {
 			writer.Header().Set("Content-Type", "text/event-stream")
 			_, _ = writer.Write(candidatePrefix)
 			return
@@ -659,6 +663,21 @@ func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
 	compactionRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"oldest"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"oldest answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
 	if err := json.Unmarshal(compactionRequestBody, &struct{}{}); err != nil {
 		t.Fatalf("compaction request fixture is invalid JSON: %v", err)
+	}
+	failedCompactionRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compactionRequestBody))
+	failedCompactionRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
+	failedWriter := &passthroughPartialWriter{header: make(http.Header), failAfter: 0}
+	srv.mux.ServeHTTP(failedWriter, failedCompactionRequest)
+	if _, ok := srv.compactionV2.Match("native-session", "encrypted-state"); ok {
+		t.Fatal("failed compaction write armed recovery")
+	}
+	select {
+	case event := <-terminalEvents:
+		if event.Stage != adapterruntime.RequestStageFailed && event.Stage != adapterruntime.RequestStageCancelled {
+			t.Fatalf("failed compaction terminal stage = %s, want failed or cancelled", event.Stage)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed compaction request did not finish")
 	}
 	compactionRequest, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", bytes.NewReader(compactionRequestBody))
 	if err != nil {
