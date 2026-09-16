@@ -880,7 +880,7 @@ func TestNativeCodexResponsesCompactionV2EndToEndRecovery(t *testing.T) {
 	compactionRequest := []byte(`{"model":"gpt-native","input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"oldest"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"oldest answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"newer"}]},{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":"result"},{"type":"compaction_trigger"}]}`)
 	encryptedResponse := []byte(`{"id":"resp-n","status":"completed","output":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
 	regularRequest := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"encrypted-state"},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
-	regularResponse := []byte(`{"id":"resp-n-plus-1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final answer"}]}]}`)
+	regularResponse := []byte(`{"id":"resp-n-plus-1","status":"completed","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"final answer"}]}]}`)
 	var upstreamBodies [][]byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
@@ -999,8 +999,8 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequest(t *testing.T) {
 func TestNativeCodexResponsesCompactionV2RecoveryLifecycle(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	naturalResend := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>"}]}]}`)
-	responseBody := []byte(`{"id":"resp-1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final answer"}]}]}`)
-	naturalResponse := []byte(`{"id":"resp-2","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>\nfinal answer"}]}]}`)
+	responseBody := []byte(`{"id":"resp-1","status":"completed","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"final answer"}]}]}`)
+	naturalResponse := []byte(`{"id":"resp-2","status":"completed","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>\nfinal answer"}]}]}`)
 	var upstreamBodies [][]byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
@@ -1781,7 +1781,7 @@ func nativeCompactionTurnMetadata() string {
 }
 
 func nativeCompactionSSEFrames() (string, string) {
-	item := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`
+	item := `{"id":"msg-1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"summary"}]}`
 	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":" + item + "}\n\n"
 	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":{\"id\":\"resp-1\",\"output\":[" + item + "]}}\n\n"
 	return itemDone, completed
