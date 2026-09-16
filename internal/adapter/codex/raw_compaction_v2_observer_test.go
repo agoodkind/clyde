@@ -95,9 +95,10 @@ func TestObserveRawResponsesCompactionV2ResponseZstdAndFailures(t *testing.T) {
 		t.Fatal("zstd recovery not armed")
 	}
 	malformed := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader([]byte(`{`)))}
-	observed = ObserveRawResponsesCompactionV2Response(malformed, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, registry)
+	malformedRegistry := NewRawResponsesCompactionV2Registry(nil)
+	observed = ObserveRawResponsesCompactionV2Response(malformed, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, malformedRegistry)
 	_, _ = io.ReadAll(observed.Body)
-	if _, ok := registry.Match("s", ""); ok {
+	if _, ok := malformedRegistry.Match("s", "cipher"); ok {
 		t.Fatal("malformed response armed state")
 	}
 }
