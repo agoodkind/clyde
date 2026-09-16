@@ -75,7 +75,16 @@ func rawCompactionStrictFinalAnswerJSON(body []byte) bool {
 
 func rawCompactionStrictFinalAnswerSSEFrame(frame []byte) bool {
 	_, data, dataCount := rawSSEFrameDataValue(frame)
-	return dataCount == 1 && rawCompactionStrictFinalAnswerJSON(data)
+	if dataCount != 1 || !rawCompactionJSONHasUniqueObjectKeys(data) {
+		return false
+	}
+	var payload struct {
+		Response json.RawMessage `json:"response"`
+	}
+	if json.Unmarshal(data, &payload) != nil || len(payload.Response) == 0 {
+		return false
+	}
+	return rawCompactionStrictFinalAnswerJSON(payload.Response)
 }
 
 func rawCompactionStrictFinalAnswerOutput(output []json.RawMessage) bool {

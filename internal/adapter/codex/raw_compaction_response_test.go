@@ -102,6 +102,27 @@ func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *
 	}
 }
 
+func TestRawResponsesCompactionV2MutatesStrictFinalAnswerStream(t *testing.T) {
+	request := RawResponsesRequest{
+		Stream: true,
+		Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
+	}
+	recovery := &RawResponsesCompactionV2Recovery{transcript: "recovered transcript"}
+	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
+	item := `{"id":"msg-1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"summary"}]}`
+	stream := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":" + item + "}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":{\"status\":\"completed\",\"id\":\"resp-1\",\"output\":[" + item + "]}}\n\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(stream)),
+	}
+	body := readResponseBody(t, transformer.TransformResponse(response))
+	if !transformer.DidMutateResponse() || !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
+		t.Fatalf("strict final-answer stream was not injected: %s", body)
+	}
+}
+
 func TestRawResponsesCompactionMutatesMultilineSSEDataFrames(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
 	itemDone := "event: response.output_item.done\n" +
