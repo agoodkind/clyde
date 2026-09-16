@@ -78,6 +78,9 @@ func TestInjectRawResponsesCompactionV2RecoveryFailsOpen(t *testing.T) {
 			}
 		})
 	}
+	if transcript, ok := registry.Match("session-1", "cipher"); !ok || transcript != "recovered transcript" {
+		t.Fatalf("fail-open requests consumed recovery: transcript=%q present=%t", transcript, ok)
+	}
 	now = now.Add(rawResponsesCompactionV2TTL)
 	got, recovery, changed := InjectRawResponsesCompactionV2Recovery(base, registry)
 	if changed || recovery != nil || !bytes.Equal(got.Body, base.Body) {
