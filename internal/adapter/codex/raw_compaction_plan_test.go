@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 )
@@ -78,6 +79,33 @@ func TestPlanRawResponsesCompactionHonorsFractionAndByteCapBoundaries(t *testing
 	underCap, ok := planRawResponsesCompaction(items, len(lastTurn)-1, 0.5)
 	if ok {
 		t.Fatalf("under-cap plan unexpectedly split: %+v", underCap)
+	}
+}
+
+func TestPlanRawResponsesCompactionHandlesLargeTranscriptWithinWatchdog(t *testing.T) {
+	const itemCount = 10_001
+	var body strings.Builder
+	body.WriteString(`{"input":[`)
+	for index := 0; index < itemCount; index++ {
+		if index > 0 {
+			body.WriteByte(',')
+		}
+		body.WriteString(`{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}`)
+	}
+	body.WriteString(`,{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
+	items := rawInputItemsForTest(t, []byte(body.String()))
+	result := make(chan bool, 1)
+	go func() {
+		_, ok := planRawResponsesCompaction(items, 0, 1)
+		result <- ok
+	}()
+	select {
+	case ok := <-result:
+		if !ok {
+			t.Fatal("large transcript did not produce a compaction plan")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("large transcript planning exceeded watchdog")
 	}
 }
 
