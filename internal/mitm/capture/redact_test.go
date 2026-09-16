@@ -524,11 +524,11 @@ func TestSensitiveHTTPBodyValuesCollectsDuplicateFields(t *testing.T) {
 	}
 	_, redacted := RedactHTTPWithSensitiveValuesStatus(
 		nil,
-		[]byte(`{"echo":"first-secret","safe":"kept"}`),
+		[]byte(`{"echo":"first-secret","echo_second":"second-secret","safe":"kept"}`),
 		values,
 		complete,
 	)
-	if bytes.Contains(redacted, []byte("first-secret")) {
+	if bytes.Contains(redacted, []byte("first-secret")) || bytes.Contains(redacted, []byte("second-secret")) {
 		t.Fatalf("duplicate sensitive value leaked: %s", redacted)
 	}
 }
