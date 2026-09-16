@@ -277,17 +277,23 @@ func TestNativeCodexResponsesZstdCompactionPreservesUndecodableStreamingResponse
 
 func TestNativeCodexResponsesCompactionV2RecoveryPreservesLateCorruptZstdStreams(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
-	candidate := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n"
-	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+	candidate := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n"
+	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":{\"status\":\"completed\",\"output\":[{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}]}}\n\n"
 	for _, testCase := range []struct {
-		name   string
-		stream string
+		name    string
+		stream  string
+		valid   bool
+		corrupt bool
 	}{
-		{name: "after candidate", stream: candidate},
-		{name: "after completed", stream: candidate + completed},
+		{name: "after candidate", stream: candidate, corrupt: true},
+		{name: "after completed", stream: candidate + completed, corrupt: true},
+		{name: "valid", stream: candidate + completed, valid: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			wireResponse := append(zstdEncodeNativeResponseBody(t, []byte(testCase.stream)), []byte("late-corruption")...)
+			wireResponse := zstdEncodeNativeResponseBody(t, []byte(testCase.stream))
+			if testCase.corrupt {
+				wireResponse = append(wireResponse, []byte("late-corruption")...)
+			}
 			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.Header().Set("Content-Type", "text/event-stream")
 				writer.Header().Set("Content-Encoding", "zstd")
@@ -302,10 +308,23 @@ func TestNativeCodexResponsesCompactionV2RecoveryPreservesLateCorruptZstdStreams
 			request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
 			recorder := httptest.NewRecorder()
 			srv.mux.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Encoding") != "zstd" || !bytes.Equal(recorder.Body.Bytes(), wireResponse) {
+			if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Encoding") != "zstd" || (!testCase.valid && !bytes.Equal(recorder.Body.Bytes(), wireResponse)) {
 				t.Fatalf("headers=%v body=%x", recorder.Header(), recorder.Body.Bytes())
 			}
-			if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
+			if testCase.valid {
+				decoded := recorder.Body.Bytes()
+				if recorder.Header().Get("Content-Encoding") == "zstd" {
+					decoded = zstdDecodeNativeResponseBody(t, decoded)
+				}
+				if !bytes.Contains(decoded, []byte("<pre-compaction-transcript>")) ||
+					!bytes.Contains(decoded, []byte("recovered transcript")) ||
+					!bytes.Contains(decoded, []byte("</pre-compaction-transcript>")) {
+					t.Fatalf("valid stream omitted recovered transcript: %s", decoded)
+				}
+				if _, ok := srv.compactionV2.Match("native-session", "cipher"); ok {
+					t.Fatal("valid stream did not complete recovery")
+				}
+			} else if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
 				t.Fatal("corrupt stream completed recovery")
 			}
 		})

@@ -626,7 +626,7 @@ func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
 	nextBody := make(chan []byte, 1)
 	var requestCount atomic.Int32
 	compactionResponseBody := []byte(`{"id":"resp-compact","status":"completed","output":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
-	candidatePrefix := []byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-final\"}}\n\n")
+	candidatePrefix := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":{\"id\":\"msg-final\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"provider answer " + strings.Repeat("x", 64*1024) + "\"}]}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":11,\"response\":{\"status\":\"completed\",\"output\":[{\"id\":\"msg-final\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"provider answer " + strings.Repeat("x", 64*1024) + "\"}]}]}}\n\n")
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		count := requestCount.Add(1)
 		if count == 1 {
