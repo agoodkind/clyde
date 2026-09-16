@@ -82,7 +82,9 @@ func transformNativeCodexCompactionResponse(
 	if response == nil || !nativeResponsesZstdEncoded(response.Header.Get("Content-Encoding")) {
 		return transformer.TransformResponse(response)
 	}
-	if requestStreams || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	if strings.Contains(contentType, "text/event-stream") ||
+		(requestStreams && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices) {
 		return transformStreamingNativeCodexCompactionResponse(response, transformer)
 	}
 	originalBody := response.Body

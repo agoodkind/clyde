@@ -126,10 +126,6 @@ func redactHTTP(headers http.Header, body []byte, additionalValues []string, add
 		}
 		delete(redactedHeaders, name)
 	}
-	if body != nil && (!sensitiveValuesComplete || shortSensitiveValue) {
-		redactedHeaders.Del("Content-Length")
-		return redactedHeaders, []byte(redactedValue)
-	}
 	redactionBody := body
 	contentEncoding := strings.TrimSpace(headers.Get("Content-Encoding"))
 	if body != nil && contentEncoding != "" && !captureBodyUsesZstd(contentEncoding) {
@@ -145,6 +141,17 @@ func redactHTTP(headers http.Header, body []byte, additionalValues []string, add
 			return redactedHeaders, []byte(redactedValue)
 		}
 		redactionBody = decoded
+	}
+	bodyValues, bodyValuesComplete := SensitiveHTTPBodyValuesWithStatus(redactionBody)
+	for _, value := range bodyValues {
+		var valueComplete bool
+		sensitiveValues, valueComplete = appendSensitiveBodyValueWithStatus(sensitiveValues, value)
+		sensitiveValuesComplete = sensitiveValuesComplete && valueComplete
+	}
+	sensitiveValuesComplete = sensitiveValuesComplete && bodyValuesComplete
+	if body != nil && (!sensitiveValuesComplete || shortSensitiveValue) {
+		redactedHeaders.Del("Content-Length")
+		return redactedHeaders, []byte(redactedValue)
 	}
 	redactedBody := redactHTTPBody(redactionBody, sensitiveValues)
 	if !bytes.Equal(redactedBody, body) {
@@ -270,7 +277,7 @@ func unquotedSensitiveCookieValue(value string) string {
 
 func appendSensitiveBodyValueWithStatus(values []string, value string) ([]string, bool) {
 	trimmed := strings.TrimSpace(value)
-	if len(trimmed) < 3 || slices.Contains(values, trimmed) {
+	if trimmed == "" || slices.Contains(values, trimmed) {
 		return values, true
 	}
 	if len(values) >= maxSensitiveBodyValues {
@@ -281,14 +288,11 @@ func appendSensitiveBodyValueWithStatus(values []string, value string) ([]string
 
 func redactHTTPBody(body []byte, sensitiveValues []string) []byte {
 	redacted := bytes.TrimPrefix(bytes.Clone(body), []byte(utf8ByteOrderMark))
-	for _, value := range sensitiveValues {
-		if len(value) < 3 {
-			continue
-		}
-		redacted = bytes.ReplaceAll(redacted, []byte(value), []byte(redactedValue))
-	}
 	if looksLikeJSONValue(redacted) {
 		return redactJSONCaptureBody(redacted, sensitiveValues)
+	}
+	for _, value := range sensitiveValues {
+		redacted = bytes.ReplaceAll(redacted, []byte(value), []byte(redactedValue))
 	}
 	if value, handled := redactSSEJSON(redacted, sensitiveValues); handled {
 		if containsSensitiveSSENonDataMarker(value) {
@@ -313,10 +317,7 @@ func redactJSONCaptureBody(body []byte, sensitiveValues []string) []byte {
 }
 
 func redactValidJSONCaptureBody(body []byte, sensitiveValues []string) []byte {
-	if containsSensitiveJSONScalar(body, sensitiveValues) {
-		return []byte(redactedValue)
-	}
-	value, changed := redactJSONValue(body)
+	value, changed := redactJSONValue(body, sensitiveValues)
 	if changed {
 		if containsSensitiveJSONScalar(value, sensitiveValues) {
 			return []byte(redactedValue)
@@ -354,10 +355,7 @@ func redactJSONLines(body []byte, sensitiveValues []string) ([]byte, bool) {
 			return body, false
 		}
 		valueCount++
-		if containsSensitiveJSONScalar(value, sensitiveValues) {
-			return []byte(redactedValue), true
-		}
-		redacted, changed := redactJSONValue(value)
+		redacted, changed := redactJSONValue(value, sensitiveValues)
 		if containsSensitiveJSONScalar(redacted, sensitiveValues) {
 			return []byte(redactedValue), true
 		}
@@ -381,6 +379,7 @@ func redactJSONLines(body []byte, sensitiveValues []string) ([]byte, bool) {
 
 func containsSensitiveJSONScalar(raw []byte, sensitiveValues []string) bool {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
 	if containsSensitiveJSONValue(decoder, sensitiveValues) {
 		return true
 	}
@@ -394,6 +393,9 @@ func containsSensitiveJSONValue(decoder *json.Decoder, sensitiveValues []string)
 	}
 	if value, ok := token.(string); ok {
 		return containsSensitiveBodyMarker([]byte(value)) || containsSensitiveValue(value, sensitiveValues)
+	}
+	if number, ok := token.(json.Number); ok {
+		return containsSensitiveValue(number.String(), sensitiveValues)
 	}
 	delimiter, ok := token.(json.Delim)
 	if !ok {
@@ -439,7 +441,7 @@ func containsSensitiveJSONArray(decoder *json.Decoder, sensitiveValues []string)
 
 func containsSensitiveValue(value string, sensitiveValues []string) bool {
 	for _, sensitiveValue := range sensitiveValues {
-		if len(sensitiveValue) >= 3 && strings.Contains(value, sensitiveValue) {
+		if sensitiveValue != "" && strings.Contains(value, sensitiveValue) {
 			return true
 		}
 	}
@@ -451,16 +453,16 @@ func consumesJSONClosingDelimiter(decoder *json.Decoder, expected json.Delim) bo
 	return err != nil || closing != expected
 }
 
-func redactJSONValue(raw []byte) ([]byte, bool) {
+func redactJSONValue(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return raw, false
 	}
 	switch trimmed[0] {
 	case '{':
-		return redactJSONObject(raw)
+		return redactJSONObject(raw, sensitiveValues)
 	case '[':
-		return redactJSONArray(raw)
+		return redactJSONArray(raw, sensitiveValues)
 	default:
 		return raw, false
 	}
@@ -474,6 +476,10 @@ func collectSensitiveBodyValues(body []byte, values *[]string, complete *bool) {
 	if trimmed[0] == '{' {
 		fields, ok := parseSensitiveJSONObject(trimmed)
 		if !ok {
+			if bytes.ContainsAny(trimmed, "\r\n") {
+				collectSensitiveBodyStreamValues(trimmed, values, complete)
+				return
+			}
 			*complete = false
 			return
 		}
@@ -495,6 +501,32 @@ func collectSensitiveBodyValues(body []byte, values *[]string, complete *bool) {
 		for _, item := range items {
 			collectSensitiveBodyValues(item, values, complete)
 		}
+		return
+	}
+	if !bytes.ContainsAny(trimmed, "\r\n") {
+		return
+	}
+	collectSensitiveBodyStreamValues(trimmed, values, complete)
+}
+
+func collectSensitiveBodyStreamValues(body []byte, values *[]string, complete *bool) {
+	for _, line := range splitCaptureLines(body) {
+		payload := bytes.TrimSpace(line)
+		if data, ok := bytes.CutPrefix(payload, []byte("data:")); ok {
+			payload = bytes.TrimSpace(data)
+		}
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) || bytes.HasPrefix(payload, []byte("event:")) || bytes.HasPrefix(payload, []byte(":")) {
+			continue
+		}
+		if !json.Valid(payload) {
+			trimmedPayload := bytes.TrimSpace(payload)
+			if len(trimmedPayload) == 0 || (trimmedPayload[0] != '{' && trimmedPayload[0] != '[' && trimmedPayload[0] != '"') {
+				continue
+			}
+			*complete = false
+			return
+		}
+		collectSensitiveBodyValues(payload, values, complete)
 	}
 }
 
@@ -580,7 +612,7 @@ func parseSensitiveJSONObject(raw []byte) ([]sensitiveJSONObjectField, bool) {
 	return fields, true
 }
 
-func redactJSONObject(raw []byte) ([]byte, bool) {
+func redactJSONObject(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return raw, false
@@ -592,12 +624,12 @@ func redactJSONObject(raw []byte) ([]byte, bool) {
 			changed = true
 			continue
 		}
-		if containsSensitiveBodyMarker(value) {
+		if containsSensitiveBodyMarker(value) || containsSensitiveJSONScalar(value, sensitiveValues) {
 			fields[name] = json.RawMessage(`"` + redactedValue + `"`)
 			changed = true
 			continue
 		}
-		if redacted, nestedChanged := redactJSONValue(value); nestedChanged {
+		if redacted, nestedChanged := redactJSONValue(value, sensitiveValues); nestedChanged {
 			fields[name] = redacted
 			changed = true
 		}
@@ -612,14 +644,14 @@ func redactJSONObject(raw []byte) ([]byte, bool) {
 	return encoded, true
 }
 
-func redactJSONArray(raw []byte) ([]byte, bool) {
+func redactJSONArray(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return raw, false
 	}
 	changed := false
 	for index, item := range items {
-		if redacted, nestedChanged := redactJSONValue(item); nestedChanged {
+		if redacted, nestedChanged := redactJSONValue(item, sensitiveValues); nestedChanged {
 			items[index] = redacted
 			changed = true
 		}
@@ -684,7 +716,7 @@ func redactSSEJSON(body []byte, sensitiveValues []string) ([]byte, bool) {
 		if containsSensitiveJSONScalar(payload, sensitiveValues) {
 			return []byte(redactedValue), true
 		}
-		redacted, payloadChanged := redactJSONValue(payload)
+		redacted, payloadChanged := redactJSONValue(payload, sensitiveValues)
 		if containsSensitiveJSONScalar(redacted, sensitiveValues) {
 			return []byte(redactedValue), true
 		}
