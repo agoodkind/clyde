@@ -537,6 +537,7 @@ func collectSensitiveBodyValues(body []byte, values *[]string, complete *bool) {
 		return
 	}
 	if trimmed[0] == '{' {
+<<<<<<< HEAD
 		fields, ok := parseSensitiveJSONObject(trimmed)
 		if !ok {
 			if bytes.ContainsAny(trimmed, "\r\n") {
@@ -590,6 +591,31 @@ func collectSensitiveBodyStreamValues(body []byte, values *[]string, complete *b
 			return
 		}
 		collectSensitiveBodyValues(payload, values, complete)
+||||||| parent of da69ee48 (Preserve strict compaction redaction contracts)
+=======
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(trimmed, &fields) != nil {
+			*complete = false
+			return
+		}
+		for name, value := range fields {
+			if sensitiveJSONField(name) {
+				collectSensitiveJSONScalars(value, values, complete)
+			}
+			collectSensitiveBodyValues(value, values, complete)
+		}
+		return
+	}
+	if trimmed[0] == '[' {
+		var items []json.RawMessage
+		if json.Unmarshal(trimmed, &items) != nil {
+			*complete = false
+			return
+		}
+		for _, item := range items {
+			collectSensitiveBodyValues(item, values, complete)
+		}
+>>>>>>> da69ee48 (Preserve strict compaction redaction contracts)
 	}
 }
 
