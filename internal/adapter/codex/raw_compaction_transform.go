@@ -36,8 +36,10 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	originalBody := response.Body
 	body, err := io.ReadAll(originalBody)
 	if err != nil {
-		_ = originalBody.Close()
-		response.Body = io.NopCloser(bytes.NewReader(body))
+		response.Body = &rawCompactionReadCloser{
+			reader: io.MultiReader(bytes.NewReader(body), originalBody),
+			closer: originalBody,
+		}
 		return response
 	}
 	_ = originalBody.Close()

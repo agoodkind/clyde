@@ -21,6 +21,30 @@ type rawCompactionSSEDecodedFrame struct {
 	Response       json.RawMessage `json:"response"`
 }
 
+type partialReadCloser struct {
+	prefix []byte
+	suffix []byte
+	failed bool
+}
+
+func (r *partialReadCloser) Read(target []byte) (int, error) {
+	if !r.failed {
+		r.failed = true
+		count := copy(target, r.prefix)
+		return count, io.ErrUnexpectedEOF
+	}
+	if len(r.suffix) == 0 {
+		return 0, io.EOF
+	}
+	count := copy(target, r.suffix)
+	r.suffix = r.suffix[count:]
+	return count, nil
+}
+
+func (r *partialReadCloser) Close() error {
+	return nil
+}
+
 func rawCompactionSSEDecodedFramesForTest(t *testing.T, body []byte) []rawCompactionSSEDecodedFrame {
 	t.Helper()
 	frames := make([]rawCompactionSSEDecodedFrame, 0)
@@ -188,6 +212,23 @@ func rawCompactionRequest(t *testing.T, body []byte) RawResponsesRequest {
 		Body:      body,
 		Header:    http.Header{CodexTurnMetadataHeader: {`{"session_id":"s","thread_source":"user","sandbox":"none","request_kind":"compaction","compaction":{"implementation":"responses"}}`}},
 		RequestID: "req", Correlation: correlation.Context{}, Stream: false,
+	}
+}
+
+func TestRawResponsesCompactionReadFailurePreservesRemainingBody(t *testing.T) {
+	transformer := rawResponseTransformerForTest(t)
+	original := []byte(`{"output":[]}`)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body: &partialReadCloser{
+			prefix: original[:5],
+			suffix: original[5:],
+		},
+	}
+	got := readResponseBody(t, transformer.TransformResponse(response))
+	if !bytes.Equal(got, original) {
+		t.Fatalf("partial read body = %q, want %q", got, original)
 	}
 }
 
