@@ -920,6 +920,14 @@ func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *
 	if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
 		t.Fatal("OpenRawResponses completed recovery")
 	}
+	eligibleBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}]}`)
+	eligibleRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(eligibleBody))
+	eligibleRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	recorder = httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, eligibleRequest)
+	if recorder.Code != http.StatusOK || !bytes.Contains(upstreamBody, []byte(`recovered transcript`)) {
+		t.Fatalf("eligible recovery status=%d upstream=%s", recorder.Code, upstreamBody)
+	}
 }
 
 func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpen(t *testing.T) {
@@ -971,6 +979,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpenZstd(t *testing
 		body     []byte
 		metadata string
 	}{
+		{name: "v1 compaction", body: base, metadata: nativeCompactionTurnMetadata()},
 		{name: "wrong session", body: base, metadata: strings.Replace(nativeTurnMetadata(t), "native-session", "other", 1)},
 		{name: "wrong digest", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "duplicate compaction", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
