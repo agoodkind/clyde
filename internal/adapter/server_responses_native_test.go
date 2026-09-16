@@ -852,8 +852,10 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequest(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			var upstreamBody []byte
+			var upstreamEncoding string
 			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				upstreamBody, _ = io.ReadAll(request.Body)
+				upstreamEncoding = request.Header.Get("Content-Encoding")
 				_, _ = writer.Write(responseBody)
 			}))
 			t.Cleanup(upstream.Close)
@@ -874,7 +876,12 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequest(t *testing.T) {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
 			}
 			if testCase.encoding != "" {
+				if upstreamEncoding != testCase.encoding {
+					t.Fatalf("upstream encoding=%q, want %q", upstreamEncoding, testCase.encoding)
+				}
 				upstreamBody = zstdDecodeNativeResponseBody(t, upstreamBody)
+			} else if upstreamEncoding != "" {
+				t.Fatalf("upstream encoding=%q, want empty", upstreamEncoding)
 			}
 			assertNativeCompactionV2RecoveryInput(t, upstreamBody)
 		})
