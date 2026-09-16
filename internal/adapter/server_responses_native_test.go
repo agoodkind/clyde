@@ -3,6 +3,7 @@ package adapter
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -166,7 +167,14 @@ func TestNativeCodexResponsesCompactionStreamingRequestPreservesJSONError(t *tes
 
 func TestNativeCodexResponsesZstdCompactionPassesThroughOversizedWireResponse(t *testing.T) {
 	transformer := nativeCompactionTransformerForTest(t)
-	wireBody := bytes.Repeat([]byte("w"), maxResponsesResponseBodyBytes+1)
+	decodedBody := make([]byte, maxResponsesResponseBodyBytes+64*1024)
+	if _, err := rand.Read(decodedBody); err != nil {
+		t.Fatalf("fill oversized zstd payload: %v", err)
+	}
+	wireBody := zstdEncodeNativeResponseBody(t, decodedBody)
+	if len(wireBody) <= maxResponsesResponseBodyBytes {
+		t.Fatalf("compressed payload length = %d, want more than %d", len(wireBody), maxResponsesResponseBodyBytes)
+	}
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header: http.Header{
