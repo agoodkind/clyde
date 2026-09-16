@@ -661,6 +661,7 @@ func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
 	compactionRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"oldest"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"oldest answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
+	compactionRequestBody = bytes.Replace(compactionRequestBody, []byte(`{"model":"gpt-native","input":`), []byte(`{"model":"gpt-native","stream":true,"input":`), 1)
 	if err := json.Unmarshal(compactionRequestBody, &struct{}{}); err != nil {
 		t.Fatalf("compaction request fixture is invalid JSON: %v", err)
 	}

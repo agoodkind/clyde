@@ -127,7 +127,7 @@ func (b *rawResponsesCompactionV2ObservedBody) consumeSSEFrames(atEOF bool) {
 			return
 		}
 	}
-	if b.sseCompleted && len(b.sseBuffer) == 0 {
+	if b.sseCompleted && len(bytes.Trim(b.sseBuffer, "\r\n")) == 0 {
 		b.armEncrypted(b.sseEncrypted)
 	}
 }
