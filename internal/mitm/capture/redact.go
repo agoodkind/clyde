@@ -340,41 +340,54 @@ func containsUnredactableSensitiveJSON(raw []byte, sensitiveValues []string) boo
 	}
 	switch trimmed[0] {
 	case '"':
-		var value string
-		if json.Unmarshal(trimmed, &value) != nil {
-			return true
-		}
-		if containsSensitiveBodyMarker([]byte(value)) {
-			return true
-		}
-		return bytes.Contains(trimmed, []byte(`\u`)) && containsSensitiveValue(value, sensitiveValues)
+		return containsUnredactableSensitiveJSONString(trimmed, sensitiveValues)
 	case '{':
-		fields, ok := parseSensitiveJSONObject(trimmed)
-		if !ok {
-			return true
-		}
-		for _, field := range fields {
-			if sensitiveJSONField(field.name) {
-				continue
-			}
-			if containsSensitiveBodyMarker([]byte(field.name)) ||
-				(bytes.Contains(trimmed, []byte(`\u`)) && containsSensitiveValue(field.name, sensitiveValues)) {
-				return true
-			}
-			if containsUnredactableSensitiveJSON(field.value, sensitiveValues) {
-				return true
-			}
-		}
-		return false
+		return containsUnredactableSensitiveJSONObject(trimmed, sensitiveValues)
 	case '[':
-		var items []json.RawMessage
-		if json.Unmarshal(trimmed, &items) != nil {
+		return containsUnredactableSensitiveJSONArray(trimmed, sensitiveValues)
+	}
+	return false
+}
+
+func containsUnredactableSensitiveJSONString(raw []byte, sensitiveValues []string) bool {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return true
+	}
+	if containsSensitiveBodyMarker([]byte(value)) {
+		return true
+	}
+	return bytes.Contains(raw, []byte(`\u`)) && containsSensitiveValue(value, sensitiveValues)
+}
+
+func containsUnredactableSensitiveJSONObject(raw []byte, sensitiveValues []string) bool {
+	fields, ok := parseSensitiveJSONObject(raw)
+	if !ok {
+		return true
+	}
+	for _, field := range fields {
+		if sensitiveJSONField(field.name) {
+			continue
+		}
+		if containsSensitiveBodyMarker([]byte(field.name)) ||
+			(bytes.Contains(raw, []byte(`\u`)) && containsSensitiveValue(field.name, sensitiveValues)) {
 			return true
 		}
-		for _, item := range items {
-			if containsUnredactableSensitiveJSON(item, sensitiveValues) {
-				return true
-			}
+		if containsUnredactableSensitiveJSON(field.value, sensitiveValues) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsUnredactableSensitiveJSONArray(raw []byte, sensitiveValues []string) bool {
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		return true
+	}
+	for _, item := range items {
+		if containsUnredactableSensitiveJSON(item, sensitiveValues) {
+			return true
 		}
 	}
 	return false
