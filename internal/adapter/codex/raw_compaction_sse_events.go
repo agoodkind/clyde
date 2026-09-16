@@ -169,7 +169,7 @@ func appendRawCompactionSSEContentPart(item []byte, transcriptText string) ([]by
 		if !ok {
 			return item, false, false
 		}
-		if text == transcriptText {
+		if rawCompactionTranscriptPresent(text, transcriptText) {
 			return item, false, true
 		}
 	}

@@ -81,7 +81,7 @@ func appendRawCompactionAssistantItem(
 		if json.Unmarshal(part[textStart:textEnd], &text) != nil {
 			return item, false, false
 		}
-		if text == transcriptText {
+		if rawCompactionTranscriptPresent(text, transcriptText) {
 			return item, true, true
 		}
 		if !hasTarget {
@@ -107,6 +107,33 @@ func appendRawCompactionAssistantItem(
 	}
 	mutatedPart := replaceByteRange(part, textStart, textEnd, encodedText)
 	return replaceByteRange(item, target.start, target.end, mutatedPart), true, true
+}
+
+func rawCompactionTranscriptPresent(text, transcriptText string) bool {
+	needle := strings.TrimSpace(transcriptText)
+	if needle == "" {
+		return false
+	}
+	searchStart := 0
+	for searchStart < len(text) {
+		matchOffset := strings.Index(text[searchStart:], needle)
+		if matchOffset < 0 {
+			return false
+		}
+		matchStart := searchStart + matchOffset
+		matchEnd := matchStart + len(needle)
+		beforeBoundary := matchStart == 0 || rawCompactionTranscriptBoundary(text[matchStart-1])
+		afterBoundary := matchEnd == len(text) || rawCompactionTranscriptBoundary(text[matchEnd])
+		if beforeBoundary && afterBoundary {
+			return true
+		}
+		searchStart = matchStart + 1
+	}
+	return false
+}
+
+func rawCompactionTranscriptBoundary(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
 
 func marshalRawCompactionString(value string) ([]byte, bool) {
