@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
@@ -26,6 +27,9 @@ type Deps struct {
 	// to inject one. A nil result lets the adapter build the provider's
 	// default auth manager.
 	GetAuth func(adapterresolver.ProviderID) adapterprovider.AuthLookup
+	// RawResponsesCompaction carries the existing reorient controls into the
+	// native Codex Responses path. The daemon derives it from MITM config.
+	RawResponsesCompaction adaptercodex.RawResponsesCompactionSettings
 	// CaptureStore is the daemon's shared SQLite capture store. The Anthropic
 	// client and Codex provider read their wire baseline (current baseline +
 	// updated-at) from it at request time to project their outbound wire
