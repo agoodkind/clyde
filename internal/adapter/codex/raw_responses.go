@@ -133,7 +133,7 @@ func (p *Provider) openRawResponsesAttempt(ctx context.Context, raw RawResponses
 		attemptBody.recordCapture = func(responseBody []byte) {
 			recordCodexHTTPEgress(
 				p.captureStore, raw.Correlation, response.Request, response,
-				raw.Body, responseBody, "", started,
+				raw.Body, responseBody, response.Header.Get("Content-Encoding"), started,
 			)
 		}
 	}

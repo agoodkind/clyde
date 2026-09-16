@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -171,8 +172,40 @@ func TestCodexEgressRedactsRequestCredentialEchoedByResponse(t *testing.T) {
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("store.Close: %v", err)
 	}
-	if got := queryCodexRow(t, dbPath, "response"); bytes.Contains(got, []byte("request-credential")) {
-		t.Fatalf("response body leaked request credential: %q", got)
+	got := queryCodexRow(t, dbPath, "response")
+	want := []byte(`{"safe":"[REDACTED]"}`)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("response body = %q, want redacted response %q", got, want)
+	}
+}
+
+func TestCodexEgressRedactsRequestBodyCredentialEchoedByResponse(t *testing.T) {
+	store, dbPath := openCodexCaptureStore(t)
+	request, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}
+	recordCodexHTTPEgress(
+		store,
+		correlation.Context{},
+		request,
+		response,
+		[]byte(`{"client_secret":"request-credential"}`),
+		[]byte(`{"safe":"request-credential","keep":true}`),
+		"conv-body-echo",
+		clock.Now(),
+	)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	got := queryCodexRow(t, dbPath, "response")
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+	if decoded["safe"] != "[REDACTED]" || decoded["keep"] != true {
+		t.Fatalf("response body = %q, want redacted safe field and preserved keep field", got)
 	}
 }
 
