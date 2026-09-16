@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -656,6 +657,12 @@ func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
 		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
 		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
 	}
+	terminalEvents := make(chan adapterruntime.RequestEvent, 8)
+	srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) {
+		if event.Stage == adapterruntime.RequestStageFailed || event.Stage == adapterruntime.RequestStageCancelled || event.Stage == adapterruntime.RequestStageCompleted {
+			terminalEvents <- event
+		}
+	}
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
 	compactionRequestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
@@ -711,6 +718,14 @@ func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
 	<-firstHeaders
 	close(releaseBody)
 	<-firstFinished
+	select {
+	case event := <-terminalEvents:
+		if event.Stage != adapterruntime.RequestStageFailed && event.Stage != adapterruntime.RequestStageCancelled {
+			t.Fatalf("public response terminal stage = %s, want failed or cancelled", event.Stage)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("public response handler did not finish after downstream failure")
+	}
 	finalRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
 	secondRequest, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", bytes.NewReader(finalRequestBody))
 	if err != nil {
