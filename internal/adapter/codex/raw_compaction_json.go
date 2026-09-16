@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -188,8 +187,8 @@ func jsonObjectFieldValueRange(raw []byte, field string) (int, int, bool) {
 		if !ok {
 			return 0, 0, false
 		}
-		key, err := strconv.Unquote(string(raw[keyStart:keyEnd]))
-		if err != nil {
+		var key string
+		if err := json.Unmarshal(raw[keyStart:keyEnd], &key); err != nil {
 			return 0, 0, false
 		}
 		index = skipJSONSpace(raw, keyEnd)
