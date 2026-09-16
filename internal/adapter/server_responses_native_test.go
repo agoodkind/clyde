@@ -3,7 +3,6 @@ package adapter
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -167,11 +166,18 @@ func TestNativeCodexResponsesCompactionStreamingRequestPreservesJSONError(t *tes
 
 func TestNativeCodexResponsesZstdCompactionPassesThroughOversizedWireResponse(t *testing.T) {
 	transformer := nativeCompactionTransformerForTest(t)
-	decodedBody := make([]byte, maxResponsesResponseBodyBytes+64*1024)
-	if _, err := rand.Read(decodedBody); err != nil {
-		t.Fatalf("fill oversized zstd payload: %v", err)
+	decodedBody := []byte(`{"output":[]}`)
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderPadding(maxResponsesResponseBodyBytes+1))
+	if err != nil {
+		t.Fatalf("create padded zstd encoder: %v", err)
 	}
-	wireBody := zstdEncodeNativeResponseBody(t, decodedBody)
+	wireBody := encoder.EncodeAll(decodedBody, nil)
+	if err := encoder.Close(); err != nil {
+		t.Fatalf("close padded zstd encoder: %v", err)
+	}
+	if len(decodedBody) >= maxResponsesResponseBodyBytes {
+		t.Fatalf("decoded payload length = %d, want less than %d", len(decodedBody), maxResponsesResponseBodyBytes)
+	}
 	if len(wireBody) <= maxResponsesResponseBodyBytes {
 		t.Fatalf("compressed payload length = %d, want more than %d", len(wireBody), maxResponsesResponseBodyBytes)
 	}
@@ -247,7 +253,9 @@ func TestNativeCodexResponsesZstdCompactionBoundsStreamingDecoderMemory(t *testi
 	if err != nil {
 		t.Fatalf("create oversized-window zstd encoder: %v", err)
 	}
-	decodedBody := bytes.Repeat([]byte("x"), 2*maxResponsesResponseBodyBytes+1)
+	decodedBody := []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"padding\":\"")
+	decodedBody = append(decodedBody, bytes.Repeat([]byte("x"), 2*maxResponsesResponseBodyBytes)...)
+	decodedBody = append(decodedBody, []byte("\"}}\n\n")...)
 	wireBody := encoder.EncodeAll(decodedBody, nil)
 	if err := encoder.Close(); err != nil {
 		t.Fatalf("close oversized-window zstd encoder: %v", err)
