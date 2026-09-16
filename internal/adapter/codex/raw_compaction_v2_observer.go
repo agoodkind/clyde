@@ -33,7 +33,6 @@ func ObserveRawResponsesCompactionV2Response(response *http.Response, plan RawRe
 		armGeneration:   0,
 		sseBuffer:       nil,
 		sseScanOffset:   0,
-		sseEncrypted:    "",
 		sseCompleted:    false,
 		sseInvalid:      false,
 	}

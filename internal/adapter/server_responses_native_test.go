@@ -885,6 +885,7 @@ func TestNativeCodexResponsesCompactionV2EndToEndRecovery(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		upstreamBodies = append(upstreamBodies, body)
+		t.Logf("upstream request %d: %s", len(upstreamBodies), body)
 		if bytes.Contains(body, []byte(`"compaction_trigger"`)) {
 			_, _ = writer.Write(encryptedResponse)
 			return
@@ -1000,15 +1001,10 @@ func TestNativeCodexResponsesCompactionV2RecoveryLifecycle(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	naturalResend := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>"}]}]}`)
 	responseBody := []byte(`{"id":"resp-1","status":"completed","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"final answer"}]}]}`)
-	naturalResponse := []byte(`{"id":"resp-2","status":"completed","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"<pre-compaction-transcript>recovered transcript</pre-compaction-transcript>\nfinal answer"}]}]}`)
 	var upstreamBodies [][]byte
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		upstreamBodies = append(upstreamBodies, body)
-		if bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
-			_, _ = writer.Write(naturalResponse)
-			return
-		}
 		_, _ = writer.Write(responseBody)
 	}))
 	t.Cleanup(upstream.Close)
@@ -1017,13 +1013,19 @@ func TestNativeCodexResponsesCompactionV2RecoveryLifecycle(t *testing.T) {
 	if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
 		t.Fatal("arm registry")
 	}
-	for _, body := range [][]byte{requestBody, naturalResend} {
+	for index, body := range [][]byte{requestBody, naturalResend} {
 		request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 		request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
 		recorder := httptest.NewRecorder()
 		srv.mux.ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusOK || bytes.Count(recorder.Body.Bytes(), []byte("<pre-compaction-transcript>")) != 1 {
+		if recorder.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+		}
+		if index == 0 && bytes.Count(recorder.Body.Bytes(), []byte("<pre-compaction-transcript>")) != 1 {
+			t.Fatalf("recovered response body=%s", recorder.Body.Bytes())
+		}
+		if index == 1 && !bytes.Equal(recorder.Body.Bytes(), responseBody) {
+			t.Fatalf("natural resend response=%s", recorder.Body.Bytes())
 		}
 	}
 	if _, ok := srv.compactionV2.Match("native-session", "cipher"); ok {
