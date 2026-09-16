@@ -75,28 +75,38 @@ func TestStartOnListenersSynchronizesHTTPServerLifecycle(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		start := make(chan struct{})
 		serveErr := make(chan error, 1)
-		lifecycleErr := make(chan error, 1)
 		go func() {
 			<-start
 			serveErr <- srv.StartOnListeners(ctx, lis)
 		}()
-		go func() {
-			<-start
-			for i := 0; i < disableAttempts; i++ {
-				srv.DisableKeepAlives()
-				runtime.Gosched()
-			}
-			shutCtx, shutCancel := context.WithTimeout(context.Background(), time.Second)
-			defer shutCancel()
-			lifecycleErr <- srv.ShutdownHTTP(shutCtx)
-		}()
 		close(start)
 
-		if err := <-lifecycleErr; err != nil {
+		readyDeadline := time.Now().Add(time.Second)
+		for {
+			conn, dialErr := net.DialTimeout("tcp", lis.Addr().String(), 20*time.Millisecond)
+			if dialErr == nil {
+				_ = conn.Close()
+				break
+			}
+			if time.Now().After(readyDeadline) {
+				cancel()
+				_ = lis.Close()
+				t.Fatalf("server did not start attempt %d: %v", attempt, dialErr)
+			}
+			runtime.Gosched()
+		}
+		for i := 0; i < disableAttempts; i++ {
+			srv.DisableKeepAlives()
+			runtime.Gosched()
+		}
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), time.Second)
+		if err := srv.ShutdownHTTP(shutCtx); err != nil {
+			shutCancel()
 			cancel()
 			_ = lis.Close()
 			t.Fatalf("shutdown attempt %d: %v", attempt, err)
 		}
+		shutCancel()
 		cancel()
 		if err := <-serveErr; err != nil {
 			_ = lis.Close()
