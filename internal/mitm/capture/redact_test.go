@@ -515,8 +515,25 @@ func TestSensitiveHTTPBodyValuesCollectsNumericAndArrayValues(t *testing.T) {
 		complete,
 	)
 	if string(redacted) == `{"echo":123456,"echo_array":["array-secret",987654]}` ||
-		bytes.Contains(redacted, []byte("array-secret")) || bytes.Contains(redacted, []byte("123456")) {
+		bytes.Contains(redacted, []byte("array-secret")) || bytes.Contains(redacted, []byte("123456")) ||
+		bytes.Contains(redacted, []byte("987654")) {
 		t.Fatalf("sensitive values leaked: %s", redacted)
+	}
+}
+
+func TestSensitiveHTTPBodyValuesCollectsDuplicateFields(t *testing.T) {
+	values, complete := SensitiveHTTPBodyValuesWithStatus([]byte(`{"token":"first-secret","token":"second-secret"}`))
+	if !complete || !slices.Contains(values, "first-secret") || !slices.Contains(values, "second-secret") {
+		t.Fatalf("duplicate credential values = %v complete=%t", values, complete)
+	}
+	_, redacted := RedactHTTPWithSensitiveValuesStatus(
+		nil,
+		[]byte(`{"echo":"first-secret","safe":"kept"}`),
+		values,
+		complete,
+	)
+	if bytes.Contains(redacted, []byte("first-secret")) {
+		t.Fatalf("duplicate sensitive value leaked: %s", redacted)
 	}
 }
 

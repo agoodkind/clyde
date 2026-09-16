@@ -472,12 +472,13 @@ func collectSensitiveBodyValues(body []byte, values *[]string, complete *bool) {
 		return
 	}
 	if trimmed[0] == '{' {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(trimmed, &fields) != nil {
+		fields, ok := parseSensitiveJSONObject(trimmed)
+		if !ok {
 			*complete = false
 			return
 		}
-		for name, value := range fields {
+		for _, field := range fields {
+			name, value := field.name, field.value
 			if sensitiveJSONField(name) {
 				collectSensitiveJSONScalars(value, values, complete)
 			}
@@ -513,13 +514,13 @@ func collectSensitiveJSONScalars(raw []byte, values *[]string, complete *bool) {
 		*values, valueComplete = appendSensitiveBodyValueWithStatus(*values, value)
 		*complete = *complete && valueComplete
 	case '{':
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(trimmed, &fields) != nil {
+		fields, ok := parseSensitiveJSONObject(trimmed)
+		if !ok {
 			*complete = false
 			return
 		}
-		for _, value := range fields {
-			collectSensitiveJSONScalars(value, values, complete)
+		for _, field := range fields {
+			collectSensitiveJSONScalars(field.value, values, complete)
 		}
 	case '[':
 		var items []json.RawMessage
@@ -539,6 +540,44 @@ func collectSensitiveJSONScalars(raw []byte, values *[]string, complete *bool) {
 		*values, valueComplete = appendSensitiveBodyValueWithStatus(*values, string(trimmed))
 		*complete = *complete && valueComplete
 	}
+}
+
+type sensitiveJSONObjectField struct {
+	name  string
+	value json.RawMessage
+}
+
+func parseSensitiveJSONObject(raw []byte) ([]sensitiveJSONObjectField, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return nil, false
+	}
+	fields := make([]sensitiveJSONObjectField, 0)
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return nil, false
+		}
+		name, ok := key.(string)
+		if !ok {
+			return nil, false
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return nil, false
+		}
+		fields = append(fields, sensitiveJSONObjectField{name: name, value: value})
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return nil, false
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, false
+	}
+	return fields, true
 }
 
 func redactJSONObject(raw []byte) ([]byte, bool) {
