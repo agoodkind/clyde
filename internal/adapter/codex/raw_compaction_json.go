@@ -78,7 +78,8 @@ func appendRawCompactionAssistantItem(
 			return item, false, false
 		}
 		var text string
-		if json.Unmarshal(part[textStart:textEnd], &text) != nil {
+		if bytes.Equal(bytes.TrimSpace(part[textStart:textEnd]), []byte("null")) ||
+			json.Unmarshal(part[textStart:textEnd], &text) != nil {
 			return item, false, false
 		}
 		if rawCompactionTranscriptPresent(text, transcriptText) {
@@ -98,7 +99,8 @@ func appendRawCompactionAssistantItem(
 		return item, false, false
 	}
 	var text string
-	if json.Unmarshal(part[textStart:textEnd], &text) != nil {
+	if bytes.Equal(bytes.TrimSpace(part[textStart:textEnd]), []byte("null")) ||
+		json.Unmarshal(part[textStart:textEnd], &text) != nil {
 		return item, false, false
 	}
 	encodedText, ok := marshalRawCompactionString(text + transcriptText)

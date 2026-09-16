@@ -159,6 +159,7 @@ func TestRawResponsesCompactionResponseFailuresPassThrough(t *testing.T) {
 	}{
 		{name: "upstream failure", status: http.StatusBadRequest, contentType: "application/json", body: []byte(`{"error":"unchanged"}`)},
 		{name: "malformed json", status: http.StatusOK, contentType: "application/json", body: []byte(`{"output":[`)},
+		{name: "null output text", status: http.StatusOK, contentType: "application/json", body: []byte(`{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":null}]}]}`)},
 		{name: "malformed sse item", status: http.StatusOK, contentType: "text/event-stream", body: []byte("event: response.output_item.done\ndata: {not-json}\n\n")},
 		{name: "eof after candidate", status: http.StatusOK, contentType: "text/event-stream", body: []byte(assistantCandidate)},
 		{name: "eof after later unknown frame", status: http.StatusOK, contentType: "text/event-stream", body: []byte(assistantCandidate + "event: response.future\ndata: {\"type\":\"response.future\",\"opaque\":true}\n\n")},

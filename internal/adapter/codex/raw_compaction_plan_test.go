@@ -151,6 +151,8 @@ func TestRawResponsesCompactionRejectsIncompleteToolPairs(t *testing.T) {
 	}{
 		{name: "call without id", items: `{"type":"function_call","name":"lookup","arguments":"{}"}`},
 		{name: "output without id", items: `{"type":"function_call_output","output":"result"}`},
+		{name: "output without payload", items: `{"type":"function_call","name":"lookup","arguments":"{}","call_id":"call-1"},{"type":"function_call_output","call_id":"call-1"}`},
+		{name: "output null payload", items: `{"type":"function_call","name":"lookup","arguments":"{}","call_id":"call-1"},{"type":"function_call_output","call_id":"call-1","output":null}`},
 		{name: "call without output", items: `{"type":"function_call","name":"lookup","arguments":"{}","call_id":"call-1"}`},
 		{name: "output without call", items: `{"type":"function_call_output","call_id":"call-1","output":"result"}`},
 		{name: "custom call without output", items: `{"type":"custom_tool_call","name":"apply_patch","input":"patch","call_id":"call-1"}`},

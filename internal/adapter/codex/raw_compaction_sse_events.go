@@ -21,6 +21,7 @@ type rawCompactionSSESyntheticContentPart struct {
 	Type        string            `json:"type"`
 	Text        string            `json:"text"`
 	Annotations []json.RawMessage `json:"annotations"`
+	Logprobs    []json.RawMessage `json:"logprobs"`
 }
 
 type rawCompactionSSESyntheticEvent struct {
@@ -211,8 +212,8 @@ func rawCompactionSSEItemsHaveCoherentContent(first, second []byte) bool {
 func rawCompactionSSESyntheticContentEvents(identity rawCompactionSSEItemIdentity, transcriptText string) ([]byte, bool) {
 	emptyAnnotations := make([]json.RawMessage, 0)
 	emptyLogprobs := make([]json.RawMessage, 0)
-	emptyPart := &rawCompactionSSESyntheticContentPart{Type: "output_text", Text: "", Annotations: emptyAnnotations}
-	completePart := &rawCompactionSSESyntheticContentPart{Type: "output_text", Text: transcriptText, Annotations: emptyAnnotations}
+	emptyPart := &rawCompactionSSESyntheticContentPart{Type: "output_text", Text: "", Annotations: emptyAnnotations, Logprobs: emptyLogprobs}
+	completePart := &rawCompactionSSESyntheticContentPart{Type: "output_text", Text: transcriptText, Annotations: emptyAnnotations, Logprobs: emptyLogprobs}
 	events := []rawCompactionSSESyntheticEvent{
 		{Type: string(rawCompactionSSEContentPartAdded), ItemID: identity.id, OutputIndex: identity.outputIndex, ContentIndex: identity.contentIndex, Part: emptyPart, Delta: "", Text: "", Logprobs: nil, SequenceNumber: identity.sequence},
 		{Type: string(rawCompactionSSEOutputTextDelta), ItemID: identity.id, OutputIndex: identity.outputIndex, ContentIndex: identity.contentIndex, Part: nil, Delta: transcriptText, Text: "", Logprobs: &emptyLogprobs, SequenceNumber: identity.sequence + 1},
@@ -331,6 +332,9 @@ func replaceRawCompactionSSEIntegerField(data []byte, field string, value int) (
 func rawCompactionSSEStringField(data []byte, field string) (string, bool) {
 	start, end, ok := jsonObjectFieldValueRange(data, field)
 	if !ok {
+		return "", false
+	}
+	if bytes.Equal(bytes.TrimSpace(data[start:end]), []byte("null")) {
 		return "", false
 	}
 	var value string

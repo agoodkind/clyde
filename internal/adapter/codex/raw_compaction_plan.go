@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -388,12 +389,16 @@ func rawCompactionCall(item transcript.CompactedContextItem) (string, rawCompact
 func rawCompactionOutput(item transcript.CompactedContextItem) (string, rawCompactionCallKind, bool) {
 	switch item.Kind {
 	case transcript.CompactedContextItemKindFunctionCallOutput:
-		if item.FunctionCallOutput == nil {
+		if item.FunctionCallOutput == nil || item.FunctionCallOutput.CallID == "" ||
+			len(bytes.TrimSpace(item.FunctionCallOutput.OutputRaw)) == 0 ||
+			bytes.Equal(bytes.TrimSpace(item.FunctionCallOutput.OutputRaw), []byte("null")) {
 			return "", "", false
 		}
 		return item.FunctionCallOutput.CallID, rawCompactionCallFunction, true
 	case transcript.CompactedContextItemKindCustomToolCallOutput:
-		if item.CustomToolCallOutput == nil {
+		if item.CustomToolCallOutput == nil || item.CustomToolCallOutput.CallID == "" ||
+			len(bytes.TrimSpace(item.CustomToolCallOutput.OutputRaw)) == 0 ||
+			bytes.Equal(bytes.TrimSpace(item.CustomToolCallOutput.OutputRaw), []byte("null")) {
 			return "", "", false
 		}
 		return item.CustomToolCallOutput.CallID, rawCompactionCallCustom, true
@@ -546,12 +551,16 @@ func rawCompactionTranscriptValue(
 			string(item.ToolSearchCall.ArgumentsRaw),
 		), item.ToolSearchCall.CallID, rawCompactionCallToolSearch, false, "", "", true
 	case transcript.CompactedContextItemKindFunctionCallOutput:
-		if item.FunctionCallOutput == nil || item.FunctionCallOutput.CallID == "" {
+		if item.FunctionCallOutput == nil || item.FunctionCallOutput.CallID == "" ||
+			len(bytes.TrimSpace(item.FunctionCallOutput.OutputRaw)) == 0 ||
+			bytes.Equal(bytes.TrimSpace(item.FunctionCallOutput.OutputRaw), []byte("null")) {
 			return empty, "", "", false, "", "", false
 		}
 		return empty, "", "", true, item.FunctionCallOutput.CallID, rawCompactionCallFunction, true
 	case transcript.CompactedContextItemKindCustomToolCallOutput:
-		if item.CustomToolCallOutput == nil || item.CustomToolCallOutput.CallID == "" {
+		if item.CustomToolCallOutput == nil || item.CustomToolCallOutput.CallID == "" ||
+			len(bytes.TrimSpace(item.CustomToolCallOutput.OutputRaw)) == 0 ||
+			bytes.Equal(bytes.TrimSpace(item.CustomToolCallOutput.OutputRaw), []byte("null")) {
 			return empty, "", "", false, "", "", false
 		}
 		return empty, "", "", true, item.CustomToolCallOutput.CallID, rawCompactionCallCustom, true
