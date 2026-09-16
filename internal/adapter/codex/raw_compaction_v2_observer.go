@@ -29,6 +29,7 @@ func ObserveRawResponsesCompactionV2Response(response *http.Response, plan RawRe
 		registry:        registry,
 		contentType:     response.Header.Get("Content-Type"),
 		contentEncoding: response.Header.Get("Content-Encoding"),
+		sseEncrypted:    "",
 		armed:           false,
 	}
 	return &clone

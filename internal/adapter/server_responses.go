@@ -295,7 +295,7 @@ func (s *Server) dispatchNativeCodexResponses(
 	}
 	terminalErr := copyErr
 	if terminalErr == nil && !responseSucceeded {
-		terminalErr = &adaptercodex.UpstreamStatusError{Status: response.StatusCode}
+		terminalErr = &adaptercodex.UpstreamStatusError{Status: response.StatusCode, Snippet: ""}
 	}
 	var result adapterprovider.Result
 	lifecycle.terminal(ctx, result, terminalErr)
