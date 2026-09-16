@@ -243,12 +243,13 @@ func nativeCodexResponsesRequest(wireBody, decodedBody []byte, header http.Heade
 		return zero, "", false
 	}
 	raw := adaptercodex.RawResponsesRequest{
-		Body: wireBody, Header: header.Clone(), RequestID: corr.RequestID, Correlation: corr, Stream: request.Stream,
+		Body: decodedBody, Header: header.Clone(), RequestID: corr.RequestID, Correlation: corr, Stream: request.Stream,
 	}
 	if !raw.HasValidTurnMetadata() {
 		var zero adaptercodex.RawResponsesRequest
 		return zero, "", false
 	}
+	raw.Body = wireBody
 	return raw, request.Model, true
 }
 

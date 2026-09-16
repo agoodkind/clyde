@@ -79,6 +79,18 @@ func SensitiveHTTPHeaderValuesWithStatus(headers http.Header) ([]string, bool) {
 	return values, complete
 }
 
+// SensitiveHTTPBodyValuesWithStatus returns string values found under sensitive
+// JSON fields so a related response can redact a request-body credential too.
+func SensitiveHTTPBodyValuesWithStatus(body []byte) ([]string, bool) {
+	if body == nil {
+		return nil, true
+	}
+	values := make([]string, 0)
+	complete := true
+	collectSensitiveBodyValues(body, &values, &complete)
+	return values, complete
+}
+
 // RedactHTTPWithSensitiveValuesStatus fails closed for a related nonnil body
 // when bounded collection could not retain every distinct sensitive value.
 func RedactHTTPWithSensitiveValuesStatus(headers http.Header, body []byte, additionalValues []string, additionalValuesComplete bool) (http.Header, []byte) {
@@ -112,6 +124,13 @@ func redactHTTP(headers http.Header, body []byte, additionalValues []string, add
 		}
 		delete(redactedHeaders, name)
 	}
+	bodyValues, bodyValuesComplete := SensitiveHTTPBodyValuesWithStatus(body)
+	for _, value := range bodyValues {
+		var valueComplete bool
+		sensitiveValues, valueComplete = appendSensitiveBodyValueWithStatus(sensitiveValues, value)
+		sensitiveValuesComplete = sensitiveValuesComplete && valueComplete
+	}
+	sensitiveValuesComplete = sensitiveValuesComplete && bodyValuesComplete
 	if body != nil && (!sensitiveValuesComplete || shortSensitiveValue) {
 		redactedHeaders.Del("Content-Length")
 		return redactedHeaders, []byte(redactedValue)
@@ -408,6 +427,40 @@ func collectSensitiveJSONScalars(raw []byte, values *[]string, complete *bool) {
 	}
 }
 
+func collectSensitiveBodyValues(body []byte, values *[]string, complete *bool) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return
+	}
+	if trimmed[0] == '{' {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(trimmed, &fields) != nil {
+			return
+		}
+		for name, value := range fields {
+			if sensitiveJSONField(name) {
+				var stringValue string
+				if json.Unmarshal(value, &stringValue) == nil {
+					var valueComplete bool
+					*values, valueComplete = appendSensitiveBodyValueWithStatus(*values, stringValue)
+					*complete = *complete && valueComplete
+				}
+			}
+			collectSensitiveBodyValues(value, values, complete)
+		}
+		return
+	}
+	if trimmed[0] == '[' {
+		var items []json.RawMessage
+		if json.Unmarshal(trimmed, &items) != nil {
+			return
+		}
+		for _, item := range items {
+			collectSensitiveBodyValues(item, values, complete)
+		}
+	}
+}
+
 func redactJSONObject(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
@@ -420,7 +473,7 @@ func redactJSONObject(raw []byte, sensitiveValues []string) ([]byte, bool) {
 			changed = true
 			continue
 		}
-		if containsSensitiveBodyMarker(value) {
+		if containsSensitiveJSONStringMarker(value) || containsSensitiveBodyMarker(value) {
 			fields[name] = json.RawMessage(`"` + redactedValue + `"`)
 			changed = true
 			continue
@@ -438,6 +491,14 @@ func redactJSONObject(raw []byte, sensitiveValues []string) ([]byte, bool) {
 		return raw, false
 	}
 	return encoded, true
+}
+
+func containsSensitiveJSONStringMarker(raw []byte) bool {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	return containsSensitiveBodyMarker([]byte(value))
 }
 
 func redactJSONArray(raw []byte, sensitiveValues []string) ([]byte, bool) {

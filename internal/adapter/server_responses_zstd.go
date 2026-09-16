@@ -130,27 +130,7 @@ func transformStreamingNativeCodexCompactionResponse(
 	transformer *adaptercodex.RawResponsesCompactionTransformer,
 ) *http.Response {
 	if !transformer.RequiresTerminalValidation() {
-		var consumed bytes.Buffer
-		buffered := bufio.NewReader(io.TeeReader(response.Body, &consumed))
-		decoder, err := zstd.NewReader(buffered, zstd.WithDecoderMaxMemory(maxResponsesResponseBodyBytes))
-		if err != nil {
-			response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body), source: response.Body}
-			return response
-		}
-		probe := make([]byte, 1)
-		count, readErr := decoder.Read(probe)
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			decoder.Close()
-			response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body), source: response.Body}
-			return response
-		}
-		decodedResponse := *response
-		decodedResponse.Header = response.Header.Clone()
-		decodedResponse.Header.Del("Content-Encoding")
-		decodedResponse.Header.Del("Content-Length")
-		decodedResponse.ContentLength = -1
-		decodedResponse.Body = &nativeResponsesZstdBody{ReadCloser: io.NopCloser(io.MultiReader(bytes.NewReader(probe[:count]), decoder.IOReadCloser())), source: response.Body, decoder: decoder}
-		return transformer.TransformResponse(&decodedResponse)
+		return transformStreamingNativeCodexCompactionResponseWithoutTerminalValidation(response, transformer)
 	}
 	originalBody := response.Body
 	wireBody, err := io.ReadAll(io.LimitReader(originalBody, maxResponsesResponseBodyBytes+1))
@@ -199,6 +179,56 @@ func transformStreamingNativeCodexCompactionResponse(
 	clone.ContentLength = -1
 	clone.Body = io.NopCloser(bytes.NewReader(encodedBody))
 	return &clone
+}
+
+func transformStreamingNativeCodexCompactionResponseWithoutTerminalValidation(
+	response *http.Response,
+	transformer *adaptercodex.RawResponsesCompactionTransformer,
+) *http.Response {
+	var consumed bytes.Buffer
+	probeSource := &nativeResponsesProbeReader{source: response.Body, consumed: &consumed, probing: true}
+	buffered := bufio.NewReader(probeSource)
+	decoder, err := zstd.NewReader(buffered, zstd.WithDecoderMaxMemory(maxResponsesResponseBodyBytes))
+	if err != nil {
+		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body), source: response.Body}
+		return response
+	}
+	probe := make([]byte, 1)
+	count, readErr := decoder.Read(probe)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		decoder.Close()
+		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body), source: response.Body}
+		return response
+	}
+	probeSource.stop()
+	decodedResponse := *response
+	decodedResponse.Header = response.Header.Clone()
+	decodedResponse.Header.Del("Content-Encoding")
+	decodedResponse.Header.Del("Content-Length")
+	decodedResponse.ContentLength = -1
+	decodedResponse.Body = &nativeResponsesZstdBody{ReadCloser: io.NopCloser(io.MultiReader(bytes.NewReader(probe[:count]), decoder.IOReadCloser())), source: response.Body, decoder: decoder}
+	return transformer.TransformResponse(&decodedResponse)
+}
+
+type nativeResponsesProbeReader struct {
+	source   io.Reader
+	consumed *bytes.Buffer
+	probing  bool
+}
+
+func (r *nativeResponsesProbeReader) Read(p []byte) (int, error) {
+	count, err := r.source.Read(p)
+	if r.probing && count > 0 {
+		_, _ = r.consumed.Write(p[:count])
+	}
+	if err != nil {
+		return count, fmt.Errorf("read native Responses probe: %w", err)
+	}
+	return count, nil
+}
+
+func (r *nativeResponsesProbeReader) stop() {
+	r.probing = false
 }
 
 type nativeResponsesZstdBody struct {

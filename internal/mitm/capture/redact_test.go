@@ -65,9 +65,14 @@ func TestRedactHTTPFailsClosedForShortHeaderCredential(t *testing.T) {
 }
 
 func TestRedactHTTPRedactsNestedScalarMarker(t *testing.T) {
-	_, redactedBody := RedactHTTP(nil, []byte(`{"outer":{"note":"token=secret","safe":"kept"}}`))
-	if bytes.Contains(redactedBody, []byte("token=secret")) {
-		t.Fatalf("nested scalar marker persisted: %s", redactedBody)
+	for _, body := range [][]byte{
+		[]byte(`{"outer":{"note":"token=secret","safe":"kept"}}`),
+		[]byte(`{"outer":{"note":"\u0074oken=secret","safe":"kept"}}`),
+	} {
+		_, redactedBody := RedactHTTP(nil, body)
+		if bytes.Contains(redactedBody, []byte("token=secret")) || bytes.Contains(redactedBody, []byte(`\u0074oken=secret`)) {
+			t.Fatalf("nested scalar marker persisted: %s", redactedBody)
+		}
 	}
 }
 
