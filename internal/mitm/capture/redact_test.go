@@ -42,9 +42,9 @@ func TestRedactHTTPCoversHeadersJSONAndSSE(t *testing.T) {
 }
 
 func TestRedactHTTPRedactsNoncanonicalAuthTokenAndClientSecret(t *testing.T) {
-	headers := http.Header{"x-auth-token": {"header-secret"}}
+	headers := http.Header{"x-AuTh-ToKeN": {"header-secret"}}
 	_, redactedBody := RedactHTTP(headers, []byte(`{"client_secret":"body-secret","safe":"kept"}`))
-	if _, exists := headers["x-auth-token"]; !exists {
+	if _, exists := headers["x-AuTh-ToKeN"]; !exists {
 		t.Fatal("test header lost before redaction")
 	}
 	redactedHeaders, _ := RedactHTTP(headers, nil)
