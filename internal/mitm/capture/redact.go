@@ -383,50 +383,6 @@ func redactJSONValue(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	}
 }
 
-func collectSensitiveJSONScalars(raw []byte, values *[]string, complete *bool) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return
-	}
-	switch trimmed[0] {
-	case '"':
-		var value string
-		if json.Unmarshal(trimmed, &value) != nil {
-			*complete = false
-			return
-		}
-		var valueComplete bool
-		*values, valueComplete = appendSensitiveBodyValueWithStatus(*values, value)
-		*complete = *complete && valueComplete
-	case '{':
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(trimmed, &fields) != nil {
-			*complete = false
-			return
-		}
-		for _, value := range fields {
-			collectSensitiveJSONScalars(value, values, complete)
-		}
-	case '[':
-		var items []json.RawMessage
-		if json.Unmarshal(trimmed, &items) != nil {
-			*complete = false
-			return
-		}
-		for _, item := range items {
-			collectSensitiveJSONScalars(item, values, complete)
-		}
-	default:
-		if !json.Valid(trimmed) {
-			*complete = false
-			return
-		}
-		var valueComplete bool
-		*values, valueComplete = appendSensitiveBodyValueWithStatus(*values, string(trimmed))
-		*complete = *complete && valueComplete
-	}
-}
-
 func collectSensitiveBodyValues(body []byte, values *[]string, complete *bool) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
