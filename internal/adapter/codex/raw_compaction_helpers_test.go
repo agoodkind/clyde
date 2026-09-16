@@ -164,6 +164,19 @@ func TestSelectRawCompactionStartUsesLogarithmicRenders(t *testing.T) {
 	}
 }
 
+func TestSelectRawCompactionStartRejectsInvalidTargetCount(t *testing.T) {
+	units := []rawCompactionInterval{{start: 0, end: 1}}
+	for _, targetCount := range []int{0, 2} {
+		selected, rendered, ok := selectRawCompactionStart(units, 1, targetCount, func(int) (string, bool) {
+			t.Fatal("render called for invalid target count")
+			return "", false
+		})
+		if ok || selected != 0 || rendered != "" {
+			t.Fatalf("target count %d selected=%d rendered=%q ok=%t", targetCount, selected, rendered, ok)
+		}
+	}
+}
+
 func rawCompactionLogarithmicRenderLimit(count int) int {
 	limit := 1
 	for size := 1; size < count; size *= 2 {

@@ -96,7 +96,8 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 	originalBody := response.Body
 	wireBody, readErr := io.ReadAll(originalBody)
 	if readErr != nil {
-		response.Body = &rawCompactionReadCloser{reader: io.MultiReader(bytes.NewReader(wireBody), originalBody), closer: originalBody}
+		_ = originalBody.Close()
+		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
 	_ = originalBody.Close()
