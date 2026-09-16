@@ -291,6 +291,15 @@ func rawJSONResponse(status int, text string) *http.Response {
 	}
 }
 
+func rawFinalAnswerJSONResponse(status int, text string) *http.Response {
+	body := []byte(`{"status":"completed","id":"resp-1","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":` + quotedJSONForTest(text) + `}]}]}`)
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": {"application/json"}, "Content-Length": {"1"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}
+}
+
 func rawInputItemsForTest(t *testing.T, body []byte) []json.RawMessage {
 	t.Helper()
 	var request struct {
