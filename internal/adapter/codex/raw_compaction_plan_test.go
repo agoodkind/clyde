@@ -2,6 +2,7 @@ package codex
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -200,7 +201,12 @@ func TestRawResponsesCompactionRejectsDuplicateResponseFields(t *testing.T) {
 		t.Fatal("expected a compaction transformer")
 	}
 	responseBody := []byte(`{"output":[],"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}]}`)
-	got := readResponseBody(t, transformer.TransformResponse(rawJSONResponse(http.StatusOK, string(responseBody))))
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(responseBody)),
+	}
+	got := readResponseBody(t, transformer.TransformResponse(response))
 	if !bytes.Equal(got, responseBody) {
 		t.Fatalf("duplicate response fields were mutated: %s", got)
 	}

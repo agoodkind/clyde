@@ -213,6 +213,9 @@ func jsonObjectFieldValueRange(raw []byte, field string) (int, int, bool) {
 			index++
 			continue
 		}
+		if index < len(raw) && raw[index] == '}' && foundField {
+			return fieldStart, fieldEnd, true
+		}
 		return 0, 0, false
 	}
 }
