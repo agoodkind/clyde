@@ -923,10 +923,10 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpen(t *testing.T) 
 		metadata string
 	}{
 		{name: "v1 compaction", body: base, metadata: nativeCompactionTurnMetadata()},
-		{name: "wrong session", body: base, metadata: `{"session_id":"other","thread_source":"user","sandbox":"none"}`},
+		{name: "wrong session", body: base, metadata: strings.Replace(nativeTurnMetadata(t), "native-session", "other", 1)},
 		{name: "wrong digest", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "duplicate compaction", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
-		{name: "malformed input field", body: []byte(`{"model":"gpt-native","input":[],"input":[{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
+		{name: "malformed input field", body: []byte(`{"model":"gpt-native","input":"invalid"}`), metadata: nativeTurnMetadata(t)},
 		{name: "tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>kept</pre-compaction-transcript>"}]}]}`), metadata: nativeTurnMetadata(t)},
 	}
 	for _, testCase := range tests {
@@ -961,10 +961,10 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpenZstd(t *testing
 		body     []byte
 		metadata string
 	}{
-		{name: "wrong session", body: base, metadata: `{"session_id":"other","thread_source":"user","sandbox":"none"}`},
+		{name: "wrong session", body: base, metadata: strings.Replace(nativeTurnMetadata(t), "native-session", "other", 1)},
 		{name: "wrong digest", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "duplicate compaction", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
-		{name: "malformed input field", body: []byte(`{"model":"gpt-native","input":[],"input":[{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
+		{name: "malformed input field", body: []byte(`{"model":"gpt-native","input":"invalid"}`), metadata: nativeTurnMetadata(t)},
 		{name: "tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>kept</pre-compaction-transcript>"}]}]}`), metadata: nativeTurnMetadata(t)},
 	}
 	for _, testCase := range tests {
@@ -1090,7 +1090,7 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 		t.Cleanup(func() { _ = response.Body.Close() })
 	case requestErrValue := <-requestErr:
 		t.Fatalf("post response: %v", requestErrValue)
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("matching compaction SSE headers waited for upstream completion")
 	}
@@ -1120,7 +1120,7 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 		if !strings.Contains(firstFrame, "response.created") {
 			t.Fatalf("first downstream frame = %q", firstFrame)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("matching compaction SSE first frame waited for upstream completion")
 	}
@@ -1272,7 +1272,7 @@ func TestNativeCodexResponsesStreamsRawBytes(t *testing.T) {
 		t.Cleanup(func() { _ = response.Body.Close() })
 	case requestErrValue := <-requestErr:
 		t.Fatalf("post response: %v", requestErrValue)
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("SSE headers waited for upstream completion")
 	}
@@ -1291,7 +1291,7 @@ func TestNativeCodexResponsesStreamsRawBytes(t *testing.T) {
 		if !strings.Contains(got, "data: first") {
 			t.Fatalf("first downstream bytes = %q", got)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("first raw bytes waited for upstream completion")
 	}

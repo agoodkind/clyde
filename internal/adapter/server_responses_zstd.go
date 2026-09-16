@@ -59,6 +59,7 @@ func prepareNativeCodexResponsesCompaction(
 	if changed {
 		forwardBody, ok := encodeNativeResponsesBody(injected.Body, raw.Header.Get("Content-Encoding"))
 		if !ok {
+			recovery.ReleaseRecovery()
 			return raw, nil, nil, nil
 		}
 		injected.Body = forwardBody
