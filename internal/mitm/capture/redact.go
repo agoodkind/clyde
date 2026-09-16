@@ -537,8 +537,6 @@ func collectSensitiveBodyValues(body []byte, values *[]string, complete *bool) {
 		return
 	}
 	if trimmed[0] == '{' {
-<<<<<<< HEAD
-<<<<<<< HEAD
 		fields, ok := parseSensitiveJSONObject(trimmed)
 		if !ok {
 			if bytes.ContainsAny(trimmed, "\r\n") {
@@ -592,39 +590,6 @@ func collectSensitiveBodyStreamValues(body []byte, values *[]string, complete *b
 			return
 		}
 		collectSensitiveBodyValues(payload, values, complete)
-||||||| parent of da69ee48 (Preserve strict compaction redaction contracts)
-=======
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(trimmed, &fields) != nil {
-||||||| parent of e754bad7 (Preserve duplicate sensitive JSON values)
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(trimmed, &fields) != nil {
-=======
-		fields, ok := parseSensitiveJSONObject(trimmed)
-		if !ok {
->>>>>>> e754bad7 (Preserve duplicate sensitive JSON values)
-			*complete = false
-			return
-		}
-		for _, field := range fields {
-			name, value := field.name, field.value
-			if sensitiveJSONField(name) {
-				collectSensitiveJSONScalars(value, values, complete)
-			}
-			collectSensitiveBodyValues(value, values, complete)
-		}
-		return
-	}
-	if trimmed[0] == '[' {
-		var items []json.RawMessage
-		if json.Unmarshal(trimmed, &items) != nil {
-			*complete = false
-			return
-		}
-		for _, item := range items {
-			collectSensitiveBodyValues(item, values, complete)
-		}
->>>>>>> da69ee48 (Preserve strict compaction redaction contracts)
 	}
 }
 
@@ -710,13 +675,7 @@ func parseSensitiveJSONObject(raw []byte) ([]sensitiveJSONObjectField, bool) {
 	return fields, true
 }
 
-<<<<<<< HEAD
 func redactJSONObject(raw []byte, sensitiveValues []string) ([]byte, bool) {
-||||||| parent of e754bad7 (Preserve duplicate sensitive JSON values)
-func redactJSONObject(raw []byte) ([]byte, bool) {
-=======
-func redactJSONObject(raw []byte) ([]byte, bool) {
->>>>>>> e754bad7 (Preserve duplicate sensitive JSON values)
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return raw, false
