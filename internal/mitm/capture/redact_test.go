@@ -48,7 +48,7 @@ func TestRedactHTTPRedactsNoncanonicalAuthTokenAndClientSecret(t *testing.T) {
 		t.Fatal("test header lost before redaction")
 	}
 	redactedHeaders, _ := RedactHTTP(headers, nil)
-	if _, exists := redactedHeaders["x-auth-token"]; exists {
+	if redactedHeaders.Get("x-auth-token") != "" {
 		t.Fatalf("noncanonical auth token persisted: %v", redactedHeaders)
 	}
 	if bytes.Contains(redactedBody, []byte("body-secret")) {
