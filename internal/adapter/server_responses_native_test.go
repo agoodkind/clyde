@@ -725,10 +725,18 @@ func TestNativeCodexResponsesCompactionV2PassesThrough(t *testing.T) {
 func TestNativeCodexResponsesCompactionV2UpstreamFailureDoesNotArmRecovery(t *testing.T) {
 	originalRequest := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"compaction_trigger"}]}`)
 	upstreamResponse := []byte(`{"output":[{"type":"compaction","encrypted_content":"failed-cipher"}]}`)
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	var upstreamCalls atomic.Int32
+	var followUpRequest []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if upstreamCalls.Add(1) == 1 {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusInternalServerError)
+			_, _ = writer.Write(upstreamResponse)
+			return
+		}
+		followUpRequest, _ = io.ReadAll(request.Body)
 		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusInternalServerError)
-		_, _ = writer.Write(upstreamResponse)
+		_, _ = writer.Write([]byte(`{"id":"follow-up","output":[]}`))
 	}))
 	t.Cleanup(upstream.Close)
 
@@ -753,8 +761,17 @@ func TestNativeCodexResponsesCompactionV2UpstreamFailureDoesNotArmRecovery(t *te
 	if len(stages) != 2 || stages[1].Stage != adapterruntime.RequestStageFailed {
 		t.Fatalf("request stages = %+v", stages)
 	}
-	if _, matched := srv.compactionV2.Match("native-session", "failed-cipher"); matched {
-		t.Fatal("failed upstream response armed recovery")
+	followUpBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"failed-cipher"},{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}]}`)
+	followUp := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(followUpBody))
+	followUp.Header.Set("Content-Type", "application/json")
+	followUp.Header.Set(adaptercodex.CodexTurnMetadataHeader, `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"implementation":"","phase":"final_answer","strategy":""}}`)
+	followUpRecorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(followUpRecorder, followUp)
+	if upstreamCalls.Load() != 2 || followUpRecorder.Code != http.StatusOK {
+		t.Fatalf("follow-up calls=%d status=%d body=%s", upstreamCalls.Load(), followUpRecorder.Code, followUpRecorder.Body.Bytes())
+	}
+	if !bytes.Equal(followUpRequest, followUpBody) {
+		t.Fatalf("failed response changed follow-up request:\n got: %s\nwant: %s", followUpRequest, followUpBody)
 	}
 }
 

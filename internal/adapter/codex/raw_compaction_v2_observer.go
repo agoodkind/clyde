@@ -133,6 +133,7 @@ func rawResponsesCompactionV2EncryptedContent(body []byte, contentType string) (
 func rawResponsesCompactionV2SSEEncryptedContent(body []byte) (string, bool) {
 	scanner := bufio.NewScanner(bytes.NewReader(body))
 	scanner.Buffer(make([]byte, 64*1024), maxRawResponsesCompactionV2ObserveBytes+1)
+	scanner.Split(rawResponsesCompactionV2SSEScanLines)
 	completed := false
 	encrypted := ""
 	data := make([]string, 0, 1)
@@ -156,6 +157,23 @@ func rawResponsesCompactionV2SSEEncryptedContent(body []byte) (string, bool) {
 		return "", false
 	}
 	return encrypted, encrypted != "" && completed
+}
+
+func rawResponsesCompactionV2SSEScanLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	for index, value := range data {
+		if value != '\n' && value != '\r' {
+			continue
+		}
+		advance = index + 1
+		if value == '\r' && advance < len(data) && data[advance] == '\n' {
+			advance++
+		}
+		return advance, data[:index], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 func rawResponsesCompactionV2SSEDataIsValid(data []string, encrypted *string, completed *bool) bool {
