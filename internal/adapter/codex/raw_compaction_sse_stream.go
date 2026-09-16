@@ -48,7 +48,7 @@ type rawCompactionMutation struct {
 // NewRawResponsesCompactionV2FinalAnswerTransformer creates the one-shot
 // recovery transformer only for a regular final-answer request.
 func NewRawResponsesCompactionV2FinalAnswerTransformer(request RawResponsesRequest, recovery *RawResponsesCompactionV2Recovery) *RawResponsesCompactionTransformer {
-	if recovery == nil || !rawResponsesCompactionV2FinalAnswer(request.Header) {
+	if recovery == nil || !rawResponsesCompactionV2FinalAnswerTurn(request.Header) {
 		return nil
 	}
 	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}, strictFinalAnswer: rawResponsesCompactionV2FinalAnswerTurn(request.Header)}
@@ -63,14 +63,6 @@ func (t *RawResponsesCompactionTransformer) markMutated() {
 	if t != nil && t.mutation != nil {
 		t.mutation.mutated.Store(true)
 	}
-}
-
-func rawResponsesCompactionV2FinalAnswer(header http.Header) bool {
-	var metadata rawResponsesCompactionMetadata
-	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
-		return false
-	}
-	return metadata.Compaction.Phase == "final_answer"
 }
 
 func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {

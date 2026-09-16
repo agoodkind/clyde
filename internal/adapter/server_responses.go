@@ -308,7 +308,7 @@ func (s *Server) dispatchNativeCodexResponses(
 		adaptercodex.ReleaseRawResponsesCompactionV2Response(response)
 	}
 	if v2Recovery != nil {
-		if copyErr == nil && v2Transformer != nil && v2Transformer.DidMutateResponse() {
+		if copyErr == nil && responseSucceeded && v2Transformer != nil && v2Transformer.DidMutateResponse() {
 			v2Recovery.CompleteRecovery()
 		} else {
 			v2Recovery.ReleaseRecovery()
