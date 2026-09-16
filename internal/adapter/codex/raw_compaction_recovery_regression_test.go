@@ -150,7 +150,10 @@ func recoveryFinalTextItem(phase string) string {
 }
 
 func recoveryResponseFixture(status, item string, stream bool) string {
-	body := `{"status":"` + status + `","output":[` + item + `]}`
+	body := `{"output":[` + item + `]}`
+	if status != "" {
+		body = `{"status":"` + status + `","output":[` + item + `]}`
+	}
 	if !stream {
 		return body
 	}
