@@ -170,7 +170,7 @@ func appendRawCompactionSSEContentPart(item []byte, transcriptText string) ([]by
 		if !ok {
 			return item, false, false
 		}
-		if strings.Contains(text, transcriptText) {
+		if text == transcriptText {
 			return item, false, true
 		}
 	}

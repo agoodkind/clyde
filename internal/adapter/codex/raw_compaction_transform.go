@@ -36,7 +36,8 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	originalBody := response.Body
 	body, err := io.ReadAll(originalBody)
 	if err != nil {
-		response.Body = &rawCompactionReadCloser{reader: io.MultiReader(bytes.NewReader(body), originalBody), closer: originalBody}
+		_ = originalBody.Close()
+		response.Body = io.NopCloser(bytes.NewReader(body))
 		return response
 	}
 	_ = originalBody.Close()
@@ -107,7 +108,7 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 
 func rawCompactionMutatedHeaders(headers http.Header) http.Header {
 	clone := headers.Clone()
-	for _, name := range []string{"Content-Length", "ETag", "Digest", "Content-Digest"} {
+	for _, name := range []string{"Content-Length", "Content-MD5", "ETag", "Digest", "Content-Digest"} {
 		clone.Del(name)
 	}
 	return clone

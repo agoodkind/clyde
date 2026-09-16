@@ -12,6 +12,9 @@ func selectRawCompactionStart(
 	targetCount int,
 	render func(start int) (string, bool),
 ) (int, string, bool) {
+	if targetCount <= 0 || targetCount > len(units) {
+		return 0, "", false
+	}
 	firstCandidate := len(units) - targetCount
 	if maxBytes <= 0 {
 		rendered, ok := render(units[firstCandidate].start)
@@ -53,7 +56,7 @@ func appendRawCompactionAssistantContentPart(
 	if !ok {
 		return item, false, false
 	}
-	part := append([]byte(`{"type":"output_text","text":`), encodedText...)
+	part := append([]byte(`{"type":"output_text","annotations":[],"logprobs":[],"text":`), encodedText...)
 	part = append(part, '}')
 	if hasContent {
 		content := item[contentStart:contentEnd]
