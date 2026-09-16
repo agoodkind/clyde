@@ -284,7 +284,9 @@ func TestNativeCodexResponsesZstdCompactionTransformsRequestAndResponse(t *testi
 
 func TestNativeCodexResponsesZstdCompactionPreservesOversizedResponse(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
-	compressedResponse := zstdEncodeNativeResponseBody(t, bytes.Repeat([]byte("x"), maxResponsesResponseBodyBytes+1))
+	decodedResponse := append([]byte(`{"payload":"`), bytes.Repeat([]byte("x"), maxResponsesResponseBodyBytes+1)...)
+	decodedResponse = append(decodedResponse, []byte(`"}`)...)
+	compressedResponse := zstdEncodeNativeResponseBody(t, decodedResponse)
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Encoding", "zstd")
 		writer.Header().Set("Content-Type", "application/json")
