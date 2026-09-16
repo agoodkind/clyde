@@ -81,7 +81,7 @@ func appendRawCompactionAssistantItem(
 		if json.Unmarshal(part[textStart:textEnd], &text) != nil {
 			return item, false, false
 		}
-		if strings.Contains(text, transcriptText) {
+		if text == transcriptText {
 			return item, true, true
 		}
 		if !hasTarget {
