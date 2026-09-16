@@ -163,7 +163,7 @@ func (b *rawCompactionSSEBody) handleSSEOtherFrame(frame []byte, readErr error) 
 			return b.failOpenSSE(frame, readErr)
 		}
 		_, _, dataCount := rawSSEFrameDataValue(frame)
-		if dataCount == 0 && rawSSEFrameIsCommentOnly(frame) {
+		if readErr == nil && dataCount == 0 && rawSSEFrameIsCommentOnly(frame) {
 			return b.queueSSEBytes(frame, readErr)
 		}
 		if !rawCompactionSSEPendingFits(b.candidate, b.following, frame) {
@@ -307,101 +307,39 @@ func readRawCompactionSSEFrame(reader *bufio.Reader, maxBytes int) ([]byte, erro
 	var frame bytes.Buffer
 	lineStart := 0
 	for {
-		remaining := maxBytes - frame.Len()
-		if remaining < reader.Size() {
-			result := readRawCompactionSSEFrameByte(
-				reader,
-				&frame,
-				lineStart,
-				maxBytes,
-			)
-			lineStart = result.lineStart
-			if result.complete || result.oversized || result.readErr != nil {
-				return frame.Bytes(), result.readErr, result.oversized
-			}
-			continue
-		}
-		line, err := reader.ReadSlice('\n')
-		frame.Write(line)
-		if frame.Len() > maxBytes {
-			if errors.Is(err, bufio.ErrBufferFull) {
-				err = nil
-			}
-			return frame.Bytes(), err, true
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		if len(line) > 0 && line[len(line)-1] == '\n' {
-			logicalLine := frame.Bytes()[lineStart:]
-			if rawCompactionSSEBlankLine(logicalLine) {
-				return frame.Bytes(), err, false
-			}
-			lineStart = frame.Len()
-		}
+		value, err := reader.ReadByte()
 		if err != nil {
 			return frame.Bytes(), err, false
 		}
-	}
-}
-
-type rawCompactionSSEFrameByteResult struct {
-	lineStart int
-	complete  bool
-	oversized bool
-	readErr   error
-}
-
-func readRawCompactionSSEFrameByte(
-	reader *bufio.Reader,
-	frame *bytes.Buffer,
-	lineStart int,
-	maxBytes int,
-) rawCompactionSSEFrameByteResult {
-	value, err := reader.ReadByte()
-	if err != nil {
-		return rawCompactionSSEFrameByteResult{
-			lineStart: lineStart,
-			complete:  false,
-			oversized: false,
-			readErr:   err,
+		frame.WriteByte(value)
+		if frame.Len() > maxBytes {
+			return frame.Bytes(), nil, true
 		}
-	}
-	frame.WriteByte(value)
-	if frame.Len() > maxBytes {
-		return rawCompactionSSEFrameByteResult{
-			lineStart: lineStart,
-			complete:  false,
-			oversized: true,
-			readErr:   nil,
+		if value != '\n' && value != '\r' {
+			continue
 		}
-	}
-	if value != '\n' {
-		return rawCompactionSSEFrameByteResult{
-			lineStart: lineStart,
-			complete:  false,
-			oversized: false,
-			readErr:   nil,
+		if value == '\r' {
+			next, peekErr := reader.Peek(1)
+			if peekErr == nil && len(next) == 1 && next[0] == '\n' {
+				lineFeed, readErr := reader.ReadByte()
+				if readErr != nil {
+					return frame.Bytes(), readErr, false
+				}
+				frame.WriteByte(lineFeed)
+				if frame.Len() > maxBytes {
+					return frame.Bytes(), nil, true
+				}
+			}
 		}
-	}
-	if rawCompactionSSEBlankLine(frame.Bytes()[lineStart:]) {
-		return rawCompactionSSEFrameByteResult{
-			lineStart: lineStart,
-			complete:  true,
-			oversized: false,
-			readErr:   nil,
+		if rawCompactionSSEBlankLine(frame.Bytes()[lineStart:]) {
+			return frame.Bytes(), nil, false
 		}
-	}
-	return rawCompactionSSEFrameByteResult{
-		lineStart: frame.Len(),
-		complete:  false,
-		oversized: false,
-		readErr:   nil,
+		lineStart = frame.Len()
 	}
 }
 
 func rawCompactionSSEBlankLine(line []byte) bool {
-	return bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n"))
+	return bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n")) || bytes.Equal(line, []byte("\r"))
 }
 
 func appendRawCompactionSSEFrame(frame []byte, transcriptText string) ([]byte, bool, bool) {

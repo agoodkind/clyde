@@ -1084,7 +1084,7 @@ func TestNativeCodexResponsesCompactionV2StreamingResponseCompletesRecovery(t *t
 func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAndDeliveryFailures(t *testing.T) {
 	requestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	sseBody := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n")
-	jsonBody := []byte(`{"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}]}`)
+	jsonBody := []byte(`{"id":"resp-1","status":"completed","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"answer"}]}]}`)
 	for _, testCase := range []struct {
 		name         string
 		metadata     string

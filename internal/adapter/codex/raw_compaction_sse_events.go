@@ -300,8 +300,8 @@ func addRawCompactionSSESyntheticEventCount(sequence int) (int, bool) {
 
 func rawSSEFrameIsCommentOnly(frame []byte) bool {
 	hasComment := false
-	for line := range bytes.SplitSeq(frame, []byte("\n")) {
-		line = bytes.TrimSpace(bytes.TrimSuffix(line, []byte("\r")))
+	for line := range bytes.SplitSeq(rawSSENormalizeLineEndings(frame), []byte("\n")) {
+		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}

@@ -99,8 +99,7 @@ func appendRawCompactionAssistantContentPart(
 
 func rawSSEFrameEvent(frame []byte) rawCompactionSSEEvent {
 	var eventName rawCompactionSSEEvent
-	for line := range bytes.SplitSeq(frame, []byte("\n")) {
-		line = bytes.TrimSuffix(line, []byte("\r"))
+	for line := range bytes.SplitSeq(rawSSENormalizeLineEndings(frame), []byte("\n")) {
 		if bytes.HasPrefix(line, []byte("event:")) {
 			eventName = rawCompactionSSEEvent(strings.TrimSpace(string(line[len("event:"):])))
 		}
@@ -112,8 +111,7 @@ func rawSSEFrameDataValue(frame []byte) (string, []byte, int) {
 	eventName := ""
 	data := make([]byte, 0, len(frame))
 	dataCount := 0
-	for line := range bytes.SplitSeq(frame, []byte("\n")) {
-		line = bytes.TrimSuffix(line, []byte("\r"))
+	for line := range bytes.SplitSeq(rawSSENormalizeLineEndings(frame), []byte("\n")) {
 		field, value := rawSSEField(line)
 		if bytes.Equal(field, []byte("event")) {
 			eventName = string(value)
@@ -128,6 +126,21 @@ func rawSSEFrameDataValue(frame []byte) (string, []byte, int) {
 		dataCount++
 	}
 	return eventName, data, dataCount
+}
+
+func rawSSENormalizeLineEndings(frame []byte) []byte {
+	normalized := make([]byte, 0, len(frame))
+	for index := 0; index < len(frame); index++ {
+		if frame[index] == '\r' {
+			if index+1 < len(frame) && frame[index+1] == '\n' {
+				index++
+			}
+			normalized = append(normalized, '\n')
+			continue
+		}
+		normalized = append(normalized, frame[index])
+	}
+	return normalized
 }
 
 func rawSSEField(line []byte) ([]byte, []byte) {
@@ -151,16 +164,11 @@ func replaceRawSSEFrameData(frame []byte, data []byte) []byte {
 	}
 	firstDataLineStart := -1
 	var result bytes.Buffer
-	lineStart := 0
-	for lineStart < len(frame) {
-		lineEnd := bytes.IndexByte(frame[lineStart:], '\n')
-		if lineEnd < 0 {
-			lineEnd = len(frame)
-		} else {
-			lineEnd += lineStart + 1
-		}
+	for _, lineRange := range rawSSEFrameLineRanges(frame) {
+		lineStart := lineRange.start
+		lineEnd := lineRange.end
 		line := frame[lineStart:lineEnd]
-		lineContent := bytes.TrimSuffix(bytes.TrimSuffix(line, []byte("\n")), []byte("\r"))
+		lineContent := frame[lineRange.start:lineRange.contentEnd]
 		field, _ := rawSSEField(lineContent)
 		if !bytes.Equal(field, []byte("data")) {
 			result.Write(line)
@@ -171,13 +179,34 @@ func replaceRawSSEFrameData(frame []byte, data []byte) []byte {
 			firstDataLineStart = lineStart
 			result.WriteString("data: ")
 			result.Write(data)
-			if bytes.HasSuffix(line, []byte("\r\n")) {
-				result.WriteString("\r\n")
-			} else if bytes.HasSuffix(line, []byte("\n")) {
-				result.WriteByte('\n')
-			}
+			result.Write(line[lineRange.contentEnd-lineStart:])
 		}
-		lineStart = lineEnd
 	}
 	return result.Bytes()
+}
+
+type rawSSEFrameLineRange struct {
+	start      int
+	contentEnd int
+	end        int
+}
+
+func rawSSEFrameLineRanges(frame []byte) []rawSSEFrameLineRange {
+	ranges := make([]rawSSEFrameLineRange, 0)
+	for start := 0; start < len(frame); {
+		contentEnd := start
+		for contentEnd < len(frame) && frame[contentEnd] != '\n' && frame[contentEnd] != '\r' {
+			contentEnd++
+		}
+		end := contentEnd
+		if end < len(frame) {
+			end++
+			if frame[contentEnd] == '\r' && end < len(frame) && frame[end] == '\n' {
+				end++
+			}
+		}
+		ranges = append(ranges, rawSSEFrameLineRange{start: start, contentEnd: contentEnd, end: end})
+		start = end
+	}
+	return ranges
 }
