@@ -21,6 +21,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
@@ -718,6 +719,59 @@ func TestNativeCodexResponsesCompactionV2PassesThrough(t *testing.T) {
 	clientResponse := recorder.Body.Bytes()
 	if !bytes.Equal(clientResponse, upstreamResponse) {
 		t.Fatal("v2 response changed before persistence proof")
+	}
+}
+
+func TestNativeCodexResponsesCompactionV2UpstreamFailureDoesNotArmRecovery(t *testing.T) {
+	originalRequest := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"compaction_trigger"}]}`)
+	upstreamResponse := []byte(`{"output":[{"type":"compaction","encrypted_content":"failed-cipher"}]}`)
+	var upstreamCalls atomic.Int32
+	var followUpRequest []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if upstreamCalls.Add(1) == 1 {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusInternalServerError)
+			_, _ = writer.Write(upstreamResponse)
+			return
+		}
+		followUpRequest, _ = io.ReadAll(request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"follow-up","output":[]}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	stages := make([]adapterruntime.RequestEvent, 0, 2)
+	srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) {
+		stages = append(stages, event)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalRequest))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError || !bytes.Equal(recorder.Body.Bytes(), upstreamResponse) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	if len(stages) != 2 || stages[1].Stage != adapterruntime.RequestStageFailed {
+		t.Fatalf("request stages = %+v", stages)
+	}
+	followUpBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"failed-cipher"},{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}]}`)
+	followUp := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(followUpBody))
+	followUp.Header.Set("Content-Type", "application/json")
+	followUp.Header.Set(adaptercodex.CodexTurnMetadataHeader, `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"implementation":"","phase":"final_answer","strategy":""}}`)
+	followUpRecorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(followUpRecorder, followUp)
+	if upstreamCalls.Load() != 2 || followUpRecorder.Code != http.StatusOK {
+		t.Fatalf("follow-up calls=%d status=%d body=%s", upstreamCalls.Load(), followUpRecorder.Code, followUpRecorder.Body.Bytes())
+	}
+	if !bytes.Equal(followUpRequest, followUpBody) {
+		t.Fatalf("failed response changed follow-up request:\n got: %s\nwant: %s", followUpRequest, followUpBody)
 	}
 }
 
