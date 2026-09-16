@@ -253,13 +253,15 @@ func TestNativeCodexResponsesZstdCompactionBoundsStreamingDecoderMemory(t *testi
 	if err != nil {
 		t.Fatalf("create oversized-window zstd encoder: %v", err)
 	}
-	decodedBody := []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"padding\":\"")
-	decodedBody = append(decodedBody, bytes.Repeat([]byte("x"), 2*maxResponsesResponseBodyBytes)...)
-	decodedBody = append(decodedBody, []byte("\"}}\n\n")...)
+	decodedBody := []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n")
 	wireBody := encoder.EncodeAll(decodedBody, nil)
 	if err := encoder.Close(); err != nil {
 		t.Fatalf("close oversized-window zstd encoder: %v", err)
 	}
+	if len(wireBody) < 6 || wireBody[4]&(1<<5) != 0 {
+		t.Fatalf("encoded zstd frame does not expose a window descriptor: %x", wireBody[:min(len(wireBody), 6)])
+	}
+	wireBody[5] = 0x70
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header: http.Header{
