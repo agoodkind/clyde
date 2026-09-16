@@ -160,6 +160,8 @@ func TestRawResponsesCompactionRejectsIncompleteToolPairs(t *testing.T) {
 		{name: "custom output without call", items: `{"type":"custom_tool_call_output","name":"apply_patch","call_id":"call-1","output":"result"}`},
 		{name: "shell call without output", items: `{"type":"local_shell_call","call_id":"call-1","action":{"type":"exec","command":"pwd"}}`},
 		{name: "search call without output", items: `{"type":"tool_search_call","call_id":"call-1","arguments":{"query":"calendar"}}`},
+		{name: "search output without payload", items: `{"type":"tool_search_call","call_id":"call-1","arguments":{"query":"calendar"}},{"type":"tool_search_output","call_id":"call-1"}`},
+		{name: "search output null payload", items: `{"type":"tool_search_call","call_id":"call-1","arguments":{"query":"calendar"}},{"type":"tool_search_output","call_id":"call-1","tools":null}`},
 		{name: "search output without call", items: `{"type":"tool_search_output","call_id":"call-1","tools":[]}`},
 		{name: "duplicate calls", items: `{"type":"function_call","name":"one","arguments":"{}","call_id":"call-1"},{"type":"function_call","name":"two","arguments":"{}","call_id":"call-1"},{"type":"function_call_output","call_id":"call-1","output":"result"}`},
 		{name: "duplicate outputs", items: `{"type":"function_call","name":"one","arguments":"{}","call_id":"call-1"},{"type":"function_call_output","call_id":"call-1","output":"one"},{"type":"function_call_output","call_id":"call-1","output":"two"}`},

@@ -406,6 +406,9 @@ func rawCompactionOutput(item transcript.CompactedContextItem) (string, rawCompa
 		if item.ToolSearchOutput == nil {
 			return "", "", false
 		}
+		if len(item.ToolSearchOutput.ToolsRaw) == 0 {
+			return "", "", false
+		}
 		return item.ToolSearchOutput.CallID, rawCompactionCallToolSearch, true
 	case transcript.CompactedContextItemKindMessage,
 		transcript.CompactedContextItemKindReasoning,
