@@ -148,7 +148,7 @@ func TestNativeCodexResponsesZstdNativeContinuationReachesRawForwarding(t *testi
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
 	request.Header.Set("Content-Encoding", "zstd")
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
 	recorder := httptest.NewRecorder()
 	srv.mux.ServeHTTP(recorder, request)
 
