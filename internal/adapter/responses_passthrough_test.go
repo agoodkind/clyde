@@ -715,9 +715,18 @@ func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
 	if err := tcpConnection.Close(); err != nil {
 		t.Fatalf("close failed response: %v", err)
 	}
-	<-firstHeaders
-	close(releaseBody)
-	<-firstFinished
+	select {
+	case <-firstHeaders:
+		close(releaseBody)
+	case <-time.After(5 * time.Second):
+		close(releaseBody)
+		t.Fatal("upstream did not send the first response headers")
+	}
+	select {
+	case <-firstFinished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream did not finish the failed response")
+	}
 	select {
 	case event := <-terminalEvents:
 		if event.Stage != adapterruntime.RequestStageFailed && event.Stage != adapterruntime.RequestStageCancelled {
@@ -741,7 +750,12 @@ func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read matching response: %v", err)
 	}
-	gotSecondBody := <-secondBody
+	var gotSecondBody []byte
+	select {
+	case gotSecondBody = <-secondBody:
+	case <-time.After(5 * time.Second):
+		t.Fatal("matching request did not reach upstream")
+	}
 	if secondResponse.StatusCode != http.StatusOK || !bytes.Equal(secondResponseBody, []byte(`{"output":[]}`)) || !bytes.Equal(gotSecondBody, finalRequestBody) {
 		t.Fatalf("matching response status=%d body=%s upstream=%s", secondResponse.StatusCode, secondResponseBody, gotSecondBody)
 	}
