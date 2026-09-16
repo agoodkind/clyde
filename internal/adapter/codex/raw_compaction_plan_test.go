@@ -184,6 +184,28 @@ func TestRawResponsesCompactionRejectsIncompleteToolPairs(t *testing.T) {
 	}
 }
 
+func TestRawResponsesCompactionRejectsDuplicateResponseFields(t *testing.T) {
+	body := []byte(`{"model":"gpt-native","input":[
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"old user"}]},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},
+		{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}
+	]}`)
+	settings := RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	_, transformer := PrepareRawResponsesCompaction(rawCompactionRequest(t, body), settings)
+	if transformer == nil {
+		t.Fatal("expected a compaction transformer")
+	}
+	responseBody := []byte(`{"output":[],"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}]}`)
+	got := readResponseBody(t, transformer.TransformResponse(rawJSONResponse(http.StatusOK, string(responseBody))))
+	if !bytes.Equal(got, responseBody) {
+		t.Fatalf("duplicate response fields were mutated: %s", got)
+	}
+}
+
 func TestRawResponsesCompactionFailsOpenForMetadataAndMalformedRemovedItems(t *testing.T) {
 	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"future_item","value":1},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
 	settings := RawResponsesCompactionSettings{

@@ -173,10 +173,15 @@ func jsonObjectFieldValueRange(raw []byte, field string) (int, int, bool) {
 		return 0, 0, false
 	}
 	index++
+	fieldStart, fieldEnd := 0, 0
+	foundField := false
 	for {
 		index = skipJSONSpace(raw, index)
 		if index >= len(raw) || raw[index] == '}' {
-			return 0, 0, false
+			if !foundField {
+				return 0, 0, false
+			}
+			return fieldStart, fieldEnd, true
 		}
 		keyStart := index
 		keyEnd, ok := scanJSONStringEnd(raw, keyStart)
@@ -197,7 +202,11 @@ func jsonObjectFieldValueRange(raw []byte, field string) (int, int, bool) {
 			return 0, 0, false
 		}
 		if key == field {
-			return valueStart, valueEnd, true
+			if foundField {
+				return 0, 0, false
+			}
+			fieldStart, fieldEnd = valueStart, valueEnd
+			foundField = true
 		}
 		index = skipJSONSpace(raw, valueEnd)
 		if index < len(raw) && raw[index] == ',' {
