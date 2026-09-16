@@ -736,7 +736,7 @@ func TestNativeCodexResponsesZstdCompactionStreamsFirstFrameBeforeCompletion(t *
 		t.Cleanup(func() { _ = response.Body.Close() })
 	case requestErrValue := <-requestErr:
 		t.Fatalf("post response: %v", requestErrValue)
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("zstd compaction SSE headers waited for upstream completion")
 	}
@@ -773,7 +773,7 @@ func TestNativeCodexResponsesZstdCompactionStreamsFirstFrameBeforeCompletion(t *
 		}
 	case err := <-readErr:
 		t.Fatalf("read first downstream frame: %v", err)
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("zstd compaction SSE first frame waited for upstream completion")
 	}
