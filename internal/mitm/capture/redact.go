@@ -317,6 +317,9 @@ func redactJSONCaptureBody(body []byte, sensitiveValues []string) []byte {
 }
 
 func redactValidJSONCaptureBody(body []byte, sensitiveValues []string) []byte {
+	if containsUnredactableSensitiveJSON(body, sensitiveValues) {
+		return []byte(redactedValue)
+	}
 	value, changed := redactJSONValue(body, sensitiveValues)
 	if changed {
 		if containsSensitiveJSONScalar(value, sensitiveValues) {
@@ -328,6 +331,53 @@ func redactValidJSONCaptureBody(body []byte, sensitiveValues []string) []byte {
 		return []byte(redactedValue)
 	}
 	return body
+}
+
+func containsUnredactableSensitiveJSON(raw []byte, sensitiveValues []string) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return false
+	}
+	switch trimmed[0] {
+	case '"':
+		var value string
+		if json.Unmarshal(trimmed, &value) != nil {
+			return true
+		}
+		if containsSensitiveBodyMarker([]byte(value)) {
+			return true
+		}
+		return bytes.Contains(trimmed, []byte(`\u`)) && containsSensitiveValue(value, sensitiveValues)
+	case '{':
+		fields, ok := parseSensitiveJSONObject(trimmed)
+		if !ok {
+			return true
+		}
+		for _, field := range fields {
+			if sensitiveJSONField(field.name) {
+				continue
+			}
+			if containsSensitiveBodyMarker([]byte(field.name)) ||
+				(bytes.Contains(trimmed, []byte(`\u`)) && containsSensitiveValue(field.name, sensitiveValues)) {
+				return true
+			}
+			if containsUnredactableSensitiveJSON(field.value, sensitiveValues) {
+				return true
+			}
+		}
+		return false
+	case '[':
+		var items []json.RawMessage
+		if json.Unmarshal(trimmed, &items) != nil {
+			return true
+		}
+		for _, item := range items {
+			if containsUnredactableSensitiveJSON(item, sensitiveValues) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func looksLikeJSONValue(body []byte) bool {
@@ -624,8 +674,8 @@ func redactJSONObject(raw []byte, sensitiveValues []string) ([]byte, bool) {
 			changed = true
 			continue
 		}
-		if containsSensitiveBodyMarker(value) || containsSensitiveJSONScalar(value, sensitiveValues) {
-			fields[name] = json.RawMessage(`"` + redactedValue + `"`)
+		if redacted, scalarChanged := redactJSONScalar(value, sensitiveValues); scalarChanged {
+			fields[name] = redacted
 			changed = true
 			continue
 		}
@@ -644,6 +694,40 @@ func redactJSONObject(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	return encoded, true
 }
 
+func redactJSONScalar(raw []byte, sensitiveValues []string) ([]byte, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return raw, false
+	}
+	if trimmed[0] == '"' {
+		var value string
+		if json.Unmarshal(trimmed, &value) != nil {
+			return raw, false
+		}
+		redacted := value
+		for _, sensitiveValue := range sensitiveValues {
+			if sensitiveValue != "" {
+				redacted = strings.ReplaceAll(redacted, sensitiveValue, redactedValue)
+			}
+		}
+		if redacted == value {
+			return raw, false
+		}
+		encoded, err := json.Marshal(redacted)
+		if err != nil {
+			return raw, false
+		}
+		return encoded, true
+	}
+	if bytes.HasPrefix(trimmed, []byte("{")) || bytes.HasPrefix(trimmed, []byte("[")) {
+		return raw, false
+	}
+	if containsSensitiveValue(string(trimmed), sensitiveValues) {
+		return json.RawMessage(`"` + redactedValue + `"`), true
+	}
+	return raw, false
+}
+
 func redactJSONArray(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
@@ -651,6 +735,11 @@ func redactJSONArray(raw []byte, sensitiveValues []string) ([]byte, bool) {
 	}
 	changed := false
 	for index, item := range items {
+		if redacted, scalarChanged := redactJSONScalar(item, sensitiveValues); scalarChanged {
+			items[index] = redacted
+			changed = true
+			continue
+		}
 		if redacted, nestedChanged := redactJSONValue(item, sensitiveValues); nestedChanged {
 			items[index] = redacted
 			changed = true
