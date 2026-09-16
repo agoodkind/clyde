@@ -548,7 +548,7 @@ func assertCodexLiveV2ClientResponses(t *testing.T, responses []codexLiveClientR
 	foundNPlusThreeResend := false
 	for index, response := range responses {
 		if index >= len(upstreamBranches) || upstreamBranches[index] != "final" || !response.request.regularTurn ||
-			!response.request.hasEncryptedContent || response.request.sessionIDHash != expectedSessionHash {
+			!response.request.regularFinalAnswer || !response.request.hasEncryptedContent || response.request.sessionIDHash != expectedSessionHash {
 			continue
 		}
 		foundNPlusTwoFinal = true
