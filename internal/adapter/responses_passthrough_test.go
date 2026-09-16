@@ -735,7 +735,12 @@ func TestNativeCompactionV2ReleasesAfterPublicWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read matching response: %v", err)
 	}
-	gotNextBody := <-nextBody
+	var gotNextBody []byte
+	select {
+	case gotNextBody = <-nextBody:
+	case <-time.After(5 * time.Second):
+		t.Fatal("matching request did not reach upstream")
+	}
 	if secondResponse.StatusCode != http.StatusOK || !bytes.Equal(secondResponseBody, []byte(`{"output":[]}`)) || !bytes.Equal(gotNextBody, nextRequestBody) {
 		t.Fatalf("next response status=%d body=%s upstream=%s", secondResponse.StatusCode, secondResponseBody, gotNextBody)
 	}
