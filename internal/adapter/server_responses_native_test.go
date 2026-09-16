@@ -909,10 +909,6 @@ func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *
 	if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), responseBody) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
 	}
-	if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
-		t.Fatal("OpenRawResponses completed recovery")
-	}
-
 	secondRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}],"metadata":{"marker":"second"}}`)
 	v1Request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(secondRequestBody))
 	v1Request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
@@ -920,6 +916,9 @@ func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *
 	srv.mux.ServeHTTP(recorder, v1Request)
 	if recorder.Code != http.StatusOK || !bytes.Equal(upstreamBody, secondRequestBody) {
 		t.Fatalf("status=%d upstream=%s", recorder.Code, upstreamBody)
+	}
+	if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
+		t.Fatal("OpenRawResponses completed recovery")
 	}
 }
 
