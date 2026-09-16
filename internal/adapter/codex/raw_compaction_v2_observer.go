@@ -172,6 +172,9 @@ func rawResponsesCompactionV2SSEDataIsValid(data []string, encrypted *string, co
 	if json.Unmarshal([]byte(strings.Join(data, "\n")), &value) != nil {
 		return false
 	}
+	if *completed {
+		return false
+	}
 	if value.Type == "response.output_item.done" {
 		if value.Item.Type != "compaction" {
 			return true

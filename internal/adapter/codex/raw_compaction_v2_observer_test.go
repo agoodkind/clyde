@@ -173,3 +173,23 @@ func TestObserveRawResponsesCompactionV2ResponseRejectsInvalidSSESequences(t *te
 		_ = encoder.Close()
 	}
 }
+
+func TestObserveRawResponsesCompactionV2RejectsDataAfterCompletion(t *testing.T) {
+	body := "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n" +
+		"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	registry := NewRawResponsesCompactionV2Registry(nil)
+	observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, registry)
+	if _, err := io.ReadAll(observed.Body); err != nil {
+		t.Fatalf("read observed response: %v", err)
+	}
+	ArmRawResponsesCompactionV2Response(observed)
+	if _, ok := registry.Match("s", "cipher"); ok {
+		t.Fatal("response with data after completion armed recovery")
+	}
+}
