@@ -79,6 +79,16 @@ func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T
 	}
 }
 
+func TestRawResponsesCompactionV2RecoveryAllowsOpeningMarkerMention(t *testing.T) {
+	recovery := &RawResponsesCompactionV2Recovery{transcript: "recovered transcript"}
+	request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}
+	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
+	body := readResponseBody(t, transformer.TransformResponse(rawFinalAnswerJSONResponse(http.StatusOK, "mentions <pre-compaction-transcript> here")))
+	if !transformer.DidMutateResponse() || !bytes.Contains(body, []byte("recovered transcript")) {
+		t.Fatalf("opening marker mention did not preserve recovery: %s", body)
+	}
+}
+
 func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
 	unknownFrame := "event: response.future\n: keep this exact comment\ndata: { \"opaque\" : [1, 2] }\n\n"
