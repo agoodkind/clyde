@@ -75,7 +75,7 @@ func (r *RawResponsesCompactionV2Registry) Disarm(sessionID, encryptedContent st
 	r.expire(r.now())
 	key := rawResponsesCompactionV2Key(sessionID, encryptedContent)
 	entry, ok := r.entries[key]
-	if !ok || entry.leased || entry.generation != generation {
+	if !ok || !entry.leased || entry.generation != generation {
 		return
 	}
 	delete(r.entries, key)
