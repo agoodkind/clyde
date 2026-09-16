@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"strings"
 )
 
 const rawCompactionSSESyntheticEventCount = 4
