@@ -747,6 +747,27 @@ func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
 	}
 }
 
+func TestNativeCompactionV2DoesNotArmAfterPublicCompactionWriteFailure(t *testing.T) {
+	compactionResponseBody := []byte(`{"id":"resp-compact","status":"completed","output":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write(compactionResponseBody)
+	}))
+	t.Cleanup(upstream.Close)
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
+		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
+		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
+	}
+	compactionRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"oldest"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"oldest answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
+	compactionRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compactionRequestBody))
+	compactionRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
+	failingWriter := &passthroughPartialWriter{header: make(http.Header), failAfter: 0}
+	srv.mux.ServeHTTP(failingWriter, compactionRequest)
+	if _, ok := srv.compactionV2.Match("native-session", "encrypted-state"); ok {
+		t.Fatal("public compaction write failure armed recovery")
+	}
+}
+
 var errPassthroughDownstreamWrite = errors.New("downstream write failed")
 
 type passthroughStreamReadStep struct {
