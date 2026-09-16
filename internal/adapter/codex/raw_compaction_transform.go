@@ -106,6 +106,10 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
+	if t.strictFinalAnswer && !rawCompactionStrictFinalAnswerJSON(decodedBody) {
+		response.Body = io.NopCloser(bytes.NewReader(wireBody))
+		return response
+	}
 	transformed, ok := appendRawCompactionJSON(decodedBody, transcriptText)
 	if !ok || bytes.Equal(transformed, decodedBody) {
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
@@ -116,6 +120,7 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
+	t.markMutated()
 	clone := *response
 	clone.Header = rawCompactionMutatedHeaders(response.Header)
 	clone.ContentLength = -1

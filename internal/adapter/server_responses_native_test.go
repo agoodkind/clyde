@@ -1087,9 +1087,11 @@ func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAnd
 				wireResponse = zstdEncodeNativeResponseBody(t, wireResponse)
 			}
 			var upstreamBody []byte
+			var upstreamEncoding string
 			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				upstreamBody, _ = io.ReadAll(request.Body)
 				writer.Header().Set("Content-Type", testCase.responseType)
+				upstreamEncoding = request.Header.Get("Content-Encoding")
 				if testCase.responseZstd {
 					writer.Header().Set("Content-Encoding", "zstd")
 				}
@@ -1107,7 +1109,11 @@ func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAnd
 			}
 			recorder := httptest.NewRecorder()
 			srv.mux.ServeHTTP(recorder, request)
-			if !bytes.Equal(upstreamBody, wireRequest) || !bytes.Equal(recorder.Body.Bytes(), wireResponse) {
+			wantEncoding := ""
+			if testCase.requestZstd {
+				wantEncoding = "zstd"
+			}
+			if !bytes.Equal(upstreamBody, wireRequest) || upstreamEncoding != wantEncoding || !bytes.Equal(recorder.Body.Bytes(), wireResponse) || recorder.Header().Get("Content-Encoding") != wantEncoding {
 				t.Fatalf("request=%x response=%x", upstreamBody, recorder.Body.Bytes())
 			}
 			if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {

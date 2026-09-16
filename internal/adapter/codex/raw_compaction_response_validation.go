@@ -75,7 +75,7 @@ func rawCompactionStrictFinalAnswerJSON(body []byte) bool {
 
 func rawCompactionStrictFinalAnswerSSEFrame(frame []byte) bool {
 	_, data, dataCount := rawSSEFrameDataValue(frame)
-	if dataCount != 1 || !rawCompactionJSONHasUniqueObjectKeys(data) {
+	if dataCount == 0 || !rawCompactionJSONHasUniqueObjectKeys(data) {
 		return false
 	}
 	var payload struct {
