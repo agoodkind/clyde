@@ -83,7 +83,7 @@ func (b *rawResponsesCompactionV2ObservedBody) validateSSETailAtEOF() {
 		return
 	}
 	b.consumeSSEFrames(true)
-	if len(b.sseBuffer) > 0 {
+	if len(bytes.Trim(b.sseBuffer, "\r\n")) > 0 {
 		b.invalidateSSE()
 	}
 }

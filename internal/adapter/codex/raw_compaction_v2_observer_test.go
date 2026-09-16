@@ -92,6 +92,30 @@ func TestRawResponsesCompactionV2SSEEncryptedContentAcceptsLineOnlyTail(t *testi
 	}
 }
 
+func TestObserveRawResponsesCompactionV2ResponseAcceptsLineOnlyTail(t *testing.T) {
+	body := []byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n\r\n")
+	registry := NewRawResponsesCompactionV2Registry(nil)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}
+	observed := ObserveRawResponsesCompactionV2Response(
+		response,
+		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		registry,
+	)
+	got, err := io.ReadAll(observed.Body)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("client body changed: err=%v body=%q", err, got)
+	}
+	ArmRawResponsesCompactionV2Response(observed)
+	if transcript, ok := registry.Match("s", "cipher"); !ok || transcript != "t" {
+		t.Fatal("line-only tail invalidated recovery")
+	}
+}
+
 func TestRawResponsesCompactionV2SSEFrameScanAdvancesLinearly(t *testing.T) {
 	body := []byte(`data: {"padding":"` + strings.Repeat("x", 128*1024) + `"}` + "\r\n\r\n")
 	buffer := make([]byte, 0, len(body))
