@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/gklog/correlation"
 )
@@ -242,6 +243,30 @@ func TestRawResponsesCompactionReadFailurePreservesRemainingBody(t *testing.T) {
 	got := readResponseBody(t, transformer.TransformResponse(response))
 	if !bytes.Equal(got, original) {
 		t.Fatalf("partial read body = %q, want %q", got, original)
+	}
+}
+
+func TestRawResponsesCompactionEncodedReadFailurePreservesRemainingBody(t *testing.T) {
+	transformer := rawResponseTransformerForTest(t)
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("create zstd encoder: %v", err)
+	}
+	original := encoder.EncodeAll([]byte(`{"output":[]}`), nil)
+	if err := encoder.Close(); err != nil {
+		t.Fatalf("close zstd encoder: %v", err)
+	}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {"zstd"}},
+		Body: &partialReadCloser{
+			prefix: original[:5],
+			suffix: original[5:],
+		},
+	}
+	got := readResponseBody(t, transformer.TransformResponse(response))
+	if !bytes.Equal(got, original) {
+		t.Fatalf("partial encoded read body = %x, want %x", got, original)
 	}
 }
 
