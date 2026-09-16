@@ -52,7 +52,6 @@ type rawResponsesCompactionV2ObservedBody struct {
 	armGeneration   uint64
 	sseBuffer       []byte
 	sseScanOffset   int
-	sseEncrypted    string
 	sseCompleted    bool
 	sseInvalid      bool
 }
