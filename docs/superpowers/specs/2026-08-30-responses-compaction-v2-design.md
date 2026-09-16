@@ -107,8 +107,8 @@ On compaction turn N:
 5. Preserve setup items, the terminal trigger, tools, headers, and unrelated
    body fields.
 6. Forward the encrypted compaction response byte-identically.
-7. After Clyde copies the unchanged successful v2 response to the client, arm
-   one bounded pending recovery entry.
+7. Arm one bounded pending recovery entry before exposing the unchanged
+   successful v2 response to the client, and release it if delivery fails.
 
 After N:
 
