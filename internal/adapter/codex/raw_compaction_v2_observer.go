@@ -41,6 +41,7 @@ type rawResponsesCompactionV2ObservedBody struct {
 	registry        *RawResponsesCompactionV2Registry
 	contentType     string
 	contentEncoding string
+	sseEncrypted    string
 	armed           bool
 }
 
