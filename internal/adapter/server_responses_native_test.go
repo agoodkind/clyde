@@ -1017,7 +1017,7 @@ func assertNativeCompactionV2RecoveryInput(t *testing.T, body []byte) {
 	if err := json.Unmarshal(body, &request); err != nil {
 		t.Fatalf("decode upstream request: %v", err)
 	}
-	if len(request.Input) != 3 || !bytes.Contains(request.Input[0], []byte(`"encrypted_content":"cipher"`)) || !bytes.Contains(request.Input[1], []byte(`"role":"assistant"`)) || !bytes.Contains(request.Input[1], []byte(`pre-compaction-transcript`)) || !bytes.Contains(request.Input[2], []byte(`"text":"next"`)) || !bytes.Contains(body, []byte(`"opaque":{"keep":true}`)) {
+	if len(request.Input) != 3 || !bytes.Contains(request.Input[0], []byte(`"encrypted_content":"cipher"`)) || !bytes.Contains(request.Input[1], []byte(`"role":"assistant"`)) || !bytes.Contains(request.Input[1], []byte(`pre-compaction-transcript`)) || !bytes.Contains(request.Input[1], []byte(`recovered transcript`)) || !bytes.Contains(request.Input[2], []byte(`"text":"next"`)) || !bytes.Contains(body, []byte(`"opaque":{"keep":true}`)) {
 		t.Fatalf("upstream body = %s", body)
 	}
 }
