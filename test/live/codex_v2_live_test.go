@@ -215,12 +215,24 @@ func TestLiveCodexV2ForegroundFunctionCall(t *testing.T) {
 		}
 		defer response.Body.Close()
 		responseBody, _ := io.ReadAll(response.Body)
+		decodedResponseBody := responseBody
+		if strings.EqualFold(strings.TrimSpace(response.Header.Get("Content-Encoding")), "zstd") {
+			decoder, err := zstd.NewReader(nil)
+			if err == nil {
+				decodedResponseBody, err = decoder.DecodeAll(responseBody, nil)
+				decoder.Close()
+			}
+			if err != nil {
+				http.Error(writer, "decode response", http.StatusBadGateway)
+				return
+			}
+		}
 		for key, values := range response.Header {
 			writer.Header()[key] = append([]string(nil), values...)
 		}
 		if request.Method == http.MethodPost && request.URL.Path == "/v1/responses" {
 			mutex.Lock()
-			clientResponses = append(clientResponses, codexLiveClientResponse{request: summarizeCodexLiveRequest(request, body, decodedBody), tagCount: codexLiveSSETranscriptTagCount(responseBody)})
+			clientResponses = append(clientResponses, codexLiveClientResponse{request: summarizeCodexLiveRequest(request, body, decodedBody), tagCount: codexLiveSSETranscriptTagCount(decodedResponseBody)})
 			mutex.Unlock()
 		}
 		writer.WriteHeader(response.StatusCode)
