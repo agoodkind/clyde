@@ -302,7 +302,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryPreservesLateCorruptZstdStreams
 			request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeFinalAnswerTurnMetadata())
 			recorder := httptest.NewRecorder()
 			srv.mux.ServeHTTP(recorder, request)
-			if recorder.Header().Get("Content-Encoding") != "zstd" || !bytes.Equal(recorder.Body.Bytes(), wireResponse) {
+			if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Encoding") != "zstd" || !bytes.Equal(recorder.Body.Bytes(), wireResponse) {
 				t.Fatalf("headers=%v body=%x", recorder.Header(), recorder.Body.Bytes())
 			}
 			if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
