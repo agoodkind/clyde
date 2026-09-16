@@ -234,7 +234,11 @@ func rawCompactionSSEJSONFrameIsValid(frame []byte, eventName rawCompactionSSEEv
 }
 
 func rawCompactionUnknownSSEFrameIsValid(frame []byte) bool {
-	return len(frame) > 0
+	_, data, dataCount := rawSSEFrameDataValue(frame)
+	if dataCount == 0 {
+		return true
+	}
+	return json.Valid(data)
 }
 
 func (b *rawCompactionSSEBody) Close() error {

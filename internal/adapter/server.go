@@ -118,6 +118,7 @@ type Server struct {
 	sem                  chan struct{}
 	token                string
 	mux                  *http.ServeMux
+	httpSrvMu            sync.RWMutex
 	httpSrv              *http.Server
 	requests             *livetrack.Registry[IngressMeta]
 	anthr                *anthropic.Client
@@ -194,6 +195,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		sem:            make(chan struct{}, maxConcurrent),
 		token:          token,
 		mux:            nil,
+		httpSrvMu:      sync.RWMutex{},
 		httpSrv:        nil,
 		requests:       newAdapterIngressRegistry(group, adapterLog),
 		anthr:          nil,

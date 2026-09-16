@@ -3,12 +3,14 @@ package adapter
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +53,68 @@ func TestStartOnListenerServesHealth(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("server did not stop")
+	}
+}
+
+func TestStartOnListenersSynchronizesHTTPServerLifecycle(t *testing.T) {
+	const attempts = 32
+	const disableAttempts = 64
+
+	cfg := baseConfig()
+	cfg.Enabled = true
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	for attempt := 0; attempt < attempts; attempt++ {
+		lis, err := net.Listen("tcp", "[::1]:0")
+		if err != nil {
+			t.Fatalf("listen attempt %d: %v", attempt, err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		start := make(chan struct{})
+		serveErr := make(chan error, 1)
+		go func() {
+			<-start
+			serveErr <- srv.StartOnListeners(ctx, lis)
+		}()
+		close(start)
+
+		readyDeadline := time.Now().Add(time.Second)
+		for {
+			conn, dialErr := net.DialTimeout("tcp", lis.Addr().String(), 20*time.Millisecond)
+			if dialErr == nil {
+				_ = conn.Close()
+				break
+			}
+			if time.Now().After(readyDeadline) {
+				cancel()
+				_ = lis.Close()
+				t.Fatalf("server did not start attempt %d: %v", attempt, dialErr)
+			}
+			runtime.Gosched()
+		}
+		for i := 0; i < disableAttempts; i++ {
+			srv.DisableKeepAlives()
+			runtime.Gosched()
+		}
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), time.Second)
+		if err := srv.ShutdownHTTP(shutCtx); err != nil {
+			shutCancel()
+			cancel()
+			_ = lis.Close()
+			t.Fatalf("shutdown attempt %d: %v", attempt, err)
+		}
+		shutCancel()
+		cancel()
+		if err := <-serveErr; err != nil {
+			_ = lis.Close()
+			t.Fatalf("serve attempt %d: %v", attempt, err)
+		}
+		if err := lis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("close listener attempt %d: %v", attempt, err)
+		}
 	}
 }
 

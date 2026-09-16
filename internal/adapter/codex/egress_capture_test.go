@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/clock"
@@ -145,5 +148,98 @@ func TestCodexWebsocketFullFrameRecorded(t *testing.T) {
 	wantResp := append(append(append([]byte{}, frame1...), '\n'), frame2...)
 	if got := queryCodexRow(t, dbPath, "response"); !bytes.Equal(got, wantResp) {
 		t.Fatalf("response body = %q, want joined frames %q", got, wantResp)
+	}
+}
+
+func TestCodexEgressRedactsRequestCredentialEchoedByResponse(t *testing.T) {
+	store, dbPath := openCodexCaptureStore(t)
+	request, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer request-credential")
+	response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}
+	recordCodexHTTPEgress(
+		store,
+		correlation.Context{},
+		request,
+		response,
+		[]byte(`{"input":"safe"}`),
+		[]byte(`{"safe":"request-credential"}`),
+		"conv-echo",
+		clock.Now(),
+	)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	got := queryCodexRow(t, dbPath, "response")
+	want := []byte(`{"safe":"[REDACTED]"}`)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("response body = %q, want redacted response %q", got, want)
+	}
+}
+
+func TestCodexEgressRedactsRequestBodyCredentialEchoedByResponse(t *testing.T) {
+	store, dbPath := openCodexCaptureStore(t)
+	request, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}
+	recordCodexHTTPEgress(
+		store,
+		correlation.Context{},
+		request,
+		response,
+		[]byte(`{"client_secret":"request-credential"}`),
+		[]byte(`{"safe":"request-credential","keep":true}`),
+		"conv-body-echo",
+		clock.Now(),
+	)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	got := queryCodexRow(t, dbPath, "response")
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+	if decoded["safe"] != "[REDACTED]" || decoded["keep"] != true {
+		t.Fatalf("response body = %q, want redacted safe field and preserved keep field", got)
+	}
+}
+
+func TestCodexEgressFailsClosedWhenRequestCredentialCollectionOverflows(t *testing.T) {
+	store, dbPath := openCodexCaptureStore(t)
+	request, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	var cookies strings.Builder
+	lastValue := ""
+	for index := 0; index < 65; index++ {
+		if index > 0 {
+			cookies.WriteString("; ")
+		}
+		lastValue = fmt.Sprintf("cookie-value-%03d-suffix", index)
+		fmt.Fprintf(&cookies, "cookie%d=%s", index, lastValue)
+	}
+	request.Header.Set("Cookie", cookies.String())
+	response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}
+	recordCodexHTTPEgress(
+		store,
+		correlation.Context{},
+		request,
+		response,
+		[]byte(`{"input":"safe"}`),
+		[]byte(`{"echo":`+fmt.Sprintf("%q", lastValue)+`}`),
+		"conv-overflow",
+		clock.Now(),
+	)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+	if got := queryCodexRow(t, dbPath, "response"); string(got) != "[REDACTED]" {
+		t.Fatalf("response body = %q, want fail-closed marker", got)
 	}
 }

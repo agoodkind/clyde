@@ -15,6 +15,12 @@ import (
 	"goodkind.io/clyde/internal/reorienttag"
 )
 
+// RequiresTerminalValidation reports whether streamed mutation state must be
+// validated before accepting the response.
+func (t *RawResponsesCompactionTransformer) RequiresTerminalValidation() bool {
+	return false
+}
+
 // TransformResponse appends the removed transcript to one successful response.
 // Upstream failures and response-shape failures retain their original bytes.
 func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Response) *http.Response {

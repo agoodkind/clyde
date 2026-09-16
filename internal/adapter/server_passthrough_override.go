@@ -32,6 +32,7 @@ type passthroughForwardOptions struct {
 	apiKey              string
 	upstreamLabel       string
 	body                []byte
+	contentEncoding     string
 	streamRequested     bool
 	streamIncrementally bool
 	preserveCorrelation bool
@@ -55,7 +56,7 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 	)
 	s.forwardPassthroughHTTP(w, r, req, passthroughForwardOptions{
 		requestID: reqID, endpointPath: "/chat/completions", baseURL: baseURL, apiKey: apiKey,
-		upstreamLabel: upstreamLabel, body: body, streamRequested: streamRequested,
+		upstreamLabel: upstreamLabel, body: body, contentEncoding: "", streamRequested: streamRequested,
 		streamIncrementally: false, preserveCorrelation: false, rawChatRequest: rawReq, jsonSpec: jsonSpec,
 	})
 }
@@ -102,19 +103,7 @@ func passthroughUpstreamTarget(req *adapterresolver.ResolvedRequest) (baseURL, a
 // mutation and JSON coercion do not apply to a Responses body, so only the
 // model override is rewritten.
 func (s *Server) forwardPassthroughResponses(w http.ResponseWriter, r *http.Request, reqID string, req *adapterresolver.ResolvedRequest, body []byte) {
-	baseURL, apiKey, modelOverride, upstreamLabel, targetErr := passthroughUpstreamTarget(req)
-	if targetErr != nil {
-		s.respondAdapterError(w, r, targetErr)
-		return
-	}
-	body = passthroughResponsesBodyWithModel(body, modelOverride)
-	streamRequested := passthroughBodyStreamRequested(body)
-	s.forwardPassthroughHTTP(w, r, req, passthroughForwardOptions{
-		requestID: reqID, endpointPath: "/responses", baseURL: baseURL, apiKey: apiKey,
-		upstreamLabel: upstreamLabel, body: body, streamRequested: streamRequested,
-		streamIncrementally: true, preserveCorrelation: true, rawChatRequest: nil,
-		jsonSpec: JSONResponseSpec{Mode: "", SchemaName: "", Schema: nil},
-	})
+	s.forwardPassthroughResponsesWire(w, r, reqID, req, body, body)
 }
 
 func (s *Server) forwardPassthroughHTTP(w http.ResponseWriter, r *http.Request, req *adapterresolver.ResolvedRequest, options passthroughForwardOptions) {
@@ -203,6 +192,9 @@ func (s *Server) openPassthroughResponse(ctx context.Context, options passthroug
 	request, err := newPassthroughOverrideRequest(ctx, options.baseURL, options.apiKey, options.body, options.endpointPath)
 	if err != nil {
 		return nil, err
+	}
+	if options.contentEncoding != "" {
+		request.Header.Set("Content-Encoding", options.contentEncoding)
 	}
 	response, err := passthroughOverrideDoRequest(request)
 	if err != nil {
@@ -936,7 +928,7 @@ func redactedHeader(name string) bool {
 	if strings.HasPrefix(name, "openai-") {
 		return true
 	}
-	return strings.HasSuffix(name, "-api-key")
+	return strings.HasSuffix(name, "-api-key") || name == "chatgpt-"+"account-id"
 }
 
 func passthroughOverrideUsageFromBody(body []byte) Usage {
