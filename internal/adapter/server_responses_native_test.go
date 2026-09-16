@@ -957,6 +957,9 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpen(t *testing.T) 
 			if recorder.Code != http.StatusOK || !bytes.Equal(upstreamBody, testCase.body) {
 				t.Fatalf("status=%d upstream=%s want=%s", recorder.Code, upstreamBody, testCase.body)
 			}
+			if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
+				t.Fatal("fail-open request consumed recovery")
+			}
 		})
 	}
 }
@@ -998,6 +1001,9 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpenZstd(t *testing
 
 			if recorder.Code != http.StatusOK || upstreamEncoding != "zstd" || !bytes.Equal(upstreamBody, wireBody) {
 				t.Fatalf("status=%d encoding=%q upstream=%x want=%x", recorder.Code, upstreamEncoding, upstreamBody, wireBody)
+			}
+			if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
+				t.Fatal("fail-open zstd request consumed recovery")
 			}
 		})
 	}
