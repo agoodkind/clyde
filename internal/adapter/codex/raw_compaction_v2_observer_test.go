@@ -84,6 +84,14 @@ func TestObserveRawResponsesCompactionV2ResponseAcceptsAllSSELineEndings(t *test
 	}
 }
 
+func TestRawResponsesCompactionV2SSEEncryptedContentAcceptsLineOnlyTail(t *testing.T) {
+	body := []byte("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n\n")
+	if encrypted, ok := rawResponsesCompactionV2SSEEncryptedContent(body); !ok || encrypted != "cipher" {
+		t.Fatalf("line-only tail encrypted=%q matched=%t", encrypted, ok)
+	}
+}
+
 func TestRawResponsesCompactionV2SSEFrameScanAdvancesLinearly(t *testing.T) {
 	body := []byte(`data: {"padding":"` + strings.Repeat("x", 128*1024) + `"}` + "\r\n\r\n")
 	buffer := make([]byte, 0, len(body))

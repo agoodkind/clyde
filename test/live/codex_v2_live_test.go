@@ -400,9 +400,30 @@ func codexLiveTranscriptTagCount(itemType string, content json.RawMessage) int {
 	}
 	tagCount := 0
 	for _, block := range blocks {
-		tagCount += strings.Count(block.Text, "<pre-compaction-transcript>")
+		tagCount += codexLiveCompleteTranscriptTagCount(block.Text)
 	}
 	return tagCount
+}
+
+func codexLiveCompleteTranscriptTagCount(text string) int {
+	const openTag = "<pre-compaction-transcript>"
+	const closeTag = "</pre-compaction-transcript>"
+	tagCount := 0
+	for {
+		openIndex := strings.Index(text, openTag)
+		if openIndex < 0 {
+			return tagCount
+		}
+		contentStart := openIndex + len(openTag)
+		closeOffset := strings.Index(text[contentStart:], closeTag)
+		if closeOffset < 0 {
+			return tagCount
+		}
+		if strings.TrimSpace(text[contentStart:contentStart+closeOffset]) != "" {
+			tagCount++
+		}
+		text = text[contentStart+closeOffset+len(closeTag):]
+	}
 }
 
 func codexLiveSSETranscriptTagCount(body []byte) int {

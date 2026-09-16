@@ -392,6 +392,9 @@ func rawResponsesCompactionV2SSEEncryptedContent(body []byte) (string, bool) {
 	for len(remaining) > 0 {
 		frame, next, complete := rawResponsesCompactionV2SSEFrame(remaining)
 		if !complete {
+			if len(bytes.Trim(remaining, "\r\n")) == 0 {
+				break
+			}
 			return "", false
 		}
 		if completed || !rawResponsesCompactionV2SSEDataIsValid(rawResponsesCompactionV2SSEFrameData(frame), &encrypted, &completed) {
