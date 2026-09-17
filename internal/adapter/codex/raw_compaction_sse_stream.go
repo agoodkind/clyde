@@ -336,6 +336,9 @@ func consumeRawCompactionSSECarriageReturn(reader *bufio.Reader, frame *bytes.Bu
 	if value != '\r' {
 		return false, nil
 	}
+	if reader.Buffered() == 0 {
+		return false, nil
+	}
 	next, _ := reader.Peek(1)
 	if len(next) != 1 || next[0] != '\n' {
 		return false, nil
