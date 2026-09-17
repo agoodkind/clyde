@@ -131,6 +131,8 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	if !native {
 		return false, nil
 	}
+	decodedRaw := raw
+	decodedRaw.Body = decodedBody
 	rr, parseErr := adapteropenai.UnmarshalResponsesRequest(decodedBody)
 	if parseErr != nil {
 		return false, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
@@ -142,7 +144,7 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	if projectionErr != nil {
 		if !errors.Is(projectionErr, errResponsesProjectionInputRequired) ||
 			(!adaptercodex.IsRawResponsesV1CompactionRequest(raw) &&
-				!adaptercodex.HasRawResponsesNativeContinuationItem(raw)) {
+				!adaptercodex.HasRawResponsesNativeContinuationItem(decodedRaw)) {
 			return false, projectionErr
 		}
 		var rawCompactionRequest ChatRequest
@@ -172,8 +174,6 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	resolvedRaw := raw
 	resolvedBody := decodedBody
 	if model != resolvedReq.Model {
-		decodedRaw := raw
-		decodedRaw.Body = decodedBody
 		rewrittenRaw, rawErr := decodedRaw.MarshalWithModel(resolvedReq.Model)
 		if rawErr != nil {
 			return false, adapterErrInvalidRequest(rawErr.Error(), rawErr)
@@ -188,8 +188,8 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	}
 	compactionSettings := s.deps.RawResponsesCompaction
 	compactionSettings.ContextWindowTokens = resolvedReq.ContextBudget.InputTokens
-	transformedRaw, compactionTransformer, v2Plan := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, compactionSettings)
-	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer, v2Plan)
+	transformedRaw, compactionTransformer, v2Plan, v2Recovery := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, compactionSettings, s.compactionV2)
+	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer, v2Plan, v2Recovery)
 	return true, nil
 }
 
@@ -261,8 +261,12 @@ func (s *Server) dispatchNativeCodexResponses(
 	resolved adapterresolver.ResolvedRequest,
 	compactionTransformer *adaptercodex.RawResponsesCompactionTransformer,
 	v2Plan *adaptercodex.RawResponsesCompactionV2Plan,
+	v2Recovery *adaptercodex.RawResponsesCompactionV2Recovery,
 ) {
 	if s.codexProvider == nil {
+		if v2Recovery != nil {
+			v2Recovery.ReleaseRecovery()
+		}
 		s.respondAdapterError(w, r, codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured))
 		return
 	}
@@ -271,6 +275,9 @@ func (s *Server) dispatchNativeCodexResponses(
 	defer releaseEgress("codex.raw_responses.done")
 	response, err := s.codexProvider.OpenRawResponses(egressCtx, raw)
 	if err != nil {
+		if v2Recovery != nil {
+			v2Recovery.ReleaseRecovery()
+		}
 		var result adapterprovider.Result
 		lifecycle.terminal(ctx, result, err)
 		s.respondAdapterError(w, r, codexProviderAdapterError(err))
@@ -292,6 +299,9 @@ func (s *Server) dispatchNativeCodexResponses(
 	responseSucceeded := response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
 	if copyErr == nil && responseSucceeded && v2Plan != nil {
 		adaptercodex.ArmRawResponsesCompactionV2Response(response)
+	}
+	if v2Recovery != nil {
+		v2Recovery.ReleaseRecovery()
 	}
 	terminalErr := copyErr
 	if terminalErr == nil && !responseSucceeded {
