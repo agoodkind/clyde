@@ -109,17 +109,18 @@ func InjectRawResponsesCompactionV2Recovery(
 		registry.Release(sessionID, encryptedContent, generation)
 		return request, nil, false
 	}
-	mutatedInput := make([]json.RawMessage, 0, len(input)+1)
-	mutatedInput = append(mutatedInput, input[:compactionIndex+1]...)
-	mutatedInput = append(mutatedInput, item)
-	mutatedInput = append(mutatedInput, input[compactionIndex+1:]...)
-	encodedInput, err := marshalRawArray(mutatedInput)
-	if err != nil {
+	inputRanges, rangesOK := jsonArrayValueRanges(request.Body[inputStart:inputEnd])
+	if !rangesOK || compactionIndex >= len(inputRanges) {
 		registry.Release(sessionID, encryptedContent, generation)
 		return request, nil, false
 	}
+	insertOffset := inputStart + inputRanges[compactionIndex].end
+	encodedInput := append([]byte(nil), request.Body[:insertOffset]...)
+	encodedInput = append(encodedInput, ',')
+	encodedInput = append(encodedInput, item...)
+	encodedInput = append(encodedInput, request.Body[insertOffset:]...)
 	transformed := request
-	transformed.Body = replaceByteRange(request.Body, inputStart, inputEnd, encodedInput)
+	transformed.Body = encodedInput
 	trace.rawInsertionSucceeded = true
 	return transformed, &RawResponsesCompactionV2Recovery{
 		transcript: transcript,
