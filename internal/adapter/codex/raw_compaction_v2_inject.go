@@ -84,7 +84,6 @@ func InjectRawResponsesCompactionV2Recovery(
 	if !ok {
 		return request, nil, false
 	}
-	_, trace.registryMatchBeforeReserve = registry.Match(sessionID, encryptedContent)
 	transcript, generation, ok := registry.Reserve(sessionID, encryptedContent)
 	trace.registryReserved = ok
 	if !ok {
@@ -165,12 +164,11 @@ type rawResponsesCompactionV2InjectionTrace struct {
 	compactionItemCount         int
 	singleCompactionItem        bool
 	registryReserved            bool
-	registryMatchBeforeReserve  bool
 	rawInsertionSucceeded       bool
 }
 
 func (trace rawResponsesCompactionV2InjectionTrace) log() {
-	slog.Debug("adapter.codex.raw_compaction_v2_recovery_injection", "detected_protocol", trace.detectedProtocol, "protocol_regular", trace.protocolRegular, "metadata_regular", trace.metadataRegular, "metadata_request_kind_turn", trace.metadataRequestKindTurn, "metadata_implementation_empty", trace.metadataImplementationEmpty, "metadata_strategy_empty", trace.metadataStrategyEmpty, "metadata_phase_final_answer", trace.metadataPhaseFinalAnswer, "registry_present", trace.registryPresent, "transcript_tag_absent", trace.transcriptTagAbsent, "session_present", trace.sessionPresent, "input_range_valid", trace.inputRangeValid, "input_json_valid", trace.inputJSONValid, "normalizer_valid", trace.normalizerValid, "compaction_item_count", trace.compactionItemCount, "single_compaction_item", trace.singleCompactionItem, "registry_reserved", trace.registryReserved, "registry_match_before_reserve", trace.registryMatchBeforeReserve, "raw_insertion_succeeded", trace.rawInsertionSucceeded)
+	slog.Debug("adapter.codex.raw_compaction_v2_recovery_injection", "detected_protocol", trace.detectedProtocol, "protocol_regular", trace.protocolRegular, "metadata_regular", trace.metadataRegular, "metadata_request_kind_turn", trace.metadataRequestKindTurn, "metadata_implementation_empty", trace.metadataImplementationEmpty, "metadata_strategy_empty", trace.metadataStrategyEmpty, "metadata_phase_final_answer", trace.metadataPhaseFinalAnswer, "registry_present", trace.registryPresent, "transcript_tag_absent", trace.transcriptTagAbsent, "session_present", trace.sessionPresent, "input_range_valid", trace.inputRangeValid, "input_json_valid", trace.inputJSONValid, "normalizer_valid", trace.normalizerValid, "compaction_item_count", trace.compactionItemCount, "single_compaction_item", trace.singleCompactionItem, "registry_reserved", trace.registryReserved, "raw_insertion_succeeded", trace.rawInsertionSucceeded)
 }
 
 func rawResponsesCompactionV2RegularFinalAnswerFields(header http.Header) (bool, bool, bool, bool) {

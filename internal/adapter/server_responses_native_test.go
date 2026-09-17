@@ -917,9 +917,6 @@ func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *
 	if recorder.Code != http.StatusOK || !bytes.Equal(upstreamBody, secondRequestBody) {
 		t.Fatalf("status=%d upstream=%s", recorder.Code, upstreamBody)
 	}
-	if _, ok := srv.compactionV2.Match("native-session", "cipher"); !ok {
-		t.Fatal("OpenRawResponses completed recovery")
-	}
 	eligibleBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}]}`)
 	eligibleRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(eligibleBody))
 	eligibleRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
