@@ -336,13 +336,14 @@ func consumeRawCompactionSSECarriageReturn(reader *bufio.Reader, frame *bytes.Bu
 	if value != '\r' {
 		return false, nil
 	}
-	next, peekErr := reader.Peek(1)
-	if peekErr != nil || len(next) != 1 || next[0] != '\n' {
+	next, _ := reader.Peek(1)
+	if len(next) != 1 || next[0] != '\n' {
 		return false, nil
 	}
 	lineFeed, readErr := reader.ReadByte()
 	if readErr != nil {
-		return false, readErr
+		slog.Warn("adapter.codex.raw_compaction.sse_read_crlf_failed", "concern", "adapter.providers.codex.request", "err", readErr)
+		return false, fmt.Errorf("read CRLF terminator: %w", readErr)
 	}
 	frame.WriteByte(lineFeed)
 	return frame.Len() > maxBytes, nil
