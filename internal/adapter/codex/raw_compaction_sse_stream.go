@@ -318,24 +318,34 @@ func readRawCompactionSSEFrame(reader *bufio.Reader, maxBytes int) ([]byte, erro
 		if value != '\n' && value != '\r' {
 			continue
 		}
-		if value == '\r' {
-			next, peekErr := reader.Peek(1)
-			if peekErr == nil && len(next) == 1 && next[0] == '\n' {
-				lineFeed, readErr := reader.ReadByte()
-				if readErr != nil {
-					return frame.Bytes(), readErr, false
-				}
-				frame.WriteByte(lineFeed)
-				if frame.Len() > maxBytes {
-					return frame.Bytes(), nil, true
-				}
-			}
+		oversized, readErr := consumeRawCompactionSSECarriageReturn(reader, &frame, value, maxBytes)
+		if readErr != nil {
+			return frame.Bytes(), readErr, false
+		}
+		if oversized {
+			return frame.Bytes(), nil, true
 		}
 		if rawCompactionSSEBlankLine(frame.Bytes()[lineStart:]) {
 			return frame.Bytes(), nil, false
 		}
 		lineStart = frame.Len()
 	}
+}
+
+func consumeRawCompactionSSECarriageReturn(reader *bufio.Reader, frame *bytes.Buffer, value byte, maxBytes int) (bool, error) {
+	if value != '\r' {
+		return false, nil
+	}
+	next, peekErr := reader.Peek(1)
+	if peekErr != nil || len(next) != 1 || next[0] != '\n' {
+		return false, nil
+	}
+	lineFeed, readErr := reader.ReadByte()
+	if readErr != nil {
+		return false, readErr
+	}
+	frame.WriteByte(lineFeed)
+	return frame.Len() > maxBytes, nil
 }
 
 func rawCompactionSSEBlankLine(line []byte) bool {

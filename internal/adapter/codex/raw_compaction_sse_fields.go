@@ -172,7 +172,6 @@ func replaceRawSSEFrameData(frame []byte, data []byte) []byte {
 		field, _ := rawSSEField(lineContent)
 		if !bytes.Equal(field, []byte("data")) {
 			result.Write(line)
-			lineStart = lineEnd
 			continue
 		}
 		if firstDataLineStart < 0 {
