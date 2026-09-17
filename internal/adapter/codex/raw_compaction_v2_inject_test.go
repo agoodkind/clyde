@@ -24,6 +24,28 @@ func TestInjectRawResponsesCompactionV2Recovery(t *testing.T) {
 	if !changed || recovery == nil {
 		t.Fatal("matching request did not inject recovery")
 	}
+	inputStart, inputEnd, ok := jsonObjectFieldValueRange(request.Body, "input")
+	if !ok {
+		t.Fatal("locate original input")
+	}
+	originalRanges, ok := jsonArrayValueRanges(request.Body[inputStart:inputEnd])
+	if !ok || len(originalRanges) < 2 {
+		t.Fatal("locate original compaction item")
+	}
+	transformedInputStart, transformedInputEnd, ok := jsonObjectFieldValueRange(transformed.Body, "input")
+	if !ok {
+		t.Fatal("locate transformed input")
+	}
+	transformedRanges, ok := jsonArrayValueRanges(transformed.Body[transformedInputStart:transformedInputEnd])
+	if !ok || len(transformedRanges) < 3 {
+		t.Fatal("locate injected item")
+	}
+	compactionEnd := inputStart + originalRanges[1].end
+	injectedEnd := transformedInputStart + transformedRanges[2].end
+	if !bytes.Equal(transformed.Body[:compactionEnd], request.Body[:compactionEnd]) ||
+		!bytes.Equal(transformed.Body[injectedEnd:], request.Body[compactionEnd:]) {
+		t.Fatalf("injection rewrote unchanged request bytes:\n got: %s\nwant prefix/suffix from: %s", transformed.Body, request.Body)
+	}
 	if !bytes.Contains(transformed.Body, []byte(`"opaque":{"keep":true}`)) {
 		t.Fatalf("unrelated fields changed: %s", transformed.Body)
 	}

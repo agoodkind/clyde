@@ -305,7 +305,7 @@ func TestRawResponsesCompactionOversizedUnterminatedFrameStreamsBeforeEOF(t *tes
 }
 
 func TestRawResponsesCompactionPreservesFragmentedSSELines(t *testing.T) {
-	for _, lineEnding := range []string{"\n", "\r\n"} {
+	for _, lineEnding := range []string{"\n", "\r\n", "\r"} {
 		for _, lineSize := range []int{4094, 4095, 4096, 4097, 8191, 8192} {
 			t.Run(fmt.Sprintf("ending%d-size%d", len(lineEnding), lineSize), func(t *testing.T) {
 				template := `{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"%s"}]}`

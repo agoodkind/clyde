@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"sync/atomic"
 )
 
 type rawCompactionSSEEvent string
@@ -27,26 +29,66 @@ const (
 )
 
 type rawCompactionSSEBody struct {
-	inner      io.ReadCloser
-	reader     *bufio.Reader
-	transcript string
-	pending    []byte
-	pendingErr error
-	candidate  []byte
-	following  []byte
-	disabled   bool
+	inner             io.ReadCloser
+	reader            *bufio.Reader
+	transcript        string
+	pending           []byte
+	pendingErr        error
+	candidate         []byte
+	following         []byte
+	disabled          bool
+	onMutated         func()
+	strictFinalAnswer bool
 }
 
-func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string) *rawCompactionSSEBody {
+type rawCompactionMutation struct {
+	mutated atomic.Bool
+}
+
+// NewRawResponsesCompactionV2FinalAnswerTransformer creates the one-shot
+// recovery transformer only for a regular final-answer request.
+func NewRawResponsesCompactionV2FinalAnswerTransformer(request RawResponsesRequest, recovery *RawResponsesCompactionV2Recovery) *RawResponsesCompactionTransformer {
+	if recovery == nil || !rawResponsesCompactionV2FinalAnswerTurn(request.Header) {
+		return nil
+	}
+	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}, strictFinalAnswer: rawResponsesCompactionV2FinalAnswerTurn(request.Header)}
+}
+
+// DidMutateResponse reports whether this transformer produced tagged output.
+func (t *RawResponsesCompactionTransformer) DidMutateResponse() bool {
+	return t != nil && t.mutation != nil && t.mutation.mutated.Load()
+}
+
+func (t *RawResponsesCompactionTransformer) markMutated() {
+	if t != nil && t.mutation != nil {
+		t.mutation.mutated.Store(true)
+	}
+}
+
+func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {
+	var metadata rawResponsesCompactionMetadata
+	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
+		return false
+	}
+	return metadata.RequestKind == "turn" && metadata.Compaction.Phase == "final_answer"
+}
+
+func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutatedCallbacks ...func()) *rawCompactionSSEBody {
+	var onMutated func()
+	if len(onMutatedCallbacks) > 0 {
+		onMutated = onMutatedCallbacks[0]
+	}
 	return &rawCompactionSSEBody{
-		inner:      inner,
-		reader:     bufio.NewReader(inner),
-		transcript: transcriptText,
-		pending:    nil,
-		pendingErr: nil,
-		candidate:  nil,
-		following:  nil,
-		disabled:   false,
+		inner:             inner,
+		reader:            bufio.NewReader(inner),
+		transcript:        transcriptText,
+		pending:           nil,
+		pendingErr:        nil,
+		candidate:         nil,
+		following:         nil,
+		disabled:          false,
+		onMutated:         onMutated,
+		strictFinalAnswer: false,
 	}
 }
 
@@ -120,6 +162,10 @@ func (b *rawCompactionSSEBody) handleSSEOtherFrame(frame []byte, readErr error) 
 		if readErr != nil || !rawCompactionUnknownSSEFrameIsValid(frame) {
 			return b.failOpenSSE(frame, readErr)
 		}
+		_, _, dataCount := rawSSEFrameDataValue(frame)
+		if readErr == nil && dataCount == 0 && rawSSEFrameIsCommentOnly(frame) {
+			return b.queueSSEBytes(frame, readErr)
+		}
 		if !rawCompactionSSEPendingFits(b.candidate, b.following, frame) {
 			return b.failOpenSSE(frame, readErr)
 		}
@@ -173,13 +219,21 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 		b.pending = frame
 		return b.queueSSEError(readErr)
 	}
+	if b.strictFinalAnswer && !rawCompactionStrictFinalAnswerSSEFrame(frame) {
+		return b.failOpenSSE(frame, readErr)
+	}
 	mutatedFrames, ok := appendRawCompactionSSEStreamEvents(b.candidate, b.following, frame, b.transcript)
 	if !ok {
 		return b.failOpenSSE(frame, readErr)
 	}
+	originalFrames := joinRawCompactionSSEFrames(joinRawCompactionSSEFrames(b.candidate, b.following), frame)
+	mutated := !bytes.Equal(mutatedFrames, originalFrames)
 	b.pending = mutatedFrames
 	b.candidate = nil
 	b.following = nil
+	if b.onMutated != nil && mutated {
+		b.onMutated()
+	}
 	return b.queueSSEError(readErr)
 }
 
@@ -253,101 +307,53 @@ func readRawCompactionSSEFrame(reader *bufio.Reader, maxBytes int) ([]byte, erro
 	var frame bytes.Buffer
 	lineStart := 0
 	for {
-		remaining := maxBytes - frame.Len()
-		if remaining < reader.Size() {
-			result := readRawCompactionSSEFrameByte(
-				reader,
-				&frame,
-				lineStart,
-				maxBytes,
-			)
-			lineStart = result.lineStart
-			if result.complete || result.oversized || result.readErr != nil {
-				return frame.Bytes(), result.readErr, result.oversized
-			}
-			continue
-		}
-		line, err := reader.ReadSlice('\n')
-		frame.Write(line)
-		if frame.Len() > maxBytes {
-			if errors.Is(err, bufio.ErrBufferFull) {
-				err = nil
-			}
-			return frame.Bytes(), err, true
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		if len(line) > 0 && line[len(line)-1] == '\n' {
-			logicalLine := frame.Bytes()[lineStart:]
-			if rawCompactionSSEBlankLine(logicalLine) {
-				return frame.Bytes(), err, false
-			}
-			lineStart = frame.Len()
-		}
+		value, err := reader.ReadByte()
 		if err != nil {
 			return frame.Bytes(), err, false
 		}
+		frame.WriteByte(value)
+		if frame.Len() > maxBytes {
+			return frame.Bytes(), nil, true
+		}
+		if value != '\n' && value != '\r' {
+			continue
+		}
+		oversized, readErr := consumeRawCompactionSSECarriageReturn(reader, &frame, value, maxBytes)
+		if readErr != nil {
+			return frame.Bytes(), readErr, false
+		}
+		if oversized {
+			return frame.Bytes(), nil, true
+		}
+		if rawCompactionSSEBlankLine(frame.Bytes()[lineStart:]) {
+			return frame.Bytes(), nil, false
+		}
+		lineStart = frame.Len()
 	}
 }
 
-type rawCompactionSSEFrameByteResult struct {
-	lineStart int
-	complete  bool
-	oversized bool
-	readErr   error
-}
-
-func readRawCompactionSSEFrameByte(
-	reader *bufio.Reader,
-	frame *bytes.Buffer,
-	lineStart int,
-	maxBytes int,
-) rawCompactionSSEFrameByteResult {
-	value, err := reader.ReadByte()
-	if err != nil {
-		return rawCompactionSSEFrameByteResult{
-			lineStart: lineStart,
-			complete:  false,
-			oversized: false,
-			readErr:   err,
-		}
+func consumeRawCompactionSSECarriageReturn(reader *bufio.Reader, frame *bytes.Buffer, value byte, maxBytes int) (bool, error) {
+	if value != '\r' {
+		return false, nil
 	}
-	frame.WriteByte(value)
-	if frame.Len() > maxBytes {
-		return rawCompactionSSEFrameByteResult{
-			lineStart: lineStart,
-			complete:  false,
-			oversized: true,
-			readErr:   nil,
-		}
+	if reader.Buffered() == 0 {
+		return false, nil
 	}
-	if value != '\n' {
-		return rawCompactionSSEFrameByteResult{
-			lineStart: lineStart,
-			complete:  false,
-			oversized: false,
-			readErr:   nil,
-		}
+	next, _ := reader.Peek(1)
+	if len(next) != 1 || next[0] != '\n' {
+		return false, nil
 	}
-	if rawCompactionSSEBlankLine(frame.Bytes()[lineStart:]) {
-		return rawCompactionSSEFrameByteResult{
-			lineStart: lineStart,
-			complete:  true,
-			oversized: false,
-			readErr:   nil,
-		}
+	lineFeed, readErr := reader.ReadByte()
+	if readErr != nil {
+		slog.Warn("adapter.codex.raw_compaction.sse_read_crlf_failed", "concern", "adapter.providers.codex.request", "err", readErr)
+		return false, fmt.Errorf("read CRLF terminator: %w", readErr)
 	}
-	return rawCompactionSSEFrameByteResult{
-		lineStart: frame.Len(),
-		complete:  false,
-		oversized: false,
-		readErr:   nil,
-	}
+	frame.WriteByte(lineFeed)
+	return frame.Len() > maxBytes, nil
 }
 
 func rawCompactionSSEBlankLine(line []byte) bool {
-	return bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n"))
+	return bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n")) || bytes.Equal(line, []byte("\r"))
 }
 
 func appendRawCompactionSSEFrame(frame []byte, transcriptText string) ([]byte, bool, bool) {

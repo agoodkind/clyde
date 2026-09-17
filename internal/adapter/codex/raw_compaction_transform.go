@@ -18,7 +18,7 @@ import (
 // RequiresTerminalValidation reports whether streamed mutation state must be
 // validated before accepting the response.
 func (t *RawResponsesCompactionTransformer) RequiresTerminalValidation() bool {
-	return false
+	return t != nil && t.mutation != nil
 }
 
 // TransformResponse appends the removed transcript to one successful response.
@@ -36,7 +36,9 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
-		clone.Body = newRawCompactionSSEBody(response.Body, wrapped)
+		streamBody := newRawCompactionSSEBody(response.Body, wrapped, t.markMutated)
+		streamBody.strictFinalAnswer = t.strictFinalAnswer
+		clone.Body = streamBody
 		return &clone
 	}
 	originalBody := response.Body
@@ -50,10 +52,14 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	}
 	_ = originalBody.Close()
 	response.Body = io.NopCloser(bytes.NewReader(body))
+	if t.strictFinalAnswer && !rawCompactionStrictFinalAnswerJSON(body) {
+		return response
+	}
 	transformed, ok := appendRawCompactionJSON(body, wrapped)
 	if !ok || bytes.Equal(transformed, body) {
 		return response
 	}
+	t.markMutated()
 	clone := *response
 	clone.Header = rawCompactionMutatedHeaders(response.Header)
 	clone.ContentLength = -1
@@ -78,8 +84,10 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		clone := *response
 		clone.Header = rawCompactionMutatedHeaders(response.Header)
 		clone.ContentLength = -1
+		streamBody := newRawCompactionSSEBody(decoded, transcriptText, t.markMutated)
+		streamBody.strictFinalAnswer = t.strictFinalAnswer
 		clone.Body = newRawCompactionEncodedBody(
-			newRawCompactionSSEBody(decoded, transcriptText),
+			streamBody,
 			encoding,
 		)
 		return &clone
@@ -88,12 +96,19 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 	originalBody := response.Body
 	wireBody, readErr := io.ReadAll(originalBody)
 	if readErr != nil {
-		response.Body = &rawCompactionReadCloser{reader: io.MultiReader(bytes.NewReader(wireBody), originalBody), closer: originalBody}
+		response.Body = &rawCompactionReadCloser{
+			reader: io.MultiReader(bytes.NewReader(wireBody), originalBody),
+			closer: originalBody,
+		}
 		return response
 	}
 	_ = originalBody.Close()
 	decodedBody, ok := decodeRawCompactionBody(wireBody, encoding)
 	if !ok {
+		response.Body = io.NopCloser(bytes.NewReader(wireBody))
+		return response
+	}
+	if t.strictFinalAnswer && !rawCompactionStrictFinalAnswerJSON(decodedBody) {
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
@@ -107,6 +122,7 @@ func (t *RawResponsesCompactionTransformer) transformEncodedResponse(
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
+	t.markMutated()
 	clone := *response
 	clone.Header = rawCompactionMutatedHeaders(response.Header)
 	clone.ContentLength = -1

@@ -68,6 +68,9 @@ func InjectRawResponsesCompactionV2Recovery(
 	if !ok {
 		return request, nil, false
 	}
+	if !rawCompactionJSONHasUniqueObjectKeys(request.Body) {
+		return request, nil, false
+	}
 	var input []json.RawMessage
 	trace.inputJSONValid = json.Unmarshal(request.Body[inputStart:inputEnd], &input) == nil
 	if !trace.inputJSONValid {

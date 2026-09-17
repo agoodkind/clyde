@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/gklog/correlation"
 )
@@ -164,6 +165,19 @@ func TestSelectRawCompactionStartUsesLogarithmicRenders(t *testing.T) {
 	}
 }
 
+func TestSelectRawCompactionStartRejectsInvalidTargetCount(t *testing.T) {
+	units := []rawCompactionInterval{{start: 0, end: 1}}
+	for _, targetCount := range []int{0, 2} {
+		selected, rendered, ok := selectRawCompactionStart(units, 1, targetCount, func(int) (string, bool) {
+			t.Fatal("render called for invalid target count")
+			return "", false
+		})
+		if ok || selected != 0 || rendered != "" {
+			t.Fatalf("target count %d selected=%d rendered=%q ok=%t", targetCount, selected, rendered, ok)
+		}
+	}
+}
+
 func rawCompactionLogarithmicRenderLimit(count int) int {
 	limit := 1
 	for size := 1; size < count; size *= 2 {
@@ -232,6 +246,30 @@ func TestRawResponsesCompactionReadFailurePreservesRemainingBody(t *testing.T) {
 	}
 }
 
+func TestRawResponsesCompactionEncodedReadFailurePreservesRemainingBody(t *testing.T) {
+	transformer := rawResponseTransformerForTest(t)
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("create zstd encoder: %v", err)
+	}
+	original := encoder.EncodeAll([]byte(`{"output":[]}`), nil)
+	if err := encoder.Close(); err != nil {
+		t.Fatalf("close zstd encoder: %v", err)
+	}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {"zstd"}},
+		Body: &partialReadCloser{
+			prefix: original[:5],
+			suffix: original[5:],
+		},
+	}
+	got := readResponseBody(t, transformer.TransformResponse(response))
+	if !bytes.Equal(got, original) {
+		t.Fatalf("partial encoded read body = %x, want %x", got, original)
+	}
+}
+
 func rawResponseTransformerForTest(t *testing.T) *RawResponsesCompactionTransformer {
 	t.Helper()
 	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
@@ -271,6 +309,15 @@ func rawCompactionSuccessfulSSEFramesForTest(item string, outputIndex int, itemS
 
 func rawJSONResponse(status int, text string) *http.Response {
 	body := []byte(`{"id":"resp-1","output":[{"type":"reasoning","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(text) + `}],"opaque":true}],"unknown":{"keep":true}}`)
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": {"application/json"}, "Content-Length": {"1"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}
+}
+
+func rawFinalAnswerJSONResponse(status int, text string) *http.Response {
+	body := []byte(`{"status":"completed","id":"resp-1","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":` + quotedJSONForTest(text) + `}]}]}`)
 	return &http.Response{
 		StatusCode: status,
 		Header:     http.Header{"Content-Type": {"application/json"}, "Content-Length": {"1"}},
