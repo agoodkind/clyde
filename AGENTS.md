@@ -4,6 +4,31 @@ This file contains durable instructions for coding agents working in this reposi
 Keep it short, current, and focused on rules that should affect day-to-day code changes.
 Move long runbooks, dated audits, generated examples, and machine-specific workflows into docs.
 
+## Generic Boundary
+
+P0. Clyde is built as a stack of layers, and each layer must stay on its own side of the boundary.
+
+- Each layer declares what it needs through an interface or a primitive contract.
+- The next layer down provides what the layer above declared, and nothing more.
+- No layer reaches into another layer's semantics, internal types, or presentation choices.
+- Provider-specific shape knowledge, including envelopes, headers, wire types, and vendor UX quirks, lives in the provider package. It does not leak into the generic adapter package.
+- The generic adapter never imports a provider's envelope type, never constructs a provider envelope literal, and never describes a provider-specific UX behavior in its comments.
+- New cross-cutting concerns follow this pattern. Define a contract in a small package with no upstream dependencies. Implementations register themselves at startup. The boundary dispatches by family or by registered key, not by hard-coded provider name.
+
+The generic adapter is the files directly under `internal/adapter/`, not files in a provider subdirectory. The only allowed provider imports at that layer are composition-root registration.
+
+Shape knowledge stays in these packages and never moves above them into the generic adapter, `internal/conversation`, or `internal/daemon`:
+
+- Claude transcript parsing, credentials, and MITM identity stay in `internal/providers/claude`. Anthropic Messages types, thinking blocks, OAuth, and error envelopes stay in `internal/adapter/anthropic`.
+- Codex websocket, Responses, and tool handlers stay in `internal/adapter/codex`. Rollout artifacts stay in `internal/providers/codex`.
+- Cursor generation ids, BYOK ingress quirks, and workspace identity stay in `internal/adapter/cursor`. Cursor conversation stores stay in `internal/providers/cursor`.
+- Zed threads stay in `internal/providers/zed`. Copilot conversations stay in `internal/providers/copilot`.
+- OpenAI-compatible chat and Responses envelopes stay in `internal/adapter/openai`. That package is the route-family wire, not a place to dump vendor UX.
+
+A new Claude header, Anthropic thinking decoder, or Cursor generation-id parser is a provider-package change. The generic adapter calls a registered contract and does not grow those types.
+
+The Error Boundary section is the canonical worked example.
+
 ## Project purpose
 
 Clyde is a Go CLI and daemon for raw provider artifact reading plus adapter, MITM, ingress, logging, MCP, and transcript export.
@@ -128,31 +153,6 @@ Use the real Cursor client for final verification when the rendered chat output 
 Use `docs/testing/overview.md` for the live daemon test harness and its parallel-run port overrides.
 
 Run a daemon by hand with `clyde daemon sandbox`, never by launching a second `clyde daemon run`. The sandbox redirects every clyde-owned path into throwaway directories and runs one process that ends when the command does. A second `daemon run` competes with the deployed daemon for its state and socket, and its supervisor can leave a worker running after the launcher is gone.
-
-## Generic Boundary
-
-P0. Clyde is built as a stack of layers, and each layer must stay on its own side of the boundary.
-
-- Each layer declares what it needs through an interface or a primitive contract.
-- The next layer down provides what the layer above declared, and nothing more.
-- No layer reaches into another layer's semantics, internal types, or presentation choices.
-- Provider-specific shape knowledge, including envelopes, headers, wire types, and vendor UX quirks, lives in the provider package. It does not leak into the generic adapter package.
-- The generic adapter never imports a provider's envelope type, never constructs a provider envelope literal, and never describes a provider-specific UX behavior in its comments.
-- New cross-cutting concerns follow this pattern. Define a contract in a small package with no upstream dependencies. Implementations register themselves at startup. The boundary dispatches by family or by registered key, not by hard-coded provider name.
-
-The generic adapter is the files directly under `internal/adapter/`, not files in a provider subdirectory. The only allowed provider imports at that layer are composition-root registration.
-
-Shape knowledge stays in these packages and never moves above them into the generic adapter, `internal/conversation`, or `internal/daemon`:
-
-- Claude transcript parsing, credentials, and MITM identity stay in `internal/providers/claude`. Anthropic Messages types, thinking blocks, OAuth, and error envelopes stay in `internal/adapter/anthropic`.
-- Codex websocket, Responses, and tool handlers stay in `internal/adapter/codex`. Rollout artifacts stay in `internal/providers/codex`.
-- Cursor generation ids, BYOK ingress quirks, and workspace identity stay in `internal/adapter/cursor`. Cursor conversation stores stay in `internal/providers/cursor`.
-- Zed threads stay in `internal/providers/zed`. Copilot conversations stay in `internal/providers/copilot`.
-- OpenAI-compatible chat and Responses envelopes stay in `internal/adapter/openai`. That package is the route-family wire, not a place to dump vendor UX.
-
-A new Claude header, Anthropic thinking decoder, or Cursor generation-id parser is a provider-package change. The generic adapter calls a registered contract and does not grow those types.
-
-The error boundary below is the canonical worked example.
 
 ## Adapter And Model Routing
 
