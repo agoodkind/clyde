@@ -67,10 +67,22 @@ const (
 )
 
 // ContentProvider returns the recovered pre-compaction transcript for a Claude
-// session id, rendered off disk with clyde's reorient knobs. It returns an empty
-// string when the session cannot be resolved, which makes the transformer pass
-// the response through unchanged.
-type ContentProvider func(ctx context.Context, sessionID string, maxBytes int) (string, error)
+// session id, rendered off disk by the transcript parser with clyde's reorient
+// knobs. It returns an empty string when the session cannot be resolved, which
+// makes the transformer pass the response through unchanged.
+type ContentProvider func(ctx context.Context, request ContentRequest) (string, error)
+
+// ContentRequest sizes one provider render.
+type ContentRequest struct {
+	// SessionID is the Claude session id parsed from metadata.user_id.
+	SessionID string
+	// MaxBytes caps the render to its last N bytes. Zero leaves it uncapped.
+	MaxBytes int
+	// UncappedLines lifts the provider's configured line cap. The split path sets
+	// it because MaxBytes already equals the size of the trimmed recent half, and a
+	// line cap would drop part of what the trim removed from the request.
+	UncappedLines bool
+}
 
 // Sizing configures the reorient injection size caps. Every zero or non-positive
 // field falls back to the matching Default constant, so a caller may set only the
@@ -189,39 +201,90 @@ func (h *Hook) MatchRequestResponse(
 		return unmatchedRequestResponseHookMatch(), nil
 	}
 	maxBytes := h.maxBytes(req.Header)
-	if promptIndex, ok := compactionPromptIndex(request); ok {
-		if plan, split := planSplit(request.Messages, promptIndex, maxBytes, h.sizing.RecentFraction); split {
-			keep := trimKeepIndexes(plan.recentStart, plan.instructionStart, len(request.Messages))
-			recent := renderRecentMessages(request.Messages[plan.recentStart:plan.instructionStart])
-			// Hard gate: only trim when the kept messages are Anthropic-valid, so a
-			// boundary edge case can never forward a request that 400s /compact.
-			if validateTrim(selectMessages(request.Messages, keep)) && strings.TrimSpace(recent) != "" {
-				return mitm.RequestResponseHookMatch{
-					Matched: true,
-					Transformer: responseAppendTransformer{
-						provider:  nil,
-						sessionID: sessionID,
-						maxBytes:  maxBytes,
-						content:   recent,
-					},
-					RequestTransformer: messageTrimTransformer{keep: keep},
-				}, nil
-			}
-		}
+	fallback := mitm.RequestResponseHookMatch{
+		Matched: true,
+		Transformer: responseAppendTransformer{
+			provider:  h.provider,
+			sessionID: sessionID,
+			maxBytes:  maxBytes,
+			split:     nil,
+		},
+		RequestTransformer: nil,
 	}
-	// Fallback: no valid split (small conversation, nothing renderable, or the trim
-	// would be invalid), so keep the pre-R2 behavior: summarize the whole request and
-	// inject the bounded disk-recovered transcript, with no request trim.
+	promptIndex, _ := compactionPromptIndex(request)
+	plan, split := planSplit(request.Messages, promptIndex, maxBytes, h.sizing.RecentFraction)
+	if !split {
+		logSplitFallback(splitFallbackNoSplit, len(request.Messages))
+		return fallback, nil
+	}
+	keep, droppedSystem := dropOlderHalfSystemMessages(
+		request.Messages,
+		trimKeepIndexes(plan.recentStart, plan.instructionStart, len(request.Messages)),
+		plan.recentStart,
+	)
+	// Hard gate: only trim when the kept messages are Anthropic-valid, so a
+	// boundary edge case can never forward a request that 400s /compact.
+	if !validateTrim(selectMessages(request.Messages, keep)) {
+		logSplitFallback(splitFallbackInvalidTrim, len(request.Messages))
+		return fallback, nil
+	}
+	slog.Info(
+		"mitm.reorient_inject.split_planned",
+		"component", reorientInjectComponent,
+		"concern", reorientInjectConcern,
+		"message_count", len(request.Messages),
+		"recent_start", plan.recentStart,
+		"instruction_start", plan.instructionStart,
+		"dropped_system_count", droppedSystem,
+	)
+	state := &splitState{content: ""}
 	return mitm.RequestResponseHookMatch{
 		Matched: true,
 		Transformer: responseAppendTransformer{
 			provider:  h.provider,
 			sessionID: sessionID,
 			maxBytes:  maxBytes,
-			content:   "",
+			split:     state,
 		},
-		RequestTransformer: nil,
+		RequestTransformer: messageTrimTransformer{
+			keep:     keep,
+			provider: h.provider,
+			request: ContentRequest{
+				SessionID:     sessionID,
+				MaxBytes:      recentBytes(request.Messages[plan.recentStart:plan.instructionStart]),
+				UncappedLines: true,
+			},
+			state: state,
+		},
 	}, nil
+}
+
+// splitFallbackReason names why a compaction request kept the whole
+// conversation instead of trimming its recent half.
+type splitFallbackReason string
+
+const (
+	splitFallbackNoSplit     splitFallbackReason = "no_split"
+	splitFallbackInvalidTrim splitFallbackReason = "invalid_trim"
+	splitFallbackEmptyRecent splitFallbackReason = "empty_recent"
+)
+
+func logSplitFallback(reason splitFallbackReason, messageCount int) {
+	slog.Warn(
+		"mitm.reorient_inject.split_fallback",
+		"component", reorientInjectComponent,
+		"concern", reorientInjectConcern,
+		"reason", string(reason),
+		"message_count", messageCount,
+	)
+}
+
+// splitState holds the recent-half render the request transformer produced for
+// the response transformer of the same exchange. The proxy runs the request
+// transform before it reads the response, so no lock is needed. An empty
+// content means the request went upstream untrimmed.
+type splitState struct {
+	content string
 }
 
 func (h *Hook) maxBytes(header http.Header) int {
@@ -402,79 +465,50 @@ func toolIDsOfParts(parts []content.Part) (uses []string, results []string) {
 	return uses, results
 }
 
-// renderBlocks renders a message's content to text, preserving tool calls and
-// tool results (not just text) so the injected recent half stays faithful.
-func (m anthropicMessage) renderBlocks() string {
-	return renderParts(m.parts())
-}
-
-// renderParts renders neutral content parts to the text the injection carries.
-// It is provider-neutral: it names no wire type and decodes no provider JSON.
-func renderParts(parts []content.Part) string {
-	var builder strings.Builder
-	for _, part := range parts {
-		rendered := renderPart(part)
-		if rendered == "" {
-			continue
-		}
-		if builder.Len() > 0 {
-			builder.WriteByte('\n')
-		}
-		builder.WriteString(rendered)
-	}
-	return builder.String()
-}
-
-func renderPart(part content.Part) string {
-	switch part.Kind {
-	case content.PartText, content.PartThinking:
-		return part.Text
-	case content.PartToolUse:
-		return "[tool_use " + part.Name + "] " + strings.TrimSpace(string(part.Input))
-	case content.PartToolResult:
-		// The injected text is re-sent as plain text on every later turn, so an
-		// image inside a tool result reaches the model as a placeholder: the model
-		// cannot see an image from its encoding, and inline bytes cost about one
-		// token each, which lets a cap sized for prose overflow the context window.
-		return "[tool_result] " + strings.TrimSpace(part.Text)
-	case content.PartImage, content.PartAudio, content.PartRefusal, content.PartUnsupported:
-		return strings.TrimSpace(content.FlattenParts([]content.Part{part}))
-	default:
-		return ""
-	}
-}
-
-// renderRecentMessages renders the removed recent half to a role-labeled verbatim
-// transcript. Every message is emitted (never skipped), so the injected block is
-// exactly complementary to the messages trimmed from the request.
-func renderRecentMessages(messages []anthropicMessage) string {
-	var builder strings.Builder
+// recentBytes is the wire size of the recent half the trim removes. The provider
+// render uses it as its byte cap, so the injection covers about the same span.
+func recentBytes(messages []anthropicMessage) int {
+	total := 0
 	for _, message := range messages {
-		if builder.Len() > 0 {
-			builder.WriteString("\n\n")
-		}
-		builder.WriteString("### ")
-		builder.WriteString(message.Role)
-		builder.WriteString("\n\n")
-		builder.WriteString(message.renderBlocks())
+		total += len(message.Content)
 	}
-	return builder.String()
+	return total
 }
 
-// messageTrimTransformer rewrites the summarization request to keep only the
-// message indexes in keep (the older conversation half plus the instruction
-// region), dropping the recent half that is re-attached to the response verbatim.
+// messageTrimTransformer renders the recent half through the transcript parser
+// and, only when that render is non-empty, rewrites the summarization request to
+// keep the message indexes in keep (the older half without its system messages,
+// plus the instruction region). Rendering before trimming means the request is
+// never trimmed unless the removed messages have a replacement to inject.
 type messageTrimTransformer struct {
-	keep []int
+	keep     []int
+	provider ContentProvider
+	request  ContentRequest
+	state    *splitState
 }
 
 func (t messageTrimTransformer) TransformRequest(ctx context.Context, body []byte) ([]byte, bool, error) {
+	recent, err := t.provider(ctx, t.request)
+	if err != nil {
+		// The proxy forwards the original body on a transform error, so the
+		// request goes upstream untrimmed and the response takes the disk fallback.
+		slog.WarnContext(ctx, "mitm.reorient_inject.content_provider_failed",
+			"component", reorientInjectComponent, "concern", reorientInjectConcern, "err", err)
+		logSplitFallback(splitFallbackEmptyRecent, len(t.keep))
+		return body, false, fmt.Errorf("render reorient recent half: %w", err)
+	}
+	if strings.TrimSpace(recent) == "" {
+		logSplitFallback(splitFallbackEmptyRecent, len(t.keep))
+		return body, false, nil
+	}
 	trimmed, err := marshalTrimmedRequest(ctx, body, t.keep)
 	if err != nil {
 		// The proxy treats an error as fail-open: it forwards the original request
-		// body unchanged, so a decode or encode failure never breaks /compact.
+		// body unchanged, so a decode or encode failure never breaks /compact. The
+		// state stays empty, so the response takes the disk fallback.
 		return body, false, err
 	}
+	t.state.content = recent
 	return trimmed, true, nil
 }
 
@@ -525,11 +559,10 @@ type responseAppendTransformer struct {
 	provider  ContentProvider
 	sessionID string
 	maxBytes  int
-	// content, when non-empty, is the pre-rendered injection text (the R2
-	// request-derived recent half that was trimmed from the summarization
-	// request). It takes precedence over the disk provider. The provider path
-	// remains the fail-open fallback used when no request split was computed.
-	content string
+	// split, when non-nil, holds the recent half the request transformer rendered
+	// for a trimmed request. An empty split content means the request went
+	// upstream untrimmed, so the response takes the capped disk fallback.
+	split *splitState
 }
 
 func (t responseAppendTransformer) TransformResponse(
@@ -547,9 +580,16 @@ func (t responseAppendTransformer) TransformResponse(
 		"component", reorientInjectComponent,
 		"concern", reorientInjectConcern,
 	)
-	content := t.content
+	content := ""
+	if t.split != nil {
+		content = t.split.content
+	}
 	if content == "" {
-		provided, err := t.provider(ctx, t.sessionID, t.maxBytes)
+		provided, err := t.provider(ctx, ContentRequest{
+			SessionID:     t.sessionID,
+			MaxBytes:      t.maxBytes,
+			UncappedLines: false,
+		})
 		if err != nil {
 			slog.WarnContext(
 				ctx,
@@ -862,7 +902,7 @@ func wrappedTranscriptContent(content string) string {
 	return builder.String()
 }
 
-func emptyContentProvider(context.Context, string, int) (string, error) {
+func emptyContentProvider(context.Context, ContentRequest) (string, error) {
 	return "", nil
 }
 

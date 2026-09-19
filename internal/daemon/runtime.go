@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"strings"
@@ -286,12 +287,13 @@ func mitmRequestResponseHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseH
 // from the intercepted compaction request, the provider resolves the Claude
 // transcript file and renders the recovered pre-compaction transcript off disk
 // with clyde's reorient knobs (tool outputs, dense, line-capped). maxLines caps
-// the recovered transcript; zero uses the conversation renderer default. An empty
-// or unresolvable session id yields empty content, which passes the response
-// through unchanged.
+// the recovered transcript unless the request lifts the line cap; zero uses the
+// conversation renderer default. An empty or unresolvable session id yields empty
+// content, which passes the response through unchanged.
 func newReorientInjectContentProvider(maxLines int) reorientinject.ContentProvider {
 	index := NewConversationIndex()
-	return func(ctx context.Context, sessionID string, maxBytes int) (string, error) {
+	return func(ctx context.Context, request reorientinject.ContentRequest) (string, error) {
+		sessionID := request.SessionID
 		if sessionID == "" {
 			return "", nil
 		}
@@ -307,11 +309,15 @@ func newReorientInjectContentProvider(maxLines int) reorientinject.ContentProvid
 		if !ok {
 			return "", nil
 		}
+		lineCap := maxLines
+		if request.UncappedLines {
+			lineCap = math.MaxInt
+		}
 		return index.RenderReorientArtifact(path, providerid.ProviderClaude, conversation.ReorientOptions{
 			ConversationID:      "",
 			WorkspaceRoot:       "",
-			MaxLines:            maxLines,
-			MaxBytes:            maxBytes,
+			MaxLines:            lineCap,
+			MaxBytes:            request.MaxBytes,
 			IncludeToolOutputs:  true,
 			SyntheticPreCompact: true,
 		})
