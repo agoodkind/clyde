@@ -4,6 +4,33 @@ This file contains durable instructions for coding agents working in this reposi
 Keep it short, current, and focused on rules that should affect day-to-day code changes.
 Move long runbooks, dated audits, generated examples, and machine-specific workflows into docs.
 
+## Generic Boundary
+
+P0. Clyde is built as a stack of layers, and each layer must stay on its own side of the boundary.
+
+- Each layer declares what it needs through an interface or a primitive contract.
+- The next layer down provides what the layer above declared, and nothing more.
+- No layer reaches into another layer's semantics, internal types, or presentation choices.
+- Provider-specific shape knowledge, including envelopes, headers, wire types, and vendor UX quirks, lives in the provider package. It does not leak into the generic adapter package.
+- The generic adapter never imports a provider's envelope type, never constructs a provider envelope literal, and never describes a provider-specific UX behavior in its comments.
+- New cross-cutting concerns follow this pattern. Define a contract in a small package with no upstream dependencies. Implementations register themselves at startup. The boundary dispatches by family or by registered key, not by hard-coded provider name.
+
+The generic adapter is the files directly under `internal/adapter/`, not files in a provider subdirectory. The only allowed provider imports at that layer are composition-root registration.
+
+Shape knowledge stays in these packages and never moves above them into the generic adapter, `internal/conversation`, or `internal/daemon`:
+
+- Claude transcript parsing, credentials, and MITM identity stay in `internal/providers/claude`. Anthropic Messages types, thinking blocks, OAuth, and error envelopes stay in `internal/adapter/anthropic`.
+- Codex websocket, Responses, and tool handlers stay in `internal/adapter/codex`. Rollout artifacts stay in `internal/providers/codex`.
+- Cursor generation ids, BYOK ingress quirks, and workspace identity stay in `internal/adapter/cursor`. Cursor conversation stores stay in `internal/providers/cursor`.
+- Zed threads stay in `internal/providers/zed`. Copilot conversations stay in `internal/providers/copilot`.
+- OpenAI-compatible chat and Responses envelopes stay in `internal/adapter/openai`. That package is the route-family wire, not a place to dump vendor UX.
+
+A new Claude header, Anthropic thinking decoder, or Cursor generation-id parser is a provider-package change. The generic adapter calls a registered contract and does not grow those types.
+
+Existing violations are technical debt, not precedent. When a change touches a violating surface, move that knowledge into its provider home in the same change when the move is feasible and in scope. Leave a narrow follow-up note if the refactor is larger than the active task.
+
+The Error Boundary section is the canonical worked example.
+
 ## Project purpose
 
 Clyde is a Go CLI and daemon for raw provider artifact reading plus adapter, MITM, ingress, logging, MCP, and transcript export.
@@ -155,11 +182,10 @@ The MITM proxy is a separate surface, not an adapter route. It runs on its own p
 
 ## Error Boundary
 
-Every adapter HTTP response with a non-2xx status MUST go through the adapter error boundary so the calling client receives a parsable, route-correct envelope with the chosen message preserved in `error.message`.
+Every adapter HTTP response with a non-2xx status MUST go through the adapter error boundary so the calling client receives a parsable, route-correct envelope with the chosen message preserved in `error.message`. The boundary applies strict dependency inversion: the generic adapter declares interfaces, and each provider package implements them. The boundary never imports a provider envelope type and never constructs a provider envelope literal.
 
-- Handlers return a typed adapter error from the generic adapter.
-- Route-family renderers live in provider packages and own their envelope shape.
-- Pre-headers errors and mid-stream errors both go through the boundary's typed entry points.
+- Handlers return a typed adapter error from the generic adapter. The boundary picks the route family from the request path and looks up the registered error renderer for that route family. Renderers live in provider packages and own their route family's envelope shape entirely.
+- Pre-headers errors and mid-stream errors both go through the boundary's typed entry points. The handoff to the renderer speaks only primitives (type, code, message, param).
 - Upstream failures classify into a typed upstream-code class and flow through the route-family-specific upstream-error mapper.
 
 OpenAI-compatible route family rule:
