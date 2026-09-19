@@ -27,6 +27,8 @@ Shape knowledge stays in these packages and never moves above them into the gene
 
 A new Claude header, Anthropic thinking decoder, or Cursor generation-id parser is a provider-package change. The generic adapter calls a registered contract and does not grow those types.
 
+Existing violations are technical debt, not precedent. When a change touches a violating surface, move that knowledge into its provider home in the same change when the move is feasible and in scope. Leave a narrow follow-up note if the refactor is larger than the active task.
+
 The Error Boundary section is the canonical worked example.
 
 ## Project purpose
