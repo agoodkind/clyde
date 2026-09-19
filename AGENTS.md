@@ -129,6 +129,19 @@ Use `docs/testing/overview.md` for the live daemon test harness and its parallel
 
 Run a daemon by hand with `clyde daemon sandbox`, never by launching a second `clyde daemon run`. The sandbox redirects every clyde-owned path into throwaway directories and runs one process that ends when the command does. A second `daemon run` competes with the deployed daemon for its state and socket, and its supervisor can leave a worker running after the launcher is gone.
 
+## Generic Boundary
+
+P0. Clyde is built as a stack of layers, and each layer must stay on its own side of the boundary.
+
+- Each layer declares what it needs through an interface or a primitive contract.
+- The next layer down provides what the layer above declared, and nothing more.
+- No layer reaches into another layer's semantics, internal types, or presentation choices.
+- Provider-specific shape knowledge, including envelopes, headers, wire types, and vendor UX quirks, lives in the provider package. It does not leak into the generic adapter package.
+- The generic adapter never imports a provider's envelope type, never constructs a provider envelope literal, and never describes a provider-specific UX behavior in its comments.
+- New cross-cutting concerns follow this pattern. Define a contract in a small package with no upstream dependencies. Implementations register themselves at startup. The boundary dispatches by family or by registered key, not by hard-coded provider name.
+
+The error boundary below is the canonical worked example.
+
 ## Adapter And Model Routing
 
 The adapter is a safety boundary. For model aliases, effort tiers, context budgets, request shaping, and provider-specific behavior, prefer config-driven and typed resolver paths over hard-coded facts.
@@ -155,11 +168,10 @@ The MITM proxy is a separate surface, not an adapter route. It runs on its own p
 
 ## Error Boundary
 
-Every adapter HTTP response with a non-2xx status MUST go through the adapter error boundary so the calling client receives a parsable, route-correct envelope with the chosen message preserved in `error.message`.
+Every adapter HTTP response with a non-2xx status MUST go through the adapter error boundary so the calling client receives a parsable, route-correct envelope with the chosen message preserved in `error.message`. The boundary applies strict dependency inversion: the generic adapter declares interfaces, and each provider package implements them. The boundary never imports a provider envelope type and never constructs a provider envelope literal.
 
-- Handlers return a typed adapter error from the generic adapter.
-- Route-family renderers live in provider packages and own their envelope shape.
-- Pre-headers errors and mid-stream errors both go through the boundary's typed entry points.
+- Handlers return a typed adapter error from the generic adapter. The boundary picks the route family from the request path and looks up the registered error renderer for that route family. Renderers live in provider packages and own their route family's envelope shape entirely.
+- Pre-headers errors and mid-stream errors both go through the boundary's typed entry points. The handoff to the renderer speaks only primitives (type, code, message, param).
 - Upstream failures classify into a typed upstream-code class and flow through the route-family-specific upstream-error mapper.
 
 OpenAI-compatible route family rule:
