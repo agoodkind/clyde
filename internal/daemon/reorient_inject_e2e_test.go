@@ -52,7 +52,11 @@ func TestReorientInjectEndToEnd(t *testing.T) {
 	const maxTokens = 80
 	const maxBytes = maxTokens * 4
 	provider := newReorientInjectContentProvider(0)
-	content, err := provider(context.Background(), sessionID, maxBytes)
+	content, err := provider(context.Background(), reorientinject.ContentRequest{
+		SessionID:     sessionID,
+		MaxBytes:      maxBytes,
+		UncappedLines: false,
+	})
 	if err != nil {
 		t.Fatalf("provider err = %v", err)
 	}

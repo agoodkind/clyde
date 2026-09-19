@@ -78,9 +78,20 @@ func (b staticHookBody) Bytes() ([]byte, error) {
 }
 
 func fixedContentProvider(content string) ContentProvider {
-	return func(context.Context, string, int) (string, error) {
+	return func(context.Context, ContentRequest) (string, error) {
 		return content, nil
 	}
+}
+
+// recordingContentProvider returns content and records every request it gets.
+type recordingContentProvider struct {
+	content  string
+	requests []ContentRequest
+}
+
+func (p *recordingContentProvider) provide(_ context.Context, request ContentRequest) (string, error) {
+	p.requests = append(p.requests, request)
+	return p.content, nil
 }
 
 func eventStreamResponse(body string) mitm.ResponseHookResponse {
@@ -239,7 +250,8 @@ const compactTinyBody = `{"messages":[` +
 
 func TestHookSplitsConversationAtMidpoint(t *testing.T) {
 	t.Parallel()
-	hook := New(nil, Sizing{})
+	provider := &recordingContentProvider{content: "PARSER-RENDERED-RECENT", requests: nil}
+	hook := New(provider.provide, Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -254,18 +266,6 @@ func TestHookSplitsConversationAtMidpoint(t *testing.T) {
 	}
 	if match.RequestTransformer == nil {
 		t.Fatal("expected a request transformer on a splittable request")
-	}
-	appender, ok := match.Transformer.(responseAppendTransformer)
-	if !ok {
-		t.Fatalf("transformer type = %T", match.Transformer)
-	}
-	// The older half ends on a user message, so with this alternating fixture the
-	// older half is m1 and the recent (injected) half is m2, m3, m4.
-	if !strings.Contains(appender.content, "m3-recent") || !strings.Contains(appender.content, "m4-newest") {
-		t.Fatalf("injected content missing the recent half: %q", appender.content)
-	}
-	if strings.Contains(appender.content, "m1-oldest") {
-		t.Fatalf("injected content leaked the older half: %q", appender.content)
 	}
 
 	trimmed, changed, err := match.RequestTransformer.TransformRequest(context.Background(), []byte(compactSplitBody))
@@ -303,11 +303,133 @@ func TestHookSplitsConversationAtMidpoint(t *testing.T) {
 	if !strings.Contains(trimmedStr, "create a detailed summary") {
 		t.Fatalf("trimmed request dropped the compaction prompt: %s", trimmedStr)
 	}
+
+	// The older half ends on a user message, so the removed recent half is m2, m3,
+	// and m4. The provider render is sized to their wire bytes with no line cap.
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(provider.requests))
+	}
+	wantBytes := len(`"m2-old"`) + len(`"m3-recent"`) + len(`"m4-newest"`)
+	gotRequest := provider.requests[0]
+	if gotRequest.SessionID != "sess-abc" || gotRequest.MaxBytes != wantBytes || !gotRequest.UncappedLines {
+		t.Fatalf("provider request = %+v, want session sess-abc, MaxBytes %d, UncappedLines", gotRequest, wantBytes)
+	}
+	out, err := match.Transformer.TransformResponse(context.Background(), eventStreamResponse(summarySSEResponse))
+	if err != nil {
+		t.Fatalf("TransformResponse err = %v", err)
+	}
+	if body := readBody(t, out); !strings.Contains(body, "PARSER-RENDERED-RECENT") {
+		t.Fatalf("summary is missing the provider-rendered recent half: %s", body)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider calls after response = %d, want 1 (no disk fallback)", len(provider.requests))
+	}
+}
+
+// compactWithSystemRunsBody reproduces the Claude Code 2.1.276 shape: the older
+// half holds back-to-back system reminders (user, system, system, assistant), and
+// a system reminder trails the compaction prompt.
+const compactWithSystemRunsBody = `{"model":"m","messages":[` +
+	`{"role":"user","content":"old-1"},` +
+	`{"role":"system","content":"reminder-a"},` +
+	`{"role":"system","content":"reminder-b"},` +
+	`{"role":"assistant","content":"old-2"},` +
+	`{"role":"user","content":"old-3"},` +
+	`{"role":"system","content":"reminder-a"},` +
+	`{"role":"system","content":"reminder-b"},` +
+	`{"role":"assistant","content":"recent-1"},` +
+	`{"role":"user","content":"recent-2"},` +
+	`{"role":"assistant","content":"recent-3"},` +
+	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]},` +
+	`{"role":"system","content":"trailing-reminder"}` +
+	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
+
+func TestHookSplitsWhenOlderHalfHasSystemRuns(t *testing.T) {
+	t.Parallel()
+	provider := &recordingContentProvider{content: "PARSER-RENDERED-RECENT", requests: nil}
+	hook := New(provider.provide, Sizing{RecentFraction: 0.3})
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
+		Body:   staticHookBody{body: []byte(compactWithSystemRunsBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if match.RequestTransformer == nil {
+		t.Fatal("expected the split path, got the disk fallback")
+	}
+	trimmed, changed, err := match.RequestTransformer.TransformRequest(context.Background(), []byte(compactWithSystemRunsBody))
+	if err != nil || !changed {
+		t.Fatalf("TransformRequest changed=%v err=%v", changed, err)
+	}
+	var got struct {
+		Messages []anthropicMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(trimmed, &got); err != nil {
+		t.Fatalf("decode trimmed: %v", err)
+	}
+	if !validateTrim(got.Messages) {
+		t.Fatalf("trimmed request is not valid: %s", trimmed)
+	}
+	roles := make([]string, 0, len(got.Messages))
+	for _, message := range got.Messages {
+		roles = append(roles, message.Role)
+	}
+	wantRoles := []string{"user", "assistant", "user", "user", "system"}
+	if strings.Join(roles, ",") != strings.Join(wantRoles, ",") {
+		t.Fatalf("trimmed roles = %v, want %v", roles, wantRoles)
+	}
+	trimmedStr := string(trimmed)
+	if strings.Contains(trimmedStr, "reminder-a") || strings.Contains(trimmedStr, "reminder-b") {
+		t.Fatalf("trimmed request kept an older-half system reminder: %s", trimmedStr)
+	}
+	if !strings.Contains(trimmedStr, "trailing-reminder") {
+		t.Fatalf("trimmed request dropped the reminder after the compaction prompt: %s", trimmedStr)
+	}
+	out, err := match.Transformer.TransformResponse(context.Background(), eventStreamResponse(summarySSEResponse))
+	if err != nil {
+		t.Fatalf("TransformResponse err = %v", err)
+	}
+	if body := readBody(t, out); !strings.Contains(body, "PARSER-RENDERED-RECENT") {
+		t.Fatalf("summary is missing the provider-rendered recent half: %s", body)
+	}
+}
+
+func TestHookKeepsRequestWhenRecentRenderIsEmpty(t *testing.T) {
+	t.Parallel()
+	provider := &recordingContentProvider{content: "", requests: nil}
+	hook := New(provider.provide, Sizing{})
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
+		Body:   staticHookBody{body: []byte(compactSplitBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if match.RequestTransformer == nil {
+		t.Fatal("expected a request transformer on a splittable request")
+	}
+	out, changed, err := match.RequestTransformer.TransformRequest(context.Background(), []byte(compactSplitBody))
+	if err != nil {
+		t.Fatalf("TransformRequest err = %v", err)
+	}
+	if changed || string(out) != compactSplitBody {
+		t.Fatal("an empty recent-half render must forward the request untrimmed")
+	}
 }
 
 func TestSplitRequestTransformerFailsOpen(t *testing.T) {
 	t.Parallel()
-	transformer := messageTrimTransformer{keep: []int{0, 1}}
+	transformer := messageTrimTransformer{
+		keep:     []int{0, 1},
+		provider: fixedContentProvider("RECENT"),
+		request:  ContentRequest{SessionID: "sess-abc", MaxBytes: 10, UncappedLines: true},
+		state:    &splitState{content: ""},
+	}
 	body := []byte(`{not valid json`)
 	out, changed, err := transformer.TransformRequest(context.Background(), body)
 	if err == nil {
@@ -365,7 +487,7 @@ const compactWithToolPairsBody = `{"model":"m","messages":[` +
 
 func TestPlanSplitKeepsToolPairsAndValidates(t *testing.T) {
 	t.Parallel()
-	hook := New(nil, Sizing{})
+	hook := New(fixedContentProvider("RECENT"), Sizing{})
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
@@ -492,8 +614,8 @@ func TestHookSmallConversationFallsBackToProvider(t *testing.T) {
 	if !ok {
 		t.Fatalf("transformer type = %T", match.Transformer)
 	}
-	if appender.content != "" {
-		t.Fatalf("expected empty content on the provider fallback, got %q", appender.content)
+	if appender.split != nil {
+		t.Fatal("expected no split state on the provider fallback")
 	}
 	if appender.provider == nil {
 		t.Fatal("expected the disk provider to be set on the fallback path")
@@ -769,7 +891,7 @@ func TestTransformPassesThroughEmptyContent(t *testing.T) {
 
 func TestTransformPassesThroughProviderError(t *testing.T) {
 	t.Parallel()
-	failing := func(context.Context, string, int) (string, error) {
+	failing := func(context.Context, ContentRequest) (string, error) {
 		return "", context.DeadlineExceeded
 	}
 	out := transformSummary(t, failing, eventStreamResponse(summarySSEResponse))
@@ -810,8 +932,10 @@ func TestTransformForwardsMaxBytesToProvider(t *testing.T) {
 	t.Parallel()
 	const wantMaxBytes = 4321
 	gotMaxBytes := 0
-	provider := func(_ context.Context, _ string, maxBytes int) (string, error) {
-		gotMaxBytes = maxBytes
+	gotUncapped := true
+	provider := func(_ context.Context, request ContentRequest) (string, error) {
+		gotMaxBytes = request.MaxBytes
+		gotUncapped = request.UncappedLines
 		return "RECOVERED", nil
 	}
 	transformer := responseAppendTransformer{
@@ -828,6 +952,9 @@ func TestTransformForwardsMaxBytesToProvider(t *testing.T) {
 	}
 	if gotMaxBytes != wantMaxBytes {
 		t.Fatalf("provider maxBytes = %d, want %d", gotMaxBytes, wantMaxBytes)
+	}
+	if gotUncapped {
+		t.Fatal("the disk fallback must keep the provider's line cap")
 	}
 }
 
@@ -856,115 +983,5 @@ func TestTransformPassesThroughNonStreamingResponse(t *testing.T) {
 		if got := readBody(t, out); got != tc.body {
 			t.Fatalf("%s must pass through unchanged: got %q", tc.name, got)
 		}
-	}
-}
-
-// screenshotBase64 stands in for a real screenshot's base64 payload. A live
-// /compact reattached seven of these, 1.5 MB of base64 counted as 1.55M tokens,
-// and the next turn failed with "prompt is too long".
-var screenshotBase64 = strings.Repeat("iVBORw0KGgoAAAANSUhEUg", 10_000)
-
-// compactWithScreenshotBody has a screenshot tool result in the recent half, the
-// part the hook removes from the request and injects into the summary as text.
-var compactWithScreenshotBody = `{"messages":[` +
-	`{"role":"user","content":"m1-oldest"},` +
-	`{"role":"assistant","content":"m2-old"},` +
-	`{"role":"user","content":"m3-old"},` +
-	`{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"computer","input":{"action":"screenshot"}}]},` +
-	`{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":[` +
-	`{"type":"text","text":"screenshot captured"},` +
-	`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + screenshotBase64 + `"}}` +
-	`]}]},` +
-	`{"role":"assistant","content":"m6-newest"},` +
-	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
-	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
-
-func TestHookInjectionOmitsToolResultImageData(t *testing.T) {
-	t.Parallel()
-	hook := New(nil, Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
-		Body:   staticHookBody{body: []byte(compactWithScreenshotBody)},
-	})
-	if err != nil {
-		t.Fatalf("MatchRequestResponse err = %v", err)
-	}
-	if match.RequestTransformer == nil {
-		t.Fatal("expected the screenshot conversation to split")
-	}
-	out, err := match.Transformer.TransformResponse(context.Background(), eventStreamResponse(summarySSEResponse))
-	if err != nil {
-		t.Fatalf("TransformResponse err = %v", err)
-	}
-	body := readBody(t, out)
-	if !strings.Contains(body, "screenshot captured") || !strings.Contains(body, "m6-newest") {
-		t.Fatalf("injected summary lost the recent half's text: %s", body)
-	}
-	if !strings.Contains(body, "[image]") {
-		t.Fatalf("injected summary has no image placeholder: %s", body)
-	}
-	if strings.Contains(body, screenshotBase64[:64]) {
-		t.Fatalf("injected summary carries %d bytes of base64 image data", len(body))
-	}
-}
-
-// compactWithNeutralPartsBody carries the content kinds only a real mapping
-// reaches: an assistant thinking block, a top-level image block, and a tool
-// result whose nested blocks include an image. A renderer that knows only
-// text, tool_use, and tool_result drops the first two entirely.
-var compactWithNeutralPartsBody = `{"messages":[` +
-	`{"role":"user","content":"m1-oldest"},` +
-	`{"role":"assistant","content":"m2-old"},` +
-	`{"role":"user","content":"m3-old"},` +
-	`{"role":"assistant","content":[` +
-	`{"type":"thinking","thinking":"weighing the approach","signature":"sig"},` +
-	`{"type":"text","text":"m4-answer"}` +
-	`]},` +
-	`{"role":"user","content":[` +
-	`{"type":"text","text":"look at this"},` +
-	`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + screenshotBase64 + `"}}` +
-	`]},` +
-	`{"role":"assistant","content":"m6-newest"},` +
-	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
-	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
-
-// TestHookInjectionRendersNeutralContentKinds pins the mapping the injection
-// reads: reasoning and a standalone image are real content kinds, not unknown
-// blocks. Rendering them proves the recent half goes through the provider
-// mapping into neutral parts rather than a local switch over a few wire type
-// strings, which silently dropped every kind it did not name.
-func TestHookInjectionRendersNeutralContentKinds(t *testing.T) {
-	t.Parallel()
-	hook := New(nil, Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
-		Body:   staticHookBody{body: []byte(compactWithNeutralPartsBody)},
-	})
-	if err != nil {
-		t.Fatalf("MatchRequestResponse err = %v", err)
-	}
-	if match.RequestTransformer == nil {
-		t.Fatal("expected the conversation to split")
-	}
-	out, err := match.Transformer.TransformResponse(context.Background(), eventStreamResponse(summarySSEResponse))
-	if err != nil {
-		t.Fatalf("TransformResponse err = %v", err)
-	}
-	body := readBody(t, out)
-	if !strings.Contains(body, "weighing the approach") {
-		t.Fatalf("injected summary dropped the assistant's reasoning: %s", body)
-	}
-	if !strings.Contains(body, "look at this") {
-		t.Fatalf("injected summary dropped the user's words beside the image: %s", body)
-	}
-	if !strings.Contains(body, "[image]") {
-		t.Fatalf("injected summary dropped the standalone image placeholder: %s", body)
-	}
-	if strings.Contains(body, screenshotBase64[:64]) {
-		t.Fatal("injected summary carries base64 image data")
 	}
 }

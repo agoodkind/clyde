@@ -83,9 +83,9 @@ func planSplit(messages []anthropicMessage, promptIndex int, maxBytes int, recen
 	recentStart := instructionStart
 	taken := 0
 	for index := instructionStart - 1; index >= 0 && taken < half; index-- {
-		// Budget on the rendering the injection emits (renderBlocks includes tool_use
-		// and tool_result), not text(), which drops tool blocks.
-		size := len(messages[index].renderBlocks())
+		// Budget on the wire content bytes, which count tool_use inputs and
+		// tool_result bodies, not text(), which drops tool blocks.
+		size := len(messages[index].Content)
 		if maxBytes > 0 && taken > 0 && bytesUsed+size > maxBytes {
 			break
 		}
@@ -121,6 +121,25 @@ func trimKeepIndexes(recentStart int, instructionStart int, total int) []int {
 		keep = append(keep, index)
 	}
 	return keep
+}
+
+// dropOlderHalfSystemMessages removes every system message below recentStart from
+// keep and returns the remaining indexes with the number removed. Claude Code sends
+// harness reminders as system messages, often back to back, and a system message
+// followed by anything but an assistant makes the API reject the request. The
+// instruction region at and after recentStart stays as sent, including the
+// trailing reminder after the compaction prompt.
+func dropOlderHalfSystemMessages(messages []anthropicMessage, keep []int, recentStart int) ([]int, int) {
+	out := make([]int, 0, len(keep))
+	dropped := 0
+	for _, index := range keep {
+		if index < recentStart && messages[index].Role == "system" {
+			dropped++
+			continue
+		}
+		out = append(out, index)
+	}
+	return out, dropped
 }
 
 // selectMessages returns the messages at the keep indexes, in order.
