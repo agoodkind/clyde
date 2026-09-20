@@ -108,6 +108,9 @@ func TestHookMatchesLatestUserMessage(t *testing.T) {
 	if !match.Matched {
 		t.Fatal("expected sentinel request to match")
 	}
+	if !match.ContinueMatching {
+		t.Fatal("response-only sentinel match stopped later response hooks")
+	}
 	transformer, ok := match.Transformer.(responseReplaceTransformer)
 	if !ok {
 		t.Fatalf("transformer type = %T, want responseReplaceTransformer", match.Transformer)
@@ -332,6 +335,9 @@ func TestHookDualRewritesRequestAndResponse(t *testing.T) {
 	}
 	if !match.Matched {
 		t.Fatal("expected dual sentinel request to match")
+	}
+	if match.ContinueMatching {
+		t.Fatal("request-rewriting sentinel match continued to later hooks")
 	}
 	respTransformer, ok := match.Transformer.(responseReplaceTransformer)
 	if !ok {

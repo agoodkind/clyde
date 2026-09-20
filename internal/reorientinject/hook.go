@@ -114,6 +114,7 @@ func (h *Hook) MatchRequestResponse(
 			instructionStart: parsed.InstructionStart,
 			state:            state,
 		},
+		ContinueMatching: false,
 	}, nil
 }
 
@@ -315,5 +316,6 @@ func unmatched() mitm.RequestResponseHookMatch {
 		Matched:            false,
 		Transformer:        nil,
 		RequestTransformer: nil,
+		ContinueMatching:   false,
 	}
 }

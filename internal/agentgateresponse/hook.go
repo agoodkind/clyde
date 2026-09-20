@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 
@@ -26,100 +25,45 @@ const (
 	responseTimeout    = 5 * time.Second
 )
 
-// Hook preserves the first matching MITM hook and checks the resulting
-// Anthropic response text with agent-gate.
+// Hook checks ordinary Anthropic message responses with agent-gate.
 type Hook struct {
 	command string
-	nested  []mitm.RequestResponseHook
 }
 
-// New creates a response check around the existing MITM hooks.
-func New(command string, nested []mitm.RequestResponseHook) *Hook {
-	return &Hook{
-		command: strings.TrimSpace(command),
-		nested:  slices.Clone(nested),
-	}
+// New returns an Anthropic response checker for command.
+func New(command string) *Hook {
+	return &Hook{command: strings.TrimSpace(command)}
 }
 
-// MatchRequestResponse selects the existing hook first. Anthropic message
-// responses then receive the agent-gate check after that hook finishes.
+// MatchRequestResponse rejects compaction requests before response processing.
 func (h *Hook) MatchRequestResponse(
 	request mitm.RequestResponseHookRequest,
 ) (mitm.RequestResponseHookMatch, error) {
-	match, err := h.matchNested(request)
-	if err != nil {
-		return mitm.RequestResponseHookMatch{}, err
-	}
 	if !h.matchesAnthropicMessages(request) {
-		return match, nil
+		return mitm.RequestResponseHookMatch{}, nil
 	}
 	checker := responseTransformer{
 		command:   h.command,
 		sessionID: strings.TrimSpace(request.Header.Get("X-Claude-Code-Session-Id")),
 	}
-	match.Matched = true
-	match.Transformer = responseTransformerChain{
-		first:  match.Transformer,
-		second: checker,
-	}
-	return match, nil
-}
-
-func (h *Hook) matchNested(
-	request mitm.RequestResponseHookRequest,
-) (mitm.RequestResponseHookMatch, error) {
-	for _, nested := range h.nested {
-		if nested == nil {
-			continue
-		}
-		match, err := nested.MatchRequestResponse(request)
-		if err != nil {
-			slog.Warn(
-				"mitm.agent_gate_response.nested_match_failed",
-				"concern", "providers.mitm.wire",
-				"err", err,
-			)
-			return mitm.RequestResponseHookMatch{}, fmt.Errorf("match nested response hook: %w", err)
-		}
-		if match.Matched {
-			return match, nil
-		}
-	}
-	return mitm.RequestResponseHookMatch{}, nil
+	return mitm.RequestResponseHookMatch{
+		Matched:            true,
+		Transformer:        checker,
+		RequestTransformer: nil,
+		ContinueMatching:   false,
+	}, nil
 }
 
 func (h *Hook) matchesAnthropicMessages(request mitm.RequestResponseHookRequest) bool {
 	if h == nil || h.command == "" {
 		return false
 	}
+	if request.Purpose == mitm.RequestPurposeCompaction {
+		return false
+	}
 	return request.Provider == claudeProviderName &&
 		request.Method == http.MethodPost &&
 		request.Path == messagesPath
-}
-
-type responseTransformerChain struct {
-	first  mitm.ResponseTransformer
-	second mitm.ResponseTransformer
-}
-
-func (c responseTransformerChain) TransformResponse(
-	ctx context.Context,
-	response mitm.ResponseHookResponse,
-) (mitm.ResponseHookResponse, error) {
-	var err error
-	if c.first != nil {
-		response, err = c.first.TransformResponse(ctx, response)
-		if err != nil {
-			slog.WarnContext(
-				ctx,
-				"mitm.agent_gate_response.nested_transform_failed",
-				"concern", "providers.mitm.wire",
-				"err", err,
-			)
-			return response, fmt.Errorf("transform nested response: %w", err)
-		}
-	}
-	return c.second.TransformResponse(ctx, response)
 }
 
 type responseTransformer struct {
@@ -153,7 +97,10 @@ func (t responseTransformer) TransformResponse(
 			"concern", "providers.mitm.wire",
 			"err", err,
 		)
-		return responseWithBody(response, body), nil
+		return responseWithBody(response, body), fmt.Errorf(
+			"check Anthropic response with agent-gate: %w",
+			err,
+		)
 	}
 	if diagnostic == "" {
 		return responseWithBody(response, body), nil
@@ -176,14 +123,14 @@ func isAnthropicEventStream(response mitm.ResponseHookResponse) bool {
 }
 
 type claudeHookPayload struct {
-	HookEventName       string          `json:"hook_event_name"`
-	SessionID           string          `json:"session_id"`
-	TranscriptPath      string          `json:"transcript_path"`
-	CWD                 string          `json:"cwd"`
-	PermissionMode      string          `json:"permission_mode"`
-	ToolName            string          `json:"tool_name"`
-	ToolUseID           string          `json:"tool_use_id"`
-	ToolInput           claudeToolInput `json:"tool_input"`
+	HookEventName  string          `json:"hook_event_name"`
+	SessionID      string          `json:"session_id"`
+	TranscriptPath string          `json:"transcript_path"`
+	CWD            string          `json:"cwd"`
+	PermissionMode string          `json:"permission_mode"`
+	ToolName       string          `json:"tool_name"`
+	ToolUseID      string          `json:"tool_use_id"`
+	ToolInput      claudeToolInput `json:"tool_input"`
 }
 
 type claudeToolInput struct {

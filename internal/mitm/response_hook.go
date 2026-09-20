@@ -43,16 +43,16 @@ type RequestResponseHookBody interface {
 	Bytes() ([]byte, error)
 }
 
-// RequestResponseHookMatch is the typed match result returned by a hook. A
-// matched hook must carry at least one transformer. RequestTransformer, when
-// set, rewrites the request body before it is forwarded upstream; Transformer,
-// when set, rewrites the response stream returned to the client. A hook may set
-// both, as the reorient injection hook does (it trims the summarization request
-// and appends to the summary response from the same match).
+// RequestResponseHookMatch reports one hook decision and its transformations.
+// A matched hook must define a request transformer, a response transformer, or
+// both. ContinueMatching permits later hooks to add response transformations.
 type RequestResponseHookMatch struct {
 	Matched            bool
 	Transformer        ResponseTransformer
 	RequestTransformer RequestTransformer
+	// ContinueMatching permits the dispatcher to inspect later hooks. The
+	// default stops selection after this match.
+	ContinueMatching bool
 }
 
 // ResponseTransformer rewrites the upstream response stream returned to the
@@ -114,6 +114,8 @@ func (p *Proxy) requestResponseHookSnapshot() []RequestResponseHook {
 }
 
 func (p *Proxy) matchRequestResponseHook(request RequestResponseHookRequest) (ResponseTransformer, RequestTransformer, error) {
+	var responseTransformers []ResponseTransformer
+	var requestTransformer RequestTransformer
 	for _, hook := range p.requestResponseHookSnapshot() {
 		if hook == nil {
 			continue
@@ -129,9 +131,53 @@ func (p *Proxy) matchRequestResponseHook(request RequestResponseHookRequest) (Re
 		if match.Transformer == nil && match.RequestTransformer == nil {
 			return nil, nil, fmt.Errorf("matched request response hook returned no transformer")
 		}
-		return match.Transformer, match.RequestTransformer, nil
+		if match.Transformer != nil {
+			responseTransformers = append(responseTransformers, match.Transformer)
+		}
+		if requestTransformer == nil {
+			requestTransformer = match.RequestTransformer
+		}
+		if !match.ContinueMatching {
+			break
+		}
 	}
-	return nil, nil, nil
+	return combineResponseTransformers(responseTransformers), requestTransformer, nil
+}
+
+type responseTransformerSequence struct {
+	transformers []ResponseTransformer
+}
+
+func combineResponseTransformers(transformers []ResponseTransformer) ResponseTransformer {
+	switch len(transformers) {
+	case 0:
+		return nil
+	case 1:
+		return transformers[0]
+	default:
+		return responseTransformerSequence{transformers: slices.Clone(transformers)}
+	}
+}
+
+func (s responseTransformerSequence) TransformResponse(
+	ctx context.Context,
+	response ResponseHookResponse,
+) (ResponseHookResponse, error) {
+	for index, transformer := range s.transformers {
+		var err error
+		response, err = transformer.TransformResponse(ctx, response)
+		if err != nil {
+			slog.WarnContext(
+				ctx,
+				"mitm.response_hook.sequence_failed",
+				"concern", "providers.mitm.wire",
+				"transformer_index", index,
+				"err", err,
+			)
+			return response, fmt.Errorf("transform response with hook %d: %w", index, err)
+		}
+	}
+	return response, nil
 }
 
 func newRequestResponseHookRequest(provider string, host string, req *http.Request, body RequestResponseHookBody) RequestResponseHookRequest {

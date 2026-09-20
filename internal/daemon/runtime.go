@@ -252,29 +252,43 @@ func bindMITMPacketConns(ctx context.Context, log *slog.Logger, listenerCfg conf
 	return packetConns, nil
 }
 
-// mitmRequestResponseHooks returns the MITM request/response hooks enabled by
-// config. The default configuration registers no hooks and the proxy path stays
-// byte-for-byte unchanged. Sentinel is registered first so a matched sentinel
-// rewrite wins over reorient when both are enabled and both would match.
+type mitmHookRegistration struct {
+	enabled bool
+	hook    mitm.RequestResponseHook
+}
+
+// mitmRequestResponseHooks returns each configured hook in selection order.
+// Reorientation precedes agent-gate, and compaction matches stop selection.
 func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
-	var hooks []mitm.RequestResponseHook
 	mitmCfg := cfg.MITM
 	sentinel := strings.TrimSpace(mitmCfg.Sentinel)
 	actualUserSentinel := strings.TrimSpace(mitmCfg.ActualUserSentinel)
-	if sentinel != "" || actualUserSentinel != "" {
-		hooks = append(hooks, sentinelinject.New(sentinel, actualUserSentinel))
+	command := strings.TrimSpace(mitmCfg.AgentGateCommand)
+	registrations := []mitmHookRegistration{
+		{
+			enabled: sentinel != "" || actualUserSentinel != "",
+			hook:    sentinelinject.New(sentinel, actualUserSentinel),
+		},
+		{
+			enabled: mitmCfg.ReorientSummaryInjection,
+			hook: reorientinject.New(
+				claudecompaction.NewProvider(),
+				reorientinject.Settings{
+					DefaultBudget: mitmCfg.ReorientInjectMaxTokens,
+					Counter:       compactionCounter(cfg),
+				},
+			),
+		},
+		{
+			enabled: command != "",
+			hook:    agentgateresponse.New(command),
+		},
 	}
-	if mitmCfg.ReorientSummaryInjection {
-		hooks = append(hooks, reorientinject.New(
-			claudecompaction.NewProvider(),
-			reorientinject.Settings{
-				DefaultBudget: mitmCfg.ReorientInjectMaxTokens,
-				Counter:       compactionCounter(cfg),
-			},
-		))
-	}
-	if command := strings.TrimSpace(mitmCfg.AgentGateCommand); command != "" {
-		hooks = []mitm.RequestResponseHook{agentgateresponse.New(command, hooks)}
+	hooks := make([]mitm.RequestResponseHook, 0, len(registrations))
+	for _, registration := range registrations {
+		if registration.enabled {
+			hooks = append(hooks, registration.hook)
+		}
 	}
 	return hooks
 }

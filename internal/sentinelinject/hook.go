@@ -111,11 +111,13 @@ func (h *Hook) MatchRequestResponse(
 		Matched:            true,
 		Transformer:        nil,
 		RequestTransformer: nil,
+		ContinueMatching:   false,
 	}
 	if split.hasResponse {
 		match.Transformer = responseReplaceTransformer{
 			content: split.forcedResponse,
 		}
+		match.ContinueMatching = !split.hasUpstreamUser
 	}
 	if split.hasUpstreamUser {
 		match.RequestTransformer = requestReplaceTransformer{
@@ -130,6 +132,7 @@ func unmatchedRequestResponseHookMatch() mitm.RequestResponseHookMatch {
 		Matched:            false,
 		Transformer:        nil,
 		RequestTransformer: nil,
+		ContinueMatching:   false,
 	}
 }
 

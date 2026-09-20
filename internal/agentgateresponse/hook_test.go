@@ -13,7 +13,6 @@ import (
 
 	"goodkind.io/clyde/internal/agentgateresponse"
 	"goodkind.io/clyde/internal/mitm"
-	"goodkind.io/clyde/internal/sentinelinject"
 )
 
 const responseSSE = "event: message_start\n" +
@@ -37,20 +36,18 @@ func (b requestBody) Bytes() ([]byte, error) {
 	return b.value, nil
 }
 
-func TestHookAppendsRealAgentGateDiagnosticAfterSentinelRewrite(t *testing.T) {
+func TestHookAppendsRealAgentGateDiagnostic(t *testing.T) {
 	command := agentGateCommand(t)
 	prohibitedVerb := strings.Join([]string{"car", "ries"}, "")
-	forced := "The response " + prohibitedVerb + " the result."
-	requestJSON := `{"messages":[{"role":"user","content":"MYKEYWORD ` + forced + `"}]}`
-	hook := agentgateresponse.New(command, []mitm.RequestResponseHook{
-		sentinelinject.New("MYKEYWORD", ""),
-	})
+	responseText := "The response " + prohibitedVerb + " the result."
+	violatingSSE := strings.Replace(responseSSE, "hello", responseText, 1)
+	hook := agentgateresponse.New(command)
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Provider: "claude",
 		Method:   http.MethodPost,
 		Path:     "/v1/messages",
 		Header:   http.Header{"X-Claude-Code-Session-Id": {"session-test"}},
-		Body:     requestBody{value: []byte(requestJSON)},
+		Body:     requestBody{value: []byte(`{"messages":[]}`)},
 	})
 	if err != nil {
 		t.Fatalf("MatchRequestResponse: %v", err)
@@ -60,7 +57,7 @@ func TestHookAppendsRealAgentGateDiagnosticAfterSentinelRewrite(t *testing.T) {
 	}
 	response, err := match.Transformer.TransformResponse(
 		context.Background(),
-		eventStreamResponse(responseSSE),
+		eventStreamResponse(violatingSSE),
 	)
 	if err != nil {
 		t.Fatalf("TransformResponse: %v", err)
@@ -70,7 +67,7 @@ func TestHookAppendsRealAgentGateDiagnosticAfterSentinelRewrite(t *testing.T) {
 		t.Fatalf("read transformed body: %v", err)
 	}
 	for _, expected := range []string{
-		forced,
+		responseText,
 		"Agent-gate detected a rule violation in the preceding response.",
 		"no-vague-prose-relationships",
 	} {
@@ -78,14 +75,11 @@ func TestHookAppendsRealAgentGateDiagnosticAfterSentinelRewrite(t *testing.T) {
 			t.Fatalf("response missing %q: %s", expected, body)
 		}
 	}
-	if bytes.Contains(body, []byte(`"text":"hello"`)) {
-		t.Fatalf("sentinel response replacement did not run first: %s", body)
-	}
 }
 
 func TestHookLeavesCompliantResponseUnchanged(t *testing.T) {
 	command := agentGateCommand(t)
-	hook := agentgateresponse.New(command, nil)
+	hook := agentgateresponse.New(command)
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 		Provider: "claude",
 		Method:   http.MethodPost,
@@ -109,6 +103,24 @@ func TestHookLeavesCompliantResponseUnchanged(t *testing.T) {
 	}
 	if !bytes.Equal(body, []byte(responseSSE)) {
 		t.Fatalf("compliant response changed: %s", body)
+	}
+}
+
+func TestHookRejectsCompactionRequests(t *testing.T) {
+	t.Parallel()
+	hook := agentgateresponse.New("/path/that/does/not/exist/agent-gate")
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Provider: "claude",
+		Method:   http.MethodPost,
+		Path:     "/v1/messages",
+		Header:   http.Header{},
+		Purpose:  mitm.RequestPurposeCompaction,
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse: %v", err)
+	}
+	if match.Matched {
+		t.Fatal("agent-gate response check matched a compaction request")
 	}
 }
 
