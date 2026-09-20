@@ -37,8 +37,12 @@ Required change:
    budget and never exceeds it.
 6. The counter and the token settings are the ones
    `clyde conversation export --max-tokens` uses.
-7. Clyde never retains message 1. The model summarizes message 1 in every
-   compaction.
+7. The count includes message 1. After one compaction, message 1 stores the
+   prior summary and the prior injection and is the largest message in the
+   request. A budget larger than every later message cuts inside message 1
+   and retains its tail. When every message fits the budget, the upstream
+   request keeps message 1 whole and clyde retains the rest, and the model
+   summarizes message 1.
 8. Clyde parses all content from the intercepted request. No compaction path
    reads a transcript file.
 9. Clyde forwards the request unmodified, leaves the response unchanged, and
@@ -177,7 +181,9 @@ blocks the counter measures and the injection includes.
    them.
 5. `--max-tokens` accepts the human sizes `clyde conversation export` accepts,
    for example `500k`. Absent that argument, the budget is
-   `reorient_inject_max_tokens`.
+   `reorient_inject_max_tokens`. Absent `--only` and every content shortcut,
+   the content selection is `reorient_inject_content`, and an empty setting
+   keeps every kind. A budget argument alone changes no content selection.
 6. Argument parsing never fails a compaction. Clyde logs an unrecognized or
    invalid argument and proceeds on the configured budget.
 7. Both commands read one parameter declaration. An argument added to

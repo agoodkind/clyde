@@ -434,6 +434,11 @@ reorient_summary_injection = false
 # to the same value. Omit it to use each path's own default (500000).
 # reorient_inject_max_tokens = 500000
 
+# Content kinds the Claude split retains when no --only argument or content
+# shortcut follows /compact. Accepts the clyde conversation export --only
+# values. Omit it to keep every kind.
+# reorient_inject_content = ["chat", "thinking", "tool_outputs"]
+
 # Native Codex split sizing. The Claude split reads none of these; it selects by
 # token budget with the counter clyde conversation export uses.
 # reorient_recent_fraction = 0.5

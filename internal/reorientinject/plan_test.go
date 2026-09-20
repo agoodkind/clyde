@@ -81,14 +81,48 @@ func TestPlanCutRetainsTheTailOfALargeMessage(t *testing.T) {
 	}
 }
 
-func TestPlanCutNeverRetainsMessageZero(t *testing.T) {
+// TestPlanCutRetainsTheTailOfMessageZero pins the common case: after one
+// compaction, message 0 stores the prior summary and the prior injection and is
+// the largest message in the request. A budget larger than every later message
+// must cut inside message 0 and retain its tail.
+func TestPlanCutRetainsTheTailOfMessageZero(t *testing.T) {
+	t.Parallel()
+	request := compactedSession()
+	request.Messages[0] = Message{Role: RoleUser, Segments: []Segment{
+		{Kind: KindText, Text: repeatedWords("summary", 3000) + " prior-injection-tail"},
+	}}
+	// Messages 1 through 5 measure about 5,500 tokens and message 0 about
+	// 3,900, so an 8,000 budget retains every later message and then part of
+	// message 0.
+	got, ok := planCut(request, 8000, testCounter(), everyKind)
+	if !ok {
+		t.Fatal("planCut planned no cut")
+	}
+	if got.Cut.MessageIndex != 0 {
+		t.Fatalf("cut message index = %d, want 0", got.Cut.MessageIndex)
+	}
+	if got.Cut.HeadRunes <= 0 {
+		t.Fatalf("head runes = %d, want the model to summarize part of message 0", got.Cut.HeadRunes)
+	}
+	if !strings.Contains(got.Retained, "prior-injection-tail") {
+		t.Error("the retained text omits the tail of message 0")
+	}
+	if !strings.Contains(got.Retained, "all green") {
+		t.Error("the retained text omits the newest message")
+	}
+}
+
+// TestPlanCutSendsMessageZeroWholeWhenEverythingFits pins the other case: the
+// model always needs content to summarize, so a budget larger than the whole
+// conversation keeps message 0 in the forwarded request and retains the rest.
+func TestPlanCutSendsMessageZeroWholeWhenEverythingFits(t *testing.T) {
 	t.Parallel()
 	got, ok := planCut(compactedSession(), 1_000_000, testCounter(), everyKind)
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
-	if got.Cut.MessageIndex < 1 {
-		t.Fatalf("cut message index = %d, want 1 or greater", got.Cut.MessageIndex)
+	if got.Cut.MessageIndex != 1 || got.Cut.HeadRunes != 0 {
+		t.Fatalf("cut = %+v, want message 1 segment 0 head 0", got.Cut)
 	}
 	if strings.Contains(got.Retained, "start") {
 		t.Error("the retained text includes message 0")

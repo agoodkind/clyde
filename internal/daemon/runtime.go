@@ -17,6 +17,7 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/agentgateaction"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
@@ -275,8 +276,9 @@ func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
 			hook: reorientinject.New(
 				claudecompaction.NewProvider(),
 				reorientinject.Settings{
-					DefaultBudget: mitmCfg.ReorientInjectMaxTokens,
-					Counter:       compactionCounter(cfg),
+					DefaultBudget:  mitmCfg.ReorientInjectMaxTokens,
+					DefaultContent: compactionContent(mitmCfg.ReorientInjectContent),
+					Counter:        compactionCounter(cfg),
 				},
 			),
 		},
@@ -292,6 +294,24 @@ func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
 		}
 	}
 	return hooks
+}
+
+// compactionContent resolves reorient_inject_content. The empty list keeps
+// every kind. An invalid list is logged and also keeps every kind.
+func compactionContent(selectors []string) conversation.ContentKindSet {
+	if len(selectors) == 0 {
+		return conversation.NewContentKindSet()
+	}
+	selected, err := conversation.ResolveContentKinds(selectors)
+	if err != nil {
+		slog.Warn("daemon.reorient_inject.content_invalid",
+			"concern", "process.daemon.lifecycle", "component", "daemon",
+			"reorient_inject_content", selectors,
+			"err", err,
+		)
+		return conversation.NewContentKindSet()
+	}
+	return selected
 }
 
 // compactionCounter returns the token counter clyde conversation export uses,
