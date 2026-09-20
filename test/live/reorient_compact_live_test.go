@@ -20,6 +20,10 @@ import (
 const (
 	reorientSplitPlannedEvent  = "mitm.reorient_inject.split_planned"
 	reorientSplitFallbackEvent = "mitm.reorient_inject.split_fallback"
+
+	// liveCompactionBudget is the token budget both compactions run under. It is
+	// small enough that a short session still exceeds it, so the split has to cut.
+	liveCompactionBudget = 20_000
 )
 
 // claudeLiveResult is the part of `claude -p --output-format json` this test reads.
@@ -30,15 +34,23 @@ type claudeLiveResult struct {
 
 // reorientWireEvent is one line of the sandbox daemon's MITM wire log.
 type reorientWireEvent struct {
-	Message string `json:"msg"`
-	Reason  string `json:"reason"`
+	Message        string `json:"msg"`
+	Reason         string `json:"reason"`
+	Budget         int    `json:"budget"`
+	RetainedTokens int    `json:"retained_tokens"`
+	MessageIndex   int    `json:"message_index"`
+	HeadRunes      int    `json:"head_runes"`
 }
 
-// TestLiveReorientCompactSplitsAndInjects runs a real Claude Code session and a
-// real /compact through a sandbox daemon's MITM listener with summary injection
-// on. It asserts the compaction took the split path, that no fallback rejected
-// the trim, and that the persisted compact summary holds the parser-rendered
-// recent half without harness reminders.
+// TestLiveReorientCompactSplitsAndInjects runs a real Claude Code session and
+// two real compactions through a sandbox daemon's MITM listener, both under one
+// token budget.
+//
+// It asserts four things. Each compaction takes the split path. Each retained
+// part measures strictly under the budget, by the count the split logged. No
+// path falls back. The second compaction's summary still stores content the
+// first compaction retained, which is the defect this work fixes: a count-based
+// selection summarized away the prior compaction's recovered text every time.
 func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires the logged-in Claude Code CLI")
@@ -73,30 +85,57 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 		runClaudeLive(t, commandContext, workdir, clientEnv, prompt,
 			"-p", "--output-format", "json", "--resume", first.SessionID, "--allowedTools", "Bash(echo:*)")
 	}
-	runClaudeLive(t, commandContext, workdir, clientEnv, "/compact",
+	compactCommand := fmt.Sprintf("/compact --max-tokens %d", liveCompactionBudget)
+	runClaudeLive(t, commandContext, workdir, clientEnv, compactCommand,
+		"-p", "--output-format", "json", "--resume", first.SessionID)
+
+	firstSummary := readCompactSummary(t, transcriptPath)
+	if !strings.Contains(firstSummary, reorienttag.PreCompactionTranscriptOpen) {
+		t.Fatalf("the first compact summary has no injected transcript (%d bytes)", len(firstSummary))
+	}
+	if !strings.Contains(firstSummary, "reorient-live-four") {
+		t.Fatalf("the first compaction lost the most recent turn (%d bytes)", len(firstSummary))
+	}
+
+	// The second compaction summarizes a conversation whose message index 0 now
+	// stores the first compaction's summary plus its retained transcript.
+	runClaudeLive(t, commandContext, workdir, clientEnv,
+		"Run `echo reorient-live-five` and reply with its output.",
+		"-p", "--output-format", "json", "--resume", first.SessionID, "--allowedTools", "Bash(echo:*)")
+	runClaudeLive(t, commandContext, workdir, clientEnv, compactCommand,
 		"-p", "--output-format", "json", "--resume", first.SessionID)
 
 	events := readReorientWireEvents(t, h)
-	planned := 0
+	planned := make([]reorientWireEvent, 0, 2)
 	for _, event := range events {
-		if event.Message == reorientSplitPlannedEvent {
-			planned++
-		}
-		if event.Message == reorientSplitFallbackEvent {
-			t.Fatalf("compaction fell back with reason %q; logs=%s", event.Reason, h.dumpLogsOnFailure(t))
+		switch event.Message {
+		case reorientSplitPlannedEvent:
+			planned = append(planned, event)
+		case reorientSplitFallbackEvent:
+			t.Fatalf("a compaction fell back with reason %q; logs=%s", event.Reason, h.dumpLogsOnFailure(t))
 		}
 	}
-	if planned == 0 {
-		t.Fatalf("no %s event; events=%+v logs=%s", reorientSplitPlannedEvent, events, h.dumpLogsOnFailure(t))
+	if len(planned) < 2 {
+		t.Fatalf("%s fired %d times, want 2; events=%+v logs=%s",
+			reorientSplitPlannedEvent, len(planned), events, h.dumpLogsOnFailure(t))
+	}
+	for index, event := range planned {
+		if event.Budget != liveCompactionBudget {
+			t.Errorf("compaction %d ran under budget %d, want %d", index+1, event.Budget, liveCompactionBudget)
+		}
+		if event.RetainedTokens >= liveCompactionBudget {
+			t.Errorf("compaction %d retained %d tokens, which is not under the budget %d",
+				index+1, event.RetainedTokens, liveCompactionBudget)
+		}
 	}
 
-	summary := readCompactSummary(t, transcriptPath)
-	if !strings.Contains(summary, reorienttag.PreCompactionTranscriptOpen) {
-		t.Fatalf("compact summary has no injected transcript (%d bytes)", len(summary))
+	secondSummary := readCompactSummary(t, transcriptPath)
+	if !strings.Contains(secondSummary, "reorient-live-five") {
+		t.Fatalf("the second compaction lost the most recent turn (%d bytes)", len(secondSummary))
 	}
-	injected := summary[strings.Index(summary, reorienttag.PreCompactionTranscriptOpen):]
-	if !strings.Contains(injected, "reorient-live-four") {
-		t.Fatalf("injected transcript is missing the most recent turn (%d bytes)", len(injected))
+	if !strings.Contains(secondSummary, "reorient-live-four") {
+		t.Fatalf("the second compaction summarized away the first compaction's retained content (%d bytes)",
+			len(secondSummary))
 	}
 }
 
