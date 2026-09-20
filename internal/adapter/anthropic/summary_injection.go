@@ -47,6 +47,37 @@ func InjectIntoSummary(body []byte, content string) ([]byte, error) {
 	return buildSummarySSEBody(events), nil
 }
 
+// ResponseText returns the text_delta content from an Anthropic SSE response.
+func ResponseText(body []byte) string {
+	events := parseSummarySSEEvents(string(body))
+	var builder strings.Builder
+	previousIndex := missingContentBlockIndex
+	for _, event := range events {
+		index, text, ok := summaryTextDeltaOf(event)
+		if !ok || text == "" {
+			continue
+		}
+		if builder.Len() > 0 && index != previousIndex {
+			builder.WriteByte('\n')
+		}
+		builder.WriteString(text)
+		previousIndex = index
+	}
+	return builder.String()
+}
+
+// AppendTextBlock adds one text block before the closing message events.
+func AppendTextBlock(body []byte, content string) ([]byte, error) {
+	events := parseSummarySSEEvents(string(body))
+	blockIndex := maxSummaryContentBlockIndex(events) + 1
+	appendEvents, err := marshalTextAppendEvents(blockIndex, content)
+	if err != nil {
+		return nil, err
+	}
+	events = insertSummaryAppendEvents(events, appendEvents)
+	return buildSummarySSEBody(events), nil
+}
+
 // injectIntoSummaryBlock rebuilds the assistant text block that contains
 // </summary> as a single delta with content inserted before that tag, and
 // leaves every other event unchanged. The second return is false when no text
@@ -171,12 +202,15 @@ func maxSummaryContentBlockIndex(events []summarySSEEvent) int {
 }
 
 func marshalSummaryAppendEvents(blockIndex int, content string) ([]summarySSEEvent, error) {
-	wrappedContent := wrappedTranscriptContent(content)
+	return marshalTextAppendEvents(blockIndex, wrappedTranscriptContent(content))
+}
+
+func marshalTextAppendEvents(blockIndex int, content string) ([]summarySSEEvent, error) {
 	start, err := marshalSummarySSEData(newSummaryBlockStartPayload(blockIndex))
 	if err != nil {
 		return nil, err
 	}
-	delta, err := marshalSummarySSEData(newSummaryBlockDeltaPayload(blockIndex, wrappedContent))
+	delta, err := marshalSummarySSEData(newSummaryBlockDeltaPayload(blockIndex, content))
 	if err != nil {
 		return nil, err
 	}

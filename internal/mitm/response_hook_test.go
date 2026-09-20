@@ -21,8 +21,9 @@ import (
 	"goodkind.io/clyde/internal/mitm/capture"
 )
 
-func TestRequestResponseHookAppendsPlainHTTPResponseBody(t *testing.T) {
-	const suffix = "\ndata: plain hook\n\n"
+func TestRequestResponseHooksTransformPlainHTTPResponseInRegistrationOrder(t *testing.T) {
+	const firstSuffix = "\ndata: first hook\n\n"
+	const secondSuffix = "\ndata: second hook\n\n"
 	requestBody := []byte(`{"probe":"hook-match"}`)
 	upstreamBody := []byte("plain upstream\n")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,10 +45,17 @@ func TestRequestResponseHookAppendsPlainHTTPResponseBody(t *testing.T) {
 	proxy := newHTTPProxyForCaptureTest(t, captureDir, store, upstream)
 	proxy.SetRequestResponseHooks([]RequestResponseHook{
 		testAppendResponseHook{
+			provider:               "openai",
+			path:                   "/v1/responses",
+			requiredBody:           []byte("hook-match"),
+			suffix:                 []byte(firstSuffix),
+			continueWithLaterHooks: true,
+		},
+		testAppendResponseHook{
 			provider:     "openai",
 			path:         "/v1/responses",
 			requiredBody: []byte("hook-match"),
-			suffix:       []byte(suffix),
+			suffix:       []byte(secondSuffix),
 		},
 	})
 
@@ -62,7 +70,8 @@ func TestRequestResponseHookAppendsPlainHTTPResponseBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read response body: %v", err)
 	}
-	wantBody := append(append([]byte(nil), upstreamBody...), []byte(suffix)...)
+	wantBody := append(append([]byte(nil), upstreamBody...), []byte(firstSuffix)...)
+	wantBody = append(wantBody, []byte(secondSuffix)...)
 	if !bytes.Equal(gotBody, wantBody) {
 		t.Fatalf("response body = %q want %q", gotBody, wantBody)
 	}
@@ -187,10 +196,11 @@ func TestRequestResponseHookNoHookLeavesPlainHTTPResponseUnchanged(t *testing.T)
 }
 
 type testAppendResponseHook struct {
-	provider     string
-	path         string
-	requiredBody []byte
-	suffix       []byte
+	provider               string
+	path                   string
+	requiredBody           []byte
+	suffix                 []byte
+	continueWithLaterHooks bool
 }
 
 func (h testAppendResponseHook) MatchRequestResponse(request RequestResponseHookRequest) (RequestResponseHookMatch, error) {
@@ -208,8 +218,9 @@ func (h testAppendResponseHook) MatchRequestResponse(request RequestResponseHook
 		return RequestResponseHookMatch{}, nil
 	}
 	return RequestResponseHookMatch{
-		Matched:     true,
-		Transformer: testAppendResponseTransformer{suffix: append([]byte(nil), h.suffix...)},
+		Matched:          true,
+		Transformer:      testAppendResponseTransformer{suffix: append([]byte(nil), h.suffix...)},
+		ContinueMatching: h.continueWithLaterHooks,
 	}, nil
 }
 

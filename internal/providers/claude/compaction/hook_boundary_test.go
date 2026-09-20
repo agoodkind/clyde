@@ -106,6 +106,9 @@ func TestHookSplitsARealCompactionRequest(t *testing.T) {
 	if !match.Matched {
 		t.Fatal("a compaction request did not match")
 	}
+	if match.ContinueMatching {
+		t.Fatal("a compaction match continued to later response hooks")
+	}
 	if match.RequestTransformer == nil || match.Transformer == nil {
 		t.Fatal("a matched compaction needs both transformers")
 	}

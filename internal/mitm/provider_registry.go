@@ -158,6 +158,37 @@ type RequestClassifier interface {
 	ClassifyRequestPurpose(headers http.Header) RequestPurpose
 }
 
+// ResponseAction evaluates assistant text. It receives no provider wire type.
+// A provider response adapter supplies the text and encodes returned feedback.
+type ResponseAction interface {
+	EvaluateResponse(context.Context, ResponseActionInput) (ResponseActionResult, error)
+}
+
+// ResponseActionInput contains the text and session identifier passed to a
+// [ResponseAction].
+type ResponseActionInput struct {
+	Text      string
+	SessionID string
+}
+
+// ResponseActionResult is the optional feedback returned by a [ResponseAction].
+type ResponseActionResult struct {
+	Feedback string
+}
+
+// ProviderResponseAdapter is an optional provider extension for response
+// formats that support response actions. The provider implementation selects
+// its routes, extracts assistant text, and encodes feedback in its wire format.
+type ProviderResponseAdapter interface {
+	MatchesResponse(RequestResponseHookRequest) bool
+	TransformResponse(
+		context.Context,
+		RequestResponseHookRequest,
+		ResponseHookResponse,
+		ResponseAction,
+	) (ResponseHookResponse, error)
+}
+
 // requestPurposeFor asks the named provider's classifier to read these
 // headers. An unregistered provider and a provider without a classifier both
 // return [RequestPurposeUnspecified].
@@ -170,6 +201,18 @@ func requestPurposeFor(providerName string, headers http.Header) RequestPurpose 
 		return classifier.ClassifyRequestPurpose(headers)
 	}
 	return RequestPurposeUnspecified
+}
+
+// ResponseAdapterFor returns the response adapter registered by providerName.
+func ResponseAdapterFor(providerName string) (ProviderResponseAdapter, bool) {
+	for _, provider := range defaultRegistry.snapshot() {
+		adapter, ok := provider.(ProviderResponseAdapter)
+		if !ok || provider.ID().String() != providerName {
+			continue
+		}
+		return adapter, true
+	}
+	return nil, false
 }
 
 func bodyConversationIdentifierFor(providerName string) (BodyConversationIdentifier, bool) {

@@ -15,12 +15,14 @@ import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	"goodkind.io/clyde/internal/agentgateaction"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
 	claudecompaction "goodkind.io/clyde/internal/providers/claude/compaction"
 	"goodkind.io/clyde/internal/reorientinject"
+	"goodkind.io/clyde/internal/responsehook"
 	"goodkind.io/clyde/internal/sentinelinject"
 	"goodkind.io/clyde/internal/tokencount"
 )
@@ -251,26 +253,43 @@ func bindMITMPacketConns(ctx context.Context, log *slog.Logger, listenerCfg conf
 	return packetConns, nil
 }
 
-// mitmRequestResponseHooks returns the MITM request/response hooks enabled by
-// config. The default configuration registers no hooks and the proxy path stays
-// byte-for-byte unchanged. Sentinel is registered first so a matched sentinel
-// rewrite wins over reorient when both are enabled and both would match.
+type mitmHookRegistration struct {
+	enabled bool
+	hook    mitm.RequestResponseHook
+}
+
+// mitmRequestResponseHooks returns each configured hook in selection order.
+// Reorientation precedes agent-gate, and compaction matches stop selection.
 func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
-	var hooks []mitm.RequestResponseHook
 	mitmCfg := cfg.MITM
 	sentinel := strings.TrimSpace(mitmCfg.Sentinel)
 	actualUserSentinel := strings.TrimSpace(mitmCfg.ActualUserSentinel)
-	if sentinel != "" || actualUserSentinel != "" {
-		hooks = append(hooks, sentinelinject.New(sentinel, actualUserSentinel))
+	command := strings.TrimSpace(mitmCfg.AgentGateCommand)
+	registrations := []mitmHookRegistration{
+		{
+			enabled: sentinel != "" || actualUserSentinel != "",
+			hook:    sentinelinject.New(sentinel, actualUserSentinel),
+		},
+		{
+			enabled: mitmCfg.ReorientSummaryInjection,
+			hook: reorientinject.New(
+				claudecompaction.NewProvider(),
+				reorientinject.Settings{
+					DefaultBudget: mitmCfg.ReorientInjectMaxTokens,
+					Counter:       compactionCounter(cfg),
+				},
+			),
+		},
+		{
+			enabled: command != "",
+			hook:    responsehook.New(agentgateaction.New(command)),
+		},
 	}
-	if mitmCfg.ReorientSummaryInjection {
-		hooks = append(hooks, reorientinject.New(
-			claudecompaction.NewProvider(),
-			reorientinject.Settings{
-				DefaultBudget: mitmCfg.ReorientInjectMaxTokens,
-				Counter:       compactionCounter(cfg),
-			},
-		))
+	hooks := make([]mitm.RequestResponseHook, 0, len(registrations))
+	for _, registration := range registrations {
+		if registration.enabled {
+			hooks = append(hooks, registration.hook)
+		}
 	}
 	return hooks
 }

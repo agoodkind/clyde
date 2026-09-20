@@ -1,9 +1,15 @@
 package daemon
 
 import (
+	"context"
+	"net/http"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/mitm"
+	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
+	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
 	"goodkind.io/clyde/internal/reorientinject"
 	"goodkind.io/clyde/internal/sentinelinject"
 )
@@ -22,6 +28,53 @@ func TestMitmHooksDisabledByDefault(t *testing.T) {
 	t.Parallel()
 	if hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{})); len(hooks) != 0 {
 		t.Fatalf("mitmRequestResponseHooks(default) = %d hooks, want 0", len(hooks))
+	}
+}
+
+func TestAgentGateResponseCheckRegistersAfterReorient(t *testing.T) {
+	t.Parallel()
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{
+		AgentGateCommand:         "/path/that/does/not/exist/agent-gate",
+		ReorientSummaryInjection: true,
+	}))
+	if len(hooks) != 2 {
+		t.Fatalf("hooks = %d, want 2", len(hooks))
+	}
+	request := mitm.RequestResponseHookRequest{
+		Provider: "claude",
+		Method:   http.MethodPost,
+		Path:     "/v1/messages",
+		Header:   http.Header{},
+	}
+	reorientMatch, err := hooks[0].MatchRequestResponse(request)
+	if err != nil {
+		t.Fatalf("match reorientation hook: %v", err)
+	}
+	if reorientMatch.Matched {
+		t.Fatal("reorientation hook matched an ordinary request")
+	}
+	match, err := hooks[1].MatchRequestResponse(request)
+	if err != nil {
+		t.Fatalf("match agent-gate hook: %v", err)
+	}
+	if !match.Matched || match.Transformer == nil {
+		t.Fatal("configured agent-gate response check did not match")
+	}
+	_, err = match.Transformer.TransformResponse(
+		context.Background(),
+		mitm.ResponseHookResponse{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body: strings.NewReader(
+				"event: content_block_delta\n" +
+					`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}` + "\n\n" +
+					"event: message_stop\n" +
+					`data: {"type":"message_stop"}` + "\n\n",
+			),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "evaluate Anthropic response") {
+		t.Fatalf("TransformResponse error = %v, want agent-gate command failure", err)
 	}
 }
 
