@@ -50,6 +50,8 @@ func liveHook(budget int) *reorientinject.Hook {
 	})
 }
 
+// hookRequest builds a request Claude Code declared to be its own compaction
+// turn. The client sets that declaration; a pasted transcript does not.
 func hookRequest(body mitm.RequestResponseHookBody) mitm.RequestResponseHookRequest {
 	return mitm.RequestResponseHookRequest{
 		Provider: "claude",
@@ -58,6 +60,7 @@ func hookRequest(body mitm.RequestResponseHookBody) mitm.RequestResponseHookRequ
 		Path:     "/v1/messages",
 		Header:   http.Header{},
 		Body:     body,
+		Purpose:  mitm.RequestPurposeCompaction,
 	}
 }
 
@@ -165,6 +168,28 @@ func TestHookIgnoresAnUndecodableBody(t *testing.T) {
 	}
 	if match.Matched {
 		t.Fatal("a malformed body matched the compaction split")
+	}
+}
+
+// TestHookIgnoresAnUndeclaredCompactionBody is the regression test for the
+// pasted-transcript injection, capture row 364776: an ordinary turn whose last
+// user message reproduced the compaction prompt received an injected transcript.
+//
+// The body here is a complete compaction request, prompt included, and the
+// client declared no compaction. The body reader fails the test when anything
+// reads it, which pins the declaration check above the decode. Without that
+// ordering a pasted transcript is decoded on every ordinary turn.
+func TestHookIgnoresAnUndeclaredCompactionBody(t *testing.T) {
+	t.Parallel()
+	compactionBody(t)
+	request := hookRequest(unreadableBody{t: t})
+	request.Purpose = mitm.RequestPurposeUnspecified
+	match, err := liveHook(2000).MatchRequestResponse(request)
+	if err != nil {
+		t.Fatalf("MatchRequestResponse: %v", err)
+	}
+	if match.Matched {
+		t.Fatal("an undeclared request matched the compaction split")
 	}
 }
 
