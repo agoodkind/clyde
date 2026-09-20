@@ -8,21 +8,28 @@ import (
 	"goodkind.io/clyde/internal/sentinelinject"
 )
 
+// hookConfig returns a daemon config with one MITM section applied.
+func hookConfig(mitmCfg config.MITMConfig) *config.Config {
+	cfg := config.NewConfigWithDefaults()
+	cfg.MITM = mitmCfg
+	return cfg
+}
+
 // TestMitmHooksDisabledByDefault asserts the default MITM config registers no
 // request/response hooks, so the proxy path stays unchanged until a feature is
 // explicitly enabled.
 func TestMitmHooksDisabledByDefault(t *testing.T) {
 	t.Parallel()
-	if hooks := mitmRequestResponseHooks(config.MITMConfig{}); len(hooks) != 0 {
+	if hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{})); len(hooks) != 0 {
 		t.Fatalf("mitmRequestResponseHooks(default) = %d hooks, want 0", len(hooks))
 	}
 }
 
 // TestMitmHooksReorientOnlyRegistersOneHook asserts enabling reorient registers
-// exactly the reorient injection hook.
+// exactly the compaction split hook.
 func TestMitmHooksReorientOnlyRegistersOneHook(t *testing.T) {
 	t.Parallel()
-	hooks := mitmRequestResponseHooks(config.MITMConfig{ReorientSummaryInjection: true})
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{ReorientSummaryInjection: true}))
 	if len(hooks) != 1 {
 		t.Fatalf("mitmRequestResponseHooks(reorient) = %d hooks, want 1", len(hooks))
 	}
@@ -35,7 +42,7 @@ func TestMitmHooksReorientOnlyRegistersOneHook(t *testing.T) {
 // registers the sentinel rewrite hook.
 func TestSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 	t.Parallel()
-	hooks := mitmRequestResponseHooks(config.MITMConfig{Sentinel: "MYKEYWORD"})
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{Sentinel: "MYKEYWORD"}))
 	if len(hooks) != 1 {
 		t.Fatalf("mitmRequestResponseHooks(sentinel) = %d hooks, want 1", len(hooks))
 	}
@@ -48,7 +55,7 @@ func TestSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 // actual_user_sentinel alone registers the sentinel rewrite hook.
 func TestActualUserSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 	t.Parallel()
-	hooks := mitmRequestResponseHooks(config.MITMConfig{ActualUserSentinel: "ACTUAL_USER"})
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{ActualUserSentinel: "ACTUAL_USER"}))
 	if len(hooks) != 1 {
 		t.Fatalf("mitmRequestResponseHooks(actual_user_sentinel) = %d hooks, want 1", len(hooks))
 	}
@@ -61,10 +68,10 @@ func TestActualUserSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 // both features are on, sentinel is first so it wins if both hooks would match.
 func TestMitmHooksRegistersSentinelBeforeReorient(t *testing.T) {
 	t.Parallel()
-	hooks := mitmRequestResponseHooks(config.MITMConfig{
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{
 		Sentinel:                 "MYKEYWORD",
 		ReorientSummaryInjection: true,
-	})
+	}))
 	if len(hooks) != 2 {
 		t.Fatalf("hooks = %d, want 2", len(hooks))
 	}

@@ -8,8 +8,26 @@
 package exportargs
 
 import (
+	"fmt"
+	"io"
+	"log/slog"
+	"strings"
+
+	"github.com/spf13/pflag"
+
 	"goodkind.io/clyde/internal/conversation"
 )
+
+const (
+	logConcern   = "conversation.export"
+	logComponent = "conversation"
+)
+
+// defaultContentSelector is what Parse selects when the arguments name no
+// content kind. An operator who named none asked for no narrowing. The terminal
+// and the MCP tool still demand an explicit selection, because each one calls
+// conversation.ResolveContentKinds itself.
+const defaultContentSelector = "all"
 
 // Kind is the value shape of one argument.
 type Kind uint8
@@ -43,6 +61,11 @@ type Declaration struct {
 	DefaultBool bool
 	// CLIOnly keeps this argument off the MCP surface.
 	CLIOnly bool
+}
+
+// flagName returns the dash-spelled argument name.
+func (d Declaration) flagName() string {
+	return strings.ReplaceAll(d.Canonical, "_", "-")
 }
 
 func stringDeclaration(canonical, description string) Declaration {
@@ -154,4 +177,152 @@ func contentShortcutDescription(selector string) string {
 		return described
 	}
 	return "Include " + selector + " content."
+}
+
+// values stores one parse result before it becomes export options. Each map is
+// keyed by the declaration's canonical name and stores the pointer pflag writes
+// through.
+type values struct {
+	strings map[string]*string
+	ints    map[string]*int
+	bools   map[string]*bool
+	lists   map[string]*[]string
+}
+
+func newValues() values {
+	return values{
+		strings: map[string]*string{},
+		ints:    map[string]*int{},
+		bools:   map[string]*bool{},
+		lists:   map[string]*[]string{},
+	}
+}
+
+func (v values) stringValue(canonical string) string {
+	if stored, ok := v.strings[canonical]; ok && stored != nil {
+		return *stored
+	}
+	return ""
+}
+
+func (v values) intValue(canonical string) int {
+	if stored, ok := v.ints[canonical]; ok && stored != nil {
+		return *stored
+	}
+	return 0
+}
+
+func (v values) boolValue(canonical string) bool {
+	if stored, ok := v.bools[canonical]; ok && stored != nil {
+		return *stored
+	}
+	return false
+}
+
+func (v values) listValue(canonical string) []string {
+	if stored, ok := v.lists[canonical]; ok && stored != nil {
+		return *stored
+	}
+	return nil
+}
+
+// Parse reads command-line style arguments into export options. An undeclared
+// or malformed argument returns an error and no options.
+func Parse(args []string) (conversation.ExportOptions, error) {
+	set := pflag.NewFlagSet("export", pflag.ContinueOnError)
+	// The parser has no terminal, so pflag's usage output goes nowhere. The
+	// returned error carries the reason.
+	set.SetOutput(io.Discard)
+	stored := newValues()
+	for _, declaration := range Declarations() {
+		register(set, declaration, stored)
+	}
+	if err := set.Parse(args); err != nil {
+		slog.Warn("conversation.exportargs.parse_failed",
+			"concern", logConcern, "component", logComponent, "err", err)
+		return conversation.ExportOptions{}, fmt.Errorf("parse export arguments: %w", err)
+	}
+	return resolve(stored)
+}
+
+func register(set *pflag.FlagSet, declaration Declaration, stored values) {
+	name := declaration.flagName()
+	switch declaration.Kind {
+	case KindString, KindEnum:
+		stored.strings[declaration.Canonical] = set.String(name, declaration.DefaultStr, declaration.Description)
+	case KindInt:
+		stored.ints[declaration.Canonical] = set.Int(name, declaration.DefaultInt, declaration.Description)
+	case KindBool:
+		stored.bools[declaration.Canonical] = set.Bool(name, declaration.DefaultBool, declaration.Description)
+	case KindEnumList:
+		stored.lists[declaration.Canonical] = set.StringSlice(name, nil, declaration.Description)
+	}
+}
+
+func resolve(stored values) (conversation.ExportOptions, error) {
+	options := conversation.ExportOptions{
+		Format:       conversation.ExportFormat(stored.stringValue("format")),
+		HistoryStart: stored.intValue("history_start"),
+		LastN:        stored.intValue("last_n"),
+		MaxLines:     stored.intValue("max_lines"),
+		MaxTokens:    stored.stringValue("max_tokens"),
+		TokenModel:   stored.stringValue("token_model"),
+		Whitespace:   resolveWhitespace(stored),
+		Content:      conversation.NewContentKindSet(),
+		Compaction: conversation.CompactionExportOptions{
+			IncludeSelector: stored.stringValue("include_compactions"),
+			FullHistory:     stored.boolValue("full_history"),
+		},
+	}
+	content, err := conversation.ResolveContentKinds(selectedContentKinds(stored))
+	if err != nil {
+		slog.Warn("conversation.exportargs.content_invalid",
+			"concern", logConcern, "component", logComponent, "err", err)
+		return conversation.ExportOptions{}, fmt.Errorf("select content kinds: %w", err)
+	}
+	options.Content = content
+	compaction, err := conversation.NormalizeCompactionExportOptions(
+		options.Compaction,
+		options.HistoryStart,
+		options.LastN,
+	)
+	if err != nil {
+		slog.Warn("conversation.exportargs.compaction_invalid",
+			"concern", logConcern, "component", logComponent, "err", err)
+		return conversation.ExportOptions{}, fmt.Errorf("select compaction controls: %w", err)
+	}
+	options.Compaction = compaction
+	return options, nil
+}
+
+// resolveWhitespace returns the whitespace mode the arguments named. A shortcut
+// wins over the enum, the last shortcut wins over an earlier one, and arguments
+// that name no mode leave the rendered output untouched.
+func resolveWhitespace(stored values) conversation.WhitespaceMode {
+	mode := conversation.WhitespaceMode(stored.stringValue("whitespace"))
+	for _, shortcut := range whitespaceShortcutModes {
+		if stored.boolValue(string(shortcut)) {
+			mode = shortcut
+		}
+	}
+	if mode == "" {
+		return conversation.WhitespacePreserve
+	}
+	return mode
+}
+
+// selectedContentKinds returns the selector values the arguments named, from
+// the only list and from the per-kind shortcuts. Arguments that name no kind
+// select the default.
+func selectedContentKinds(stored values) []string {
+	selectors := append([]string(nil), stored.listValue("only")...)
+	for _, selector := range conversation.ContentKindSelectorValues() {
+		if stored.boolValue(selector) {
+			selectors = append(selectors, selector)
+		}
+	}
+	if len(selectors) == 0 {
+		return []string{defaultContentSelector}
+	}
+	return selectors
 }
