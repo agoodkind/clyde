@@ -6,10 +6,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 
 	conv "goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/conversation/exportargs"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/tokencount"
 )
@@ -48,13 +50,6 @@ type exportTailPayload struct {
 
 func (exportTailPayload) isClispecPrepared() {}
 
-var exportFormatValues = []string{
-	string(conv.ExportFormatMarkdown),
-	string(conv.ExportFormatHTML),
-	string(conv.ExportFormatJSON),
-	string(conv.ExportFormatPlainText),
-}
-
 var whitespaceValues = []string{
 	string(conv.WhitespacePreserve),
 	string(conv.WhitespaceTidy),
@@ -62,6 +57,109 @@ var whitespaceValues = []string{
 	string(conv.WhitespaceDense),
 }
 
+// exportBind writes one declared export argument into exportInput. Exactly one
+// field is non-nil, matching the declaration's kind.
+type exportBind struct {
+	str      func(in *exportInput, v string)
+	integer  func(in *exportInput, v int)
+	boolean  func(in *exportInput, v bool)
+	strSlice func(in *exportInput, v []string)
+}
+
+func stringBind(set func(in *exportInput, v string)) exportBind {
+	return exportBind{str: set, integer: nil, boolean: nil, strSlice: nil}
+}
+
+func intBind(set func(in *exportInput, v int)) exportBind {
+	return exportBind{str: nil, integer: set, boolean: nil, strSlice: nil}
+}
+
+func boolBind(set func(in *exportInput, v bool)) exportBind {
+	return exportBind{str: nil, integer: nil, boolean: set, strSlice: nil}
+}
+
+func strSliceBind(set func(in *exportInput, v []string)) exportBind {
+	return exportBind{str: nil, integer: nil, boolean: nil, strSlice: set}
+}
+
+// whitespaceShortcutBind records the selection as well as the mode. Prepare
+// reads the recorded selections to reject two conflicting whitespace flags.
+func whitespaceShortcutBind(mode conv.WhitespaceMode) exportBind {
+	return boolBind(func(in *exportInput, v bool) {
+		if v {
+			in.Options.Whitespace = mode
+			recordWhitespaceSelection(in, mode)
+		}
+	})
+}
+
+// contentShortcutBind appends the selector to the same list --only appends to.
+// conv.ResolveContentKinds then resolves both through one call.
+func contentShortcutBind(selector string) exportBind {
+	return boolBind(func(in *exportInput, v bool) {
+		if v {
+			in.Kinds = append(in.Kinds, selector)
+		}
+	})
+}
+
+// exportBinds returns one closure per declared export argument, keyed by
+// canonical name. A declaration with no entry here panics when registerFlag
+// applies the flag. TestExportParamsMatchDeclarations fails before that.
+func exportBinds() map[string]exportBind {
+	binds := map[string]exportBind{
+		"format": stringBind(func(in *exportInput, v string) { in.Options.Format = conv.ExportFormat(v) }),
+		"whitespace": stringBind(func(in *exportInput, v string) {
+			mode := conv.WhitespaceMode(v)
+			in.Options.Whitespace = mode
+			recordWhitespaceSelection(in, mode)
+		}),
+		"history_start":       intBind(func(in *exportInput, v int) { in.Options.HistoryStart = v }),
+		"include_compactions": stringBind(func(in *exportInput, v string) { in.Options.Compaction.IncludeSelector = v }),
+		"full_history":        boolBind(func(in *exportInput, v bool) { in.Options.Compaction.FullHistory = v }),
+		"last_n":              intBind(func(in *exportInput, v int) { in.Options.LastN = v }),
+		"max_lines":           intBind(func(in *exportInput, v int) { in.Options.MaxLines = v }),
+		"max_tokens":          stringBind(func(in *exportInput, v string) { in.Options.MaxTokens = v }),
+		"token_model":         stringBind(func(in *exportInput, v string) { in.Options.TokenModel = v }),
+		"only":                strSliceBind(func(in *exportInput, v []string) { in.Kinds = append(in.Kinds, v...) }),
+	}
+	for _, declaration := range exportargs.Declarations() {
+		if _, ok := binds[declaration.Canonical]; ok {
+			continue
+		}
+		if slices.Contains(whitespaceValues, declaration.Canonical) {
+			binds[declaration.Canonical] = whitespaceShortcutBind(conv.WhitespaceMode(declaration.Canonical))
+			continue
+		}
+		if slices.Contains(conv.ContentKindSelectorValues(), declaration.Canonical) {
+			binds[declaration.Canonical] = contentShortcutBind(declaration.Canonical)
+		}
+	}
+	return binds
+}
+
+func renderExportParam(declaration exportargs.Declaration, bind exportBind) Param[exportInput] {
+	var param Param[exportInput]
+	switch declaration.Kind {
+	case exportargs.KindString:
+		param = StringParam(declaration.Canonical, declaration.Description, declaration.DefaultStr, declaration.Required, bind.str)
+	case exportargs.KindInt:
+		param = IntParam(declaration.Canonical, declaration.Description, declaration.DefaultInt, bind.integer)
+	case exportargs.KindBool:
+		param = BoolParam(declaration.Canonical, declaration.Description, declaration.DefaultBool, bind.boolean)
+	case exportargs.KindEnum:
+		param = EnumParam(declaration.Canonical, declaration.Description, declaration.DefaultStr, declaration.Values, bind.str)
+	case exportargs.KindEnumList:
+		param = EnumListParam(declaration.Canonical, declaration.Description, declaration.Values, declaration.Required, bind.strSlice)
+	}
+	param.Required = declaration.Required
+	param.CLIOnly = declaration.CLIOnly
+	return param
+}
+
+// exportParams renders internal/conversation/exportargs as terminal and MCP
+// parameters, and declares output and stdout itself. Those two select a
+// destination file. The compaction path accepts no destination.
 func exportParams() []Param[exportInput] {
 	outputPathParam := StringParam("output", "Write output to path. MCP requires an absolute path. Use - for terminal stdout.", "", false,
 		func(in *exportInput, v string) { in.OutputPath = v })
@@ -70,74 +168,13 @@ func exportParams() []Param[exportInput] {
 		func(in *exportInput, v bool) { in.Stdout = v })
 	stdoutParam.CLIOnly = true
 
-	onlyParam := EnumListParam("only",
-		"Content kinds to export, comma-separated: chat, thinking, tools, tool_calls, tool_outputs, system_prompts, system_messages, injected, raw_json_metadata, plus all.",
-		conv.ContentKindSelectorValues(), true,
-		func(in *exportInput, v []string) { in.Kinds = append(in.Kinds, v...) })
-
-	whitespaceParam := EnumParam("whitespace", "preserve, tidy, compact, or dense.", "", whitespaceValues,
-		func(in *exportInput, v string) {
-			mode := conv.WhitespaceMode(v)
-			in.Options.Whitespace = mode
-			recordWhitespaceSelection(in, mode)
-		})
-
-	shortcut := func(canonical, value, description string) Param[exportInput] {
-		param := BoolParam(canonical, description, false, func(in *exportInput, v bool) {
-			if v {
-				in.Kinds = append(in.Kinds, value)
-			}
-		})
-		param.CLIOnly = true
-		return param
+	binds := exportBinds()
+	declarations := exportargs.Declarations()
+	params := make([]Param[exportInput], 0, len(declarations)+2)
+	for _, declaration := range declarations {
+		params = append(params, renderExportParam(declaration, binds[declaration.Canonical]))
 	}
-
-	whitespaceShortcut := func(mode conv.WhitespaceMode) Param[exportInput] {
-		param := BoolParam(string(mode), "Use "+string(mode)+" whitespace.", false, func(in *exportInput, v bool) {
-			if v {
-				in.Options.Whitespace = mode
-				recordWhitespaceSelection(in, mode)
-			}
-		})
-		param.CLIOnly = true
-		return param
-	}
-
-	return []Param[exportInput]{
-		EnumParam("format", "markdown, html, json, or plain_text.", string(conv.ExportFormatMarkdown), exportFormatValues,
-			func(in *exportInput, v string) { in.Options.Format = conv.ExportFormat(v) }),
-		whitespaceParam,
-		whitespaceShortcut(conv.WhitespacePreserve),
-		whitespaceShortcut(conv.WhitespaceTidy),
-		whitespaceShortcut(conv.WhitespaceDense),
-		outputPathParam,
-		stdoutParam,
-		IntParam("history_start", "First message index to include.", 0,
-			func(in *exportInput, v int) { in.Options.HistoryStart = v }),
-		StringParam("include_compactions", "Compaction segments to export: 0, 0,1, 0..2, or all. Defaults to 0.", "", false,
-			func(in *exportInput, v string) { in.Options.Compaction.IncludeSelector = v }),
-		BoolParam("full_history", "Export all compaction segments. Equivalent to --include-compactions all.", false,
-			func(in *exportInput, v bool) { in.Options.Compaction.FullHistory = v }),
-		IntParam("last_n", "Keep only the last N visible messages after compaction segment selection.", 0,
-			func(in *exportInput, v int) { in.Options.LastN = v }),
-		IntParam("max_lines", "Keep only the last N rendered lines after whitespace compression. Zero leaves the output uncapped.", 0,
-			func(in *exportInput, v int) { in.Options.MaxLines = v }),
-		StringParam("max_tokens", "Cap the rendered body to a token budget, keeping the tail. Accepts human sizes like 200000, 200,000, 200k, or 1m. Empty leaves the output uncapped.", "", false,
-			func(in *exportInput, v string) { in.Options.MaxTokens = v }),
-		StringParam("token_model", "Override the model whose tokenizer counts --max-tokens (for example gpt-4o). Empty derives it from the conversation's provider and model.", "", false,
-			func(in *exportInput, v string) { in.Options.TokenModel = v }),
-		onlyParam,
-		shortcut("chat", "chat", "Include conversation chat text."),
-		shortcut("thinking", "thinking", "Include assistant thinking blocks."),
-		shortcut("tool_calls", "tool_calls", "Include tool calls."),
-		shortcut("tool_outputs", "tool_outputs", "Include tool result bodies."),
-		shortcut("system_prompts", "system_prompts", "Include system-injected prompts."),
-		shortcut("system_messages", "system_messages", "Include provider system transcript records."),
-		shortcut("injected", "injected", "Include hook-pushed context inside user messages."),
-		shortcut("raw_json_metadata", "raw_json_metadata", "Include JSON metadata fields."),
-		shortcut("tools", "tools", "Include summary-only tool lines."),
-		shortcut("all", "all", "Include every non-tool kind plus tool outputs."),
-	}
+	return append(params, outputPathParam, stdoutParam)
 }
 
 func exportTranscriptOp() Operation[exportInput, exportPayload] {
