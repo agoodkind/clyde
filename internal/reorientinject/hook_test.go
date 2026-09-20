@@ -107,13 +107,11 @@ func eventStreamResponse(body string) mitm.ResponseHookResponse {
 
 // declaredCompaction builds the request a real Claude Code compaction turn
 // produces. The client declares the purpose on the request, and the compaction
-// body follows. An empty beta omits the anthropic-beta header, and the hook
-// treats an omitted header the same as an empty value.
+// body follows. Claude Code sets anthropic-beta on every request, so this
+// helper sets it on every request too, empty value included.
 func declaredCompaction(body string, beta string) mitm.RequestResponseHookRequest {
 	header := http.Header{}
-	if beta != "" {
-		header.Set("anthropic-beta", beta)
-	}
+	header.Set("anthropic-beta", beta)
 	return mitm.RequestResponseHookRequest{
 		Method:  http.MethodPost,
 		Path:    "/v1/messages",
