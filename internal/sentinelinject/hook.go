@@ -272,7 +272,7 @@ func (t requestReplaceTransformer) TransformRequest(
 	if !found {
 		return body, false, nil
 	}
-	replaced, err := replaceMessageContent(messages[index], t.upstreamUser)
+	replaced, err := marshalMessageWithContent(messages[index], t.upstreamUser)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
@@ -324,10 +324,10 @@ func latestUserMessageIndex(messages []json.RawMessage) (int, bool) {
 	return 0, false
 }
 
-// replaceMessageContent returns message with its content field set to text.
-// Every other field of the message stays as it arrived, including a
+// marshalMessageWithContent returns message with its content field set to
+// text. Every other field of the message stays as it arrived, including a
 // cache_control marker this package does not model.
-func replaceMessageContent(message json.RawMessage, text string) (json.RawMessage, error) {
+func marshalMessageWithContent(message json.RawMessage, text string) (json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(message, &fields); err != nil {
 		return nil, fmt.Errorf("decode sentinel inject message: %w", err)
