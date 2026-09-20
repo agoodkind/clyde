@@ -4,16 +4,24 @@ package live
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
+	_ "github.com/mattn/go-sqlite3" // database/sql driver "sqlite3"
 	"goodkind.io/clyde/internal/reorienttag"
 )
 
@@ -89,6 +97,13 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 	runClaudeLive(t, commandContext, workdir, clientEnv, compactCommand,
 		"-p", "--output-format", "json", "--resume", first.SessionID)
 
+	// Check the split before the transcript. A missing summary then names the
+	// stage that broke: no event means the compaction never reached the hook.
+	if planned := plannedSplits(t, h); len(planned) == 0 {
+		t.Fatalf("the first compaction planned no split; logs=%s", h.dumpLogsOnFailure(t))
+	}
+	assertCompactionRequestsAccepted(t, h)
+
 	firstSummary := readCompactSummary(t, transcriptPath)
 	if !strings.Contains(firstSummary, reorienttag.PreCompactionTranscriptOpen) {
 		t.Fatalf("the first compact summary has no injected transcript (%d bytes)", len(firstSummary))
@@ -105,19 +120,10 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 	runClaudeLive(t, commandContext, workdir, clientEnv, compactCommand,
 		"-p", "--output-format", "json", "--resume", first.SessionID)
 
-	events := readReorientWireEvents(t, h)
-	planned := make([]reorientWireEvent, 0, 2)
-	for _, event := range events {
-		switch event.Message {
-		case reorientSplitPlannedEvent:
-			planned = append(planned, event)
-		case reorientSplitFallbackEvent:
-			t.Fatalf("a compaction fell back with reason %q; logs=%s", event.Reason, h.dumpLogsOnFailure(t))
-		}
-	}
+	planned := plannedSplits(t, h)
 	if len(planned) < 2 {
-		t.Fatalf("%s fired %d times, want 2; events=%+v logs=%s",
-			reorientSplitPlannedEvent, len(planned), events, h.dumpLogsOnFailure(t))
+		t.Fatalf("%s fired %d times, want 2; logs=%s",
+			reorientSplitPlannedEvent, len(planned), h.dumpLogsOnFailure(t))
 	}
 	for index, event := range planned {
 		if event.Budget != liveCompactionBudget {
@@ -199,6 +205,158 @@ func runClaudeLive(t *testing.T, ctx context.Context, workdir string, env []stri
 		t.Fatalf("claude %q returned is_error=%v session=%q", prompt, result.IsError, result.SessionID)
 	}
 	return result
+}
+
+// decodeCapturedBody returns a readable form of one captured body. Anthropic
+// compresses its error responses, and the capture store keeps the bytes as they
+// arrived.
+func decodeCapturedBody(body []byte) string {
+	if len(body) == 0 {
+		return "(empty)"
+	}
+	if reader, err := gzip.NewReader(bytes.NewReader(body)); err == nil {
+		defer func() { _ = reader.Close() }()
+		if plain, readErr := io.ReadAll(reader); readErr == nil && utf8.Valid(plain) {
+			return string(plain)
+		}
+	}
+	if plain, err := io.ReadAll(brotli.NewReader(bytes.NewReader(body))); err == nil && utf8.Valid(plain) {
+		return string(plain)
+	}
+	if reader, err := zstd.NewReader(bytes.NewReader(body)); err == nil {
+		defer reader.Close()
+		if plain, readErr := io.ReadAll(reader); readErr == nil && utf8.Valid(plain) {
+			return string(plain)
+		}
+	}
+	if utf8.Valid(body) {
+		return string(body)
+	}
+	return fmt.Sprintf("(%d bytes, no decoder matched)", len(body))
+}
+
+// preserveCaptureStore copies the sandbox capture store when
+// CLYDE_LIVE_CAPTURE_COPY names a destination. The sandbox root is a temp
+// directory the harness deletes, and the operator's own capture store prunes
+// within hours, so a rejected request is otherwise unreachable for offline work.
+func preserveCaptureStore(t *testing.T, store string) {
+	t.Helper()
+	destination := os.Getenv("CLYDE_LIVE_CAPTURE_COPY")
+	if destination == "" {
+		return
+	}
+	contents, err := os.ReadFile(store)
+	if err != nil {
+		t.Logf("preserve capture store: %v", err)
+		return
+	}
+	if err := os.WriteFile(destination, contents, 0o600); err != nil {
+		t.Logf("write preserved capture store: %v", err)
+		return
+	}
+	t.Logf("preserved the sandbox capture store at %s", destination)
+}
+
+// messageShape renders one request body as its role and block-type outline, so
+// a rejection names the structure the API refused without printing the whole
+// conversation.
+func messageShape(body string) string {
+	var request struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		return "(request body is not JSON)"
+	}
+	var out strings.Builder
+	for index, message := range request.Messages {
+		fmt.Fprintf(&out, "\n  [%d] %s:", index, message.Role)
+		var blocks []struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			ToolUseID string `json:"tool_use_id"`
+		}
+		if json.Unmarshal(message.Content, &blocks) != nil {
+			out.WriteString(" text")
+			continue
+		}
+		for _, block := range blocks {
+			out.WriteString(" " + block.Type)
+			if block.ID != "" {
+				out.WriteString("(" + block.ID + ")")
+			}
+			if block.ToolUseID != "" {
+				out.WriteString("(for " + block.ToolUseID + ")")
+			}
+		}
+	}
+	return out.String()
+}
+
+// assertCompactionRequestsAccepted reads the sandbox capture store and fails
+// when Anthropic rejected a request the split rewrote. A rewritten request that
+// the API refuses breaks the compaction the operator asked for, and the wire
+// log records only the status, so the failure quotes the response body.
+func assertCompactionRequestsAccepted(t *testing.T, h *harness) {
+	t.Helper()
+	store := filepath.Join(h.stateRoot, "mitm", "capture.db")
+	preserveCaptureStore(t, store)
+	database, err := sql.Open("sqlite3", "file:"+store+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open sandbox capture store: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	rows, err := database.Query(`
+		SELECT requests.id, requests.status,
+		       response_body.data, request_body.data
+		FROM requests
+		LEFT JOIN bodies AS response_body
+		  ON response_body.request_row_id = requests.id AND response_body.which = 'response'
+		LEFT JOIN bodies AS request_body
+		  ON request_body.request_row_id = requests.id AND request_body.which = 'request'
+		WHERE requests.path LIKE '%/v1/messages'
+		  AND requests.status >= 400
+		ORDER BY requests.id
+	`)
+	if err != nil {
+		t.Fatalf("query sandbox capture store: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, status int
+		var response, request []byte
+		if scanErr := rows.Scan(&id, &status, &response, &request); scanErr != nil {
+			t.Fatalf("scan capture row: %v", scanErr)
+		}
+		t.Errorf("Anthropic rejected a rewritten request: row %d status %d body %s\nforwarded shape: %s",
+			id, status, decodeCapturedBody(response), messageShape(decodeCapturedBody(request)))
+	}
+	if rows.Err() != nil {
+		t.Fatalf("read capture rows: %v", rows.Err())
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+}
+
+// plannedSplits returns every split the sandbox daemon planned so far. It fails
+// the test on any fallback, because a fallback means the compaction forwarded
+// its whole conversation.
+func plannedSplits(t *testing.T, h *harness) []reorientWireEvent {
+	t.Helper()
+	planned := make([]reorientWireEvent, 0, 2)
+	for _, event := range readReorientWireEvents(t, h) {
+		switch event.Message {
+		case reorientSplitPlannedEvent:
+			planned = append(planned, event)
+		case reorientSplitFallbackEvent:
+			t.Fatalf("a compaction fell back with reason %q; logs=%s",
+				event.Reason, h.dumpLogsOnFailure(t))
+		}
+	}
+	return planned
 }
 
 // liveTranscriptPath finds the transcript Claude Code wrote for a session. The

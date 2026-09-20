@@ -80,6 +80,11 @@ func TruncateCompactionRequest(
 		kept = append(kept, boundary)
 	}
 
+	kept, err = dropTrailingSystemMessages(kept)
+	if err != nil {
+		return nil, err
+	}
+
 	synthetic, err := syntheticResultMessage(kept)
 	if err != nil {
 		return nil, err
@@ -89,6 +94,11 @@ func TruncateCompactionRequest(
 	}
 
 	kept = append(kept, messages[instructionStart:]...)
+
+	kept, err = dropOrphanedToolResults(kept)
+	if err != nil {
+		return nil, err
+	}
 
 	encodedMessages, err := json.Marshal(kept)
 	if err != nil {
@@ -100,6 +110,130 @@ func TruncateCompactionRequest(
 		return nil, truncateError("encode truncated compaction request", err)
 	}
 	return out, nil
+}
+
+// dropOrphanedToolResults removes every tool_result block the message before it
+// does not call. Anthropic requires the call and its result in adjacent
+// messages, and the truncation deletes the assistant message that made a call
+// while the instruction region it re-appends can open with that call's result.
+// Measured against the API on 2026-09-19: leaving one returns 400
+// invalid_request_error, "messages.0.content.4: unexpected tool_use_id found in
+// tool_result blocks ... Each tool_result block must have a corresponding
+// tool_use block in the previous message."
+//
+// A message left with no block is dropped, because the API rejects an empty
+// content array.
+func dropOrphanedToolResults(kept []json.RawMessage) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, 0, len(kept))
+	previousCalls := map[string]bool{}
+	for _, raw := range kept {
+		blocks, plain, err := messageBlocks(raw)
+		if err != nil {
+			return nil, err
+		}
+		if blocks == nil {
+			// A string-content message calls nothing and answers nothing.
+			out = append(out, raw)
+			previousCalls = map[string]bool{}
+			continue
+		}
+		kepBlocks := make([]json.RawMessage, 0, len(blocks))
+		calls := map[string]bool{}
+		for _, block := range blocks {
+			var shape compactionBlockShape
+			if err := json.Unmarshal(block, &shape); err != nil {
+				return nil, truncateError("decode kept block", err)
+			}
+			if wireBlockType(shape.Type) == wireBlockToolResult && !previousCalls[shape.ToolUseID] {
+				continue
+			}
+			if wireBlockType(shape.Type) == wireBlockToolUse && shape.ID != "" {
+				calls[shape.ID] = true
+			}
+			kepBlocks = append(kepBlocks, block)
+		}
+		previousCalls = calls
+		if len(kepBlocks) == 0 {
+			continue
+		}
+		rewritten, err := replaceMessageContent(raw, kepBlocks, plain)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rewritten)
+	}
+	return out, nil
+}
+
+// compactionBlockShape is the part of a content block this file inspects.
+type compactionBlockShape struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	ToolUseID string `json:"tool_use_id"`
+}
+
+// messageBlocks returns a message's content blocks, or nil blocks when its
+// content is a plain string.
+func messageBlocks(raw json.RawMessage) ([]json.RawMessage, bool, error) {
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return nil, false, truncateError("decode kept message", err)
+	}
+	rawContent, ok := message["content"]
+	if !ok {
+		return nil, true, nil
+	}
+	// Anthropic keeps message content as either a string or an array of
+	// blocks. A string calls nothing and answers nothing.
+	trimmed := strings.TrimSpace(string(rawContent))
+	if trimmed == "" || trimmed[0] != '[' {
+		return nil, true, nil
+	}
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(rawContent, &blocks); err != nil {
+		return nil, false, truncateError("decode kept message blocks", err)
+	}
+	return blocks, false, nil
+}
+
+func replaceMessageContent(
+	raw json.RawMessage,
+	blocks []json.RawMessage,
+	plain bool,
+) (json.RawMessage, error) {
+	if plain {
+		return raw, nil
+	}
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return nil, truncateError("decode kept message", err)
+	}
+	encoded, err := json.Marshal(blocks)
+	if err != nil {
+		return nil, truncateError("encode kept message blocks", err)
+	}
+	message["content"] = encoded
+	return marshalMessage(message)
+}
+
+// dropTrailingSystemMessages removes system messages from the end of the kept
+// prefix. Anthropic accepts a system message only before an assistant message
+// or at the end of the array, and the instruction region that follows opens
+// with the user message holding the compaction prompt. Measured against the API
+// on 2026-09-19: leaving one returns 400 invalid_request_error, "messages.1:
+// role 'system' must precede an 'assistant' message or end the array".
+func dropTrailingSystemMessages(kept []json.RawMessage) ([]json.RawMessage, error) {
+	for len(kept) > 0 {
+		var message compactionWireMessage
+		if err := json.Unmarshal(kept[len(kept)-1], &message); err != nil {
+			return nil, truncateError("decode trailing kept message", err)
+		}
+		if compactionRole(message.Role) != CompactionRoleSystem {
+			return kept, nil
+		}
+		kept = kept[:len(kept)-1]
+	}
+	return kept, nil
 }
 
 // truncateMessage keeps the content blocks before segmentIndex and the first
