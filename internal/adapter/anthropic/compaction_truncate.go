@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -13,6 +14,19 @@ import (
 // Code emits the same shape for a tool call with no result (claude-code source,
 // src/utils/messages.ts:5318-5325).
 const interruptedToolResultText = "[Tool use was interrupted]"
+
+// truncateError logs one truncation failure and returns it named. Every failure
+// in this file is a malformed request body, and the caller forwards the
+// original request unmodified, so this log is the only record of the reason.
+func truncateError(operation string, err error) error {
+	slog.Warn("adapter.anthropic.compaction_truncate_failed",
+		"concern", string(anthropicRequestLog),
+		"component", "adapter",
+		"operation", operation,
+		"err", err,
+	)
+	return fmt.Errorf("%s: %w", operation, err)
+}
 
 // CompactionCut is where the split divides the boundary message. MessageIndex
 // and SegmentIndex address the boundary segment. HeadRunes is how much of that
@@ -31,10 +45,14 @@ type CompactionCut struct {
 // Anthropic requires a result for every tool call in the same request.
 // Truncation deletes the results that answered the retained calls, so this
 // appends one synthetic result per unanswered call.
-func TruncateCompactionRequest(body []byte, cut CompactionCut, instructionStart int) ([]byte, error) {
+func TruncateCompactionRequest(
+	body []byte,
+	cut CompactionCut,
+	instructionStart int,
+) ([]byte, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
-		return nil, fmt.Errorf("decode compaction request body: %w", err)
+		return nil, truncateError("decode compaction request body", err)
 	}
 	rawMessages, ok := top["messages"]
 	if !ok {
@@ -42,7 +60,7 @@ func TruncateCompactionRequest(body []byte, cut CompactionCut, instructionStart 
 	}
 	var messages []json.RawMessage
 	if err := json.Unmarshal(rawMessages, &messages); err != nil {
-		return nil, fmt.Errorf("decode compaction request messages: %w", err)
+		return nil, truncateError("decode compaction request messages", err)
 	}
 	if cut.MessageIndex < 0 || cut.MessageIndex >= len(messages) {
 		return nil, fmt.Errorf("cut message index %d out of range %d", cut.MessageIndex, len(messages))
@@ -74,12 +92,12 @@ func TruncateCompactionRequest(body []byte, cut CompactionCut, instructionStart 
 
 	encodedMessages, err := json.Marshal(kept)
 	if err != nil {
-		return nil, fmt.Errorf("encode truncated messages: %w", err)
+		return nil, truncateError("encode truncated messages", err)
 	}
 	top["messages"] = encodedMessages
 	out, err := json.Marshal(top)
 	if err != nil {
-		return nil, fmt.Errorf("encode truncated compaction request: %w", err)
+		return nil, truncateError("encode truncated compaction request", err)
 	}
 	return out, nil
 }
@@ -89,7 +107,7 @@ func TruncateCompactionRequest(body []byte, cut CompactionCut, instructionStart 
 func truncateMessage(raw json.RawMessage, segmentIndex, headRunes int) (json.RawMessage, error) {
 	var message map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &message); err != nil {
-		return nil, fmt.Errorf("decode boundary message: %w", err)
+		return nil, truncateError("decode boundary message", err)
 	}
 	rawContent, ok := message["content"]
 	if !ok {
@@ -99,15 +117,15 @@ func truncateMessage(raw json.RawMessage, segmentIndex, headRunes int) (json.Raw
 	if trimmed != "" && trimmed[0] == '"' {
 		var plain string
 		if err := json.Unmarshal(rawContent, &plain); err != nil {
-			return nil, fmt.Errorf("decode boundary message text: %w", err)
+			return nil, truncateError("decode boundary message text", err)
 		}
 		head := headRunesOf(plain, headRunes)
 		if head == "" {
 			return nil, nil
 		}
-		encoded, err := json.Marshal(head)
-		if err != nil {
-			return nil, fmt.Errorf("encode boundary message text: %w", err)
+		encoded, marshalErr := json.Marshal(head)
+		if marshalErr != nil {
+			return nil, truncateError("encode boundary message text", marshalErr)
 		}
 		message["content"] = encoded
 		return marshalMessage(message)
@@ -115,7 +133,7 @@ func truncateMessage(raw json.RawMessage, segmentIndex, headRunes int) (json.Raw
 
 	var blocks []json.RawMessage
 	if err := json.Unmarshal(rawContent, &blocks); err != nil {
-		return nil, fmt.Errorf("decode boundary message blocks: %w", err)
+		return nil, truncateError("decode boundary message blocks", err)
 	}
 	if segmentIndex < 0 || segmentIndex > len(blocks) {
 		return nil, fmt.Errorf("cut segment index %d out of range %d", segmentIndex, len(blocks))
@@ -134,9 +152,9 @@ func truncateMessage(raw json.RawMessage, segmentIndex, headRunes int) (json.Raw
 	if len(kept) == 0 {
 		return nil, nil
 	}
-	encoded, err := json.Marshal(kept)
-	if err != nil {
-		return nil, fmt.Errorf("encode boundary message blocks: %w", err)
+	encoded, marshalErr := json.Marshal(kept)
+	if marshalErr != nil {
+		return nil, truncateError("encode boundary message blocks", marshalErr)
 	}
 	message["content"] = encoded
 	return marshalMessage(message)
@@ -145,7 +163,7 @@ func truncateMessage(raw json.RawMessage, segmentIndex, headRunes int) (json.Raw
 func marshalMessage(message map[string]json.RawMessage) (json.RawMessage, error) {
 	encoded, err := json.Marshal(message)
 	if err != nil {
-		return nil, fmt.Errorf("encode boundary message: %w", err)
+		return nil, truncateError("encode boundary message", err)
 	}
 	return encoded, nil
 }
@@ -156,12 +174,12 @@ func marshalMessage(message map[string]json.RawMessage) (json.RawMessage, error)
 func truncateBlock(raw json.RawMessage, headRunes int) (json.RawMessage, error) {
 	var block map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &block); err != nil {
-		return nil, fmt.Errorf("decode boundary block: %w", err)
+		return nil, truncateError("decode boundary block", err)
 	}
 	var blockType string
 	if rawType, ok := block["type"]; ok {
 		if err := json.Unmarshal(rawType, &blockType); err != nil {
-			return nil, fmt.Errorf("decode boundary block type: %w", err)
+			return nil, truncateError("decode boundary block type", err)
 		}
 	}
 	switch wireBlockType(blockType) {
@@ -190,11 +208,11 @@ func truncateStringField(
 	}
 	var value string
 	if err := json.Unmarshal(rawValue, &value); err != nil {
-		return nil, fmt.Errorf("decode boundary block %s: %w", field, err)
+		return nil, truncateError("decode boundary block "+field, err)
 	}
 	encoded, err := json.Marshal(headRunesOf(value, headRunes))
 	if err != nil {
-		return nil, fmt.Errorf("encode boundary block %s: %w", field, err)
+		return nil, truncateError("encode boundary block "+field, err)
 	}
 	block[field] = encoded
 	return marshalBlock(block)
@@ -214,7 +232,7 @@ func truncateToolResultBlock(
 	head := headRunesOf(flattenToolResult(rawContent), headRunes)
 	encoded, err := json.Marshal(head)
 	if err != nil {
-		return nil, fmt.Errorf("encode boundary tool result: %w", err)
+		return nil, truncateError("encode boundary tool result", err)
 	}
 	block["content"] = encoded
 	return marshalBlock(block)
@@ -255,7 +273,7 @@ func truncateToolUseBlock(
 		if err := json.Unmarshal(value, &text); err == nil {
 			encoded, marshalErr := json.Marshal(headRunesOf(text, budget))
 			if marshalErr != nil {
-				return nil, fmt.Errorf("encode boundary tool input: %w", marshalErr)
+				return nil, truncateError("encode boundary tool input", marshalErr)
 			}
 			truncatedInput[key] = encoded
 		}
@@ -263,7 +281,7 @@ func truncateToolUseBlock(
 	}
 	encoded, err := json.Marshal(truncatedInput)
 	if err != nil {
-		return nil, fmt.Errorf("encode boundary tool input object: %w", err)
+		return nil, truncateError("encode boundary tool input object", err)
 	}
 	block["input"] = encoded
 	return marshalBlock(block)
@@ -272,7 +290,7 @@ func truncateToolUseBlock(
 func marshalBlock(block map[string]json.RawMessage) (json.RawMessage, error) {
 	encoded, err := json.Marshal(block)
 	if err != nil {
-		return nil, fmt.Errorf("encode boundary block: %w", err)
+		return nil, truncateError("encode boundary block", err)
 	}
 	return encoded, nil
 }
@@ -296,7 +314,7 @@ func syntheticResultMessage(kept []json.RawMessage) (json.RawMessage, error) {
 	for _, raw := range kept {
 		var message compactionWireMessage
 		if err := json.Unmarshal(raw, &message); err != nil {
-			return nil, fmt.Errorf("decode kept message: %w", err)
+			return nil, truncateError("decode kept message", err)
 		}
 		parts, _ := NormalizeContent(message.Content)
 		for _, part := range parts {
@@ -309,6 +327,12 @@ func syntheticResultMessage(kept []json.RawMessage) (json.RawMessage, error) {
 				if part.ToolUseID != "" {
 					answered[part.ToolUseID] = true
 				}
+			case content.PartText,
+				content.PartImage,
+				content.PartAudio,
+				content.PartRefusal,
+				content.PartThinking,
+				content.PartUnsupported:
 			}
 		}
 	}
@@ -329,7 +353,7 @@ func syntheticResultMessage(kept []json.RawMessage) (json.RawMessage, error) {
 	}
 	encoded, err := json.Marshal(syntheticResultWireMessage{Role: "user", Content: blocks})
 	if err != nil {
-		return nil, fmt.Errorf("encode synthetic tool result message: %w", err)
+		return nil, truncateError("encode synthetic tool result message", err)
 	}
 	return encoded, nil
 }

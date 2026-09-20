@@ -26,9 +26,40 @@ type Segment struct {
 	Text string
 }
 
+// Role is who produced one message. A provider maps its own wire role onto
+// these, and RoleOther preserves a role this package does not name.
+type Role string
+
+const (
+	// RoleUser is a message the operator or the client sent.
+	RoleUser Role = "user"
+	// RoleAssistant is a message the model produced.
+	RoleAssistant Role = "assistant"
+	// RoleSystem is a message that exists only on the wire, such as a reminder
+	// the client appends.
+	RoleSystem Role = "system"
+	// RoleOther is any role the provider did not map.
+	RoleOther Role = "other"
+)
+
+// Heading is the name the retained text gives this role.
+func (r Role) Heading() string {
+	switch r {
+	case RoleUser:
+		return "User"
+	case RoleAssistant:
+		return "Assistant"
+	case RoleSystem:
+		return "System"
+	case RoleOther:
+		return "Other"
+	}
+	return "Other"
+}
+
 // Message is one message of a compaction request.
 type Message struct {
-	Role     string
+	Role     Role
 	Segments []Segment
 }
 

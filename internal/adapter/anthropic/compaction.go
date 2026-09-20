@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/content"
@@ -36,9 +37,38 @@ type Segment struct {
 	ToolUseID string
 }
 
+// CompactionRole is the role of one wire message. Anthropic accepts user and
+// assistant; Claude Code also sends its system reminders as wire messages.
+type CompactionRole string
+
+const (
+	// CompactionRoleUser is a message the client sent.
+	CompactionRoleUser CompactionRole = "user"
+	// CompactionRoleAssistant is a message the model produced.
+	CompactionRoleAssistant CompactionRole = "assistant"
+	// CompactionRoleSystem is a message that exists only on the wire.
+	CompactionRoleSystem CompactionRole = "system"
+	// CompactionRoleOther is a role this package does not name.
+	CompactionRoleOther CompactionRole = "other"
+)
+
+func compactionRole(wire string) CompactionRole {
+	switch CompactionRole(wire) {
+	case CompactionRoleUser:
+		return CompactionRoleUser
+	case CompactionRoleAssistant:
+		return CompactionRoleAssistant
+	case CompactionRoleSystem:
+		return CompactionRoleSystem
+	case CompactionRoleOther:
+		return CompactionRoleOther
+	}
+	return CompactionRoleOther
+}
+
 // CompactionMessage is one wire message of a compaction request.
 type CompactionMessage struct {
-	Role     string
+	Role     CompactionRole
 	Segments []Segment
 }
 
@@ -76,6 +106,14 @@ type compactionUserID struct {
 func DecodeCompactionRequest(body []byte) (CompactionRequest, error) {
 	var wire compactionWireRequest
 	if err := json.Unmarshal(body, &wire); err != nil {
+		// The caller reports no match on this path and reads no error, so this
+		// is the only record that a body reached the decode and failed it.
+		slog.Warn("adapter.anthropic.compaction_decode_failed",
+			"concern", string(anthropicRequestLog),
+			"component", "adapter",
+			"body_bytes", len(body),
+			"err", err,
+		)
 		return CompactionRequest{SessionID: "", Messages: nil},
 			fmt.Errorf("decode compaction request: %w", err)
 	}
@@ -86,7 +124,10 @@ func DecodeCompactionRequest(body []byte) (CompactionRequest, error) {
 		for _, part := range parts {
 			segments = append(segments, segmentOfPart(part))
 		}
-		messages = append(messages, CompactionMessage{Role: message.Role, Segments: segments})
+		messages = append(messages, CompactionMessage{
+			Role:     compactionRole(message.Role),
+			Segments: segments,
+		})
 	}
 	return CompactionRequest{
 		SessionID: compactionSessionID(wire.Metadata),

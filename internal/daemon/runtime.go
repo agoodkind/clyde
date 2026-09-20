@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"os"
 	"strings"
@@ -17,14 +16,13 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
-	"goodkind.io/clyde/internal/providerid"
-	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
+	claudecompaction "goodkind.io/clyde/internal/providers/claude/compaction"
 	"goodkind.io/clyde/internal/reorientinject"
 	"goodkind.io/clyde/internal/sentinelinject"
+	"goodkind.io/clyde/internal/tokencount"
 )
 
 type runtimeServices struct {
@@ -257,8 +255,9 @@ func bindMITMPacketConns(ctx context.Context, log *slog.Logger, listenerCfg conf
 // config. The default configuration registers no hooks and the proxy path stays
 // byte-for-byte unchanged. Sentinel is registered first so a matched sentinel
 // rewrite wins over reorient when both are enabled and both would match.
-func mitmRequestResponseHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
+func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
 	var hooks []mitm.RequestResponseHook
+	mitmCfg := cfg.MITM
 	sentinel := strings.TrimSpace(mitmCfg.Sentinel)
 	actualUserSentinel := strings.TrimSpace(mitmCfg.ActualUserSentinel)
 	if sentinel != "" || actualUserSentinel != "" {
@@ -266,62 +265,27 @@ func mitmRequestResponseHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseH
 	}
 	if mitmCfg.ReorientSummaryInjection {
 		hooks = append(hooks, reorientinject.New(
-			newReorientInjectContentProvider(mitmCfg.ReorientInjectMaxLines),
-			reorientinject.Sizing{
-				MaxTokens:               mitmCfg.ReorientInjectMaxTokens,
-				ContextWindowFraction:   mitmCfg.ReorientContextWindowFraction,
-				BytesPerToken:           mitmCfg.ReorientBytesPerToken,
-				StandardContextWindow:   mitmCfg.ReorientStandardContextWindow,
-				OneMillionContextWindow: mitmCfg.ReorientOneMillionContextWindow,
-				RecentFraction:          mitmCfg.ReorientRecentFraction,
+			claudecompaction.NewProvider(),
+			reorientinject.Settings{
+				DefaultBudget: mitmCfg.ReorientInjectMaxTokens,
+				Counter:       compactionCounter(cfg),
 			},
 		))
 	}
 	return hooks
 }
 
-// newReorientInjectContentProvider builds the reorient content provider. It
-// closes over a dedicated conversation index used only to render a transcript
-// directly from its on-disk path: the index never scans and is independent of
-// the daemon's shared index and its refresh cycle. Given the session id parsed
-// from the intercepted compaction request, the provider resolves the Claude
-// transcript file and renders the recovered pre-compaction transcript off disk
-// with clyde's reorient knobs (tool outputs, dense, line-capped). maxLines caps
-// the recovered transcript unless the request lifts the line cap; zero uses the
-// conversation renderer default. An empty or unresolvable session id yields empty
-// content, which passes the response through unchanged.
-func newReorientInjectContentProvider(maxLines int) reorientinject.ContentProvider {
-	index := NewConversationIndex()
-	return func(ctx context.Context, request reorientinject.ContentRequest) (string, error) {
-		sessionID := request.SessionID
-		if sessionID == "" {
-			return "", nil
-		}
-		// Honor cancellation (client disconnect or timeout) before the filesystem
-		// walk and the render, so a canceled compaction does not keep scanning
-		// ~/.claude/projects or rendering a large transcript. The transformer
-		// treats a provider error as pass-through, so injection is skipped.
-		if err := ctx.Err(); err != nil {
-			slog.WarnContext(ctx, "daemon.reorient_inject.canceled", "concern", "providers.mitm.wire", "component", "daemon", "err", err)
-			return "", fmt.Errorf("reorient inject canceled: %w", err)
-		}
-		path, ok := claudeparser.TranscriptPathForSession(sessionID)
-		if !ok {
-			return "", nil
-		}
-		lineCap := maxLines
-		if request.UncappedLines {
-			lineCap = math.MaxInt
-		}
-		return index.RenderReorientArtifact(path, providerid.ProviderClaude, conversation.ReorientOptions{
-			ConversationID:      "",
-			WorkspaceRoot:       "",
-			MaxLines:            lineCap,
-			MaxBytes:            request.MaxBytes,
-			IncludeToolOutputs:  true,
-			SyntheticPreCompact: true,
-		})
+// compactionCounter returns the token counter clyde conversation export uses,
+// under the same [export] settings.
+//
+// The local estimator answers alone. The exact count endpoint is a network call
+// on the request path, and every compaction would wait on it.
+func compactionCounter(cfg *config.Config) tokencount.Counter {
+	settings := tokencount.Settings{
+		SafetyFactor:  cfg.Export.TokenSafetyFactor,
+		CharsPerToken: cfg.Export.HeuristicCharsPerToken,
 	}
+	return tokencount.LocalCounter(tokencount.FamilyClaude, "", settings)
 }
 
 func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices, listenerCfg config.MITMListenerConfig, inherited inheritedRuntime) error {
@@ -345,7 +309,7 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 		)
 		return fmt.Errorf("init mitm proxy for listener %q: %w", listenerCfg.ID, err)
 	}
-	proxy.SetRequestResponseHooks(mitmRequestResponseHooks(cfg.MITM))
+	proxy.SetRequestResponseHooks(mitmRequestResponseHooks(cfg))
 	runtime.mitmProxies[listenerCfg.ID] = proxy
 	runtime.mitmListeners[listenerCfg.ID] = sockets
 	runtime.mitmPacketConns[listenerCfg.ID] = packetConns

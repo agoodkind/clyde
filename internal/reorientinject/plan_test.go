@@ -20,10 +20,10 @@ func repeatedWords(word string, count int) string {
 	return strings.TrimSpace(strings.Repeat(word+" ", count))
 }
 
-// conversation builds a request whose message 1 is far larger than the rest.
-// That is the shape a compacted session sends: message 1 stores the prior
+// compactedSession builds a request whose message 1 is far larger than the
+// rest. That is the shape a compacted session sends: message 1 stores the prior
 // summary and the transcript injected below it.
-func conversation() ParsedRequest {
+func compactedSession() ParsedRequest {
 	return ParsedRequest{
 		SessionID: "test-session",
 		Messages: []Message{
@@ -50,7 +50,7 @@ func TestPlanCutRetainsStrictlyUnderTheBudget(t *testing.T) {
 	t.Parallel()
 	counter := testCounter()
 	for _, budget := range []int{50, 200, 1000, 5000} {
-		got, ok := planCut(conversation(), budget, counter, everyKind)
+		got, ok := planCut(compactedSession(), budget, counter, everyKind)
 		if !ok {
 			t.Errorf("budget %d planned no cut", budget)
 			continue
@@ -63,7 +63,7 @@ func TestPlanCutRetainsStrictlyUnderTheBudget(t *testing.T) {
 
 func TestPlanCutRetainsTheTailOfALargeMessage(t *testing.T) {
 	t.Parallel()
-	got, ok := planCut(conversation(), 1000, testCounter(), everyKind)
+	got, ok := planCut(compactedSession(), 1000, testCounter(), everyKind)
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
@@ -83,7 +83,7 @@ func TestPlanCutRetainsTheTailOfALargeMessage(t *testing.T) {
 
 func TestPlanCutNeverRetainsMessageZero(t *testing.T) {
 	t.Parallel()
-	got, ok := planCut(conversation(), 1_000_000, testCounter(), everyKind)
+	got, ok := planCut(compactedSession(), 1_000_000, testCounter(), everyKind)
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
@@ -98,7 +98,7 @@ func TestPlanCutNeverRetainsMessageZero(t *testing.T) {
 func TestPlanCutSkipsAnExcludedKind(t *testing.T) {
 	t.Parallel()
 	chatOnly := func(kind SegmentKind) bool { return kind == KindText }
-	got, ok := planCut(conversation(), 1_000_000, testCounter(), chatOnly)
+	got, ok := planCut(compactedSession(), 1_000_000, testCounter(), chatOnly)
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
@@ -112,7 +112,7 @@ func TestPlanCutSkipsAnExcludedKind(t *testing.T) {
 
 func TestPlanCutReportsNoCutForATinyBudget(t *testing.T) {
 	t.Parallel()
-	if _, ok := planCut(conversation(), 1, testCounter(), everyKind); ok {
+	if _, ok := planCut(compactedSession(), 1, testCounter(), everyKind); ok {
 		t.Fatal("a one token budget planned a cut")
 	}
 }

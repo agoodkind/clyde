@@ -1,6 +1,7 @@
 package reorientinject
 
 import (
+	"slices"
 	"strings"
 
 	"goodkind.io/clyde/internal/tokencount"
@@ -34,7 +35,7 @@ func planCut(
 	include func(SegmentKind) bool,
 ) (plan, bool) {
 	if budget <= 0 || request.InstructionStart <= 1 {
-		return plan{}, false
+		return noPlan(), false
 	}
 	// The retained text adds a role heading per message, which the per-segment
 	// count does not see. A first pass that overshoots lowers the planning
@@ -43,7 +44,7 @@ func planCut(
 	for range planAttempts {
 		candidate, ok := planOnce(request, planningBudget, counter, include)
 		if !ok {
-			return plan{}, false
+			return noPlan(), false
 		}
 		tokens := counter.Estimate(candidate.Retained)
 		if tokens < budget {
@@ -52,10 +53,19 @@ func planCut(
 		}
 		planningBudget -= tokens - budget + 1
 		if planningBudget <= 0 {
-			return plan{}, false
+			return noPlan(), false
 		}
 	}
-	return plan{}, false
+	return noPlan(), false
+}
+
+// noPlan is the zero result planCut returns when no segment fits the budget.
+func noPlan() plan {
+	return plan{
+		Cut:            Cut{MessageIndex: 0, SegmentIndex: 0, HeadRunes: 0},
+		Retained:       "",
+		RetainedTokens: 0,
+	}
 }
 
 // planAttempts bounds the re-planning loop. Each pass lowers the budget by the
@@ -73,8 +83,7 @@ func planOnce(
 
 	for messageIndex := request.InstructionStart - 1; messageIndex >= 1; messageIndex-- {
 		segments := request.Messages[messageIndex].Segments
-		for segmentIndex := len(segments) - 1; segmentIndex >= 0; segmentIndex-- {
-			segment := segments[segmentIndex]
+		for segmentIndex, segment := range slices.Backward(segments) {
 			if !include(segment.Kind) {
 				continue
 			}
@@ -93,7 +102,7 @@ func planOnce(
 		}
 	}
 	if cut.MessageIndex < 0 {
-		return plan{}, false
+		return noPlan(), false
 	}
 	return finishPlan(request, cut, include)
 }
@@ -125,7 +134,7 @@ func finishPlan(
 ) (plan, bool) {
 	retained := retainedText(request, cut, include)
 	if strings.TrimSpace(retained) == "" {
-		return plan{}, false
+		return noPlan(), false
 	}
 	return plan{Cut: cut, Retained: retained, RetainedTokens: 0}, true
 }
@@ -153,7 +162,7 @@ func retainedText(request ParsedRequest, cut Cut, include func(SegmentKind) bool
 			}
 			if written == 0 {
 				builder.WriteString("\n\n### ")
-				builder.WriteString(roleHeading(message.Role))
+				builder.WriteString(message.Role.Heading())
 				builder.WriteString("\n\n")
 			} else {
 				builder.WriteString("\n\n")
@@ -175,16 +184,4 @@ func tailRunes(text string, headRunes int) string {
 		return ""
 	}
 	return string(runes[headRunes:])
-}
-
-func roleHeading(role string) string {
-	switch role {
-	case "user":
-		return "User"
-	case "assistant":
-		return "Assistant"
-	case "system":
-		return "System"
-	}
-	return role
 }

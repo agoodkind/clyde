@@ -14,14 +14,12 @@ import (
 	"testing"
 	"time"
 
-	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
 	"goodkind.io/clyde/internal/reorienttag"
 )
 
 const (
 	reorientSplitPlannedEvent  = "mitm.reorient_inject.split_planned"
 	reorientSplitFallbackEvent = "mitm.reorient_inject.split_fallback"
-	systemReminderOpenTag      = "<system-reminder>"
 )
 
 // claudeLiveResult is the part of `claude -p --output-format json` this test reads.
@@ -61,7 +59,7 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 	first := runClaudeLive(t, commandContext, workdir, clientEnv,
 		"Run `echo reorient-live-one`, then `ls`, then `echo reorient-live-two`. Reply with the three outputs.",
 		"-p", "--output-format", "json", "--allowedTools", "Bash(ls:*),Bash(echo:*)")
-	transcriptPath, ok := claudeparser.TranscriptPathForSession(first.SessionID)
+	transcriptPath, ok := liveTranscriptPath(t, first.SessionID)
 	if !ok {
 		t.Fatalf("no transcript for the live session")
 	}
@@ -84,8 +82,8 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 		if event.Message == reorientSplitPlannedEvent {
 			planned++
 		}
-		if event.Message == reorientSplitFallbackEvent && event.Reason == "invalid_trim" {
-			t.Fatalf("compaction fell back with reason invalid_trim; logs=%s", h.dumpLogsOnFailure(t))
+		if event.Message == reorientSplitFallbackEvent {
+			t.Fatalf("compaction fell back with reason %q; logs=%s", event.Reason, h.dumpLogsOnFailure(t))
 		}
 	}
 	if planned == 0 {
@@ -99,9 +97,6 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 	injected := summary[strings.Index(summary, reorienttag.PreCompactionTranscriptOpen):]
 	if !strings.Contains(injected, "reorient-live-four") {
 		t.Fatalf("injected transcript is missing the most recent turn (%d bytes)", len(injected))
-	}
-	if strings.Contains(injected, systemReminderOpenTag) {
-		t.Fatalf("injected transcript still holds a %s block", systemReminderOpenTag)
 	}
 }
 
@@ -165,6 +160,41 @@ func runClaudeLive(t *testing.T, ctx context.Context, workdir string, env []stri
 		t.Fatalf("claude %q returned is_error=%v session=%q", prompt, result.IsError, result.SessionID)
 	}
 	return result
+}
+
+// liveTranscriptPath finds the transcript Claude Code wrote for a session. The
+// test locates it itself, because no production code resolves a session id to a
+// transcript file any more: the split reads the intercepted request alone.
+func liveTranscriptPath(t *testing.T, sessionID string) (string, bool) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve home dir: %v", err)
+	}
+	target := sessionID + ".jsonl"
+	found := ""
+	walkErr := filepath.WalkDir(
+		filepath.Join(home, ".claude", "projects"),
+		func(path string, entry os.DirEntry, entryErr error) error {
+			if entryErr != nil {
+				// An unreadable directory is not this test's subject. Skip it and
+				// keep walking the rest of the tree.
+				return nil
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			if entry.Name() == target {
+				found = path
+				return filepath.SkipAll
+			}
+			return nil
+		},
+	)
+	if walkErr != nil {
+		t.Fatalf("walk Claude projects: %v", walkErr)
+	}
+	return found, found != ""
 }
 
 // readReorientWireEvents collects reorient events from every JSONL log under the
