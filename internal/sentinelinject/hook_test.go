@@ -369,6 +369,64 @@ func TestRequestTransformerRewritesLatestUserMessage(t *testing.T) {
 	}
 }
 
+// TestRequestTransformerPreservesTopLevelFields pins the fields Anthropic
+// requires. A rewrite that dropped model produced 400 "model: Field required"
+// on every turn of an affected session.
+func TestRequestTransformerPreservesTopLevelFields(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"claude-opus-5","max_tokens":4096,` +
+		`"system":[{"type":"text","text":"sys"}],` +
+		`"tools":[{"name":"Bash","input_schema":{"type":"object"}}],` +
+		`"metadata":{"user_id":"uid"},"stream":true,"temperature":1,` +
+		`"messages":[{"role":"assistant","content":"ok"},` +
+		`{"role":"user","content":"old text","cache_control":{"type":"ephemeral"}}]}`)
+	transformer := requestReplaceTransformer{upstreamUser: "replacement"}
+	out, changed, err := transformer.TransformRequest(context.Background(), body)
+	if err != nil {
+		t.Fatalf("TransformRequest err = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected request body to change")
+	}
+
+	var before, after map[string]json.RawMessage
+	if err := json.Unmarshal(body, &before); err != nil {
+		t.Fatalf("decode original body: %v", err)
+	}
+	if err := json.Unmarshal(out, &after); err != nil {
+		t.Fatalf("decode transformed body: %v", err)
+	}
+	for key, want := range before {
+		if key == "messages" {
+			continue
+		}
+		got, present := after[key]
+		if !present {
+			t.Fatalf("transformed request dropped %q", key)
+		}
+		if string(got) != string(want) {
+			t.Fatalf("%q = %s, want %s", key, got, want)
+		}
+	}
+
+	var messages []map[string]json.RawMessage
+	if err := json.Unmarshal(after["messages"], &messages); err != nil {
+		t.Fatalf("decode transformed messages: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(messages))
+	}
+	if string(messages[1]["content"]) != `"replacement"` {
+		t.Fatalf("latest user content = %s, want the replacement", messages[1]["content"])
+	}
+	if string(messages[1]["cache_control"]) != `{"type":"ephemeral"}` {
+		t.Fatalf("cache_control on the rewritten message = %s", messages[1]["cache_control"])
+	}
+	if string(messages[0]["content"]) != `"ok"` {
+		t.Fatalf("assistant message changed: %s", messages[0]["content"])
+	}
+}
+
 func TestHookActualUserOnlyRewritesRequest(t *testing.T) {
 	t.Parallel()
 	body := `{"messages":[{"role":"user","content":"ACTUAL_USER i only want this to come back"}]}`

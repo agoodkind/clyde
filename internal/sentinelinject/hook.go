@@ -23,6 +23,13 @@ const (
 	sentinelInjectConcern   = "providers.mitm.wire"
 	sentinelInjectComponent = "mitm"
 	defaultTextContentIndex = 0
+
+	// messagesField and contentField are the Anthropic Messages wire keys the
+	// request rewrite edits. Every other key stays untouched.
+	messagesField = "messages"
+	contentField  = "content"
+
+	roleUser = "user"
 )
 
 // contentBlockEventName enumerates Anthropic SSE content-block event names the
@@ -224,12 +231,19 @@ type requestReplaceTransformer struct {
 	upstreamUser string
 }
 
+// TransformRequest replaces the latest user message's content and keeps every
+// other part of the request byte for byte.
+//
+// The rewrite decodes the body into [json.RawMessage] fields rather than into
+// anthropicMessagesRequest. That struct declares only Messages, and marshalling
+// it back drops model, max_tokens, system, tools, and metadata. Anthropic
+// answers a body without model with 400 "model: Field required".
 func (t requestReplaceTransformer) TransformRequest(
 	ctx context.Context,
 	body []byte,
 ) ([]byte, bool, error) {
-	var request anthropicMessagesRequest
-	if err := json.Unmarshal(body, &request); err != nil {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
 		slog.WarnContext(
 			ctx,
 			"mitm.sentinel_inject.request_transform_decode_failed",
@@ -239,10 +253,43 @@ func (t requestReplaceTransformer) TransformRequest(
 		)
 		return body, false, fmt.Errorf("decode sentinel inject request: %w", err)
 	}
-	if !replaceLatestUserContent(&request, t.upstreamUser) {
+	rawMessages, ok := top[messagesField]
+	if !ok {
 		return body, false, nil
 	}
-	output, err := json.Marshal(request)
+	var messages []json.RawMessage
+	if err := json.Unmarshal(rawMessages, &messages); err != nil {
+		slog.WarnContext(
+			ctx,
+			"mitm.sentinel_inject.request_transform_decode_failed",
+			"component", sentinelInjectComponent,
+			"concern", sentinelInjectConcern,
+			"err", err,
+		)
+		return body, false, fmt.Errorf("decode sentinel inject messages: %w", err)
+	}
+	index, found := latestUserMessageIndex(messages)
+	if !found {
+		return body, false, nil
+	}
+	replaced, err := marshalMessageWithContent(ctx, messages[index], t.upstreamUser)
+	if err != nil {
+		return body, false, err
+	}
+	messages[index] = replaced
+	encodedMessages, err := json.Marshal(messages)
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"mitm.sentinel_inject.request_transform_encode_failed",
+			"component", sentinelInjectComponent,
+			"concern", sentinelInjectConcern,
+			"err", err,
+		)
+		return body, false, fmt.Errorf("encode sentinel inject messages: %w", err)
+	}
+	top[messagesField] = encodedMessages
+	output, err := json.Marshal(top)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
@@ -256,22 +303,60 @@ func (t requestReplaceTransformer) TransformRequest(
 	return output, true, nil
 }
 
-func replaceLatestUserContent(request *anthropicMessagesRequest, text string) bool {
-	if request == nil {
-		return false
-	}
-	for i := range slices.Backward(request.Messages) {
-		if request.Messages[i].Role != "user" {
+// logSentinelRewriteFailure records one request-rewrite failure on the wire
+// concern. The caller forwards the original request unchanged after this.
+func logSentinelRewriteFailure(ctx context.Context, err error) {
+	slog.WarnContext(
+		ctx,
+		"mitm.sentinel_inject.request_transform_encode_failed",
+		"component", sentinelInjectComponent,
+		"concern", sentinelInjectConcern,
+		"err", err,
+	)
+}
+
+// latestUserMessageIndex returns the index of the last user message.
+func latestUserMessageIndex(messages []json.RawMessage) (int, bool) {
+	for index := range slices.Backward(messages) {
+		var message anthropicMessage
+		if err := json.Unmarshal(messages[index], &message); err != nil {
 			continue
 		}
-		encoded, err := json.Marshal(text)
-		if err != nil {
-			return false
+		if message.Role == roleUser {
+			return index, true
 		}
-		request.Messages[i].Content = encoded
-		return true
 	}
-	return false
+	return 0, false
+}
+
+// marshalMessageWithContent returns message with its content field set to
+// text. Every other field of the message stays as it arrived, including a
+// cache_control marker this package does not model.
+func marshalMessageWithContent(
+	ctx context.Context,
+	message json.RawMessage,
+	text string,
+) (json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(message, &fields); err != nil {
+		wrapped := fmt.Errorf("decode sentinel inject message: %w", err)
+		logSentinelRewriteFailure(ctx, wrapped)
+		return nil, wrapped
+	}
+	encodedText, err := json.Marshal(text)
+	if err != nil {
+		wrapped := fmt.Errorf("encode sentinel inject message content: %w", err)
+		logSentinelRewriteFailure(ctx, wrapped)
+		return nil, wrapped
+	}
+	fields[contentField] = encodedText
+	out, err := json.Marshal(fields)
+	if err != nil {
+		wrapped := fmt.Errorf("encode sentinel inject message: %w", err)
+		logSentinelRewriteFailure(ctx, wrapped)
+		return nil, wrapped
+	}
+	return out, nil
 }
 
 type responseReplaceTransformer struct {

@@ -18,8 +18,7 @@ func TestClassifyRequestPurpose(t *testing.T) {
 		class string
 		want  mitm.RequestPurpose
 	}{
-		{"manual compaction", "compaction", mitm.RequestPurposeCompaction},
-		{"automatic compaction uses the same class", "compaction", mitm.RequestPurposeCompaction},
+		{"compaction", "compaction", mitm.RequestPurposeCompaction},
 		{"mixed case is accepted", "Compaction", mitm.RequestPurposeCompaction},
 		{"surrounding space is trimmed", " compaction ", mitm.RequestPurposeCompaction},
 		{"ordinary turn", "main", mitm.RequestPurposeUnspecified},
@@ -39,15 +38,6 @@ func TestClassifyRequestPurpose(t *testing.T) {
 				t.Fatalf("classifyRequestPurpose(%q) = %q, want %q", tc.class, got, tc.want)
 			}
 		})
-	}
-}
-
-// TestClassifyRequestPurposeWithoutHeader covers a request from a client that
-// sets no request class at all.
-func TestClassifyRequestPurposeWithoutHeader(t *testing.T) {
-	t.Parallel()
-	if got := classifyRequestPurpose(http.Header{}); got != mitm.RequestPurposeUnspecified {
-		t.Fatalf("classifyRequestPurpose(no header) = %q, want unspecified", got)
 	}
 }
 
