@@ -272,15 +272,8 @@ func (t requestReplaceTransformer) TransformRequest(
 	if !found {
 		return body, false, nil
 	}
-	replaced, err := marshalMessageWithContent(messages[index], t.upstreamUser)
+	replaced, err := marshalMessageWithContent(ctx, messages[index], t.upstreamUser)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"mitm.sentinel_inject.request_transform_encode_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"err", err,
-		)
 		return body, false, err
 	}
 	messages[index] = replaced
@@ -310,6 +303,18 @@ func (t requestReplaceTransformer) TransformRequest(
 	return output, true, nil
 }
 
+// logSentinelRewriteFailure records one request-rewrite failure on the wire
+// concern. The caller forwards the original request unchanged after this.
+func logSentinelRewriteFailure(ctx context.Context, err error) {
+	slog.WarnContext(
+		ctx,
+		"mitm.sentinel_inject.request_transform_encode_failed",
+		"component", sentinelInjectComponent,
+		"concern", sentinelInjectConcern,
+		"err", err,
+	)
+}
+
 // latestUserMessageIndex returns the index of the last user message.
 func latestUserMessageIndex(messages []json.RawMessage) (int, bool) {
 	for index := range slices.Backward(messages) {
@@ -327,19 +332,29 @@ func latestUserMessageIndex(messages []json.RawMessage) (int, bool) {
 // marshalMessageWithContent returns message with its content field set to
 // text. Every other field of the message stays as it arrived, including a
 // cache_control marker this package does not model.
-func marshalMessageWithContent(message json.RawMessage, text string) (json.RawMessage, error) {
+func marshalMessageWithContent(
+	ctx context.Context,
+	message json.RawMessage,
+	text string,
+) (json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(message, &fields); err != nil {
-		return nil, fmt.Errorf("decode sentinel inject message: %w", err)
+		wrapped := fmt.Errorf("decode sentinel inject message: %w", err)
+		logSentinelRewriteFailure(ctx, wrapped)
+		return nil, wrapped
 	}
 	encodedText, err := json.Marshal(text)
 	if err != nil {
-		return nil, fmt.Errorf("encode sentinel inject message content: %w", err)
+		wrapped := fmt.Errorf("encode sentinel inject message content: %w", err)
+		logSentinelRewriteFailure(ctx, wrapped)
+		return nil, wrapped
 	}
 	fields[contentField] = encodedText
 	out, err := json.Marshal(fields)
 	if err != nil {
-		return nil, fmt.Errorf("encode sentinel inject message: %w", err)
+		wrapped := fmt.Errorf("encode sentinel inject message: %w", err)
+		logSentinelRewriteFailure(ctx, wrapped)
+		return nil, wrapped
 	}
 	return out, nil
 }
