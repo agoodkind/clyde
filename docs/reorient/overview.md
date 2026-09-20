@@ -26,7 +26,11 @@ Correlation reads the Claude session id from the request's `metadata.user_id` fi
 
 Every byte the Claude split reads comes from the intercepted request. No compaction path opens a transcript file.
 
-The split counts one content block at a time from the newest message toward the oldest, retains every block that fits the budget whole, and retains the tail of the first block that does not fit. The retained text measures strictly under the budget: it never equals the budget and never exceeds it. The split never retains message index 0, which the model always summarizes.
+The split counts one content block at a time from the newest message toward the oldest, retains every block that fits the budget whole, and retains the tail of the first block that does not fit. The retained text measures strictly under the budget: it never equals the budget and never exceeds it.
+
+The count includes message index 0. After one compaction, message 0 stores the prior summary and the prior injection and is the largest message in the request. A budget larger than every later message cuts inside message 0 and retains its tail. The model always summarizes some content: when every message fits the budget, the forwarded request keeps message 0 whole and the split retains the rest.
+
+The `--max-tokens` argument sets the budget. The `--only` argument and the content shortcut flags select the content kinds the split counts and retains. Without a content selection, the split keeps the kinds in `reorient_inject_content`; when that setting is empty, the split keeps every kind. Selecting `tool_outputs` keeps the tool calls as well as their results, matching the export renderer.
 
 `internal/adapter/anthropic` implements the per-block decode and truncation. `internal/reorientinject` runs the count.
 
