@@ -32,6 +32,10 @@ type RequestResponseHookRequest struct {
 	Path     string
 	Header   http.Header
 	Body     RequestResponseHookBody
+	// Purpose stores what the claiming provider's [RequestClassifier]
+	// returned. A request no classifier claims stores
+	// [RequestPurposeUnspecified].
+	Purpose RequestPurpose
 }
 
 // RequestResponseHookBody provides lazy, cached request-body access to hooks.
@@ -131,6 +135,7 @@ func (p *Proxy) matchRequestResponseHook(request RequestResponseHookRequest) (Re
 }
 
 func newRequestResponseHookRequest(provider string, host string, req *http.Request, body RequestResponseHookBody) RequestResponseHookRequest {
+	header := req.Header.Clone()
 	return RequestResponseHookRequest{
 		Provider: provider,
 		Host:     host,
@@ -138,9 +143,10 @@ func newRequestResponseHookRequest(provider string, host string, req *http.Reque
 		// Path is the request path without the query string, so a hook matching
 		// on a path suffix is not defeated by a query-parameterized request such
 		// as /v1/messages?beta=...
-		Path:   req.URL.Path,
-		Header: req.Header.Clone(),
-		Body:   body,
+		Path:    req.URL.Path,
+		Header:  header,
+		Body:    body,
+		Purpose: requestPurposeFor(provider, header),
 	}
 }
 

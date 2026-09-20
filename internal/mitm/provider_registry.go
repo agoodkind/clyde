@@ -133,6 +133,45 @@ type BodyConversationIdentifier interface {
 	ConversationIDFromBody(exchange ExchangeDiagnostic) (string, bool)
 }
 
+// RequestPurpose is the value a hook matches to act on one kind of request.
+// A provider package converts its own header or field into one of these
+// values. This package defines no provider-specific spelling.
+type RequestPurpose string
+
+const (
+	// RequestPurposeUnspecified is the zero value. A request no classifier
+	// claims reaches a hook with this value.
+	RequestPurposeUnspecified RequestPurpose = ""
+	// RequestPurposeCompaction is the value a client declares on its own
+	// conversation-summarization turn.
+	RequestPurposeCompaction RequestPurpose = "compaction"
+)
+
+// RequestClassifier is an optional provider extension that returns the purpose
+// a client declared for one intercepted request. Implementations read only
+// provider-owned headers and must not block.
+//
+// A client sets a header to declare what a request is for. A person pasting
+// text into a conversation changes the request body and sets no header. A hook
+// reads the declaration through this interface instead of reading the body.
+type RequestClassifier interface {
+	ClassifyRequestPurpose(headers http.Header) RequestPurpose
+}
+
+// requestPurposeFor asks the named provider's classifier to read these
+// headers. An unregistered provider and a provider without a classifier both
+// return [RequestPurposeUnspecified].
+func requestPurposeFor(providerName string, headers http.Header) RequestPurpose {
+	for _, provider := range defaultRegistry.snapshot() {
+		classifier, ok := provider.(RequestClassifier)
+		if !ok || provider.ID().String() != providerName {
+			continue
+		}
+		return classifier.ClassifyRequestPurpose(headers)
+	}
+	return RequestPurposeUnspecified
+}
+
 func bodyConversationIdentifierFor(providerName string) (BodyConversationIdentifier, bool) {
 	for _, provider := range defaultRegistry.snapshot() {
 		identifier, ok := provider.(BodyConversationIdentifier)

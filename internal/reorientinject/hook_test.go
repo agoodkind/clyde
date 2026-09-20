@@ -105,15 +105,28 @@ func eventStreamResponse(body string) mitm.ResponseHookResponse {
 	}
 }
 
+// declaredCompaction builds the request a real Claude Code compaction turn
+// produces. The client declares the purpose on the request, and the compaction
+// body follows. An empty beta omits the anthropic-beta header, and the hook
+// treats an omitted header the same as an empty value.
+func declaredCompaction(body string, beta string) mitm.RequestResponseHookRequest {
+	header := http.Header{}
+	if beta != "" {
+		header.Set("anthropic-beta", beta)
+	}
+	return mitm.RequestResponseHookRequest{
+		Method:  http.MethodPost,
+		Path:    "/v1/messages",
+		Header:  header,
+		Body:    staticHookBody{body: []byte(body)},
+		Purpose: mitm.RequestPurposeCompaction,
+	}
+}
+
 func TestHookMatchesCompactionSummaryRequest(t *testing.T) {
 	t.Parallel()
 	hook := New(fixedContentProvider("recovered"), Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{},
-		Body:   staticHookBody{body: []byte(compactRequestBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactRequestBody, ""))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -153,12 +166,7 @@ func TestHookSetsWindowAwareMaxBytes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			hook := New(fixedContentProvider("recovered"), Sizing{})
-			match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-				Method: http.MethodPost,
-				Path:   "/v1/messages",
-				Header: http.Header{"anthropic-beta": []string{tc.beta}},
-				Body:   staticHookBody{body: []byte(compactRequestBody)},
-			})
+			match, err := hook.MatchRequestResponse(declaredCompaction(compactRequestBody, tc.beta))
 			if err != nil {
 				t.Fatalf("MatchRequestResponse err = %v", err)
 			}
@@ -184,12 +192,7 @@ func TestSizingOverridesMaxBytes(t *testing.T) {
 		BytesPerToken:         3,
 		StandardContextWindow: 300_000,
 	})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{"anthropic-beta": []string{""}},
-		Body:   staticHookBody{body: []byte(compactRequestBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactRequestBody, ""))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -252,12 +255,7 @@ func TestHookSplitsConversationAtMidpoint(t *testing.T) {
 	t.Parallel()
 	provider := &recordingContentProvider{content: "PARSER-RENDERED-RECENT", requests: nil}
 	hook := New(provider.provide, Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
-		Body:   staticHookBody{body: []byte(compactSplitBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactSplitBody, "context-1m-2025-08-07"))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -348,12 +346,7 @@ func TestHookSplitsWhenOlderHalfHasSystemRuns(t *testing.T) {
 	t.Parallel()
 	provider := &recordingContentProvider{content: "PARSER-RENDERED-RECENT", requests: nil}
 	hook := New(provider.provide, Sizing{RecentFraction: 0.3})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
-		Body:   staticHookBody{body: []byte(compactWithSystemRunsBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactWithSystemRunsBody, "context-1m-2025-08-07"))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -401,12 +394,7 @@ func TestHookKeepsRequestWhenRecentRenderIsEmpty(t *testing.T) {
 	t.Parallel()
 	provider := &recordingContentProvider{content: "", requests: nil}
 	hook := New(provider.provide, Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
-		Body:   staticHookBody{body: []byte(compactSplitBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactSplitBody, "context-1m-2025-08-07"))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -488,12 +476,7 @@ const compactWithToolPairsBody = `{"model":"m","messages":[` +
 func TestPlanSplitKeepsToolPairsAndValidates(t *testing.T) {
 	t.Parallel()
 	hook := New(fixedContentProvider("RECENT"), Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{"anthropic-beta": []string{"context-1m-2025-08-07"}},
-		Body:   staticHookBody{body: []byte(compactWithToolPairsBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactWithToolPairsBody, "context-1m-2025-08-07"))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -571,12 +554,7 @@ const compactWithGhostToolResultBody = `{"messages":[` +
 func TestHookFallsBackWhenTrimWouldBeInvalid(t *testing.T) {
 	t.Parallel()
 	hook := New(fixedContentProvider("disk-recovered"), Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{},
-		Body:   staticHookBody{body: []byte(compactWithGhostToolResultBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactWithGhostToolResultBody, ""))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -595,12 +573,7 @@ func TestHookFallsBackWhenTrimWouldBeInvalid(t *testing.T) {
 func TestHookSmallConversationFallsBackToProvider(t *testing.T) {
 	t.Parallel()
 	hook := New(fixedContentProvider("disk-recovered"), Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{},
-		Body:   staticHookBody{body: []byte(compactTinyBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactTinyBody, ""))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -676,12 +649,7 @@ func TestHookDetectionTable(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			hook := New(fixedContentProvider("recovered"), Sizing{})
-			match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-				Method: http.MethodPost,
-				Path:   "/v1/messages",
-				Header: http.Header{},
-				Body:   staticHookBody{body: []byte(tc.body)},
-			})
+			match, err := hook.MatchRequestResponse(declaredCompaction(tc.body, ""))
 			if err != nil {
 				t.Fatalf("MatchRequestResponse err = %v", err)
 			}
@@ -698,12 +666,7 @@ func TestHookMatchesCompactionWithTrailingSystemMessage(t *testing.T) {
 	// prompt, so the final message is not the prompt. Detection must scan back to
 	// the last user message and still match.
 	hook := New(fixedContentProvider("recovered"), Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{},
-		Body:   staticHookBody{body: []byte(compactWithTrailingSystemBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactWithTrailingSystemBody, ""))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -722,12 +685,7 @@ func TestHookMatchesCompactionWithTrailingSystemMessage(t *testing.T) {
 func TestHookIgnoresNormalTurn(t *testing.T) {
 	t.Parallel()
 	hook := New(fixedContentProvider("recovered"), Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{},
-		Body:   staticHookBody{body: []byte(normalRequestBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(normalRequestBody, ""))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -745,12 +703,7 @@ func TestHookIgnoresCompactionWithoutSessionID(t *testing.T) {
 		`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
 		`]}`
 	hook := New(fixedContentProvider("recovered"), Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{},
-		Body:   staticHookBody{body: []byte(noSession)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(noSession, ""))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
@@ -782,17 +735,33 @@ func TestHookMatchesQueryParameterizedPath(t *testing.T) {
 	// The seam strips the query, so Path is already query-free here; assert the
 	// suffix match still holds for the bare messages path.
 	hook := New(fixedContentProvider("recovered"), Sizing{})
-	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{},
-		Body:   staticHookBody{body: []byte(compactRequestBody)},
-	})
+	match, err := hook.MatchRequestResponse(declaredCompaction(compactRequestBody, ""))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
 	if !match.Matched {
 		t.Fatal("expected a match on /v1/messages")
+	}
+}
+
+// TestHookIgnoresUndeclaredCompactionBody is the regression test for the
+// injection firing on a pasted transcript. The body is a complete compaction
+// request, including the prompt in its last user message, but the client
+// declared no compaction purpose. Capture row 364776 recorded this exact case
+// in production: request class main, and the recovered transcript injected
+// into an ordinary reply.
+func TestHookIgnoresUndeclaredCompactionBody(t *testing.T) {
+	t.Parallel()
+	hook := New(fixedContentProvider("recovered"), Sizing{})
+	request := declaredCompaction(compactRequestBody, "")
+	request.Purpose = mitm.RequestPurposeUnspecified
+	request.Body = staticHookBody{body: []byte(compactRequestBody), failIfRead: true, t: t}
+	match, err := hook.MatchRequestResponse(request)
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if match.Matched {
+		t.Fatal("a request the client did not declare a compaction must not match")
 	}
 }
 

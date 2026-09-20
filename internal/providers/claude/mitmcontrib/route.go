@@ -87,6 +87,13 @@ func (routeProvider) ExtractIdentity(headers http.Header) mitm.IdentityContribut
 	return extractIdentity(headers)
 }
 
+// ClassifyRequestPurpose reports the purpose Claude Code declared for
+// this request, satisfying the optional [mitm.RequestClassifier]
+// extension.
+func (routeProvider) ClassifyRequestPurpose(headers http.Header) mitm.RequestPurpose {
+	return classifyRequestPurpose(headers)
+}
+
 func init() {
 	mitm.RegisterProvider(routeProvider{})
 }
