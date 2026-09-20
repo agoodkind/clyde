@@ -1,7 +1,7 @@
-// Package reorientinject rewrites a compaction request so the newest
-// conversation content stays out of the summary, then inserts that content into
-// the summary the model returns. The client persists both in its compact
-// summary message and sends them on later turns.
+// Package reorientinject splits a compaction request by token budget. The
+// model summarizes the older part, and the split inserts the newest part into
+// the summary the model returns. Claude Code stores the whole summary text in
+// its isCompactSummary user message and sends that message on later turns.
 package reorientinject
 
 import (
@@ -12,52 +12,24 @@ import (
 	"net/http"
 	"strings"
 
-	"goodkind.io/clyde/internal/conversation"
-	"goodkind.io/clyde/internal/conversation/exportargs"
 	"goodkind.io/clyde/internal/mitm"
-	"goodkind.io/clyde/internal/tokencount"
-	"goodkind.io/clyde/internal/util"
 )
 
 const (
 	messagesPathSuffix     = "/v1/messages"
 	eventStreamContentType = "text/event-stream"
-
-	reorientInjectConcern   = "providers.mitm.wire"
-	reorientInjectComponent = "mitm"
 )
 
-// DefaultMaxTokens is the budget a compaction retains when the operator typed
-// no max-tokens argument and the configuration sets none.
-const DefaultMaxTokens = 500_000
-
-// Settings configures one hook.
-type Settings struct {
-	// DefaultBudget is the token budget when the compaction arguments set no
-	// max-tokens. Zero uses DefaultMaxTokens.
-	DefaultBudget int
-	// DefaultContent is the content selection when the compaction arguments
-	// pick no content kind. The empty set keeps every kind.
-	DefaultContent conversation.ContentKindSet
-	// Counter measures the retained content. The daemon builds the counter
-	// clyde conversation export uses, under the same [export] settings.
-	Counter tokencount.Counter
-}
-
-// Hook rewrites a compaction request and its summary response. It implements
-// [mitm.RequestResponseHook].
+// Hook runs the splitter as a [mitm.RequestResponseHook]: it rewrites a
+// compaction request and its summary response on the MITM proxy.
 type Hook struct {
-	provider Provider
-	settings Settings
+	splitter *Splitter
 }
 
 // New constructs a compaction split hook. A nil provider or a nil counter
 // yields a hook that leaves every request alone.
 func New(provider Provider, settings Settings) *Hook {
-	if settings.DefaultBudget <= 0 {
-		settings.DefaultBudget = DefaultMaxTokens
-	}
-	return &Hook{provider: provider, settings: settings}
+	return &Hook{splitter: NewSplitter(provider, settings)}
 }
 
 // MatchRequestResponse decides whether this request is a compaction, plans the
@@ -66,9 +38,6 @@ func New(provider Provider, settings Settings) *Hook {
 func (h *Hook) MatchRequestResponse(
 	req mitm.RequestResponseHookRequest,
 ) (mitm.RequestResponseHookMatch, error) {
-	if h.provider == nil || h.settings.Counter == nil {
-		return unmatched(), nil
-	}
 	if req.Method != http.MethodPost || !strings.HasSuffix(req.Path, messagesPathSuffix) {
 		return unmatched(), nil
 	}
@@ -82,42 +51,15 @@ func (h *Hook) MatchRequestResponse(
 	if !ok {
 		return unmatched(), nil
 	}
-	parsed, ok := h.provider.ParseCompaction(body)
+	result, ok := h.splitter.Plan(body)
 	if !ok {
 		return unmatched(), nil
 	}
-
-	budget, include := h.options(parsed.Arguments)
-	plan, planned := planCut(parsed, budget, h.settings.Counter, include)
-	if !planned {
-		logFallback(fallbackNoCut, len(parsed.Messages))
-		return unmatched(), nil
-	}
-	slog.Info("mitm.reorient_inject.split_planned",
-		"component", reorientInjectComponent,
-		"concern", reorientInjectConcern,
-		"message_count", len(parsed.Messages),
-		"message_index", plan.Cut.MessageIndex,
-		"segment_index", plan.Cut.SegmentIndex,
-		"head_runes", plan.Cut.HeadRunes,
-		"budget", budget,
-		"retained_tokens", plan.RetainedTokens,
-	)
-
-	state := &splitState{content: plan.Retained}
 	return mitm.RequestResponseHookMatch{
-		Matched: true,
-		Transformer: summaryInjector{
-			provider: h.provider,
-			state:    state,
-		},
-		RequestTransformer: requestTruncator{
-			provider:         h.provider,
-			cut:              plan.Cut,
-			instructionStart: parsed.InstructionStart,
-			state:            state,
-		},
-		ContinueMatching: false,
+		Matched:            true,
+		Transformer:        summaryInjector{splitter: h.splitter, injection: result.Injection},
+		RequestTransformer: requestTruncator{forwarded: result.Forwarded},
+		ContinueMatching:   false,
 	}, nil
 }
 
@@ -138,142 +80,28 @@ func readRequestBody(source mitm.RequestResponseHookBody) ([]byte, bool) {
 	return body, true
 }
 
-// options reads the token budget and the content kinds from the arguments the
-// operator typed. Each falls back to its configured default. An unreadable
-// argument never fails a compaction: both fall back to the configured defaults.
-func (h *Hook) options(args []string) (int, func(SegmentKind) bool) {
-	budget := h.settings.DefaultBudget
-	selected := h.settings.DefaultContent
-	if len(args) == 0 {
-		return budget, includeFor(selected)
-	}
-	options, err := exportargs.Parse(args)
-	if err != nil {
-		slog.Warn("mitm.reorient_inject.arguments_invalid",
-			"component", reorientInjectComponent,
-			"concern", reorientInjectConcern,
-			"err", err,
-		)
-		return budget, includeFor(selected)
-	}
-	if options.MaxTokens != "" {
-		parsed, parseErr := util.ParseHumanCount(options.MaxTokens)
-		if parseErr != nil {
-			slog.Warn("mitm.reorient_inject.max_tokens_invalid",
-				"component", reorientInjectComponent,
-				"concern", reorientInjectConcern,
-				"max_tokens", options.MaxTokens,
-				"err", parseErr,
-			)
-		} else if parsed > 0 {
-			budget = parsed
-		}
-	}
-	if !options.Content.Empty() {
-		selected = options.Content
-	}
-	return budget, includeFor(selected)
-}
-
-// includeFor maps the selected content kinds onto the segment kinds the split
-// counts and retains. The empty set keeps every kind.
-//
-// tool_outputs is the highest-detail tool kind. ResolveContentKinds deletes
-// tool_calls from a set that includes tool_outputs, and the export renderer
-// then draws each call with its result. The split matches that: tool_outputs
-// keeps the calls as well as the results.
-func includeFor(selected conversation.ContentKindSet) func(SegmentKind) bool {
-	if selected.Empty() {
-		return func(SegmentKind) bool { return true }
-	}
-	return func(kind SegmentKind) bool {
-		switch kind {
-		case KindText, KindOther:
-			return selected.Has(conversation.ContentKindChat)
-		case KindThinking:
-			return selected.Has(conversation.ContentKindThinking)
-		case KindToolUse:
-			return selected.Has(conversation.ContentKindToolCalls) ||
-				selected.Has(conversation.ContentKindToolSummaries) ||
-				selected.Has(conversation.ContentKindToolOutputs)
-		case KindToolResult:
-			return selected.Has(conversation.ContentKindToolOutputs)
-		case KindImage:
-			return false
-		}
-		return false
-	}
-}
-
-// fallbackReason names why a compaction kept its whole conversation.
-type fallbackReason string
-
-const (
-	fallbackBodyUnreadable fallbackReason = "body_unreadable"
-	fallbackNoCut          fallbackReason = "no_cut"
-	fallbackTruncateFailed fallbackReason = "truncate_failed"
-)
-
-func logFallback(reason fallbackReason, messageCount int) {
-	slog.Warn("mitm.reorient_inject.split_fallback",
-		"component", reorientInjectComponent,
-		"concern", reorientInjectConcern,
-		"reason", string(reason),
-		"message_count", messageCount,
-	)
-}
-
-// splitState passes the retained content from the request rewrite to the
-// response injection of the same exchange. The proxy runs the request transform
-// before it reads the response, so no lock is needed. An empty content means
-// the request went upstream unmodified.
-type splitState struct {
-	content string
-}
-
-// requestTruncator rewrites the compaction request to end the conversation at
-// the cut.
+// requestTruncator hands the proxy the truncated request the splitter built.
 type requestTruncator struct {
-	provider         Provider
-	cut              Cut
-	instructionStart int
-	state            *splitState
+	forwarded []byte
 }
 
-func (t requestTruncator) TransformRequest(
-	ctx context.Context,
-	body []byte,
-) ([]byte, bool, error) {
-	truncated, err := t.provider.Truncate(body, t.cut, t.instructionStart)
-	if err != nil {
-		// The proxy forwards the original body on an error. Clearing the state
-		// leaves the response unchanged as well, so the compaction runs the way
-		// it would without clyde.
-		t.state.content = ""
-		slog.WarnContext(ctx, "mitm.reorient_inject.request_truncate_failed",
-			"component", reorientInjectComponent,
-			"concern", reorientInjectConcern,
-			"err", err,
-		)
-		logFallback(fallbackTruncateFailed, 0)
-		return body, false, nil
-	}
-	return truncated, true, nil
+func (t requestTruncator) TransformRequest(context.Context, []byte) ([]byte, bool, error) {
+	return t.forwarded, true, nil
 }
 
-// summaryInjector inserts the retained content into the summary response.
+// summaryInjector inserts the injection into the summary response.
 type summaryInjector struct {
-	provider Provider
-	state    *splitState
+	splitter  *Splitter
+	injection string
 }
 
 func (t summaryInjector) TransformResponse(
 	ctx context.Context,
 	resp mitm.ResponseHookResponse,
 ) (mitm.ResponseHookResponse, error) {
-	if t.state.content == "" || !streamingSuccess(resp) {
-		// An upstream error body and a non-stream body both reach the client
-		// intact.
+	if !streamingSuccess(resp) {
+		// The client receives an upstream error body and a non-stream body
+		// unchanged.
 		return resp, nil
 	}
 	body, err := io.ReadAll(resp.Body)
@@ -285,9 +113,9 @@ func (t summaryInjector) TransformResponse(
 		)
 		return responseWithBody(resp, body), nil
 	}
-	injected, err := t.provider.InjectSummary(body, t.state.content)
+	injected, err := t.splitter.Inject(body, t.injection)
 	if err != nil {
-		slog.WarnContext(ctx, "mitm.reorient_inject.summary_inject_failed",
+		slog.WarnContext(ctx, "mitm.reorient_inject.summary_unchanged",
 			"component", reorientInjectComponent,
 			"concern", reorientInjectConcern,
 			"err", err,

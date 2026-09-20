@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -18,8 +17,9 @@ const summaryCloseTag = "</summary>"
 // block takes index 0.
 const missingContentBlockIndex = -1
 
-// InjectIntoSummary inserts content into an Anthropic summary response and
-// returns the rewritten SSE body.
+// InjectIntoSummary inserts the wrapped injection text into an Anthropic
+// summary response and returns the rewritten SSE body. The caller wraps the
+// text in the reorient tags; this function inserts it verbatim.
 //
 // Claude Code's formatCompactSummary keeps the text between <summary> and
 // </summary> and drops a separately appended trailing content block. The
@@ -27,11 +27,11 @@ const missingContentBlockIndex = -1
 // isCompactSummary message preserves it.
 //
 // A response with no </summary> in any text block has a malformed or empty
-// summary. Claude Code keeps the whole assistant text in that case, so the
-// injection becomes a trailing content block.
-func InjectIntoSummary(body []byte, content string) ([]byte, error) {
+// summary. Claude Code keeps the whole assistant text in that case. The
+// injection then becomes a trailing content block.
+func InjectIntoSummary(body []byte, injection string) ([]byte, error) {
 	events := parseSummarySSEEvents(string(body))
-	injected, ok, err := injectIntoSummaryBlock(events, content)
+	injected, ok, err := injectIntoSummaryBlock(events, injection)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func InjectIntoSummary(body []byte, content string) ([]byte, error) {
 		return buildSummarySSEBody(injected), nil
 	}
 	blockIndex := maxSummaryContentBlockIndex(events) + 1
-	appendEvents, err := marshalSummaryAppendEvents(blockIndex, content)
+	appendEvents, err := marshalTextAppendEvents(blockIndex, injection)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func injectIntoSummaryBlock(events []summarySSEEvent, content string) ([]summary
 	}
 	original := textByIndex[target]
 	cut := strings.Index(original, summaryCloseTag)
-	injection := escapeSummaryCloseTag(wrappedTranscriptContent(content))
+	injection := escapeSummaryCloseTag(content)
 	modified := original[:cut] + injection + original[cut:]
 
 	output := make([]summarySSEEvent, 0, len(events))
@@ -201,10 +201,6 @@ func maxSummaryContentBlockIndex(events []summarySSEEvent) int {
 	return maxIndex
 }
 
-func marshalSummaryAppendEvents(blockIndex int, content string) ([]summarySSEEvent, error) {
-	return marshalTextAppendEvents(blockIndex, wrappedTranscriptContent(content))
-}
-
 func marshalTextAppendEvents(blockIndex int, content string) ([]summarySSEEvent, error) {
 	start, err := marshalSummarySSEData(newSummaryBlockStartPayload(blockIndex))
 	if err != nil {
@@ -281,18 +277,6 @@ func marshalSummarySSEData[T summaryPayload](payload T) (string, error) {
 		return "", fmt.Errorf("encode summary injection SSE JSON: %w", err)
 	}
 	return strings.TrimSuffix(buffer.String(), "\n"), nil
-}
-
-func wrappedTranscriptContent(content string) string {
-	var builder strings.Builder
-	builder.WriteString("\n\n")
-	builder.WriteString(reorienttag.PreCompactionTranscriptOpen)
-	builder.WriteByte('\n')
-	builder.WriteString(content)
-	builder.WriteByte('\n')
-	builder.WriteString(reorienttag.PreCompactionTranscriptClose)
-	builder.WriteByte('\n')
-	return builder.String()
 }
 
 type summarySSEEvent struct {

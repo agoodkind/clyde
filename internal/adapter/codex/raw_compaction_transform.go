@@ -324,5 +324,5 @@ func newRawCompactionEncodingWriter(
 }
 
 func wrappedRawCompactionTranscript(content string) string {
-	return "\n\n" + reorienttag.PreCompactionTranscriptOpen + "\n" + content + "\n" + reorienttag.PreCompactionTranscriptClose + "\n"
+	return reorienttag.WrapInjection(content, "")
 }
