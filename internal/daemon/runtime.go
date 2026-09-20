@@ -15,13 +15,14 @@ import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
-	"goodkind.io/clyde/internal/agentgateresponse"
+	"goodkind.io/clyde/internal/agentgateaction"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
 	claudecompaction "goodkind.io/clyde/internal/providers/claude/compaction"
 	"goodkind.io/clyde/internal/reorientinject"
+	"goodkind.io/clyde/internal/responsehook"
 	"goodkind.io/clyde/internal/sentinelinject"
 	"goodkind.io/clyde/internal/tokencount"
 )
@@ -281,7 +282,7 @@ func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
 		},
 		{
 			enabled: command != "",
-			hook:    agentgateresponse.New(command),
+			hook:    responsehook.New(agentgateaction.New(command)),
 		},
 	}
 	hooks := make([]mitm.RequestResponseHook, 0, len(registrations))

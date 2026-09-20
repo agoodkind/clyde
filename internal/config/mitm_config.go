@@ -14,8 +14,8 @@ type MITMConfig struct {
 	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
 	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
 	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
-	// AgentGateCommand is the agent-gate executable path used to check Anthropic
-	// response text. A violation appends the command diagnostic to the response.
+	// AgentGateCommand is the Agent Gate executable used to evaluate assistant
+	// text. Each provider response adapter encodes feedback in its response format.
 	AgentGateCommand string `json:"agentGateCommand,omitempty" toml:"agent_gate_command,omitempty"`
 	// ReorientSummaryInjection turns on compaction reorientation. The Anthropic
 	// MITM path may recover transcript content from disk; the native Codex path

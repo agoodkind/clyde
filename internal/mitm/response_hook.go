@@ -83,6 +83,15 @@ type ResponseHookResponse struct {
 	ContentLength int64
 }
 
+// ReplaceResponseBody returns response with body and removes the stale length.
+func ReplaceResponseBody(response ResponseHookResponse, body []byte) ResponseHookResponse {
+	response.Header = response.Header.Clone()
+	response.Header.Del("Content-Length")
+	response.ContentLength = -1
+	response.Body = bytes.NewReader(body)
+	return response
+}
+
 type cachedRequestResponseHookBody struct {
 	mu      sync.Mutex
 	request *http.Request

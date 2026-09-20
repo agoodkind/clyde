@@ -8,7 +8,7 @@ The generic hook package defines an action interface and a provider response ada
 
 Provider packages register response adapters during startup. The generic package selects an adapter by the typed MITM provider identifier. The generic package does not import Anthropic or OpenAI response types.
 
-Agent Gate implements one action through a provider independent command. The command accepts a neutral response event and returns its diagnostic. Agent Gate does not receive a Claude, Codex, Anthropic, or OpenAI hook payload.
+Agent Gate implements one action as the `response-hook` command. The command accepts a neutral response event and returns its diagnostic. Agent Gate does not receive a Claude, Codex, Anthropic, or OpenAI hook payload.
 
 ## Request selection
 
@@ -22,8 +22,8 @@ The Codex MITM provider registers an OpenAI Responses adapter. The adapter extra
 
 ## Failure behavior
 
-An unavailable checker or invalid provider response returns the original response and records an error. A rule violation appends the diagnostic and a direct retry instruction. A compliant response remains byte identical.
+The adapter returns checker and response encoding errors to the proxy. A rule violation appends the diagnostic and a direct retry instruction. A compliant response body remains byte-identical.
 
 ## Verification
 
-Agent Gate tests the neutral response event through its real daemon boundary. Clyde tests both provider adapters with complete event streams. Clyde also tests the generic action chain through the live MITM proxy and confirms that compaction responses remain unchanged.
+Agent Gate tests the neutral response event at its real daemon boundary. Clyde tests both provider adapters with complete event streams. Clyde also tests the generic action chain with the live MITM proxy and confirms that compaction responses remain unchanged.

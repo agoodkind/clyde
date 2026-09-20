@@ -8,6 +8,8 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm"
+	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
+	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
 	"goodkind.io/clyde/internal/reorientinject"
 	"goodkind.io/clyde/internal/sentinelinject"
 )
@@ -71,7 +73,7 @@ func TestAgentGateResponseCheckRegistersAfterReorient(t *testing.T) {
 			),
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "check Anthropic response with agent-gate") {
+	if err == nil || !strings.Contains(err.Error(), "evaluate Anthropic response") {
 		t.Fatalf("TransformResponse error = %v, want agent-gate command failure", err)
 	}
 }
