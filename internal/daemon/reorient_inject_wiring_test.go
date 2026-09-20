@@ -3,6 +3,7 @@ package daemon
 import (
 	"testing"
 
+	"goodkind.io/clyde/internal/agentgateresponse"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/reorientinject"
 	"goodkind.io/clyde/internal/sentinelinject"
@@ -22,6 +23,21 @@ func TestMitmHooksDisabledByDefault(t *testing.T) {
 	t.Parallel()
 	if hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{})); len(hooks) != 0 {
 		t.Fatalf("mitmRequestResponseHooks(default) = %d hooks, want 0", len(hooks))
+	}
+}
+
+func TestAgentGateResponseCheckWrapsEnabledHooks(t *testing.T) {
+	t.Parallel()
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{
+		AgentGateCommand:         "/usr/local/bin/agent-gate",
+		Sentinel:                 "MYKEYWORD",
+		ReorientSummaryInjection: true,
+	}))
+	if len(hooks) != 1 {
+		t.Fatalf("hooks = %d, want 1", len(hooks))
+	}
+	if _, ok := hooks[0].(*agentgateresponse.Hook); !ok {
+		t.Fatalf("hooks[0] = %T, want *agentgateresponse.Hook", hooks[0])
 	}
 }
 

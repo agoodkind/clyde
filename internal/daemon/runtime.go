@@ -15,6 +15,7 @@ import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	"goodkind.io/clyde/internal/agentgateresponse"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
@@ -271,6 +272,9 @@ func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
 				Counter:       compactionCounter(cfg),
 			},
 		))
+	}
+	if command := strings.TrimSpace(mitmCfg.AgentGateCommand); command != "" {
+		hooks = []mitm.RequestResponseHook{agentgateresponse.New(command, hooks)}
 	}
 	return hooks
 }

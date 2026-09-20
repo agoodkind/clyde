@@ -14,6 +14,10 @@ type MITMConfig struct {
 	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
 	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
 	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
+	// AgentGateCommand enables response checks for Anthropic messages. Clyde
+	// runs this command with the agent-gate managed Claude hook protocol and
+	// appends any deterministic violation diagnostic to the response.
+	AgentGateCommand string `json:"agentGateCommand,omitempty" toml:"agent_gate_command,omitempty"`
 	// ReorientSummaryInjection turns on compaction reorientation. The Anthropic
 	// MITM path may recover transcript content from disk; the native Codex path
 	// uses only the transcript carried in the Responses request. Default false.
