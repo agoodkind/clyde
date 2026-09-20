@@ -76,10 +76,11 @@ func TestReorientInjectEndToEnd(t *testing.T) {
 		`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]}` +
 		`],"metadata":{"user_id":"{\"session_id\":\"` + sessionID + `\"}"}}`
 	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
-		Method: http.MethodPost,
-		Path:   "/v1/messages",
-		Header: http.Header{},
-		Body:   e2eHookBody{data: []byte(requestBody)},
+		Method:  http.MethodPost,
+		Path:    "/v1/messages",
+		Header:  http.Header{},
+		Body:    e2eHookBody{data: []byte(requestBody)},
+		Purpose: mitm.RequestPurposeCompaction,
 	})
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
