@@ -17,7 +17,6 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	"goodkind.io/clyde/internal/adapter/content"
 	"goodkind.io/clyde/internal/mitm"
-	"goodkind.io/clyde/internal/reorienttag"
 )
 
 const (
@@ -35,9 +34,8 @@ const (
 
 	eventStreamContentType = "text/event-stream"
 
-	reorientInjectConcern           = "providers.mitm.wire"
-	reorientInjectComponent         = "mitm"
-	defaultMissingContentBlockIndex = -1
+	reorientInjectConcern   = "providers.mitm.wire"
+	reorientInjectComponent = "mitm"
 
 	anthropicBetaHeader = "Anthropic-Beta"
 )
@@ -623,7 +621,7 @@ func (t responseAppendTransformer) TransformResponse(
 		)
 		return responseWithBody(resp, body), nil
 	}
-	output, err := appendSSEContent(body, content)
+	output, err := anthropic.InjectIntoSummary(body, content)
 	if err != nil {
 		// Fail open: a rewrite failure must not break /compact. Return the
 		// original (fully read) summary response unchanged.
@@ -649,219 +647,6 @@ func responseIsStreamingSuccess(resp mitm.ResponseHookResponse) bool {
 	return strings.Contains(contentType, eventStreamContentType)
 }
 
-func appendSSEContent(body []byte, content string) ([]byte, error) {
-	events := parseSSEEvents(string(body))
-	// The client's formatCompactSummary keeps the text between <summary> and
-	// </summary> and drops a separately-appended trailing content block, so the
-	// transcript must go INSIDE the summary span (before </summary>) to survive
-	// into the persisted isCompactSummary message.
-	injected, ok, err := injectIntoSummaryBlock(events, content)
-	if err != nil {
-		return nil, err
-	}
-	if ok {
-		return buildSSEBody(injected), nil
-	}
-	// Fallback: no </summary> in any text block (a malformed or empty summary).
-	// With no summary span the client keeps the whole assistant text, so a
-	// trailing appended block survives.
-	blockIndex := maxSeenContentBlockIndex(events) + 1
-	appendEvents, err := marshalAppendEvents(blockIndex, content)
-	if err != nil {
-		return nil, err
-	}
-	events = insertAppendEvents(events, appendEvents)
-	return buildSSEBody(events), nil
-}
-
-const summaryCloseTag = "</summary>"
-
-// injectIntoSummaryBlock inserts the wrapped transcript just before the first
-// </summary> in the assistant's summary text block, so it lands inside the span
-// the client extracts. It rebuilds that block's streamed text deltas into a
-// single delta carrying the modified text and leaves every other event intact.
-// The second return is false when no text block contains </summary>, so the
-// caller falls back to appending a trailing block.
-func injectIntoSummaryBlock(events []sseEvent, content string) ([]sseEvent, bool, error) {
-	textByIndex := map[int]string{}
-	order := make([]int, 0)
-	for _, event := range events {
-		index, text, ok := textDeltaOf(event)
-		if !ok {
-			continue
-		}
-		if _, seen := textByIndex[index]; !seen {
-			order = append(order, index)
-		}
-		textByIndex[index] += text
-	}
-	target := -1
-	for _, index := range order {
-		if strings.Contains(textByIndex[index], summaryCloseTag) {
-			target = index
-			break
-		}
-	}
-	if target == -1 {
-		return nil, false, nil
-	}
-	original := textByIndex[target]
-	cut := strings.Index(original, summaryCloseTag)
-	injection := sanitizeForSummarySpan(wrappedTranscriptContent(content))
-	modified := original[:cut] + injection + original[cut:]
-
-	output := make([]sseEvent, 0, len(events))
-	replaced := false
-	for _, event := range events {
-		index, _, ok := textDeltaOf(event)
-		if ok && index == target {
-			if replaced {
-				continue
-			}
-			data, err := marshalSSEData(newContentBlockDeltaPayload(target, modified))
-			if err != nil {
-				return nil, false, err
-			}
-			output = append(output, sseEvent{Name: "content_block_delta", Data: data})
-			replaced = true
-			continue
-		}
-		output = append(output, event)
-	}
-	return output, true, nil
-}
-
-// textDeltaOf returns the block index and text of a text_delta content block
-// event. The final bool is false for any other event.
-func textDeltaOf(event sseEvent) (int, string, bool) {
-	if event.Name != "content_block_delta" {
-		return 0, "", false
-	}
-	var payload deltaTextPayload
-	if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
-		return 0, "", false
-	}
-	if payload.Index == nil || payload.Delta.Type != "text_delta" {
-		return 0, "", false
-	}
-	return *payload.Index, payload.Delta.Text, true
-}
-
-// sanitizeForSummarySpan neutralizes any literal </summary> inside the injected
-// transcript so a conversation that discussed the tag cannot prematurely close
-// the summary span the client matches.
-func sanitizeForSummarySpan(s string) string {
-	return strings.ReplaceAll(s, summaryCloseTag, `<\/summary>`)
-}
-
-func parseSSEEvents(body string) []sseEvent {
-	records := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n\n")
-	events := make([]sseEvent, 0, len(records))
-	for _, record := range records {
-		event := parseSSERecord(record)
-		if event.Name == "" && event.Data == "" {
-			continue
-		}
-		events = append(events, event)
-	}
-	return events
-}
-
-func parseSSERecord(record string) sseEvent {
-	lines := strings.Split(record, "\n")
-	dataLines := make([]string, 0, len(lines))
-	event := sseEvent{Name: "", Data: ""}
-	for _, line := range lines {
-		if value, ok := strings.CutPrefix(line, "event:"); ok {
-			event.Name = strings.TrimSpace(value)
-			continue
-		}
-		if value, ok := strings.CutPrefix(line, "data:"); ok {
-			dataLines = append(dataLines, strings.TrimPrefix(value, " "))
-		}
-	}
-	event.Data = strings.Join(dataLines, "\n")
-	return event
-}
-
-func maxSeenContentBlockIndex(events []sseEvent) int {
-	maxIndex := defaultMissingContentBlockIndex
-	for _, event := range events {
-		var payload indexedSSEPayload
-		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
-			continue
-		}
-		if payload.Index == nil {
-			continue
-		}
-		if *payload.Index > maxIndex {
-			maxIndex = *payload.Index
-		}
-	}
-	return maxIndex
-}
-
-func marshalAppendEvents(blockIndex int, content string) ([]sseEvent, error) {
-	wrappedContent := wrappedTranscriptContent(content)
-	start, err := marshalSSEData(newContentBlockStartPayload(blockIndex))
-	if err != nil {
-		return nil, err
-	}
-	delta, err := marshalSSEData(newContentBlockDeltaPayload(blockIndex, wrappedContent))
-	if err != nil {
-		return nil, err
-	}
-	stop, err := marshalSSEData(newContentBlockStopPayload(blockIndex))
-	if err != nil {
-		return nil, err
-	}
-	return []sseEvent{
-		{Name: "content_block_start", Data: start},
-		{Name: "content_block_delta", Data: delta},
-		{Name: "content_block_stop", Data: stop},
-	}, nil
-}
-
-func insertAppendEvents(events []sseEvent, appendEvents []sseEvent) []sseEvent {
-	insertAt := len(events)
-	for index, event := range events {
-		if event.Name == "message_delta" || event.Name == "message_stop" {
-			insertAt = index
-			break
-		}
-	}
-	output := make([]sseEvent, 0, len(events)+len(appendEvents))
-	output = append(output, events[:insertAt]...)
-	output = append(output, appendEvents...)
-	output = append(output, events[insertAt:]...)
-	return output
-}
-
-func buildSSEBody(events []sseEvent) []byte {
-	var builder strings.Builder
-	for _, event := range events {
-		if event.Name != "" {
-			builder.WriteString("event: ")
-			builder.WriteString(event.Name)
-			builder.WriteByte('\n')
-		}
-		writeSSEDataLines(&builder, event.Data)
-		builder.WriteByte('\n')
-	}
-	return []byte(builder.String())
-}
-
-func writeSSEDataLines(builder *strings.Builder, data string) {
-	if data == "" {
-		return
-	}
-	for line := range strings.SplitSeq(data, "\n") {
-		builder.WriteString("data: ")
-		builder.WriteString(line)
-		builder.WriteByte('\n')
-	}
-}
-
 func responseWithBody(
 	resp mitm.ResponseHookResponse,
 	body []byte,
@@ -878,117 +663,6 @@ func responseWithBody(
 	}
 }
 
-func marshalSSEData[T ssePayload](payload T) (string, error) {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(payload); err != nil {
-		slog.Warn(
-			"mitm.reorient_inject.sse_json_encode_failed",
-			"component", reorientInjectComponent,
-			"concern", reorientInjectConcern,
-			"err", err,
-		)
-		return "", fmt.Errorf("encode reorient inject SSE JSON: %w", err)
-	}
-	return strings.TrimSuffix(buffer.String(), "\n"), nil
-}
-
-func wrappedTranscriptContent(content string) string {
-	var builder strings.Builder
-	builder.WriteString("\n\n")
-	builder.WriteString(reorienttag.PreCompactionTranscriptOpen)
-	builder.WriteByte('\n')
-	builder.WriteString(content)
-	builder.WriteByte('\n')
-	builder.WriteString(reorienttag.PreCompactionTranscriptClose)
-	builder.WriteByte('\n')
-	return builder.String()
-}
-
 func emptyContentProvider(context.Context, ContentRequest) (string, error) {
 	return "", nil
-}
-
-type sseEvent struct {
-	Name string
-	Data string
-}
-
-type indexedSSEPayload struct {
-	Index *int `json:"index"`
-}
-
-// deltaTextPayload decodes a content_block_delta event enough to read its block
-// index and streamed text, so the summary-span injection can reassemble a text
-// block's content.
-type deltaTextPayload struct {
-	Index *int `json:"index"`
-	Delta struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"delta"`
-}
-
-type ssePayload interface {
-	contentBlockStartPayload | contentBlockDeltaPayload | contentBlockStopPayload
-}
-
-type textContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type textDelta struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type contentBlockStartPayload struct {
-	Type         string           `json:"type"`
-	Index        int              `json:"index"`
-	ContentBlock textContentBlock `json:"content_block"`
-}
-
-type contentBlockDeltaPayload struct {
-	Type  string    `json:"type"`
-	Index int       `json:"index"`
-	Delta textDelta `json:"delta"`
-}
-
-type contentBlockStopPayload struct {
-	Type  string `json:"type"`
-	Index int    `json:"index"`
-}
-
-func newContentBlockStartPayload(blockIndex int) contentBlockStartPayload {
-	return contentBlockStartPayload{
-		Type:  "content_block_start",
-		Index: blockIndex,
-		ContentBlock: textContentBlock{
-			Type: "text",
-			Text: "",
-		},
-	}
-}
-
-func newContentBlockDeltaPayload(
-	blockIndex int,
-	content string,
-) contentBlockDeltaPayload {
-	return contentBlockDeltaPayload{
-		Type:  "content_block_delta",
-		Index: blockIndex,
-		Delta: textDelta{
-			Type: "text_delta",
-			Text: content,
-		},
-	}
-}
-
-func newContentBlockStopPayload(blockIndex int) contentBlockStopPayload {
-	return contentBlockStopPayload{
-		Type:  "content_block_stop",
-		Index: blockIndex,
-	}
 }
