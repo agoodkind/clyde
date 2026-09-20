@@ -425,9 +425,21 @@ aliases = [{ id = "claude-haiku-4-5", advertise = true }]
 providers = ["claude", "codex", "conductor", "cursor"]
 
 # Inject pre-compaction transcript content into Claude MITM summaries and
-# authenticated native Codex Responses summaries. Both paths use the existing
-# reorient sizing defaults when the related keys are omitted.
+# authenticated native Codex Responses summaries. Both paths read the transcript
+# from the intercepted request and open no file.
 reorient_summary_injection = false
+
+# Default token budget the Claude split retains when no --max-tokens argument
+# follows /compact. The native Codex split applies its context-window fraction
+# to the same value. Omit it to use each path's own default (500000).
+# reorient_inject_max_tokens = 500000
+
+# Native Codex split sizing. The Claude split reads none of these; it selects by
+# token budget with the counter clyde conversation export uses.
+# reorient_recent_fraction = 0.5
+# reorient_context_window_fraction = 0.5
+# reorient_bytes_per_token = 4
+# reorient_standard_context_window = 200000
 
 # sentinel = "MYKEYWORD"
 # actual_user_sentinel = "ACTUAL_USER"
