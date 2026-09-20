@@ -26,6 +26,10 @@ type MITMConfig struct {
 	// and the token cap the native Codex split applies its context-window
 	// fraction to. Zero uses each path's own default.
 	ReorientInjectMaxTokens int `json:"reorientInjectMaxTokens,omitempty" toml:"reorient_inject_max_tokens,omitempty"`
+	// ReorientInjectContent is the content selection the Claude split retains
+	// when no --only argument or content shortcut follows /compact. It accepts
+	// the clyde conversation export --only values. Empty keeps every kind.
+	ReorientInjectContent []string `json:"reorientInjectContent,omitempty" toml:"reorient_inject_content,omitempty"`
 	// ReorientRecentFraction is the fraction of request items, by count, the
 	// native Codex split reattaches verbatim as the recent half. The Claude
 	// split selects by token budget and reads this setting nowhere. Zero uses

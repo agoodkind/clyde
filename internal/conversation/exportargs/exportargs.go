@@ -23,12 +23,6 @@ const (
 	logComponent = "conversation"
 )
 
-// defaultContentSelector is what Parse selects when the arguments name no
-// content kind. An operator who named none asked for no narrowing. The terminal
-// and the MCP tool still demand an explicit selection, because each one calls
-// conversation.ResolveContentKinds itself.
-const defaultContentSelector = "all"
-
 // Kind is the value shape of one argument.
 type Kind uint8
 
@@ -274,13 +268,19 @@ func resolve(stored values) (conversation.ExportOptions, error) {
 			FullHistory:     stored.boolValue("full_history"),
 		},
 	}
-	content, err := conversation.ResolveContentKinds(selectedContentKinds(stored))
-	if err != nil {
-		slog.Warn("conversation.exportargs.content_invalid",
-			"concern", logConcern, "component", logComponent, "err", err)
-		return conversation.ExportOptions{}, fmt.Errorf("select content kinds: %w", err)
+	// Content stays the empty set when the arguments pick no content kind. The
+	// compaction split keeps every kind for an empty set. ResolveContentKinds
+	// rejects an empty pick; the terminal and MCP export commands run that
+	// check themselves.
+	if selectors := selectedContentKinds(stored); len(selectors) > 0 {
+		content, err := conversation.ResolveContentKinds(selectors)
+		if err != nil {
+			slog.Warn("conversation.exportargs.content_invalid",
+				"concern", logConcern, "component", logComponent, "err", err)
+			return conversation.ExportOptions{}, fmt.Errorf("select content kinds: %w", err)
+		}
+		options.Content = content
 	}
-	options.Content = content
 	compaction, err := conversation.NormalizeCompactionExportOptions(
 		options.Compaction,
 		options.HistoryStart,
@@ -311,18 +311,14 @@ func resolveWhitespace(stored values) conversation.WhitespaceMode {
 	return mode
 }
 
-// selectedContentKinds returns the selector values the arguments named, from
-// the only list and from the per-kind shortcuts. Arguments that name no kind
-// select the default.
+// selectedContentKinds returns the selector values from the only list and from
+// the per-kind shortcuts. It returns nil when the arguments select no kind.
 func selectedContentKinds(stored values) []string {
 	selectors := append([]string(nil), stored.listValue("only")...)
 	for _, selector := range conversation.ContentKindSelectorValues() {
 		if stored.boolValue(selector) {
 			selectors = append(selectors, selector)
 		}
-	}
-	if len(selectors) == 0 {
-		return []string{defaultContentSelector}
 	}
 	return selectors
 }

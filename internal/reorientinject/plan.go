@@ -23,8 +23,11 @@ type plan struct {
 // that fits whole. The boundary segment is the first that does not fit, and the
 // plan retains that segment's tail.
 //
-// Message index 0 is never retained. The model summarizes it in every
-// compaction, so a compaction always produces a summary of some content.
+// The count includes message index 0. After a compaction that message stores
+// the prior summary and the prior injection, and a budget larger than every
+// later message retains the tail of it. The model always summarizes some
+// content: when every message fits the budget, the plan sends message 0 whole
+// and retains the rest.
 //
 // ok is false when no segment fits the budget. The caller then forwards the
 // request unmodified.
@@ -34,7 +37,7 @@ func planCut(
 	counter tokencount.Counter,
 	include func(SegmentKind) bool,
 ) (plan, bool) {
-	if budget <= 0 || request.InstructionStart <= 1 {
+	if budget <= 0 || request.InstructionStart <= 0 {
 		return noPlan(), false
 	}
 	// The retained text adds a role heading per message, which the per-segment
@@ -81,7 +84,7 @@ func planOnce(
 	used := 0
 	cut := Cut{MessageIndex: -1, SegmentIndex: 0, HeadRunes: 0}
 
-	for messageIndex := request.InstructionStart - 1; messageIndex >= 1; messageIndex-- {
+	for messageIndex := request.InstructionStart - 1; messageIndex >= 0; messageIndex-- {
 		segments := request.Messages[messageIndex].Segments
 		for segmentIndex, segment := range slices.Backward(segments) {
 			if !include(segment.Kind) {
@@ -103,6 +106,15 @@ func planOnce(
 	}
 	if cut.MessageIndex < 0 {
 		return noPlan(), false
+	}
+	if cut.MessageIndex == 0 && cut.HeadRunes == 0 {
+		// Every message fits. The model still needs content to summarize, so
+		// the forwarded request keeps message 0 whole and the plan retains the
+		// rest.
+		if request.InstructionStart <= 1 {
+			return noPlan(), false
+		}
+		cut = Cut{MessageIndex: 1, SegmentIndex: 0, HeadRunes: 0}
 	}
 	return finishPlan(request, cut, include)
 }

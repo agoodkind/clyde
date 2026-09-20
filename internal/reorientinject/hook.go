@@ -33,9 +33,12 @@ const DefaultMaxTokens = 500_000
 
 // Settings configures one hook.
 type Settings struct {
-	// DefaultBudget is the token budget for a compaction whose arguments name
-	// no max-tokens. Zero uses DefaultMaxTokens.
+	// DefaultBudget is the token budget when the compaction arguments set no
+	// max-tokens. Zero uses DefaultMaxTokens.
 	DefaultBudget int
+	// DefaultContent is the content selection when the compaction arguments
+	// pick no content kind. The empty set keeps every kind.
+	DefaultContent conversation.ContentKindSet
 	// Counter measures the retained content. The daemon builds the counter
 	// clyde conversation export uses, under the same [export] settings.
 	Counter tokencount.Counter
@@ -135,14 +138,14 @@ func readRequestBody(source mitm.RequestResponseHookBody) ([]byte, bool) {
 	return body, true
 }
 
-// options reads the token budget and the content selection from the arguments
-// the operator typed. An unreadable argument never fails a compaction: the
-// budget falls back to the configured default and the selection to every kind.
+// options reads the token budget and the content kinds from the arguments the
+// operator typed. Each falls back to its configured default. An unreadable
+// argument never fails a compaction: both fall back to the configured defaults.
 func (h *Hook) options(args []string) (int, func(SegmentKind) bool) {
 	budget := h.settings.DefaultBudget
-	include := func(SegmentKind) bool { return true }
+	selected := h.settings.DefaultContent
 	if len(args) == 0 {
-		return budget, include
+		return budget, includeFor(selected)
 	}
 	options, err := exportargs.Parse(args)
 	if err != nil {
@@ -151,7 +154,7 @@ func (h *Hook) options(args []string) (int, func(SegmentKind) bool) {
 			"concern", reorientInjectConcern,
 			"err", err,
 		)
-		return budget, include
+		return budget, includeFor(selected)
 	}
 	if options.MaxTokens != "" {
 		parsed, parseErr := util.ParseHumanCount(options.MaxTokens)
@@ -166,24 +169,36 @@ func (h *Hook) options(args []string) (int, func(SegmentKind) bool) {
 			budget = parsed
 		}
 	}
-	return budget, includeFor(options.Content)
+	if !options.Content.Empty() {
+		selected = options.Content
+	}
+	return budget, includeFor(selected)
 }
 
 // includeFor maps the selected content kinds onto the segment kinds the split
-// counts and retains.
+// counts and retains. The empty set keeps every kind.
+//
+// tool_outputs is the highest-detail tool kind. ResolveContentKinds deletes
+// tool_calls from a set that includes tool_outputs, and the export renderer
+// then draws each call with its result. The split matches that: tool_outputs
+// keeps the calls as well as the results.
 func includeFor(selected conversation.ContentKindSet) func(SegmentKind) bool {
+	if selected.Empty() {
+		return func(SegmentKind) bool { return true }
+	}
 	return func(kind SegmentKind) bool {
 		switch kind {
-		case KindText:
+		case KindText, KindOther:
 			return selected.Has(conversation.ContentKindChat)
 		case KindThinking:
 			return selected.Has(conversation.ContentKindThinking)
 		case KindToolUse:
 			return selected.Has(conversation.ContentKindToolCalls) ||
-				selected.Has(conversation.ContentKindToolSummaries)
+				selected.Has(conversation.ContentKindToolSummaries) ||
+				selected.Has(conversation.ContentKindToolOutputs)
 		case KindToolResult:
 			return selected.Has(conversation.ContentKindToolOutputs)
-		case KindImage, KindOther:
+		case KindImage:
 			return false
 		}
 		return false
