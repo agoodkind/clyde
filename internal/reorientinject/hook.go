@@ -21,15 +21,14 @@ import (
 )
 
 const (
-	// compactPromptSignature is a stable, distinctive substring shared by every
-	// Claude Code compaction prompt (the full BASE_COMPACT_PROMPT and the RECENT /
-	// this-conversation partial variants all open with it). The compaction
-	// summarization request is structurally identical to a normal turn on the wire
-	// (it carries the full tool schema and the same top-level shape), so this
-	// first-party control string in the request's last user message is the only
-	// reliable discriminator. The imperative "Your task is to ..." framing keeps a
-	// user who merely asks for a summary from matching. If Claude Code changes the
-	// prompt this stops matching, so detection fails safe to no injection.
+	// compactPromptSignature is a substring shared by every Claude Code
+	// compaction prompt. The full BASE_COMPACT_PROMPT and the RECENT and
+	// this-conversation partial variants all open with it.
+	//
+	// An exported transcript reproduces this prompt verbatim. Pasting one puts
+	// this substring in the last user message of an ordinary turn.
+	// MatchRequestResponse requires [mitm.RequestPurposeCompaction] first and
+	// checks this substring second.
 	compactPromptSignature = "Your task is to create a detailed summary of"
 
 	messagesPathSuffix = "/v1/messages"
@@ -151,9 +150,9 @@ func New(provider ContentProvider, sizing Sizing) *Hook {
 	}
 }
 
-// MatchRequestResponse matches the compaction summarization request by the
-// compact-prompt signature in its final user message, and pairs the response
-// with a transformer carrying the session id parsed from metadata.user_id.
+// MatchRequestResponse matches a request the client declared to be its own
+// compaction turn. It pairs the response with a transformer that stores the
+// session id read from the request.
 func (h *Hook) MatchRequestResponse(
 	req mitm.RequestResponseHookRequest,
 ) (mitm.RequestResponseHookMatch, error) {
@@ -161,6 +160,11 @@ func (h *Hook) MatchRequestResponse(
 		return unmatchedRequestResponseHookMatch(), nil
 	}
 	if !strings.HasSuffix(req.Path, messagesPathSuffix) {
+		return unmatchedRequestResponseHookMatch(), nil
+	}
+	// Claude Code sets the declaration on the request. A pasted transcript
+	// does not set it. This check precedes the body read.
+	if req.Purpose != mitm.RequestPurposeCompaction {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
 	body, err := req.Body.Bytes()
