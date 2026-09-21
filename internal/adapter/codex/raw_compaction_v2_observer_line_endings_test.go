@@ -22,7 +22,7 @@ func TestObserveRawResponsesCompactionV2ResponseAcceptsStandaloneCarriageReturns
 	}
 	observed := ObserveRawResponsesCompactionV2Response(
 		response,
-		RawResponsesCompactionV2Plan{SessionID: "session-1", Transcript: "transcript"},
+		RawResponsesCompactionV2Plan{SessionID: "session-1", Injection: "transcript"},
 		registry,
 	)
 	got, err := io.ReadAll(observed.Body)

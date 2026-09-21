@@ -26,7 +26,7 @@ func TestObserveRawResponsesCompactionV2ResponsePreservesAndArms(t *testing.T) {
 			if testCase.name == "sse" {
 				response.Header.Set("Content-Type", "text/event-stream")
 			}
-			observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, registry)
+			observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"}, registry)
 			got, err := io.ReadAll(observed.Body)
 			if err != nil {
 				t.Fatal(err)
@@ -69,7 +69,7 @@ func TestObserveRawResponsesCompactionV2ResponseAcceptsAllSSELineEndings(t *test
 			}
 			observed := ObserveRawResponsesCompactionV2Response(
 				response,
-				RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+				RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"},
 				registry,
 			)
 			got, err := io.ReadAll(observed.Body)
@@ -103,7 +103,7 @@ func TestObserveRawResponsesCompactionV2ResponseAcceptsLineOnlyTail(t *testing.T
 	}
 	observed := ObserveRawResponsesCompactionV2Response(
 		response,
-		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"},
 		registry,
 	)
 	got, err := io.ReadAll(observed.Body)
@@ -153,7 +153,7 @@ func TestObserveRawResponsesCompactionV2ResponseArmsBeforeEOF(t *testing.T) {
 	}
 	observed := ObserveRawResponsesCompactionV2Response(
 		response,
-		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"},
 		registry,
 	)
 	destination := make([]byte, len(body))
@@ -182,7 +182,7 @@ func TestObserveRawResponsesCompactionV2ResponseDisarmsInvalidPostTerminalTail(t
 		}
 		observed := ObserveRawResponsesCompactionV2Response(
 			response,
-			RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+			RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"},
 			registry,
 		)
 		first := make([]byte, len(prefix))
@@ -217,7 +217,7 @@ func TestObserveRawResponsesCompactionV2ResponseDisarmsAfterReadError(t *testing
 	}
 	observed := ObserveRawResponsesCompactionV2Response(
 		response,
-		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"},
 		registry,
 	)
 	first := make([]byte, len(prefix))
@@ -247,7 +247,7 @@ func TestReleaseRawResponsesCompactionV2ResponseDisarmsWithIncompleteTail(t *tes
 	}
 	observed := ObserveRawResponsesCompactionV2Response(
 		response,
-		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"},
 		registry,
 	)
 	first := make([]byte, len(prefix))
@@ -337,7 +337,7 @@ func TestObserveRawResponsesCompactionV2ResponseBoundsZstdOutput(t *testing.T) {
 		Header:     http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {"zstd"}},
 		Body:       io.NopCloser(bytes.NewReader(wire)),
 	}
-	observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, registry)
+	observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"}, registry)
 	got, err := io.ReadAll(observed.Body)
 	if err != nil || !bytes.Equal(got, wire) {
 		t.Fatal("zstd client bytes changed")
@@ -358,7 +358,7 @@ func TestObserveRawResponsesCompactionV2ResponseZstdAndFailures(t *testing.T) {
 	_ = encoder.Close()
 	registry := NewRawResponsesCompactionV2Registry(nil)
 	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {"zstd"}}, Body: io.NopCloser(bytes.NewReader(wire))}
-	observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, registry)
+	observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"}, registry)
 	got, err := io.ReadAll(observed.Body)
 	if err != nil || !bytes.Equal(got, wire) {
 		t.Fatal("zstd client body changed")
@@ -369,7 +369,7 @@ func TestObserveRawResponsesCompactionV2ResponseZstdAndFailures(t *testing.T) {
 	}
 	malformed := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader([]byte(`{`)))}
 	malformedRegistry := NewRawResponsesCompactionV2Registry(nil)
-	observed = ObserveRawResponsesCompactionV2Response(malformed, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, malformedRegistry)
+	observed = ObserveRawResponsesCompactionV2Response(malformed, RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"}, malformedRegistry)
 	_, _ = io.ReadAll(observed.Body)
 	if _, ok := malformedRegistry.Match("s", "cipher"); ok {
 		t.Fatal("malformed response armed state")
@@ -394,7 +394,7 @@ func TestObserveRawResponsesCompactionV2ResponseRejectsIncompleteSSE(t *testing.
 		t.Run(testCase.name, func(t *testing.T) {
 			registry := NewRawResponsesCompactionV2Registry(nil)
 			response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}, "Content-Encoding": {testCase.encoding}}, Body: io.NopCloser(bytes.NewReader(testCase.body))}
-			observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, registry)
+			observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"}, registry)
 			got, readErr := io.ReadAll(observed.Body)
 			if readErr != nil || !bytes.Equal(got, testCase.body) {
 				t.Fatal("client bytes changed")
@@ -420,7 +420,7 @@ func TestObserveRawResponsesCompactionV2ResponseRejectsTruncatedTailAfterComplet
 	}
 	observed := ObserveRawResponsesCompactionV2Response(
 		response,
-		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"},
 		registry,
 	)
 	got, err := io.ReadAll(observed.Body)
@@ -448,7 +448,7 @@ func TestObserveRawResponsesCompactionV2ResponseRejectsTailBeyondCaptureLimit(t 
 	}
 	observed := ObserveRawResponsesCompactionV2Response(
 		response,
-		RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"},
+		RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"},
 		registry,
 	)
 	got, err := io.ReadAll(observed.Body)
@@ -501,7 +501,7 @@ func TestObserveRawResponsesCompactionV2ResponseRejectsInvalidSSESequences(t *te
 		}{{body: []byte(sequence)}, {body: encoder.EncodeAll([]byte(sequence), nil), encoding: "zstd"}} {
 			registry := NewRawResponsesCompactionV2Registry(nil)
 			response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}, "Content-Encoding": {testCase.encoding}}, Body: io.NopCloser(bytes.NewReader(testCase.body))}
-			observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, registry)
+			observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"}, registry)
 			_, _ = io.ReadAll(observed.Body)
 			ArmRawResponsesCompactionV2Response(observed)
 			if _, ok := registry.Match("s", "cipher"); ok {
@@ -522,7 +522,7 @@ func TestObserveRawResponsesCompactionV2RejectsDataAfterCompletion(t *testing.T)
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 	registry := NewRawResponsesCompactionV2Registry(nil)
-	observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Transcript: "t"}, registry)
+	observed := ObserveRawResponsesCompactionV2Response(response, RawResponsesCompactionV2Plan{SessionID: "s", Injection: "t"}, registry)
 	if _, err := io.ReadAll(observed.Body); err != nil {
 		t.Fatalf("read observed response: %v", err)
 	}

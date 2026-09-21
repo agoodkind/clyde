@@ -6,8 +6,8 @@ Tickets: CLYDE-738, CLYDE-739, CLYDE-740, CLYDE-741, CLYDE-742
 
 ## Scope
 
-The Claude MITM reorient split. The native Codex compaction path is out of
-scope.
+The Claude MITM reorient split. The native Codex compaction path joined the
+same split under CLYDE-742; see the Removed section.
 
 ## Selection
 
@@ -218,5 +218,8 @@ Required change:
 - Whole-request trim validation. Truncation plus the synthetic result keeps the
   request valid at the cut.
 
-The `reorient_*` settings remain in configuration. The native Codex compaction
-path reads them.
+CLYDE-742 moved the native Codex compaction path onto the same split and
+deleted `reorient_recent_fraction`, `reorient_bytes_per_token`,
+`reorient_context_window_fraction`, and `reorient_standard_context_window`
+from configuration. `reorient_summary_injection`, `reorient_inject_max_tokens`,
+and `reorient_inject_content` remain, and both paths read them.

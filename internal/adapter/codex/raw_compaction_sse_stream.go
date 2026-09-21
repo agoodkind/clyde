@@ -51,7 +51,7 @@ func NewRawResponsesCompactionV2FinalAnswerTransformer(request RawResponsesReque
 	if recovery == nil || !rawResponsesCompactionV2FinalAnswerTurn(request.Header) {
 		return nil
 	}
-	return &RawResponsesCompactionTransformer{transcript: recovery.transcript, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}, strictFinalAnswer: rawResponsesCompactionV2FinalAnswerTurn(request.Header)}
+	return &RawResponsesCompactionTransformer{injection: recovery.injection, stream: request.Stream, mutation: &rawCompactionMutation{mutated: atomic.Bool{}}, strictFinalAnswer: rawResponsesCompactionV2FinalAnswerTurn(request.Header)}
 }
 
 // DidMutateResponse reports whether this transformer produced tagged output.

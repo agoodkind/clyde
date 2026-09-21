@@ -23,9 +23,25 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/mitm/capture"
+	codexcompaction "goodkind.io/clyde/internal/providers/codex/compaction"
+	"goodkind.io/clyde/internal/reorientinject"
+	"goodkind.io/clyde/internal/reorienttag"
+	"goodkind.io/clyde/internal/tokencount"
 	"goodkind.io/gklog/correlation"
 )
+
+// nativeCodexSplitter is the production splitter the daemon builds for the
+// native Codex path, under an explicit token budget and the real counter.
+func nativeCodexSplitter(budget int) adaptercodex.CompactionSplitter {
+	return codexcompaction.NewSplitter(reorientinject.Settings{
+		DefaultBudget:    budget,
+		DefaultContent:   conversation.NewContentKindSet(),
+		MaxRetainedBytes: adaptercodex.MaxCompactionInjectionBytes,
+		Counter:          tokencount.LocalCounter(tokencount.FamilyClaude, "", tokencount.Settings{}),
+	})
+}
 
 func TestNativeCodexResponsesRequestCarriesIngressCorrelation(t *testing.T) {
 	correlationContext := correlation.Context{
@@ -174,10 +190,7 @@ func TestNativeCodexResponsesCompactionStreamingRequestPreservesJSONError(t *tes
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/responses",
@@ -301,7 +314,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryPreservesLateCorruptZstdStreams
 			}))
 			t.Cleanup(upstream.Close)
 			srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-			if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+			if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 				t.Fatal("arm registry")
 			}
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
@@ -459,10 +472,7 @@ func TestNativeCodexResponsesZstdCompactionTransformsRequestAndResponse(t *testi
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
 	request.Header.Set("Content-Encoding", "zstd")
 	request.Header.Set("Content-Type", "application/json")
@@ -499,10 +509,7 @@ func TestNativeCodexResponsesZstdCompactionPreservesOversizedResponse(t *testing
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(zstdEncodeNativeResponseBody(t, requestBody)))
 	request.Header.Set("Content-Encoding", "zstd")
 	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
@@ -596,10 +603,7 @@ func TestNativeCodexResponsesCapturesFourRedactedStages(t *testing.T) {
 	}
 	auth := &nativeCaptureAuth{token: configuredOAuth, accountID: configuredAccount}
 	srv := newNativeResponsesServerWithCapture(t, upstream.URL, auth, store)
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
 	request.Header.Set("Authorization", "Bearer "+adapterToken)
 	request.Header.Set("Cookie", "session="+requestCookie)
@@ -725,15 +729,9 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled:                     true,
-		ContextWindowTokens:         0,
-		FallbackContextWindowTokens: 10_000,
-		MaxTokens:                   10_000,
-		ContextWindowFraction:       1,
-		BytesPerToken:               1,
-		RecentFraction:              0.5,
-	}
+	// Every message fits the budget. The split keeps the first counted message
+	// for the model to summarize and retains the rest.
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
@@ -745,8 +743,8 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 	}
 	if bytes.Contains(gotBody, []byte(`"text":"recent user"`)) ||
 		bytes.Contains(gotBody, []byte(`"text":"recent answer"`)) ||
-		!bytes.Contains(gotBody, []byte(`"text":"old user"`)) ||
-		!bytes.Contains(gotBody, []byte(`"text":"old answer"`)) {
+		bytes.Contains(gotBody, []byte(`"text":"old answer"`)) ||
+		!bytes.Contains(gotBody, []byte(`"text":"old user"`)) {
 		t.Fatalf("upstream transcript split was wrong: %s", gotBody)
 	}
 	var upstreamRequest struct {
@@ -755,8 +753,8 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 	if err := json.Unmarshal(gotBody, &upstreamRequest); err != nil {
 		t.Fatalf("unmarshal trimmed upstream request: %v", err)
 	}
-	if len(upstreamRequest.Input) != 3 {
-		t.Fatalf("trimmed upstream input count = %d, want 3: %s", len(upstreamRequest.Input), gotBody)
+	if len(upstreamRequest.Input) != 2 {
+		t.Fatalf("trimmed upstream input count = %d, want 2: %s", len(upstreamRequest.Input), gotBody)
 	}
 	if !bytes.Contains(gotBody, []byte(`{ "type":"message", "role":"user", "content":[{"type":"input_text","text":"prompt\\nbytes"}] }`)) {
 		t.Fatalf("upstream prompt bytes changed: %s", gotBody)
@@ -766,10 +764,169 @@ func TestNativeCodexResponsesCompactionTransformsOnlyTranscriptAndSummary(t *tes
 		t.Fatalf("upstream unrelated fields changed: %s", gotBody)
 	}
 	if strings.Count(recorder.Body.String(), "<pre-compaction-transcript>") != 1 ||
+		!strings.Contains(recorder.Body.String(), "old answer") ||
 		!strings.Contains(recorder.Body.String(), "recent user") ||
 		!strings.Contains(recorder.Body.String(), "recent answer") {
 		t.Fatalf("downstream summary missing transcript: %s", recorder.Body.String())
 	}
+}
+
+// TestNativeCodexResponsesCompactionSplitsByTokenBudget sends a v1 compaction
+// with a large tool call through the real handler under a budget smaller than
+// the conversation. The split retains the newest content, including the tool
+// call input, and keeps the retained count strictly under the budget.
+func TestNativeCodexResponsesCompactionSplitsByTokenBudget(t *testing.T) {
+	bulk := strings.Repeat("patched line of source ", 200)
+	requestBody := []byte(`{"model":"gpt-native","input":[` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"old user"}]},` +
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + strings.Repeat("old answer ", 800) + `"}]},` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},` +
+		`{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"tool-call-marker ` + bulk + `"},` +
+		`{"type":"custom_tool_call_output","call_id":"call-1","output":"applied"},` +
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent answer"}]},` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"summarize"}]}` +
+		`]}`)
+	responseBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`)
+	var gotBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotBody, _ = io.ReadAll(request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write(responseBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	const budget = 3000
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(budget)
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !bytes.Contains(gotBody, []byte(`"text":"old user"`)) || bytes.Contains(gotBody, []byte("tool-call-marker")) {
+		t.Fatalf("upstream request kept the retained tool call or lost the oldest message: %s", gotBody)
+	}
+	if !bytes.Contains(gotBody, []byte(`"text":"summarize"`)) {
+		t.Fatalf("upstream request lost the compaction prompt: %s", gotBody)
+	}
+	injected := injectedSpanForTest(t, recorder.Body.String())
+	if !strings.Contains(injected, "tool-call-marker") || !strings.Contains(injected, "recent answer") {
+		t.Fatalf("injection dropped the retained tool call or the newest answer: %s", injected)
+	}
+	assertInjectionUnderBudget(t, injected, budget)
+}
+
+// injectedSpanForTest decodes the assistant output text of one JSON summary
+// response and returns the text between the transcript tags.
+func injectedSpanForTest(t *testing.T, body string) string {
+	t.Helper()
+	var response struct {
+		Output []struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(body), &response); err != nil {
+		t.Fatalf("decode summary response: %v", err)
+	}
+	var text strings.Builder
+	for _, item := range response.Output {
+		for _, part := range item.Content {
+			text.WriteString(part.Text)
+		}
+	}
+	summary := text.String()
+	start := strings.Index(summary, reorienttag.PreCompactionTranscriptOpen)
+	end := strings.Index(summary, reorienttag.PreCompactionTranscriptClose)
+	if start < 0 || end < start {
+		t.Fatalf("summary has no injection: %s", summary)
+	}
+	// WrapInjection puts one newline after the open tag and one before the
+	// close tag; the retained text sits between them.
+	span := summary[start+len(reorienttag.PreCompactionTranscriptOpen) : end]
+	return strings.TrimSuffix(strings.TrimPrefix(span, "\n"), "\n")
+}
+
+// serveNativeResponsesForTest posts body to /v1/responses with the given
+// turn metadata and returns the response body after a 200 status.
+func serveNativeResponsesForTest(t *testing.T, srv *Server, body []byte, metadata string) string {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, metadata)
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("native responses status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	return recorder.Body.String()
+}
+
+func assertInjectionUnderBudget(t *testing.T, injected string, budget int) {
+	t.Helper()
+	counter := tokencount.LocalCounter(tokencount.FamilyClaude, "", tokencount.Settings{})
+	if got := counter.Estimate(injected); got >= budget {
+		t.Fatalf("injection measures %d tokens, budget %d", got, budget)
+	}
+}
+
+func TestNativeCodexResponsesCompactionV2CutsTheOversizedAnswer(t *testing.T) {
+	answer := strings.Repeat("older answer line ", 600) + "older-answer-tail"
+	turns := []struct{ role, text string }{{"user", "older"}, {"assistant", answer}, {"user", "newer"}, {"assistant", "newer answer"}, {"user", "unfinished"}}
+	items := []string{`{"type":"additional_tools","role":"developer"}`}
+	for _, turn := range turns {
+		items = append(items, nativeMessageItemForTest(turn.role, turn.text))
+	}
+	items = append(items, `{"type":"compaction_trigger"}`)
+	turnN := []byte(`{"model":"gpt-native","input":[` + strings.Join(items, ",") + `]}`)
+	turnNPlusOne := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"budget-state"},` + nativeMessageItemForTest("user", "go on") + `]}`)
+	var upstreamCompaction []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received, _ := io.ReadAll(request.Body)
+		if bytes.Contains(received, []byte(`"compaction_trigger"`)) {
+			upstreamCompaction = received
+			_, _ = io.WriteString(writer, `{"id":"resp-cut","status":"completed","output":[{"type":"compaction","encrypted_content":"budget-state"}]}`)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"id":"resp-cut-next","status":"completed","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}]}`)
+	}))
+	t.Cleanup(upstream.Close)
+
+	const budget = 800
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(budget)
+	serveNativeResponsesForTest(t, srv, turnN, nativeCompactionV2TurnMetadata())
+	for _, kept := range []string{items[0], `"text":"unfinished"`, `"compaction_trigger"`, "older answer line"} {
+		if !bytes.Contains(upstreamCompaction, []byte(kept)) {
+			t.Fatalf("turn N upstream body lacks %q: %s", kept, upstreamCompaction)
+		}
+	}
+	if bytes.Contains(upstreamCompaction, []byte("older-answer-tail")) {
+		t.Fatalf("turn N upstream body kept the whole oversized answer: %s", upstreamCompaction)
+	}
+
+	recovered := injectedSpanForTest(t, serveNativeResponsesForTest(t, srv, turnNPlusOne, nativeFinalAnswerTurnMetadata()))
+	for _, retained := range []string{"older-answer-tail", "newer answer"} {
+		if !strings.Contains(recovered, retained) {
+			t.Fatalf("turn N+1 recovery lacks %q: %s", retained, recovered)
+		}
+	}
+	assertInjectionUnderBudget(t, recovered, budget)
+}
+
+// nativeMessageItemForTest returns one Responses message item with a single
+// text part. A user role gets an input_text part; any other role gets an
+// output_text part.
+func nativeMessageItemForTest(role, text string) string {
+	partType := "output_text"
+	if role == "user" {
+		partType = "input_text"
+	}
+	return `{"type":"message","role":"` + role + `","content":[{"type":"` + partType + `","text":"` + text + `"}]}`
 }
 
 func TestNativeCodexResponsesCompactionV2PassesThrough(t *testing.T) {
@@ -787,10 +944,7 @@ func TestNativeCodexResponsesCompactionV2PassesThrough(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalRequest))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
@@ -828,10 +982,7 @@ func TestNativeCodexResponsesCompactionV2UpstreamFailureDoesNotArmRecovery(t *te
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	stages := make([]adapterruntime.RequestEvent, 0, 2)
 	srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) {
 		stages = append(stages, event)
@@ -874,10 +1025,7 @@ func TestNativeCodexResponsesCompactionV2MalformedLayoutPassesThrough(t *testing
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalRequest))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
@@ -914,10 +1062,7 @@ func TestNativeCodexResponsesCompactionV2EndToEndRecovery(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	compaction := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compactionRequest))
 	compaction.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
 	compactionRecorder := httptest.NewRecorder()
@@ -989,7 +1134,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequest(t *testing.T) {
 			t.Cleanup(upstream.Close)
 
 			srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-			if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+			if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 				t.Fatal("arm registry")
 			}
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(testCase.body))
@@ -1029,7 +1174,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryLifecycle(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+	if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 		t.Fatal("arm registry")
 	}
 	for index, body := range [][]byte{requestBody, naturalResend} {
@@ -1065,7 +1210,7 @@ func TestNativeCodexResponsesCompactionV2StreamingResponseCompletesRecovery(t *t
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+	if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 		t.Fatal("arm registry")
 	}
 	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
@@ -1120,7 +1265,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAnd
 			}))
 			t.Cleanup(upstream.Close)
 			srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-			if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+			if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 				t.Fatal("arm registry")
 			}
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(wireRequest))
@@ -1147,7 +1292,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAnd
 		upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write(jsonBody) }))
 		t.Cleanup(upstream.Close)
 		srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-		if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+		if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 			t.Fatal("arm registry")
 		}
 		request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
@@ -1162,12 +1307,12 @@ func TestNativeCodexResponsesCompactionV2RecoveryServerFailsOpenForNonregularAnd
 
 func TestNativeCodexResponsesCompactionV2RecoveryReleasesWhenProviderMissing(t *testing.T) {
 	registry := adaptercodex.NewRawResponsesCompactionV2Registry(nil)
-	if !registry.Arm("native-session", "cipher", "recovered transcript") {
+	if !registry.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 		t.Fatal("arm registry")
 	}
 	body := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	raw := adaptercodex.RawResponsesRequest{Body: body, Header: http.Header{adaptercodex.CodexTurnMetadataHeader: {nativeFinalAnswerTurnMetadata()}}}
-	transformed, _, _, recovery := prepareNativeCodexResponsesCompaction(raw, body, adaptercodex.RawResponsesCompactionSettings{}, registry)
+	transformed, _, _, recovery := prepareNativeCodexResponsesCompaction(raw, body, nil, registry)
 	if recovery == nil {
 		t.Fatal("missing recovery")
 	}
@@ -1195,7 +1340,7 @@ func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+	if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 		t.Fatal("arm registry")
 	}
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
@@ -1248,7 +1393,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpen(t *testing.T) 
 			t.Cleanup(upstream.Close)
 
 			srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-			if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+			if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 				t.Fatal("arm registry")
 			}
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(testCase.body))
@@ -1293,7 +1438,7 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpenZstd(t *testing
 			t.Cleanup(upstream.Close)
 
 			srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-			if !srv.compactionV2.Arm("native-session", "cipher", "recovered transcript") {
+			if !srv.compactionV2.Arm("native-session", "cipher", reorienttag.WrapInjection("recovered transcript", "")) {
 				t.Fatal("arm registry")
 			}
 			wireBody := zstdEncodeNativeResponseBody(t, testCase.body)
@@ -1347,10 +1492,7 @@ func TestNativeCodexResponsesCompactionInjectsWithMultilineUnknownFrame(t *testi
 	t.Cleanup(upstream.Close)
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
 	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionTurnMetadata())
 	recorder := httptest.NewRecorder()
@@ -1387,11 +1529,7 @@ func TestNativeCodexResponsesCompactionStreamsFirstFrameBeforeCompletion(t *test
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, FallbackContextWindowTokens: 0,
-		MaxTokens: 10_000, ContextWindowFraction: 1, BytesPerToken: 1,
-		RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
 	requestBody := `{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`
@@ -1475,10 +1613,7 @@ func TestNativeCodexResponsesZstdCompactionStreamsFirstFrameBeforeCompletion(t *
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
-	srv.deps.RawResponsesCompaction = adaptercodex.RawResponsesCompactionSettings{
-		Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-		ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-	}
+	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
 	requestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
@@ -1832,10 +1967,7 @@ func nativeCompactionTransformerForTest(t *testing.T) *adaptercodex.RawResponses
 			RequestID: "req-native",
 			Stream:    false,
 		},
-		adaptercodex.RawResponsesCompactionSettings{
-			Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-			ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-		},
+		nativeCodexSplitter(10_000),
 	)
 	if transformer == nil {
 		t.Fatal("expected native compaction transformer")

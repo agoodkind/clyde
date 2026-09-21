@@ -27,9 +27,10 @@ type Deps struct {
 	// to inject one. A nil result lets the adapter build the provider's
 	// default auth manager.
 	GetAuth func(adapterresolver.ProviderID) adapterprovider.AuthLookup
-	// RawResponsesCompaction carries the existing reorient controls into the
-	// native Codex Responses path. The daemon derives it from MITM config.
-	RawResponsesCompaction adaptercodex.RawResponsesCompactionSettings
+	// RawResponsesCompaction plans the native Codex compaction split. The
+	// daemon supplies the generic reorient splitter with the Codex provider;
+	// nil disables the split.
+	RawResponsesCompaction adaptercodex.CompactionSplitter
 	// CaptureStore is the daemon's shared SQLite capture store. The Anthropic
 	// client and Codex provider read their wire baseline (current baseline +
 	// updated-at) from it at request time to project their outbound wire

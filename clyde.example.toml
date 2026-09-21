@@ -429,22 +429,14 @@ providers = ["claude", "codex", "conductor", "cursor"]
 # from the intercepted request and open no file.
 reorient_summary_injection = false
 
-# Default token budget the Claude split retains when no --max-tokens argument
-# follows /compact. The native Codex split applies its context-window fraction
-# to the same value. Omit it to use each path's own default (500000).
+# Default token budget the Claude split and the native Codex split retain when
+# no --max-tokens argument follows /compact. Omit it to use the default (500000).
 # reorient_inject_max_tokens = 500000
 
-# Content kinds the Claude split retains when no --only argument or content
-# shortcut follows /compact. Accepts the clyde conversation export --only
-# values. Omit it to keep every kind.
+# Content kinds both splits retain when no --only argument or content shortcut
+# follows /compact. Accepts the clyde conversation export --only values. Omit
+# it to keep every kind.
 # reorient_inject_content = ["chat", "thinking", "tool_outputs"]
-
-# Native Codex split sizing. The Claude split reads none of these; it selects by
-# token budget with the counter clyde conversation export uses.
-# reorient_recent_fraction = 0.5
-# reorient_context_window_fraction = 0.5
-# reorient_bytes_per_token = 4
-# reorient_standard_context_window = 200000
 
 # sentinel = "MYKEYWORD"
 # actual_user_sentinel = "ACTUAL_USER"

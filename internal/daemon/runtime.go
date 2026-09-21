@@ -22,6 +22,7 @@ import (
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
 	claudecompaction "goodkind.io/clyde/internal/providers/claude/compaction"
+	codexcompaction "goodkind.io/clyde/internal/providers/codex/compaction"
 	"goodkind.io/clyde/internal/reorientinject"
 	"goodkind.io/clyde/internal/responsehook"
 	"goodkind.io/clyde/internal/sentinelinject"
@@ -315,6 +316,21 @@ func compactionContent(selectors []string) conversation.ContentKindSet {
 	return selected
 }
 
+// codexCompactionSplitter builds the native Codex compaction split from the
+// same reorient settings the Claude hook reads. A disabled injection returns
+// nil, and the adapter then forwards every compaction unchanged.
+func codexCompactionSplitter(cfg *config.Config) adaptercodex.CompactionSplitter {
+	if !cfg.MITM.ReorientSummaryInjection {
+		return nil
+	}
+	return codexcompaction.NewSplitter(reorientinject.Settings{
+		DefaultBudget:    cfg.MITM.ReorientInjectMaxTokens,
+		DefaultContent:   compactionContent(cfg.MITM.ReorientInjectContent),
+		MaxRetainedBytes: adaptercodex.MaxCompactionInjectionBytes,
+		Counter:          compactionCounter(cfg),
+	})
+}
+
 // compactionCounter returns the token counter clyde conversation export uses,
 // under the same [export] settings.
 //
@@ -417,21 +433,13 @@ func startAdapter(
 	inheritedCursor net.Listener,
 ) (*adapter.Server, net.Listener, net.Listener, error) {
 	deps := adapter.Deps{
-		ScratchDir:     ensureScratchDir,
-		RequestEvents:  stats.record,
-		RuntimeLogging: adapter.NewRuntimeLogging(cfg.Logging),
-		GetAuth:        getAuth(cfg, log),
-		RawResponsesCompaction: adaptercodex.RawResponsesCompactionSettings{
-			Enabled:                     cfg.MITM.ReorientSummaryInjection,
-			ContextWindowTokens:         0,
-			FallbackContextWindowTokens: cfg.MITM.ReorientStandardContextWindow,
-			MaxTokens:                   cfg.MITM.ReorientInjectMaxTokens,
-			ContextWindowFraction:       cfg.MITM.ReorientContextWindowFraction,
-			BytesPerToken:               cfg.MITM.ReorientBytesPerToken,
-			RecentFraction:              cfg.MITM.ReorientRecentFraction,
-		},
-		CaptureStore: store,
-		Group:        group,
+		ScratchDir:             ensureScratchDir,
+		RequestEvents:          stats.record,
+		RuntimeLogging:         adapter.NewRuntimeLogging(cfg.Logging),
+		GetAuth:                getAuth(cfg, log),
+		RawResponsesCompaction: codexCompactionSplitter(cfg),
+		CaptureStore:           store,
+		Group:                  group,
 	}
 	server, err := adapter.New(ctx, cfg.Adapter, cfg.Logging, deps, log)
 	if err != nil {
