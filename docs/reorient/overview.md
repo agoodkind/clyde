@@ -12,6 +12,8 @@ The hook emits a small note, under the client's hook-output size limit, that tel
 
 When `reorient_summary_injection` is on, the Claude MITM path injects the recovered transcript into the `/compact` summary response. The client persists that content in the `isCompactSummary` user message and sends it on later turns. The transcript is inserted inside the model's `<summary>` span. A response without a closing span receives a trailing block instead.
 
+`reorient_inject_instructions_file` adds an operator-written markdown file after the transcript, inside `<compaction-instructions>` tags and before the summary close tag, on both the Claude path and the native Codex path. The split reads the file on every compaction, so an edit takes effect on the next `/compact` with no daemon reload. A missing or unreadable file logs `mitm.reorient_inject.instructions_unreadable` and the injection proceeds without the span. The reorient renderer strips a prior instructions span from a stored summary the same way it strips a prior transcript span.
+
 Detection requires Claude Code's declaration that a request is a compaction turn. Claude Code sets `x-claude-code-request-class: compaction` on that request. It sets `main`, `auxiliary`, or `subagent` on every other request. A survey of the MITM capture store found the compaction class on 1 of 1,173 `/v1/messages` requests, and that request was a deliberately triggered compaction.
 
 A manual `/compact` and an automatic compaction set the same request class. They differ in the separate `x-claude-code-compaction` header, which reads `manual` for one and `reactive` for the other. Detection ignores that header, because the two values are not a shared enum.
@@ -24,7 +26,7 @@ Correlation reads the Claude session id from the request's `metadata.user_id` fi
 
 ### Selecting the retained content by token budget
 
-Every byte the Claude split reads comes from the intercepted request. No compaction path opens a transcript file.
+Every byte of transcript the split reads comes from the intercepted request. No compaction path opens a transcript file. The instructions file is the one file a compaction reads.
 
 The split counts one content block at a time from the newest message toward the oldest, retains every block that fits the budget whole, and retains the tail of the first block that does not fit. The retained text measures strictly under the budget: it never equals the budget and never exceeds it.
 

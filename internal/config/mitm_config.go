@@ -19,7 +19,8 @@ type MITMConfig struct {
 	AgentGateCommand string `json:"agentGateCommand,omitempty" toml:"agent_gate_command,omitempty"`
 	// ReorientSummaryInjection turns on the compaction split for both the
 	// Claude MITM path and the native Codex Responses path. Each path reads the
-	// transcript from the intercepted request and opens no file. Default false.
+	// transcript from the intercepted request and opens no transcript file.
+	// Default false.
 	ReorientSummaryInjection bool `json:"reorientSummaryInjection,omitempty" toml:"reorient_summary_injection,omitempty"`
 	// ReorientInjectMaxTokens is the default token budget the Claude split and
 	// the native Codex split retain when no `--max-tokens` argument appears in
@@ -29,6 +30,11 @@ type MITMConfig struct {
 	// no --only argument or content shortcut follows /compact. It accepts the
 	// clyde conversation export --only values. Empty keeps every kind.
 	ReorientInjectContent []string `json:"reorientInjectContent,omitempty" toml:"reorient_inject_content,omitempty"`
+	// ReorientInjectInstructionsFile is a markdown file both splits append
+	// after the injected transcript, inside <compaction-instructions> tags.
+	// The split reads the file on every compaction. A relative path resolves
+	// against the config directory. Empty appends nothing.
+	ReorientInjectInstructionsFile string `json:"reorientInjectInstructionsFile,omitempty" toml:"reorient_inject_instructions_file,omitempty"`
 	// Sentinel, when non-empty, enables the MITM hook that scans the latest
 	// user message on an intercepted Anthropic /v1/messages request and
 	// rewrites the downstream model message to everything after the keyword.

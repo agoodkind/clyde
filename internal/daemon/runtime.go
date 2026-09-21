@@ -280,6 +280,7 @@ func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
 					DefaultBudget:    mitmCfg.ReorientInjectMaxTokens,
 					DefaultContent:   compactionContent(mitmCfg.ReorientInjectContent),
 					MaxRetainedBytes: 0,
+					InstructionsFile: mitmCfg.ReorientInjectInstructionsFile,
 					Counter:          compactionCounter(cfg),
 				},
 			),
@@ -327,6 +328,7 @@ func codexCompactionSplitter(cfg *config.Config) adaptercodex.CompactionSplitter
 		DefaultBudget:    cfg.MITM.ReorientInjectMaxTokens,
 		DefaultContent:   compactionContent(cfg.MITM.ReorientInjectContent),
 		MaxRetainedBytes: adaptercodex.MaxCompactionInjectionBytes,
+		InstructionsFile: cfg.MITM.ReorientInjectInstructionsFile,
 		Counter:          compactionCounter(cfg),
 	})
 }

@@ -411,9 +411,19 @@ func stripPriorReorientInjectionMetadata(
 	return &out, true
 }
 
+// stripPriorReorientInjectionSpans removes every balanced transcript span and
+// every balanced instructions span from a stored compact summary.
 func stripPriorReorientInjectionSpans(body string) (string, bool) {
-	openTag := reorienttag.PreCompactionTranscriptOpen
-	closeTag := reorienttag.PreCompactionTranscriptClose
+	withoutTranscript, transcriptChanged := stripBalancedSpans(
+		body, reorienttag.PreCompactionTranscriptOpen, reorienttag.PreCompactionTranscriptClose,
+	)
+	withoutInstructions, instructionsChanged := stripBalancedSpans(
+		withoutTranscript, reorienttag.CompactionInstructionsOpen, reorienttag.CompactionInstructionsClose,
+	)
+	return withoutInstructions, transcriptChanged || instructionsChanged
+}
+
+func stripBalancedSpans(body, openTag, closeTag string) (string, bool) {
 	if !strings.Contains(body, openTag) {
 		return body, false
 	}
