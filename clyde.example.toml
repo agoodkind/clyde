@@ -426,8 +426,14 @@ providers = ["claude", "codex", "conductor", "cursor"]
 
 # Inject pre-compaction transcript content into Claude MITM summaries and
 # authenticated native Codex Responses summaries. Both paths read the transcript
-# from the intercepted request and open no file.
+# from the intercepted request and open no transcript file.
 reorient_summary_injection = false
+
+# Markdown file both splits append after the injected transcript, inside
+# <compaction-instructions> tags. Read on every compaction; edits apply to the
+# next /compact with no reload. A relative path resolves against this
+# config.toml. Omit it to append nothing.
+# reorient_inject_instructions_file = "compaction-instructions.md"
 
 # Default token budget the Claude split and the native Codex split retain when
 # no --max-tokens argument follows /compact. Omit it to use the default (500000).

@@ -41,6 +41,7 @@ func loadConfig(dir string) (*Config, error) {
 		return nil, err
 	}
 	resolveExportAPIKeyFiles(&cfg.Export, filepath.Dir(tomlPath))
+	resolveReorientInstructionsFile(&cfg.MITM, filepath.Dir(tomlPath))
 	pruneEmptyModelDeclarations(&cfg.Adapter)
 	warnRemovedLoggingConfig(data, tomlPath, log)
 	if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {

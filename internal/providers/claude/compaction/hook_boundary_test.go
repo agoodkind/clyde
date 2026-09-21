@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/reorientinject"
+	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/clyde/internal/tokencount"
 )
 
@@ -48,6 +51,52 @@ func liveHook(budget int) *reorientinject.Hook {
 			tokencount.Settings{},
 		),
 	})
+}
+
+// instructionsHook is liveHook with an operator instructions file path.
+func instructionsHook(path string) *reorientinject.Hook {
+	return reorientinject.New(NewProvider(), reorientinject.Settings{
+		DefaultBudget:    500_000,
+		InstructionsFile: path,
+		Counter:          tokencount.LocalCounter(tokencount.FamilyClaude, "claude-opus-5", tokencount.Settings{}),
+	})
+}
+
+// TestSplitAppendsTheInstructionsFileAfterTheTranscript writes an operator
+// instructions file and asserts the summary response ends the injection with
+// that text inside the instructions tags, after the transcript close tag and
+// before the summary close tag.
+func TestSplitAppendsTheInstructionsFileAfterTheTranscript(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "after-compact.md")
+	if err := os.WriteFile(path, []byte("# Read the ledger first\n\nThen the tickets.\n"), 0o600); err != nil {
+		t.Fatalf("write instructions file: %v", err)
+	}
+	_, summary := splitWithHook(t, instructionsHook(path), recompactionBody(t, ""))
+	transcriptClose := strings.Index(summary, reorienttag.PreCompactionTranscriptClose)
+	instructionsOpen := strings.Index(summary, reorienttag.CompactionInstructionsOpen)
+	instructionsClose := strings.Index(summary, reorienttag.CompactionInstructionsClose)
+	summaryClose := strings.LastIndex(summary, "</summary>")
+	if transcriptClose < 0 || instructionsOpen < transcriptClose || instructionsClose < instructionsOpen || summaryClose < instructionsClose {
+		t.Fatalf("instructions span is missing or out of order: %s", summary)
+	}
+	if !strings.Contains(summary[instructionsOpen:instructionsClose], "Read the ledger first") {
+		t.Fatalf("instructions span lacks the file text: %s", summary[instructionsOpen:instructionsClose])
+	}
+}
+
+// TestSplitRunsWithoutAMissingInstructionsFile asserts a missing file leaves
+// the split in place and the summary free of the instructions tags.
+func TestSplitRunsWithoutAMissingInstructionsFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "absent.md")
+	forwarded, summary := splitWithHook(t, instructionsHook(path), recompactionBody(t, ""))
+	if bytes.Contains(forwarded, []byte("tool-call-marker")) {
+		t.Fatal("the forwarded request still stores the retained tool call")
+	}
+	if !strings.Contains(summary, reorienttag.PreCompactionTranscriptClose) || strings.Contains(summary, reorienttag.CompactionInstructionsOpen) {
+		t.Fatalf("summary has no transcript or an unexpected instructions span: %s", summary)
+	}
 }
 
 // hookRequest builds a request Claude Code declared to be its own compaction
@@ -311,7 +360,12 @@ func summaryStream(t *testing.T) []byte {
 // retained content.
 func splitOnce(t *testing.T, body []byte, budget int) (forwarded []byte, summary string) {
 	t.Helper()
-	match, err := liveHook(budget).MatchRequestResponse(hookRequest(hookBody{raw: body, err: nil}))
+	return splitWithHook(t, liveHook(budget), body)
+}
+
+func splitWithHook(t *testing.T, hook *reorientinject.Hook, body []byte) (forwarded []byte, summary string) {
+	t.Helper()
+	match, err := hook.MatchRequestResponse(hookRequest(hookBody{raw: body, err: nil}))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse: %v", err)
 	}

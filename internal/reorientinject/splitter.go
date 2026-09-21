@@ -3,6 +3,8 @@ package reorientinject
 import (
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/exportargs"
@@ -30,6 +32,10 @@ type Settings struct {
 	DefaultContent conversation.ContentKindSet
 	// MaxRetainedBytes caps the injection in bytes. Zero means no cap.
 	MaxRetainedBytes int
+	// InstructionsFile is a markdown file the split appends after the
+	// transcript on every compaction. Empty appends nothing. An unreadable
+	// file logs a warning and appends nothing.
+	InstructionsFile string
 	// Counter measures the retained content. The daemon builds the counter
 	// clyde conversation export uses, under the same [export] settings.
 	Counter tokencount.Counter
@@ -73,9 +79,10 @@ func (s *Splitter) Plan(body []byte) (Result, bool) {
 		return noResult, false
 	}
 	budget, include := s.options(parsed.Arguments)
+	instructions := s.instructions()
 	maxBytes := s.settings.MaxRetainedBytes
 	if maxBytes > 0 {
-		maxBytes -= len(reorienttag.WrapInjection("", ""))
+		maxBytes -= len(reorienttag.WrapInjection("", instructions))
 	}
 	plan, planned := planCut(parsed, budget, maxBytes, s.settings.Counter, include)
 	if !planned {
@@ -104,8 +111,29 @@ func (s *Splitter) Plan(body []byte) (Result, bool) {
 	}
 	return Result{
 		Forwarded: forwarded,
-		Injection: reorienttag.WrapInjection(plan.Retained, ""),
+		Injection: reorienttag.WrapInjection(plan.Retained, instructions),
 	}, true
+}
+
+// instructions reads the configured instructions file. It returns an empty
+// string when no file is configured or the file cannot be read; the read
+// failure is logged and the compaction proceeds without the span.
+func (s *Splitter) instructions() string {
+	path := s.settings.InstructionsFile
+	if path == "" {
+		return ""
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		slog.Warn("mitm.reorient_inject.instructions_unreadable",
+			"component", reorientInjectComponent,
+			"concern", reorientInjectConcern,
+			"path", path,
+			"err", err,
+		)
+		return ""
+	}
+	return strings.TrimSpace(string(content))
 }
 
 // Inject inserts injection into the summary response body through the

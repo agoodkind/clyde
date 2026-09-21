@@ -30,6 +30,16 @@ func resolveExportAPIKeyFiles(cfg *ExportConfig, configDir string) {
 	cfg.OpenAIAPIKeyFile = resolveConfiguredFilePath(configDir, cfg.OpenAIAPIKeyFile)
 }
 
+// resolveReorientInstructionsFile makes reorient_inject_instructions_file an
+// absolute path, relative to the config directory when the operator wrote a
+// relative one.
+func resolveReorientInstructionsFile(cfg *MITMConfig, configDir string) {
+	if cfg == nil {
+		return
+	}
+	cfg.ReorientInjectInstructionsFile = resolveConfiguredFilePath(configDir, cfg.ReorientInjectInstructionsFile)
+}
+
 func resolveConfiguredFilePath(configDir string, configuredPath string) string {
 	trimmedPath := strings.TrimSpace(configuredPath)
 	if trimmedPath == "" {
