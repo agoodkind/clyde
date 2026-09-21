@@ -23,26 +23,29 @@ type plan struct {
 // that fits whole. The boundary segment is the first that does not fit, and the
 // plan retains that segment's tail.
 //
-// The count includes message index 0. After a compaction that message stores
-// the prior summary and the prior injection, and a budget larger than every
-// later message retains the tail of it. The model always summarizes some
-// content: when every message fits the budget, the plan sends message 0 whole
-// and retains the rest.
+// The count includes the first message after RetainStart. After a compaction
+// that message stores the prior summary and the prior injection, and a budget
+// larger than every later message retains the tail of it. The model always
+// summarizes some content: when every message fits the budget, the plan sends
+// that first message whole and retains the rest.
 //
-// ok is false when no segment fits the budget. The caller then forwards the
-// request unmodified.
+// maxBytes caps the retained text in bytes; zero means no cap. ok is false
+// when no segment fits the budget. The caller then forwards the request
+// unmodified.
 func planCut(
 	request ParsedRequest,
 	budget int,
+	maxBytes int,
 	counter tokencount.Counter,
 	include func(SegmentKind) bool,
 ) (plan, bool) {
-	if budget <= 0 || request.InstructionStart <= 0 {
+	if budget <= 0 || request.RetainStart < 0 || request.InstructionStart <= request.RetainStart {
 		return noPlan(), false
 	}
 	// The retained text adds a role heading per message, which the per-segment
 	// count does not see. A first pass that overshoots lowers the planning
-	// budget by the overage and plans again.
+	// budget by the overage and plans again. A byte cap overage lowers it by
+	// the same fraction.
 	planningBudget := budget
 	for range planAttempts {
 		candidate, ok := planOnce(request, planningBudget, counter, include)
@@ -50,11 +53,16 @@ func planCut(
 			return noPlan(), false
 		}
 		tokens := counter.Estimate(candidate.Retained)
-		if tokens < budget {
+		if tokens < budget && (maxBytes <= 0 || len(candidate.Retained) <= maxBytes) {
 			candidate.RetainedTokens = tokens
 			return candidate, true
 		}
-		planningBudget -= tokens - budget + 1
+		overage := tokens - budget + 1
+		if maxBytes > 0 && len(candidate.Retained) > maxBytes {
+			byteOverage := tokens - int(float64(tokens)*float64(maxBytes)/float64(len(candidate.Retained))) + 1
+			overage = max(overage, byteOverage)
+		}
+		planningBudget -= overage
 		if planningBudget <= 0 {
 			return noPlan(), false
 		}
@@ -84,7 +92,7 @@ func planOnce(
 	used := 0
 	cut := Cut{MessageIndex: -1, SegmentIndex: 0, HeadRunes: 0}
 
-	for messageIndex := request.InstructionStart - 1; messageIndex >= 0; messageIndex-- {
+	for messageIndex := request.InstructionStart - 1; messageIndex >= request.RetainStart; messageIndex-- {
 		segments := request.Messages[messageIndex].Segments
 		for segmentIndex, segment := range slices.Backward(segments) {
 			if !include(segment.Kind) {
@@ -96,7 +104,12 @@ func planOnce(
 				cut = Cut{MessageIndex: messageIndex, SegmentIndex: segmentIndex, HeadRunes: 0}
 				continue
 			}
-			head := headRunesThatFit(segment.Text, budget-used, counter)
+			// An atomic boundary segment stays whole in the forwarded request.
+			// A head of its full length summarizes all of it and retains none.
+			head := len([]rune(segment.Text))
+			if !segment.Atomic {
+				head = headRunesThatFit(segment.Text, budget-used, counter)
+			}
 			return finishPlan(request, Cut{
 				MessageIndex: messageIndex,
 				SegmentIndex: segmentIndex,
@@ -107,14 +120,14 @@ func planOnce(
 	if cut.MessageIndex < 0 {
 		return noPlan(), false
 	}
-	if cut.MessageIndex == 0 && cut.HeadRunes == 0 {
+	if cut.MessageIndex == request.RetainStart && cut.HeadRunes == 0 {
 		// Every message fits. The model still needs content to summarize, so
-		// the forwarded request keeps message 0 whole and the plan retains the
-		// rest.
-		if request.InstructionStart <= 1 {
+		// the forwarded request keeps the first counted message whole and the
+		// plan retains the rest.
+		if request.InstructionStart <= request.RetainStart+1 {
 			return noPlan(), false
 		}
-		cut = Cut{MessageIndex: 1, SegmentIndex: 0, HeadRunes: 0}
+		cut = Cut{MessageIndex: request.RetainStart + 1, SegmentIndex: 0, HeadRunes: 0}
 	}
 	return finishPlan(request, cut, include)
 }

@@ -48,6 +48,7 @@ func (Provider) ParseCompaction(body []byte) (reorientinject.ParsedRequest, bool
 	return reorientinject.ParsedRequest{
 		SessionID:        decoded.SessionID,
 		Messages:         messages,
+		RetainStart:      0,
 		InstructionStart: promptIndex,
 		Arguments:        Arguments(texts[promptIndex]),
 	}, true
@@ -78,14 +79,15 @@ func (Provider) Truncate(
 	return truncated, nil
 }
 
-// InjectSummary inserts content into the summary the model returned.
-func (Provider) InjectSummary(body []byte, content string) ([]byte, error) {
-	injected, err := anthropic.InjectIntoSummary(body, content)
+// InjectSummary inserts the wrapped injection into the summary the model
+// returned.
+func (Provider) InjectSummary(body []byte, injection string) ([]byte, error) {
+	injected, err := anthropic.InjectIntoSummary(body, injection)
 	if err != nil {
 		slog.Warn("providers.claude.compaction_inject_failed",
 			"concern", logConcern,
 			"component", logComponent,
-			"content_bytes", len(content),
+			"injection_bytes", len(injection),
 			"err", err,
 		)
 		return nil, fmt.Errorf("inject into claude summary: %w", err)
@@ -99,6 +101,7 @@ func noRequest() reorientinject.ParsedRequest {
 	return reorientinject.ParsedRequest{
 		SessionID:        "",
 		Messages:         nil,
+		RetainStart:      0,
 		InstructionStart: 0,
 		Arguments:        nil,
 	}
@@ -135,8 +138,9 @@ func segments(message anthropic.CompactionMessage) []reorientinject.Segment {
 	out := make([]reorientinject.Segment, 0, len(message.Segments))
 	for _, segment := range message.Segments {
 		out = append(out, reorientinject.Segment{
-			Kind: segmentKind(segment.Kind),
-			Text: segment.Text,
+			Kind:   segmentKind(segment.Kind),
+			Text:   segment.Text,
+			Atomic: false,
 		})
 	}
 	return out

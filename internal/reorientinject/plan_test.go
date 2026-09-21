@@ -50,7 +50,7 @@ func TestPlanCutRetainsStrictlyUnderTheBudget(t *testing.T) {
 	t.Parallel()
 	counter := testCounter()
 	for _, budget := range []int{50, 200, 1000, 5000} {
-		got, ok := planCut(compactedSession(), budget, counter, everyKind)
+		got, ok := planCut(compactedSession(), budget, 0, counter, everyKind)
 		if !ok {
 			t.Errorf("budget %d planned no cut", budget)
 			continue
@@ -63,7 +63,7 @@ func TestPlanCutRetainsStrictlyUnderTheBudget(t *testing.T) {
 
 func TestPlanCutRetainsTheTailOfALargeMessage(t *testing.T) {
 	t.Parallel()
-	got, ok := planCut(compactedSession(), 1000, testCounter(), everyKind)
+	got, ok := planCut(compactedSession(), 1000, 0, testCounter(), everyKind)
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
@@ -94,7 +94,7 @@ func TestPlanCutRetainsTheTailOfMessageZero(t *testing.T) {
 	// Messages 1 through 5 measure about 5,500 tokens and message 0 about
 	// 3,900, so an 8,000 budget retains every later message and then part of
 	// message 0.
-	got, ok := planCut(request, 8000, testCounter(), everyKind)
+	got, ok := planCut(request, 8000, 0, testCounter(), everyKind)
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
@@ -117,7 +117,7 @@ func TestPlanCutRetainsTheTailOfMessageZero(t *testing.T) {
 // conversation keeps message 0 in the forwarded request and retains the rest.
 func TestPlanCutSendsMessageZeroWholeWhenEverythingFits(t *testing.T) {
 	t.Parallel()
-	got, ok := planCut(compactedSession(), 1_000_000, testCounter(), everyKind)
+	got, ok := planCut(compactedSession(), 1_000_000, 0, testCounter(), everyKind)
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
@@ -132,7 +132,7 @@ func TestPlanCutSendsMessageZeroWholeWhenEverythingFits(t *testing.T) {
 func TestPlanCutSkipsAnExcludedKind(t *testing.T) {
 	t.Parallel()
 	chatOnly := func(kind SegmentKind) bool { return kind == KindText }
-	got, ok := planCut(compactedSession(), 1_000_000, testCounter(), chatOnly)
+	got, ok := planCut(compactedSession(), 1_000_000, 0, testCounter(), chatOnly)
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
@@ -146,7 +146,7 @@ func TestPlanCutSkipsAnExcludedKind(t *testing.T) {
 
 func TestPlanCutReportsNoCutForATinyBudget(t *testing.T) {
 	t.Parallel()
-	if _, ok := planCut(compactedSession(), 1, testCounter(), everyKind); ok {
+	if _, ok := planCut(compactedSession(), 1, 0, testCounter(), everyKind); ok {
 		t.Fatal("a one token budget planned a cut")
 	}
 }

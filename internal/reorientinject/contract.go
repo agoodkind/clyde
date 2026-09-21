@@ -24,6 +24,11 @@ const (
 type Segment struct {
 	Kind SegmentKind
 	Text string
+	// Atomic marks a segment the provider cannot truncate inside, such as a
+	// tool call argument object or an encrypted reasoning item. The planner
+	// keeps an atomic boundary segment whole in the forwarded request and
+	// starts the retained text after it.
+	Atomic bool
 }
 
 // Role is who produced one message. A provider maps its own wire role onto
@@ -68,6 +73,10 @@ type ParsedRequest struct {
 	// SessionID identifies the conversation in the provider's own terms.
 	SessionID string
 	Messages  []Message
+	// RetainStart is the index of the first message the split counts. Messages
+	// before it stay in the forwarded request unmodified and never appear in
+	// the retained text. Zero means every message is counted.
+	RetainStart int
 	// InstructionStart is the index of the compaction prompt. The messages from
 	// that index onward stay in the forwarded request unmodified.
 	InstructionStart int
@@ -93,6 +102,7 @@ type Provider interface {
 	// Truncate rewrites body to end the conversation at the cut, keeping the
 	// instruction region from instructionStart onward.
 	Truncate(body []byte, cut Cut, instructionStart int) ([]byte, error)
-	// InjectSummary inserts content into the summary the model returned.
-	InjectSummary(body []byte, content string) ([]byte, error)
+	// InjectSummary inserts the wrapped injection text into the summary the
+	// model returned.
+	InjectSummary(body []byte, injection string) ([]byte, error)
 }

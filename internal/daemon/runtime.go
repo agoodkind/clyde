@@ -276,9 +276,10 @@ func mitmRequestResponseHooks(cfg *config.Config) []mitm.RequestResponseHook {
 			hook: reorientinject.New(
 				claudecompaction.NewProvider(),
 				reorientinject.Settings{
-					DefaultBudget:  mitmCfg.ReorientInjectMaxTokens,
-					DefaultContent: compactionContent(mitmCfg.ReorientInjectContent),
-					Counter:        compactionCounter(cfg),
+					DefaultBudget:    mitmCfg.ReorientInjectMaxTokens,
+					DefaultContent:   compactionContent(mitmCfg.ReorientInjectContent),
+					MaxRetainedBytes: 0,
+					Counter:          compactionCounter(cfg),
 				},
 			),
 		},
