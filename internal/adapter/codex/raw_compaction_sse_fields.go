@@ -6,45 +6,6 @@ import (
 	"strings"
 )
 
-func selectRawCompactionStart(
-	units []rawCompactionInterval,
-	maxBytes int,
-	targetCount int,
-	render func(start int) (string, bool),
-) (int, string, bool) {
-	if targetCount <= 0 || targetCount > len(units) {
-		return 0, "", false
-	}
-	firstCandidate := len(units) - targetCount
-	if maxBytes <= 0 {
-		rendered, ok := render(units[firstCandidate].start)
-		return firstCandidate, rendered, ok && strings.TrimSpace(rendered) != ""
-	}
-
-	selected := -1
-	selectedTranscript := ""
-	lower := firstCandidate
-	upper := len(units) - 1
-	for lower <= upper {
-		middle := lower + (upper-lower)/2
-		rendered, ok := render(units[middle].start)
-		if !ok || strings.TrimSpace(rendered) == "" {
-			return 0, "", false
-		}
-		if len(rendered) > maxBytes {
-			lower = middle + 1
-			continue
-		}
-		selected = middle
-		selectedTranscript = rendered
-		upper = middle - 1
-	}
-	if selected < 0 {
-		return 0, "", false
-	}
-	return selected, selectedTranscript, true
-}
-
 func appendRawCompactionAssistantContentPart(
 	item []byte,
 	contentStart int,

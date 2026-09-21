@@ -46,13 +46,13 @@ func readResponsesRequestBody(body []byte, contentEncoding string) ([]byte, erro
 func prepareNativeCodexResponsesCompaction(
 	raw adaptercodex.RawResponsesRequest,
 	decodedBody []byte,
-	settings adaptercodex.RawResponsesCompactionSettings,
+	splitter adaptercodex.CompactionSplitter,
 	registry *adaptercodex.RawResponsesCompactionV2Registry,
 ) (adaptercodex.RawResponsesRequest, *adaptercodex.RawResponsesCompactionTransformer, *adaptercodex.RawResponsesCompactionV2Plan, *adaptercodex.RawResponsesCompactionV2Recovery) {
 	decodedRaw := raw
 	decodedRaw.Body = decodedBody
 	if adaptercodex.DetectRawResponsesCompactionProtocol(decodedRaw.Header) == adaptercodex.RawResponsesCompactionV2 {
-		transformed, plan := prepareNativeCodexResponsesCompactionV2(raw, decodedRaw, decodedBody, settings)
+		transformed, plan := prepareNativeCodexResponsesCompactionV2(raw, decodedRaw, decodedBody, splitter)
 		return transformed, nil, plan, nil
 	}
 	injected, recovery, changed := adaptercodex.InjectRawResponsesCompactionV2Recovery(decodedRaw, registry)
@@ -65,7 +65,7 @@ func prepareNativeCodexResponsesCompaction(
 		injected.Body = forwardBody
 		return injected, nil, nil, recovery
 	}
-	transformed, transformer := adaptercodex.PrepareRawResponsesCompaction(decodedRaw, settings)
+	transformed, transformer := adaptercodex.PrepareRawResponsesCompaction(decodedRaw, splitter)
 	if transformer == nil {
 		return raw, nil, nil, nil
 	}
@@ -81,9 +81,9 @@ func prepareNativeCodexResponsesCompactionV2(
 	raw adaptercodex.RawResponsesRequest,
 	decodedRaw adaptercodex.RawResponsesRequest,
 	decodedBody []byte,
-	settings adaptercodex.RawResponsesCompactionSettings,
+	splitter adaptercodex.CompactionSplitter,
 ) (adaptercodex.RawResponsesRequest, *adaptercodex.RawResponsesCompactionV2Plan) {
-	plan, ok := adaptercodex.PlanRawResponsesCompactionV2(decodedRaw, settings)
+	plan, ok := adaptercodex.PlanRawResponsesCompactionV2(decodedRaw, splitter)
 	if !ok {
 		return raw, nil
 	}

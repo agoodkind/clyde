@@ -304,7 +304,7 @@ func (b *rawResponsesCompactionV2ObservedBody) armEncrypted(encrypted string) {
 		return
 	}
 	b.sseEncrypted = encrypted
-	generation, armed := b.registry.ArmWithGeneration(b.plan.SessionID, encrypted, b.plan.Transcript)
+	generation, armed := b.registry.ArmWithGeneration(b.plan.SessionID, encrypted, b.plan.Injection)
 	if !armed {
 		return
 	}

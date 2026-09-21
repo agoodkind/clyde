@@ -64,23 +64,6 @@ func TestRawResponsesCompactionV2RecoveryResponseRejectsDuplicateFields(t *testi
 	}
 }
 
-func TestRawResponsesCompactionPreservesEscapedUnrelatedKeys(t *testing.T) {
-	body := []byte(`{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent user"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"summarize"}]}],"opaque\/key":{"kept":true}}`)
-	request, transformer := PrepareRawResponsesCompaction(rawCompactionRequest(t, body), RawResponsesCompactionSettings{Enabled: true})
-	if transformer == nil || bytes.Equal(request.Body, body) {
-		t.Fatal("escaped unrelated request key prevented compaction")
-	}
-	if !bytes.Contains(request.Body, []byte(`"opaque\/key":{"kept":true}`)) {
-		t.Fatalf("escaped request key changed: %s", request.Body)
-	}
-	original := `{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}],"opaque\/key":{"kept":true}}`
-	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(original))}
-	got := readResponseBody(t, transformer.TransformResponse(response))
-	if !bytes.Contains(got, []byte("recent user")) || !bytes.Contains(got, []byte(`"opaque\/key":{"kept":true}`)) {
-		t.Fatalf("escaped unrelated response key prevented recovery or changed: %s", got)
-	}
-}
-
 func TestInjectRawResponsesCompactionV2RecoveryRejectsDuplicateFields(t *testing.T) {
 	for _, body := range []string{
 		`{"input":[{"type":"compaction","encrypted_content":"cipher"}],"input":[]}`,
@@ -99,41 +82,6 @@ func TestInjectRawResponsesCompactionV2RecoveryRejectsDuplicateFields(t *testing
 		if _, _, reserved := registry.Reserve("session-1", "cipher"); !reserved {
 			t.Fatal("ambiguous request consumed or reserved recovery")
 		}
-	}
-}
-
-func TestPlanRawResponsesCompactionV2RetainsUnfinishedCommentaryTurn(t *testing.T) {
-	request := rawResponsesCompactionV2DeveloperRequest(t, "recent instructions")
-	unfinished := `{"type":"message","role":"user","content":[{"type":"input_text","text":"current-user"}]},{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"still-working"}]},{"type":"custom_tool_call","call_id":"pending","name":"exec_command","input":"run"}`
-	request.Body = bytes.Replace(request.Body, []byte(`{"type":"compaction_trigger"}`), []byte(unfinished+`,{"type":"compaction_trigger"}`), 1)
-	plan, ok := PlanRawResponsesCompactionV2(request, RawResponsesCompactionSettings{Enabled: true, RecentFraction: 0.5})
-	if !ok {
-		t.Fatal("completed recent turn should remain removable")
-	}
-	for _, text := range []string{"current-user", "still-working", `"call_id":"pending"`} {
-		if !bytes.Contains(plan.Request.Body, []byte(text)) || strings.Contains(plan.Transcript, text) {
-			t.Fatalf("unfinished turn moved to recovery: request=%s transcript=%s", plan.Request.Body, plan.Transcript)
-		}
-	}
-	if !strings.Contains(plan.Transcript, "recent instructions") {
-		t.Fatal("completed recent turn was not selected")
-	}
-}
-
-func TestPlanRawResponsesCompactionV2HonorsConfiguredBudget(t *testing.T) {
-	request := rawResponsesCompactionV2DeveloperRequest(t, strings.Repeat("x", 4096))
-	for _, settings := range []RawResponsesCompactionSettings{
-		{Enabled: true, MaxTokens: 64, ContextWindowTokens: 10_000, ContextWindowFraction: 1, BytesPerToken: 1},
-		{Enabled: true, ContextWindowTokens: 128, ContextWindowFraction: 0.5, BytesPerToken: 1},
-		{Enabled: true, FallbackContextWindowTokens: 128, ContextWindowFraction: 0.5, BytesPerToken: 1},
-		{Enabled: true, MaxTokens: 32, ContextWindowTokens: 10_000, ContextWindowFraction: 1, BytesPerToken: 2},
-	} {
-		if plan, ok := PlanRawResponsesCompactionV2(request, settings); ok {
-			t.Fatalf("selected %d-byte whole turn with 64-byte budget", len(plan.Transcript))
-		}
-	}
-	if _, ok := PlanRawResponsesCompactionV2(request, RawResponsesCompactionSettings{Enabled: true, MaxTokens: 8192, ContextWindowTokens: 8192, ContextWindowFraction: 1, BytesPerToken: 1}); !ok {
-		t.Fatal("larger configured budget rejected complete turn")
 	}
 }
 

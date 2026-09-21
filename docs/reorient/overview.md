@@ -52,20 +52,41 @@ Every failure forwards the request unmodified and leaves the response unchanged.
 
 ### Native Codex Responses
 
-The authenticated native Codex path splits by unit count, not by token budget.
-It reads `reorient_recent_fraction`, `reorient_context_window_fraction`,
-`reorient_bytes_per_token`, and `reorient_standard_context_window`, and
-`reorient_inject_max_tokens` caps the result. The Claude split reads none of the
-first four.
+The authenticated native Codex path runs the same token-budget split as the
+Claude path. `internal/reorientinject` plans the cut for both. The daemon
+builds the Codex splitter from `internal/providers/codex/compaction`, and
+`internal/adapter/codex` owns the Responses item decode and the request
+rewrite. `reorient_inject_max_tokens` and `reorient_inject_content` apply to
+both paths. The Codex compaction prompt is a fixed client string with no
+argument block. The configured budget and content selection always apply on
+this path.
 
-The `responses` implementation keeps the final synthesized user item
-byte-for-byte, splits the earlier request input on complete turn and tool-pair
-boundaries, and appends the removed transcript to the final assistant summary.
-It reads no disk fallback.
+Detection stays in the adapter. The `X-Codex-Turn-Metadata` header selects the
+`responses` or `responses_compaction_v2` implementation before the split runs,
+and the same header supplies the session id the v2 registry keys on.
+
+The counted range depends on the implementation. The `responses`
+implementation counts every item before the final synthesized user prompt and
+keeps that prompt byte for byte. The `responses_compaction_v2` implementation
+counts the items between the first user message and the last complete
+assistant answer; the setup items before that message and the unfinished turn
+before the trigger stay in the forwarded request byte for byte.
+
+A Responses item is one message to the split. Message text parts and string
+tool outputs can be cut inside. A call item's arguments, a reasoning item, a
+non-string output, and a tool search result are atomic: the boundary item of
+that kind stays whole in the forwarded request and the retained text starts
+after it. Every kept call with no kept output receives the output Codex itself
+emits for an aborted call. A reasoning item left last in the kept prefix is
+dropped. `internal/adapter/codex/compaction_validity_test.go` asserts those
+rules at every cut of one request.
+
+The `responses` implementation appends the injection to the final assistant
+summary. It reads no disk fallback.
 
 The `responses_compaction_v2` implementation keeps turn N's encrypted
-compaction response byte-identical. Clyde stores the bounded selected transcript
-in process memory after that successful response. On the matching regular turn
+compaction response byte-identical. Clyde stores the wrapped injection, capped
+at 1 MiB, in process memory after that successful response. On the matching regular turn
 N+1, it inserts one tagged assistant history item after the encrypted item in
 the upstream request. It appends that tag once to the first successful regular
 final assistant response. Codex then resends the tagged result naturally on

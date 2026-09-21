@@ -11,11 +11,12 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// RawResponsesCompactionV2Recovery carries private state for Task 5.
+// RawResponsesCompactionV2Recovery stores one leased recovery: the wrapped
+// injection and the registry callbacks that settle the lease.
 type RawResponsesCompactionV2Recovery struct {
-	transcript string
-	complete   func() bool
-	release    func()
+	injection string
+	complete  func() bool
+	release   func()
 }
 
 // CompleteRecovery removes the matched recovery after Task 5 persists it.
@@ -87,7 +88,7 @@ func InjectRawResponsesCompactionV2Recovery(
 	if !ok {
 		return request, nil, false
 	}
-	transcript, generation, ok := registry.Reserve(sessionID, encryptedContent)
+	injection, generation, ok := registry.Reserve(sessionID, encryptedContent)
 	trace.registryReserved = ok
 	if !ok {
 		return request, nil, false
@@ -105,7 +106,7 @@ func InjectRawResponsesCompactionV2Recovery(
 		Content: []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
-		}{{Type: "output_text", Text: wrappedRawCompactionTranscript(transcript)}},
+		}{{Type: "output_text", Text: injection}},
 	})
 	if err != nil {
 		registry.Release(sessionID, encryptedContent, generation)
@@ -125,9 +126,9 @@ func InjectRawResponsesCompactionV2Recovery(
 	transformed.Body = encodedInput
 	trace.rawInsertionSucceeded = true
 	return transformed, &RawResponsesCompactionV2Recovery{
-		transcript: transcript,
-		complete:   rawResponsesCompactionV2Completion(registry, sessionID, encryptedContent, generation),
-		release:    rawResponsesCompactionV2Release(registry, sessionID, encryptedContent, generation),
+		injection: injection,
+		complete:  rawResponsesCompactionV2Completion(registry, sessionID, encryptedContent, generation),
+		release:   rawResponsesCompactionV2Release(registry, sessionID, encryptedContent, generation),
 	}, true
 }
 

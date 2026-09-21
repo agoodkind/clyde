@@ -6,12 +6,15 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/reorienttag"
 )
 
 func TestInjectRawResponsesCompactionV2Recovery(t *testing.T) {
 	now := time.Unix(1, 0)
 	registry := NewRawResponsesCompactionV2Registry(func() time.Time { return now })
-	if !registry.Arm("session-1", "cipher", "recovered transcript") {
+	injection := reorienttag.WrapInjection("recovered transcript", "")
+	if !registry.Arm("session-1", "cipher", injection) {
 		t.Fatal("arm registry")
 	}
 	request := RawResponsesRequest{
@@ -64,7 +67,7 @@ func TestInjectRawResponsesCompactionV2Recovery(t *testing.T) {
 	if err := json.Unmarshal(body.Input[2], &injected); err != nil {
 		t.Fatalf("decode injected item: %v", err)
 	}
-	if len(body.Input) != 4 || injected.Role != "assistant" || len(injected.Content) != 1 || injected.Content[0].Text != wrappedRawCompactionTranscript("recovered transcript") {
+	if len(body.Input) != 4 || injected.Role != "assistant" || len(injected.Content) != 1 || injected.Content[0].Text != injection {
 		t.Fatalf("input = %s", transformed.Body)
 	}
 	if !bytes.Contains(body.Input[1], []byte(`"encrypted_content":"cipher"`)) || !bytes.Contains(body.Input[1], []byte(`"opaque":true`)) {

@@ -17,38 +17,18 @@ type MITMConfig struct {
 	// AgentGateCommand is the Agent Gate executable used to evaluate assistant
 	// text. Each provider response adapter encodes feedback in its response format.
 	AgentGateCommand string `json:"agentGateCommand,omitempty" toml:"agent_gate_command,omitempty"`
-	// ReorientSummaryInjection turns on compaction reorientation for both the
+	// ReorientSummaryInjection turns on the compaction split for both the
 	// Claude MITM path and the native Codex Responses path. Each path reads the
 	// transcript from the intercepted request and opens no file. Default false.
 	ReorientSummaryInjection bool `json:"reorientSummaryInjection,omitempty" toml:"reorient_summary_injection,omitempty"`
-	// ReorientInjectMaxTokens is the default token budget the Claude split
-	// retains when no `--max-tokens` argument appears in the compaction prompt,
-	// and the token cap the native Codex split applies its context-window
-	// fraction to. Zero uses each path's own default.
+	// ReorientInjectMaxTokens is the default token budget the Claude split and
+	// the native Codex split retain when no `--max-tokens` argument appears in
+	// the compaction prompt. Zero uses the split's default.
 	ReorientInjectMaxTokens int `json:"reorientInjectMaxTokens,omitempty" toml:"reorient_inject_max_tokens,omitempty"`
-	// ReorientInjectContent is the content selection the Claude split retains
-	// when no --only argument or content shortcut follows /compact. It accepts
-	// the clyde conversation export --only values. Empty keeps every kind.
+	// ReorientInjectContent is the content selection both splits retain when
+	// no --only argument or content shortcut follows /compact. It accepts the
+	// clyde conversation export --only values. Empty keeps every kind.
 	ReorientInjectContent []string `json:"reorientInjectContent,omitempty" toml:"reorient_inject_content,omitempty"`
-	// ReorientRecentFraction is the fraction of request items, by count, the
-	// native Codex split reattaches verbatim as the recent half. The Claude
-	// split selects by token budget and reads this setting nowhere. Zero uses
-	// the Codex default (0.5).
-	ReorientRecentFraction float64 `json:"reorientRecentFraction,omitempty" toml:"reorient_recent_fraction,omitempty"`
-	// ReorientContextWindowFraction is the fraction of the request's context
-	// window the native Codex injection may fill. The Claude split reads it
-	// nowhere. Zero uses the Codex default (0.5).
-	ReorientContextWindowFraction float64 `json:"reorientContextWindowFraction,omitempty" toml:"reorient_context_window_fraction,omitempty"`
-	// ReorientBytesPerToken is the token-to-byte approximation the native Codex
-	// split uses to turn a token budget into a byte cap. The Claude split counts
-	// tokens with the export counter and reads this setting nowhere. Zero uses
-	// the Codex default (4).
-	ReorientBytesPerToken int `json:"reorientBytesPerToken,omitempty" toml:"reorient_bytes_per_token,omitempty"`
-	// ReorientStandardContextWindow is the fallback context window, in tokens,
-	// the native Codex split uses when model resolution supplies no input
-	// budget. The Claude split reads it nowhere. Zero uses the Codex default
-	// (200000).
-	ReorientStandardContextWindow int `json:"reorientStandardContextWindow,omitempty" toml:"reorient_standard_context_window,omitempty"`
 	// Sentinel, when non-empty, enables the MITM hook that scans the latest
 	// user message on an intercepted Anthropic /v1/messages request and
 	// rewrites the downstream model message to everything after the keyword.

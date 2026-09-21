@@ -81,7 +81,7 @@ func rawCompactionSSEOutputTextForTest(t *testing.T, item json.RawMessage) strin
 }
 
 func TestAppendRawCompactionAssistantItemCreatesOutputTextTarget(t *testing.T) {
-	transcriptText := wrappedRawCompactionTranscript("recent")
+	transcriptText := reorienttag.WrapInjection("recent", "")
 	item := []byte(`{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"No"}]}`)
 	mutated, matched, valid := appendRawCompactionAssistantItem(item, transcriptText)
 	if !matched || !valid {
@@ -102,7 +102,7 @@ func TestAppendRawCompactionAssistantItemCreatesOutputTextTarget(t *testing.T) {
 }
 
 func TestAppendRawCompactionAssistantItemRequiresCompleteTranscriptWrapper(t *testing.T) {
-	transcriptText := wrappedRawCompactionTranscript("recent")
+	transcriptText := reorienttag.WrapInjection("recent", "")
 	tests := []struct {
 		name      string
 		text      string
@@ -110,7 +110,7 @@ func TestAppendRawCompactionAssistantItemRequiresCompleteTranscriptWrapper(t *te
 	}{
 		{name: "opening tag", text: "quoted " + reorienttag.PreCompactionTranscriptOpen},
 		{name: "closing tag", text: "quoted " + reorienttag.PreCompactionTranscriptClose},
-		{name: "complete older wrapper", text: "summary" + wrappedRawCompactionTranscript("older")},
+		{name: "complete older wrapper", text: "summary" + reorienttag.WrapInjection("older", "")},
 		{name: "complete current wrapper", text: "summary" + transcriptText, unchanged: true},
 	}
 	for _, testCase := range tests {
@@ -139,51 +139,6 @@ func TestAppendRawCompactionAssistantItemRequiresCompleteTranscriptWrapper(t *te
 			}
 		})
 	}
-}
-
-func TestSelectRawCompactionStartUsesLogarithmicRenders(t *testing.T) {
-	const unitCount = 1024
-	units := make([]rawCompactionInterval, unitCount)
-	for index := range units {
-		units[index] = rawCompactionInterval{start: index, end: index + 1}
-	}
-	renderCount := 0
-	selected, rendered, ok := selectRawCompactionStart(
-		units,
-		unitCount/2,
-		unitCount,
-		func(start int) (string, bool) {
-			renderCount++
-			return strings.Repeat("x", unitCount-start), true
-		},
-	)
-	if !ok || selected != unitCount/2 || len(rendered) != unitCount/2 {
-		t.Fatalf("selection selected=%d bytes=%d ok=%t", selected, len(rendered), ok)
-	}
-	if renderCount > rawCompactionLogarithmicRenderLimit(unitCount) {
-		t.Fatalf("render count = %d, want logarithmic bound <= %d", renderCount, rawCompactionLogarithmicRenderLimit(unitCount))
-	}
-}
-
-func TestSelectRawCompactionStartRejectsInvalidTargetCount(t *testing.T) {
-	units := []rawCompactionInterval{{start: 0, end: 1}}
-	for _, targetCount := range []int{0, 2} {
-		selected, rendered, ok := selectRawCompactionStart(units, 1, targetCount, func(int) (string, bool) {
-			t.Fatal("render called for invalid target count")
-			return "", false
-		})
-		if ok || selected != 0 || rendered != "" {
-			t.Fatalf("target count %d selected=%d rendered=%q ok=%t", targetCount, selected, rendered, ok)
-		}
-	}
-}
-
-func rawCompactionLogarithmicRenderLimit(count int) int {
-	limit := 1
-	for size := 1; size < count; size *= 2 {
-		limit++
-	}
-	return limit
 }
 
 func TestRawResponsesCompactionResponseFailuresPassThrough(t *testing.T) {
@@ -270,20 +225,16 @@ func TestRawResponsesCompactionEncodedReadFailurePreservesRemainingBody(t *testi
 	}
 }
 
+// rawResponseTransformerForTest is the transformer PrepareRawResponsesCompaction
+// returns for a planned split: a wrapped injection with no mutation tracking.
 func rawResponseTransformerForTest(t *testing.T) *RawResponsesCompactionTransformer {
 	t.Helper()
-	body := []byte(`{"model":"gpt-native","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"recent"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent assistant"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]}`)
-	_, transformer := PrepareRawResponsesCompaction(
-		rawCompactionRequest(t, body),
-		RawResponsesCompactionSettings{
-			Enabled: true, ContextWindowTokens: 10_000, MaxTokens: 10_000,
-			ContextWindowFraction: 1, BytesPerToken: 1, RecentFraction: 0.5,
-		},
-	)
-	if transformer == nil {
-		t.Fatal("expected transformer")
+	return &RawResponsesCompactionTransformer{
+		injection:         reorienttag.WrapInjection("### User\n\nrecent\n\n### Assistant\n\nrecent assistant", ""),
+		stream:            false,
+		mutation:          nil,
+		strictFinalAnswer: false,
 	}
-	return transformer
 }
 
 func rawCompactionSSEFramesForTest(item string, outputIndex int, itemSequence int, completedSequence int) (string, string) {

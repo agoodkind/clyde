@@ -23,7 +23,21 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	"goodkind.io/clyde/internal/conversation"
+	codexcompaction "goodkind.io/clyde/internal/providers/codex/compaction"
+	"goodkind.io/clyde/internal/reorientinject"
+	"goodkind.io/clyde/internal/tokencount"
 )
+
+// liveCodexSplitter is the production Codex splitter under one token budget.
+func liveCodexSplitter(budget int) adaptercodex.CompactionSplitter {
+	return codexcompaction.NewSplitter(reorientinject.Settings{
+		DefaultBudget:    budget,
+		DefaultContent:   conversation.NewContentKindSet(),
+		MaxRetainedBytes: adaptercodex.MaxCompactionInjectionBytes,
+		Counter:          tokencount.LocalCounter(tokencount.FamilyClaude, "", tokencount.Settings{}),
+	})
+}
 
 const liveEncryptedContent = "live-encrypted-state"
 const liveCodexVersion = "codex-cli 0.151.0"
@@ -373,16 +387,16 @@ func summarizeCodexLiveRequest(request *http.Request, encodedBody, decodedBody [
 		)
 		plan, accepted := adaptercodex.PlanRawResponsesCompactionV2(
 			adaptercodex.RawResponsesRequest{Body: decodedBody, Header: request.Header.Clone()},
-			adaptercodex.RawResponsesCompactionSettings{Enabled: true, ContextWindowTokens: 2000},
+			liveCodexSplitter(1000),
 		)
 		observed.v2PlannerAccepted = accepted
 		_, observed.v2PlannerAcceptedFullWindow = adaptercodex.PlanRawResponsesCompactionV2(
 			adaptercodex.RawResponsesRequest{Body: decodedBody, Header: request.Header.Clone()},
-			adaptercodex.RawResponsesCompactionSettings{Enabled: true, ContextWindowTokens: 2000, ContextWindowFraction: 1},
+			liveCodexSplitter(2000),
 		)
 		_, observed.v2PlannerAcceptedUnbounded = adaptercodex.PlanRawResponsesCompactionV2(
 			adaptercodex.RawResponsesRequest{Body: decodedBody, Header: request.Header.Clone()},
-			adaptercodex.RawResponsesCompactionSettings{Enabled: true, ContextWindowTokens: 1_000_000, MaxTokens: 1_000_000, ContextWindowFraction: 1},
+			liveCodexSplitter(1_000_000),
 		)
 		if accepted {
 			registry := adaptercodex.NewRawResponsesCompactionV2Registry(nil)

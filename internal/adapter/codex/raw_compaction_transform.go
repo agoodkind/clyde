@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/andybalholm/brotli"
-	"goodkind.io/clyde/internal/reorienttag"
 )
 
 // RequiresTerminalValidation reports whether streamed mutation state must be
@@ -27,7 +26,7 @@ func (t *RawResponsesCompactionTransformer) TransformResponse(response *http.Res
 	if t == nil || response == nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return response
 	}
-	wrapped := wrappedRawCompactionTranscript(t.transcript)
+	wrapped := t.injection
 	encoding, encoded := rawCompactionResponseContentEncoding(response.Header.Get("Content-Encoding"))
 	if encoded {
 		return t.transformEncodedResponse(response, wrapped, encoding)
@@ -321,8 +320,4 @@ func newRawCompactionEncodingWriter(
 	default:
 		return nil, false
 	}
-}
-
-func wrappedRawCompactionTranscript(content string) string {
-	return reorienttag.WrapInjection(content, "")
 }

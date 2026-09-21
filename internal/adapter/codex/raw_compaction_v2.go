@@ -8,8 +8,6 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-const maxRawResponsesCompactionV2RecoveryBytes = 1 * 1024 * 1024
-
 // RawResponsesCompactionV2Layout identifies the setup, transcript, and
 // terminal trigger boundaries in a captured v2 request.
 type RawResponsesCompactionV2Layout struct {
@@ -18,122 +16,47 @@ type RawResponsesCompactionV2Layout struct {
 	TriggerIndex    int
 }
 
-// RawResponsesCompactionV2Plan carries the bounded transcript recovery data
-// and raw request replacement for one valid v2 compaction request.
+// RawResponsesCompactionV2Plan stores the wrapped injection and the raw
+// request replacement for one valid v2 compaction request.
 type RawResponsesCompactionV2Plan struct {
-	Request    RawResponsesRequest
-	Transcript string
-	SessionID  string
+	Request   RawResponsesRequest
+	Injection string
+	SessionID string
 }
 
-// PlanRawResponsesCompactionV2 selects a bounded whole-turn transcript tail.
-// Every failure preserves the original request by returning false.
+// PlanRawResponsesCompactionV2 splits a v2 compaction request through the
+// shared splitter. Every failure preserves the original request by returning
+// false. A nil splitter disables the split.
 func PlanRawResponsesCompactionV2(
 	request RawResponsesRequest,
-	settings RawResponsesCompactionSettings,
+	splitter CompactionSplitter,
 ) (RawResponsesCompactionV2Plan, bool) {
 	var emptyRequest RawResponsesRequest
 	emptyPlan := RawResponsesCompactionV2Plan{
-		Request:    emptyRequest,
-		Transcript: "",
-		SessionID:  "",
+		Request:   emptyRequest,
+		Injection: "",
+		SessionID: "",
 	}
-	if !settings.Enabled {
+	if splitter == nil {
 		return emptyPlan, false
 	}
-	layout, ok := ParseRawResponsesCompactionV2(request)
-	if !ok {
+	if _, ok := ParseRawResponsesCompactionV2(request); !ok {
 		return emptyPlan, false
 	}
 	sessionID, ok := rawResponsesCompactionV2SessionID(request)
 	if !ok {
 		return emptyPlan, false
 	}
-	inputStart, inputEnd, ok := jsonObjectFieldValueRange(request.Body, "input")
+	split, ok := splitter.Plan(request.Body)
 	if !ok {
-		return emptyPlan, false
-	}
-	var rawItems []json.RawMessage
-	if json.Unmarshal(request.Body[inputStart:inputEnd], &rawItems) != nil {
-		return emptyPlan, false
-	}
-	transcriptRawItems := rawItems[layout.TranscriptStart:layout.TriggerIndex]
-	transcriptItems := codexstore.NormalizeResponseInputItems(transcriptRawItems)
-	completeEnd, ok := rawResponsesCompactionV2CompletePrefixEnd(transcriptItems)
-	if !ok {
-		return emptyPlan, false
-	}
-	plan, ok := planRawResponsesCompactionTail(
-		transcriptRawItems[:completeEnd],
-		transcriptItems[:completeEnd],
-		min(rawCompactionMaxBytes(settings), maxRawResponsesCompactionV2RecoveryBytes),
-		normalizedRecentFraction(settings.RecentFraction),
-	)
-	if !ok {
-		return emptyPlan, false
-	}
-	remaining := make([]json.RawMessage, 0, len(rawItems)-(completeEnd-plan.removedStart))
-	remaining = append(remaining, rawItems[:layout.TranscriptStart+plan.removedStart]...)
-	remaining = append(remaining, rawItems[layout.TranscriptStart+completeEnd:]...)
-	encodedInput, err := marshalRawArray(remaining)
-	if err != nil {
 		return emptyPlan, false
 	}
 	transformed := request
-	transformed.Body = replaceByteRange(request.Body, inputStart, inputEnd, encodedInput)
+	transformed.Body = split.Forwarded
 	return RawResponsesCompactionV2Plan{
-		Request:    transformed,
-		Transcript: plan.transcript,
-		SessionID:  sessionID,
-	}, true
-}
-
-func planRawResponsesCompactionTail(
-	rawItems []json.RawMessage,
-	normalizedItems []transcript.CompactedContextItem,
-	maxBytes int,
-	recentFraction float64,
-) (rawCompactionPlan, bool) {
-	emptyPlan := rawCompactionPlan{removedStart: 0, promptIndex: 0, transcript: ""}
-	if len(rawItems) != len(normalizedItems) || len(rawItems) < 2 ||
-		!rawCompactionPairsAreComplete(normalizedItems) {
-		return emptyPlan, false
-	}
-	units := rawCompactionUnits(normalizedItems)
-	if len(units) < 2 {
-		return emptyPlan, false
-	}
-	targetCount := int(float64(len(units)) * recentFraction)
-	if targetCount < 1 {
-		return emptyPlan, false
-	}
-	if targetCount >= len(units) {
-		targetCount = len(units) - 1
-	}
-	if _, renderable := renderRawResponsesCompactionNormalizedItems(normalizedItems[units[len(units)-targetCount].start:]); !renderable {
-		return emptyPlan, false
-	}
-	selectedCount, selectedTranscript := 0, ""
-	for minimumCount, maximumCount := 1, targetCount; minimumCount <= maximumCount; {
-		candidateCount := minimumCount + (maximumCount-minimumCount)/2
-		candidateTranscript, renderable := renderRawResponsesCompactionNormalizedItems(normalizedItems[units[len(units)-candidateCount].start:])
-		if !renderable {
-			return emptyPlan, false
-		}
-		if maxBytes > 0 && len(candidateTranscript) > maxBytes {
-			maximumCount = candidateCount - 1
-			continue
-		}
-		selectedCount, selectedTranscript = candidateCount, candidateTranscript
-		minimumCount = candidateCount + 1
-	}
-	if selectedCount == 0 || strings.TrimSpace(selectedTranscript) == "" {
-		return emptyPlan, false
-	}
-	return rawCompactionPlan{
-		removedStart: units[len(units)-selectedCount].start,
-		promptIndex:  len(rawItems),
-		transcript:   selectedTranscript,
+		Request:   transformed,
+		Injection: split.Injection,
+		SessionID: sessionID,
 	}, true
 }
 

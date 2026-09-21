@@ -186,9 +186,7 @@ func (s *Server) tryDispatchNativeCodexResponses(
 		resolvedRaw = rewrittenRaw
 		resolvedRaw.Body = forwardBody
 	}
-	compactionSettings := s.deps.RawResponsesCompaction
-	compactionSettings.ContextWindowTokens = resolvedReq.ContextBudget.InputTokens
-	transformedRaw, compactionTransformer, v2Plan, v2Recovery := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, compactionSettings, s.compactionV2)
+	transformedRaw, compactionTransformer, v2Plan, v2Recovery := prepareNativeCodexResponsesCompaction(resolvedRaw, resolvedBody, s.deps.RawResponsesCompaction, s.compactionV2)
 	s.dispatchNativeCodexResponses(w, r, requestID, transformedRaw, resolvedReq, compactionTransformer, v2Plan, v2Recovery)
 	return true, nil
 }

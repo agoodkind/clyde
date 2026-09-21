@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/andybalholm/brotli"
+	"goodkind.io/clyde/internal/reorienttag"
 )
 
 func TestRawResponsesCompactionMutatesNonStreamingJSONOnce(t *testing.T) {
@@ -41,7 +42,7 @@ func TestRawResponsesCompactionMutatesNonStreamingJSONOnce(t *testing.T) {
 }
 
 func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T) {
-	recovery := &RawResponsesCompactionV2Recovery{transcript: "recovered transcript"}
+	recovery := &RawResponsesCompactionV2Recovery{injection: reorienttag.WrapInjection("recovered transcript", "")}
 	finalRequest := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}
 	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(finalRequest, recovery)
 	if transformer == nil {
@@ -80,7 +81,7 @@ func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T
 }
 
 func TestRawResponsesCompactionV2RecoveryAllowsOpeningMarkerMention(t *testing.T) {
-	recovery := &RawResponsesCompactionV2Recovery{transcript: "recovered transcript"}
+	recovery := &RawResponsesCompactionV2Recovery{injection: reorienttag.WrapInjection("recovered transcript", "")}
 	request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}
 	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
 	body := readResponseBody(t, transformer.TransformResponse(rawFinalAnswerJSONResponse(http.StatusOK, "mentions <pre-compaction-transcript> here")))
@@ -117,7 +118,7 @@ func TestRawResponsesCompactionV2MutatesStrictFinalAnswerStream(t *testing.T) {
 		Stream: true,
 		Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
 	}
-	recovery := &RawResponsesCompactionV2Recovery{transcript: "recovered transcript"}
+	recovery := &RawResponsesCompactionV2Recovery{injection: reorienttag.WrapInjection("recovered transcript", "")}
 	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
 	item := `{"id":"msg-1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"summary"}]}`
 	stream := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":" + item + "}\n\n" +
@@ -238,7 +239,7 @@ func TestRawResponsesCompactionTransformsCompressedResponses(t *testing.T) {
 			}
 			decoded := rawCompactionDecompressedBodyForTest(t, readResponseBody(t, transformed), testCase.encoding)
 			if !bytes.Contains(decoded, []byte("<pre-compaction-transcript>")) {
-				t.Fatalf("compressed response lost transcript: %s", decoded)
+				t.Fatalf("compressed response lost injection: %s", decoded)
 			}
 		})
 	}
