@@ -2,10 +2,9 @@ package mitm
 
 import "net/url"
 
-// classifyRoute returns the provider and upstream from the registered
-// provider that claims the supplied path. The generic MITM proxy contains no
-// provider identifiers. Provider packages register their upstream claims with
-// [RegisterProvider] at init time.
+// classifyRoute calls ClassifyPlain on each registered provider with path. It
+// returns the provider name and upstream URL from the first result with Claimed
+// set to true.
 func classifyRoute(path string) (provider string, upstream string) {
 	if _, claim, ok := providerForPlain(path); ok {
 		return claim.Provider, claim.UpstreamURL
@@ -13,13 +12,16 @@ func classifyRoute(path string) (provider string, upstream string) {
 	return "", ""
 }
 
-// classifyPlainRequest picks the provider and upstream for a plain-HTTP
-// request. Providers share path prefixes such as /v1/. A client that uses this
-// listener as HTTP_PROXY sends the full target URL. For that request, a
-// registered host claim picks the provider, and the proxy forwards the request
-// to the host the client requested. A client that uses this listener as its
-// base URL sends only a path. For that request, the path claim picks the
-// provider and upstream.
+// classifyPlainRequest calls ClassifyConnect on each registered provider with
+// the URL host. The first provider with Claimed set to true is the result, and
+// the URL scheme and host form the upstream. Otherwise classifyRoute selects the
+// provider from the URL path.
+//
+// Example: Claude Code sends POST https://api.anthropic.com/v1/environments/bridge
+// through HTTPS_PROXY. The Claude provider ClassifyConnect sets Claimed to true
+// for api.anthropic.com. classifyPlainRequest returns the Claude provider and
+// https://api.anthropic.com. The Codex provider ClassifyPlain matches the /v1/
+// prefix and returns https://api.openai.com.
 func classifyPlainRequest(target *url.URL) (provider string, upstream string) {
 	if target.IsAbs() && target.Host != "" {
 		if hostProvider, _, ok := providerForConnect(target.Host); ok {
