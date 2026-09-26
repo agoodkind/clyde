@@ -16,6 +16,10 @@ Complete CLYDE-643. Clyde constructs provider-neutral conversation filters, call
 - Map `per_conversation_limit` to `group_by=conversationId` with `per_group_limit`. Preserve score ordering, `min_score`, and the `loadRules` scalar on every hit.
 - A failed LMS request remains an LMS failure. Do not silently retry it through a local backend.
 
+## Pull request boundary
+
+Implement Tasks 1 and 2 with the Task 3 parity test and documentation in one CLYDE-643 pull request. The shared filter builder, generic LMS request, hit conversion, and within-conversation fingerprint read must pass together. Deploy and compare live CLI and MCP results after the pull request passes its checks.
+
 ## Tasks
 
 ### 1. Build typed filters and translate generic hits

@@ -22,6 +22,10 @@ The [design specification](../specs/2026-09-22-local-conversation-search-design.
 - Treat the earlier 7.6 to 8.6 million passage count and 390 to 444 MiB of bare 384-bit vectors as estimates. They exclude the model, metadata, runtime, disk overhead, and temporary memory.
 - CLYDE-629 depends on LMS-15, LMS-16, and LMS-17 for generic LMS ingestion. CLYDE-643 depends on LMS-18 for generic LMS search. Complete those Clyde cutovers before removing the current LMS-specific calls. Local work can implement Clyde-owned contracts without LMS at runtime.
 
+## Pull request boundaries
+
+Complete Task 2 in the CLYDE-629 ingestion pull request and Task 3 in the CLYDE-643 search pull request. Implement Task 4 as a separate offline model and passage pull request. Implement Task 5 storage and refresh internals as a separate pull request after the model; keep daemon backend selection unchanged in that intermediate release. Implement Task 1, the remaining Task 5 daemon wiring, Task 6, and Task 7 in the local activation pull request. That pull request must include working local CLI and MCP search, selected-LMS outage coverage, and full-corpus measurements before local mode is released.
+
 ## Tasks
 
 ### 1. Validate the backend setting (CLYDE-751)
@@ -137,7 +141,7 @@ Verification:
 
 ### 5. Persist and refresh the local index (CLYDE-754)
 
-Depends on: Tasks 1, 2, and 4.
+Depends on: Tasks 2 and 4 for storage. Daemon integration depends on Task 1.
 
 Files:
 

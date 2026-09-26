@@ -21,10 +21,10 @@ LMS currently exposes conversation-specific RPCs. Clyde's LMS client sends conve
 
 | Order | Work | Depends on | Required result |
 | --- | --- | --- | --- |
-| 1 | LMS-15 registration from the [LMS ingestion plan](https://github.com/agoodkind/lm-semantic-search/blob/d9f502d8312cb9b2b6e3e83df6d95d7251e724ef/docs/superpowers/plans/2026-09-26-generic-collection-ingestion.md). | Existing LMS. | Clyde remains on old RPCs. Registration validates saved declarations in both profiles and existing Milvus schemas when present. It changes no checkpoint or feeder needed set. |
+| 1 | LMS-15 registration from the [LMS ingestion plan](https://github.com/agoodkind/lm-semantic-search/blob/d0a16ac591a0fa011137b2536d4cd3b93e3156c9/docs/superpowers/plans/2026-09-26-generic-collection-ingestion.md). | Existing LMS. | Clyde remains on old RPCs. Registration validates saved declarations in both profiles and existing Milvus schemas when present. It changes no checkpoint or feeder needed set. |
 | 2 | LMS-16 manifest and upsert from the LMS ingestion plan. | Order 1. | Old and generic requests write equal rows and fingerprints. Clyde's unchanged feeder reports zero re-offer. |
 | 3 | LMS-17 backfill and delete from the LMS ingestion plan. | Order 2. | Old and generic dry runs report equal counts. A normal Clyde feeder pass succeeds. |
-| 4 | LMS-18 typed search from the [LMS search plan](https://github.com/agoodkind/lm-semantic-search/blob/d9f502d8312cb9b2b6e3e83df6d95d7251e724ef/docs/superpowers/plans/2026-09-26-generic-collection-search.md). | Order 1. | Old and generic searches return equal ordered hits, scores, and fingerprints. Clyde still calls the old RPCs. |
+| 4 | LMS-18 typed search from the [LMS search plan](https://github.com/agoodkind/lm-semantic-search/blob/d0a16ac591a0fa011137b2536d4cd3b93e3156c9/docs/superpowers/plans/2026-09-26-generic-collection-search.md). | Order 1. | Old and generic searches return equal ordered hits, scores, and fingerprints. Clyde still calls the old RPCs. |
 | 5 | CLYDE-629 and local search Task 2. | Orders 1 through 3. | Clyde prepares rows once and uses the generic LMS ingestion RPCs. An unchanged corpus causes no re-offer. |
 | 6 | CLYDE-643 and local search Task 3. | Orders 4 and 5. | Clyde prepares filters once and uses generic LMS search. Live CLI and MCP results, freshness, and context windows remain equal. |
 | 7 | Local search Task 4, CLYDE-753. | Order 5. | A bundled model runs offline and splits long eligible rows into searchable passages. |
@@ -32,9 +32,27 @@ LMS currently exposes conversation-specific RPCs. Clyde's LMS client sends conve
 | 9 | Local search Task 5, CLYDE-754. | Orders 5, 7, and 8. | Clyde persists a compact index, loads search data into RAM, and refreshes it from the existing ingestion worker. |
 | 10 | Local search Task 6, CLYDE-755. | Orders 6 and 9. | Local CLI and MCP search work with LMS absent; selected LMS outage returns an error. |
 | 11 | Local search Task 7, CLYDE-756, then local-mode release. | Order 10. | Full-corpus measurements establish model and index size, build and startup cost, peak and steady RAM, and query latency on 16 GB and 24 GB configurations. |
-| 12 | [LMS protocol retirement](https://github.com/agoodkind/lm-semantic-search/blob/d9f502d8312cb9b2b6e3e83df6d95d7251e724ef/docs/superpowers/plans/2026-09-26-generic-collection-retirement.md). | Orders 5 and 6 deployed; supported installed Clyde versions use generic RPCs. | Seven old RPCs and obsolete conversion code are removed. Existing collections, vectors, scalars, and checkpoints remain readable. |
+| 12 | [LMS protocol retirement](https://github.com/agoodkind/lm-semantic-search/blob/d0a16ac591a0fa011137b2536d4cd3b93e3156c9/docs/superpowers/plans/2026-09-26-generic-collection-retirement.md). | Orders 5 and 6 deployed; supported installed Clyde versions use generic RPCs. | Seven old RPCs and obsolete conversion code are removed. Existing collections, vectors, scalars, and checkpoints remain readable. |
 
 LMS-18 implementation may proceed after order 1 while LMS-16 and LMS-17 are in progress. Integrate LMS changes against the latest `service.proto` and regenerate protobuf code after each merge. Local model work may proceed after order 5 while order 6 is in progress. Integrate Clyde changes to `internal/conversation/semsearch/client.go` serially.
+
+## Pull request split
+
+Create the smallest pull request that compiles, passes required checks, and can be released at its branch position. Keep a behavior change with its public-boundary tests, generated code with its proto source, and a migration with the compatible client change. Use independent branches from `origin/main` when no unmerged code is required. Use a dependent stack only for a real code dependency within one repository. Link cross-repository pull requests and pin the exact LMS commit in Clyde. Run each deployed parity gate before merging a dependent client cutover. Do not expose `backend = "local"` until local ingestion and search work together.
+
+| Repository | Pull request | Required boundary |
+| --- | --- | --- |
+| LMS | LMS-15 registration. | Include schema persistence, old-RPC delegation, generated code, and tests. |
+| LMS | LMS-16 manifest and upsert. | Start after LMS-15. Include the ingest parity test and keep old RPCs available. |
+| LMS | LMS-17 backfill and delete. | Start after LMS-16. Include maintenance behavior and parity tests. |
+| LMS | LMS-18 typed search. | Start after LMS-15. Include the expression compiler, generated code, live parity battery, and old-RPC adapter. Integrate against the latest proto before merge. |
+| Clyde | CLYDE-629 and local search Task 2. | Start after deployed LMS-15 through LMS-17 pass parity. Include one shared row projector, the complete ingestion cutover, and operator maintenance. |
+| Clyde | CLYDE-643 and local search Task 3. | Start after CLYDE-629 and deployed LMS-18 pass their parity gates. Include one shared filter builder, the complete search cutover, and live result checks. |
+| Clyde | CLYDE-753 local model. | Start after the shared row contract. Include the bundled assets, passage splitting, offline tests, and model documentation without enabling local mode. |
+| Clyde | CLYDE-754 local index internals. | Start after the model and shared row contract. Include storage, refresh, and restart tests without selecting the local backend at daemon startup. |
+| Clyde | CLYDE-751, remaining CLYDE-754 wiring, CLYDE-755, and CLYDE-756. | Start after shared filtering and local index internals. Enable the explicit backend with working CLI and MCP search. Include full-corpus measurements and the selected-LMS outage test before release. |
+| Clyde | Legacy LMS wire cleanup. | Start after both Clyde cutovers are deployed and supported installed clients use generic RPCs. Remove the remaining old calls and verify against the candidate LMS removal commit. |
+| LMS | Conversation protocol retirement. | Prepare the candidate commit for Clyde's dependency check. Merge and deploy only after the Clyde cleanup is deployed. Remove the seven old RPCs and obsolete conversion in one pull request while preserving stored rows and checkpoints. |
 
 ## Tasks
 

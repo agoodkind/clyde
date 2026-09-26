@@ -16,6 +16,10 @@ Complete CLYDE-629. Clyde registers its collection, syncs fingerprints, streams 
 - Default every normal and operator upsert to retain. Keep `backfill_delivered` for reexamination and reserve `force_reexamine` for the existing explicit rebuild behavior. A transport or schema error never selects another backend automatically.
 - Pin a released LMS commit in `go.mod`; do not add a machine-specific `replace`. Verify with `GOWORK=off`.
 
+## Pull request boundary
+
+Implement Tasks 1 through 3 and the pre-merge parity test from Task 4 in one CLYDE-629 pull request. The shared row projector and generic LMS delivery must pass together; a separate unused projector would not complete a user-visible operation. Deploy the cutover and inspect the normal feeder after that pull request passes its checks.
+
 ## Tasks
 
 ### 1. Implement Clyde's row projection and schema declaration
