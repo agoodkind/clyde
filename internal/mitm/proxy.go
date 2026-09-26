@@ -449,7 +449,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		p.handleConnect(w, r)
 		return
 	}
-	provider, upstream := classifyRoute(r.URL.Path)
+	provider, upstream := classifyPlainRequest(r.URL)
 	if provider == "" {
 		http.Error(w, "unsupported mitm route", http.StatusNotFound)
 		return
@@ -798,17 +798,6 @@ func (p *Proxy) recordHTTPCapture(r *http.Request, responseHeader http.Header, i
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMForward, logevent.PhaseCompleted, input)
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMCaptureIndex, logevent.PhaseCompleted, input)
 	p.completeHTTPLogRecorder(ctx, recorder, input)
-}
-
-// classifyRoute dispatches plain-HTTP MITM routing to the registered
-// provider that claims the supplied path. The generic MITM proxy
-// never names a provider; provider packages declare their upstream
-// claims via [RegisterProvider] at init time.
-func classifyRoute(path string) (provider string, upstream string) {
-	if _, claim, ok := providerForPlain(path); ok {
-		return claim.Provider, claim.UpstreamURL
-	}
-	return "", ""
 }
 
 func copyHeaders(dst, src http.Header) {
