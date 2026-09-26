@@ -1,0 +1,37 @@
+# Local conversation search
+
+Clyde needs cross-provider conversation search without LMS, Docker, or an external model provider. A local backend stores a compact index on disk and loads it into memory for search on computers with 16 or 24 GB of RAM. Local ranking may be less precise than LMS ranking.
+
+## Select one backend
+
+Add an explicit `backend = "local"` or `backend = "lms"` setting under `[conversation.semantic]`. Keep `ingestion_enabled` and `search_enabled` as independent switches. Require a backend choice when either operation is enabled. Both operations use that choice.
+
+When LMS is selected and unavailable, return the existing typed unavailable error. Do not search the local index or change the configured backend. Raw conversation listing, reading, context, and export remain available.
+
+## Reuse conversation ingestion
+
+Use Clyde's existing provider readers, raw conversation index, refresh scheduling, load options, content selection, and `BuildSemanticConversationDocuments` projection for both backends. Do not create another provider parser, transcript scan, or conversation ingestion path. Preserve conversation IDs, message indexes, metadata, and the selected content kinds.
+
+The projection omits a message only when all selected content is empty. It retains tool-only and selected reasoning-only messages. Empty or whitespace-only text produces no searchable text passage, while selected tool and reasoning content still produces passages. Historical empty rows in the LMS collection do not define the local index contents.
+
+Filtering and row preparation are generic Clyde work before backend dispatch. Clyde applies the selected content policy, omits empty fields, and converts each projected message into text, tool, and thinking rows with stable keys and metadata. The selected backend receives those eligible rows. It does not decide which provider messages or content kinds qualify.
+
+CLYDE-629 already specifies the Clyde cutover to LMS's generic ingestion RPC after LMS-15, LMS-16, and LMS-17. Reuse that row preparation and ingestion boundary for the local backend. Preserve LMS row keys, fingerprints, and collection reconciliation during its cutover. The local backend records conversation fingerprints and projection changes in its own persisted index. A local rebuild reads Clyde's raw conversation records through the same preparation path; it does not import LMS vectors or rows.
+
+The backend may subdivide each eligible row for its model's input limit. Split every long field into ordered passages with overlap, and index every passage without truncation. Retain the conversation ID, original message index, content kind, and passage position so a match can resolve to the existing transcript window. Model token limits and vector encoding do not change Clyde's content policy.
+
+## Share search behavior
+
+Use the existing `conversationSearchSource` lookup boundary for both backends. Clyde defines request validation, filter meaning, result visibility, record hydration, pagination, facets, and typed errors once. Clyde resolves and validates provider, workspace or conversation scope, role, time, score, and per-conversation limits before dispatch. It gives the selected backend a neutral retrieval request. CLYDE-643 already specifies Clyde's cutover to the generic LMS search RPC after LMS-18.
+
+The backend executes the prepared scalar restrictions during candidate selection so a search does not rank the whole collection and discard most hits afterward. It applies the minimum score after scoring. The backend does not interpret Clyde provider formats or decide filter policy. Clyde checks each returned conversation against its current raw index, including hidden, missing, and archived records. Both backends return the same public result shape. Backend selection never depends on whether a query succeeds or returns matches.
+
+## Bound local storage and memory
+
+A sampled LMS collection contained 3,525,870 rows. About one quarter of sampled rows had empty stored content from older indexing behavior. Excluding those rows and splitting nonempty content for a small model gives an approximate 7.6 to 8.6 million local passages. A 384-dimension binary vector plus packed passage ID uses about 390 to 444 MiB for that estimate. The estimate assumes 384 dimensions and one bit per dimension. It excludes the model, lookup structures, persisted text references, and runtime overhead; it is not a measured local index size.
+
+Bundle a small model that runs without a model provider. Persist the compact index after ingestion and load its search data into RAM at daemon startup. Bound ingestion batches and peak build memory so indexing and search remain usable on 16 GB and 24 GB machines. Measure actual index size, startup time, peak and steady memory, update cost, and query latency on the corpus before setting final budgets.
+
+## Verify the contract
+
+Verify the same cross-provider search request through the CLI and MCP with each selected backend. Verify tool-only messages, empty text, long passage coverage, filters, pagination, incremental updates, restart from the saved index, and full rebuild from Clyde's raw index. Verify that an unavailable selected LMS returns an error without local fallback. Report actual disk, memory, startup, and query measurements separately from the corpus estimate.
