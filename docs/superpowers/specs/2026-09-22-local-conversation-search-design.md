@@ -22,9 +22,15 @@ The backend may subdivide each eligible row for its model's input limit. Split e
 
 ## Share search behavior
 
-Use the existing `conversationSearchSource` lookup boundary for both backends. Clyde defines request validation, filter meaning, result visibility, record hydration, pagination, facets, and typed errors once. Clyde resolves and validates provider, workspace or conversation scope, role, time, score, and per-conversation limits before dispatch. It gives the selected backend a neutral retrieval request. CLYDE-643 already specifies Clyde's cutover to the generic LMS search RPC after LMS-18.
+Use the existing `conversationSearchSource` lookup boundary for both backends. Clyde defines request validation, filter meaning, result visibility, record hydration, pagination, facets, and typed errors once. CLYDE-643 specifies Clyde's cutover to the generic LMS search RPC after LMS-18.
 
-The backend executes the prepared scalar restrictions during candidate selection so a search does not rank the whole collection and discard most hits afterward. It applies the minimum score after scoring. The backend does not interpret Clyde provider formats or decide filter policy. Clyde checks each returned conversation against its current raw index, including hidden, missing, and archived records. Both backends return the same public result shape. Backend selection never depends on whether a query succeeds or returns matches.
+Search results are deterministic. The same query, filters, and corpus return the same ordered results. Every page is a slice of one ranking, and a smaller limit returns a prefix of a larger limit's results.
+
+Clyde prepares the complete candidate restriction before dispatch. It resolves provider, workspace, conversation, and archive scope against one snapshot of its raw index and produces the allowed conversation IDs. Hidden subagent conversations, archived conversations the request excludes, and conversations missing from the raw index are absent from that set. Clyde sends the allowed set with the role, time, and message-index restrictions. An empty allowed set returns an empty result without a backend call.
+
+The backend applies every restriction during candidate selection. It computes one ranking per query at a fixed depth that does not depend on the limit, offset, or per-conversation cap. It orders equal scores by row key. It walks that ranking once to apply the minimum score, the per-conversation cap, and the requested window. The backend never splits one request into separately ranked searches. It does not interpret Clyde provider formats or decide filter policy.
+
+Clyde hydrates hits from the snapshot that produced the allowed set. Clyde never drops ranked hits after retrieval or retries a query with a larger limit. The local backend scores every allowed passage in RAM and ranks exactly. LMS ranks within the Milvus 16,384-row search ceiling, and a page beyond that depth is the end of the results. Both backends return the same public result shape. Backend selection never depends on whether a query succeeds or returns matches.
 
 ## Bound local storage and memory
 
@@ -34,4 +40,4 @@ Bundle a small model that runs without a model provider. Persist the compact ind
 
 ## Verify the contract
 
-Verify the same cross-provider search request through the CLI and MCP with each selected backend. Verify tool-only messages, empty text, long passage coverage, filters, pagination, incremental updates, restart from the saved index, and full rebuild from Clyde's raw index. Verify that an unavailable selected LMS returns an error without local fallback. Report actual disk, memory, startup, and query measurements separately from the corpus estimate.
+Verify the same cross-provider search request through the CLI and MCP with each selected backend. Verify tool-only messages, empty text, long passage coverage, filters, pagination, incremental updates, restart from the saved index, and full rebuild from Clyde's raw index. Verify that repeated requests return the same order, that a smaller limit returns a prefix of a larger one, and that a visible match ranked below many hidden or archived matches still appears. Verify that an unavailable selected LMS returns an error without local fallback. Report actual disk, memory, startup, and query measurements separately from the corpus estimate.
