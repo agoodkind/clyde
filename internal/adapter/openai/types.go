@@ -431,9 +431,13 @@ type ModelsResponse struct {
 }
 
 // ModelEntry is part of Clyde's typed adapter surface.
+//
+// Created is zero on the compatibility listener, and the encoder omits it
+// there. The documented Models contract requires it on the OpenAI listener.
 type ModelEntry struct {
 	ID                               string   `json:"id"`
 	Object                           string   `json:"object"`
+	Created                          int64    `json:"created,omitempty"`
 	OwnedBy                          string   `json:"owned_by"`
 	Context                          int      `json:"context,omitempty"`
 	ContextWindow                    int      `json:"context_window,omitempty"`

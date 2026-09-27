@@ -27,22 +27,17 @@ import (
 func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	w := hctx.Writer
 	r := hctx.Request
+	if listenerFollowsDocumentedContract(ctx) && r.Method != http.MethodGet {
+		return newAdapterError(adapterErrorMethodNotAllowed, "GET required")
+	}
 	corr := hctx.Correlation
 	clydeingress.SetHTTPHeaders(corr, w.Header())
-	entries := s.modelRegistry().List()
+	registry := s.modelRegistry()
+	entries := registry.List()
 	fingerprint := modelCatalogFingerprint(entries)
 	resp := ModelsResponse{Object: "list", Data: nil}
 	for _, m := range entries {
-		entry := modelEntryFromResolved(m)
-		if m.Backend == BackendCodex {
-			entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(m, adaptercodex.CapabilityMode{
-				WebsocketEnabled: s.codexWebsocketEnabled(),
-			}))
-		}
-		if m.Backend == BackendAnthropic {
-			entry = applyModelContextLimit(entry, m.TransportLimits[config.AdapterModelTransportAnthropic])
-		}
-		resp.Data = append(resp.Data, entry)
+		resp.Data = append(resp.Data, s.advertisedModelEntry(ctx, registry, m))
 	}
 	respBody, err := json.Marshal(resp)
 	if err != nil {
@@ -63,11 +58,79 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	return nil
 }
 
+// advertisedModelEntry projects one resolved alias into the Models wire
+// entry. The OpenAI listener also receives the catalog load time as the
+// documented created field.
+func (s *Server) advertisedModelEntry(ctx context.Context, registry *Registry, m adaptermodel.ResolvedAlias) ModelEntry {
+	entry := modelEntryFromResolved(m)
+	if m.Backend == BackendCodex {
+		entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(m, adaptercodex.CapabilityMode{
+			WebsocketEnabled: s.codexWebsocketEnabled(),
+		}))
+	}
+	if m.Backend == BackendAnthropic {
+		entry = applyModelContextLimit(entry, m.TransportLimits[config.AdapterModelTransportAnthropic])
+	}
+	if listenerFollowsDocumentedContract(ctx) {
+		entry.Created = registry.LoadedUnix()
+	}
+	return entry
+}
+
+// handleModel serves GET /v1/models/{model}. It returns an advertised
+// model, or a model the ingress surface resolves through a route rule.
+// Any other identifier receives the documented model_not_found error.
+func (s *Server) handleModel(ctx context.Context, hctx *handlerCtx) error {
+	w := hctx.Writer
+	r := hctx.Request
+	if r.Method != http.MethodGet {
+		return newAdapterError(adapterErrorMethodNotAllowed, "GET required")
+	}
+	clydeingress.SetHTTPHeaders(hctx.Correlation, w.Header())
+	requestedModel := strings.TrimSpace(r.PathValue("model"))
+	registry := s.modelRegistry()
+	entry, found := s.lookupModelEntry(ctx, registry, requestedModel)
+	if !found {
+		return adapterErrModelNotFound("The model '" + requestedModel + "' does not exist")
+	}
+	body, err := json.Marshal(entry)
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.models.retrieve_marshal_failed", "concern", "adapter.models.catalog", "err", err)
+		return fmt.Errorf("marshal model response: %w", err)
+	}
+	writeJSON(w, body)
+	return nil
+}
+
+// lookupModelEntry finds an advertised model by identifier, then tries
+// route resolution for the request's ingress surface. A model that only
+// the OpenAI-compatible fallback upstream resolves is not in Clyde's
+// catalog, and the lookup reports it as not found.
+func (s *Server) lookupModelEntry(ctx context.Context, registry *Registry, requestedModel string) (ModelEntry, bool) {
+	var notFound ModelEntry
+	if requestedModel == "" {
+		return notFound, false
+	}
+	for _, m := range registry.List() {
+		if m.Alias == requestedModel {
+			return s.advertisedModelEntry(ctx, registry, m), true
+		}
+	}
+	resolved, _, err := registry.Resolve(openAIIngressSurface(ctx), requestedModel, "")
+	if err != nil || resolved.Backend == adaptermodel.BackendPassthroughOverride {
+		return notFound, false
+	}
+	entry := s.advertisedModelEntry(ctx, registry, resolved)
+	entry.ID = requestedModel
+	return entry, true
+}
+
 func modelEntryFromResolved(m adaptermodel.ResolvedAlias) ModelEntry {
 	advertised := m.Context
 	return ModelEntry{
 		ID:                               m.Alias,
 		Object:                           "model",
+		Created:                          0,
 		OwnedBy:                          "clyde",
 		Context:                          advertised,
 		ContextWindow:                    advertised,

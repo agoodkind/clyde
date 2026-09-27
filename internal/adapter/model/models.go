@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -128,6 +129,15 @@ type Registry struct {
 	routes               []routeRule
 	defaultModel         string
 	openAICompat         config.AdapterOpenAICompatPassthrough
+	// loadedUnix is the Unix time in seconds when this catalog was built.
+	loadedUnix int64
+}
+
+// LoadedUnix returns the Unix time in seconds when the registry built this
+// catalog. The OpenAI Models resource reports it as each model's created
+// time. Clyde has no upstream creation time for a configured alias.
+func (registry *Registry) LoadedUnix() int64 {
+	return registry.loadedUnix
 }
 
 // NewRegistry builds one registry exclusively from the declarative model
@@ -147,6 +157,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		routes:               make([]routeRule, 0, len(cfg.ModelRoutes)),
 		defaultModel:         strings.TrimSpace(cfg.DefaultModel),
 		openAICompat:         cfg.OpenAICompatPassthrough,
+		loadedUnix:           clock.Now().Unix(),
 	}
 	for name, passthrough := range cfg.PassthroughOverrides {
 		registry.passthroughOverrides[strings.ToLower(strings.TrimSpace(name))] = passthrough
