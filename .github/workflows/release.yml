@@ -55,4 +55,6 @@ jobs:
           cache: false
           go-version-file: go.mod
       - name: Test automatic update
-        run: go run ./cmd/ci-auto-update
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          go run ./cmd/ci-auto-update
