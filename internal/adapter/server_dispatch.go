@@ -207,6 +207,15 @@ func openAIIngressSurface(ctx context.Context) adapterresolver.IngressSurface {
 	return adapterresolver.IngressOpenAI
 }
 
+// listenerFollowsDocumentedContract reports whether the request arrived
+// on the generic OpenAI listener. [Server.StartOnListeners] labels every
+// accepted connection as "openai" or "cursor". Only the "openai" label
+// selects the documented OpenAI contract. The Cursor BYOK listener and an
+// unlabeled in-process request keep the compatibility behavior.
+func listenerFollowsDocumentedContract(ctx context.Context) bool {
+	return ingressLabelFromContext(ctx) == string(adapterresolver.IngressOpenAI)
+}
+
 func applyHeaderIngressContext(ctx context.Context, r *http.Request, corr correlation.Context, ingress ingresscontract.IngressContract) (context.Context, *http.Request, correlation.Context, []logevent.Facet) {
 	headerIngressCtx := ingress.TranslateHeaders(r.Header)
 	if headerIngressCtx.ConversationID != "" && clydeingress.ChatKey(corr) == "" {

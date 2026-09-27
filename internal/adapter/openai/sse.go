@@ -144,10 +144,7 @@ func (r StreamErrorRenderer) WriteStreamError(w errcontract.StreamErrorWriter, i
 }
 
 func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
-	envelopeType := info.Type
-	if envelopeType == "" {
-		envelopeType = openAITypeForClass(info.Class)
-	}
+	envelopeType := envelopeTypeFor(info.Status, info)
 	body := ErrorBody{
 		Message: info.Message,
 		Type:    envelopeType,

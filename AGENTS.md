@@ -188,13 +188,15 @@ Every adapter HTTP response with a non-2xx status MUST go through the adapter er
 - Pre-headers errors and mid-stream errors both go through the boundary's typed entry points. The handoff to the renderer speaks only primitives (type, code, message, param).
 - Upstream failures classify into a typed upstream-code class and flow through the route-family-specific upstream-error mapper.
 
-OpenAI-compatible route family rule:
+OpenAI-compatible route family rule on the Cursor BYOK listener (`cursor_ingress_port`):
 
 - Every non-2xx upstream MUST be returned as HTTP 400 + `invalid_request_error` + a typed `upstream_*` code.
 - Do not preserve upstream 5xx or 429 status codes on the response.
 - Do not map upstream rate-limits to OpenAI `rate_limit_error`.
 
 The empirical Cursor reason for this rule is in `docs/cursor.md`.
+
+The generic OpenAI listener follows the documented OpenAI contract instead. It keeps the documented upstream status and derives `error.type` from that status. The boundary selects the contract from the listener label, never from request headers or body. `docs/adapter/openai-conformance.md` records the OpenAI listener contract.
 
 ## Logging And Observability
 

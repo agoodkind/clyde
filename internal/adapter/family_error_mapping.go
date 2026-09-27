@@ -324,3 +324,72 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	aerr.Message = folded
 	return aerr
 }
+
+// documentedStatusByClass is the documented HTTP status for an error
+// class when no upstream HTTP status is available. Local classes absent
+// from this table keep the status their defaults already chose.
+var documentedStatusByClass = map[adapterErrorClass]int{
+	adapterErrorModelNotFound:           http.StatusNotFound,
+	adapterErrorUpstreamRateLimited:     http.StatusTooManyRequests,
+	adapterErrorUpstreamAuthFailed:      http.StatusUnauthorized,
+	adapterErrorUpstreamSchemaViolation: http.StatusBadRequest,
+	adapterErrorUpstreamNetworkError:    http.StatusBadGateway,
+	adapterErrorUpstreamUnavailable:     http.StatusServiceUnavailable,
+	adapterErrorUpstreamFailed:          http.StatusBadGateway,
+}
+
+// applyDocumentedShape selects the documented HTTP status for an error
+// on a listener that follows the vendor's documented contract. It never
+// changes the message, code, or param. An upstream failure keeps the
+// upstream status when that status is a client error or a standard
+// gateway status.
+func applyDocumentedShape(aerr *adapterError) *adapterError {
+	if aerr == nil {
+		return nil
+	}
+	if status := documentedUpstreamStatus(aerr); status > 0 {
+		aerr.HTTPStatus = status
+		return aerr
+	}
+	if status, ok := documentedStatusByClass[aerr.Class]; ok {
+		aerr.HTTPStatus = status
+	}
+	return aerr
+}
+
+// documentedUpstreamStatus returns the client-visible status for an
+// error that came from an upstream HTTP response, or zero when the
+// error has no usable upstream status. Anthropic's 529 capacity status
+// becomes 503, and other nonstandard server statuses become 500.
+func documentedUpstreamStatus(aerr *adapterError) int {
+	if !adapterErrorFromUpstream(aerr) {
+		return 0
+	}
+	status := aerr.UpstreamStatus
+	switch {
+	case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
+		return status
+	case status == http.StatusInternalServerError,
+		status == http.StatusBadGateway,
+		status == http.StatusServiceUnavailable,
+		status == http.StatusGatewayTimeout:
+		return status
+	case status == anthropicOverloadedStatus:
+		return http.StatusServiceUnavailable
+	case status > http.StatusInternalServerError:
+		return http.StatusInternalServerError
+	default:
+		return 0
+	}
+}
+
+// adapterErrorFromUpstream reports whether an error came from a provider
+// failure rather than a local adapter rejection. The upstream mapper
+// assigns the invalid_request class to an upstream invalid request, and
+// that error keeps a nonzero UpstreamStatus.
+func adapterErrorFromUpstream(aerr *adapterError) bool {
+	if strings.HasPrefix(string(aerr.Class), "upstream_") {
+		return true
+	}
+	return aerr.Class == adapterErrorInvalidRequest && aerr.UpstreamStatus > 0
+}

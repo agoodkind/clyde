@@ -257,6 +257,10 @@ func startRoutingListeners(t *testing.T, srv *Server) (string, string) {
 	t.Helper()
 	openAIListener := listenLoopback(t)
 	cursorListener := listenLoopback(t)
+	// The accept hook labels connections by comparing the local port with
+	// cfg.CursorIngressPort, so setting it before serving makes the second
+	// listener the Cursor BYOK listener.
+	srv.cfg.CursorIngressPort = listenerPort(t, cursorListener)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {

@@ -202,21 +202,30 @@ func TestResponsesPreparationFailurePrecedesStreamingHeadersAndFrames(t *testing
 	// not the generic registry entry. Removing this preparation dependency
 	// leaves the registry intact and distinguishes the two boundaries.
 	srv.codexProvider = nil
-	openAIURL, _ := startRoutingListeners(t, srv)
+	openAIURL, cursorURL := startRoutingListeners(t, srv)
 
-	response, body := postResponsesRaw(t, openAIURL+"/v1/responses", `{"model":"gpt-future","input":"hello","stream":true}`)
-	if response.StatusCode == http.StatusOK {
-		t.Fatalf("status = %d, want typed pre-header error; body=%s", response.StatusCode, body)
-	}
-	if bytes.Contains(body, []byte("response.created")) || bytes.Contains(body, []byte("response.in_progress")) {
-		t.Fatalf("preparation failure emitted lifecycle frames: %s", body)
-	}
-	var envelope adapteropenai.ErrorResponse
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		t.Fatalf("unmarshal error envelope: %v; body=%s", err, body)
-	}
-	if envelope.Error.Type != "invalid_request_error" {
-		t.Fatalf("error type = %q, want invalid_request_error", envelope.Error.Type)
+	for _, listener := range []struct {
+		name     string
+		baseURL  string
+		wantType string
+	}{
+		{name: "cursor", baseURL: cursorURL, wantType: "invalid_request_error"},
+		{name: "openai", baseURL: openAIURL, wantType: "server_error"},
+	} {
+		response, body := postResponsesRaw(t, listener.baseURL+"/v1/responses", `{"model":"gpt-future","input":"hello","stream":true}`)
+		if response.StatusCode == http.StatusOK {
+			t.Fatalf("%s status = %d, want typed pre-header error; body=%s", listener.name, response.StatusCode, body)
+		}
+		if bytes.Contains(body, []byte("response.created")) || bytes.Contains(body, []byte("response.in_progress")) {
+			t.Fatalf("%s preparation failure emitted lifecycle frames: %s", listener.name, body)
+		}
+		var envelope adapteropenai.ErrorResponse
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			t.Fatalf("%s unmarshal error envelope: %v; body=%s", listener.name, err, body)
+		}
+		if envelope.Error.Type != listener.wantType {
+			t.Fatalf("%s error type = %q, want %s", listener.name, envelope.Error.Type, listener.wantType)
+		}
 	}
 }
 

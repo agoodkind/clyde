@@ -174,6 +174,8 @@ func (UpstreamErrorMapper) Map(
 			Param:          "",
 			UpstreamStatus: httpStatus,
 			Diagnostics:    nil,
+			Contract:       errcontract.ClientContractCompatibility,
+			Status:         httpStatus,
 		},
 	}
 }

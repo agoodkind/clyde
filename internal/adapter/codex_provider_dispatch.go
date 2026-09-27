@@ -420,12 +420,14 @@ func codexProviderAdapterError(err error) *adapterError {
 	// Error() is snippet-free for logs; fold the snippet into the client
 	// message here, the one place that builds the Cursor-facing envelope.
 	message := err.Error()
+	upstreamStatus := 0
 	var upstreamStatusErr *adaptercodex.UpstreamStatusError
 	if errors.As(err, &upstreamStatusErr) {
 		message = upstreamStatusErr.ClientMessage()
+		upstreamStatus = upstreamStatusErr.Status
 	}
 	codeClass := codexClassifyError(message)
-	aerr := mapUpstreamForFamily(adapterRouteOpenAI, "codex", 0, codeClass, "", message)
+	aerr := mapUpstreamForFamily(adapterRouteOpenAI, "codex", upstreamStatus, codeClass, "", message)
 	aerr.Cause = err
 	return aerr
 }

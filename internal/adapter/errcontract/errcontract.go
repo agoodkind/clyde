@@ -43,7 +43,31 @@ type ErrorInfo struct {
 	// string, so the generic boundary stays blind to envelope syntax.
 	UpstreamStatus int
 	Diagnostics    *ErrorDiagnostics
+	// Contract selects the client error contract the renderer applies.
+	// The zero value keeps the family's compatibility shape.
+	Contract ClientContract
+	// Status is the HTTP status the boundary selected for this error. A
+	// renderer applying ClientContractDocumented derives the envelope
+	// type from it. Stream error renderers read it because their write
+	// call receives no status argument.
+	Status int
 }
+
+// ClientContract identifies which client error contract a family
+// renderer applies. The boundary selects it from the listener identity
+// the request arrived on, never from request headers or body content.
+type ClientContract string
+
+const (
+	// ClientContractCompatibility is the family's compatibility shape.
+	// On the OpenAI family it is the Cursor BYOK shape: every upstream
+	// failure renders as HTTP 400 with invalid_request_error.
+	ClientContractCompatibility ClientContract = ""
+	// ClientContractDocumented is the vendor's documented error contract.
+	// On the OpenAI family the renderer derives error.type from the
+	// documented HTTP status.
+	ClientContractDocumented ClientContract = "documented"
+)
 
 // ErrorDiagnostics carries primitive, client-visible breadcrumbs that let an
 // operator or follow-up LLM jump from a displayed provider error back to the
