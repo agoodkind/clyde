@@ -37,6 +37,58 @@ func (s ResponsesFieldSet) Presence(name string) ResponsesFieldPresence {
 	return responsesPresence(s.fields[name])
 }
 
+// knownResponsesRequestKeys mirrors the JSON tags on ResponsesRequest.
+// TestResponsesRequestJSONTagsMatchKnownKeys pins the two sets together.
+var knownResponsesRequestKeys = map[string]bool{
+	"previous_response_id":   true,
+	"model":                  true,
+	"background":             true,
+	"max_tool_calls":         true,
+	"text":                   true,
+	"tools":                  true,
+	"tool_choice":            true,
+	"prompt":                 true,
+	"prompt_cache_options":   true,
+	"top_logprobs":           true,
+	"metadata":               true,
+	"temperature":            true,
+	"top_p":                  true,
+	"user":                   true,
+	"safety_identifier":      true,
+	"prompt_cache_key":       true,
+	"service_tier":           true,
+	"prompt_cache_retention": true,
+	"truncation":             true,
+	"reasoning":              true,
+	"input":                  true,
+	"include":                true,
+	"parallel_tool_calls":    true,
+	"store":                  true,
+	"instructions":           true,
+	"moderation":             true,
+	"stream":                 true,
+	"stream_options":         true,
+	"conversation":           true,
+	"context_management":     true,
+	"max_output_tokens":      true,
+	"max_tokens":             true,
+	"max_completion_tokens":  true,
+	"n":                      true,
+	"stop":                   true,
+}
+
+// UnknownResponsesKeys returns the sorted top-level keys that the typed
+// ResponsesRequest does not model.
+func (s ResponsesFieldSet) UnknownResponsesKeys() []string {
+	unknown := make([]string, 0)
+	for _, key := range sortedKeys(s.fields) {
+		if !knownResponsesRequestKeys[key] {
+			unknown = append(unknown, key)
+		}
+	}
+	return unknown
+}
+
 // responsesRawFields is the one deliberately opaque edge used solely to
 // retain CreateResponse top-level presence during typed JSON decoding.
 type responsesRawFields map[string]json.RawMessage
@@ -119,6 +171,18 @@ func (r *ResponsesRequest) UnmarshalJSON(data []byte) error {
 	*r = ResponsesRequest(decoded)
 	r.Fields = ResponsesFieldSet{fields: fields}
 	return nil
+}
+
+// DecodeFieldSet records the top-level wire presence of every key in a
+// JSON object request body. Chat Completions and legacy Completions
+// validation use it to tell an omitted field from an explicit value.
+func DecodeFieldSet(body []byte) (ResponsesFieldSet, error) {
+	fields := responsesRawFields{}
+	if err := json.Unmarshal(body, &fields); err != nil {
+		slog.Warn("adapter.openai.field_presence_invalid", "concern", "adapter.chat.dispatch", "err", err)
+		return ResponsesFieldSet{fields: nil}, fmt.Errorf("decode request field presence: %w", err)
+	}
+	return ResponsesFieldSet{fields: fields}, nil
 }
 
 func responsesPresence(raw json.RawMessage) ResponsesFieldPresence {

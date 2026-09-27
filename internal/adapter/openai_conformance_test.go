@@ -416,6 +416,132 @@ func TestOpenAIConformanceModelsListAndRetrieve(t *testing.T) {
 	}
 }
 
+func TestOpenAIConformanceChatRejectsFieldsBeforeProviderRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantCode  string
+		wantParam string
+	}{
+		{
+			name:      "provider ignores temperature",
+			body:      `{"model":"gpt-future","temperature":0.2,"messages":[{"role":"user","content":"hi"}]}`,
+			wantCode:  "unsupported_parameter",
+			wantParam: "temperature",
+		},
+		{
+			name:      "unknown field",
+			body:      `{"model":"gpt-future","vendor_only_field":true,"messages":[{"role":"user","content":"hi"}]}`,
+			wantCode:  "unknown_parameter",
+			wantParam: "vendor_only_field",
+		},
+		{
+			name:      "stream options without stream",
+			body:      `{"model":"gpt-future","stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}`,
+			wantCode:  "invalid_parameter",
+			wantParam: "stream_options",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+			listeners := startConformanceServer(t, upstream)
+
+			rejected := postConformance(t, listeners.openAI+"/v1/chat/completions", test.body)
+			rejection := decodeErrorEnvelope(t, rejected.body)
+			if rejected.status != http.StatusBadRequest || rejection.Type != "invalid_request_error" || rejection.Code != test.wantCode || rejection.Param != test.wantParam {
+				t.Fatalf("OpenAI listener = %d %+v, want 400 %s for %s", rejected.status, rejection, test.wantCode, test.wantParam)
+			}
+			requireNoUpstreamRequest(t, upstream)
+
+			// The Cursor listener keeps its lenient projection.
+			cursor := postConformance(t, listeners.cursor+"/v1/chat/completions", test.body)
+			if cursor.status != http.StatusOK {
+				t.Fatalf("Cursor listener status = %d; body=%s", cursor.status, cursor.body)
+			}
+			drainConformanceRequest(t, upstream)
+		})
+	}
+}
+
+func TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantCode  string
+		wantParam string
+	}{
+		{
+			name:      "provider ignores temperature",
+			body:      `{"model":"gpt-future","input":"hi","temperature":0.5}`,
+			wantCode:  "unsupported_parameter",
+			wantParam: "temperature",
+		},
+		{
+			name:      "built-in tool",
+			body:      `{"model":"gpt-future","input":"hi","tools":[{"type":"web_search"}]}`,
+			wantCode:  "unsupported_parameter",
+			wantParam: "tools",
+		},
+		{
+			name:      "forced tool choice",
+			body:      `{"model":"gpt-future","input":"hi","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"tool_choice":"required"}`,
+			wantCode:  "unsupported_parameter",
+			wantParam: "tool_choice",
+		},
+		{
+			name:      "unknown field",
+			body:      `{"model":"gpt-future","input":"hi","vendor_only_field":1}`,
+			wantCode:  "unknown_parameter",
+			wantParam: "vendor_only_field",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+			listeners := startConformanceServer(t, upstream)
+
+			rejected := postConformance(t, listeners.openAI+"/v1/responses", test.body)
+			rejection := decodeErrorEnvelope(t, rejected.body)
+			if rejected.status != http.StatusBadRequest || rejection.Type != "invalid_request_error" || rejection.Code != test.wantCode || rejection.Param != test.wantParam {
+				t.Fatalf("OpenAI listener = %d %+v, want 400 %s for %s", rejected.status, rejection, test.wantCode, test.wantParam)
+			}
+			requireNoUpstreamRequest(t, upstream)
+
+			cursor := postConformance(t, listeners.cursor+"/v1/responses", test.body)
+			if cursor.status != http.StatusOK {
+				t.Fatalf("Cursor listener status = %d; body=%s", cursor.status, cursor.body)
+			}
+			drainConformanceRequest(t, upstream)
+		})
+	}
+}
+
+func TestOpenAIConformanceResponsesAcceptsDocumentedDefaults(t *testing.T) {
+	upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+	listeners := startConformanceServer(t, upstream)
+	body := `{"model":"gpt-future","input":"hi","temperature":1,"top_p":1,"store":false,"background":false,"truncation":"disabled","parallel_tool_calls":true,"tool_choice":"auto","metadata":{"k":"v"},"user":"caller","prompt_cache_key":"cache"}`
+	accepted := postConformance(t, listeners.openAI+"/v1/responses", body)
+	if accepted.status != http.StatusOK {
+		t.Fatalf("default-valued Responses request status = %d; body=%s", accepted.status, accepted.body)
+	}
+	if len(accepted.header.Values("X-Clyde-Warning")) != 0 {
+		t.Fatalf("OpenAI listener emitted compatibility warnings: %v", accepted.header.Values("X-Clyde-Warning"))
+	}
+	drainConformanceRequest(t, upstream)
+}
+
+func TestOpenAIConformanceChatAcceptsDocumentedDefaults(t *testing.T) {
+	upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+	listeners := startConformanceServer(t, upstream)
+	body := `{"model":"gpt-future","temperature":1,"top_p":1,"n":1,"presence_penalty":0,"frequency_penalty":0,"logprobs":false,"store":false,"tool_choice":"auto","user":"caller","prompt_cache_key":"cache","messages":[{"role":"user","content":"hi"}]}`
+	accepted := postConformance(t, listeners.openAI+"/v1/chat/completions", body)
+	if accepted.status != http.StatusOK {
+		t.Fatalf("default-valued request status = %d; body=%s", accepted.status, accepted.body)
+	}
+	drainConformanceRequest(t, upstream)
+}
+
 func TestOpenAIConformanceReportsUpstreamReasoningTokens(t *testing.T) {
 	upstream := newConformanceUpstream(conformanceUsageWithReasoning)
 	listeners := startConformanceServer(t, upstream)

@@ -12,8 +12,10 @@ import (
 	"strings"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
@@ -246,6 +248,10 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 		return err
 	}
 
+	if rejectErr := rejectUndocumentedChatFields(ctx, recorder, body, req, discovery, &resolvedReq); rejectErr != nil {
+		return rejectErr
+	}
+
 	toolNames := chatToolNames(req)
 	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, &resolvedReq, toolNames)
 	if ingressCtx.PathKind == ingresscontract.PathKindSubagent && ingressCtx.GenerationID == "" {
@@ -261,6 +267,59 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	s.dispatchResolvedChat(w, r, req, effort, reqID, body, ingressCtx, resolvedReq)
 	s.completeChatDispatchLegs(ctx, recorder, corr, req, &resolvedReq, effort, bodyFacets)
 	return nil
+}
+
+// rejectUndocumentedChatFields applies documentedChatRejection on the
+// generic OpenAI listener and records the rejection. Other listeners
+// receive nil.
+func rejectUndocumentedChatFields(ctx context.Context, recorder *logevent.Recorder, body []byte, req ChatRequest, discovery RequestDiscovery, resolvedReq *adapterresolver.ResolvedRequest) error {
+	if !listenerFollowsDocumentedContract(ctx) {
+		return nil
+	}
+	rejectErr := documentedChatRejection(body, req, discovery, resolvedReq)
+	if rejectErr == nil {
+		return nil
+	}
+	recorder.EmitError(ctx, "unsupported_parameter", rejectErr.Error())
+	return rejectErr
+}
+
+// documentedChatRejection returns an invalid request error for the first
+// Chat Completions field the resolved provider cannot honor. handleChat
+// runs this check on the generic OpenAI listener before any provider
+// request starts.
+func documentedChatRejection(body []byte, req ChatRequest, discovery RequestDiscovery, resolvedReq *adapterresolver.ResolvedRequest) *adapterError {
+	fields, err := adapteropenai.DecodeFieldSet(body)
+	if err != nil {
+		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
+	}
+	var n *int
+	if req.N != 0 {
+		n = &req.N
+	}
+	values := adaptercompat.ChatRequestValues{
+		Stream:           req.Stream,
+		Temperature:      req.Temperature,
+		TopP:             req.TopP,
+		PresencePenalty:  req.PresencePenalty,
+		FrequencyPenalty: req.FrequencyPenalty,
+		N:                n,
+		Logprobs:         req.Logprobs,
+		TopLogprobs:      req.TopLogprobs,
+		Store:            req.Store,
+		ServiceTier:      req.ServiceTier,
+		ToolChoice:       req.ToolChoice,
+		FunctionCall:     req.FunctionCall,
+		Modalities:       req.Modalities,
+		ResponseFormat:   req.ResponseFormat,
+		UnknownKeys:      discovery.UnknownKeys,
+	}
+	presenceFor := func(param string) int { return int(fields.Presence(param)) }
+	rejection, rejected := adaptercompat.ChatRejection(presenceFor, values, resolvedReq.Provider)
+	if !rejected {
+		return nil
+	}
+	return adapterErrRejectedParameter(rejection)
 }
 
 func openAIIngressSurface(ctx context.Context) adapterresolver.IngressSurface {

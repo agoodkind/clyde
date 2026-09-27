@@ -83,12 +83,16 @@ func warningForParam(warnings []adaptercompat.CompatibilityWarning, param string
 	return adaptercompat.CompatibilityWarning{}, false
 }
 
+// The compatibility warning tests below use the Cursor listener. The
+// generic OpenAI listener rejects the same fields, and the OpenAI
+// conformance tests cover that contract.
+
 func TestResponsesNonStreamingCodexTemperatureWarns(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)
-	openAIURL, _ := startRoutingListeners(t, srv)
+	_, cursorURL := startRoutingListeners(t, srv)
 
-	response, body := postResponsesRaw(t, openAIURL+"/v1/responses", `{"model":"gpt-future","input":"hello","temperature":0.5}`)
+	response, body := postResponsesRaw(t, cursorURL+"/v1/responses", `{"model":"gpt-future","input":"hello","temperature":0.5}`)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", response.StatusCode, body)
 	}
@@ -114,9 +118,9 @@ func TestResponsesNonStreamingCodexTemperatureWarns(t *testing.T) {
 func TestResponsesStreamingCodexTemperatureWarnsInFirstEvent(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)
-	openAIURL, _ := startRoutingListeners(t, srv)
+	_, cursorURL := startRoutingListeners(t, srv)
 
-	response, body := postResponsesRaw(t, openAIURL+"/v1/responses", `{"model":"gpt-future","input":"hello","temperature":0.5,"stream":true}`)
+	response, body := postResponsesRaw(t, cursorURL+"/v1/responses", `{"model":"gpt-future","input":"hello","temperature":0.5,"stream":true}`)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", response.StatusCode, body)
 	}
@@ -143,12 +147,12 @@ func TestResponsesStreamingCodexUnsupportedToolChoiceWarnsBeforeHeaders(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			fakes := newRoutingFakeEndpoints(t)
 			srv := newRoutingIntegrationServer(t, fakes)
-			openAIURL, _ := startRoutingListeners(t, srv)
+			_, cursorURL := startRoutingListeners(t, srv)
 			requestBody := `{"model":"gpt-future","input":"hello","stream":true,` +
 				`"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],` +
 				`"tool_choice":` + test.toolChoice + `}`
 
-			response, body := postResponsesRaw(t, openAIURL+"/v1/responses", requestBody)
+			response, body := postResponsesRaw(t, cursorURL+"/v1/responses", requestBody)
 			if response.StatusCode != http.StatusOK {
 				t.Fatalf("status = %d; body=%s", response.StatusCode, body)
 			}
@@ -232,13 +236,13 @@ func TestResponsesPreparationFailurePrecedesStreamingHeadersAndFrames(t *testing
 func TestResponsesUnsupportedToolOmittedAndWarned(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)
-	openAIURL, _ := startRoutingListeners(t, srv)
+	_, cursorURL := startRoutingListeners(t, srv)
 
 	body := `{"model":"gpt-future","input":"hello","tools":[` +
 		`{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}},` +
 		`{"type":"web_search"}` +
 		`]}`
-	response, respBody := postResponsesRaw(t, openAIURL+"/v1/responses", body)
+	response, respBody := postResponsesRaw(t, cursorURL+"/v1/responses", body)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", response.StatusCode, respBody)
 	}

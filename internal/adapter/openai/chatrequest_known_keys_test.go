@@ -27,12 +27,34 @@ func TestChatRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	}
 }
 
+// TestResponsesRequestJSONTagsMatchKnownKeys is the same drift check for
+// the Responses request. The OpenAI listener rejects every key absent
+// from knownResponsesRequestKeys. The catalog must equal the struct tags.
+func TestResponsesRequestJSONTagsMatchKnownKeys(t *testing.T) {
+	actual := structJSONTags(reflect.TypeOf(ResponsesRequest{}))
+	for key := range actual {
+		if !knownResponsesRequestKeys[key] {
+			t.Errorf("ResponsesRequest serializes JSON key %q absent from knownResponsesRequestKeys", key)
+		}
+	}
+	for key := range knownResponsesRequestKeys {
+		if !actual[key] {
+			t.Errorf("knownResponsesRequestKeys lists %q but ResponsesRequest no longer serializes that JSON key", key)
+		}
+	}
+}
+
 // chatRequestJSONTags reflects the ChatRequest struct into the set of
 // JSON key names it serializes, dropping the omitempty suffix and any
 // field tagged json:"-".
 func chatRequestJSONTags() map[string]bool {
+	return structJSONTags(reflect.TypeOf(ChatRequest{}))
+}
+
+// structJSONTags reflects a struct type into the set of JSON key names it
+// serializes.
+func structJSONTags(typ reflect.Type) map[string]bool {
 	out := map[string]bool{}
-	typ := reflect.TypeOf(ChatRequest{})
 	for fieldIndex := 0; fieldIndex < typ.NumField(); fieldIndex++ {
 		tag := typ.Field(fieldIndex).Tag.Get("json")
 		if tag == "" || tag == "-" {

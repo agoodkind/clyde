@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,20 +41,24 @@ func TestDeclarativeRoutesDispatchToLoopbackEndpoints(t *testing.T) {
 	srv := newRoutingIntegrationServer(t, fakes)
 	openAIURL, cursorURL := startRoutingListeners(t, srv)
 
-	chatBody := `{"model":"gpt-future","messages":[{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"reasoning_effort":"future-tier","tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"max_output_tokens":73}`
-	for _, ingress := range []struct {
-		name    string
-		baseURL string
-	}{
-		{name: "cursor", baseURL: cursorURL},
-		{name: "openai", baseURL: openAIURL},
-	} {
-		response := postRoutingJSON(t, ingress.baseURL+"/v1/chat/completions", chatBody)
-		if response.status != http.StatusOK {
-			t.Fatalf("%s chat status = %d; body=%s", ingress.name, response.status, response.body)
-		}
-		assertCodexWildcardRequest(t, <-fakes.codexReqs)
+	chatBody := `{"model":"gpt-future","messages":[{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"reasoning_effort":"future-tier","tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`
+	cappedChatBody := strings.TrimSuffix(chatBody, "}") + `,"max_output_tokens":73}`
+	// The Cursor listener drops the output cap Codex cannot honor.
+	cursorChat := postRoutingJSON(t, cursorURL+"/v1/chat/completions", cappedChatBody)
+	if cursorChat.status != http.StatusOK {
+		t.Fatalf("cursor chat status = %d; body=%s", cursorChat.status, cursorChat.body)
 	}
+	assertCodexWildcardRequest(t, <-fakes.codexReqs)
+	// The OpenAI listener rejects that cap and accepts the request without it.
+	rejectedChat := postRoutingJSON(t, openAIURL+"/v1/chat/completions", cappedChatBody)
+	if rejectedChat.status != http.StatusBadRequest || !bytes.Contains(rejectedChat.body, []byte(`"param":"max_output_tokens"`)) {
+		t.Fatalf("openai capped chat = %d %s, want 400 for max_output_tokens", rejectedChat.status, rejectedChat.body)
+	}
+	openAIChat := postRoutingJSON(t, openAIURL+"/v1/chat/completions", chatBody)
+	if openAIChat.status != http.StatusOK {
+		t.Fatalf("openai chat status = %d; body=%s", openAIChat.status, openAIChat.body)
+	}
+	assertCodexWildcardRequest(t, <-fakes.codexReqs)
 
 	legacy := postRoutingJSON(t, openAIURL+"/v1/completions", `{"model":"gpt-legacy-future","prompt":"legacy prompt"}`)
 	if legacy.status != http.StatusOK {

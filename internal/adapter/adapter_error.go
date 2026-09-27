@@ -125,6 +125,15 @@ func adapterErrInvalidRequest(message string, cause error) *adapterError {
 	return e
 }
 
+// adapterErrRejectedParameter builds the invalid request error for one
+// rejected request field. The code and param come from the rejection.
+func adapterErrRejectedParameter(rejection adaptercompat.Rejection) *adapterError {
+	e := newAdapterError(adapterErrorInvalidRequest, rejection.Message)
+	e.Code = rejection.Code
+	e.Param = rejection.Param
+	return e
+}
+
 func adapterErrModelNotFound(message string) *adapterError {
 	return newAdapterError(adapterErrorModelNotFound, message)
 }

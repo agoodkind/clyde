@@ -101,6 +101,11 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	if overrideErr := s.applyBackendOverride(r, req, &resolvedReq, reqID); overrideErr != nil {
 		return overrideErr
 	}
+	if listenerFollowsDocumentedContract(ctx) {
+		if rejectErr := documentedResponsesRejection(rr, resolvedReq.Provider, droppedTools); rejectErr != nil {
+			return rejectErr
+		}
+	}
 	if preErr := s.preflightChat(ctx, &req, &resolvedReq, reqID); preErr != nil {
 		return preErr
 	}
@@ -113,11 +118,43 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	// provider omits or overrides, plus the built-in / custom tool types the
 	// projection dropped. It reads the raw body for top-level field presence
 	// and never performs the omission itself.
-	warningValues := adaptercompat.ResponsesWarningValues{N: rr.N, ToolChoice: rr.ToolChoice}
-	warnings := adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, warningValues, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
+	// The generic OpenAI listener rejected every field the provider cannot
+	// honor. It computes no warnings for the remaining hints and default
+	// values.
+	var warnings adaptercompat.WarningSet
+	if !listenerFollowsDocumentedContract(ctx) {
+		warningValues := adaptercompat.ResponsesWarningValues{N: rr.N, ToolChoice: rr.ToolChoice}
+		warnings = adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, warningValues, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
+	}
 
 	s.dispatchResolvedResponsesWithID(w, r, req, reqID, responseID, body, resolvedReq, warnings)
 	return nil
+}
+
+// documentedResponsesRejection returns an invalid request error for the
+// first Responses field the resolved provider cannot honor. handleResponses
+// runs this check on the generic OpenAI listener before any provider
+// request starts. The Cursor listener keeps the compatibility warnings.
+func documentedResponsesRejection(rr adapteropenai.ResponsesRequest, provider adapterresolver.ProviderID, droppedTools []string) *adapterError {
+	values := adaptercompat.ResponsesRequestValues{
+		N:             rr.N,
+		ToolChoice:    rr.ToolChoice,
+		Temperature:   rr.Temperature,
+		TopP:          rr.TopP,
+		TopLogprobs:   rr.TopLogprobs,
+		Background:    rr.Background,
+		Store:         rr.Store,
+		ParallelTools: rr.ParallelTools,
+		Truncation:    rr.Truncation,
+		ServiceTier:   rr.ServiceTier,
+		UnknownKeys:   rr.Fields.UnknownResponsesKeys(),
+	}
+	presenceFor := func(param string) int { return int(rr.Fields.Presence(param)) }
+	rejection, rejected := adaptercompat.ResponsesRejection(presenceFor, values, provider, droppedTools)
+	if !rejected {
+		return nil
+	}
+	return adapterErrRejectedParameter(rejection)
 }
 
 func (s *Server) tryDispatchNativeCodexResponses(

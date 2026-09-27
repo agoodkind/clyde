@@ -57,7 +57,7 @@ func drainCodex(t *testing.T, ch <-chan adaptercodex.HTTPTransportRequest) {
 func TestResponsesEndpointEndToEnd(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)
-	openAIURL, _ := startRoutingListeners(t, srv)
+	openAIURL, cursorURL := startRoutingListeners(t, srv)
 
 	// Codex non-streaming: the mock streams response.output_text.delta "ok", so
 	// the Responses object carries a message output item with that text.
@@ -88,10 +88,17 @@ func TestResponsesEndpointEndToEnd(t *testing.T) {
 	}
 	drainCodex(t, fakes.codexReqs)
 
-	// Codex non-streaming with a temperature the codex backend omits: a
-	// compatibility warning must appear as an X-Clyde-Warning header and under
-	// clyde.warnings in the object.
-	status, header, body := postResponses(t, openAIURL+"/v1/responses",
+	// Codex non-streaming with a temperature the codex backend omits: the
+	// OpenAI listener rejects it before the provider request.
+	status, _, body = postResponses(t, openAIURL+"/v1/responses",
+		`{"model":"gpt-future","input":"say hi","temperature":0.5,"stream":false}`)
+	if status != http.StatusBadRequest || !bytes.Contains(body, []byte(`"param":"temperature"`)) {
+		t.Fatalf("openai codex temperature = %d %s, want 400 for temperature", status, body)
+	}
+
+	// The Cursor listener keeps the compatibility warning as an
+	// X-Clyde-Warning header and under clyde.warnings in the object.
+	status, header, body := postResponses(t, cursorURL+"/v1/responses",
 		`{"model":"gpt-future","input":"say hi","temperature":0.5,"stream":false}`)
 	if status != http.StatusOK {
 		t.Fatalf("codex warn status = %d; body=%s", status, body)
