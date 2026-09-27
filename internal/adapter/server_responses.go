@@ -539,6 +539,9 @@ func (s *Server) dispatchResponsesStream(
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
 	}
+	if echo := documentedResponsesEcho(ctx, resolvedReq); echo != nil {
+		writer.useDocumentedContract(*echo)
+	}
 	if beginErr := writer.begin(); beginErr != nil {
 		s.log.LogAttrs(
 			ctx, slog.LevelWarn, "adapter.responses.begin_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
@@ -642,6 +645,7 @@ func (s *Server) dispatchResponsesCollect(
 		Usage:      &usage,
 		ItemIDBase: responsesItemBase(responseID),
 		Warnings:   warnings,
+		Echo:       documentedResponsesEcho(ctx, resolvedReq),
 	})
 	resp.IncompleteDetails = incompleteDetails
 	body, marshalErr := json.Marshal(resp)
@@ -650,6 +654,16 @@ func (s *Server) dispatchResponsesCollect(
 		return
 	}
 	writeJSON(w, body)
+}
+
+// documentedResponsesEcho returns the request echo for the documented
+// Response object on the generic OpenAI listener, or nil elsewhere.
+func documentedResponsesEcho(ctx context.Context, resolvedReq adapterresolver.ResolvedRequest) *adapteropenai.ResponsesEcho {
+	if !listenerFollowsDocumentedContract(ctx) || resolvedReq.Responses == nil {
+		return nil
+	}
+	echo := adapteropenai.NewResponsesEcho(*resolvedReq.Responses)
+	return &echo
 }
 
 // responsesFieldsFromChatResponse extracts the assistant text, reasoning,

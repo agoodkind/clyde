@@ -52,18 +52,150 @@ var responsesMetadataEmpty = json.RawMessage(`{}`)
 // ResponsesResponse is the top-level OpenAI Responses API response
 // object. The adapter emits it both as the non-streaming body and as
 // the `response` payload embedded in the streamed lifecycle events.
+//
+// The request echo fields are nil on the compatibility listener, and the
+// encoder omits them there. The documented contract sets every echo field,
+// with an explicit JSON null for an omitted nullable request field.
 type ResponsesResponse struct {
-	ID                string                      `json:"id"`
-	Object            string                      `json:"object"`
-	CreatedAt         int64                       `json:"created_at"`
-	Status            ResponsesStatus             `json:"status"`
-	Model             string                      `json:"model"`
-	Output            []ResponsesOutputItem       `json:"output"`
-	Usage             *ResponsesUsage             `json:"usage,omitempty"`
-	IncompleteDetails *ResponsesIncompleteDetails `json:"incomplete_details"`
-	Error             *ResponsesError             `json:"error"`
-	Metadata          json.RawMessage             `json:"metadata"`
-	Clyde             *ResponsesClyde             `json:"clyde,omitempty"`
+	ID                 string                      `json:"id"`
+	Object             string                      `json:"object"`
+	CreatedAt          int64                       `json:"created_at"`
+	Status             ResponsesStatus             `json:"status"`
+	Model              string                      `json:"model"`
+	Output             []ResponsesOutputItem       `json:"output"`
+	Usage              *ResponsesUsage             `json:"usage,omitempty"`
+	IncompleteDetails  *ResponsesIncompleteDetails `json:"incomplete_details"`
+	Error              *ResponsesError             `json:"error"`
+	Metadata           json.RawMessage             `json:"metadata"`
+	Instructions       json.RawMessage             `json:"instructions,omitempty"`
+	MaxOutputTokens    json.RawMessage             `json:"max_output_tokens,omitempty"`
+	ParallelToolCalls  json.RawMessage             `json:"parallel_tool_calls,omitempty"`
+	PreviousResponseID json.RawMessage             `json:"previous_response_id,omitempty"`
+	Reasoning          json.RawMessage             `json:"reasoning,omitempty"`
+	Store              json.RawMessage             `json:"store,omitempty"`
+	Temperature        json.RawMessage             `json:"temperature,omitempty"`
+	Text               json.RawMessage             `json:"text,omitempty"`
+	ToolChoice         json.RawMessage             `json:"tool_choice,omitempty"`
+	Tools              json.RawMessage             `json:"tools,omitempty"`
+	TopP               json.RawMessage             `json:"top_p,omitempty"`
+	Truncation         json.RawMessage             `json:"truncation,omitempty"`
+	User               json.RawMessage             `json:"user,omitempty"`
+	Clyde              *ResponsesClyde             `json:"clyde,omitempty"`
+}
+
+// ResponsesEcho stores the request values the documented Response object
+// repeats. Each field is raw JSON at this edge because the Responses
+// contract echoes the client's tool, text, and reasoning objects
+// unchanged, and those objects are external shapes the adapter forwards.
+type ResponsesEcho struct {
+	Instructions       json.RawMessage
+	MaxOutputTokens    json.RawMessage
+	Metadata           json.RawMessage
+	ParallelToolCalls  json.RawMessage
+	PreviousResponseID json.RawMessage
+	Reasoning          json.RawMessage
+	Store              json.RawMessage
+	Temperature        json.RawMessage
+	Text               json.RawMessage
+	ToolChoice         json.RawMessage
+	Tools              json.RawMessage
+	TopP               json.RawMessage
+	Truncation         json.RawMessage
+	User               json.RawMessage
+}
+
+// jsonNull is the JSON literal for an omitted nullable request field.
+var jsonNull = json.RawMessage(`null`)
+
+// NewResponsesEcho builds the documented echo values from a Responses
+// request. An omitted field takes its documented default. Clyde never
+// stores responses, so store is always false, and previous_response_id is
+// always null because Clyde rejects a request that sets it.
+func NewResponsesEcho(rr ResponsesRequest) ResponsesEcho {
+	return ResponsesEcho{
+		Instructions:       echoString(rr.Instructions),
+		MaxOutputTokens:    echoInt(rr.MaxOutputTokens),
+		Metadata:           echoRawOr(rr.Metadata, responsesMetadataEmpty),
+		ParallelToolCalls:  echoBool(rr.ParallelTools, true),
+		PreviousResponseID: jsonNull,
+		Reasoning:          echoReasoning(rr.Reasoning),
+		Store:              json.RawMessage(`false`),
+		Temperature:        echoNumber(rr.Temperature, 1),
+		Text:               echoRawOr(rr.Text, json.RawMessage(`{"format":{"type":"text"}}`)),
+		ToolChoice:         echoRawOr(rr.ToolChoice, json.RawMessage(`"auto"`)),
+		Tools:              echoRawOr(rr.Tools, json.RawMessage(`[]`)),
+		TopP:               echoNumber(rr.TopP, 1),
+		Truncation:         echoRawOr(echoString(rr.Truncation), json.RawMessage(`"disabled"`)),
+		User:               echoString(rr.User),
+	}
+}
+
+func echoRawOr(raw json.RawMessage, fallback json.RawMessage) json.RawMessage {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return fallback
+	}
+	return raw
+}
+
+func echoString(value *string) json.RawMessage {
+	if value == nil {
+		return jsonNull
+	}
+	return json.RawMessage(strconv.Quote(*value))
+}
+
+func echoInt(value *int) json.RawMessage {
+	if value == nil {
+		return jsonNull
+	}
+	return json.RawMessage(strconv.Itoa(*value))
+}
+
+func echoBool(value *bool, fallback bool) json.RawMessage {
+	selected := fallback
+	if value != nil {
+		selected = *value
+	}
+	return json.RawMessage(strconv.FormatBool(selected))
+}
+
+func echoNumber(value *float64, fallback float64) json.RawMessage {
+	selected := fallback
+	if value != nil {
+		selected = *value
+	}
+	return json.RawMessage(strconv.FormatFloat(selected, 'f', -1, 64))
+}
+
+func echoReasoning(reasoning *Reasoning) json.RawMessage {
+	if reasoning == nil {
+		return jsonNull
+	}
+	encoded, err := json.Marshal(reasoning)
+	if err != nil {
+		slog.Warn("adapter.openai.responses_reasoning_echo_failed", "concern", "adapter.chat.render", "err", err)
+		return jsonNull
+	}
+	return encoded
+}
+
+// applyResponsesEcho copies the documented echo values onto a response.
+func applyResponsesEcho(resp *ResponsesResponse, echo ResponsesEcho) {
+	resp.Instructions = echo.Instructions
+	resp.MaxOutputTokens = echo.MaxOutputTokens
+	resp.Metadata = echo.Metadata
+	resp.ParallelToolCalls = echo.ParallelToolCalls
+	resp.PreviousResponseID = echo.PreviousResponseID
+	resp.Reasoning = echo.Reasoning
+	resp.Store = echo.Store
+	resp.Temperature = echo.Temperature
+	resp.Text = echo.Text
+	resp.ToolChoice = echo.ToolChoice
+	resp.Tools = echo.Tools
+	resp.TopP = echo.TopP
+	resp.Truncation = echo.Truncation
+	resp.User = echo.User
 }
 
 // ResponsesClyde carries Clyde-specific extension data on the Responses
@@ -347,6 +479,9 @@ type ResponsesResponseParams struct {
 	Usage      *Usage
 	ItemIDBase string
 	Warnings   []adaptercompat.CompatibilityWarning
+	// Echo is the documented request echo. A nil Echo omits the echo
+	// fields.
+	Echo *ResponsesEcho
 }
 
 // BuildResponsesResponse assembles a Responses response object from the
@@ -370,19 +505,36 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 	}
 
 	incompleteDetails := responsesIncompleteDetails(params.Status, "")
-	return ResponsesResponse{
-		ID:                params.ID,
-		Object:            responsesObjectType,
-		CreatedAt:         params.CreatedAt,
-		Status:            params.Status,
-		Model:             params.Model,
-		Output:            output,
-		Usage:             usage,
-		IncompleteDetails: incompleteDetails,
-		Error:             nil,
-		Metadata:          responsesMetadataEmpty,
-		Clyde:             clyde,
+	resp := ResponsesResponse{
+		ID:                 params.ID,
+		Object:             responsesObjectType,
+		CreatedAt:          params.CreatedAt,
+		Status:             params.Status,
+		Model:              params.Model,
+		Output:             output,
+		Usage:              usage,
+		IncompleteDetails:  incompleteDetails,
+		Error:              nil,
+		Metadata:           responsesMetadataEmpty,
+		Instructions:       nil,
+		MaxOutputTokens:    nil,
+		ParallelToolCalls:  nil,
+		PreviousResponseID: nil,
+		Reasoning:          nil,
+		Store:              nil,
+		Temperature:        nil,
+		Text:               nil,
+		ToolChoice:         nil,
+		Tools:              nil,
+		TopP:               nil,
+		Truncation:         nil,
+		User:               nil,
+		Clyde:              clyde,
 	}
+	if params.Echo != nil {
+		applyResponsesEcho(&resp, *params.Echo)
+	}
+	return resp
 }
 
 func buildResponsesOutput(params ResponsesResponseParams) []ResponsesOutputItem {

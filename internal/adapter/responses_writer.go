@@ -50,6 +50,47 @@ type responsesStreamWriter struct {
 
 	toolStates map[int]*responsesStreamToolState
 	toolOrder  []int
+
+	// documented selects the documented Responses stream contract: request
+	// echo fields on every response snapshot, reasoning summary part
+	// events, and output_text logprobs arrays.
+	documented bool
+	echo       *adapteropenai.ResponsesEcho
+}
+
+// useDocumentedContract switches the writer to the documented Responses
+// stream contract with the given request echo. The caller sets it before
+// begin.
+func (p *responsesStreamWriter) useDocumentedContract(echo adapteropenai.ResponsesEcho) {
+	p.documented = true
+	p.echo = &echo
+}
+
+// documentedLogprobs returns the empty logprobs array the documented
+// output_text events require, or nil on the compatibility contract.
+func (p *responsesStreamWriter) documentedLogprobs() *[]adapteropenai.ResponsesTokenLogprob {
+	if !p.documented {
+		return nil
+	}
+	empty := []adapteropenai.ResponsesTokenLogprob{}
+	return &empty
+}
+
+// emitReasoningSummaryPart writes a reasoning_summary_part event on the
+// documented contract. The compatibility contract writes nothing.
+func (p *responsesStreamWriter) emitReasoningSummaryPart(name string, text string) error {
+	if !p.documented {
+		return nil
+	}
+	evt := adapteropenai.ResponsesReasoningSummaryPartEvent{
+		Type:           name,
+		ItemID:         p.reasoningItemID,
+		OutputIndex:    p.reasoningOutputIndex,
+		SummaryIndex:   0,
+		Part:           adapteropenai.ResponsesSummaryPart{Type: "summary_text", Text: text},
+		SequenceNumber: p.nextSeq(),
+	}
+	return p.marshalSend(name, evt)
 }
 
 type responsesStreamContentState struct {
@@ -106,6 +147,8 @@ func newResponsesStreamWriter(w http.ResponseWriter, responseID, model string, w
 		messageParts:         nil,
 		toolStates:           make(map[int]*responsesStreamToolState),
 		toolOrder:            nil,
+		documented:           false,
+		echo:                 nil,
 	}, nil
 }
 
@@ -266,7 +309,10 @@ func (p *responsesStreamWriter) openReasoning() error {
 		Type: "reasoning", ID: p.reasoningItemID, Status: p.reasoningStatus, Role: "",
 		Content: nil, Summary: []adapteropenai.ResponsesSummaryPart{}, CallID: "", Name: "", Arguments: "",
 	}
-	return p.emitOutputItem(adapteropenai.ResponsesEventOutputItemAdded, p.reasoningOutputIndex, item)
+	if err := p.emitOutputItem(adapteropenai.ResponsesEventOutputItemAdded, p.reasoningOutputIndex, item); err != nil {
+		return err
+	}
+	return p.emitReasoningSummaryPart(adapteropenai.ResponsesEventReasoningSummaryPartAdded, "")
 }
 
 func (p *responsesStreamWriter) closeReasoning(status adapteropenai.ResponsesOutputItemStatus) error {
@@ -285,6 +331,9 @@ func (p *responsesStreamWriter) closeReasoning(status adapteropenai.ResponsesOut
 		SequenceNumber: p.nextSeq(),
 	}
 	if err := p.marshalSend(adapteropenai.ResponsesEventReasoningSummaryDone, done); err != nil {
+		return err
+	}
+	if err := p.emitReasoningSummaryPart(adapteropenai.ResponsesEventReasoningSummaryPartDone, full); err != nil {
 		return err
 	}
 	item := adapteropenai.ResponsesOutputItem{
@@ -312,6 +361,7 @@ func (p *responsesStreamWriter) handleText(text string) error {
 		OutputIndex:    p.messageOutputIndex,
 		ContentIndex:   contentIndex,
 		Delta:          text,
+		Logprobs:       p.documentedLogprobs(),
 		SequenceNumber: p.nextSeq(),
 	}
 	return p.marshalSend(adapteropenai.ResponsesEventOutputTextDelta, evt)
@@ -340,9 +390,22 @@ func (p *responsesStreamWriter) handleRefusal(text string) error {
 	return p.marshalSend(adapteropenai.ResponsesEventRefusalDelta, evt)
 }
 
+// closeReasoningBeforeNextItem completes an open reasoning item before
+// another output item starts on the documented contract. The documented
+// stream finishes each output item before the next item begins.
+func (p *responsesStreamWriter) closeReasoningBeforeNextItem() error {
+	if !p.documented {
+		return nil
+	}
+	return p.closeReasoning(adapteropenai.ResponsesOutputItemStatusCompleted)
+}
+
 func (p *responsesStreamWriter) openMessage() error {
 	if p.messageOpen {
 		return nil
+	}
+	if err := p.closeReasoningBeforeNextItem(); err != nil {
+		return err
 	}
 	p.messageOpen = true
 	p.messageItemID = "msg_" + p.itemBase
@@ -394,7 +457,7 @@ func (p *responsesStreamWriter) closeMessage(status adapteropenai.ResponsesOutpu
 		if state.kind == "output_text" {
 			textDone := adapteropenai.ResponsesOutputTextDoneEvent{
 				Type: adapteropenai.ResponsesEventOutputTextDone, ItemID: p.messageItemID,
-				OutputIndex: p.messageOutputIndex, ContentIndex: contentIndex, Text: full, SequenceNumber: p.nextSeq(),
+				OutputIndex: p.messageOutputIndex, ContentIndex: contentIndex, Text: full, Logprobs: p.documentedLogprobs(), SequenceNumber: p.nextSeq(),
 			}
 			if err := p.marshalSend(adapteropenai.ResponsesEventOutputTextDone, textDone); err != nil {
 				return err
@@ -426,6 +489,11 @@ func (p *responsesStreamWriter) closeMessage(status adapteropenai.ResponsesOutpu
 
 func (p *responsesStreamWriter) handleToolCalls(toolCalls []adapteropenai.ToolCall) error {
 	for _, tc := range toolCalls {
+		if _, known := p.toolStates[tc.Index]; !known {
+			if err := p.closeReasoningBeforeNextItem(); err != nil {
+				return err
+			}
+		}
 		state, isNew := p.getOrCreateTool(tc)
 		if isNew {
 			item := adapteropenai.ResponsesOutputItem{
@@ -542,6 +610,7 @@ func (p *responsesStreamWriter) buildResponse(status adapteropenai.ResponsesStat
 		// sets Clyde on the first snapshot; buildResponse leaves it unset so
 		// terminal frames stay warning-free.
 		Warnings: nil,
+		Echo:     p.echo,
 	})
 }
 

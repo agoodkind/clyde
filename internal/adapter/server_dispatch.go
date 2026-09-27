@@ -601,6 +601,9 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	if r.Method != http.MethodPost {
 		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
+	if listenerFollowsDocumentedContract(ctx) {
+		return s.handleDocumentedLegacy(ctx, hctx)
+	}
 	var legacy struct {
 		Model           string `json:"model"`
 		Prompt          string `json:"prompt"`
@@ -633,6 +636,113 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	r.Header.Set("Content-Type", "application/json")
 	hctx.Request = r
 	return s.handleChat(ctx, hctx)
+}
+
+// handleDocumentedLegacy serves POST /v1/completions on the generic
+// OpenAI listener. It validates the legacy request, runs the prompt as a
+// one-message Chat Completions request, and rewrites the Chat output
+// into the legacy text_completion object and stream chunks.
+func (s *Server) handleDocumentedLegacy(ctx context.Context, hctx *handlerCtx) error {
+	r := hctx.Request
+	body, err := io.ReadAll(http.MaxBytesReader(hctx.Writer, r.Body, 8<<20))
+	if err != nil {
+		return adapterErrInvalidRequest("failed to read body", err)
+	}
+	fields, err := adapteropenai.DecodeFieldSet(body)
+	if err != nil {
+		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
+	}
+	var legacy adapteropenai.CompletionRequest
+	if err := json.Unmarshal(body, &legacy); err != nil {
+		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
+	}
+	prompt, rejectErr := legacyCompletionPrompt(legacy, fields)
+	if rejectErr != nil {
+		return rejectErr
+	}
+	chatBody, err := json.Marshal(legacyChatRequest(legacy, prompt))
+	if err != nil {
+		return adapterErrInternal("serialize legacy completion request", err)
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(chatBody)))
+	r.ContentLength = int64(len(chatBody))
+	r.Header.Set("Content-Type", "application/json")
+	hctx.Request = r
+	includeUsage := legacy.StreamOptions != nil && legacy.StreamOptions.IncludeUsage
+	writer := adapteropenai.NewLegacyCompletionWriter(hctx.Writer, includeUsage)
+	hctx.Writer = writer
+	if chatErr := s.handleChat(ctx, hctx); chatErr != nil {
+		return chatErr
+	}
+	if finishErr := writer.Finish(); finishErr != nil {
+		return adapterErrInternal("write legacy completion", finishErr)
+	}
+	return nil
+}
+
+// legacyCompletionPrompt rejects legacy request fields Clyde cannot honor
+// and returns the single prompt string.
+func legacyCompletionPrompt(legacy adapteropenai.CompletionRequest, fields adapteropenai.ResponsesFieldSet) (string, *adapterError) {
+	if unknown := fields.UnknownCompletionKeys(); len(unknown) > 0 {
+		return "", adapterErrRejectedParameter(adaptercompat.Rejection{
+			Code:    adaptercompat.RejectionCodeUnknownParameter,
+			Param:   unknown[0],
+			Message: "Unrecognized request argument supplied: " + unknown[0],
+		})
+	}
+	unsupported := []struct {
+		param   string
+		present bool
+	}{
+		{param: "suffix", present: legacy.Suffix != nil && *legacy.Suffix != ""},
+		{param: "echo", present: legacy.Echo != nil && *legacy.Echo},
+		{param: "logprobs", present: legacy.Logprobs != nil},
+		{param: "best_of", present: legacy.BestOf != nil && *legacy.BestOf > 1},
+		{param: "n", present: legacy.N != nil && *legacy.N > 1},
+	}
+	for _, field := range unsupported {
+		if field.present {
+			return "", adapterErrRejectedParameter(adaptercompat.Rejection{
+				Code:    adaptercompat.RejectionCodeUnsupportedParameter,
+				Param:   field.param,
+				Message: "Unsupported parameter: '" + field.param + "' is not supported by Clyde.",
+			})
+		}
+	}
+	prompt, err := legacy.PromptText()
+	if err != nil {
+		return "", adapterErrRejectedParameter(adaptercompat.Rejection{
+			Code:    adaptercompat.RejectionCodeUnsupportedParameter,
+			Param:   "prompt",
+			Message: err.Error(),
+		})
+	}
+	return prompt, nil
+}
+
+// legacyChatRequest builds the one-message Chat Completions request that
+// runs a legacy prompt. The Chat request validation then rejects any
+// forwarded field the resolved provider cannot honor.
+func legacyChatRequest(legacy adapteropenai.CompletionRequest, prompt string) ChatRequest {
+	var chat ChatRequest
+	chat.Model = legacy.Model
+	chat.Messages = []ChatMessage{{
+		Role:    "user",
+		Content: json.RawMessage(strconv.Quote(prompt)), Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
+	}}
+	chat.Stream = legacy.Stream
+	chat.StreamOptions = legacy.StreamOptions
+	chat.MaxTokens = legacy.MaxTokens
+	chat.Temperature = legacy.Temperature
+	chat.TopP = legacy.TopP
+	chat.Stop = legacy.Stop
+	chat.PresencePenalty = legacy.PresencePenalty
+	chat.FrequencyPenalty = legacy.FrequencyPenalty
+	chat.LogitBias = legacy.LogitBias
+	chat.Seed = legacy.Seed
+	chat.User = legacy.User
+	chat.ReasoningEffort = legacy.ReasoningEffort
+	return chat
 }
 
 func forceStreamUsageOptIn(req *ChatRequest) {

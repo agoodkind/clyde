@@ -19,8 +19,14 @@ const (
 	ResponsesEventRefusalDone           = "response.refusal.done"
 	ResponsesEventReasoningSummaryDelta = "response.reasoning_summary_text.delta"
 	ResponsesEventReasoningSummaryDone  = "response.reasoning_summary_text.done"
-	ResponsesEventFunctionArgsDelta     = "response.function_call_arguments.delta"
-	ResponsesEventFunctionArgsDone      = "response.function_call_arguments.done"
+	// ResponsesEventReasoningSummaryPartAdded opens one reasoning summary
+	// part before its text deltas.
+	ResponsesEventReasoningSummaryPartAdded = "response.reasoning_summary_part.added"
+	// ResponsesEventReasoningSummaryPartDone closes one reasoning summary
+	// part after its text is complete.
+	ResponsesEventReasoningSummaryPartDone = "response.reasoning_summary_part.done"
+	ResponsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
+	ResponsesEventFunctionArgsDone         = "response.function_call_arguments.done"
 )
 
 // ResponsesStreamEvent is the closed set of typed Responses SSE event
@@ -59,25 +65,48 @@ type ResponsesContentPartEvent struct {
 	SequenceNumber int                  `json:"sequence_number"`
 }
 
+// ResponsesTokenLogprob is one token log probability on an output_text
+// event. No Clyde provider reports token log probabilities. The
+// documented logprobs array is always empty.
+type ResponsesTokenLogprob struct {
+	Token   string  `json:"token"`
+	Logprob float64 `json:"logprob"`
+}
+
 // ResponsesOutputTextDeltaEvent is the frame shape for
-// output_text.delta.
+// output_text.delta. Logprobs is nil on the compatibility listener, and
+// the encoder omits it there. The documented contract requires the array.
 type ResponsesOutputTextDeltaEvent struct {
-	Type           string `json:"type"`
-	ItemID         string `json:"item_id"`
-	OutputIndex    int    `json:"output_index"`
-	ContentIndex   int    `json:"content_index"`
-	Delta          string `json:"delta"`
-	SequenceNumber int    `json:"sequence_number"`
+	Type           string                   `json:"type"`
+	ItemID         string                   `json:"item_id"`
+	OutputIndex    int                      `json:"output_index"`
+	ContentIndex   int                      `json:"content_index"`
+	Delta          string                   `json:"delta"`
+	Logprobs       *[]ResponsesTokenLogprob `json:"logprobs,omitempty"`
+	SequenceNumber int                      `json:"sequence_number"`
 }
 
 // ResponsesOutputTextDoneEvent is the frame shape for output_text.done.
+// Logprobs follows the same listener rule as the delta event.
 type ResponsesOutputTextDoneEvent struct {
-	Type           string `json:"type"`
-	ItemID         string `json:"item_id"`
-	OutputIndex    int    `json:"output_index"`
-	ContentIndex   int    `json:"content_index"`
-	Text           string `json:"text"`
-	SequenceNumber int    `json:"sequence_number"`
+	Type           string                   `json:"type"`
+	ItemID         string                   `json:"item_id"`
+	OutputIndex    int                      `json:"output_index"`
+	ContentIndex   int                      `json:"content_index"`
+	Text           string                   `json:"text"`
+	Logprobs       *[]ResponsesTokenLogprob `json:"logprobs,omitempty"`
+	SequenceNumber int                      `json:"sequence_number"`
+}
+
+// ResponsesReasoningSummaryPartEvent is the frame shape for
+// reasoning_summary_part.added and reasoning_summary_part.done.
+type ResponsesReasoningSummaryPartEvent struct {
+	Type           string               `json:"type"`
+	ItemID         string               `json:"item_id"`
+	OutputIndex    int                  `json:"output_index"`
+	SummaryIndex   int                  `json:"summary_index"`
+	Part           ResponsesSummaryPart `json:"part"`
+	SequenceNumber int                  `json:"sequence_number"`
 }
 
 // ResponsesRefusalDeltaEvent is the frame shape for refusal.delta.
@@ -154,3 +183,4 @@ func (ResponsesReasoningSummaryDeltaEvent) isResponsesStreamEvent() {}
 func (ResponsesReasoningSummaryDoneEvent) isResponsesStreamEvent()  {}
 func (ResponsesFunctionArgsDeltaEvent) isResponsesStreamEvent()     {}
 func (ResponsesFunctionArgsDoneEvent) isResponsesStreamEvent()      {}
+func (ResponsesReasoningSummaryPartEvent) isResponsesStreamEvent()  {}

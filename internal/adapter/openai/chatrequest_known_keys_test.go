@@ -44,6 +44,22 @@ func TestResponsesRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	}
 }
 
+// TestCompletionRequestJSONTagsMatchKnownKeys is the same drift check for
+// the legacy Completions request.
+func TestCompletionRequestJSONTagsMatchKnownKeys(t *testing.T) {
+	actual := structJSONTags(reflect.TypeOf(CompletionRequest{}))
+	for key := range actual {
+		if !knownCompletionRequestKeys[key] {
+			t.Errorf("CompletionRequest serializes JSON key %q absent from knownCompletionRequestKeys", key)
+		}
+	}
+	for key := range knownCompletionRequestKeys {
+		if !actual[key] {
+			t.Errorf("knownCompletionRequestKeys lists %q but CompletionRequest no longer serializes that JSON key", key)
+		}
+	}
+}
+
 // chatRequestJSONTags reflects the ChatRequest struct into the set of
 // JSON key names it serializes, dropping the omitempty suffix and any
 // field tagged json:"-".

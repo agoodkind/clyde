@@ -531,6 +531,200 @@ func TestOpenAIConformanceResponsesAcceptsDocumentedDefaults(t *testing.T) {
 	drainConformanceRequest(t, upstream)
 }
 
+// codexReasoningSSEBody streams a reasoning summary, one text delta, and
+// a completed event.
+func codexReasoningSSEBody() string {
+	return "event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-conformance\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"rs_up\",\"type\":\"reasoning\",\"summary\":[]}}\n\n" +
+		"event: response.reasoning_summary_text.delta\n" +
+		"data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_up\",\"output_index\":0,\"summary_index\":0,\"delta\":\"thinking\"}\n\n" +
+		"event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_up\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"thinking\"}]}}\n\n" +
+		"event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-conformance\",\"usage\":" + conformanceUsageWithReasoning + "}}\n\n"
+}
+
+// responsesStreamEvents returns the SSE event names and JSON payloads in
+// order.
+func responsesStreamEvents(t *testing.T, body []byte) ([]string, []map[string]json.RawMessage) {
+	t.Helper()
+	var names []string
+	var payloads []map[string]json.RawMessage
+	for _, frame := range strings.Split(string(body), "\n\n") {
+		var name string
+		for _, line := range strings.Split(frame, "\n") {
+			if value, ok := strings.CutPrefix(line, "event: "); ok {
+				name = value
+			}
+			if value, ok := strings.CutPrefix(line, "data: "); ok {
+				names = append(names, name)
+				payloads = append(payloads, decodeJSONObject(t, []byte(value)))
+			}
+		}
+	}
+	return names, payloads
+}
+
+func indexOfEvent(names []string, name string) int {
+	for index, candidate := range names {
+		if candidate == name {
+			return index
+		}
+	}
+	return -1
+}
+
+func TestOpenAIConformanceResponsesStreamEventsAndEcho(t *testing.T) {
+	upstream := &conformanceUpstream{
+		requests: make(chan adaptercodex.HTTPTransportRequest, 4),
+		reply: func(writer http.ResponseWriter) {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = writer.Write([]byte(codexReasoningSSEBody()))
+		},
+	}
+	listeners := startConformanceServer(t, upstream)
+	body := `{"model":"gpt-future","input":"hi","stream":true,"instructions":"be brief"}`
+
+	stream := postConformance(t, listeners.openAI+"/v1/responses", body)
+	if stream.status != http.StatusOK {
+		t.Fatalf("stream status = %d; body=%s", stream.status, stream.body)
+	}
+	drainConformanceRequest(t, upstream)
+	names, payloads := responsesStreamEvents(t, stream.body)
+	ordered := []string{
+		"response.created",
+		"response.in_progress",
+		"response.output_item.added",
+		"response.reasoning_summary_part.added",
+		"response.reasoning_summary_text.delta",
+		"response.reasoning_summary_text.done",
+		"response.reasoning_summary_part.done",
+		"response.output_text.delta",
+		"response.output_text.done",
+		"response.content_part.done",
+		"response.completed",
+	}
+	previous := -1
+	for _, name := range ordered {
+		index := indexOfEvent(names, name)
+		if index <= previous {
+			t.Fatalf("event %s at %d, want after %d; events=%v", name, index, previous, names)
+		}
+		previous = index
+	}
+	for index, name := range names {
+		payload := payloads[index]
+		requireMember(t, payload, "sequence_number")
+		if name == "response.output_text.delta" || name == "response.output_text.done" {
+			if string(requireMember(t, payload, "logprobs")) != "[]" {
+				t.Fatalf("%s logprobs = %s, want []", name, payload["logprobs"])
+			}
+		}
+	}
+	completed := decodeJSONObject(t, payloads[indexOfEvent(names, "response.completed")]["response"])
+	for _, key := range []string{"parallel_tool_calls", "tool_choice", "tools", "temperature", "top_p", "store", "text", "truncation", "previous_response_id", "max_output_tokens", "reasoning", "user"} {
+		requireMember(t, completed, key)
+	}
+	if string(completed["instructions"]) != `"be brief"` || string(completed["store"]) != "false" {
+		t.Fatalf("completed echo instructions=%s store=%s", completed["instructions"], completed["store"])
+	}
+	usage := decodeJSONObject(t, completed["usage"])
+	if string(decodeJSONObject(t, usage["output_tokens_details"])["reasoning_tokens"]) != "7" {
+		t.Fatalf("completed usage = %s, want reasoning_tokens 7", completed["usage"])
+	}
+
+	// The Cursor listener keeps the compatibility stream shape.
+	cursor := postConformance(t, listeners.cursor+"/v1/responses", body)
+	drainConformanceRequest(t, upstream)
+	cursorNames, cursorPayloads := responsesStreamEvents(t, cursor.body)
+	if indexOfEvent(cursorNames, "response.reasoning_summary_part.added") >= 0 {
+		t.Fatalf("cursor stream gained reasoning_summary_part events: %v", cursorNames)
+	}
+	if _, present := cursorPayloads[indexOfEvent(cursorNames, "response.output_text.delta")]["logprobs"]; present {
+		t.Fatal("cursor output_text.delta gained logprobs")
+	}
+	cursorCompleted := decodeJSONObject(t, cursorPayloads[indexOfEvent(cursorNames, "response.completed")]["response"])
+	if _, present := cursorCompleted["parallel_tool_calls"]; present {
+		t.Fatal("cursor response object gained request echo fields")
+	}
+}
+
+func TestOpenAIConformanceLegacyCompletions(t *testing.T) {
+	upstream := newConformanceUpstream(conformanceUsageWithReasoning)
+	listeners := startConformanceServer(t, upstream)
+
+	completion := postConformance(t, listeners.openAI+"/v1/completions", `{"model":"gpt-future","prompt":"say ok"}`)
+	if completion.status != http.StatusOK {
+		t.Fatalf("completion status = %d; body=%s", completion.status, completion.body)
+	}
+	drainConformanceRequest(t, upstream)
+	var response adapteropenai.CompletionResponse
+	if err := json.Unmarshal(completion.body, &response); err != nil {
+		t.Fatalf("decode completion: %v", err)
+	}
+	if response.Object != "text_completion" || !strings.HasPrefix(response.ID, "cmpl-") || len(response.Choices) != 1 {
+		t.Fatalf("completion = %s, want one text_completion choice", completion.body)
+	}
+	if response.Choices[0].Text != "ok" || response.Choices[0].FinishReason == nil || *response.Choices[0].FinishReason != "stop" {
+		t.Fatalf("completion choice = %+v, want text ok and finish_reason stop", response.Choices[0])
+	}
+	if string(response.Choices[0].Logprobs) != "null" || response.Usage == nil || response.Usage.TotalTokens != 24 {
+		t.Fatalf("completion logprobs/usage = %s", completion.body)
+	}
+
+	stream := postConformance(t, listeners.openAI+"/v1/completions", `{"model":"gpt-future","prompt":["say ok"],"stream":true,"stream_options":{"include_usage":true}}`)
+	if stream.status != http.StatusOK {
+		t.Fatalf("stream status = %d; body=%s", stream.status, stream.body)
+	}
+	drainConformanceRequest(t, upstream)
+	chunks := requireSingleTrailingDone(t, sseDataFrames(t, stream.body))
+	text := ""
+	for index, chunk := range chunks {
+		object := decodeJSONObject(t, []byte(chunk))
+		if string(requireMember(t, object, "object")) != `"text_completion"` {
+			t.Fatalf("chunk %d object = %s, want text_completion", index, object["object"])
+		}
+		usage := requireMember(t, object, "usage")
+		if index < len(chunks)-1 {
+			if string(usage) != "null" {
+				t.Fatalf("chunk %d usage = %s, want null", index, usage)
+			}
+			var parsed adapteropenai.CompletionResponse
+			if err := json.Unmarshal([]byte(chunk), &parsed); err != nil || len(parsed.Choices) != 1 {
+				t.Fatalf("chunk %d = %s, want one choice", index, chunk)
+			}
+			text += parsed.Choices[0].Text
+			continue
+		}
+		if string(object["choices"]) != "[]" || string(usage) == "null" {
+			t.Fatalf("final chunk = %s, want empty choices and usage", chunk)
+		}
+	}
+	if text != "ok" {
+		t.Fatalf("streamed text = %q, want ok", text)
+	}
+
+	for _, rejected := range []struct {
+		body  string
+		param string
+	}{
+		{body: `{"model":"gpt-future","prompt":[1,2,3]}`, param: "prompt"},
+		{body: `{"model":"gpt-future","prompt":"x","suffix":"tail"}`, param: "suffix"},
+		{body: `{"model":"gpt-future","prompt":"x","max_tokens":5}`, param: "max_tokens"},
+	} {
+		response := postConformance(t, listeners.openAI+"/v1/completions", rejected.body)
+		rejection := decodeErrorEnvelope(t, response.body)
+		if response.status != http.StatusBadRequest || rejection.Param != rejected.param {
+			t.Fatalf("legacy %s = %d %+v, want 400 for %s", rejected.body, response.status, rejection, rejected.param)
+		}
+		requireNoUpstreamRequest(t, upstream)
+	}
+}
+
 func TestOpenAIConformanceChatAcceptsDocumentedDefaults(t *testing.T) {
 	upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
 	listeners := startConformanceServer(t, upstream)
