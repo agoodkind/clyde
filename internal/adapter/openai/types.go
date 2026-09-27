@@ -405,8 +405,10 @@ type Usage struct {
 }
 
 // PromptTokensDetails is part of Clyde's typed adapter surface.
+// CacheWriteTokens is nil when the provider did not report cache writes.
 type PromptTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens     int  `json:"cached_tokens"`
+	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
 }
 
 // CompletionTokensDetails is the Chat Completions breakdown of output

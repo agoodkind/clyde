@@ -430,9 +430,12 @@ type ResponsesUsage struct {
 	OutputTokensDetails *ResponsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
-// ResponsesInputTokensDetails stores the cached-prompt token count.
+// ResponsesInputTokensDetails stores the cached-prompt and cache-write
+// token counts. CacheWriteTokens is nil when the provider did not report
+// cache writes.
 type ResponsesInputTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens     int  `json:"cached_tokens"`
+	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
 }
 
 // ResponsesOutputTokensDetails stores the reasoning token count.
@@ -448,7 +451,10 @@ type ResponsesOutputTokensDetails struct {
 func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
 	var inputDetails *ResponsesInputTokensDetails
 	if usage.PromptTokensDetails != nil {
-		inputDetails = &ResponsesInputTokensDetails{CachedTokens: usage.PromptTokensDetails.CachedTokens}
+		inputDetails = &ResponsesInputTokensDetails{
+			CachedTokens:     usage.PromptTokensDetails.CachedTokens,
+			CacheWriteTokens: usage.PromptTokensDetails.CacheWriteTokens,
+		}
 	}
 	var outputDetails *ResponsesOutputTokensDetails
 	if usage.CompletionTokensDetails != nil {

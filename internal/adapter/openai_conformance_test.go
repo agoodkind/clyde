@@ -20,8 +20,9 @@ import (
 // upstream, and asserts the raw wire output a client receives.
 
 // conformanceUsageWithReasoning is a Codex response.completed usage object
-// that reports seven reasoning tokens.
-const conformanceUsageWithReasoning = `{"input_tokens":11,"output_tokens":13,"total_tokens":24,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":7}}`
+// that reports seven reasoning tokens, three cached tokens, and two cache
+// write tokens.
+const conformanceUsageWithReasoning = `{"input_tokens":11,"output_tokens":13,"total_tokens":24,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},"output_tokens_details":{"reasoning_tokens":7}}`
 
 // conformanceUsageWithoutDetails is a Codex usage object that reports no
 // token breakdown.
@@ -441,6 +442,12 @@ func TestOpenAIConformanceChatRejectsFieldsBeforeProviderRequest(t *testing.T) {
 			wantCode:  "invalid_parameter",
 			wantParam: "stream_options",
 		},
+		{
+			name:      "documented field without a provider path",
+			body:      `{"model":"gpt-future","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`,
+			wantCode:  "unsupported_parameter",
+			wantParam: "verbosity",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -500,6 +507,12 @@ func TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
 			listeners := startConformanceServer(t, upstream)
+
+			stored := postConformance(t, listeners.openAI+"/v1/responses", `{"model":"gpt-future","input":"hi","previous_response_id":"resp_prior"}`)
+			if stored.status != http.StatusBadRequest || decodeErrorEnvelope(t, stored.body).Type != "invalid_request_error" {
+				t.Fatalf("previous_response_id = %d %s, want 400", stored.status, stored.body)
+			}
+			requireNoUpstreamRequest(t, upstream)
 
 			rejected := postConformance(t, listeners.openAI+"/v1/responses", test.body)
 			rejection := decodeErrorEnvelope(t, rejected.body)
@@ -725,6 +738,42 @@ func TestOpenAIConformanceLegacyCompletions(t *testing.T) {
 	}
 }
 
+func TestOpenAIConformanceChatMidStreamFailure(t *testing.T) {
+	upstream := &conformanceUpstream{
+		requests: make(chan adaptercodex.HTTPTransportRequest, 4),
+		reply: func(writer http.ResponseWriter) {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = writer.Write([]byte("event: response.output_text.delta\n" +
+				"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n" +
+				"event: response.failed\n" +
+				"data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp-conformance\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"upstream stopped midstream\"}}}\n\n"))
+		},
+	}
+	listeners := startConformanceServer(t, upstream)
+	body := `{"model":"gpt-future","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+
+	for _, listener := range []struct {
+		name     string
+		baseURL  string
+		wantType string
+	}{
+		{name: "openai", baseURL: listeners.openAI, wantType: "server_error"},
+		{name: "cursor", baseURL: listeners.cursor, wantType: "invalid_request_error"},
+	} {
+		stream := postConformance(t, listener.baseURL+"/v1/chat/completions", body)
+		drainConformanceRequest(t, upstream)
+		if stream.status != http.StatusOK {
+			t.Fatalf("%s stream status = %d; body=%s", listener.name, stream.status, stream.body)
+		}
+		frames := requireSingleTrailingDone(t, sseDataFrames(t, stream.body))
+		errorFrame := decodeJSONObject(t, []byte(frames[len(frames)-1]))
+		failure := decodeErrorEnvelope(t, []byte(frames[len(frames)-1]))
+		if _, present := errorFrame["error"]; !present || failure.Type != listener.wantType {
+			t.Fatalf("%s final frame = %s, want an error with type %s", listener.name, frames[len(frames)-1], listener.wantType)
+		}
+	}
+}
+
 func TestOpenAIConformanceChatAcceptsDocumentedDefaults(t *testing.T) {
 	upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
 	listeners := startConformanceServer(t, upstream)
@@ -754,8 +803,9 @@ func TestOpenAIConformanceReportsUpstreamReasoningTokens(t *testing.T) {
 		if reasoning == nil || reasoning.ReasoningTokens != 7 {
 			t.Fatalf("chat completion_tokens_details = %+v, want reasoning_tokens 7; body=%s", reasoning, chat.body)
 		}
-		if completion.Usage.PromptTokensDetails == nil || completion.Usage.PromptTokensDetails.CachedTokens != 3 {
-			t.Fatalf("chat prompt_tokens_details = %+v, want cached_tokens 3", completion.Usage.PromptTokensDetails)
+		promptDetails := completion.Usage.PromptTokensDetails
+		if promptDetails == nil || promptDetails.CachedTokens != 3 || promptDetails.CacheWriteTokens == nil || *promptDetails.CacheWriteTokens != 2 {
+			t.Fatalf("chat prompt_tokens_details = %s, want cached_tokens 3 and cache_write_tokens 2", chat.body)
 		}
 	}
 

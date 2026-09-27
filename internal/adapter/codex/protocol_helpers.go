@@ -256,7 +256,10 @@ func mapUsage(c completedResponse) adapteropenai.Usage {
 		TotalTokens:      usage.TotalTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
 	}
 	if usage.InputTokensDetails != nil {
-		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: usage.InputTokensDetails.CachedTokens}
+		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{
+			CachedTokens:     usage.InputTokensDetails.CachedTokens,
+			CacheWriteTokens: usage.InputTokensDetails.CacheWriteTokens,
+		}
 	}
 	if usage.OutputTokensDetails != nil {
 		u.CompletionTokensDetails = &adapteropenai.CompletionTokensDetails{ReasoningTokens: usage.OutputTokensDetails.ReasoningTokens}

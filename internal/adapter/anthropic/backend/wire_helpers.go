@@ -491,7 +491,7 @@ func UsageFromAnthropic(a anthropic.Usage) adapteropenai.Usage {
 		CacheWriteTokens: a.CacheCreationInputTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, MaxTokens: 0,
 	}
 	if a.CacheReadInputTokens > 0 {
-		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: a.CacheReadInputTokens}
+		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: a.CacheReadInputTokens, CacheWriteTokens: nil}
 	}
 	return u
 }
