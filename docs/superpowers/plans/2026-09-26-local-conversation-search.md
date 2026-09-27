@@ -95,20 +95,20 @@ Files:
 
 Behavior:
 
-- Clyde converts `SearchConversationsOptions` into a typed retrieval request. It resolves conversation and workspace scopes, validates bounds, and includes provider, role, time, archive, minimum score, and per-conversation restrictions. An empty workspace scope returns an empty result without querying a backend.
-- Backends execute scalar restrictions while selecting candidates and return ranked hit IDs, message indexes, row kinds, passage positions, scores, and load rules. Clyde checks current raw records, deduplicates passages, applies visibility, offset, limits, facets, freshness, and typed errors. A backend error never becomes an empty success.
+- Clyde converts `SearchConversationsOptions` into a typed retrieval request. It resolves provider, conversation, workspace, visibility, and archive scope into the allowed conversation set from one raw-index snapshot. It validates bounds and adds role, time, minimum score, and per-conversation restrictions. An empty allowed set returns an empty result without querying a backend.
+- Backends follow the deterministic search contract in the [design specification](../specs/2026-09-22-local-conversation-search-design.md). They apply every restriction while selecting candidates, rank once per query, and walk that ranking for the minimum score, the per-conversation cap, and the requested window. They return ranked hit IDs, message indexes, row kinds, passage positions, scores, and load rules. Clyde hydrates hits from the same snapshot and applies offset, facets, freshness, and typed errors without dropping hits. A backend error never becomes an empty success.
 
 Steps:
 
-1. Extract `engineSearchFilter` into Clyde's filter preparation. Preserve workspace prefix matching and the empty-scope short circuit.
-2. Extract `resolveEngineHits` and `semanticSearchResult` into a common hit resolver. Deduplicate repeated passages before offset and per-conversation limits. Use a stable secondary key for equal scores. Keep bounded overfetch for hidden or stale hits.
+1. Extract `engineSearchFilter` into Clyde's filter preparation. Preserve workspace prefix matching and the empty-scope short circuit. Add visibility and archive scope to the allowed set.
+2. Extract `resolveEngineHits` and `semanticSearchResult` into a common hit resolver that hydrates without filtering. Remove the bounded overfetch for hidden or stale hits.
 3. Keep LMS RPC conversion and upstream error classification in its adapter. Preserve `conversationSearchSourceError` mapping at the public boundary.
 4. Run CLYDE-643's side-by-side queries for provider, workspace, conversation, role, time, archive, score, offset, and per-conversation limit. Keep the existing CLI and MCP operation.
 
 Verification:
 
 - Run: `go test ./internal/daemon/... ./internal/conversation/... -run 'Search|Filter' -count=1`.
-- Expect: LMS returns the existing public result shape and filter behavior, including `has_more` after bounded overfetch. An LMS query error retains its typed status.
+- Expect: LMS returns the existing public result shape. `has_more` is true exactly when the ranking has allowed rows after the page. An LMS query error retains its typed status.
 
 ### 4. Bundle the local model and split passages (CLYDE-753)
 
@@ -180,17 +180,17 @@ Files:
 
 Behavior:
 
-- The local backend scores only allowed candidates, applies minimum score after scoring, and returns ranked passage hits. Clyde groups winning hits by conversation and reads selected source fields through the existing loader. It renders the matched passage span, then uses the original message index and load rules for the context window.
-- Clyde excludes hidden, missing, and disallowed archived records before paging. It deduplicates local passages from one message before per-conversation limits, offset, and page limit. Preserve LMS ordering during the generic cutover. Equal scores use a stable secondary key. CLI and MCP return the existing matches, facets, freshness, filter accounting, and `has_more` fields.
+- The local backend scores every passage of the allowed candidate set, applies minimum score after scoring, and returns ranked passage hits. Clyde groups winning hits by conversation and reads selected source fields through the existing loader. It renders the matched passage span, then uses the original message index and load rules for the context window.
+- Hidden, missing, and disallowed archived conversations are absent from the allowed candidate set. The ranking walk keeps the highest-scoring passage of each source row, then applies the per-conversation limit and the page window. Equal scores use the row key and passage ordinal as a stable secondary key. CLI and MCP return the existing matches, facets, freshness, filter accounting, and `has_more` fields.
 - Add a `SEARCH_SOURCE_LOCAL` value outside the proto's reserved 2 and 3 slots. Map it through domain, daemon response, and client rendering; leave `SEARCH_SOURCE_SEMANTIC` for LMS. `controlServer.SearchConversations` currently overwrites source freshness with its LMS snapshot. Select the local worker's snapshot for local results. Add the selected backend to `SemanticStatus`; report local index readiness as its connection state, with zero LMS retry counters in local mode.
 - Local mode makes no LMS dial. Selected LMS returns the typed unavailable error when down and never opens the local index. Ingestion-only mode updates without serving search. Search-only mode reads an existing index without updating it.
 
 Steps:
 
-1. Implement bounded candidate scoring and stable ranking. Return row kind, passage ordinal, and source span for accurate text, tool, or thinking snippets.
+1. Score every allowed passage and rank with the stable secondary key. Return row kind, passage ordinal, and source span for accurate text, tool, or thinking snippets.
 2. Register local ingestion and search adapters at daemon startup. Attach model sessions and background work to `livetrack`. Preserve zero-bind-gap reload on backend changes.
 3. Add an isolated live test with real temporary Claude, Codex, and Cursor artifacts, the bundled model, temporary XDG directories, the daemon, the CLI command, and the MCP tool. Assert user-visible results through both public boundaries.
-4. Cover long text near a passage end, tool-only content, selected thinking, empty content, combined filters, archive visibility, pagination, restart, and selected LMS outage. Compare CLI and MCP conversation IDs and message indexes for the same request.
+4. Cover long text near a passage end, tool-only content, selected thinking, empty content, combined filters, archive visibility, a visible match ranked below many hidden matches, prefix stability across limits, pagination, restart, and selected LMS outage. Compare CLI and MCP conversation IDs and message indexes for the same request.
 5. Document `backend`, both independent switches, local index location, install behavior, and selected-LMS outage behavior.
 
 Verification:
