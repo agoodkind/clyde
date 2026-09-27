@@ -88,11 +88,12 @@ func (s *Server) dispatchAnthropicProviderStream(
 	if err != nil {
 		return adapterErrInternal(err.Error(), err)
 	}
+	includeUsage := resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage
+	streamWriter.configureStreamUsage(includeUsage)
 	ctx, lifecycle := s.beginProviderRequestLifecycle(ctx, &resolvedReq, "oauth", reqID, resolvedReq.Model, true)
 	streamWriter.onStreamOpened = func() { lifecycle.streamOpened(ctx) }
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
 	lifecycle.terminal(ctx, result, runErr)
-	includeUsage := resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage
 	// Anthropic streams sometimes end with a non-nil runErr after the
 	// answer text has fully streamed (a late SSE error frame, a
 	// scanner error, or a non-clean upstream close). When that

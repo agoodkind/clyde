@@ -61,7 +61,9 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	}
 	handledNative, nativeErr := s.tryDispatchNativeCodexResponses(ctx, w, r, reqID, wireBody, body, corr)
 	if nativeErr != nil {
-		return nativeErr
+		// tryDispatchNativeCodexResponses returns an error only after it
+		// classifies the request for native Codex raw forwarding.
+		return markRawForwardingError(nativeErr)
 	}
 	if handledNative {
 		return nil
@@ -265,7 +267,7 @@ func (s *Server) dispatchNativeCodexResponses(
 		if v2Recovery != nil {
 			v2Recovery.ReleaseRecovery()
 		}
-		s.respondAdapterError(w, r, codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured))
+		s.respondAdapterError(w, r, markRawForwardingError(codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured)))
 		return
 	}
 	ctx, lifecycle := s.beginProviderRequestLifecycle(r.Context(), &resolved, "direct", requestID, resolved.Model, raw.Stream)
@@ -278,7 +280,7 @@ func (s *Server) dispatchNativeCodexResponses(
 		}
 		var result adapterprovider.Result
 		lifecycle.terminal(ctx, result, err)
-		s.respondAdapterError(w, r, codexProviderAdapterError(err))
+		s.respondAdapterError(w, r, markRawForwardingError(codexProviderAdapterError(err)))
 		return
 	}
 	streamingResponse := strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") ||

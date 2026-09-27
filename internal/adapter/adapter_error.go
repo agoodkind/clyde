@@ -216,11 +216,47 @@ func (e *adapterError) applyDefaults() {
 	}
 }
 
+// rawForwardingError marks an error from a request that the adapter
+// classified for raw upstream forwarding. The boundary renders it with
+// the family's compatibility contract on every listener. Raw forwarding
+// keeps its existing error contract, and the documented contract applies
+// only to requests the adapter projects itself.
+type rawForwardingError struct {
+	cause error
+}
+
+func (e *rawForwardingError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *rawForwardingError) Unwrap() error {
+	return e.cause
+}
+
+// markRawForwardingError wraps err as a raw forwarding error. A nil err
+// stays nil.
+func markRawForwardingError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &rawForwardingError{cause: err}
+}
+
+// errorContractForRequest selects the contract for one error response.
+// A raw forwarding error keeps the compatibility contract. Every other
+// error uses the contract of the listener the request arrived on.
+func errorContractForRequest(ctx context.Context, family adapterRouteFamily, err error) errcontract.ClientContract {
+	var forwarding *rawForwardingError
+	if errors.As(err, &forwarding) {
+		return errcontract.ClientContractCompatibility
+	}
+	return errorContractForListener(ctx, family)
+}
+
 // errorContractForListener selects the client error contract from the
 // listener the request arrived on. An OpenAI family request on the
-// generic OpenAI listener uses the documented OpenAI contract. The Cursor
-// BYOK listener keeps the compatibility shape, and other families keep
-// their own shape.
+// "openai" listener uses the documented contract. Every other listener
+// label and every other family keeps the compatibility contract.
 func errorContractForListener(ctx context.Context, family adapterRouteFamily) errcontract.ClientContract {
 	if family == adapterRouteOpenAI && listenerFollowsDocumentedContract(ctx) {
 		return errcontract.ClientContractDocumented
@@ -279,7 +315,7 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
 	family := adapterRouteFamilyForPath(r.URL.Path)
-	contract := errorContractForListener(r.Context(), family)
+	contract := errorContractForRequest(r.Context(), family, err)
 	aerr = applyContractShape(family, contract, aerr)
 	corr := correlationForRequest(r)
 	message := aerr.Message
@@ -548,7 +584,7 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse errcontract.
 	if aerr == nil {
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
-	contract := errorContractForListener(ctx, adapterRouteOpenAI)
+	contract := errorContractForRequest(ctx, adapterRouteOpenAI, err)
 	aerr = applyContractShape(adapterRouteOpenAI, contract, aerr)
 	message := aerr.Message
 	if !aerr.SafeForClient {

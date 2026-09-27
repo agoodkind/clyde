@@ -359,8 +359,8 @@ func applyDocumentedShape(aerr *adapterError) *adapterError {
 
 // documentedUpstreamStatus returns the client-visible status for an
 // error that came from an upstream HTTP response, or zero when the
-// error has no usable upstream status. Anthropic's 529 capacity status
-// becomes 503, and other nonstandard server statuses become 500.
+// error has no usable upstream status. A nonstandard server status
+// becomes 500.
 func documentedUpstreamStatus(aerr *adapterError) int {
 	if !adapterErrorFromUpstream(aerr) {
 		return 0
@@ -374,8 +374,6 @@ func documentedUpstreamStatus(aerr *adapterError) int {
 		status == http.StatusServiceUnavailable,
 		status == http.StatusGatewayTimeout:
 		return status
-	case status == anthropicOverloadedStatus:
-		return http.StatusServiceUnavailable
 	case status > http.StatusInternalServerError:
 		return http.StatusInternalServerError
 	default:

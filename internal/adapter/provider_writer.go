@@ -34,6 +34,21 @@ type providerStreamWriter struct {
 	server            *Server
 	streamChunkSeq    int
 	onStreamOpened    func()
+	// documentedUsage selects the documented Chat Completions usage
+	// sequence. The generic OpenAI listener sets it. The compatibility
+	// sequence puts usage on the finish chunk and on a separate usage
+	// chunk.
+	documentedUsage bool
+}
+
+// configureStreamUsage applies the client's stream_options.include_usage
+// request before any chunk is written. On the documented contract, an
+// opted-in stream renders `"usage":null` on every ordinary chunk.
+func (p *providerStreamWriter) configureStreamUsage(includeUsage bool) {
+	if p == nil || p.sse == nil {
+		return
+	}
+	p.sse.SetExplicitNullUsage(p.documentedUsage && includeUsage)
 }
 
 func newProviderStreamWriter(
@@ -73,6 +88,7 @@ func newProviderStreamWriterWithOptions(
 		logContext:        func() context.Context { return ctx },
 		log:               slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPEgress),
 		server:            s, headersWritten: false, streamChunkSeq: 0, onStreamOpened: nil,
+		documentedUsage: listenerFollowsDocumentedContract(ctx),
 	}, nil
 }
 
@@ -298,6 +314,9 @@ func (p *providerStreamWriter) finalizeStream(ctx context.Context, result adapte
 			FinishReason: &finishReason, Logprobs: nil,
 		}}, Usage: nil, SystemFingerprint: "",
 	}
+	if p != nil && p.documentedUsage {
+		return p.finalizeDocumentedStream(ctx, finishChunk, result.Usage, includeUsage)
+	}
 	if includeUsage {
 		usage := result.Usage
 		finishChunk.Usage = &usage
@@ -307,6 +326,29 @@ func (p *providerStreamWriter) finalizeStream(ctx context.Context, result adapte
 	}
 	if includeUsage {
 		usage := result.Usage
+		if err := p.writeRenderedChunk(ctx, adapteropenai.StreamChunk{
+			ID:      p.reqID,
+			Object:  "chat.completion.chunk",
+			Created: p.createdUnix(),
+			Model:   p.modelAlias,
+			Choices: []adapteropenai.StreamChoice{},
+			Usage:   &usage, SystemFingerprint: "",
+		}); err != nil {
+			return err
+		}
+	}
+	return p.writeStreamDone(ctx)
+}
+
+// finalizeDocumentedStream ends a stream with the documented Chat
+// Completions sequence. The finish chunk has no usage. When the client
+// set stream_options.include_usage, one final chunk with empty choices
+// reports the aggregate usage. One [DONE] frame ends the stream.
+func (p *providerStreamWriter) finalizeDocumentedStream(ctx context.Context, finishChunk adapteropenai.StreamChunk, usage adapteropenai.Usage, includeUsage bool) error {
+	if err := p.writeRenderedChunk(ctx, finishChunk); err != nil {
+		return err
+	}
+	if includeUsage {
 		if err := p.writeRenderedChunk(ctx, adapteropenai.StreamChunk{
 			ID:      p.reqID,
 			Object:  "chat.completion.chunk",

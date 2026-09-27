@@ -59,9 +59,9 @@ type ErrorInfo struct {
 type ClientContract string
 
 const (
-	// ClientContractCompatibility is the family's compatibility shape.
-	// On the OpenAI family it is the Cursor BYOK shape: every upstream
-	// failure renders as HTTP 400 with invalid_request_error.
+	// ClientContractCompatibility is the shape the family's registered
+	// mapper and renderer produce without a documented-contract
+	// override.
 	ClientContractCompatibility ClientContract = ""
 	// ClientContractDocumented is the vendor's documented error contract.
 	// On the OpenAI family the renderer derives error.type from the

@@ -185,6 +185,175 @@ func requireNoUpstreamRequest(t *testing.T, upstream *conformanceUpstream) {
 	}
 }
 
+// sseDataFrames returns the data payload of every SSE frame in order.
+func sseDataFrames(t *testing.T, body []byte) []string {
+	t.Helper()
+	var frames []string
+	for _, frame := range strings.Split(string(body), "\n\n") {
+		for _, line := range strings.Split(frame, "\n") {
+			if payload, ok := strings.CutPrefix(line, "data: "); ok {
+				frames = append(frames, payload)
+			}
+		}
+	}
+	if len(frames) == 0 {
+		t.Fatalf("stream has no data frames: %s", body)
+	}
+	return frames
+}
+
+// requireSingleTrailingDone asserts one [DONE] frame that ends the stream
+// and returns the JSON frames before it.
+func requireSingleTrailingDone(t *testing.T, frames []string) []string {
+	t.Helper()
+	doneCount := 0
+	for _, frame := range frames {
+		if frame == "[DONE]" {
+			doneCount++
+		}
+	}
+	if doneCount != 1 || frames[len(frames)-1] != "[DONE]" {
+		t.Fatalf("stream must end with exactly one [DONE]; frames=%v", frames)
+	}
+	return frames[:len(frames)-1]
+}
+
+func TestOpenAIConformanceChatStreamUsageOptIn(t *testing.T) {
+	upstream := newConformanceUpstream(conformanceUsageWithReasoning)
+	listeners := startConformanceServer(t, upstream)
+
+	stream := postConformance(t, listeners.openAI+"/v1/chat/completions", `{"model":"gpt-future","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}`)
+	if stream.status != http.StatusOK {
+		t.Fatalf("stream status = %d; body=%s", stream.status, stream.body)
+	}
+	drainConformanceRequest(t, upstream)
+	chunks := requireSingleTrailingDone(t, sseDataFrames(t, stream.body))
+	for index, chunk := range chunks {
+		object := decodeJSONObject(t, []byte(chunk))
+		usage := requireMember(t, object, "usage")
+		final := index == len(chunks)-1
+		if !final {
+			if string(usage) != "null" {
+				t.Fatalf("chunk %d usage = %s, want null before the final chunk", index, usage)
+			}
+			continue
+		}
+		if string(requireMember(t, object, "choices")) != "[]" {
+			t.Fatalf("final usage chunk choices = %s, want []", object["choices"])
+		}
+		var aggregate adapteropenai.Usage
+		if err := json.Unmarshal(usage, &aggregate); err != nil {
+			t.Fatalf("decode final usage: %v", err)
+		}
+		if aggregate.TotalTokens != 24 || aggregate.CompletionTokensDetails == nil || aggregate.CompletionTokensDetails.ReasoningTokens != 7 {
+			t.Fatalf("final usage = %s, want total 24 and reasoning 7", usage)
+		}
+	}
+}
+
+func TestOpenAIConformanceChatStreamWithoutUsageOptIn(t *testing.T) {
+	upstream := newConformanceUpstream(conformanceUsageWithReasoning)
+	listeners := startConformanceServer(t, upstream)
+	body := `{"model":"gpt-future","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+
+	stream := postConformance(t, listeners.openAI+"/v1/chat/completions", body)
+	if stream.status != http.StatusOK {
+		t.Fatalf("stream status = %d; body=%s", stream.status, stream.body)
+	}
+	drainConformanceRequest(t, upstream)
+	for index, chunk := range requireSingleTrailingDone(t, sseDataFrames(t, stream.body)) {
+		object := decodeJSONObject(t, []byte(chunk))
+		if _, present := object["usage"]; present {
+			t.Fatalf("chunk %d has a usage member without include_usage: %s", index, chunk)
+		}
+		if string(object["choices"]) == "[]" {
+			t.Fatalf("chunk %d is an aggregate usage chunk without include_usage: %s", index, chunk)
+		}
+	}
+
+	// The Cursor listener keeps its forced usage chunk.
+	cursor := postConformance(t, listeners.cursor+"/v1/chat/completions", body)
+	if cursor.status != http.StatusOK {
+		t.Fatalf("cursor stream status = %d; body=%s", cursor.status, cursor.body)
+	}
+	drainConformanceRequest(t, upstream)
+	cursorUsageChunks := 0
+	for _, chunk := range requireSingleTrailingDone(t, sseDataFrames(t, cursor.body)) {
+		if _, present := decodeJSONObject(t, []byte(chunk))["usage"]; present {
+			cursorUsageChunks++
+		}
+	}
+	if cursorUsageChunks != 2 {
+		t.Fatalf("cursor stream usage chunks = %d, want the finish chunk and the usage chunk", cursorUsageChunks)
+	}
+}
+
+// postNativeCodexResponses posts a Responses body with native Codex turn
+// metadata, which classifies the request for raw forwarding.
+func postNativeCodexResponses(t *testing.T, url string, body string) conformanceResponse {
+	t.Helper()
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("new native request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeTurnMetadata(t))
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read native response: %v", err)
+	}
+	return conformanceResponse{status: response.StatusCode, header: response.Header, body: responseBody}
+}
+
+func TestOpenAIListenerKeepsNativeCodexForwardingContract(t *testing.T) {
+	requestBody := `{"model":"gpt-native","input":"native","vendor_extension":{"kept":true}}`
+	upstreamError := `{"error":{"message":"native upstream failure","type":"server_error"}}`
+	var forwardedBody []byte
+	upstream := newLoopbackHTTPServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		forwardedBody, _ = io.ReadAll(request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusInternalServerError)
+		_, _ = writer.Write([]byte(upstreamError))
+	}))
+	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
+	openAIURL, _ := startRoutingListeners(t, srv)
+
+	forwarded := postNativeCodexResponses(t, openAIURL+"/v1/responses", requestBody)
+	if forwarded.status != http.StatusInternalServerError || string(forwarded.body) != upstreamError {
+		t.Fatalf("native forwarding = %d %s, want the upstream status and body unchanged", forwarded.status, forwarded.body)
+	}
+	if string(forwardedBody) != requestBody {
+		t.Fatalf("native upstream body = %s, want unknown fields forwarded unchanged", forwardedBody)
+	}
+
+	// A resolver failure after native classification keeps the native
+	// compatibility status instead of the documented 404.
+	unknownModel := postNativeCodexResponses(t, openAIURL+"/v1/responses", `{"model":"unrouted-native","input":"native"}`)
+	unknownModelError := decodeErrorEnvelope(t, unknownModel.body)
+	if unknownModel.status != http.StatusBadRequest || unknownModelError.Type != "invalid_request_error" {
+		t.Fatalf("native resolver failure = %d %q, want 400 invalid_request_error; body=%s", unknownModel.status, unknownModelError.Type, unknownModel.body)
+	}
+}
+
+func TestOpenAIListenerKeepsNativeCodexTransportFailureContract(t *testing.T) {
+	closed := newLoopbackHTTPServer(t, http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+	srv := newNativeResponsesServer(t, closedURL, &nativeRawRefreshAuth{})
+	openAIURL, _ := startRoutingListeners(t, srv)
+
+	failed := postNativeCodexResponses(t, openAIURL+"/v1/responses", `{"model":"gpt-native","input":"native"}`)
+	failure := decodeErrorEnvelope(t, failed.body)
+	if failed.status != http.StatusBadRequest || failure.Type != "invalid_request_error" {
+		t.Fatalf("native transport failure = %d %q, want 400 invalid_request_error; body=%s", failed.status, failure.Type, failed.body)
+	}
+}
+
 func TestOpenAIConformanceReportsUpstreamReasoningTokens(t *testing.T) {
 	upstream := newConformanceUpstream(conformanceUsageWithReasoning)
 	listeners := startConformanceServer(t, upstream)

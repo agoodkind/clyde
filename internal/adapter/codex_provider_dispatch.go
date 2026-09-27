@@ -169,6 +169,7 @@ func (s *Server) dispatchCodexProviderStream(
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
 	}
+	writer.configureStreamUsage(req.StreamOptions != nil && req.StreamOptions.IncludeUsage)
 
 	s.emitRequestStreamOpened(ctx, &resolvedReq, "direct", reqID, alias)
 

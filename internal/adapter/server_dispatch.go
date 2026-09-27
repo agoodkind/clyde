@@ -210,7 +210,7 @@ func openAIIngressSurface(ctx context.Context) adapterresolver.IngressSurface {
 // listenerFollowsDocumentedContract reports whether the request arrived
 // on the generic OpenAI listener. [Server.StartOnListeners] labels every
 // accepted connection as "openai" or "cursor". Only the "openai" label
-// selects the documented OpenAI contract. The Cursor BYOK listener and an
+// selects the documented OpenAI contract. The "cursor" label and an
 // unlabeled in-process request keep the compatibility behavior.
 func listenerFollowsDocumentedContract(ctx context.Context) bool {
 	return ingressLabelFromContext(ctx) == string(adapterresolver.IngressOpenAI)
@@ -259,7 +259,9 @@ func (s *Server) prepareChatRequest(ctx context.Context, corr correlation.Contex
 		s.logChatParseFailed(ctx, corr, reqID, bodyBytes, parseErr)
 		return ChatRequest{}, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
 	}
-	forceStreamUsageOptIn(&req)
+	if !listenerFollowsDocumentedContract(ctx) {
+		forceStreamUsageOptIn(&req)
+	}
 	if normErr := normalizeRequestMessages(&req); normErr != nil {
 		recorder.EmitError(ctx, "message_normalization_failed", normErr.Error())
 		return ChatRequest{}, normErr
