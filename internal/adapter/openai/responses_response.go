@@ -287,37 +287,47 @@ type ResponsesSummaryPart struct {
 	Text string `json:"text"`
 }
 
-// ResponsesUsage is the Responses-shaped token usage block.
+// ResponsesUsage is the Responses-shaped token usage block. A details
+// object is nil when the provider did not report that breakdown. The
+// encoder omits a nil details object instead of writing a zero count.
 type ResponsesUsage struct {
-	InputTokens         int                          `json:"input_tokens"`
-	OutputTokens        int                          `json:"output_tokens"`
-	TotalTokens         int                          `json:"total_tokens"`
-	InputTokensDetails  ResponsesInputTokensDetails  `json:"input_tokens_details"`
-	OutputTokensDetails ResponsesOutputTokensDetails `json:"output_tokens_details"`
+	InputTokens         int                           `json:"input_tokens"`
+	OutputTokens        int                           `json:"output_tokens"`
+	TotalTokens         int                           `json:"total_tokens"`
+	InputTokensDetails  *ResponsesInputTokensDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *ResponsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
-// ResponsesInputTokensDetails carries the cached-prompt token count.
+// ResponsesInputTokensDetails stores the cached-prompt token count.
 type ResponsesInputTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 
-// ResponsesOutputTokensDetails carries the reasoning token count.
+// ResponsesOutputTokensDetails stores the reasoning token count.
 type ResponsesOutputTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 // ResponsesUsageFromChat maps the OpenAI chat Usage the provider reports
-// into the Responses usage shape: input=prompt, output=completion,
-// total=total, cached from the prompt token details. Reasoning token
-// detail is not exposed on the chat Usage struct, so reasoning_tokens
-// stays zero for Task A.
+// into the Responses usage shape: input=prompt, output=completion, and
+// total=total. The prompt token details become input_tokens_details, and
+// the completion token details become output_tokens_details. A detail the
+// provider did not report stays absent.
 func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
+	var inputDetails *ResponsesInputTokensDetails
+	if usage.PromptTokensDetails != nil {
+		inputDetails = &ResponsesInputTokensDetails{CachedTokens: usage.PromptTokensDetails.CachedTokens}
+	}
+	var outputDetails *ResponsesOutputTokensDetails
+	if usage.CompletionTokensDetails != nil {
+		outputDetails = &ResponsesOutputTokensDetails{ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens}
+	}
 	return ResponsesUsage{
 		InputTokens:         usage.PromptTokens,
 		OutputTokens:        usage.CompletionTokens,
 		TotalTokens:         usage.TotalTokens,
-		InputTokensDetails:  ResponsesInputTokensDetails{CachedTokens: usage.CachedTokens()},
-		OutputTokensDetails: ResponsesOutputTokensDetails{ReasoningTokens: 0},
+		InputTokensDetails:  inputDetails,
+		OutputTokensDetails: outputDetails,
 	}
 }
 

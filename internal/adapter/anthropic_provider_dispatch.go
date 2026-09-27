@@ -619,15 +619,16 @@ func anthropicProviderResultFromResponse(resp *adapteropenai.ChatResponse) adapt
 
 func emptyAnthropicOpenAIUsage() adapteropenai.Usage {
 	return adapteropenai.Usage{
-		PromptTokens:        0,
-		CompletionTokens:    0,
-		TotalTokens:         0,
-		PromptTokensDetails: nil,
-		InputTokens:         0,
-		OutputTokens:        0,
-		CacheReadTokens:     0,
-		CacheWriteTokens:    0,
-		MaxTokens:           0,
+		PromptTokens:            0,
+		CompletionTokens:        0,
+		TotalTokens:             0,
+		PromptTokensDetails:     nil,
+		CompletionTokensDetails: nil,
+		InputTokens:             0,
+		OutputTokens:            0,
+		CacheReadTokens:         0,
+		CacheWriteTokens:        0,
+		MaxTokens:               0,
 	}
 }
 

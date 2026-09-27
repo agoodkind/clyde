@@ -85,7 +85,7 @@ func (e *NativePatchInputError) Error() string {
 func NewRunResult(finishReason string) RunResult {
 	return RunResult{
 		FinishReason: finishreason.FromCodex(finishReason), Usage: adapteropenai.
-				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
 
 		UsageTelemetry: UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0},
 
@@ -734,7 +734,7 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 	if err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{
 			Usage: adapteropenai.
-				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
 
 			UsageTelemetry: UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0},
 

@@ -384,7 +384,7 @@ func (t *StreamTranslator) handleMessageStop() ([]Event, bool, string, *OpenAIUs
 	u := &OpenAIUsage{
 		PromptTokens:     t.pendingInputTokens,
 		CompletionTokens: t.lastOutputTokens,
-		TotalTokens:      t.pendingInputTokens + t.lastOutputTokens, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+		TotalTokens:      t.pendingInputTokens + t.lastOutputTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
 	}
 	var extra []Event
 	if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {

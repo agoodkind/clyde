@@ -386,21 +386,34 @@ type StreamDelta struct {
 }
 
 // Usage is part of Clyde's typed adapter surface.
+//
+// PromptTokensDetails and CompletionTokensDetails are nil when the
+// provider did not report the breakdown. A non-nil detail stores the
+// provider's value, including a reported zero. Absent data therefore
+// never renders as a fabricated zero.
 type Usage struct {
-	PromptTokens        int                  `json:"prompt_tokens"`
-	CompletionTokens    int                  `json:"completion_tokens"`
-	TotalTokens         int                  `json:"total_tokens"`
-	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
-	InputTokens         int                  `json:"input_tokens,omitempty"`
-	OutputTokens        int                  `json:"output_tokens,omitempty"`
-	CacheReadTokens     int                  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens    int                  `json:"cache_write_tokens,omitempty"`
-	MaxTokens           int                  `json:"max_tokens,omitempty"`
+	PromptTokens            int                      `json:"prompt_tokens"`
+	CompletionTokens        int                      `json:"completion_tokens"`
+	TotalTokens             int                      `json:"total_tokens"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	InputTokens             int                      `json:"input_tokens,omitempty"`
+	OutputTokens            int                      `json:"output_tokens,omitempty"`
+	CacheReadTokens         int                      `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens        int                      `json:"cache_write_tokens,omitempty"`
+	MaxTokens               int                      `json:"max_tokens,omitempty"`
 }
 
 // PromptTokensDetails is part of Clyde's typed adapter surface.
 type PromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
+}
+
+// CompletionTokensDetails is the Chat Completions breakdown of output
+// tokens. Only the reasoning count is modeled. No Clyde provider reports
+// another output breakdown.
+type CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 // CachedTokens is part of Clyde's typed adapter surface.
