@@ -1,9 +1,13 @@
 # Adapter Compatibility Warnings
 
-The generic Responses projection forwards what the resolved provider can honor
-and warns for every request field it drops or overrides. A generic
-`/v1/responses` request never fails just because it carries a field or tool type
-the backend cannot use.
+On the Cursor BYOK listener, the generic Responses projection forwards what the
+resolved provider can honor and warns for every request field it drops or
+overrides. A Cursor `/v1/responses` request never fails only because it sets a
+field or tool type the backend cannot use.
+
+The generic OpenAI listener reads the same field catalog and rejects those
+fields instead of warning. The [OpenAI conformance matrix](openai-conformance.md)
+records that contract.
 
 ## Native Codex boundary
 
@@ -90,9 +94,9 @@ still warns.
 
 ## Unsupported Responses tools
 
-A `/v1/responses` request whose `tools` array carries non-function tools keeps
-the function tools, drops the rest, and warns with code `tool_unsupported`
-rather than rejecting the whole request. OpenAI built-in tools such as
+On the Cursor listener, a `/v1/responses` request with non-function tools in
+its `tools` array keeps the function tools, drops the rest, and warns with code
+`tool_unsupported` rather than rejecting the whole request. OpenAI built-in tools such as
 web_search, file_search, computer_use, and mcp, plus custom tools, are the
 dropped types. The
 [`responses_tools.go`](../../internal/adapter/openai/responses_tools.go)
