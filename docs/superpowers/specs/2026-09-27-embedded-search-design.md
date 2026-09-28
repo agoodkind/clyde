@@ -14,7 +14,7 @@ The default selects chat text and tool calls. It excludes tool output, thinking,
 
 Clyde updates stored metadata for an indexed owner when archive, workspace, provider, or subagent classification changes, even when the current ingestion policy excludes that owner. It calls `ReprojectScalars` with exact stable row keys, mutable declared scalar values, a monotonic projection order, and an idempotency token. The library commits the effective metadata projection atomically with zero vector writes. Clyde does not load excluded transcript fields for that update. A missing artifact retains its last accepted metadata.
 
-Clyde preserves tool display and shell search behavior. A bash display uses `gksyntax/shelldecomp` to extract program names and read and write targets. An opaque command retains its raw display. Trimmed duplicate tokens appear once. Each occurrence retains the original message index and `loadRules` tag. Clyde never loads excluded thinking or output solely to create context for an earlier hit.
+Clyde uses each provider's display text and display language hint to prepare tool search text. A bash display uses `gksyntax/shelldecomp` to extract program names and read and write targets. An opaque command uses the raw display. Trimmed duplicate tokens appear once. The tool name starts every prepared part, including parts after the first model-sized split. The parser preserves valid UTF-8 text and does not infer tool type from harness labels or JSON shape. Each occurrence stores the original message index and `loadRules` tag. Clyde never loads excluded thinking or output solely to create context for an earlier hit.
 
 ## Search through generic filters
 
@@ -33,6 +33,44 @@ Clyde records an outbox batch before calling the library. It stages every new pr
 Clyde opens the library inside its daemon lifecycle after creating its Milvus client and vector adapter. The daemon stops ingestion workers before closing the library, adapter, and client during reload or shutdown. The library does not close the caller owned Milvus client. Failed open, embed, store read, and Milvus query operations produce typed errors rather than an empty successful page. Search-only mode reads committed data without ingestion. Ingestion-only mode updates data without serving search. Neither mode needs an LMS process or socket.
 
 The library packages pinned CGO and native dependencies for supported macOS and Linux builds. Moving shell decomposition into Clyde adds a `gksyntax` import. Its native grammar currently requires a reproducible pinned source checkout in the build and release workspace because the module archive does not include it. Clyde pins an exact library commit and adds no machine-specific replacement. Model identity, resolved revision, normalization, dimension, SQLite path, Milvus target, batch size, and search resource controls use explicit configuration. The immutable store descriptor binds model, revision, dimension, and normalization. Opening an old catalog with a different descriptor fails with `ErrStoreMismatch`. A model change uses an explicit new catalog and vector pool generation. Clyde publishes that generation only after it is searchable, while the prior generation remains readable. Clyde does not automatically remove referenced vectors or occurrences from either generation.
+
+## Proposed configuration contract
+
+The following keys are the proposed `[conversation.semantic]` contract. An omitted library budget uses the library's stated default. Changes to these keys use `RouteReload`. A model, revision, dimension, normalization, analyzer, catalog path, or vector pool change creates a separately configured generation. Clyde builds and verifies the new generation before publishing it. Opening an existing catalog with a mismatched descriptor returns `ErrStoreMismatch`; the prior generation remains readable.
+
+| Keys | Type and default | Library mapping or Clyde behavior |
+| --- | --- | --- |
+| `ingestion_enabled`, `search_enabled` | Existing booleans, false unless configured. | Independent write and read switches. |
+| `collection_id`, `indexed_content` | Existing string and selector list. The current selector default remains chat plus tool calls. | Map collection ID to namespace and selectors to Clyde projection. |
+| `indexed_providers`, `indexed_roles` | String lists. Empty means every supported provider and role. | Clyde content admission and generic scalar predicates. |
+| `include_archived`, `include_subagents` | Booleans, false. | Clyde content admission and query predicates; metadata refresh still runs for already indexed owners. |
+| `catalog_path`, `lock_path`, `pool_id` | Explicit paths and pool ID when enabled. | `StoreDescriptor.CatalogPath`, `LockPath`, `PoolID`. Existing configured values are never silently repurposed. |
+| `milvus_address`, `milvus_database`, `milvus_collection` | Explicit endpoint and names for the Milvus profile. | Clyde creates the SDK client and injects `library/milvus`; the library does not close the client. |
+| `embedding_base_url`, `embedding_api_key_env`, `embedding_api_key_file` | Explicit OpenAI-compatible endpoint and an optional credential reference. Reject simultaneous environment and file references. | Clyde resolves any configured credential and supplies the library embedding adapter. Support local endpoints without authentication. Never log the credential. |
+| `embedding_request_timeout`, `embedding_max_attempts`, `embedding_backoff_base` | Explicit request timeout; defaults 4 attempts and 200 milliseconds for retry settings. Zero timeout uses the caller deadline. | Map to the exported embedding adapter configuration. Reject negative timeouts, nonpositive attempt counts, and negative retry delays. |
+| `embedding_model`, `embedding_revision`, `vector_dimension`, `normalization`, `analyzer_identity`, `query_instruction_prefix` | Explicit model identity, resolved revision, positive dimension, normalization identifier, analyzer identity, and optional prefix. | `StoreDescriptor` and `library.Config`. A descriptor mismatch fails before writes. |
+| `max_batch_rows`, `max_batch_bytes` | Positive integers; defaults 256 and 8 MiB. | `library.Config.MaxBatchRows` and `MaxBatchBytes`. |
+| `raw_batch_target_bytes` | Positive integer; default 8 MiB. | Clyde source-loading admission target. Load an oversized artifact alone and measure its peak memory separately. This does not change the library write batch limit. |
+| `query_block_size`, `query_workers`, `max_temporary_bytes`, `max_snapshot_bytes`, `snapshot_ttl`, `query_timeout` | Positive budgets; defaults 512, 2, 1 GiB, 256 MiB, 10 minutes, and 30 seconds. | Same named `library.Config` fields. Exhaustion returns a typed failure, never a short page. |
+| `max_page_size`, `max_query_bytes`, `max_filter_depth`, `max_filter_values` | Nonnegative integers; default zero disables the individual request limit. | Same named `library.Config` fields. Reject an oversized request with `ErrInvalidRequest`; never truncate it. |
+| `bm25_k1`, `bm25_b`, `rrf_k` | Finite numbers; defaults 1.2, 0.75, and 60. | Same named `library.Config` fields. Query settings enter the cursor identity. |
+
+The global `conversation.include_subagent_conversations` setting currently controls raw index visibility. Clyde makes semantic subagent admission independent of ordinary list visibility while continuing to use the registered provider readers. Unknown selectors, missing enabled store fields, invalid numeric budgets, and model descriptor mismatches fail configuration or opening before search accepts requests. The old `socket_path` key is rejected with a migration error after the RPC client is removed.
+
+## Error contract
+
+| Library result | Clyde CLI and MCP result | gRPC status |
+| --- | --- | --- |
+| `ErrInvalidRequest`, `ErrCursorMismatch` | `conversation_search_source_refused` with the safe reason. | `InvalidArgument` |
+| `ErrCursorExpired` | `conversation_search_source_refused` with a restart paging reason. | `FailedPrecondition` |
+| `ErrStoreMismatch` | Opening the mismatched store fails. Any prior valid generation remains readable. | `FailedPrecondition` |
+| `ErrAppendConflict`, `ErrStaleGeneration` | The ingestion operation fails. Freshness reports pending work or the error; search continues on prior committed data. | `FailedPrecondition` |
+| `ErrVectorMissing`, `ErrVectorCorrupt` | `conversation_search_source_failed`; never return a partial page. | `Internal` |
+| `ErrDeadline` | `conversation_search_source_failed` with a deadline reason. | `DeadlineExceeded` |
+| `ErrResourceLimit` | `conversation_search_source_refused` with a resource reason. | `ResourceExhausted` |
+| Disabled search switch | Existing `conversation_search_disabled`. | `FailedPrecondition` |
+
+Unexpected library errors become `conversation_search_source_failed` and `Internal`. Clyde logs the cause without transcript text. An offset request consumes a cursor chain inside one library snapshot; the public result retains `offset`, `next_offset`, and `has_more`. A later independent offset request opens a new snapshot and can see newly committed rows. The search API adds optional request `cursor`, response `next_cursor`, and per-match `context_state` fields to the daemon protobuf, domain types, CLI JSON, and MCP result. The CLI accepts `--cursor`; the MCP operation accepts the same optional value. Old clients can ignore the new fields. A cursor continues under the same query, filter, ranking settings, and snapshot; expiry or mismatch returns the typed error above.
 
 ## Prove the behavior
 

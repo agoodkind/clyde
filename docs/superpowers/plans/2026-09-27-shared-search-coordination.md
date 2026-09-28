@@ -1,105 +1,229 @@
-# Coordinate the shared search library implementation
+# Coordinate the shared search implementation
 
 ## Goal
 
-Implement LMS-708, LMS-648, and CLYDE-758 as separate, reviewable changes. Clyde must index and search conversations through the shared library with its own Milvus connection. Both applications must use the shared deduplication implementation for new writes. Complete this plan through validated integration before declaring the refactor ready for release.
+Complete LMS-708, LMS-648, and CLYDE-758 through independent implementation lanes and joint validation. Clyde uses the generic library with its own Milvus connection. Both applications use canonical vector storage for new writes.
 
-This document defines implementation order and ownership. It does not report completed implementation or authorize a production reset.
+This is the sole coordination plan. Component plans provide exact implementation steps. Specifications provide behavior and interface contracts. Tickets track status and link to these documents.
 
-## Use the selected contracts
+## Current behavior
 
-The [LMS library specification](https://github.com/agoodkind/lm-semantic-search/blob/6b92ad6cb1855180a2d0928938a7ecf29aac2084/docs/superpowers/specs/2026-09-27-shared-search-library-design.md) defines generic storage, publication, filtering, scoring, and paging. The [Clyde specification](../specs/2026-09-27-embedded-search-design.md) defines conversation projection, retention, configuration, and result interpretation. Use those contracts instead of the superseded RPC cutovers.
+The planning branches contain specifications. Clyde still calls the existing LMS daemon client. LMS stores vectors on source rows and in its reuse catalog. Runtime implementation and acceptance remain pending.
 
-Execute exact file changes and component tests from the [LMS implementation plan](https://github.com/agoodkind/lm-semantic-search/blob/6b92ad6cb1855180a2d0928938a7ecf29aac2084/docs/superpowers/plans/2026-09-27-shared-search-library.md) and [Clyde implementation plan](2026-09-27-embedded-conversation-search.md).
+The planning bases are LMS `d2c763db23271bb28d17ec4198da843b5d6c67df` and Clyde `3860a8c4ed843fcf52592b0aa558849522f9d25f`. Refresh repository and deployed revisions before implementation.
 
-## Establish the starting state
+## Use one source for each contract
 
-1. Fetch both repositories. Record each implementation branch base from `origin/main`, the deployed binary revisions, the Milvus version, and the research corpus identity.
-2. Inspect the stopped `port-production-search` branch before reusing any implementation. Preserve its uncommitted work. Adopt only changes that satisfy the new contracts.
-3. Keep LMS-707, LMS-709, LMS-710, and CLYDE-759 active as research work. Record their evidence independently from refactor progress. The restore diagnosis and current-corpus reset decision do not block library or projection development.
-4. Coordinate resource-heavy validation with the existing clean-install experiment. Do not restart its services, change its ingestion settings, or count a contended timing run as an uncontended measurement.
+| Concern | Authoritative source |
+| --- | --- |
+| Generic API, storage, publication, filters, ranking, and cursors | Read the [LMS specification](https://github.com/agoodkind/lm-semantic-search/blob/docs/shared-search-library/docs/superpowers/specs/2026-09-27-shared-search-library-design.md). |
+| Conversation selection, retention, metadata, configuration, and errors | Read the [Clyde specification](../specs/2026-09-27-embedded-search-design.md). |
+| Execution order, ownership, integration, acceptance, and status | Use this coordination plan. |
+| Component edits and verification | Execute the linked lane plans below. |
 
-## Assign separate ownership
+Change the authoritative source and its affected component plan together when resolving a contradiction. Do not create new requirements from historical plans or ticket comments.
 
-Each lane owns its files until integration. Add lane-specific files for independent work. Assign edits to shared constructors, module files, configuration entrypoints, and generated code to the integration owner indicated below.
+## Constraints
 
-| Lane | Owner responsibility | Development dependency | Integration requirement |
+1. Re-read both specifications before starting a lane, at each task boundary, after compaction, and before integration. Check comments, tests, documents, tickets, and status updates against the prose rules at each task boundary.
+2. Use subagent-driven development for independent work. Assign exact files and prerequisite revisions. Review each implementation against its specification before integration.
+3. Run implementation tests against isolated stores and immutable artifact snapshots. Do not change production services, provider artifacts, or the existing research experiment.
+4. Require real dependencies at public test boundaries. Fail acceptance when dependencies are unavailable, required tests skip, or no test matches.
+5. Append conversation occurrences without deletion. Do not add message editing or edit-history work. Codebase retention remains independently configurable.
+6. Continue restore and corpus research under LMS-707, LMS-709, LMS-710, and CLYDE-759. A repaired production corpus is not a development prerequisite.
+7. Complete LMS conversation subsystem removal within this work. Production cutover and the conditional one-time reset require measured migration evidence.
+
+## Execute the dependency graph
+
+Development prerequisites supply interfaces and code. Acceptance prerequisites supply the running integration.
+
+| Lane and plan | Development prerequisites | Acceptance prerequisites | Assigned files and interfaces |
 | --- | --- | --- | --- |
-| L0 | Define the public library API, build contract, and shared error/configuration types. | Start from the LMS base. | Publish an importable, pinned contract before consumer branches compile against it. |
-| L1 | Implement the transactional occurrence catalog, vector identity, writer coordination, publication, and recovery. | Use L0. | Pass real concurrent-process and interrupted-write tests. |
-| L2 | Implement lexical postings and occurrence-weighted scoring. | Use L0. Develop alongside L1. | Compare scores and global ordering with the real Milvus parity corpus. |
-| L3 | Implement complete filtered search, global ranks, result snapshots, and paging. | Use L0. Integrate L1 and L2 before query acceptance. | Pass every complete-page and filter oracle case. |
-| C1 | Implement Clyde projection, stable occurrence identity, and typed metadata/filter preparation. | Use L0. Develop alongside L1 and L2. | Preserve the existing content and provider extension contracts. |
-| C2 | Implement Clyde incremental ingestion and committed checkpoints. | Use C1 and L1. | Prove unchanged ingestion performs no embedding or vector writes. |
-| C3 | Implement Clyde search, occurrence hydration, and context revision handling. | Use C1 and L3. | Prove CLI and MCP results with the LMS daemon absent. |
-| L4 | Integrate the library into codebase indexing and search. | Use L1 and L3. | Preserve codebase lifecycle behavior and verify new writes share vectors. |
-| C4 | Integrate Clyde configuration, native dependencies, connection lifecycle, reload, and daemon wiring. | Use C2 and C3. | Pass Clyde integration and full-corpus acceptance. |
-| L5 | Remove the LMS conversation subsystem and retired protocol. | Verify C4 against the removal candidate and retain L4 coverage. | Prove both applications work with the removal commit. |
-
-L0 owns public type files and initial module/build wiring. L1 owns generic store migrations. L2 owns lexical implementation files. L3 owns query and cursor implementation files. L4 owns LMS application wiring. C4 owns Clyde daemon/configuration composition and dependency pins. L5 owns LMS protobuf edits and regeneration. The component plans assign the remaining exact files.
+| [L0: Library contracts](https://github.com/agoodkind/lm-semantic-search/blob/docs/shared-search-library/docs/superpowers/plans/2026-09-27-shared-search-l0-contracts.md) | Start from the LMS base. | The public package compiles with native dependencies outside the application. | Assign exported types, preparation, and initial build targets. |
+| [L1: Storage and recovery](https://github.com/agoodkind/lm-semantic-search/blob/docs/shared-search-library/docs/superpowers/plans/2026-09-27-shared-search-l1-storage.md) | L0 supplies the API. | Real storage and restart tests pass. | Assign catalog, outbox, adapters, and shared library test harness. |
+| [L2: Lexical ranking](https://github.com/agoodkind/lm-semantic-search/blob/docs/shared-search-library/docs/superpowers/plans/2026-09-27-shared-search-l2-lexical.md) | L0 supplies the API. Develop alongside L1. | Integrate L1's catalog and L3's public search before score acceptance. | Assign lexical migration, analyzer, postings, and tests. |
+| [L3: Query execution](https://github.com/agoodkind/lm-semantic-search/blob/docs/shared-search-library/docs/superpowers/plans/2026-09-27-shared-search-l3-query.md) | Integrate L1 and L2. | Complete-result and cursor tests pass. | Assign filters, scoring, rank fusion, snapshots, and tests. |
+| [C4.1: Clyde build bootstrap](2026-09-27-embedded-conversation-runtime.md) | L0 supplies an importable revision. | Clyde compiles with pinned native sources. | Assign module files, build wiring, and initial test targets. |
+| [C1: Conversation projection](2026-09-27-embedded-conversation-projection.md) | L0 and C4.1 supply the build contract. | C4 runtime enables public application tests. | Assign projection, stable IDs, tool text, filters, and projection tests. |
+| [C2: Conversation ingestion](2026-09-27-embedded-conversation-ingestion.md) | C1 and L1 supply rows and persistence. | C4 runtime enables public restart and unchanged-pass tests. | Assign workers, checkpoints, outbox, and ingestion tests. |
+| [C3: Conversation queries](2026-09-27-embedded-conversation-query.md) | C1 and L3 supply filters and retrieval. | C4 runtime enables CLI and MCP tests. | Assign query adapters, cursor/context fields, and query tests. |
+| [L4: Codebase integration](https://github.com/agoodkind/lm-semantic-search/blob/docs/shared-search-library/docs/superpowers/plans/2026-09-27-shared-search-l4-codebase.md) | L1 and L3 supply persistence and retrieval. | Codebase and offline acceptance pass. | Assign LMS application integration and codebase tests. |
+| C4.2 and later runtime tasks | Integrate C2 and C3. | Joint acceptance below passes. | Assign lifecycle, configuration, public harness, and measurement command. |
+| [L5: Conversation retirement](https://github.com/agoodkind/lm-semantic-search/blob/docs/shared-search-library/docs/superpowers/plans/2026-09-27-shared-search-l5-retirement.md) | L4 and C4 pass joint acceptance. | Both applications pass with the removal candidate. | Assign obsolete code, protobuf removal, and regeneration. |
 
 ```mermaid
 flowchart TD
-    L0[L0: Library contracts] --> L1[L1: Storage and recovery]
-    L0 --> L2[L2: Lexical scoring]
-    L0 --> C1[C1: Clyde projection]
-    L1 --> L3[L3: Complete search]
+    L0[Library contracts] --> L1[Storage]
+    L0 --> L2[Lexical ranking]
+    L0 --> B[Clyde build bootstrap]
+    B --> C1[Projection]
+    L1 --> L3[Queries]
     L2 --> L3
-    L1 --> C2[C2: Clyde ingestion]
-    C1 --> C2
-    C1 --> C3[C3: Clyde search]
+    C1 --> C2[Ingestion]
+    L1 --> C2
+    C1 --> C3[Conversation queries]
     L3 --> C3
-    L3 --> L4[L4: Codebase integration]
-    L1 --> L4
-    C2 --> C4[C4: Clyde integration]
+    L3 --> L4[Codebase integration]
+    C2 --> C4[Clyde runtime]
     C3 --> C4
     C4 --> A[Joint acceptance]
     L4 --> A
-    A --> L5[L5: Remove conversation subsystem]
+    A --> L5[Retirement]
+    L5 --> F[Final acceptance]
 ```
 
-## Create reviewable branches
+Create C4.1 as a foundation PR before C1. Integrate C4's later runtime tasks after C2 and C3. Do not enable the new backend in the foundation PR.
 
-1. Create independent branches from the recorded remote base when a lane has no unmerged code dependency. Create a dependent Graphite branch only when its code requires an unmerged ancestor in the same repository.
-2. Develop L1, L2, and C1 concurrently after L0. Keep L1 and L2 as sibling branches; merge or integrate their completed prerequisites before finalizing L3. Graphite parentage represents one Git ancestry chain, not every logical dependency in the table.
-3. Link cross-repository PRs explicitly. Pin Clyde to the exact reviewed LMS revision. Do not model a cross-repository dependency as a Graphite parent.
-4. Use Graphite MCP for dependent branch creation, submission, restacking, and merging. Fetch before comparisons. Never move the trunk ref from a feature worktree when another checkout owns trunk. Verify signed commits after every history rewrite.
-5. Include observable behavior and its real public-boundary coverage in the same PR. Do not merge an enabled partial backend. Foundations may compile and merge before application activation.
-6. Run the full babysit workflow for every open PR, including the active base-branch ruleset, required checks, approvals, and review-thread resolution. Passing CI alone does not prove merge readiness.
+Assign separate schema files to L1 and L2 and separate test files to C1, C2, and C3. Assign initial LMS Makefile changes to L0 and Clyde Makefile changes to C4. Transfer ownership explicitly before editing another lane's files.
 
-## Validate the shared contract
+## Tasks
 
-1. Run the library public API against an isolated real Milvus instance and a real SQLite catalog. Use the production embedding adapter with an isolated compatible model endpoint. Do not substitute mocks, recorded responses, or a second implementation of production filtering.
-2. Ingest repeated content from a conversation namespace and a code namespace under a compatible model identity. Verify one canonical live vector and every occurrence. Change the model identity and verify a separate vector.
-3. Run simultaneous writers from separate processes. Kill a writer at each publication boundary. Restart it and verify durable occurrences, correct checkpoints, and idempotent replay. Measure transient backend versions separately from canonical live-vector counts.
-4. Search a corpus containing more than 16,384 distinct vectors. Include excluded and included occurrences sharing vectors, heavily repeated content, restrictive filters, tied scores, absent lexical terms, group limits, and concurrent ingestion. Compare every page against the exhaustive reference result.
-5. Check BM25 statistics and reciprocal rank fusion against occurrence-based reference data. Do not accept unchanged result counts as proof of unchanged scoring. Compare identities, order, modality scores, and final scores.
-6. Verify bounded process memory and temporary-disk accounting under the configured limits. Exhaustion, timeout, corruption, and missing-vector conditions must return typed errors rather than successful partial results.
-7. Run both application suites against the same library revision. Remove the LMS daemon from the Clyde test environment. Verify Clyde ingestion, search, restart, and context interpretation without it. Keep LMS code-search daemon tests separate.
+### 1. Record bases and assign branches
 
-Use existing `make test` and `make check` gates in each repository after the documented native dependency bootstrap. Use the component plans for opt-in live commands. Treat a skipped real-dependency suite as missing evidence. Do not start or deploy a second unmanaged daemon against operator state.
+Files:
 
-## Measure release acceptance
+- Update the execution table in this document.
 
-1. Freeze the query battery before tuning. Recover previously useful queries from Clyde conversation history and add the known recall, paging, and restore regressions. Record expected occurrence IDs from source artifacts and the exhaustive reference.
-2. Measure the candidate and a recovered healthy baseline on the same corpus, hardware, query battery, and concurrency. Separate cold startup, collection loading, warm first-page latency, later-page latency, and full traversal. Report p50, p95, maximum latency, peak RSS for each process, Milvus RSS, and temporary disk use.
-3. Require complete eligible results and stable page traversal in the oracle cases. Reject fixed candidate truncation, successful partial results, and post-ranking eligibility removal.
-4. Require no measured latency or memory regression against the matched healthy baseline before release. A baseline with the known restore or paging defect is not a passing reference. If a healthy comparison cannot be reproduced, record that missing measurement; do not invent an accepted numeric budget or claim performance acceptance.
-5. Measure first indexing time, compatible-vector reuse, model requests, selected nonempty rows, source coverage, logical vector bytes, backend physical bytes, and metadata bytes. Run a second unchanged pass and verify zero embedding work and zero vector writes.
-6. Include constrained-memory execution in the recovered 16 GB and 24 GB acceptance environments. Record the exact imposed limits and model dimensions. Do not load every source transcript or vector into the application heap merely to pass a query.
-7. Optimize the exact executor if measurements fail. Require each optimization to pass the same result oracle and resource measurements. Do not replace the requirements with a latency/completeness tradeoff.
+Behavior:
 
-## Complete integration and retirement
+- Each worker uses one isolated checkout and recorded dependency revisions.
+- The coordinator alone edits execution status.
 
-1. Decide the current-corpus migration from the research evidence. Compare reuse/import with the conditionally permitted one-time reset. Record source coverage, unavailable artifacts, expected rebuild time, and required disk space. Preserve the forward retention contract after either choice.
-2. Verify the new codebase path writes shared vectors without changing codebase retention rules. Keep existing legacy collections intact until an explicit migration or retirement action. Do not count deployment as backfilling old duplicates.
-3. Validate the Clyde candidate against the LMS removal candidate before deleting the conversation subsystem. Remove obsolete RPCs, adapters, schemas, conversion, configuration, tests, dependencies, and documentation within this work.
-4. Re-run both applications' public acceptance checks against the final revisions. Record checks, review resolution, merge state, deployment state, and live validation separately.
-5. Stop when the implementation is reviewed, green, and validated in the authorized environment. Report the exact revisions and remaining release state. Do not start another agent or transfer responsibility automatically.
+Steps:
 
-## Preserve the implementation record
+1. Run `git fetch origin`, `git status --short`, `git worktree list --porcelain`, and `git rev-parse origin/main` in each repository. Record bases and dirty paths. Preserve uncommitted work on the stopped `port-production-search` branch.
+2. Complete L0 first. Start L1, L2, and C4.1 concurrently afterward. Start C1 after C4.1. Start C2 and C3 when their listed development prerequisites exist.
+3. Use independent branches after prerequisites merge. Use Graphite for real unmerged dependencies within one repository. L1 and L2 are siblings; integrate both before L3. Cross-repository dependencies use exact module revisions, not Graphite parentage.
+4. Give C4.1 and runtime integration separate PRs. Record each worker's files, dependency commits, and required validation before assignment.
+5. Inspect existing unfinished code before reuse. Do not duplicate a source implementation to avoid a dependency.
 
-1. Keep one shared progress ledger associated with LMS-708 and CLYDE-758. Record each lane's branch, PR, immutable revision, dependency revision, validation command, result, and blocker.
-2. Update the ledger after every meaningful state change. Record system/configuration changes and restore their intended state after experiments. Do not treat a chat update as a substitute for the ledger.
-3. Re-read both specifications before starting a lane, after compaction, before integration, and whenever a requirement conflict appears. Correct contradictory comments, tests, documentation, and status prose as part of the affected lane.
-4. Keep cancelled RPC tickets cancelled. Reuse completed generic work where it satisfies the library contract. Do not resume a superseded plan from an old goal or remembered context.
+Verification:
+
+- Run: `git status --short` and `git worktree list --porcelain`.
+- Expect: Every active lane has one worker, checkout, dependency revision set, and disjoint write paths.
+
+### 2. Integrate component changes
+
+Files:
+
+- Modify only the assigned lane files.
+- Update this document's execution table.
+
+Behavior:
+
+- Component development can finish before application acceptance.
+- Enable the new application backend only after complete integration passes.
+
+Steps:
+
+1. Execute L0 and L1 checks. Integrate L2's lexical implementation with L1, then implement L3's public query path. Run L2 and L3 acceptance against that combined revision.
+2. Run the strict LMS targets declared by L0: `make library-live-l1`, `make library-live-l2`, `make library-live-l3`, and `make library-live-l4`. Each target must fail on missing dependencies, skipped required tests, and zero matched tests.
+3. Integrate C1, C2, and C3 into C4's runtime branch. Run `make embedded-search-live` after C4 creates the target. Verify CLI and MCP operations without an LMS daemon.
+4. Run `make test` and `make check` in both repositories. Run `make offline-live` in LMS. Use each lane's native prerequisites before direct Go commands.
+5. Read the active base-branch GitHub ruleset for every PR. Resolve review threads, approvals, conflicts, and required checks through babysit. Use Graphite MCP for dependent stack operations and verify signatures after history rewrites.
+
+Verification:
+
+- Run: The component targets and repository gates above at exact integrated revisions.
+- Expect: Each required test executes successfully. Save test names, dependency identities, exit codes, and evidence paths in the execution table.
+
+### 3. Measure joint acceptance
+
+Files:
+
+- Use the full-corpus harness created by C4.
+- Update the execution table with report paths and checksums.
+
+Behavior:
+
+- Evaluate result completeness against source-derived expected occurrences and an exhaustive oracle.
+- Compare speed and memory with a matched healthy baseline. A damaged restored corpus is not a healthy reference.
+
+Steps:
+
+1. Freeze an immutable source snapshot and query battery before tuning. Include recovered useful queries, paging regressions, excluded high-ranked matches, shared vectors, repeated content, ties, group saturation, missing artifacts, and more than 16,384 distinct eligible vectors.
+2. Record corpus, query, model, hardware, limits, and concurrency identities in both reports. Require verified expected results in the baseline. Record missing baseline evidence as an acceptance blocker without stopping independent implementation.
+3. Schedule heavy measurements with the research agent. Do not change its production-ingestion pause or services.
+4. Create a baseline report with C4's `make shared-search-baseline` command using the verified existing binary and isolated stores. Set the candidate command inputs below to absolute paths for the recorded snapshot, battery, healthy baseline, and output report. Run the command from Clyde after C4 creates it.
+5. Inspect failed cases, fix the responsible component, and repeat the frozen battery before acceptance.
+6. Measure 16 GB and 24 GB configurations with exact limits. Report Clyde, model, Milvus, and total workload RSS separately.
+7. Measure initial indexing by source reading, selection, embedding, persistence, and searchable completion. Estimate total work from selected nonempty content only. Label estimates and measure a second unchanged pass.
+
+```bash
+make shared-search-acceptance \
+    CORPUS_SNAPSHOT="$CORPUS_SNAPSHOT" \
+    QUERY_BATTERY="$QUERY_BATTERY" \
+    BASELINE_REPORT="$BASELINE_REPORT" \
+    REPORT_PATH="$REPORT_PATH"
+```
+
+Verification:
+
+- Expect: Every eligible occurrence appears once in the complete traversal. Pages fill until the filtered result ends. Cursor order remains stable across concurrent writes.
+- Expect: Compatible duplicate content adds no canonical vector. An unchanged second pass performs zero embedding requests and zero vector writes.
+- Expect: No latency or memory regression against the matched healthy workload. Report cold startup, first and later pages, full traversal, p50, p95, maximum, peak/steady RSS, temporary disk, and compacted backend bytes.
+- Reject candidate cutoffs, partial successful pages, and weakened query batteries. Optimize under the same correctness oracle when measurements fail.
+
+### 4. Retire the conversation subsystem
+
+Files:
+
+- Execute L5's removal map.
+- Update this document's execution table and affected operational documentation.
+
+Behavior:
+
+- Both applications use the library revision that removes conversation-specific LMS code.
+- Existing legacy collections remain readable until a separately authorized migration or retirement.
+
+Steps:
+
+1. Record passing L4 and C4 revisions and their joint acceptance report. Build the L5 removal candidate.
+2. Pin Clyde to the exact candidate. Run `make library-live-l5` and `make offline-live` in LMS. Run `make embedded-search-live` and the frozen acceptance command in Clyde.
+3. Run repository gates on the final revisions. Verify regenerated protocol sources and bindings agree and removed handlers have no runtime callers.
+4. Prepare the current-corpus migration decision from source coverage, unavailable artifacts, compatible vectors, disk needs, rebuild time, and search measurements. Do not turn the conditional reset option into a mandatory reset.
+5. Record review, checks, merge, deployment, and live validation separately. Stop after authorized integration and validation. Do not transfer the task to another agent automatically.
+
+Verification:
+
+- Expect: LMS contains no conversation RPC or conversation-specific runtime. Clyde ingestion, queries, restart, and context pass. Codebase lifecycle and offline search pass.
+- Expect: Any production change has separate authorization and deployment evidence.
+
+## Track execution
+
+Only the coordinator edits this table. Add each branch/PR, exact commit, dependency commits, command, exit code, and report path when execution begins. Update the row after each meaningful change. Record system/configuration mutations and restoration in the affected row.
+
+| Lane | Status | Required dependency |
+| --- | --- | --- |
+| L0 | Implementation has not started under this plan. | Use the recorded LMS base. |
+| L1 | Implementation has not started under this plan. | Complete L0. |
+| L2 | Implementation has not started under this plan. | Complete L0; integrate L1 and L3 for public search acceptance. |
+| L3 | Implementation has not started under this plan. | Integrate L1 and L2. |
+| C4.1 | Implementation has not started under this plan. | Complete L0. |
+| C1 | Implementation has not started under this plan. | Complete L0 and C4.1. |
+| C2 | Implementation has not started under this plan. | Complete C1 and L1. |
+| C3 | Implementation has not started under this plan. | Complete C1 and L3. |
+| L4 | Implementation has not started under this plan. | Complete L1 and L3. |
+| C4 runtime | Implementation has not started under this plan. | Integrate C2 and C3. |
+| Joint acceptance | Runtime measurements remain pending. | Integrate C4 and L4; establish a healthy baseline. |
+| L5 | Implementation has not started under this plan. | Pass joint acceptance. |
+| Production migration | The research decision remains open. | Evaluate LMS-709 and CLYDE-759 evidence. |
+
+## Reconcile superseded work
+
+Older pages contain short supersession records. Git history preserves previous text. Do not execute historical instructions.
+
+| Previous work | Current disposition |
+| --- | --- |
+| September 26 generic LMS ingestion, search, and retirement plans | Execute L0 through L5 instead. LMS-15 and LMS-17 remain completed history. |
+| September 26 Clyde ingestion and search cutovers | Execute C1 through C4 instead. CLYDE-629 and CLYDE-643 remain cancelled. |
+| September 26 coordination plan | Execute this plan instead. |
+| September 22 local-search design and September 26 local-search plan | Use the current Clyde specification and component plans. Source selection, public behavior, and corpus measurements remain required. |
+| September 27 LMS and Clyde umbrella plans | Execute the independent component plans instead of the old combined task bodies. |
+| July 29 tool embedding plan and specification | Use Clyde projection requirements for display text, language hints, raw fallback, UTF-8, token deduplication, and tool attribution on every part. Retire old conversation replacement instructions. |
+| LMS-10, LMS-11, LMS-16, LMS-18, and LMS-19 | The cancelled RPC work is superseded by LMS-708. |
+| CLYDE-750 through CLYDE-756 | CLYDE-758 replaces the obsolete dual-backend, bundled-model, RAM-index, and RPC-dependent architecture. Execute retained acceptance requirements through the current component plans. |
+| LMS-648 | Implement generic deduplication through L1, L3, L4, and joint acceptance. Legacy backfill remains separate. |
+| LMS-707, LMS-709, LMS-710, and CLYDE-759 | Continue research and record evidence independently from refactor completion. |
+
+Preserve unrelated scheduling, daemon lifecycle, and provider contracts. Update their documentation only when the assigned implementation changes their behavior.
