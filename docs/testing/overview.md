@@ -133,12 +133,12 @@ The SDK smoke test runs the official OpenAI Python SDK against the generic OpenA
 
 1. Create a virtual environment outside the repository and install the SDK:
 
-       uv venv "$TMPDIR/openai-sdk"
-       uv pip install --python "$TMPDIR/openai-sdk/bin/python" openai
+       uv venv "${TMPDIR:-/tmp}/openai-sdk"
+       uv pip install --python "${TMPDIR:-/tmp}/openai-sdk/bin/python" openai
 
 2. Run the test with the interpreter path:
 
-       CLYDE_OPENAI_SDK_PYTHON="$TMPDIR/openai-sdk/bin/python" go test ./internal/adapter/ -run TestOpenAISDKSmoke -v
+       CLYDE_OPENAI_SDK_PYTHON="${TMPDIR:-/tmp}/openai-sdk/bin/python" go test ./internal/adapter/ -run TestOpenAISDKSmoke -v
 
 The [OpenAI conformance matrix](../adapter/openai-conformance.md) records the SDK version the matrix was checked against.
 

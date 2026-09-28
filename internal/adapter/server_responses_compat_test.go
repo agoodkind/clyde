@@ -83,8 +83,8 @@ func warningForParam(warnings []adaptercompat.CompatibilityWarning, param string
 	return adaptercompat.CompatibilityWarning{}, false
 }
 
-// The compatibility warning tests below use the Cursor listener. The
-// generic OpenAI listener rejects the same fields.
+// The tests below that expect compatibility warnings use the Cursor
+// listener. The generic OpenAI listener rejects the same fields.
 // TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest verifies
 // that rejection.
 
