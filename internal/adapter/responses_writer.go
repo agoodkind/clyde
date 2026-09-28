@@ -41,6 +41,10 @@ type responsesStreamWriter struct {
 	reasoningOutputIndex int
 	reasoningStatus      adapteropenai.ResponsesOutputItemStatus
 	reasoningText        strings.Builder
+	// completedReasoning stores the reasoning items the documented
+	// contract finished before the current one. The documented stream
+	// starts a new reasoning item for each reasoning segment.
+	completedReasoning []responsesStreamReasoningItem
 
 	messageOpen        bool
 	messageItemID      string
@@ -93,6 +97,39 @@ func (p *responsesStreamWriter) emitReasoningSummaryPart(name string, text strin
 	return p.marshalSend(name, evt)
 }
 
+// responsesStreamReasoningItem is one finished reasoning output item.
+type responsesStreamReasoningItem struct {
+	itemID      string
+	outputIndex int
+	status      adapteropenai.ResponsesOutputItemStatus
+	text        string
+}
+
+// outputItem returns the reasoning output item for the response object.
+func (r responsesStreamReasoningItem) outputItem() adapteropenai.ResponsesOutputItem {
+	return adapteropenai.ResponsesOutputItem{
+		Type: "reasoning", ID: r.itemID, Status: r.status, Role: "", Content: nil,
+		Summary: []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: r.text}}, CallID: "", Name: "", Arguments: "",
+	}
+}
+
+// startNextReasoningItem archives a finished reasoning item on the
+// documented contract and returns the id for the next one. The first
+// reasoning item keeps the rs_<base> id.
+func (p *responsesStreamWriter) startNextReasoningItem() string {
+	if !p.documented || p.reasoningItemID == "" {
+		return "rs_" + p.itemBase
+	}
+	p.completedReasoning = append(p.completedReasoning, responsesStreamReasoningItem{
+		itemID:      p.reasoningItemID,
+		outputIndex: p.reasoningOutputIndex,
+		status:      p.reasoningStatus,
+		text:        p.reasoningText.String(),
+	})
+	p.reasoningText.Reset()
+	return "rs_" + p.itemBase + "_" + strconv.Itoa(len(p.completedReasoning))
+}
+
 type responsesStreamContentState struct {
 	kind string
 	text strings.Builder
@@ -140,6 +177,7 @@ func newResponsesStreamWriter(w http.ResponseWriter, responseID, model string, w
 		reasoningOutputIndex: 0,
 		reasoningStatus:      "",
 		reasoningText:        strings.Builder{},
+		completedReasoning:   nil,
 		messageOpen:          false,
 		messageItemID:        "",
 		messageOutputIndex:   0,
@@ -301,7 +339,7 @@ func (p *responsesStreamWriter) openReasoning() error {
 		return nil
 	}
 	p.reasoningOpen = true
-	p.reasoningItemID = "rs_" + p.itemBase
+	p.reasoningItemID = p.startNextReasoningItem()
 	p.reasoningOutputIndex = p.nextOutputIndex
 	p.reasoningStatus = adapteropenai.ResponsesOutputItemStatusInProgress
 	p.nextOutputIndex++
@@ -637,12 +675,14 @@ func (p *responsesStreamWriter) orderedOutput() []adapteropenai.ResponsesOutputI
 			Summary: nil, CallID: "", Name: "", Arguments: "",
 		}
 	}
+	for _, reasoning := range p.completedReasoning {
+		output[reasoning.outputIndex] = reasoning.outputItem()
+	}
 	if p.reasoningItemID != "" {
-		summary := []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: p.reasoningText.String()}}
-		output[p.reasoningOutputIndex] = adapteropenai.ResponsesOutputItem{
-			Type: "reasoning", ID: p.reasoningItemID, Status: p.reasoningStatus, Role: "", Content: nil,
-			Summary: summary, CallID: "", Name: "", Arguments: "",
+		current := responsesStreamReasoningItem{
+			itemID: p.reasoningItemID, outputIndex: p.reasoningOutputIndex, status: p.reasoningStatus, text: p.reasoningText.String(),
 		}
+		output[p.reasoningOutputIndex] = current.outputItem()
 	}
 	for _, index := range p.toolOrder {
 		state := p.toolStates[index]
@@ -654,44 +694,92 @@ func (p *responsesStreamWriter) orderedOutput() []adapteropenai.ResponsesOutputI
 	return output
 }
 
+// collectedReasoning tracks the reasoning item the collect conversion is
+// filling. separate selects the documented contract, which starts a new
+// reasoning item for a reasoning segment that follows a finished one.
+type collectedReasoning struct {
+	separate bool
+	index    int
+	count    int
+	finished bool
+}
+
+// finish marks the current reasoning item finished. A later reasoning
+// delta then starts a new item when separate is set.
+func (r *collectedReasoning) finish() {
+	if r.index >= 0 {
+		r.finished = true
+	}
+}
+
+// appendDelta adds reasoning text to the current item or starts a new one.
+func (r *collectedReasoning) appendDelta(
+	output []adapteropenai.ResponsesOutputItem,
+	base string,
+	itemStatus adapteropenai.ResponsesOutputItemStatus,
+	text string,
+) []adapteropenai.ResponsesOutputItem {
+	if text == "" {
+		return output
+	}
+	startNew := r.index < 0 || (r.separate && r.finished)
+	if !startNew {
+		output[r.index].Status = itemStatus
+		output[r.index].Summary[0].Text += text
+		return output
+	}
+	itemID := "rs_" + base
+	if r.count > 0 {
+		itemID += "_" + strconv.Itoa(r.count)
+	}
+	r.count++
+	r.finished = false
+	r.index = len(output)
+	return append(output, adapteropenai.ResponsesOutputItem{
+		Type: "reasoning", ID: itemID, Status: itemStatus, Role: "", Content: nil,
+		Summary: []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: text}},
+		CallID:  "", Name: "", Arguments: "",
+	})
+}
+
+// responsesOutputFromEvents converts collected render events into
+// Responses output items. separateReasoning selects one reasoning item per
+// reasoning segment. Without it, every reasoning delta joins the first
+// reasoning item.
 func responsesOutputFromEvents(
 	responseID string,
 	events []adapterrender.Event,
 	status adapteropenai.ResponsesStatus,
+	separateReasoning bool,
 ) []adapteropenai.ResponsesOutputItem {
 	output := make([]adapteropenai.ResponsesOutputItem, 0)
 	base := responsesItemBase(responseID)
 	itemStatus := responsesTerminalItemStatus(status)
 	messageIndex := -1
-	reasoningIndex := -1
+	reasoning := collectedReasoning{separate: separateReasoning, index: -1, count: 0, finished: false}
 	toolIndexes := make(map[int]int)
 
 	for _, event := range events {
 		switch typed := event.(type) {
 		case adapterrender.TextDelta:
+			if typed.Text != "" {
+				reasoning.finish()
+			}
 			output, messageIndex = appendCollectedMessagePart(output, messageIndex, base, itemStatus, "output_text", typed.Text)
 		case adapterrender.RefusalDelta:
+			if typed.Text != "" {
+				reasoning.finish()
+			}
 			output, messageIndex = appendCollectedMessagePart(output, messageIndex, base, itemStatus, "refusal", typed.Text)
 		case adapterrender.ReasoningDelta:
-			if typed.Text == "" {
-				continue
-			}
-			if reasoningIndex < 0 {
-				reasoningIndex = len(output)
-				output = append(output, adapteropenai.ResponsesOutputItem{
-					Type: "reasoning", ID: "rs_" + base, Status: itemStatus, Role: "", Content: nil,
-					Summary: []adapteropenai.ResponsesSummaryPart{{Type: "summary_text", Text: typed.Text}},
-					CallID:  "", Name: "", Arguments: "",
-				})
-				continue
-			}
-			output[reasoningIndex].Status = itemStatus
-			output[reasoningIndex].Summary[0].Text += typed.Text
+			output = reasoning.appendDelta(output, base, itemStatus, typed.Text)
 		case adapterrender.ReasoningFinished:
-			if reasoningIndex >= 0 {
-				output[reasoningIndex].Status = adapteropenai.ResponsesOutputItemStatusCompleted
+			if reasoning.index >= 0 {
+				output[reasoning.index].Status = adapteropenai.ResponsesOutputItemStatusCompleted
 			}
+			reasoning.finish()
 		case adapterrender.ToolCallDelta:
+			reasoning.finish()
 			for _, toolCall := range typed.ToolCalls {
 				outputIndex, found := toolIndexes[toolCall.Index]
 				if !found {

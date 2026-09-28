@@ -471,7 +471,7 @@ func TestResponsesOutputFromEventsPreservesNormalizedOutputOrder(t *testing.T) {
 		adapterrender.ToolCallDelta{ToolCalls: []adapteropenai.ToolCall{{
 			Index: 0, ID: "upstream-call", Type: "function", Function: adapteropenai.ToolCallFunction{Name: "lookup", Arguments: "{}"},
 		}}},
-	}, adapteropenai.ResponsesStatusCompleted)
+	}, adapteropenai.ResponsesStatusCompleted, false)
 	if len(output) != 3 {
 		t.Fatalf("output len=%d want 3", len(output))
 	}
@@ -520,7 +520,7 @@ func TestResponsesOutputFromEventsUsesTerminalItemStatus(t *testing.T) {
 				Reasoning:  "",
 				Refusal:    "",
 				ToolCalls:  nil,
-				Output:     responsesOutputFromEvents("resp_buffered_"+testCase.finishReason, events, status),
+				Output:     responsesOutputFromEvents("resp_buffered_"+testCase.finishReason, events, status, false),
 				Usage:      nil,
 				ItemIDBase: "buffered_" + testCase.finishReason,
 				Warnings:   nil,
@@ -548,7 +548,7 @@ func TestResponsesOutputFromEventsPreservesFinishedReasoningStatus(t *testing.T)
 		t.Run(finishReason, func(t *testing.T) {
 			t.Parallel()
 			status, _ := adapteropenai.ResponsesTerminalForFinishReason(finishReason)
-			output := responsesOutputFromEvents("resp_buffered_finished_"+finishReason, events, status)
+			output := responsesOutputFromEvents("resp_buffered_finished_"+finishReason, events, status, false)
 			if len(output) != 2 {
 				t.Fatalf("output len=%d want 2", len(output))
 			}

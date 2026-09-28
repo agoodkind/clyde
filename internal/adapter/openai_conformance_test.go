@@ -596,6 +596,93 @@ func indexOfEvent(names []string, name string) int {
 	return -1
 }
 
+// codexTwoReasoningSSEBody streams a reasoning segment, one text delta,
+// and a second reasoning segment.
+func codexTwoReasoningSSEBody() string {
+	return "event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-conformance\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"rs_first\",\"type\":\"reasoning\",\"summary\":[]}}\n\n" +
+		"event: response.reasoning_summary_text.delta\n" +
+		"data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_first\",\"output_index\":0,\"summary_index\":0,\"delta\":\"first\"}\n\n" +
+		"event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_first\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"first\"}]}}\n\n" +
+		"event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"id\":\"rs_second\",\"type\":\"reasoning\",\"summary\":[]}}\n\n" +
+		"event: response.reasoning_summary_text.delta\n" +
+		"data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_second\",\"output_index\":2,\"summary_index\":0,\"delta\":\"second\"}\n\n" +
+		"event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"id\":\"rs_second\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"second\"}]}}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-conformance\",\"usage\":" + conformanceUsageWithReasoning + "}}\n\n"
+}
+
+// reasoningOutputItems returns the id and summary text of each reasoning
+// item in a Response object output array, in output order.
+func reasoningOutputItems(t *testing.T, response map[string]json.RawMessage) ([]string, []string) {
+	t.Helper()
+	var output []adapteropenai.ResponsesOutputItem
+	if err := json.Unmarshal(requireMember(t, response, "output"), &output); err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	var ids []string
+	var texts []string
+	for _, item := range output {
+		if item.Type != "reasoning" {
+			continue
+		}
+		ids = append(ids, item.ID)
+		text := ""
+		if len(item.Summary) > 0 {
+			text = item.Summary[0].Text
+		}
+		texts = append(texts, text)
+	}
+	return ids, texts
+}
+
+func TestOpenAIConformanceResponsesSeparatesReasoningItems(t *testing.T) {
+	upstream := &conformanceUpstream{
+		requests: make(chan adaptercodex.HTTPTransportRequest, 4),
+		reply: func(writer http.ResponseWriter) {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = writer.Write([]byte(codexTwoReasoningSSEBody()))
+		},
+	}
+	listeners := startConformanceServer(t, upstream)
+
+	collected := postConformance(t, listeners.openAI+"/v1/responses", `{"model":"gpt-future","input":"hi"}`)
+	drainConformanceRequest(t, upstream)
+	ids, texts := reasoningOutputItems(t, decodeJSONObject(t, collected.body))
+	if len(ids) != 2 || ids[0] == ids[1] || texts[0] != "first" || texts[1] != "second" {
+		t.Fatalf("collected reasoning ids=%v texts=%v, want two distinct items first and second; body=%s", ids, texts, collected.body)
+	}
+
+	stream := postConformance(t, listeners.openAI+"/v1/responses", `{"model":"gpt-future","input":"hi","stream":true}`)
+	drainConformanceRequest(t, upstream)
+	names, payloads := responsesStreamEvents(t, stream.body)
+	addedReasoning := 0
+	for index, name := range names {
+		if name != "response.output_item.added" {
+			continue
+		}
+		var item adapteropenai.ResponsesOutputItem
+		if err := json.Unmarshal(payloads[index]["item"], &item); err != nil {
+			t.Fatalf("decode added item: %v", err)
+		}
+		if item.Type == "reasoning" {
+			addedReasoning++
+		}
+	}
+	completed := decodeJSONObject(t, payloads[indexOfEvent(names, "response.completed")]["response"])
+	streamIDs, streamTexts := reasoningOutputItems(t, completed)
+	if addedReasoning != 2 || len(streamIDs) != 2 || streamIDs[0] == streamIDs[1] || streamTexts[0] != "first" || streamTexts[1] != "second" {
+		t.Fatalf("stream reasoning added=%d ids=%v texts=%v, want two distinct items; events=%v", addedReasoning, streamIDs, streamTexts, names)
+	}
+}
+
 func TestOpenAIConformanceResponsesStreamEventsAndEcho(t *testing.T) {
 	upstream := &conformanceUpstream{
 		requests: make(chan adaptercodex.HTTPTransportRequest, 4),
