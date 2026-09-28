@@ -84,8 +84,9 @@ type ResponsesResponse struct {
 }
 
 // ResponsesEcho stores the request values that the documented Response
-// object repeats. Each field stores raw JSON. The Responses contract
-// repeats the client tool, text, and reasoning objects byte for byte.
+// object repeats. Each field stores raw JSON. NewResponsesEcho copies the
+// client tool and text objects byte for byte and re-encodes the reasoning
+// object from the typed Reasoning value.
 type ResponsesEcho struct {
 	Instructions       json.RawMessage
 	MaxOutputTokens    json.RawMessage

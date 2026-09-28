@@ -34,8 +34,9 @@ type providerStreamWriter struct {
 	server            *Server
 	streamChunkSeq    int
 	onStreamOpened    func()
-	// The generic OpenAI listener sets documentedUsage. Without it, the
-	// writer sends usage on the finish chunk and on a separate usage chunk.
+	// The generic OpenAI listener sets documentedUsage. Without it and with
+	// includeUsage true, the writer sends usage on the finish chunk and on a
+	// separate usage chunk.
 	documentedUsage bool
 }
 
