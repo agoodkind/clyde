@@ -421,8 +421,8 @@ func (p *responsesStreamWriter) handleRefusal(text string) error {
 }
 
 // On the documented contract, closeReasoningBeforeNextItem completes an
-// open reasoning item before another output item starts. The documented
-// stream finishes each output item before the next item begins.
+// open reasoning item before a message or tool item starts. It leaves an
+// open message item open.
 func (p *responsesStreamWriter) closeReasoningBeforeNextItem() error {
 	if !p.documented {
 		return nil
