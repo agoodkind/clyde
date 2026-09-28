@@ -10,19 +10,17 @@ import (
 	"strings"
 )
 
-// CompletionObjectType is the object discriminator of a legacy
-// Completions response and stream chunk.
+// CompletionObjectType sets the object member of every legacy Completions
+// response and stream chunk.
 const CompletionObjectType = "text_completion"
 
-// completionIDPrefix replaces the Chat Completions id prefix on a
-// converted legacy Completions id.
 const completionIDPrefix = "cmpl-"
 
-// ErrCompletionPromptUnsupported reports a prompt shape Clyde cannot run,
-// such as token arrays or several prompts in one request.
+// ErrCompletionPromptUnsupported rejects a token-array prompt and a request
+// with several prompts.
 var ErrCompletionPromptUnsupported = errors.New("prompt must be a string or an array with one string")
 
-// CompletionRequest is the legacy POST /v1/completions request body.
+// CompletionRequest decodes a POST /v1/completions request body.
 type CompletionRequest struct {
 	Model            string          `json:"model"`
 	Prompt           json.RawMessage `json:"prompt"`
@@ -45,8 +43,8 @@ type CompletionRequest struct {
 	ReasoningEffort  string          `json:"reasoning_effort,omitempty"`
 }
 
-// knownCompletionRequestKeys mirrors the JSON tags on CompletionRequest.
-// TestCompletionRequestJSONTagsMatchKnownKeys pins the two sets together.
+// TestCompletionRequestJSONTagsMatchKnownKeys fails when this set differs
+// from the CompletionRequest JSON tags.
 var knownCompletionRequestKeys = map[string]bool{
 	"model":             true,
 	"prompt":            true,
@@ -69,8 +67,8 @@ var knownCompletionRequestKeys = map[string]bool{
 	"reasoning_effort":  true,
 }
 
-// UnknownCompletionKeys returns the sorted top-level keys that the typed
-// CompletionRequest does not model.
+// UnknownCompletionKeys returns, in sorted order, the top-level keys that
+// CompletionRequest does not decode.
 func (s ResponsesFieldSet) UnknownCompletionKeys() []string {
 	unknown := make([]string, 0)
 	for _, key := range sortedKeys(s.fields) {
@@ -81,8 +79,8 @@ func (s ResponsesFieldSet) UnknownCompletionKeys() []string {
 	return unknown
 }
 
-// PromptText returns the single prompt string. It accepts a JSON string
-// or an array that contains exactly one string.
+// PromptText accepts a JSON string or an array with exactly one string. It
+// returns ErrCompletionPromptUnsupported for every other prompt.
 func (r CompletionRequest) PromptText() (string, error) {
 	var single string
 	if err := json.Unmarshal(r.Prompt, &single); err == nil {
@@ -95,9 +93,9 @@ func (r CompletionRequest) PromptText() (string, error) {
 	return "", ErrCompletionPromptUnsupported
 }
 
-// CompletionChoice is one legacy Completions choice. Logprobs is always
-// JSON null because Clyde rejects a request that asks for log
-// probabilities. FinishReason is null on stream chunks before the end.
+// CompletionChoice always writes Logprobs as JSON null. Clyde rejects every
+// request that sets logprobs. FinishReason is null on every stream chunk
+// before the last one.
 type CompletionChoice struct {
 	Text         string          `json:"text"`
 	Index        int             `json:"index"`
@@ -105,8 +103,8 @@ type CompletionChoice struct {
 	FinishReason *string         `json:"finish_reason"`
 }
 
-// CompletionResponse is the legacy Completions response object and
-// stream chunk.
+// CompletionResponse encodes both the legacy Completions response object
+// and each stream chunk.
 type CompletionResponse struct {
 	ID                string             `json:"id"`
 	Object            string             `json:"object"`
@@ -117,8 +115,8 @@ type CompletionResponse struct {
 	SystemFingerprint string             `json:"system_fingerprint,omitempty"`
 }
 
-// completionChunkNullUsageWire is the chunk shape with a usage member
-// that is never omitted.
+// marshalChunk uses this type when stream_options.include_usage is true. It
+// writes "usage":null on a chunk without usage.
 type completionChunkNullUsageWire struct {
 	ID                string             `json:"id"`
 	Object            string             `json:"object"`
@@ -129,14 +127,12 @@ type completionChunkNullUsageWire struct {
 	SystemFingerprint string             `json:"system_fingerprint,omitempty"`
 }
 
-// completionID converts a Chat Completions id into a Completions id.
 func completionID(chatID string) string {
 	return completionIDPrefix + strings.TrimPrefix(chatID, "chatcmpl-")
 }
 
-// CompletionFromChat converts a nonstreaming Chat Completions response
-// into the legacy Completions response. Only literal text content
-// becomes completion text.
+// CompletionFromChat copies only text content parts into the completion
+// text.
 func CompletionFromChat(chat ChatResponse) CompletionResponse {
 	choices := make([]CompletionChoice, 0, len(chat.Choices))
 	for _, choice := range chat.Choices {
@@ -159,8 +155,6 @@ func CompletionFromChat(chat ChatResponse) CompletionResponse {
 	}
 }
 
-// completionText returns the literal text parts of a Chat message
-// content value.
 func completionText(content json.RawMessage) string {
 	parts, kind := NormalizeContent(content)
 	if kind == ContentKindEmpty {
@@ -175,9 +169,8 @@ func completionText(content json.RawMessage) string {
 	return builder.String()
 }
 
-// completionChunkFromChat converts one Chat Completions stream chunk. It
-// drops choices with no text and no finish reason, and it reports false
-// when nothing remains to send.
+// completionChunkFromChat drops each choice with no text and no finish
+// reason. It returns false when no choice and no usage remain.
 func completionChunkFromChat(chunk StreamChunk) (CompletionResponse, bool) {
 	choices := make([]CompletionChoice, 0, len(chunk.Choices))
 	for _, choice := range chunk.Choices {
@@ -206,11 +199,10 @@ func completionChunkFromChat(chunk StreamChunk) (CompletionResponse, bool) {
 	}, true
 }
 
-// LegacyCompletionWriter wraps the response writer of a Chat Completions
-// handler and rewrites its successful output into the legacy Completions
-// shape. A 2xx JSON body becomes a text_completion object. Each SSE chat
-// chunk becomes a text_completion chunk. Error bodies, error stream
-// frames, and the [DONE] frame keep their bytes.
+// LegacyCompletionWriter rewrites a 2xx Chat Completions JSON body into a
+// text_completion object and each Chat SSE chunk into a text_completion
+// chunk. It writes error bodies, error stream frames, and the [DONE] frame
+// unchanged.
 type LegacyCompletionWriter struct {
 	inner         http.ResponseWriter
 	flusher       http.Flusher
@@ -223,9 +215,9 @@ type LegacyCompletionWriter struct {
 	finishedWrite bool
 }
 
-// NewLegacyCompletionWriter wraps inner. includeUsage reports whether the
-// client set stream_options.include_usage, which requires an explicit
-// null usage member on ordinary stream chunks.
+// NewLegacyCompletionWriter writes "usage":null on each ordinary stream
+// chunk when includeUsage is true. The caller passes the client
+// stream_options.include_usage value.
 func NewLegacyCompletionWriter(inner http.ResponseWriter, includeUsage bool) *LegacyCompletionWriter {
 	flusher, _ := inner.(http.Flusher)
 	return &LegacyCompletionWriter{
@@ -241,20 +233,21 @@ func NewLegacyCompletionWriter(inner http.ResponseWriter, includeUsage bool) *Le
 	}
 }
 
-// Header returns the wrapped writer's header map.
+// Header implements [http.ResponseWriter].
 func (w *LegacyCompletionWriter) Header() http.Header {
 	return w.inner.Header()
 }
 
-// WriteHeader records the status. A streaming or non-2xx response writes
-// the status immediately. A 2xx JSON response defers the status until
-// Finish writes the converted body.
+// WriteHeader defers a 2xx JSON status until Finish writes the converted
+// body. It writes a streaming or non-2xx status immediately. Every response
+// sets X-Content-Type-Options: nosniff because the body repeats prompt text.
 func (w *LegacyCompletionWriter) WriteHeader(status int) {
 	if w.statusChosen {
 		return
 	}
 	w.statusChosen = true
 	w.status = status
+	w.inner.Header().Set("X-Content-Type-Options", "nosniff")
 	contentType := strings.ToLower(w.inner.Header().Get("Content-Type"))
 	w.streaming = strings.Contains(contentType, "text/event-stream")
 	w.passthrough = status < http.StatusOK || status >= http.StatusMultipleChoices
@@ -263,7 +256,8 @@ func (w *LegacyCompletionWriter) WriteHeader(status int) {
 	}
 }
 
-// Write buffers or converts body bytes according to the response kind.
+// Write buffers a 2xx JSON body until Finish and converts each complete SSE
+// frame as it arrives. It writes a non-2xx body unchanged.
 func (w *LegacyCompletionWriter) Write(body []byte) (int, error) {
 	if !w.statusChosen {
 		w.WriteHeader(http.StatusOK)
@@ -284,20 +278,20 @@ func (w *LegacyCompletionWriter) Write(body []byte) (int, error) {
 	return len(body), nil
 }
 
-// Flush sends converted stream frames to the network.
+// Flush implements [http.Flusher] for streaming responses.
 func (w *LegacyCompletionWriter) Flush() {
 	if w.streaming && w.flusher != nil {
 		w.flusher.Flush()
 	}
 }
 
-// Unwrap returns the wrapped writer.
+// Unwrap exposes the inner writer to [http.ResponseController].
 func (w *LegacyCompletionWriter) Unwrap() http.ResponseWriter {
 	return w.inner
 }
 
-// Finish writes a deferred JSON body and any partial stream frame. The
-// legacy Completions handler runs Finish after the Chat Completions
+// Finish writes the deferred JSON body or the trailing partial stream frame.
+// The legacy Completions handler calls Finish after the Chat Completions
 // handler returns.
 func (w *LegacyCompletionWriter) Finish() error {
 	if w.finishedWrite || !w.statusChosen || w.passthrough {
@@ -333,8 +327,7 @@ func (w *LegacyCompletionWriter) Finish() error {
 	return nil
 }
 
-// writeCompleteFrames converts and writes every complete SSE frame in the
-// pending buffer and keeps a trailing partial frame.
+// writeCompleteFrames leaves a trailing partial frame in the pending buffer.
 func (w *LegacyCompletionWriter) writeCompleteFrames() error {
 	for {
 		buffered := w.pending.Bytes()
@@ -355,8 +348,9 @@ func (w *LegacyCompletionWriter) writeCompleteFrames() error {
 	}
 }
 
-// convertFrame rewrites one SSE frame. It reports false for a chat chunk
-// that has nothing to send in the legacy shape.
+// convertFrame returns false for a Chat chunk with no legacy content to
+// send. It returns an error frame, a [DONE] frame, or an undecodable frame
+// unchanged.
 func (w *LegacyCompletionWriter) convertFrame(frame string) (string, bool) {
 	payload, isData := strings.CutPrefix(frame, "data: ")
 	if !isData || payload == "[DONE]" {

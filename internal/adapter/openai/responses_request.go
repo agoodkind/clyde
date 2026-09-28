@@ -37,8 +37,8 @@ func (s ResponsesFieldSet) Presence(name string) ResponsesFieldPresence {
 	return responsesPresence(s.fields[name])
 }
 
-// knownResponsesRequestKeys mirrors the JSON tags on ResponsesRequest.
-// TestResponsesRequestJSONTagsMatchKnownKeys pins the two sets together.
+// TestResponsesRequestJSONTagsMatchKnownKeys fails when this set differs
+// from the ResponsesRequest JSON tags.
 var knownResponsesRequestKeys = map[string]bool{
 	"previous_response_id":   true,
 	"model":                  true,
@@ -77,8 +77,8 @@ var knownResponsesRequestKeys = map[string]bool{
 	"stop":                   true,
 }
 
-// UnknownResponsesKeys returns the sorted top-level keys that the typed
-// ResponsesRequest does not model.
+// UnknownResponsesKeys returns, in sorted order, the top-level keys that
+// ResponsesRequest does not decode.
 func (s ResponsesFieldSet) UnknownResponsesKeys() []string {
 	unknown := make([]string, 0)
 	for _, key := range sortedKeys(s.fields) {
@@ -173,9 +173,9 @@ func (r *ResponsesRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// DecodeFieldSet records the top-level wire presence of every key in a
-// JSON object request body. Chat Completions and legacy Completions
-// validation use it to tell an omitted field from an explicit value.
+// DecodeFieldSet records which top-level keys a JSON object body sets. Chat
+// Completions and legacy Completions validation read the result to separate
+// an omitted field from an explicit value.
 func DecodeFieldSet(body []byte) (ResponsesFieldSet, error) {
 	fields := responsesRawFields{}
 	if err := json.Unmarshal(body, &fields); err != nil {

@@ -24,21 +24,21 @@ type SSEWriter struct {
 	w                http.ResponseWriter
 	f                http.Flusher
 	headersCommitted bool
-	// explicitNullUsage makes EmitStreamChunk write `"usage":null` on a
-	// chunk with no usage. The Chat Completions contract requires that
-	// field on every ordinary chunk when stream_options.include_usage is
+	// When explicitNullUsage is true, EmitStreamChunk writes "usage":null on
+	// a chunk without usage. The Chat Completions contract requires that
+	// member on every ordinary chunk when stream_options.include_usage is
 	// true.
 	explicitNullUsage bool
 }
 
-// SetExplicitNullUsage selects whether chunks without usage render an
-// explicit `"usage":null` member instead of omitting it.
+// SetExplicitNullUsage makes a chunk without usage write "usage":null
+// instead of omitting the member.
 func (sw *SSEWriter) SetExplicitNullUsage(enabled bool) {
 	sw.explicitNullUsage = enabled
 }
 
-// streamChunkNullUsageWire is the StreamChunk wire shape with a usage
-// member that is never omitted. A nil Usage renders as JSON null.
+// streamChunkNullUsageWire writes a nil Usage as JSON null instead of
+// omitting the member.
 type streamChunkNullUsageWire struct {
 	ID                string         `json:"id"`
 	Object            string         `json:"object"`
@@ -49,8 +49,6 @@ type streamChunkNullUsageWire struct {
 	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
 }
 
-// marshalStreamChunk encodes a chunk. It writes an explicit null usage
-// member when the writer requires one.
 func (sw *SSEWriter) marshalStreamChunk(chunk StreamChunk) ([]byte, error) {
 	if !sw.explicitNullUsage {
 		encoded, err := json.Marshal(chunk)

@@ -13,37 +13,27 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
-// These tests exercise the OpenAI conformance matrix in
-// docs/adapter/openai-conformance.md through the public HTTP boundary.
-// Each test starts the real adapter on two loopback listeners, the generic
-// OpenAI listener and the Cursor BYOK listener, with a local Codex
-// upstream, and asserts the raw wire output a client receives.
+// These tests verify docs/adapter/openai-conformance.md at the public HTTP
+// boundary. Each test starts the adapter on the generic OpenAI listener and
+// the Cursor BYOK listener with a local Codex upstream. Each test asserts
+// the raw bytes a client receives.
 
-// conformanceUsageWithReasoning is a Codex response.completed usage object
-// that reports seven reasoning tokens, three cached tokens, and two cache
-// write tokens.
 const conformanceUsageWithReasoning = `{"input_tokens":11,"output_tokens":13,"total_tokens":24,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},"output_tokens_details":{"reasoning_tokens":7}}`
 
-// conformanceUsageWithoutDetails is a Codex usage object that reports no
-// token breakdown.
 const conformanceUsageWithoutDetails = `{"input_tokens":11,"output_tokens":13,"total_tokens":24}`
 
-// conformanceUpstream is a local Codex upstream. Its reply function
-// writes the HTTP response for each Codex request, and every decoded
-// request is sent to requests.
+// The local Codex upstream sends each decoded request on requests and
+// writes each HTTP response with reply.
 type conformanceUpstream struct {
 	requests chan adaptercodex.HTTPTransportRequest
 	reply    func(http.ResponseWriter)
 }
 
-// conformanceListeners are the base URLs of the two adapter listeners.
 type conformanceListeners struct {
 	openAI string
 	cursor string
 }
 
-// startConformanceServer starts the adapter with the given Codex upstream
-// and returns the two listener URLs.
 func startConformanceServer(t *testing.T, upstream *conformanceUpstream) conformanceListeners {
 	t.Helper()
 	fakes := newRoutingFakeEndpoints(t)
@@ -66,8 +56,8 @@ func startConformanceServer(t *testing.T, upstream *conformanceUpstream) conform
 	return conformanceListeners{openAI: openAIURL, cursor: cursorURL}
 }
 
-// newConformanceUpstream returns an upstream that streams one text delta
-// and a response.completed event with the given usage object.
+// newConformanceUpstream streams one text delta and a response.completed
+// event with usageJSON.
 func newConformanceUpstream(usageJSON string) *conformanceUpstream {
 	return &conformanceUpstream{
 		requests: make(chan adaptercodex.HTTPTransportRequest, 16),
@@ -78,8 +68,6 @@ func newConformanceUpstream(usageJSON string) *conformanceUpstream {
 	}
 }
 
-// newFailingConformanceUpstream returns an upstream that answers every
-// Codex request with the given HTTP status and JSON error body.
 func newFailingConformanceUpstream(status int, body string) *conformanceUpstream {
 	return &conformanceUpstream{
 		requests: make(chan adaptercodex.HTTPTransportRequest, 16),
@@ -100,7 +88,6 @@ func codexConformanceSSEBody(usageJSON string) string {
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-conformance\",\"usage\":" + usageJSON + "}}\n\n"
 }
 
-// conformanceResponse is the raw HTTP response a client received.
 type conformanceResponse struct {
 	status int
 	header http.Header
@@ -137,8 +124,7 @@ func sendConformance(t *testing.T, method string, url string, body string) confo
 	return conformanceResponse{status: response.StatusCode, header: response.Header, body: responseBody}
 }
 
-// decodeJSONObject decodes a JSON object into raw members so tests can
-// assert key presence and absence exactly.
+// The raw members let tests assert exact key presence and absence.
 func decodeJSONObject(t *testing.T, raw []byte) map[string]json.RawMessage {
 	t.Helper()
 	var object map[string]json.RawMessage
@@ -186,7 +172,6 @@ func requireNoUpstreamRequest(t *testing.T, upstream *conformanceUpstream) {
 	}
 }
 
-// sseDataFrames returns the data payload of every SSE frame in order.
 func sseDataFrames(t *testing.T, body []byte) []string {
 	t.Helper()
 	var frames []string
@@ -203,8 +188,8 @@ func sseDataFrames(t *testing.T, body []byte) []string {
 	return frames
 }
 
-// requireSingleTrailingDone asserts one [DONE] frame that ends the stream
-// and returns the JSON frames before it.
+// requireSingleTrailingDone fails unless exactly one [DONE] frame ends the
+// stream. It returns the JSON frames before that frame.
 func requireSingleTrailingDone(t *testing.T, frames []string) []string {
 	t.Helper()
 	doneCount := 0
@@ -272,7 +257,8 @@ func TestOpenAIConformanceChatStreamWithoutUsageOptIn(t *testing.T) {
 		}
 	}
 
-	// The Cursor listener keeps its forced usage chunk.
+	// The Cursor listener still sends usage on the finish chunk and on a
+	// separate usage chunk.
 	cursor := postConformance(t, listeners.cursor+"/v1/chat/completions", body)
 	if cursor.status != http.StatusOK {
 		t.Fatalf("cursor stream status = %d; body=%s", cursor.status, cursor.body)
@@ -294,8 +280,8 @@ func TestOpenAIConformanceChatStreamWithoutUsageOptIn(t *testing.T) {
 	}
 }
 
-// postNativeCodexResponses posts a Responses body with native Codex turn
-// metadata, which classifies the request for raw forwarding.
+// postNativeCodexResponses sets native Codex turn metadata. The adapter
+// classifies the request for raw forwarding.
 func postNativeCodexResponses(t *testing.T, url string, body string) conformanceResponse {
 	t.Helper()
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBufferString(body))
@@ -337,8 +323,8 @@ func TestOpenAIListenerKeepsNativeCodexForwardingContract(t *testing.T) {
 		t.Fatalf("native upstream body = %s, want unknown fields forwarded unchanged", forwardedBody)
 	}
 
-	// A resolver failure after native classification keeps the native
-	// compatibility status instead of the documented 404.
+	// A resolver failure after native classification returns the
+	// compatibility status 400 instead of the documented 404.
 	unknownModel := postNativeCodexResponses(t, openAIURL+"/v1/responses", `{"model":"unrouted-native","input":"native"}`)
 	unknownModelError := decodeErrorEnvelope(t, unknownModel.body)
 	if unknownModel.status != http.StatusBadRequest || unknownModelError.Type != "invalid_request_error" {
@@ -471,7 +457,8 @@ func TestOpenAIConformanceChatRejectsFieldsBeforeProviderRequest(t *testing.T) {
 			}
 			requireNoUpstreamRequest(t, upstream)
 
-			// The Cursor listener keeps its lenient projection.
+			// The Cursor listener accepts the same request and sends it to
+			// Codex.
 			cursor := postConformance(t, listeners.cursor+"/v1/chat/completions", test.body)
 			if cursor.status != http.StatusOK {
 				t.Fatalf("Cursor listener status = %d; body=%s", cursor.status, cursor.body)
@@ -554,8 +541,6 @@ func TestOpenAIConformanceResponsesAcceptsDocumentedDefaults(t *testing.T) {
 	drainConformanceRequest(t, upstream)
 }
 
-// codexReasoningSSEBody streams a reasoning summary, one text delta, and
-// a completed event.
 func codexReasoningSSEBody() string {
 	return "event: response.created\n" +
 		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-conformance\"}}\n\n" +
@@ -571,8 +556,6 @@ func codexReasoningSSEBody() string {
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-conformance\",\"usage\":" + conformanceUsageWithReasoning + "}}\n\n"
 }
 
-// responsesStreamEvents returns the SSE event names and JSON payloads in
-// order.
 func responsesStreamEvents(t *testing.T, body []byte) ([]string, []map[string]json.RawMessage) {
 	t.Helper()
 	var names []string
@@ -601,8 +584,6 @@ func indexOfEvent(names []string, name string) int {
 	return -1
 }
 
-// codexTwoReasoningSSEBody streams a reasoning segment, one text delta,
-// and a second reasoning segment.
 func codexTwoReasoningSSEBody() string {
 	return "event: response.created\n" +
 		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-conformance\"}}\n\n" +
@@ -624,8 +605,6 @@ func codexTwoReasoningSSEBody() string {
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-conformance\",\"usage\":" + conformanceUsageWithReasoning + "}}\n\n"
 }
 
-// reasoningOutputItems returns the id and summary text of each reasoning
-// item in a Response object output array, in output order.
 func reasoningOutputItems(t *testing.T, response map[string]json.RawMessage) ([]string, []string) {
 	t.Helper()
 	var output []adapteropenai.ResponsesOutputItem
@@ -747,7 +726,8 @@ func TestOpenAIConformanceResponsesStreamEventsAndEcho(t *testing.T) {
 		t.Fatalf("completed usage = %s, want reasoning_tokens 7", completed["usage"])
 	}
 
-	// The Cursor listener keeps the compatibility stream shape.
+	// The Cursor stream omits reasoning_summary_part events, logprobs, and
+	// the request echo fields.
 	cursor := postConformance(t, listeners.cursor+"/v1/responses", body)
 	drainConformanceRequest(t, upstream)
 	cursorNames, cursorPayloads := responsesStreamEvents(t, cursor.body)
@@ -905,7 +885,8 @@ func TestOpenAIConformanceReportsUpstreamReasoningTokens(t *testing.T) {
 		t.Fatalf("chat prompt_tokens_details = %s, want cached_tokens 3 and cache_write_tokens 2", chat.body)
 	}
 
-	// The Cursor listener keeps its usage bytes without the new details.
+	// The Cursor listener sends its previous usage bytes without the
+	// reasoning and cache-write details.
 	cursorChat := postConformance(t, listeners.cursor+"/v1/chat/completions", chatBody)
 	drainConformanceRequest(t, upstream)
 	cursorUsage := decodeJSONObject(t, requireMember(t, decodeJSONObject(t, cursorChat.body), "usage"))

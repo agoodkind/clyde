@@ -95,7 +95,7 @@ still warns.
 ## Unsupported Responses tools
 
 On the Cursor listener, a `/v1/responses` request with non-function tools in
-its `tools` array keeps the function tools, drops the rest, and warns with code
+its `tools` array sends the function tools, drops the rest, and warns with code
 `tool_unsupported` rather than rejecting the whole request. OpenAI built-in tools such as
 web_search, file_search, computer_use, and mcp, plus custom tools, are the
 dropped types. The

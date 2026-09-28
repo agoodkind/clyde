@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 )
 
-// streamMessageUsage is the usage object inside a message_start event.
-// A nil cache count means message_start omitted it or sent null.
+// The decoder stores nil for a cache count that message_start omits or sets
+// to null.
 type streamMessageUsage struct {
 	InputTokens              int  `json:"input_tokens"`
 	OutputTokens             int  `json:"output_tokens"`
@@ -87,10 +87,8 @@ type streamMessageDeltaPayload struct {
 	StopReason string `json:"stop_reason"`
 }
 
-// streamMessageDeltaUsage is the usage delta on a message_delta event
-// (only output_tokens is updated mid-stream). Cache token counts from
-// message_start are authoritative; message_delta may echo them for
-// completeness.
+// handleSSEMessageDelta overwrites output_tokens and each cache count with
+// the message_delta value when that value is positive.
 type streamMessageDeltaUsage struct {
 	OutputTokens             int                             `json:"output_tokens"`
 	CacheCreationInputTokens int                             `json:"cache_creation_input_tokens,omitempty"`
@@ -98,9 +96,7 @@ type streamMessageDeltaUsage struct {
 	OutputTokensDetails      *streamMessageOutputTokenDetail `json:"output_tokens_details,omitempty"`
 }
 
-// streamMessageOutputTokenDetail is the output token breakdown on a
-// message_delta usage object. ThinkingTokens counts the thinking tokens
-// inside output_tokens.
+// output_tokens includes ThinkingTokens.
 type streamMessageOutputTokenDetail struct {
 	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }

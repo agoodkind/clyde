@@ -129,13 +129,12 @@ type Registry struct {
 	routes               []routeRule
 	defaultModel         string
 	openAICompat         config.AdapterOpenAICompatPassthrough
-	// loadedUnix is the Unix time in seconds when this catalog was built.
-	loadedUnix int64
+	loadedUnix           int64
 }
 
-// LoadedUnix returns the Unix time in seconds when the registry built this
-// catalog. The OpenAI Models resource reports it as each model's created
-// time. Clyde has no upstream creation time for a configured alias.
+// LoadedUnix returns the Unix time in seconds when NewRegistry built this
+// catalog. The OpenAI Models resource reports it as the created time of
+// each model. A configured alias has no upstream creation time.
 func (registry *Registry) LoadedUnix() int64 {
 	return registry.loadedUnix
 }

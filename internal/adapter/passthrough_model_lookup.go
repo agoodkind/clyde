@@ -11,15 +11,12 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
-// passthroughModelLookupLimit bounds the upstream model object body the
-// adapter reads for GET /v1/models/{model}.
 const passthroughModelLookupLimit = 1 << 20
 
-// forwardPassthroughModel serves GET /v1/models/{model} for a model that
-// only the OpenAI-compatible fallback upstream resolves. It sends GET
-// <base>/models/<id> to that upstream and writes a 2xx body unchanged. An
-// upstream 404 becomes the documented model_not_found error, and any
-// other failure becomes an upstream failure.
+// For a fallback-only model, forwardPassthroughModel sends GET
+// <base>/models/<id> to the OpenAI-compatible upstream. It writes a 2xx
+// body unchanged, returns model_not_found for an upstream 404, and returns
+// an upstream failure for every other status.
 func (s *Server) forwardPassthroughModel(ctx context.Context, w http.ResponseWriter, alias adaptermodel.ResolvedAlias, requestedModel string) error {
 	var req adapterresolver.ResolvedRequest
 	req.PassthroughOverrideName = alias.PassthroughOverride

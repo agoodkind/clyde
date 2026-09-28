@@ -41,9 +41,8 @@ type responsesStreamWriter struct {
 	reasoningOutputIndex int
 	reasoningStatus      adapteropenai.ResponsesOutputItemStatus
 	reasoningText        strings.Builder
-	// completedReasoning stores the reasoning items the documented
-	// contract finished before the current one. The documented stream
-	// starts a new reasoning item for each reasoning segment.
+	// The documented stream starts one reasoning item per reasoning segment.
+	// completedReasoning stores each finished item before the current one.
 	completedReasoning []responsesStreamReasoningItem
 
 	messageOpen        bool
@@ -55,23 +54,19 @@ type responsesStreamWriter struct {
 	toolStates map[int]*responsesStreamToolState
 	toolOrder  []int
 
-	// documented selects the documented Responses stream contract: request
-	// echo fields on every response snapshot, reasoning summary part
-	// events, and output_text logprobs arrays.
+	// When documented is true, the writer adds request echo fields to every
+	// response snapshot, reasoning summary part events, and output_text
+	// logprobs arrays.
 	documented bool
 	echo       *adapteropenai.ResponsesEcho
 }
 
-// useDocumentedContract switches the writer to the documented Responses
-// stream contract with the given request echo. The caller sets it before
-// begin.
+// Callers run useDocumentedContract before begin.
 func (p *responsesStreamWriter) useDocumentedContract(echo adapteropenai.ResponsesEcho) {
 	p.documented = true
 	p.echo = &echo
 }
 
-// documentedLogprobs returns the empty logprobs array the documented
-// output_text events require, or nil on the compatibility contract.
 func (p *responsesStreamWriter) documentedLogprobs() *[]adapteropenai.ResponsesTokenLogprob {
 	if !p.documented {
 		return nil
@@ -80,8 +75,6 @@ func (p *responsesStreamWriter) documentedLogprobs() *[]adapteropenai.ResponsesT
 	return &empty
 }
 
-// emitReasoningSummaryPart writes a reasoning_summary_part event on the
-// documented contract. The compatibility contract writes nothing.
 func (p *responsesStreamWriter) emitReasoningSummaryPart(name string, text string) error {
 	if !p.documented {
 		return nil
@@ -97,7 +90,6 @@ func (p *responsesStreamWriter) emitReasoningSummaryPart(name string, text strin
 	return p.marshalSend(name, evt)
 }
 
-// responsesStreamReasoningItem is one finished reasoning output item.
 type responsesStreamReasoningItem struct {
 	itemID      string
 	outputIndex int
@@ -105,7 +97,6 @@ type responsesStreamReasoningItem struct {
 	text        string
 }
 
-// outputItem returns the reasoning output item for the response object.
 func (r responsesStreamReasoningItem) outputItem() adapteropenai.ResponsesOutputItem {
 	return adapteropenai.ResponsesOutputItem{
 		Type: "reasoning", ID: r.itemID, Status: r.status, Role: "", Content: nil,
@@ -113,9 +104,10 @@ func (r responsesStreamReasoningItem) outputItem() adapteropenai.ResponsesOutput
 	}
 }
 
-// startNextReasoningItem archives a finished reasoning item on the
-// documented contract and returns the id for the next one. The first
-// reasoning item keeps the rs_<base> id.
+// On the documented contract, startNextReasoningItem appends the finished
+// reasoning item to completedReasoning and returns rs_<base>_<n> for the
+// next item. The first reasoning item and every compatibility item use
+// rs_<base>.
 func (p *responsesStreamWriter) startNextReasoningItem() string {
 	if !p.documented || p.reasoningItemID == "" {
 		return "rs_" + p.itemBase
@@ -428,8 +420,8 @@ func (p *responsesStreamWriter) handleRefusal(text string) error {
 	return p.marshalSend(adapteropenai.ResponsesEventRefusalDelta, evt)
 }
 
-// closeReasoningBeforeNextItem completes an open reasoning item before
-// another output item starts on the documented contract. The documented
+// On the documented contract, closeReasoningBeforeNextItem completes an
+// open reasoning item before another output item starts. The documented
 // stream finishes each output item before the next item begins.
 func (p *responsesStreamWriter) closeReasoningBeforeNextItem() error {
 	if !p.documented {
@@ -694,9 +686,9 @@ func (p *responsesStreamWriter) orderedOutput() []adapteropenai.ResponsesOutputI
 	return output
 }
 
-// collectedReasoning tracks the reasoning item the collect conversion is
-// filling. separate selects the documented contract, which starts a new
-// reasoning item for a reasoning segment that follows a finished one.
+// When separate is true, appendDelta starts a new reasoning item for a
+// reasoning segment after a finished segment. The documented contract sets
+// separate.
 type collectedReasoning struct {
 	separate bool
 	index    int
@@ -704,15 +696,12 @@ type collectedReasoning struct {
 	finished bool
 }
 
-// finish marks the current reasoning item finished. A later reasoning
-// delta then starts a new item when separate is set.
 func (r *collectedReasoning) finish() {
 	if r.index >= 0 {
 		r.finished = true
 	}
 }
 
-// appendDelta adds reasoning text to the current item or starts a new one.
 func (r *collectedReasoning) appendDelta(
 	output []adapteropenai.ResponsesOutputItem,
 	base string,
@@ -742,10 +731,9 @@ func (r *collectedReasoning) appendDelta(
 	})
 }
 
-// responsesOutputFromEvents converts collected render events into
-// Responses output items. separateReasoning selects one reasoning item per
-// reasoning segment. Without it, every reasoning delta joins the first
-// reasoning item.
+// When separateReasoning is true, responsesOutputFromEvents writes one
+// reasoning item per reasoning segment. Otherwise it appends every
+// reasoning delta to the first reasoning item.
 func responsesOutputFromEvents(
 	responseID string,
 	events []adapterrender.Event,

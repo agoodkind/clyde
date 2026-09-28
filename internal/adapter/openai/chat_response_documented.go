@@ -6,9 +6,9 @@ import (
 	"log/slog"
 )
 
-// documentedChatResponseWire is the Chat Completions response shape the
-// documented contract sends. It always writes choices[].logprobs and
-// message content and refusal, with JSON null for an absent value.
+// The documented contract always sends choices[].logprobs, message.content,
+// and message.refusal. These wire types write JSON null for an absent value
+// instead of omitting the member.
 type documentedChatResponseWire struct {
 	ID                string                     `json:"id"`
 	Object            string                     `json:"object"`
@@ -38,9 +38,8 @@ type documentedChatMessageWire struct {
 	Annotations      []MessageAnnotation `json:"annotations,omitempty"`
 }
 
-// MarshalDocumentedChatResponse encodes a Chat Completions response with
-// the members the documented contract always sends. An empty content,
-// refusal, or logprobs value becomes JSON null.
+// MarshalDocumentedChatResponse writes JSON null for an empty content,
+// refusal, or logprobs value instead of omitting the member.
 func MarshalDocumentedChatResponse(resp ChatResponse) ([]byte, error) {
 	choices := make([]documentedChatChoiceWire, 0, len(resp.Choices))
 	for _, choice := range resp.Choices {

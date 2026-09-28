@@ -27,9 +27,9 @@ func TestChatRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	}
 }
 
-// TestResponsesRequestJSONTagsMatchKnownKeys is the same drift check for
-// the Responses request. The OpenAI listener rejects every key absent
-// from knownResponsesRequestKeys. The catalog must equal the struct tags.
+// The OpenAI listener rejects every Responses key missing from
+// knownResponsesRequestKeys. This test fails when that set differs from the
+// ResponsesRequest JSON tags.
 func TestResponsesRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	actual := structJSONTags(reflect.TypeOf(ResponsesRequest{}))
 	for key := range actual {
@@ -44,8 +44,8 @@ func TestResponsesRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	}
 }
 
-// TestCompletionRequestJSONTagsMatchKnownKeys is the same drift check for
-// the legacy Completions request.
+// This test fails when knownCompletionRequestKeys differs from the
+// CompletionRequest JSON tags.
 func TestCompletionRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	actual := structJSONTags(reflect.TypeOf(CompletionRequest{}))
 	for key := range actual {
@@ -67,8 +67,6 @@ func chatRequestJSONTags() map[string]bool {
 	return structJSONTags(reflect.TypeOf(ChatRequest{}))
 }
 
-// structJSONTags reflects a struct type into the set of JSON key names it
-// serializes.
 func structJSONTags(typ reflect.Type) map[string]bool {
 	out := map[string]bool{}
 	for fieldIndex := 0; fieldIndex < typ.NumField(); fieldIndex++ {

@@ -24,16 +24,14 @@ import (
 )
 
 // These tests run the official OpenAI Go SDK against the generic OpenAI
-// listener. The SDK decodes every response and stream event. The shape
-// check then walks the SDK's own schema metadata: a field tagged
-// api:"required" must be present, and a present field must decode into
-// the SDK type. Discriminated unions resolve to their concrete variant
-// through AsAny, and an unrecognized variant is a failure.
+// listener. After the SDK decodes each response and stream event, the shape
+// check reads the SDK schema tags. It fails when a field tagged
+// api:"required" is missing or when a present field does not decode into
+// its SDK type. It resolves each discriminated union with AsAny and fails
+// on an unrecognized variant.
 
-// sdkRequiredTag marks a field the SDK schema requires in a response.
 const sdkRequiredTag = "required"
 
-// sdkShapeProblems returns every schema violation under value.
 func sdkShapeProblems(value reflect.Value, path string) []string {
 	switch value.Kind() {
 	case reflect.Pointer, reflect.Interface:
@@ -54,8 +52,6 @@ func sdkShapeProblems(value reflect.Value, path string) []string {
 	}
 }
 
-// sdkStructShapeProblems checks one decoded SDK struct against its field
-// tags and presence metadata.
 func sdkStructShapeProblems(value reflect.Value, path string) []string {
 	if variant := value.MethodByName("AsAny"); variant.IsValid() && variant.Type().NumIn() == 0 && variant.Type().NumOut() == 1 {
 		concrete := variant.Call(nil)[0]
@@ -98,7 +94,6 @@ func sdkStructShapeProblems(value reflect.Value, path string) []string {
 	return problems
 }
 
-// requireSDKShape fails the test for every schema violation in value.
 func requireSDKShape[T any](t *testing.T, label string, value T) {
 	t.Helper()
 	for _, problem := range sdkShapeProblems(reflect.ValueOf(value), label) {
@@ -106,10 +101,9 @@ func requireSDKShape[T any](t *testing.T, label string, value T) {
 	}
 }
 
-// newConformanceSDKClient returns an official SDK client for a listener.
-// The client uses its own transport. A cleanup closes that transport's
-// idle keep-alive connections before the listener cleanup drains the
-// adapter.
+// newConformanceSDKClient closes the idle keep-alive connections of its
+// own transport before the listener cleanup drains the adapter. Open idle
+// connections stalled that drain past its 3 second limit.
 func newConformanceSDKClient(t *testing.T, baseURL string) openai.Client {
 	t.Helper()
 	transport := &http.Transport{}
@@ -122,8 +116,6 @@ func newConformanceSDKClient(t *testing.T, baseURL string) openai.Client {
 	)
 }
 
-// requireSDKError asserts that err is an SDK API error with the status
-// and param, and that the error object matches the SDK schema.
 func requireSDKError(t *testing.T, label string, err error, wantStatus int, wantParam string) {
 	t.Helper()
 	var apiErr *openai.Error
@@ -222,8 +214,8 @@ func TestOpenAIGoSDKConformanceCodexProvider(t *testing.T) {
 	}
 }
 
-// startAnthropicConformanceServer starts the adapter with an Anthropic
-// provider that returns a final response with Anthropic-reported usage.
+// The Anthropic provider in this server returns usage from
+// UsageFromAnthropic without a network request.
 func startAnthropicConformanceServer(t *testing.T, usage anthropic.Usage) conformanceListeners {
 	t.Helper()
 	fakes := newRoutingFakeEndpoints(t)
@@ -254,9 +246,9 @@ func startAnthropicConformanceServer(t *testing.T, usage anthropic.Usage) confor
 	return conformanceListeners{openAI: openAIURL, cursor: cursorURL}
 }
 
-// anthropicReportedUsage matches a captured Anthropic stream: message_start
-// reports both cache counts, and message_delta reports
-// output_tokens_details.thinking_tokens.
+// A captured Anthropic stream reports both cache counts in message_start
+// and output_tokens_details.thinking_tokens in message_delta.
+// anthropicReportedUsage matches that stream.
 func anthropicReportedUsage() anthropic.Usage {
 	thinking := 3
 	return anthropic.Usage{

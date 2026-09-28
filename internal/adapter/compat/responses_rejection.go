@@ -7,8 +7,8 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 )
 
-// ResponsesRequestValues are the decoded Responses values that decide a
-// rejection by value instead of by presence alone.
+// ResponsesRequestValues stores the decoded values that ResponsesRejection
+// compares against provider limits.
 type ResponsesRequestValues struct {
 	N             *int
 	ToolChoice    json.RawMessage
@@ -23,10 +23,9 @@ type ResponsesRequestValues struct {
 	UnknownKeys   []string
 }
 
-// responsesHintParams are Responses fields that tune caching, abuse
-// monitoring, request bookkeeping, or stream obfuscation. Omitting them
-// does not change the generated output. A provider that drops them still
-// honors the request.
+// These Responses fields tune caching, abuse monitoring, request
+// bookkeeping, or stream obfuscation and do not change generated output.
+// ResponsesRejection accepts them when the provider ignores them.
 var responsesHintParams = map[string]bool{
 	"prompt_cache_key":       true,
 	"prompt_cache_options":   true,
@@ -38,12 +37,11 @@ var responsesHintParams = map[string]bool{
 }
 
 // ResponsesRejection returns the first Responses request field that the
-// resolved provider cannot honor as the Responses contract documents it.
-// It reads the same per-provider catalog as the compatibility warnings.
-// A field that the provider omits or overrides produces a rejection
-// unless the field is a hint or its value equals the documented default.
-// unsupportedTools lists the tool types the projection cannot pass to the
-// provider.
+// resolved provider cannot honor as the Responses reference documents it.
+// The compatibility warnings read the same responsesCatalog. ResponsesRejection
+// rejects a field that the provider omits or overrides unless the field is
+// a hint or the request sets its documented default. unsupportedTools lists
+// the tool types that the Chat translation cannot send to the provider.
 func ResponsesRejection(presenceFor func(string) int, values ResponsesRequestValues, provider adaptermodel.BackendID, unsupportedTools []string) (Rejection, bool) {
 	if len(values.UnknownKeys) > 0 {
 		key := values.UnknownKeys[0]
@@ -68,7 +66,6 @@ func ResponsesRejection(presenceFor func(string) int, values ResponsesRequestVal
 	return noRejection(), false
 }
 
-// responsesFieldUnsupported applies one catalog entry to the request.
 func responsesFieldUnsupported(entry catalogEntry, column providerColumn, values ResponsesRequestValues, unsupportedTools []string) bool {
 	switch entry.dispositionFor(column) {
 	case dispositionTranslate:
@@ -87,9 +84,7 @@ func responsesFieldUnsupported(entry catalogEntry, column providerColumn, values
 	}
 }
 
-// responsesPartialUnsupported reports whether a partially supported
-// field uses a value the provider cannot honor. A partial field without a
-// value check is honored.
+// A partially supported field without a value check passes.
 func responsesPartialUnsupported(param string, column providerColumn, values ResponsesRequestValues, unsupportedTools []string) bool {
 	checks := map[string]func() bool{
 		"n":           func() bool { return values.N != nil && *values.N > 1 },
@@ -100,10 +95,8 @@ func responsesPartialUnsupported(param string, column providerColumn, values Res
 	return ok && check()
 }
 
-// responsesDocumentedDefaults maps a Responses field to the predicate that
-// reports whether the request value equals the documented default. A
-// provider that drops a field set to its default still produces the
-// documented behavior.
+// A provider that ignores one of these fields still produces the documented
+// output when the request sets the documented default.
 var responsesDocumentedDefaults = map[string]func(ResponsesRequestValues) bool{
 	"temperature":  func(values ResponsesRequestValues) bool { return !numberDiffers(values.Temperature, 1) },
 	"top_p":        func(values ResponsesRequestValues) bool { return !numberDiffers(values.TopP, 1) },
@@ -121,9 +114,8 @@ var responsesDocumentedDefaults = map[string]func(ResponsesRequestValues) bool{
 	},
 }
 
-// responsesValueIsDocumentedDefault reports whether a request value
-// equals the documented default. A field without a default predicate has
-// no value that a dropping provider can honor.
+// A field without a default predicate returns false. A provider that ignores
+// that field honors no value for it.
 func responsesValueIsDocumentedDefault(param string, values ResponsesRequestValues) bool {
 	isDefault, ok := responsesDocumentedDefaults[param]
 	return ok && isDefault(values)

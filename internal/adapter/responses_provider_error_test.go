@@ -218,7 +218,7 @@ func TestResponsesNonStreamingProviderErrorCarriesCanonicalWarnings(t *testing.T
 			return adapterprovider.Result{}, errors.New("provider-visible failure")
 		},
 	})
-	// Compatibility warnings exist only on the Cursor listener. The OpenAI
+	// Only the Cursor listener returns compatibility warnings. The OpenAI
 	// listener rejects background before the provider runs.
 	_, cursorURL := startRoutingListeners(t, srv)
 	response, body := postResponsesRaw(t, cursorURL+"/v1/responses", `{"model":"claude-future","input":"hello","background":true}`)

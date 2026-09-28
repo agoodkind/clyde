@@ -325,9 +325,9 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	return aerr
 }
 
-// documentedStatusByClass is the documented HTTP status for an error
-// class when no upstream HTTP status is available. Local classes absent
-// from this table keep the status their defaults already chose.
+// applyDocumentedShape reads this table only for an error without an
+// upstream HTTP status. A local class missing from the table retains its
+// default status.
 var documentedStatusByClass = map[adapterErrorClass]int{
 	adapterErrorModelNotFound:           http.StatusNotFound,
 	adapterErrorUpstreamRateLimited:     http.StatusTooManyRequests,
@@ -338,11 +338,8 @@ var documentedStatusByClass = map[adapterErrorClass]int{
 	adapterErrorUpstreamFailed:          http.StatusBadGateway,
 }
 
-// applyDocumentedShape selects the documented HTTP status for an error
-// on a listener that follows the vendor's documented contract. It never
-// changes the message, code, or param. An upstream failure keeps the
-// upstream status when that status is a client error or a standard
-// gateway status.
+// applyDocumentedShape changes only the HTTP status. An upstream failure
+// returns the upstream 4xx, 500, 502, 503, or 504 status.
 func applyDocumentedShape(aerr *adapterError) *adapterError {
 	if aerr == nil {
 		return nil
@@ -357,10 +354,8 @@ func applyDocumentedShape(aerr *adapterError) *adapterError {
 	return aerr
 }
 
-// documentedUpstreamStatus returns the client-visible status for an
-// error that came from an upstream HTTP response, or zero when the
-// error has no usable upstream status. A nonstandard server status
-// becomes 500.
+// documentedUpstreamStatus returns zero when the error has no usable
+// upstream HTTP status and 500 for a nonstandard upstream server status.
 func documentedUpstreamStatus(aerr *adapterError) int {
 	if !adapterErrorFromUpstream(aerr) {
 		return 0
@@ -381,10 +376,9 @@ func documentedUpstreamStatus(aerr *adapterError) int {
 	}
 }
 
-// adapterErrorFromUpstream reports whether an error came from a provider
-// failure rather than a local adapter rejection. The upstream mapper
-// assigns the invalid_request class to an upstream invalid request, and
-// that error keeps a nonzero UpstreamStatus.
+// Local rejections and upstream invalid requests share the invalid_request
+// class. adapterErrorFromUpstream treats an invalid_request error with a
+// nonzero UpstreamStatus as an upstream error.
 func adapterErrorFromUpstream(aerr *adapterError) bool {
 	if strings.HasPrefix(string(aerr.Class), "upstream_") {
 		return true

@@ -49,13 +49,13 @@ const responsesObjectType = "response"
 // than null.
 var responsesMetadataEmpty = json.RawMessage(`{}`)
 
-// ResponsesResponse is the top-level OpenAI Responses API response
-// object. The adapter emits it both as the non-streaming body and as
-// the `response` payload embedded in the streamed lifecycle events.
+// ResponsesResponse encodes the Responses API response object. The adapter
+// writes it as the nonstreaming body and as the response member of each
+// lifecycle stream event.
 //
-// The request echo fields are nil on the compatibility listener, and the
-// encoder omits them there. The documented contract sets every echo field,
-// with an explicit JSON null for an omitted nullable request field.
+// The documented contract writes every request echo field and writes JSON
+// null for an omitted nullable request field. The compatibility contract
+// leaves the echo fields nil and omits them.
 type ResponsesResponse struct {
 	ID                 string                      `json:"id"`
 	Object             string                      `json:"object"`
@@ -83,10 +83,9 @@ type ResponsesResponse struct {
 	Clyde              *ResponsesClyde             `json:"clyde,omitempty"`
 }
 
-// ResponsesEcho stores the request values the documented Response object
-// repeats. Each field is raw JSON at this edge because the Responses
-// contract echoes the client's tool, text, and reasoning objects
-// unchanged, and those objects are external shapes the adapter forwards.
+// ResponsesEcho stores the request values that the documented Response
+// object repeats. Each field stores raw JSON. The Responses contract
+// repeats the client tool, text, and reasoning objects byte for byte.
 type ResponsesEcho struct {
 	Instructions       json.RawMessage
 	MaxOutputTokens    json.RawMessage
@@ -104,13 +103,12 @@ type ResponsesEcho struct {
 	User               json.RawMessage
 }
 
-// jsonNull is the JSON literal for an omitted nullable request field.
 var jsonNull = json.RawMessage(`null`)
 
-// NewResponsesEcho builds the documented echo values from a Responses
-// request. An omitted field takes its documented default. Clyde never
-// stores responses, so store is always false, and previous_response_id is
-// always null because Clyde rejects a request that sets it.
+// NewResponsesEcho writes the documented default for each omitted field. It
+// always writes store as false because Clyde stores no responses. It always
+// writes previous_response_id as null because Clyde rejects a request that
+// sets it.
 func NewResponsesEcho(rr ResponsesRequest) ResponsesEcho {
 	return ResponsesEcho{
 		Instructions:       echoString(rr.Instructions),
@@ -180,7 +178,6 @@ func echoReasoning(reasoning *Reasoning) json.RawMessage {
 	return encoded
 }
 
-// applyResponsesEcho copies the documented echo values onto a response.
 func applyResponsesEcho(resp *ResponsesResponse, echo ResponsesEcho) {
 	resp.Instructions = echo.Instructions
 	resp.MaxOutputTokens = echo.MaxOutputTokens
@@ -419,9 +416,8 @@ type ResponsesSummaryPart struct {
 	Text string `json:"text"`
 }
 
-// ResponsesUsage is the Responses-shaped token usage block. A details
-// object is nil when the provider did not report that breakdown. The
-// encoder omits a nil details object instead of writing a zero count.
+// ResponsesUsage omits a details object that the provider did not report
+// instead of writing a zero count.
 type ResponsesUsage struct {
 	InputTokens         int                           `json:"input_tokens"`
 	OutputTokens        int                           `json:"output_tokens"`
@@ -430,24 +426,23 @@ type ResponsesUsage struct {
 	OutputTokensDetails *ResponsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
-// ResponsesInputTokensDetails stores the cached-prompt and cache-write
-// token counts. CacheWriteTokens is nil when the provider did not report
-// cache writes.
+// ResponsesInputTokensDetails leaves CacheWriteTokens nil when the provider
+// omits cache writes.
 type ResponsesInputTokensDetails struct {
 	CachedTokens     int  `json:"cached_tokens"`
 	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
 }
 
-// ResponsesOutputTokensDetails stores the reasoning token count.
+// ResponsesOutputTokensDetails encodes usage.output_tokens_details.
 type ResponsesOutputTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
-// ResponsesUsageFromChat maps the OpenAI chat Usage the provider reports
-// into the Responses usage shape: input=prompt, output=completion, and
-// total=total. The prompt token details become input_tokens_details, and
-// the completion token details become output_tokens_details. A detail the
-// provider did not report stays absent.
+// ResponsesUsageFromChat copies prompt_tokens to input_tokens,
+// completion_tokens to output_tokens, prompt token details to
+// input_tokens_details, and completion token details to
+// output_tokens_details. It omits each detail that the provider did not
+// report.
 func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
 	var inputDetails *ResponsesInputTokensDetails
 	if usage.PromptTokensDetails != nil {
@@ -469,10 +464,9 @@ func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
 	}
 }
 
-// CompatibilityResponsesUsage maps usage into the Responses shape the
-// compatibility contract reports. That shape always has
-// input_tokens_details with the cached count and output_tokens_details
-// with a reasoning count of zero.
+// CompatibilityResponsesUsage always writes input_tokens_details with the
+// cached count and output_tokens_details with reasoning_tokens set to 0. The
+// Cursor listener sends this usage.
 func CompatibilityResponsesUsage(usage Usage) ResponsesUsage {
 	return ResponsesUsage{
 		InputTokens:         usage.PromptTokens,
@@ -499,11 +493,10 @@ type ResponsesResponseParams struct {
 	Usage      *Usage
 	ItemIDBase string
 	Warnings   []adaptercompat.CompatibilityWarning
-	// Echo is the documented request echo. A nil Echo omits the echo
-	// fields.
+	// A nil Echo omits the request echo fields.
 	Echo *ResponsesEcho
-	// DocumentedUsage selects ResponsesUsageFromChat. False selects
-	// CompatibilityResponsesUsage.
+	// DocumentedUsage selects ResponsesUsageFromChat when true and
+	// CompatibilityResponsesUsage when false.
 	DocumentedUsage bool
 }
 

@@ -124,9 +124,8 @@ type completedUsage struct {
 	TotalTokens         int                           `json:"total_tokens"`
 }
 
-// completedInputTokensDetails mirrors ResponseCompletedInputTokensDetails
-// in the Codex parser, where cache_write_tokens is optional. A nil
-// CacheWriteTokens means the upstream did not report the count.
+// CacheWriteTokens is nil when the upstream omits cache_write_tokens. The
+// Codex client also decodes that field as optional.
 type completedInputTokensDetails struct {
 	CachedTokens     int  `json:"cached_tokens"`
 	CacheWriteTokens *int `json:"cache_write_tokens"`

@@ -196,7 +196,7 @@ OpenAI-compatible route family rule on the Cursor BYOK listener (`cursor_ingress
 
 The empirical Cursor reason for this rule is in `docs/cursor.md`.
 
-The generic OpenAI listener follows the documented OpenAI contract instead. It keeps the documented upstream status and derives `error.type` from that status. The boundary selects the contract from the listener label, never from request headers or body. `docs/adapter/openai-conformance.md` records the OpenAI listener contract.
+The generic OpenAI listener follows the documented OpenAI contract instead. It returns the documented upstream status and derives `error.type` from that status. The boundary selects the contract from the listener label, never from request headers or body. `docs/adapter/openai-conformance.md` records the OpenAI listener contract.
 
 ## Logging And Observability
 

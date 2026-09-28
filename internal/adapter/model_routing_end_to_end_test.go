@@ -110,8 +110,8 @@ func TestDeclarativeRoutesDispatchToLoopbackEndpoints(t *testing.T) {
 	assertAdvertisedExactModels(t, srv)
 }
 
-// routingFallbackModelID is the one model the fallback fake returns from
-// GET /v1/models/{model}. routingFallbackModelBody is its model object.
+// The fallback fake answers GET /v1/models/routingFallbackModelID with
+// routingFallbackModelBody and every other model lookup with 404.
 const (
 	routingFallbackModelID   = "unrelated-model"
 	routingFallbackModelBody = `{"id":"unrelated-model","object":"model","created":1700000000,"owned_by":"fallback-upstream"}`
@@ -279,9 +279,9 @@ func startRoutingListeners(t *testing.T, srv *Server) (string, string) {
 	t.Helper()
 	openAIListener := listenLoopback(t)
 	cursorListener := listenLoopback(t)
-	// The accept hook labels connections by comparing the local port with
-	// cfg.CursorIngressPort, so setting it before serving makes the second
-	// listener the Cursor BYOK listener.
+	// The accept hook labels a connection "cursor" when its local port equals
+	// cfg.CursorIngressPort. This helper sets that port to cursorListener
+	// before serving.
 	srv.cfg.CursorIngressPort = listenerPort(t, cursorListener)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

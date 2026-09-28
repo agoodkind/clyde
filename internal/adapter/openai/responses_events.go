@@ -19,11 +19,11 @@ const (
 	ResponsesEventRefusalDone           = "response.refusal.done"
 	ResponsesEventReasoningSummaryDelta = "response.reasoning_summary_text.delta"
 	ResponsesEventReasoningSummaryDone  = "response.reasoning_summary_text.done"
-	// ResponsesEventReasoningSummaryPartAdded opens one reasoning summary
-	// part before its text deltas.
+	// ResponsesEventReasoningSummaryPartAdded precedes the text deltas of a
+	// reasoning summary part.
 	ResponsesEventReasoningSummaryPartAdded = "response.reasoning_summary_part.added"
-	// ResponsesEventReasoningSummaryPartDone closes one reasoning summary
-	// part after its text is complete.
+	// ResponsesEventReasoningSummaryPartDone follows
+	// response.reasoning_summary_text.done.
 	ResponsesEventReasoningSummaryPartDone = "response.reasoning_summary_part.done"
 	ResponsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
 	ResponsesEventFunctionArgsDone         = "response.function_call_arguments.done"
@@ -65,17 +65,17 @@ type ResponsesContentPartEvent struct {
 	SequenceNumber int                  `json:"sequence_number"`
 }
 
-// ResponsesTokenLogprob is one token log probability on an output_text
-// event. No Clyde provider reports token log probabilities. The
-// documented logprobs array is always empty.
+// ResponsesTokenLogprob encodes one output_text token log probability. No
+// Clyde provider reports token log probabilities, and the documented
+// logprobs array is always empty.
 type ResponsesTokenLogprob struct {
 	Token   string  `json:"token"`
 	Logprob float64 `json:"logprob"`
 }
 
-// ResponsesOutputTextDeltaEvent is the frame shape for
-// output_text.delta. Logprobs is nil on the compatibility listener, and
-// the encoder omits it there. The documented contract requires the array.
+// ResponsesOutputTextDeltaEvent encodes an output_text.delta frame. The
+// documented contract writes an empty Logprobs array. The compatibility
+// contract leaves Logprobs nil and omits the member.
 type ResponsesOutputTextDeltaEvent struct {
 	Type           string                   `json:"type"`
 	ItemID         string                   `json:"item_id"`
@@ -86,8 +86,8 @@ type ResponsesOutputTextDeltaEvent struct {
 	SequenceNumber int                      `json:"sequence_number"`
 }
 
-// ResponsesOutputTextDoneEvent is the frame shape for output_text.done.
-// Logprobs follows the same listener rule as the delta event.
+// ResponsesOutputTextDoneEvent encodes an output_text.done frame. Logprobs
+// uses the same contract rule as ResponsesOutputTextDeltaEvent.
 type ResponsesOutputTextDoneEvent struct {
 	Type           string                   `json:"type"`
 	ItemID         string                   `json:"item_id"`
@@ -98,8 +98,8 @@ type ResponsesOutputTextDoneEvent struct {
 	SequenceNumber int                      `json:"sequence_number"`
 }
 
-// ResponsesReasoningSummaryPartEvent is the frame shape for
-// reasoning_summary_part.added and reasoning_summary_part.done.
+// ResponsesReasoningSummaryPartEvent encodes reasoning_summary_part.added
+// and reasoning_summary_part.done frames.
 type ResponsesReasoningSummaryPartEvent struct {
 	Type           string               `json:"type"`
 	ItemID         string               `json:"item_id"`

@@ -60,9 +60,8 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	return nil
 }
 
-// advertisedModelEntry projects one resolved alias into the Models wire
-// entry. The OpenAI listener also receives the catalog load time as the
-// documented created field.
+// On the OpenAI listener, advertisedModelEntry sets created to the catalog
+// load time.
 func (s *Server) advertisedModelEntry(ctx context.Context, registry *Registry, m adaptermodel.ResolvedAlias) ModelEntry {
 	entry := modelEntryFromResolved(m)
 	if m.Backend == BackendCodex {
@@ -79,11 +78,10 @@ func (s *Server) advertisedModelEntry(ctx context.Context, registry *Registry, m
 	return entry
 }
 
-// handleModel serves GET /v1/models/{model}. It returns an advertised
-// model, or a model the ingress surface resolves through a route rule. A
-// model that only the OpenAI-compatible fallback upstream resolves is
-// looked up on that upstream. Any other identifier receives the
-// documented model_not_found error.
+// handleModel returns an advertised model or a model that a route rule
+// resolves for the ingress surface. For a fallback-only model, handleModel
+// requests its metadata from the OpenAI-compatible upstream. Any other
+// identifier returns the documented model_not_found error.
 func (s *Server) handleModel(ctx context.Context, hctx *handlerCtx) error {
 	w := hctx.Writer
 	r := hctx.Request
@@ -109,8 +107,6 @@ func (s *Server) handleModel(ctx context.Context, hctx *handlerCtx) error {
 	return nil
 }
 
-// fallbackOnlyModel reports whether only the OpenAI-compatible fallback
-// upstream resolves the model for the request's ingress surface.
 func fallbackOnlyModel(ctx context.Context, registry *Registry, requestedModel string) (adaptermodel.ResolvedAlias, bool) {
 	var none adaptermodel.ResolvedAlias
 	if requestedModel == "" {
@@ -123,10 +119,8 @@ func fallbackOnlyModel(ctx context.Context, registry *Registry, requestedModel s
 	return resolved, true
 }
 
-// lookupModelEntry finds an advertised model by identifier, then tries
-// route resolution for the request's ingress surface. A model that only
-// the OpenAI-compatible fallback upstream resolves is not in Clyde's
-// catalog, and the lookup reports it as not found.
+// lookupModelEntry returns false for a fallback-only model. handleModel
+// requests that model from the OpenAI-compatible upstream.
 func (s *Server) lookupModelEntry(ctx context.Context, registry *Registry, requestedModel string) (ModelEntry, bool) {
 	var notFound ModelEntry
 	if requestedModel == "" {
@@ -288,9 +282,6 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	return nil
 }
 
-// rejectUndocumentedChatFields applies documentedChatRejection on the
-// generic OpenAI listener and records the rejection. Other listeners
-// receive nil.
 func rejectUndocumentedChatFields(ctx context.Context, recorder *logevent.Recorder, body []byte, req ChatRequest, discovery RequestDiscovery, resolvedReq *adapterresolver.ResolvedRequest) error {
 	if !listenerFollowsDocumentedContract(ctx) {
 		return nil
@@ -303,10 +294,8 @@ func rejectUndocumentedChatFields(ctx context.Context, recorder *logevent.Record
 	return rejectErr
 }
 
-// documentedChatRejection returns an invalid request error for the first
-// Chat Completions field the resolved provider cannot honor. handleChat
-// runs this check on the generic OpenAI listener before any provider
-// request starts.
+// handleChat runs documentedChatRejection on the generic OpenAI listener
+// before any provider request starts.
 func documentedChatRejection(body []byte, req ChatRequest, discovery RequestDiscovery, resolvedReq *adapterresolver.ResolvedRequest) *adapterError {
 	fields, err := adapteropenai.DecodeFieldSet(body)
 	if err != nil {
@@ -348,10 +337,9 @@ func openAIIngressSurface(ctx context.Context) adapterresolver.IngressSurface {
 	return adapterresolver.IngressOpenAI
 }
 
-// marshalChatResponseForListener encodes a nonstreaming Chat Completions
-// response. The generic OpenAI listener uses the documented encoding,
-// which always writes logprobs, content, and refusal. Every other
-// listener keeps the compatibility encoding and compatibility usage.
+// On the generic OpenAI listener, marshalChatResponseForListener writes
+// logprobs, content, and refusal on every choice. On other listeners it
+// applies CompatibilityUsage and the compatibility encoding.
 func marshalChatResponseForListener(ctx context.Context, resp ChatResponse) ([]byte, error) {
 	if listenerFollowsDocumentedContract(ctx) {
 		encoded, err := adapteropenai.MarshalDocumentedChatResponse(resp)
@@ -373,11 +361,10 @@ func marshalChatResponseForListener(ctx context.Context, resp ChatResponse) ([]b
 	return encoded, nil
 }
 
-// listenerFollowsDocumentedContract reports whether the request arrived
-// on the generic OpenAI listener. [Server.StartOnListeners] labels every
-// accepted connection as "openai" or "cursor". Only the "openai" label
-// selects the documented OpenAI contract. The "cursor" label and an
-// unlabeled in-process request keep the compatibility behavior.
+// listenerFollowsDocumentedContract returns true only for the "openai"
+// label. [Server.StartOnListeners] labels each accepted connection "openai"
+// or "cursor". An unlabeled in-process request uses the compatibility
+// behavior.
 func listenerFollowsDocumentedContract(ctx context.Context) bool {
 	return ingressLabelFromContext(ctx) == string(adapterresolver.IngressOpenAI)
 }
@@ -682,10 +669,9 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	return s.handleChat(ctx, hctx)
 }
 
-// handleDocumentedLegacy serves POST /v1/completions on the generic
-// OpenAI listener. It validates the legacy request, runs the prompt as a
-// one-message Chat Completions request, and rewrites the Chat output
-// into the legacy text_completion object and stream chunks.
+// handleDocumentedLegacy runs a legacy prompt as a one-message Chat
+// Completions request. LegacyCompletionWriter rewrites the Chat output into
+// text_completion objects and chunks.
 func (s *Server) handleDocumentedLegacy(ctx context.Context, hctx *handlerCtx) error {
 	r := hctx.Request
 	body, err := io.ReadAll(http.MaxBytesReader(hctx.Writer, r.Body, 8<<20))
@@ -724,8 +710,6 @@ func (s *Server) handleDocumentedLegacy(ctx context.Context, hctx *handlerCtx) e
 	return nil
 }
 
-// legacyCompletionPrompt rejects legacy request fields Clyde cannot honor
-// and returns the single prompt string.
 func legacyCompletionPrompt(legacy adapteropenai.CompletionRequest, fields adapteropenai.ResponsesFieldSet) (string, *adapterError) {
 	if unknown := fields.UnknownCompletionKeys(); len(unknown) > 0 {
 		return "", adapterErrRejectedParameter(adaptercompat.Rejection{
@@ -764,9 +748,8 @@ func legacyCompletionPrompt(legacy adapteropenai.CompletionRequest, fields adapt
 	return prompt, nil
 }
 
-// legacyChatRequest builds the one-message Chat Completions request that
-// runs a legacy prompt. The Chat request validation then rejects any
-// forwarded field the resolved provider cannot honor.
+// handleChat rejects each copied field that the resolved provider cannot
+// honor.
 func legacyChatRequest(legacy adapteropenai.CompletionRequest, prompt string) ChatRequest {
 	var chat ChatRequest
 	chat.Model = legacy.Model

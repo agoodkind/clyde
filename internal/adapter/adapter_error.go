@@ -125,8 +125,6 @@ func adapterErrInvalidRequest(message string, cause error) *adapterError {
 	return e
 }
 
-// adapterErrRejectedParameter builds the invalid request error for one
-// rejected request field. The code and param come from the rejection.
 func adapterErrRejectedParameter(rejection adaptercompat.Rejection) *adapterError {
 	e := newAdapterError(adapterErrorInvalidRequest, rejection.Message)
 	e.Code = rejection.Code
@@ -225,11 +223,9 @@ func (e *adapterError) applyDefaults() {
 	}
 }
 
-// rawForwardingError marks an error from a request that the adapter
-// classified for raw upstream forwarding. The boundary renders it with
-// the family's compatibility contract on every listener. Raw forwarding
-// keeps its existing error contract, and the documented contract applies
-// only to requests the adapter projects itself.
+// writeShapedError and respondAdapterStreamError encode a rawForwardingError
+// with the compatibility contract on every listener. Only requests that the
+// adapter translates receive the documented contract.
 type rawForwardingError struct {
 	cause error
 }
@@ -242,8 +238,6 @@ func (e *rawForwardingError) Unwrap() error {
 	return e.cause
 }
 
-// markRawForwardingError wraps err as a raw forwarding error. A nil err
-// stays nil.
 func markRawForwardingError(err error) error {
 	if err == nil {
 		return nil
@@ -251,9 +245,8 @@ func markRawForwardingError(err error) error {
 	return &rawForwardingError{cause: err}
 }
 
-// errorContractForRequest selects the contract for one error response.
-// A raw forwarding error keeps the compatibility contract. Every other
-// error uses the contract of the listener the request arrived on.
+// errorContractForRequest returns the compatibility contract for raw
+// forwarding errors.
 func errorContractForRequest(ctx context.Context, family adapterRouteFamily, err error) errcontract.ClientContract {
 	var forwarding *rawForwardingError
 	if errors.As(err, &forwarding) {
@@ -262,10 +255,8 @@ func errorContractForRequest(ctx context.Context, family adapterRouteFamily, err
 	return errorContractForListener(ctx, family)
 }
 
-// errorContractForListener selects the client error contract from the
-// listener the request arrived on. An OpenAI family request on the
-// "openai" listener uses the documented contract. Every other listener
-// label and every other family keeps the compatibility contract.
+// errorContractForListener returns the documented contract only for an
+// OpenAI family request on the "openai" listener.
 func errorContractForListener(ctx context.Context, family adapterRouteFamily) errcontract.ClientContract {
 	if family == adapterRouteOpenAI && listenerFollowsDocumentedContract(ctx) {
 		return errcontract.ClientContractDocumented
@@ -273,7 +264,6 @@ func errorContractForListener(ctx context.Context, family adapterRouteFamily) er
 	return errcontract.ClientContractCompatibility
 }
 
-// applyContractShape applies the status policy for the selected contract.
 func applyContractShape(family adapterRouteFamily, contract errcontract.ClientContract, aerr *adapterError) *adapterError {
 	if contract == errcontract.ClientContractDocumented {
 		return applyDocumentedShape(aerr)

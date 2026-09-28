@@ -88,16 +88,16 @@ func TestResponsesEndpointEndToEnd(t *testing.T) {
 	}
 	drainCodex(t, fakes.codexReqs)
 
-	// Codex non-streaming with a temperature the codex backend omits: the
-	// OpenAI listener rejects it before the provider request.
+	// The OpenAI listener rejects a Codex temperature other than 1 before the
+	// provider request.
 	status, _, body = postResponses(t, openAIURL+"/v1/responses",
 		`{"model":"gpt-future","input":"say hi","temperature":0.5,"stream":false}`)
 	if status != http.StatusBadRequest || !bytes.Contains(body, []byte(`"param":"temperature"`)) {
 		t.Fatalf("openai codex temperature = %d %s, want 400 for temperature", status, body)
 	}
 
-	// The Cursor listener keeps the compatibility warning as an
-	// X-Clyde-Warning header and under clyde.warnings in the object.
+	// The Cursor listener returns the compatibility warning in an
+	// X-Clyde-Warning header and in clyde.warnings.
 	status, header, body := postResponses(t, cursorURL+"/v1/responses",
 		`{"model":"gpt-future","input":"say hi","temperature":0.5,"stream":false}`)
 	if status != http.StatusOK {

@@ -7,40 +7,39 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 )
 
-// Rejection codes a documented-contract listener returns for a request
-// field that Clyde cannot honor.
+// The generic OpenAI listener returns these codes in a 400 error for a
+// request field that Clyde cannot honor.
 const (
-	// RejectionCodeUnsupportedParameter marks a documented field the
+	// RejectionCodeUnsupportedParameter reports a documented field that the
 	// resolved provider cannot honor with the requested value.
 	RejectionCodeUnsupportedParameter = "unsupported_parameter"
-	// RejectionCodeUnknownParameter marks a field outside the documented
-	// request schema and outside Clyde's extension fields.
+	// RejectionCodeUnknownParameter reports a field that neither the
+	// documented schema nor Clyde's extension fields define.
 	RejectionCodeUnknownParameter = "unknown_parameter"
-	// RejectionCodeInvalidParameter marks a field combination the
+	// RejectionCodeInvalidParameter reports a field combination that the
 	// documented schema forbids.
 	RejectionCodeInvalidParameter = "invalid_parameter"
 )
 
-// chatPresenceAbsent, chatPresenceNull, and chatPresenceEmpty are the
-// presence values a presence callback returns for a missing key, an
-// explicit null, and an empty string, array, or object. Every other value
-// means the request set the field.
+// A presence callback returns chatPresenceAbsent for a missing key,
+// chatPresenceNull for an explicit null, and chatPresenceEmpty for an empty
+// string, array, or object. Any other value means the request set the key.
 const (
 	chatPresenceAbsent = 0
 	chatPresenceNull   = 1
 	chatPresenceEmpty  = 2
 )
 
-// Rejection is one field-level request rejection. Message is a sanitized
-// sentence that never includes a request value.
+// Rejection reports one rejected request field. Message never includes a
+// request value.
 type Rejection struct {
 	Code    string
 	Param   string
 	Message string
 }
 
-// ChatRequestValues are the decoded Chat Completions values that decide a
-// rejection by value instead of by presence alone.
+// ChatRequestValues stores the decoded values that ChatRejection compares
+// against provider limits.
 type ChatRequestValues struct {
 	Stream           bool
 	Temperature      *float64
@@ -59,9 +58,8 @@ type ChatRequestValues struct {
 	UnknownKeys      []string
 }
 
-// chatAcceptedUnknownKeys are documented Chat Completions fields that the
-// adapter's typed request does not model and that do not change the
-// generated output. They tune caching, abuse monitoring, or latency.
+// The typed Chat request omits these documented fields. They tune caching,
+// abuse monitoring, or latency and do not change generated output.
 var chatAcceptedUnknownKeys = map[string]bool{
 	"prompt_cache_key":     true,
 	"prompt_cache_options": true,
@@ -69,20 +67,19 @@ var chatAcceptedUnknownKeys = map[string]bool{
 	"prediction":           true,
 }
 
-// chatUnsupportedDocumentedKeys are documented Chat Completions fields
-// that the typed request does not model and that change the output. The
-// adapter has no provider path for them.
+// The typed Chat request omits these documented fields. They change
+// generated output, and no provider supports them.
 var chatUnsupportedDocumentedKeys = map[string]bool{
 	"verbosity":          true,
 	"web_search_options": true,
 	"moderation":         true,
 }
 
-// ChatRejection returns the first request field that the resolved
-// provider cannot honor as the Chat Completions contract documents it.
-// presenceFor reports a top-level key's presence. A provider without a
-// catalog column, such as the OpenAI-compatible passthrough, receives the
-// request unchanged and never produces a provider rejection.
+// ChatRejection returns the first request field that the resolved provider
+// cannot honor as the Chat Completions reference documents it. presenceFor
+// returns the presence of a top-level key. The OpenAI-compatible passthrough
+// has no catalog column. It receives every field unchanged, and
+// ChatRejection never rejects a field for it.
 func ChatRejection(presenceFor func(string) int, values ChatRequestValues, provider adaptermodel.BackendID) (Rejection, bool) {
 	if rejection, ok := chatUnknownKeyRejection(values.UnknownKeys); ok {
 		return rejection, true
@@ -106,19 +103,16 @@ func ChatRejection(presenceFor func(string) int, values ChatRequestValues, provi
 	return noRejection(), false
 }
 
-// chatFieldCheck pairs a request field with the predicate that reports
-// whether the resolved provider cannot honor the requested value.
 type chatFieldCheck struct {
 	param       string
 	unsupported func() bool
 }
 
-// chatFieldChecks lists the per-field checks in documented field order.
-// Codex ignores sampling controls, output caps, stop sequences, forced
-// tool choice, and structured output formats. Anthropic clamps
-// temperature above 1 and has no processing tier. Neither provider reads
-// n, penalties, logit bias, logprobs, seed, audio, non-text modalities,
-// stored completions, or the legacy function_call control.
+// Codex ignores sampling controls, output caps, stop sequences, forced tool
+// choice, and structured output formats. Anthropic clamps temperature above
+// 1 and offers no processing tier. Neither provider reads n, penalties,
+// logit bias, logprobs, seed, audio, non-text modalities, stored
+// completions, or the legacy function_call control.
 func chatFieldChecks(presenceFor func(string) int, values ChatRequestValues, column providerColumn) []chatFieldCheck {
 	codex := column == columnCodex
 	return []chatFieldCheck{
@@ -178,26 +172,20 @@ func unsupportedParameter(param string, column providerColumn) Rejection {
 	}
 }
 
-// presenceSet reports whether the request set a key to a non-null value.
 func presenceSet(presence int) bool {
 	return presence != chatPresenceAbsent && presence != chatPresenceNull
 }
 
-// valueSet reports whether the request set a key to a non-empty value.
-// An empty string, array, or object has the same meaning as omission.
 func valueSet(presence int) bool {
 	return presenceSet(presence) && presence != chatPresenceEmpty
 }
 
-// numberDiffers reports whether a numeric field differs from the
-// documented default. An omitted field keeps the default.
 func numberDiffers(value *float64, documentedDefault float64) bool {
 	return value != nil && *value != documentedDefault
 }
 
-// temperatureUnsupported reports whether the provider cannot honor the
-// requested temperature. Codex ignores temperature and honors only the
-// default of 1. Anthropic clamps temperature to the range 0 to 1.
+// Codex ignores temperature, and this check accepts only the default of 1.
+// Anthropic clamps temperature above 1, and this check rejects those values.
 func temperatureUnsupported(column providerColumn, temperature *float64) bool {
 	if temperature == nil {
 		return false
@@ -208,8 +196,6 @@ func temperatureUnsupported(column providerColumn, temperature *float64) bool {
 	return *temperature > 1
 }
 
-// modalitiesUnsupported reports whether the request asks for an output
-// modality other than text.
 func modalitiesUnsupported(raw json.RawMessage) bool {
 	if isNullOrEmptyJSON(raw) {
 		return false
@@ -226,22 +212,16 @@ func modalitiesUnsupported(raw json.RawMessage) bool {
 	return false
 }
 
-// defaultServiceTiers are the service_tier values that select the
-// default processing tier.
 var defaultServiceTiers = map[string]bool{
 	"":        true,
 	"auto":    true,
 	"default": true,
 }
 
-// serviceTierUnsupported reports whether the request asks for a
-// processing tier other than the default.
 func serviceTierUnsupported(tier string) bool {
 	return !defaultServiceTiers[strings.TrimSpace(tier)]
 }
 
-// choiceIsAuto reports whether a tool_choice or function_call value
-// selects the default automatic behavior.
 func choiceIsAuto(raw json.RawMessage) bool {
 	if isNullOrEmptyJSON(raw) {
 		return true
@@ -253,8 +233,6 @@ func choiceIsAuto(raw json.RawMessage) bool {
 	return choice == "auto"
 }
 
-// responseFormatIsText reports whether response_format selects plain
-// text output.
 func responseFormatIsText(raw json.RawMessage) bool {
 	if isNullOrEmptyJSON(raw) {
 		return true

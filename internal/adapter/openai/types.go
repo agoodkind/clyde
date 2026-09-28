@@ -385,12 +385,10 @@ type StreamDelta struct {
 	Refusal          string     `json:"refusal,omitempty"`
 }
 
-// Usage is part of Clyde's typed adapter surface.
-//
-// PromptTokensDetails and CompletionTokensDetails are nil when the
-// provider did not report the breakdown. A non-nil detail stores the
-// provider's value, including a reported zero. Absent data therefore
-// never renders as a fabricated zero.
+// Usage encodes Chat Completions usage. PromptTokensDetails and
+// CompletionTokensDetails are nil when the provider
+// omits the breakdown. A non-nil detail stores the reported value,
+// including a reported zero.
 type Usage struct {
 	PromptTokens            int                      `json:"prompt_tokens"`
 	CompletionTokens        int                      `json:"completion_tokens"`
@@ -404,21 +402,21 @@ type Usage struct {
 	MaxTokens               int                      `json:"max_tokens,omitempty"`
 }
 
-// PromptTokensDetails is part of Clyde's typed adapter surface.
-// CacheWriteTokens is nil when the provider did not report cache writes.
-// CompatibilityOmitsUncached makes CompatibilityUsage drop these details
-// when CachedTokens is zero. A provider sets it when its compatibility
-// usage wrote prompt details only for a cache read.
+// PromptTokensDetails leaves CacheWriteTokens nil when the provider omits
+// cache writes.
+// CompatibilityUsage removes these details when CompatibilityOmitsUncached
+// is true and CachedTokens is zero. UsageFromAnthropic sets the flag. The
+// previous Anthropic compatibility usage wrote prompt details only for a
+// cache read.
 type PromptTokensDetails struct {
 	CachedTokens               int  `json:"cached_tokens"`
 	CacheWriteTokens           *int `json:"cache_write_tokens,omitempty"`
 	CompatibilityOmitsUncached bool `json:"-"`
 }
 
-// CompatibilityUsage returns the usage the compatibility contract
-// reports. That contract predates the reasoning and cache-write details.
-// The returned value has no completion_tokens_details and no
-// prompt_tokens_details.cache_write_tokens.
+// CompatibilityUsage removes completion_tokens_details and
+// prompt_tokens_details.cache_write_tokens. The Cursor listener sent usage
+// without both details before the documented contract added them.
 func CompatibilityUsage(usage Usage) Usage {
 	usage.CompletionTokensDetails = nil
 	if usage.PromptTokensDetails != nil {
@@ -432,9 +430,8 @@ func CompatibilityUsage(usage Usage) Usage {
 	return usage
 }
 
-// CompletionTokensDetails is the Chat Completions breakdown of output
-// tokens. Only the reasoning count is modeled. No Clyde provider reports
-// another output breakdown.
+// CompletionTokensDetails encodes only reasoning_tokens. No Clyde provider
+// reports another output token breakdown.
 type CompletionTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
@@ -453,10 +450,9 @@ type ModelsResponse struct {
 	Data   []ModelEntry `json:"data"`
 }
 
-// ModelEntry is part of Clyde's typed adapter surface.
-//
-// Created is zero on the compatibility listener, and the encoder omits it
-// there. The documented Models contract requires it on the OpenAI listener.
+// ModelEntry encodes one Models entry. The OpenAI listener sets Created
+// because the documented Models contract requires it. The Cursor listener
+// leaves Created zero, and the encoder omits it.
 type ModelEntry struct {
 	ID                               string   `json:"id"`
 	Object                           string   `json:"object"`

@@ -73,11 +73,10 @@ func openAITypeForClass(class string) string {
 	return "invalid_request_error"
 }
 
-// documentedTypeByStatus maps a documented OpenAI HTTP status to the
-// error.type the OpenAI API returns with it. The error code guide
-// documents invalid_request_error for 400, rate_limit_error for 429, and
-// service_unavailable_error for 503. The remaining entries follow the
-// status classes the official SDKs raise.
+// The OpenAI error code guide documents invalid_request_error for 400,
+// rate_limit_error for 429, and service_unavailable_error for 503. The other
+// entries match the error class that the official SDKs raise for each
+// status.
 var documentedTypeByStatus = map[int]string{
 	http.StatusBadRequest:          "invalid_request_error",
 	http.StatusUnauthorized:        "authentication_error",
@@ -90,9 +89,8 @@ var documentedTypeByStatus = map[int]string{
 	http.StatusServiceUnavailable:  "service_unavailable_error",
 }
 
-// documentedTypeForStatus derives the documented OpenAI error.type from
-// the HTTP status. Other client errors are invalid_request_error, and
-// other server errors are server_error.
+// An unlisted 5xx status returns server_error. Every other unlisted status
+// returns invalid_request_error.
 func documentedTypeForStatus(status int) string {
 	if envelopeType, ok := documentedTypeByStatus[status]; ok {
 		return envelopeType
@@ -103,9 +101,9 @@ func documentedTypeForStatus(status int) string {
 	return "invalid_request_error"
 }
 
-// envelopeTypeFor selects the wire error.type. The documented contract
-// derives it from the status. The compatibility contract prefers an
-// explicit Type and otherwise derives it from the neutral Class.
+// The documented contract derives error.type from the status. The
+// compatibility contract uses an explicit Type first and otherwise derives
+// the type from Class.
 func envelopeTypeFor(status int, info errcontract.ErrorInfo) string {
 	if info.Contract == errcontract.ClientContractDocumented {
 		return documentedTypeForStatus(status)
@@ -116,10 +114,9 @@ func envelopeTypeFor(status int, info errcontract.ErrorInfo) string {
 	return openAITypeForClass(info.Class)
 }
 
-// Render serializes a canonical OpenAI error envelope. The envelope type
-// comes from envelopeTypeFor. An empty Code defaults to the envelope
-// type, which gives Cursor's BYOK error renderer a code to dispatch on.
-// An encoding failure writes a deterministic constant envelope instead.
+// Render writes an OpenAI error envelope. Cursor's BYOK error renderer
+// dispatches on error.code, and Render copies the envelope type into an
+// empty Code. An encoding failure writes a constant fallback envelope.
 func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.ErrorInfo) error {
 	envelopeType := envelopeTypeFor(code, info)
 	body := ErrorBody{
@@ -154,16 +151,13 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 	return nil
 }
 
-// UpstreamErrorMapper implements the OpenAI family compatibility shape.
-// Cursor BYOK never renders HTTP 5xx + server_error correctly, and
-// HTTP 429 + rate_limit_error triggers Cursor's generic BYOK chrome
-// instead of the upstream message. Both show opaque UI text that hides
-// the real diagnostic. The mapper therefore maps every non-2xx upstream
-// to HTTP 400 + invalid_request_error + a typed upstream_* code. The
-// boundary keeps that shape on the Cursor BYOK listener. On the generic
-// OpenAI listener the boundary restores the documented status from the
-// preserved upstream status, and the renderer derives the documented
-// error.type from it.
+// UpstreamErrorMapper maps every non-2xx upstream to HTTP 400,
+// invalid_request_error, and a typed upstream_* code. Cursor BYOK renders
+// HTTP 5xx with server_error incorrectly. For HTTP 429 with
+// rate_limit_error, Cursor shows generic BYOK text and hides the upstream
+// message. The Cursor BYOK listener sends the mapped shape unchanged. On the
+// generic OpenAI listener, applyDocumentedShape restores the upstream
+// status, and Render derives error.type from that status.
 type UpstreamErrorMapper struct{}
 
 // NewUpstreamErrorMapper returns the canonical OpenAI mapper.

@@ -1,10 +1,9 @@
-"""Official OpenAI Python SDK smoke test for Clyde's generic OpenAI listener.
+"""Validate the generic OpenAI listener with the official OpenAI Python SDK.
 
-TestOpenAISDKSmoke in openai_sdk_smoke_test.go starts the adapter with a
-local Codex upstream and runs this script with the listener URL. Every
-response and stream event is validated against the SDK's Pydantic models,
-which reject a missing required field. The script records every failure
-and exits nonzero when any check fails.
+TestOpenAISDKSmoke starts the adapter with a local Codex upstream and passes
+the listener URL. The script validates every response and stream event with
+the SDK Pydantic models. A model rejects a missing required field. The
+script prints every failure and exits nonzero when any check fails.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ RESPONSE_STREAM_EVENT: TypeAdapter[ResponseStreamEvent] = TypeAdapter(ResponseSt
 
 
 class SmokeRun:
-    """Collects check failures across every resource."""
+    """Record check failures from every resource."""
 
     def __init__(self) -> None:
         self.failures: list[str] = []
@@ -44,9 +43,9 @@ class SmokeRun:
             self.failures.append(f"{label}: {error}")
 
     def validate_stream_event(self, label: str, value: BaseModel) -> None:
-        # The SDK selects the event class from the type discriminator.
-        # Validating against that class reports the missing fields of one
-        # event instead of every union member.
+        # A union validation failure lists every union member. The fallback
+        # validates the event class alone and lists the missing fields of
+        # one event.
         try:
             RESPONSE_STREAM_EVENT.validate_python(value.to_dict())
         except ValidationError:
@@ -135,9 +134,9 @@ def smoke_completions(client: OpenAI, run: SmokeRun) -> None:
     stream = client.completions.create(model=CODEX_MODEL, prompt=PROMPT, stream=True)
     streamed_text = ""
     for chunk in stream:
-        # The SDK types finish_reason as non-null, and the stream reference
-        # sends null before the last text chunk. Validation of an
-        # intermediate chunk substitutes "stop" for the null finish_reason.
+        # This check substitutes "stop" for a null finish_reason before it
+        # validates a chunk. The SDK types finish_reason as non-null, and
+        # the Completions stream reference sends null before the last chunk.
         payload = chunk.to_dict()
         for choice_payload in payload.get("choices", []):
             if choice_payload.get("finish_reason") is None:

@@ -84,8 +84,9 @@ func warningForParam(warnings []adaptercompat.CompatibilityWarning, param string
 }
 
 // The compatibility warning tests below use the Cursor listener. The
-// generic OpenAI listener rejects the same fields, and the OpenAI
-// conformance tests cover that contract.
+// generic OpenAI listener rejects the same fields.
+// TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest verifies
+// that rejection.
 
 func TestResponsesNonStreamingCodexTemperatureWarns(t *testing.T) {
 	fakes := newRoutingFakeEndpoints(t)

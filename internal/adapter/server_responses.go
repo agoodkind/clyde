@@ -114,13 +114,11 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 		return nil
 	}
 
-	// The compatibility boundary describes which request fields the resolved
-	// provider omits or overrides, plus the built-in / custom tool types the
-	// projection dropped. It reads the raw body for top-level field presence
-	// and never performs the omission itself.
-	// The generic OpenAI listener rejected every field the provider cannot
-	// honor. It computes no warnings for the remaining hints and default
-	// values.
+	// The Cursor listener warns about request fields that the resolved
+	// provider omits or overrides and about built-in or custom tool types
+	// that the Chat translation drops. The warning code reads top-level field
+	// presence and never removes a field. The generic OpenAI listener
+	// already rejected those fields and computes no warnings.
 	var warnings adaptercompat.WarningSet
 	if !listenerFollowsDocumentedContract(ctx) {
 		warningValues := adaptercompat.ResponsesWarningValues{N: rr.N, ToolChoice: rr.ToolChoice}
@@ -131,10 +129,9 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	return nil
 }
 
-// documentedResponsesRejection returns an invalid request error for the
-// first Responses field the resolved provider cannot honor. handleResponses
-// runs this check on the generic OpenAI listener before any provider
-// request starts. The Cursor listener keeps the compatibility warnings.
+// handleResponses runs documentedResponsesRejection on the generic OpenAI
+// listener before any provider request starts. The Cursor listener returns
+// compatibility warnings for the same fields instead.
 func documentedResponsesRejection(rr adapteropenai.ResponsesRequest, provider adapterresolver.ProviderID, droppedTools []string) *adapterError {
 	values := adaptercompat.ResponsesRequestValues{
 		N:             rr.N,
@@ -657,8 +654,6 @@ func (s *Server) dispatchResponsesCollect(
 	writeJSON(w, body)
 }
 
-// documentedResponsesEcho returns the request echo for the documented
-// Response object on the generic OpenAI listener, or nil elsewhere.
 func documentedResponsesEcho(ctx context.Context, resolvedReq adapterresolver.ResolvedRequest) *adapteropenai.ResponsesEcho {
 	if !listenerFollowsDocumentedContract(ctx) || resolvedReq.Responses == nil {
 		return nil
