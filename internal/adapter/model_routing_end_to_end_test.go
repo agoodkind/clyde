@@ -112,10 +112,12 @@ func TestDeclarativeRoutesDispatchToLoopbackEndpoints(t *testing.T) {
 
 // The fallback fake answers GET /v1/models/{model} with
 // routingFallbackModelBody when the model ID equals routingFallbackModelID.
-// It answers every other model ID with 404.
+// It answers routingFallbackOversizedModelID with a body one byte over
+// passthroughModelLookupLimit and every other model ID with 404.
 const (
-	routingFallbackModelID   = "unrelated-model"
-	routingFallbackModelBody = `{"id":"unrelated-model","object":"model","created":1700000000,"owned_by":"fallback-upstream"}`
+	routingFallbackModelID          = "unrelated-model"
+	routingFallbackModelBody        = `{"id":"unrelated-model","object":"model","created":1700000000,"owned_by":"fallback-upstream"}`
+	routingFallbackOversizedModelID = "oversized-model"
 )
 
 func newRoutingFakeEndpoints(t *testing.T) routingFakeEndpoints {
@@ -154,6 +156,10 @@ func newRoutingFakeEndpoints(t *testing.T) routingFakeEndpoints {
 	fakes.fallback = newLoopbackHTTPServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/") {
 			writer.Header().Set("Content-Type", "application/json")
+			if strings.TrimPrefix(request.URL.Path, "/v1/models/") == routingFallbackOversizedModelID {
+				_, _ = writer.Write(bytes.Repeat([]byte(" "), passthroughModelLookupLimit+1))
+				return
+			}
 			if strings.TrimPrefix(request.URL.Path, "/v1/models/") != routingFallbackModelID {
 				writer.WriteHeader(http.StatusNotFound)
 				_, _ = writer.Write([]byte(`{"error":{"message":"model not found","type":"invalid_request_error","code":"model_not_found","param":"model"}}`))

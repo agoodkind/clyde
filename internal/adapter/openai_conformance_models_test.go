@@ -63,6 +63,11 @@ func TestOpenAIConformanceModelsListAndRetrieve(t *testing.T) {
 		t.Fatalf("fallback model = %d %s, want the fallback upstream model object unchanged", fallback.status, fallback.body)
 	}
 
+	oversized := sendConformance(t, http.MethodGet, listeners.openAI+"/v1/models/"+routingFallbackOversizedModelID, "")
+	if oversized.status != http.StatusBadGateway || decodeErrorEnvelope(t, oversized.body).Type != "server_error" {
+		t.Fatalf("oversized fallback model = %d %s, want 502 server_error", oversized.status, oversized.body)
+	}
+
 	missing := sendConformance(t, http.MethodGet, listeners.openAI+"/v1/models/does-not-exist", "")
 	missingError := decodeErrorEnvelope(t, missing.body)
 	if missing.status != http.StatusNotFound || missingError.Type != "invalid_request_error" || missingError.Code != "model_not_found" {

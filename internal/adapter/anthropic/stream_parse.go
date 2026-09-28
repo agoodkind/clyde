@@ -87,8 +87,8 @@ type streamMessageDeltaPayload struct {
 	StopReason string `json:"stop_reason"`
 }
 
-// handleSSEMessageDelta overwrites output_tokens and each cache count with
-// the message_delta value when that value is positive.
+// streamMessageDeltaUsage decodes the usage object in a message_delta
+// event. handleSSEMessageDelta copies each positive count into Usage.
 type streamMessageDeltaUsage struct {
 	OutputTokens             int                             `json:"output_tokens"`
 	CacheCreationInputTokens int                             `json:"cache_creation_input_tokens,omitempty"`

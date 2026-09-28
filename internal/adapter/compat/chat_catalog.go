@@ -77,9 +77,9 @@ var chatUnsupportedDocumentedKeys = map[string]bool{
 
 // ChatRejection returns the first request field that the resolved provider
 // cannot honor as the Chat Completions reference documents it. presenceFor
-// returns the presence of a top-level key. The OpenAI-compatible passthrough
-// has no catalog column. It receives every field unchanged, and
-// ChatRejection never rejects a field for it.
+// returns the presence of a top-level key. ChatRejection checks unknown keys
+// and the stream_options rule for every provider. The OpenAI-compatible
+// passthrough has no catalog column and skips the provider checks.
 func ChatRejection(presenceFor func(string) int, values ChatRequestValues, provider adaptermodel.BackendID) (Rejection, bool) {
 	if rejection, ok := chatUnknownKeyRejection(values.UnknownKeys); ok {
 		return rejection, true

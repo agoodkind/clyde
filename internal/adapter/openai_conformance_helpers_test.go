@@ -14,11 +14,11 @@ import (
 )
 
 // The openai_conformance_*_test.go files verify
-// docs/adapter/openai-conformance.md at the public HTTP boundary. Each test
-// starts the adapter on the generic OpenAI listener and the Cursor BYOK
-// listener with a local Codex upstream. Each test sends HTTP requests to
-// those listeners and asserts the status, headers, and body a client
-// receives.
+// docs/adapter/openai-conformance.md at the public HTTP boundary.
+// startConformanceServer starts the adapter on the generic OpenAI listener
+// and the Cursor BYOK listener with a local Codex upstream. The tests send
+// HTTP requests to those listeners and assert the status, headers, and body
+// a client receives.
 
 const conformanceUsageWithReasoning = `{"input_tokens":11,"output_tokens":13,"total_tokens":24,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},"output_tokens_details":{"reasoning_tokens":7}}`
 
