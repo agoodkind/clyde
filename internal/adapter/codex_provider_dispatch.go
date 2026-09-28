@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -325,12 +324,8 @@ func (s *Server) dispatchCodexProviderCollect(
 	}
 	if merged.Usage != nil {
 		merged.Usage.MaxTokens = usage.MaxTokens
-		if !listenerFollowsDocumentedContract(ctx) {
-			compatibilityUsage := adapteropenai.CompatibilityUsage(*merged.Usage)
-			merged.Usage = &compatibilityUsage
-		}
 	}
-	mergedBody, err := json.Marshal(merged)
+	mergedBody, err := marshalChatResponseForListener(ctx, merged)
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.codex.collect_marshal_failed", "concern", "adapter.providers.codex.request", "err", err)
 		return

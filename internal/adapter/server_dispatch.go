@@ -329,6 +329,31 @@ func openAIIngressSurface(ctx context.Context) adapterresolver.IngressSurface {
 	return adapterresolver.IngressOpenAI
 }
 
+// marshalChatResponseForListener encodes a nonstreaming Chat Completions
+// response. The generic OpenAI listener uses the documented encoding,
+// which always writes logprobs, content, and refusal. Every other
+// listener keeps the compatibility encoding and compatibility usage.
+func marshalChatResponseForListener(ctx context.Context, resp ChatResponse) ([]byte, error) {
+	if listenerFollowsDocumentedContract(ctx) {
+		encoded, err := adapteropenai.MarshalDocumentedChatResponse(resp)
+		if err != nil {
+			slog.WarnContext(ctx, "adapter.chat.documented_response_marshal_failed", "concern", "adapter.chat.render", "err", err)
+			return nil, fmt.Errorf("marshal documented chat response: %w", err)
+		}
+		return encoded, nil
+	}
+	if resp.Usage != nil {
+		compatibilityUsage := adapteropenai.CompatibilityUsage(*resp.Usage)
+		resp.Usage = &compatibilityUsage
+	}
+	encoded, err := json.Marshal(resp)
+	if err != nil {
+		slog.WarnContext(ctx, "adapter.chat.response_marshal_failed", "concern", "adapter.chat.render", "err", err)
+		return nil, fmt.Errorf("marshal chat response: %w", err)
+	}
+	return encoded, nil
+}
+
 // listenerFollowsDocumentedContract reports whether the request arrived
 // on the generic OpenAI listener. [Server.StartOnListeners] labels every
 // accepted connection as "openai" or "cursor". Only the "openai" label

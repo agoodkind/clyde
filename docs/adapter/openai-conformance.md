@@ -12,6 +12,9 @@ The contract comes from these sources, read on 2026-09-27:
 - [Completions reference](https://developers.openai.com/api/reference/resources/completions)
 - [Error code guide](https://developers.openai.com/api/docs/guides/error-codes)
 - The `openai` Python SDK 3.19.2 Pydantic models, which mark each required response field
+- The official OpenAI Go SDK `github.com/openai/openai-go/v3` v3.66.0, which marks each required response field with an `api:"required"` tag
+
+`TestOpenAIGoSDKConformanceCodexProvider` and `TestOpenAIGoSDKConformanceAnthropicProvider` run the Go SDK client against the generic OpenAI listener. They check every response object and stream event against the SDK's required tags and presence metadata.
 
 A disposition is one of four values. Implemented means Clyde produces the documented behavior. Forwarded means Clyde passes the value to a provider that honors it. Rejected means Clyde returns HTTP 400 `invalid_request_error` with the field in `param` before any provider request starts. Deviation means Clyde differs from the reference, and the row states the difference.
 
@@ -39,8 +42,9 @@ A disposition is one of four values. Implemented means Clyde produces the docume
 
 | Behavior | Reference | Disposition | Test |
 | --- | --- | --- | --- |
-| `usage.completion_tokens_details.reasoning_tokens` reports the provider count and is absent when the provider reports none. | Chat usage object | Implemented | `TestOpenAIConformanceReportsUpstreamReasoningTokens`, `TestOpenAIConformanceOmitsAbsentReasoningDetail` |
-| `usage.prompt_tokens_details` reports `cached_tokens` and `cache_write_tokens` when the provider reports them. | Chat usage object | Implemented | `TestOpenAIConformanceReportsUpstreamReasoningTokens` |
+| A nonstreaming response always writes `choices[].logprobs`, `message.content`, and `message.refusal`, with JSON null for an absent value. | Chat completion object | Implemented | `TestOpenAIGoSDKConformanceCodexProvider` |
+| `usage.completion_tokens_details.reasoning_tokens` reports the provider count and is absent when the provider reports none. Codex reports `output_tokens_details.reasoning_tokens`. Anthropic reports `output_tokens_details.thinking_tokens`. | Chat usage object | Implemented | `TestOpenAIConformanceReportsUpstreamReasoningTokens`, `TestOpenAIConformanceOmitsAbsentReasoningDetail`, `TestOpenAIGoSDKConformanceAnthropicProvider` |
+| `usage.prompt_tokens_details` reports `cached_tokens` and `cache_write_tokens` when the provider reports them. Anthropic reports `cache_read_input_tokens` and `cache_creation_input_tokens`. | Chat usage object | Implemented | `TestOpenAIConformanceReportsUpstreamReasoningTokens`, `TestOpenAIGoSDKConformanceAnthropicProvider` |
 | With `stream_options.include_usage`, every ordinary chunk has `usage: null`, one final chunk has empty `choices` and aggregate usage, and one `[DONE]` ends the stream. | `stream_options.include_usage` | Implemented | `TestOpenAIConformanceChatStreamUsageOptIn`, SDK smoke |
 | Without the option, no chunk has a `usage` member and no aggregate chunk is sent. | `stream_options.include_usage` | Implemented | `TestOpenAIConformanceChatStreamWithoutUsageOptIn` |
 | `stream_options` without `stream: true` returns 400 with code `invalid_parameter`. | `stream_options` | Rejected | `TestOpenAIConformanceChatRejectsFieldsBeforeProviderRequest` |
@@ -73,9 +77,8 @@ The provider columns show the disposition of each request field that one provide
 | Behavior | Reference | Disposition | Test |
 | --- | --- | --- | --- |
 | The Response object repeats `instructions`, `max_output_tokens`, `metadata`, `parallel_tool_calls`, `previous_response_id`, `reasoning`, `store`, `temperature`, `text`, `tool_choice`, `tools`, `top_p`, `truncation`, and `user`, with the documented default for an omitted field. `store` is always false because Clyde stores no responses. | Response object | Implemented | `TestOpenAIConformanceResponsesStreamEventsAndEcho`, SDK smoke |
-| `usage.output_tokens_details.reasoning_tokens` reports the provider count. | Response usage object | Implemented | `TestOpenAIConformanceReportsUpstreamReasoningTokens` |
-| `usage.output_tokens_details` is absent when the provider reports no reasoning count. The SDK marks it required. The design keeps absent data absent instead of inventing a zero. | Response usage object | Deviation | `TestOpenAIConformanceOmitsAbsentReasoningDetail` |
-| `usage.input_tokens_details.cache_write_tokens` reports the provider count. It is absent when the provider reports none, and the SDK marks it required. | Response usage object | Deviation when absent | SDK smoke |
+| `usage.output_tokens_details.reasoning_tokens` and `usage.input_tokens_details` report the Codex and Anthropic counts listed in the Chat rows. | Response usage object | Implemented | `TestOpenAIConformanceReportsUpstreamReasoningTokens`, `TestOpenAIGoSDKConformanceAnthropicProvider`, SDK smoke |
+| A detail the provider does not report stays absent instead of becoming an invented zero. The SDK marks `output_tokens_details` and `cache_write_tokens` required. Codex and Anthropic reported both counts in every captured response on 2026-09-27. | Response usage object | Deviation only when a provider omits a count | `TestOpenAIConformanceOmitsAbsentReasoningDetail` |
 | The stream starts with `response.created` and `response.in_progress`, finishes each output item before the next item starts, and ends with `response.completed`, `response.incomplete`, or `response.failed`. Every event has `sequence_number`. No `[DONE]` frame is sent. | Responses streaming events | Implemented | `TestOpenAIConformanceResponsesStreamEventsAndEcho`, SDK smoke |
 | A reasoning item emits `response.reasoning_summary_part.added` before its text deltas and `response.reasoning_summary_part.done` after `response.reasoning_summary_text.done`. | Responses streaming events | Implemented | `TestOpenAIConformanceResponsesStreamEventsAndEcho` |
 | `response.output_text.delta` and `response.output_text.done` have an empty `logprobs` array. | Responses streaming events | Implemented | `TestOpenAIConformanceResponsesStreamEventsAndEcho` |
@@ -101,7 +104,7 @@ The per-provider field dispositions come from the same catalog as the Cursor lis
 
 ## Cursor and native Codex contracts
 
-The Cursor BYOK listener keeps its compatibility contract. Upstream failures render as HTTP 400 `invalid_request_error` with a typed `upstream_*` code. The listener keeps Responses compatibility warnings, the forced Chat usage chunk, the legacy Chat-shaped `/v1/completions` response, and the model list without `created`. Its usage has no `completion_tokens_details` and no `cache_write_tokens`, and its Responses usage always reports `input_tokens_details` and a zero `reasoning_tokens`. `TestOpenAIConformanceUpstreamFailureStatusByListener`, `TestOpenAIConformanceChatStreamWithoutUsageOptIn`, `TestOpenAIConformanceReportsUpstreamReasoningTokens`, `TestOpenAIConformanceModelsListAndRetrieve`, and the Responses warning tests verify these behaviors.
+The Cursor BYOK listener keeps its compatibility contract. Upstream failures render as HTTP 400 `invalid_request_error` with a typed `upstream_*` code. The listener keeps Responses compatibility warnings, the forced Chat usage chunk, the legacy Chat-shaped `/v1/completions` response, and the model list without `created`. Its usage has no `completion_tokens_details` and no `prompt_tokens_details.cache_write_tokens`. Anthropic usage writes `prompt_tokens_details` only for a cache read. Its Responses usage always reports `input_tokens_details` and a zero `reasoning_tokens`. `TestOpenAIConformanceUpstreamFailureStatusByListener`, `TestOpenAIConformanceChatStreamWithoutUsageOptIn`, `TestOpenAIConformanceReportsUpstreamReasoningTokens`, `TestAnthropicReportedUsageKeepsCursorUsageBytes`, `TestOpenAIConformanceModelsListAndRetrieve`, and the Responses warning tests verify these behaviors.
 
 Clyde classifies a Responses request for native Codex forwarding when the request has valid `X-Codex-Turn-Metadata` and its model resolves to Codex. Clyde forwards that request body, its unknown fields, the upstream status, and the response bytes unchanged on every listener. Its adapter-side errors keep the compatibility contract. `TestOpenAIListenerKeepsNativeCodexForwardingContract` and `TestOpenAIListenerKeepsNativeCodexTransportFailureContract` verify these behaviors.
 

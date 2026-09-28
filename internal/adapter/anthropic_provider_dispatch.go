@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -68,7 +67,7 @@ func (s *Server) dispatchAnthropicProviderCollect(
 	if len(notices) > 0 {
 		finalResponse = updated
 	}
-	respBody, err := json.Marshal(finalResponse)
+	respBody, err := marshalChatResponseForListener(ctx, finalResponse)
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.anthropic.collect_marshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
 		return fmt.Errorf("marshal anthropic collect response: %w", err)
