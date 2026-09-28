@@ -15,6 +15,8 @@ Complete CLYDE-629. Clyde registers its collection, syncs fingerprints, streams 
 - Keep the existing `conversationId`, `parentConversationId`, `role`, `provider`, `workspaceRoot`, `archived`, `timestampUnix`, `messageIndex`, and `loadRules` schema. Set `item_id_column=conversationId`. Clyde sends `provider` explicitly.
 - Default every normal and operator upsert to retain. Keep `backfill_delivered` for reexamination and reserve `force_reexamine` for the existing explicit rebuild behavior. A transport or schema error never selects another backend automatically.
 - Pin a released LMS commit in `go.mod`; do not add a machine-specific `replace`. Verify with `GOWORK=off`.
+- Apply the configured provider, role, and content selections in Clyde before any LMS call. Send only nonempty selected content that needs embedding. Omit a message only when every selected content class is empty. Keep a message with empty text when it contains selected tool or reasoning content, and send those rows.
+- Keep `SemanticProjectionHash` bytes and LMS checkpoint values compatible. A second pass over an unchanged corpus sends no row for embedding.
 
 ## Pull request boundary
 
@@ -119,11 +121,15 @@ Behavior:
 Steps:
 
 1. Run old and generic ingest against isolated temporary LMS collections using the same bounded real transcript sample. Compare row keys, content, scalar values, vectors, and checkpoint fingerprints. Keep transcript text out of logs and test output.
-2. Update the existing conversation documentation to state that Clyde creates search rows and LMS ingests declared items.
-3. Run `make test` and `make check`. Build, install, and reload Clyde through the repository's supported daemon procedure, then inspect a complete normal feeder pass and a fresh ingest of one changed conversation.
+2. Check the Clyde-to-LMS boundary on that sample with actual counts and payload inspection. Count conversations, messages, selected rows, rows sent, and rows embedded. Confirm that every sent row is nonempty selected content, that excluded providers, roles, and content classes send nothing, and that tool-only and reasoning-only messages with empty text send their rows. Run a second unchanged pass and confirm that it embeds zero rows and leaves `SemanticProjectionHash` values and checkpoints unchanged. Report metadata reconciliation (manifest sync, fingerprint and checkpoint updates, scalar work) separately from embedding work in both counts and time.
+3. Measure a clean install of the sample from a fresh Clyde and LMS state. Record elapsed time for source reading, projection, embedding, persistence, and searchable completion; the embedding model startup time; embedding throughput; and total elapsed time. Estimate the full corpus from eligible content counts after Clyde's selections, not from historical Milvus row counts, and label the result as an estimate.
+4. Update the existing conversation documentation to state that Clyde creates search rows and LMS ingests declared items.
+5. Run `make test` and `make check`. Build, install, and reload Clyde through the repository's supported daemon procedure, then inspect a complete normal feeder pass and a fresh ingest of one changed conversation.
 
 Verification:
 
 - Run: `GOWORK=off make test && GOWORK=off make check`
 - Expect: all tests and lint pass without `go.work`.
+- Expect: the boundary check in step 2 reports only nonempty selected rows sent, the expected tool-only and reasoning-only rows, and zero rows embedded on the unchanged second pass.
+- Expect: the clean-install measurement in step 3 reports each stage time, model startup time, throughput, sample counts, and a labeled full-corpus estimate.
 - Expect: deployed LMS accepts the generic calls; the unchanged corpus produces zero re-offered items; one changed conversation updates only its own rows and checkpoint.
