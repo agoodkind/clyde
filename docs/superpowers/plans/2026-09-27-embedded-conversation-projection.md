@@ -4,7 +4,7 @@ The [shared coordination plan](2026-09-27-shared-search-coordination.md) is the 
 
 ## C1. Prepare immutable conversation occurrences
 
-Depends on: LMS L0 public facade and C4.1 native dependency bootstrap.
+Depends on: LMS L0 public facade and [C4.1 native dependency bootstrap](2026-09-27-embedded-conversation-runtime.md#c41-bootstrap-the-native-dependency-workspace).
 
 Files:
 
