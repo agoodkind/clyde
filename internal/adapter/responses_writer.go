@@ -609,8 +609,9 @@ func (p *responsesStreamWriter) buildResponse(status adapteropenai.ResponsesStat
 		// Warnings ride on the response object only through begin(), which
 		// sets Clyde on the first snapshot; buildResponse leaves it unset so
 		// terminal frames stay warning-free.
-		Warnings: nil,
-		Echo:     p.echo,
+		Warnings:        nil,
+		Echo:            p.echo,
+		DocumentedUsage: p.documented,
 	})
 }
 

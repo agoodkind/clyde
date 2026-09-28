@@ -469,6 +469,20 @@ func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
 	}
 }
 
+// CompatibilityResponsesUsage maps usage into the Responses shape the
+// compatibility contract reports. That shape always has
+// input_tokens_details with the cached count and output_tokens_details
+// with a reasoning count of zero.
+func CompatibilityResponsesUsage(usage Usage) ResponsesUsage {
+	return ResponsesUsage{
+		InputTokens:         usage.PromptTokens,
+		OutputTokens:        usage.CompletionTokens,
+		TotalTokens:         usage.TotalTokens,
+		InputTokensDetails:  &ResponsesInputTokensDetails{CachedTokens: usage.CachedTokens(), CacheWriteTokens: nil},
+		OutputTokensDetails: &ResponsesOutputTokensDetails{ReasoningTokens: 0},
+	}
+}
+
 // ResponsesResponseParams carries the assembled turn content the
 // builder projects into a Responses response object. Output preserves the
 // normalized event order when it is supplied by a renderer.
@@ -488,6 +502,9 @@ type ResponsesResponseParams struct {
 	// Echo is the documented request echo. A nil Echo omits the echo
 	// fields.
 	Echo *ResponsesEcho
+	// DocumentedUsage selects ResponsesUsageFromChat. False selects
+	// CompatibilityResponsesUsage.
+	DocumentedUsage bool
 }
 
 // BuildResponsesResponse assembles a Responses response object from the
@@ -501,7 +518,10 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 
 	var usage *ResponsesUsage
 	if params.Usage != nil {
-		mapped := ResponsesUsageFromChat(*params.Usage)
+		mapped := CompatibilityResponsesUsage(*params.Usage)
+		if params.DocumentedUsage {
+			mapped = ResponsesUsageFromChat(*params.Usage)
+		}
 		usage = &mapped
 	}
 

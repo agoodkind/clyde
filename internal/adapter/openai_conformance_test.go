@@ -280,8 +280,13 @@ func TestOpenAIConformanceChatStreamWithoutUsageOptIn(t *testing.T) {
 	drainConformanceRequest(t, upstream)
 	cursorUsageChunks := 0
 	for _, chunk := range requireSingleTrailingDone(t, sseDataFrames(t, cursor.body)) {
-		if _, present := decodeJSONObject(t, []byte(chunk))["usage"]; present {
-			cursorUsageChunks++
+		usage, present := decodeJSONObject(t, []byte(chunk))["usage"]
+		if !present {
+			continue
+		}
+		cursorUsageChunks++
+		if strings.Contains(string(usage), "completion_tokens_details") || strings.Contains(string(usage), "cache_write_tokens") {
+			t.Fatalf("cursor stream usage gained new details: %s", usage)
 		}
 	}
 	if cursorUsageChunks != 2 {
@@ -789,24 +794,40 @@ func TestOpenAIConformanceReportsUpstreamReasoningTokens(t *testing.T) {
 	upstream := newConformanceUpstream(conformanceUsageWithReasoning)
 	listeners := startConformanceServer(t, upstream)
 
-	for _, baseURL := range []string{listeners.openAI, listeners.cursor} {
-		chat := postConformance(t, baseURL+"/v1/chat/completions", `{"model":"gpt-future","messages":[{"role":"user","content":"hi"}]}`)
-		if chat.status != http.StatusOK {
-			t.Fatalf("chat status = %d; body=%s", chat.status, chat.body)
-		}
-		drainConformanceRequest(t, upstream)
-		var completion adapteropenai.ChatResponse
-		if err := json.Unmarshal(chat.body, &completion); err != nil {
-			t.Fatalf("decode chat completion: %v", err)
-		}
-		reasoning := completion.Usage.CompletionTokensDetails
-		if reasoning == nil || reasoning.ReasoningTokens != 7 {
-			t.Fatalf("chat completion_tokens_details = %+v, want reasoning_tokens 7; body=%s", reasoning, chat.body)
-		}
-		promptDetails := completion.Usage.PromptTokensDetails
-		if promptDetails == nil || promptDetails.CachedTokens != 3 || promptDetails.CacheWriteTokens == nil || *promptDetails.CacheWriteTokens != 2 {
-			t.Fatalf("chat prompt_tokens_details = %s, want cached_tokens 3 and cache_write_tokens 2", chat.body)
-		}
+	chatBody := `{"model":"gpt-future","messages":[{"role":"user","content":"hi"}]}`
+	chat := postConformance(t, listeners.openAI+"/v1/chat/completions", chatBody)
+	if chat.status != http.StatusOK {
+		t.Fatalf("chat status = %d; body=%s", chat.status, chat.body)
+	}
+	drainConformanceRequest(t, upstream)
+	var completion adapteropenai.ChatResponse
+	if err := json.Unmarshal(chat.body, &completion); err != nil {
+		t.Fatalf("decode chat completion: %v", err)
+	}
+	reasoning := completion.Usage.CompletionTokensDetails
+	if reasoning == nil || reasoning.ReasoningTokens != 7 {
+		t.Fatalf("chat completion_tokens_details = %+v, want reasoning_tokens 7; body=%s", reasoning, chat.body)
+	}
+	promptDetails := completion.Usage.PromptTokensDetails
+	if promptDetails == nil || promptDetails.CachedTokens != 3 || promptDetails.CacheWriteTokens == nil || *promptDetails.CacheWriteTokens != 2 {
+		t.Fatalf("chat prompt_tokens_details = %s, want cached_tokens 3 and cache_write_tokens 2", chat.body)
+	}
+
+	// The Cursor listener keeps its usage bytes without the new details.
+	cursorChat := postConformance(t, listeners.cursor+"/v1/chat/completions", chatBody)
+	drainConformanceRequest(t, upstream)
+	cursorUsage := decodeJSONObject(t, requireMember(t, decodeJSONObject(t, cursorChat.body), "usage"))
+	if _, present := cursorUsage["completion_tokens_details"]; present {
+		t.Fatalf("cursor chat usage gained completion_tokens_details: %s", cursorChat.body)
+	}
+	if string(cursorUsage["prompt_tokens_details"]) != `{"cached_tokens":3}` {
+		t.Fatalf("cursor chat prompt_tokens_details = %s, want {\"cached_tokens\":3}", cursorUsage["prompt_tokens_details"])
+	}
+	cursorResponses := postConformance(t, listeners.cursor+"/v1/responses", `{"model":"gpt-future","input":"hi"}`)
+	drainConformanceRequest(t, upstream)
+	cursorResponsesUsage := decodeJSONObject(t, requireMember(t, decodeJSONObject(t, cursorResponses.body), "usage"))
+	if string(cursorResponsesUsage["input_tokens_details"]) != `{"cached_tokens":3}` || string(cursorResponsesUsage["output_tokens_details"]) != `{"reasoning_tokens":0}` {
+		t.Fatalf("cursor responses usage = %s, want the compatibility details", cursorResponses.body)
 	}
 
 	responses := postConformance(t, listeners.openAI+"/v1/responses", `{"model":"gpt-future","input":"hi"}`)

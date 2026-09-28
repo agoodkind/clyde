@@ -633,19 +633,20 @@ func (s *Server) dispatchResponsesCollect(
 		output = nil
 	}
 	resp := adapteropenai.BuildResponsesResponse(adapteropenai.ResponsesResponseParams{
-		ID:         responseID,
-		Model:      alias,
-		CreatedAt:  clock.Now().Unix(),
-		Status:     status,
-		Text:       text,
-		Reasoning:  reasoning,
-		Refusal:    refusal,
-		ToolCalls:  toolCalls,
-		Output:     output,
-		Usage:      &usage,
-		ItemIDBase: responsesItemBase(responseID),
-		Warnings:   warnings,
-		Echo:       documentedResponsesEcho(ctx, resolvedReq),
+		ID:              responseID,
+		Model:           alias,
+		CreatedAt:       clock.Now().Unix(),
+		Status:          status,
+		Text:            text,
+		Reasoning:       reasoning,
+		Refusal:         refusal,
+		ToolCalls:       toolCalls,
+		Output:          output,
+		Usage:           &usage,
+		ItemIDBase:      responsesItemBase(responseID),
+		Warnings:        warnings,
+		Echo:            documentedResponsesEcho(ctx, resolvedReq),
+		DocumentedUsage: listenerFollowsDocumentedContract(ctx),
 	})
 	resp.IncompleteDetails = incompleteDetails
 	body, marshalErr := json.Marshal(resp)

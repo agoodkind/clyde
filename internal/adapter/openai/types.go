@@ -411,6 +411,20 @@ type PromptTokensDetails struct {
 	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
 }
 
+// CompatibilityUsage returns the usage the compatibility contract
+// reports. That contract predates the reasoning and cache-write details,
+// so the returned value has no completion_tokens_details and no
+// prompt_tokens_details.cache_write_tokens.
+func CompatibilityUsage(usage Usage) Usage {
+	usage.CompletionTokensDetails = nil
+	if usage.PromptTokensDetails != nil {
+		details := *usage.PromptTokensDetails
+		details.CacheWriteTokens = nil
+		usage.PromptTokensDetails = &details
+	}
+	return usage
+}
+
 // CompletionTokensDetails is the Chat Completions breakdown of output
 // tokens. Only the reasoning count is modeled. No Clyde provider reports
 // another output breakdown.

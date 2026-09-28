@@ -325,6 +325,10 @@ func (s *Server) dispatchCodexProviderCollect(
 	}
 	if merged.Usage != nil {
 		merged.Usage.MaxTokens = usage.MaxTokens
+		if !listenerFollowsDocumentedContract(ctx) {
+			compatibilityUsage := adapteropenai.CompatibilityUsage(*merged.Usage)
+			merged.Usage = &compatibilityUsage
+		}
 	}
 	mergedBody, err := json.Marshal(merged)
 	if err != nil {

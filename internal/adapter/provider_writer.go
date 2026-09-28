@@ -317,15 +317,16 @@ func (p *providerStreamWriter) finalizeStream(ctx context.Context, result adapte
 	if p != nil && p.documentedUsage {
 		return p.finalizeDocumentedStream(ctx, finishChunk, result.Usage, includeUsage)
 	}
+	compatibilityUsage := adapteropenai.CompatibilityUsage(result.Usage)
 	if includeUsage {
-		usage := result.Usage
+		usage := compatibilityUsage
 		finishChunk.Usage = &usage
 	}
 	if err := p.writeRenderedChunk(ctx, finishChunk); err != nil {
 		return err
 	}
 	if includeUsage {
-		usage := result.Usage
+		usage := compatibilityUsage
 		if err := p.writeRenderedChunk(ctx, adapteropenai.StreamChunk{
 			ID:      p.reqID,
 			Object:  "chat.completion.chunk",
