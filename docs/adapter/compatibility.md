@@ -2,8 +2,8 @@
 
 On the Cursor BYOK listener, the generic Responses projection forwards what the
 resolved provider can honor and warns for every request field it drops or
-overrides. A Cursor `/v1/responses` request never fails only because it sets a
-field or tool type the backend cannot use.
+overrides. The Cursor listener does not reject a `/v1/responses` request for a
+field or tool type that the backend cannot use.
 
 The generic OpenAI listener reads the same field catalog and rejects those
 fields instead of warning. The [OpenAI conformance matrix](openai-conformance.md)
