@@ -33,9 +33,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # The race step calls go test outside make. This step runs the gksyntax
+      # grammar generation, go.work routing, and cgo dependency preparation that
+      # make test runs before it compiles.
+      - name: Native build prerequisites
+        run: make native-prereqs
       # Race coverage runs the suites with `go test -race` (Go's own runner)
       # rather than `ginkgo -r --race`. The ginkgo CLI orchestrator wedges after
       # the suites finish on linux/amd64 under -race (reproduced on every CI run,

@@ -62,7 +62,7 @@ CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then
 
 .PHONY: test-ginkgo test-watch coverage live setup-hooks install-hooks \
         deploy daemon-reload deadcode proto gksyntax-grammars \
-        embedded-search-bootstrap
+        native-prereqs embedded-search-bootstrap
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
 # runs ginkgo specs registered through RunSpecs. test-ginkgo is for when you
@@ -115,7 +115,8 @@ TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
 TREE_SITTER_BIN := $(TREE_SITTER_LOCAL_DIR)/tree-sitter
 
 gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its Swift parser
-	@status="$$(git submodule status --recursive $(GKS_DIR))"; \
+	@set -e; \
+	status="$$(git submodule status --recursive $(GKS_DIR))"; \
 	if printf '%s\n' "$$status" | grep -q '^U'; then \
 		echo "gksyntax-grammars: $(GKS_DIR) has unresolved submodule conflicts" >&2; \
 		exit 1; \
@@ -128,13 +129,18 @@ gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its 
 		exit 1; \
 	fi
 	@"$(GKS_DIR)/scripts/install-tree-sitter.sh" "$(TREE_SITTER_LOCAL_DIR)"
-	@if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
+	@set -e; \
+	if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
 		echo "gksyntax-grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
 		( cd "$(SWIFT_GRAMMAR_DIR)" && "$(TREE_SITTER_BIN)" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
 		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- .; \
 	else \
 		echo "gksyntax-grammars: Swift parser already generated"; \
 	fi
+
+# native-prereqs runs the go.mk order-only prerequisites that `make test` runs
+# before it compiles packages. CI jobs that call `go test` directly run it first.
+native-prereqs: | $(GO_MK_PREREQS) ## Prepare the gksyntax grammars, go.work, and cgo dependencies
 
 # EMBEDDED_SEARCH_PACKAGES lists the external packages that the embedded
 # conversation search path imports.
