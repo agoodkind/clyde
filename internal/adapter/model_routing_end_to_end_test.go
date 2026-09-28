@@ -110,8 +110,9 @@ func TestDeclarativeRoutesDispatchToLoopbackEndpoints(t *testing.T) {
 	assertAdvertisedExactModels(t, srv)
 }
 
-// The fallback fake answers GET /v1/models/routingFallbackModelID with
-// routingFallbackModelBody and every other model lookup with 404.
+// The fallback fake answers GET /v1/models/{model} with
+// routingFallbackModelBody when the model ID equals routingFallbackModelID.
+// It answers every other model ID with 404.
 const (
 	routingFallbackModelID   = "unrelated-model"
 	routingFallbackModelBody = `{"id":"unrelated-model","object":"model","created":1700000000,"owned_by":"fallback-upstream"}`

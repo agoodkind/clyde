@@ -494,7 +494,8 @@ type ResponsesResponseParams struct {
 	Usage      *Usage
 	ItemIDBase string
 	Warnings   []adaptercompat.CompatibilityWarning
-	// A nil Echo omits the request echo fields.
+	// A nil Echo omits the optional request echo fields.
+	// BuildResponsesResponse still writes metadata as {}.
 	Echo *ResponsesEcho
 	// DocumentedUsage selects ResponsesUsageFromChat when true and
 	// CompatibilityResponsesUsage when false.
