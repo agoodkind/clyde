@@ -405,11 +405,17 @@ type Thinking struct {
 // CacheCreationInputTokens is the count of input tokens written into
 // the prompt cache on this request; CacheReadInputTokens is the count
 // served from cache. Both are zero when prompt caching is disabled.
+// CacheCountsReported is true when message_start included both cache
+// counts as numbers. ThinkingTokens is the message_delta
+// usage.output_tokens_details.thinking_tokens count, and nil when the
+// upstream did not report it.
 type Usage struct {
 	InputTokens              int
 	OutputTokens             int
 	CacheCreationInputTokens int
 	CacheReadInputTokens     int
+	CacheCountsReported      bool
+	ThinkingTokens           *int
 }
 
 // Sink receives a single text delta chunk during streaming. Empty

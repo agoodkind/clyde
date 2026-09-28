@@ -986,7 +986,7 @@ func passthroughOverrideUsageFromBody(body []byte) Usage {
 		cachedTokens = wire.InputDetails.CachedTokens
 	}
 	if cachedTokens > 0 {
-		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: cachedTokens, CacheWriteTokens: nil}
+		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: cachedTokens, CacheWriteTokens: nil, CompatibilityOmitsUncached: false}
 	}
 	return usage
 }

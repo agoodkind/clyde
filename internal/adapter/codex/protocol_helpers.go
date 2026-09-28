@@ -257,8 +257,9 @@ func mapUsage(c completedResponse) adapteropenai.Usage {
 	}
 	if usage.InputTokensDetails != nil {
 		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{
-			CachedTokens:     usage.InputTokensDetails.CachedTokens,
-			CacheWriteTokens: usage.InputTokensDetails.CacheWriteTokens,
+			CachedTokens:               usage.InputTokensDetails.CachedTokens,
+			CacheWriteTokens:           usage.InputTokensDetails.CacheWriteTokens,
+			CompatibilityOmitsUncached: false,
 		}
 	}
 	if usage.OutputTokensDetails != nil {

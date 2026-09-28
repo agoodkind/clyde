@@ -406,14 +406,18 @@ type Usage struct {
 
 // PromptTokensDetails is part of Clyde's typed adapter surface.
 // CacheWriteTokens is nil when the provider did not report cache writes.
+// CompatibilityOmitsUncached makes CompatibilityUsage drop these details
+// when CachedTokens is zero. A provider sets it when its compatibility
+// usage wrote prompt details only for a cache read.
 type PromptTokensDetails struct {
-	CachedTokens     int  `json:"cached_tokens"`
-	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
+	CachedTokens               int  `json:"cached_tokens"`
+	CacheWriteTokens           *int `json:"cache_write_tokens,omitempty"`
+	CompatibilityOmitsUncached bool `json:"-"`
 }
 
 // CompatibilityUsage returns the usage the compatibility contract
-// reports. That contract predates the reasoning and cache-write details,
-// so the returned value has no completion_tokens_details and no
+// reports. That contract predates the reasoning and cache-write details.
+// The returned value has no completion_tokens_details and no
 // prompt_tokens_details.cache_write_tokens.
 func CompatibilityUsage(usage Usage) Usage {
 	usage.CompletionTokensDetails = nil
@@ -421,6 +425,9 @@ func CompatibilityUsage(usage Usage) Usage {
 		details := *usage.PromptTokensDetails
 		details.CacheWriteTokens = nil
 		usage.PromptTokensDetails = &details
+		if details.CompatibilityOmitsUncached && details.CachedTokens == 0 {
+			usage.PromptTokensDetails = nil
+		}
 	}
 	return usage
 }
