@@ -1,5 +1,7 @@
 # Clyde generic LMS ingestion cutover implementation plan
 
+This historical RPC cutover plan is superseded by the [embedded conversation search plan](2026-09-27-embedded-conversation-search.md). Preserve its selected nonempty content acceptance and measurement requirements; do not implement its replacement or deletion steps.
+
 ## Goal
 
 Complete CLYDE-629. Clyde registers its collection, syncs fingerprints, streams conversation rows, backfills scalars, and deletes items through the generic LMS RPCs. Clyde determines conversation content and scalar values before it calls LMS. An unchanged corpus causes no re-offer or row migration.

@@ -1,5 +1,7 @@
 # Clyde generic LMS search cutover implementation plan
 
+This historical RPC cutover plan is superseded by the [embedded conversation search plan](2026-09-27-embedded-conversation-search.md). The typed filter and public result requirements remain relevant; the fixed depth and LMS RPC steps do not.
+
 ## Goal
 
 Complete CLYDE-643. Clyde constructs provider-neutral conversation filters, calls `SearchCollection`, and preserves cross-provider search results and context windows. Clyde sends the allowed conversation set with each query and stops filtering hits after retrieval. Its existing within-conversation client helper reads indexed fingerprints through `GetCollectionItemState` for API compatibility.

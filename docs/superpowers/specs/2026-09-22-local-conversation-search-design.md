@@ -1,5 +1,7 @@
 # Local conversation search
 
+This historical design is superseded by [Embedded conversation search](2026-09-27-embedded-search-design.md). Its backend switch, row replacement, deletion, and fixed depth search instructions are not implementation requirements.
+
 Clyde needs cross-provider conversation search without LMS, Docker, or an external model provider. A local backend stores a compact index on disk and loads it into memory for search on computers with 16 or 24 GB of RAM. Local ranking may be less precise than LMS ranking.
 
 ## Select one backend

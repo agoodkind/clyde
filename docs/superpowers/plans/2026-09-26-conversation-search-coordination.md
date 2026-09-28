@@ -1,5 +1,7 @@
 # Conversation search coordination implementation plan
 
+This historical RPC and local-backend sequence is superseded by the [shared library coordination plan](2026-09-27-shared-search-coordination.md). Do not execute its fixed-depth search, RPC cutovers, or replacement-based ingestion steps.
+
 ## Goal
 
 Release generic LMS collection ingestion and search, move Clyde to those RPCs, add Clyde's local in-memory search backend, measure it on the full conversation corpus, and remove the retired LMS conversation protocol. Clyde uses one provider-artifact ingestion path and one prepared search contract for both backends. `backend = "lms"` returns an unavailable error when LMS is down. `backend = "local"` searches without LMS, Docker, or a model provider.

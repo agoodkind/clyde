@@ -1,5 +1,7 @@
 # Local conversation search implementation plan
 
+This historical two backend plan is superseded by the [embedded conversation search plan](2026-09-27-embedded-conversation-search.md). Its local vector replacement, deletion, and backend selection tasks are not implementation requirements.
+
 ## Goal
 
 `clyde conversation search --query "..."` and the `clyde_search` MCP tool search provider conversations with `backend = "local"`. The local backend bundles a small model, saves a compact index on disk, and loads search data into RAM. It requires no LMS process, Docker service, or model provider. `backend = "lms"` retains LMS behavior and returns an unavailable error when LMS is down. Both backends use Clyde's existing ingestion and search operations.
