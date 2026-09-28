@@ -16,7 +16,7 @@ The contract comes from these sources, read on 2026-09-27:
 
 `TestOpenAIGoSDKConformanceCodexProvider` and `TestOpenAIGoSDKConformanceAnthropicProvider` run the Go SDK client against the generic OpenAI listener. They check every response object and stream event against the SDK's required tags and presence metadata.
 
-A disposition is one of four values. Implemented means Clyde produces the documented behavior. Forwarded means Clyde passes the value to a provider that honors it. Rejected means Clyde returns HTTP 400 `invalid_request_error` with the field in `param` before any provider request starts. Deviation means Clyde differs from the reference, and the row states the difference.
+A disposition is one of five values. Implemented means Clyde produces the documented behavior. Forwarded means Clyde passes the value to a provider that honors it. Rejected means Clyde returns HTTP 400 `invalid_request_error` with the field in `param` before any provider request starts. Deviation means Clyde differs from the reference, and the row states the difference. Not advertised means Clyde registers no route for the method.
 
 ## Errors
 
