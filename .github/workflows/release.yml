@@ -21,6 +21,7 @@ jobs:
     secrets: inherit
     with:
       cgo: true
+      submodules: recursive
       binary: clyde
 
   auto-update-debian:

@@ -18,6 +18,9 @@ jobs:
     with:
       golangci_lint_install_mode: goinstall
       cgo: true
+      # The gksyntax grammar sources live in recursive submodules. The build
+      # generates the Swift parser from them.
+      submodules: recursive
     permissions:
       contents: read
       id-token: write

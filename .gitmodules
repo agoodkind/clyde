@@ -1,0 +1,3 @@
+[submodule "third_party/gksyntax"]
+	path = third_party/gksyntax
+	url = https://github.com/agoodkind/gksyntax.git

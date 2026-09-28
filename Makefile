@@ -34,6 +34,21 @@ export GOVULNCHECK_INSTALL := golang.org/x/vuln/cmd/govulncheck@v1.7.0
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
+# go.mk runs these as order-only prerequisites of every build, lint, vet, test,
+# and govulncheck target. GO_MK_GENERATE generates the Swift tree-sitter parser
+# in the pinned gksyntax submodule. GO_MK_WORKSPACE_USE materializes a
+# gitignored go.work that routes that submodule into the build. The pinned
+# gksyntax module zip omits the dart and swift grammar C sources, and
+# gomoddirectives rejects a go.mod replace.
+GO_MK_GENERATE := gksyntax-grammars
+GO_MK_GENERATE_INPUTS := third_party/gksyntax
+GO_MK_GENERATE_OUTPUTS := \
+	third_party/gksyntax/treesitter/grammars/swift/upstream/src/parser.c \
+	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/parser.h \
+	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/array.h \
+	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/alloc.h
+GO_MK_WORKSPACE_USE := . third_party/gksyntax
+
 include bootstrap.mk
 
 .DEFAULT_GOAL := check
@@ -46,7 +61,8 @@ BUNDLE_ID         ?= io.goodkind.clyde
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
 .PHONY: test-ginkgo test-watch coverage live setup-hooks install-hooks \
-        deploy daemon-reload deadcode proto
+        deploy daemon-reload deadcode proto gksyntax-grammars \
+        embedded-search-bootstrap
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
 # runs ginkgo specs registered through RunSpecs. test-ginkgo is for when you
@@ -79,6 +95,53 @@ live: ## Run the live daemon validation suite (opt-in, build tag live)
 	@go test -tags live -count=1 ./test/live/
 
 deadcode: lint-deadcode ## Alias for the central deadcode gate
+
+# ---------------------------------------------------------------------------
+# gksyntax submodule grammars and embedded search native build
+# ---------------------------------------------------------------------------
+# Embedded conversation search imports goodkind.io/gksyntax/shelldecomp. The
+# gksyntax repository vendors the dart and swift grammars as its own
+# submodules, and it commits only the swift grammar definition. This recipe
+# initializes the pinned recursive submodule, installs the tree-sitter CLI
+# version that gksyntax pins into .bin, and generates the swift parser inside
+# the submodule working tree. The nested dart grammar declares an SSH
+# submodule URL, which the HTTPS rewrite replaces for hosts without SSH keys.
+GKS_DIR := third_party/gksyntax
+SWIFT_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/swift/upstream
+SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
+SWIFT_GRAMMAR_PARSER := $(SWIFT_GRAMMAR_DIR)/src/parser.c
+TREE_SITTER_ABI := 14
+TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
+TREE_SITTER_BIN := $(TREE_SITTER_LOCAL_DIR)/tree-sitter
+
+gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its Swift parser
+	@status="$$(git submodule status --recursive $(GKS_DIR))"; \
+	if printf '%s\n' "$$status" | grep -q '^U'; then \
+		echo "gksyntax-grammars: $(GKS_DIR) has unresolved submodule conflicts" >&2; \
+		exit 1; \
+	fi; \
+	if printf '%s\n' "$$status" | grep -Eq '^[+-]'; then \
+		git -c url.https://github.com/.insteadOf=git@github.com: submodule update --init --recursive $(GKS_DIR); \
+	fi
+	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
+		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DEF) is missing after submodule initialization" >&2; \
+		exit 1; \
+	fi
+	@"$(GKS_DIR)/scripts/install-tree-sitter.sh" "$(TREE_SITTER_LOCAL_DIR)"
+	@if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
+		echo "gksyntax-grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
+		( cd "$(SWIFT_GRAMMAR_DIR)" && "$(TREE_SITTER_BIN)" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
+		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- .; \
+	else \
+		echo "gksyntax-grammars: Swift parser already generated"; \
+	fi
+
+# EMBEDDED_SEARCH_PACKAGES lists the external packages that the embedded
+# conversation search path imports.
+EMBEDDED_SEARCH_PACKAGES := goodkind.io/gksyntax/shelldecomp
+
+embedded-search-bootstrap: | $(GO_MK_PREREQS) ## Compile the embedded search native imports in the pinned workspace
+	CGO_ENABLED=1 go build $(EMBEDDED_SEARCH_PACKAGES)
 
 # ---------------------------------------------------------------------------
 # Protobuf / gRPC codegen. Sources live under api/**/*.proto; config is
