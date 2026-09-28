@@ -410,6 +410,11 @@ func TestOpenAIConformanceModelsListAndRetrieve(t *testing.T) {
 		}
 	}
 
+	fallback := sendConformance(t, http.MethodGet, listeners.openAI+"/v1/models/"+routingFallbackModelID, "")
+	if fallback.status != http.StatusOK || string(fallback.body) != routingFallbackModelBody {
+		t.Fatalf("fallback model = %d %s, want the fallback upstream model object unchanged", fallback.status, fallback.body)
+	}
+
 	missing := sendConformance(t, http.MethodGet, listeners.openAI+"/v1/models/does-not-exist", "")
 	missingError := decodeErrorEnvelope(t, missing.body)
 	if missing.status != http.StatusNotFound || missingError.Type != "invalid_request_error" || missingError.Code != "model_not_found" {

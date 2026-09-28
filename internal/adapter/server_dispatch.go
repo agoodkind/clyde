@@ -80,8 +80,10 @@ func (s *Server) advertisedModelEntry(ctx context.Context, registry *Registry, m
 }
 
 // handleModel serves GET /v1/models/{model}. It returns an advertised
-// model, or a model the ingress surface resolves through a route rule.
-// Any other identifier receives the documented model_not_found error.
+// model, or a model the ingress surface resolves through a route rule. A
+// model that only the OpenAI-compatible fallback upstream resolves is
+// looked up on that upstream. Any other identifier receives the
+// documented model_not_found error.
 func (s *Server) handleModel(ctx context.Context, hctx *handlerCtx) error {
 	w := hctx.Writer
 	r := hctx.Request
@@ -93,6 +95,9 @@ func (s *Server) handleModel(ctx context.Context, hctx *handlerCtx) error {
 	registry := s.modelRegistry()
 	entry, found := s.lookupModelEntry(ctx, registry, requestedModel)
 	if !found {
+		if fallback, ok := fallbackOnlyModel(ctx, registry, requestedModel); ok {
+			return s.forwardPassthroughModel(ctx, w, fallback, requestedModel)
+		}
 		return adapterErrModelNotFound("The model '" + requestedModel + "' does not exist")
 	}
 	body, err := json.Marshal(entry)
@@ -102,6 +107,20 @@ func (s *Server) handleModel(ctx context.Context, hctx *handlerCtx) error {
 	}
 	writeJSON(w, body)
 	return nil
+}
+
+// fallbackOnlyModel reports whether only the OpenAI-compatible fallback
+// upstream resolves the model for the request's ingress surface.
+func fallbackOnlyModel(ctx context.Context, registry *Registry, requestedModel string) (adaptermodel.ResolvedAlias, bool) {
+	var none adaptermodel.ResolvedAlias
+	if requestedModel == "" {
+		return none, false
+	}
+	resolved, _, err := registry.Resolve(openAIIngressSurface(ctx), requestedModel, "")
+	if err != nil || resolved.Backend != adaptermodel.BackendPassthroughOverride {
+		return none, false
+	}
+	return resolved, true
 }
 
 // lookupModelEntry finds an advertised model by identifier, then tries

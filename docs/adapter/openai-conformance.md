@@ -34,7 +34,7 @@ A disposition is one of four values. Implemented means Clyde produces the docume
 | --- | --- | --- | --- |
 | `GET /v1/models` returns `object: "list"` and model entries with `id`, `object`, `created`, and `owned_by`. `created` is the Unix time when Clyde loaded the catalog. | Models list | Implemented | `TestOpenAIConformanceModelsListAndRetrieve`, SDK smoke |
 | `GET /v1/models/{model}` returns an advertised model or a model a route rule resolves for the surface. | Models retrieve | Implemented | `TestOpenAIConformanceModelsListAndRetrieve`, SDK smoke |
-| A model that only the OpenAI-compatible fallback upstream resolves returns 404. Clyde has no catalog entry for it. | Models retrieve | Deviation | `TestOpenAIConformanceModelsListAndRetrieve` |
+| A model that only the OpenAI-compatible fallback upstream resolves is looked up with `GET /models/{model}` on that upstream. A 2xx model object is returned unchanged. An upstream 404 returns 404 `model_not_found`. | Models retrieve | Forwarded | `TestOpenAIConformanceModelsListAndRetrieve` |
 | A method other than `GET` returns 405. | Models list | Implemented | `TestOpenAIConformanceModelsListAndRetrieve` |
 | `DELETE /v1/models/{model}` deletes a fine-tuned model. | Models delete | Not advertised | None |
 

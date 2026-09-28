@@ -107,11 +107,18 @@ func requireSDKShape[T any](t *testing.T, label string, value T) {
 }
 
 // newConformanceSDKClient returns an official SDK client for a listener.
-func newConformanceSDKClient(baseURL string) openai.Client {
+// The client uses its own transport. A cleanup closes that transport's
+// idle keep-alive connections before the listener cleanup drains the
+// adapter.
+func newConformanceSDKClient(t *testing.T, baseURL string) openai.Client {
+	t.Helper()
+	transport := &http.Transport{}
+	t.Cleanup(transport.CloseIdleConnections)
 	return openai.NewClient(
 		option.WithBaseURL(baseURL+"/v1/"),
 		option.WithAPIKey("clyde-conformance"),
 		option.WithMaxRetries(0),
+		option.WithHTTPClient(&http.Client{Transport: transport}),
 	)
 }
 
@@ -138,7 +145,7 @@ func TestOpenAIGoSDKConformanceCodexProvider(t *testing.T) {
 		},
 	}
 	listeners := startConformanceServer(t, upstream)
-	client := newConformanceSDKClient(listeners.openAI)
+	client := newConformanceSDKClient(t, listeners.openAI)
 	ctx := context.Background()
 
 	models, err := client.Models.List(ctx)
@@ -260,7 +267,7 @@ func anthropicReportedUsage() anthropic.Usage {
 
 func TestOpenAIGoSDKConformanceAnthropicProvider(t *testing.T) {
 	listeners := startAnthropicConformanceServer(t, anthropicReportedUsage())
-	client := newConformanceSDKClient(listeners.openAI)
+	client := newConformanceSDKClient(t, listeners.openAI)
 	ctx := context.Background()
 
 	chat, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{

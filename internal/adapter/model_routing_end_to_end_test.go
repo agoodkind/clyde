@@ -110,6 +110,13 @@ func TestDeclarativeRoutesDispatchToLoopbackEndpoints(t *testing.T) {
 	assertAdvertisedExactModels(t, srv)
 }
 
+// routingFallbackModelID is the one model the fallback fake returns from
+// GET /v1/models/{model}. routingFallbackModelBody is its model object.
+const (
+	routingFallbackModelID   = "unrelated-model"
+	routingFallbackModelBody = `{"id":"unrelated-model","object":"model","created":1700000000,"owned_by":"fallback-upstream"}`
+)
+
 func newRoutingFakeEndpoints(t *testing.T) routingFakeEndpoints {
 	t.Helper()
 	fakes := routingFakeEndpoints{
@@ -144,6 +151,16 @@ func newRoutingFakeEndpoints(t *testing.T) routingFakeEndpoints {
 		_, _ = writer.Write([]byte(`{"ok":true}`))
 	}))
 	fakes.fallback = newLoopbackHTTPServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/") {
+			writer.Header().Set("Content-Type", "application/json")
+			if strings.TrimPrefix(request.URL.Path, "/v1/models/") != routingFallbackModelID {
+				writer.WriteHeader(http.StatusNotFound)
+				_, _ = writer.Write([]byte(`{"error":{"message":"model not found","type":"invalid_request_error","code":"model_not_found","param":"model"}}`))
+				return
+			}
+			_, _ = writer.Write([]byte(routingFallbackModelBody))
+			return
+		}
 		var body adapteropenai.ChatRequest
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Errorf("decode fallback request: %v", err)
