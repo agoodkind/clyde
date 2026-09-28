@@ -72,9 +72,25 @@ flowchart TD
     L5 --> F[Final acceptance]
 ```
 
-Create C4.1 as a foundation PR before C1. Integrate C4's later runtime tasks after C2 and C3. Do not enable the new backend in the foundation PR.
+Complete C4.1 before C1 in one Clyde foundation PR. Integrate C4's later runtime tasks with C3 after C2. Do not enable the new backend in the foundation PR.
 
 Assign separate schema files to L1 and L2 and separate test files to C1, C2, and C3. Assign initial LMS Makefile changes to L0 and Clyde Makefile changes to C4. Transfer ownership explicitly before editing another lane's files.
+
+## Assign agent slices and pull requests
+
+Assign one implementation agent to each ticket and PR. An agent may delegate independent files within its slice under the subagent-driven development rule. Keep behavior, generated output, and public tests in the same PR. No implementation PR exists yet.
+
+| Ticket and proposed PR title | Agent scope | Git parent while the prerequisite PR is open | Acceptance boundary |
+| --- | --- | --- | --- |
+| LMS-711: `[LMS-711] Publish shared search contracts and canonical storage` | The LMS storage agent implements L0 and L1. | `origin/main` | The public module imports; canonical storage, replay, and strict live tests pass. |
+| LMS-712: `[LMS-712] Implement occurrence ranking and complete search pages` | The LMS search agent implements L2 and L3. | LMS-711 branch | Occurrence-weighted ranking and public complete-page tests pass together. |
+| LMS-713: `[LMS-713] Adopt shared storage for codebase and offline search` | The LMS codebase agent implements L4. | LMS-712 branch | Codebase replacement, deletion, and offline profile pass. |
+| LMS-714: `[LMS-714] Remove the obsolete LMS conversation subsystem` | The LMS retirement agent implements L5 after joint acceptance. | LMS-713 branch | Regenerated protocol, LMS codebase behavior, and Clyde's pinned removal revision pass. |
+| CLYDE-760: `[CLYDE-760] Add native library build and conversation projection` | The Clyde projection agent implements C4.1 and C1. | `origin/main` | Native imports and selected nonempty projection pass without enabling the new backend. |
+| CLYDE-762: `[CLYDE-762] Append and recover conversation ingestion` | The Clyde ingestion agent implements C2. | CLYDE-760 branch | Real Milvus and SQLite recovery tests pass with immutable occurrences. |
+| CLYDE-761: `[CLYDE-761] Expose complete search and validate the runtime` | The Clyde search agent implements C3 and C4.2. | CLYDE-762 branch | CLI and MCP tests, daemon restart, and full-corpus acceptance pass with LMS-713. |
+
+Use Graphite through its MCP interface for each repository's dependent PR chain while parent PRs remain open. Base a later independent PR on refreshed `origin/main` when its prerequisite has merged. Cross-repository dependencies use exact LMS module revisions and ticket links, never a Graphite parent. LMS-711 first publishes L0's importable contract. L2 development can then proceed alongside L1 in disjoint files; LMS-712 integrates L2 with L3 after LMS-711 passes its storage gate. CLYDE-760 can start native preparation during LMS-711 and pin the reviewed library revision before completing projection.
 
 ## Tasks
 
@@ -92,9 +108,9 @@ Behavior:
 Steps:
 
 1. Run `git fetch origin`, `git status --short`, `git worktree list --porcelain`, and `git rev-parse origin/main` in each repository. Record bases and dirty paths. Preserve uncommitted work on the stopped `port-production-search` branch.
-2. Complete L0 first. Start L1, L2, and C4.1 concurrently afterward. Start C1 after C4.1. Start C2 and C3 when their listed development prerequisites exist.
-3. Use independent branches after prerequisites merge. Use Graphite for real unmerged dependencies within one repository. L1 and L2 are siblings; integrate both before L3. Cross-repository dependencies use exact module revisions, not Graphite parentage.
-4. Give C4.1 and runtime integration separate PRs. Record each worker's files, dependency commits, and required validation before assignment.
+2. Complete the L0 contract within LMS-711 first. Develop L1, L2, and C4.1 in disjoint files afterward. Integrate L2 with L3 in LMS-712 after LMS-711 passes. Complete C1 with C4.1 in CLYDE-760. Start C2 and C3 when their listed development prerequisites exist.
+3. Use the PR parent map above while parent PRs remain open. Use Graphite for real unmerged dependencies within one repository. Cross-repository dependencies use exact module revisions, not Graphite parentage.
+4. Record each worker's files, dependency commits, and required validation before assignment. Keep C4.1 with C1 and later runtime integration with C3 in separate PRs.
 5. Inspect existing unfinished code before reuse. Do not duplicate a source implementation to avoid a dependency.
 
 Verification:
