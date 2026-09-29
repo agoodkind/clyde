@@ -144,9 +144,10 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 }
 
 // visibleRecords returns the cached records this index serves under its subagent
-// setting. Every read path funnels through it, so a conversation a dispatched
-// agent wrote is absent from listing, paging, search scoping, and the semantic
-// sync feeder alike while the setting hides it. Callers hold idx.mu.
+// setting. Listing, paging, search scoping, and the lm-semantic-search sync
+// feeder read through it and omit a conversation a dispatched agent wrote while
+// the setting hides it. ListAllWithStamps is the one read path that returns
+// hidden records, for embedded semantic admission. Callers hold idx.mu.
 func (idx *Index) visibleRecords() []Record {
 	if idx.includeSubagents {
 		return cloneRecords(idx.records)

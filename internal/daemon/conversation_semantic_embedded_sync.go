@@ -42,12 +42,30 @@ type embeddedConversationSync struct {
 	// status receives the library and outbox state for the daemon status RPC.
 	// Nil disables publishing.
 	status *embeddedSemanticStatus
+	// records lists every cached conversation record, including subagent
+	// conversations that raw index visibility hides. The admits method applies
+	// the embedded subagent setting to them.
+	records embeddedRecordLister
+}
+
+// embeddedRecordLister lists every cached conversation record with its artifact
+// stamp, independent of conversation.include_subagent_conversations.
+type embeddedRecordLister interface {
+	ListAllWithStamps(context.Context) ([]conversation.StampedRecord, error)
+}
+
+// embeddedRecordIndex is the conversation index that the embedded sync worker
+// reads: the semantic sync index plus the unfiltered record listing.
+type embeddedRecordIndex interface {
+	conversationSemanticIndex
+	embeddedRecordLister
 }
 
 func newEmbeddedConversationSync(
 	semantic config.ConversationSemanticConfig,
 	outboxPath string,
 	status *embeddedSemanticStatus,
+	records embeddedRecordLister,
 ) *embeddedConversationSync {
 	return &embeddedConversationSync{
 		semantic:         semantic,
@@ -56,6 +74,7 @@ func newEmbeddedConversationSync(
 		processed:        make(map[string]string),
 		changedCommitted: 0,
 		status:           status,
+		records:          records,
 	}
 }
 
@@ -123,7 +142,7 @@ func startEmbeddedConversationSemanticSync(
 	ctx context.Context,
 	log *slog.Logger,
 	semantic config.ConversationSemanticConfig,
-	index conversationSemanticIndex,
+	index embeddedRecordIndex,
 	freshness *conversationSemanticFreshness,
 	status *embeddedSemanticStatus,
 	group *livetrack.Group,
@@ -146,7 +165,7 @@ func startEmbeddedConversationSemanticSync(
 	}
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, log, contentKinds)
 	worker.freshness = freshness
-	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), status)
+	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), status, index)
 	go func() {
 		defer close(done)
 		defer worker.embedded.closeStore(ctx)
@@ -240,7 +259,7 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	stats.replayed = replay.replayed
 	stats.delivery = replay.counts
 	stats.replayedProjections = replayedProjections
-	stampedRecords, err := w.index.ListWithStamps(ctx)
+	stampedRecords, err := w.embedded.records.ListAllWithStamps(ctx)
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.list_failed",
 			"concern", "conversation.semantic",
