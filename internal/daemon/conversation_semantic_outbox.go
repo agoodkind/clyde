@@ -20,8 +20,8 @@ import (
 )
 
 // conversationSemanticOutboxSchemaVersion is the outbox schema this build
-// creates and reads. openConversationSemanticOutbox rejects an outbox saved
-// with another version.
+// creates and reads. openLockedConversationSemanticOutbox rejects an outbox
+// saved with another version.
 const conversationSemanticOutboxSchemaVersion = 1
 
 // conversationSemanticOutboxBusyTimeoutMilliseconds bounds how long an outbox
@@ -202,23 +202,11 @@ func sanitizeOutboxPoolID(poolID string) string {
 	}, poolID)
 }
 
-// openConversationSemanticOutbox takes the outbox lock, opens or creates the
-// outbox at path in WAL mode, and checks its schema version. An outbox that
-// another open outbox locks returns an error that wraps errOutboxOwned.
-func openConversationSemanticOutbox(ctx context.Context, path string) (*conversationSemanticOutbox, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_semantic_outbox.open_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"path", path,
-			"err", err,
-		)
-		return nil, fmt.Errorf("create conversation semantic outbox directory %s: %w", filepath.Dir(path), err)
-	}
-	lock, err := lockConversationSemanticOutbox(ctx, path)
-	if err != nil {
-		return nil, err
-	}
+// openLockedConversationSemanticOutbox opens or creates the outbox at path in
+// WAL mode and checks its schema version. The caller took lock with
+// lockConversationSemanticOutbox. The returned outbox owns lock and releases
+// it on Close. On failure the caller still owns lock.
+func openLockedConversationSemanticOutbox(ctx context.Context, path string, lock *os.File) (*conversationSemanticOutbox, error) {
 	query := url.Values{}
 	query.Set("_busy_timeout", strconv.Itoa(conversationSemanticOutboxBusyTimeoutMilliseconds))
 	query.Set("_journal_mode", "WAL")
@@ -233,12 +221,13 @@ func openConversationSemanticOutbox(ctx context.Context, path string) (*conversa
 			"path", path,
 			"err", err,
 		)
-		return nil, errors.Join(fmt.Errorf("open conversation semantic outbox %s: %w", path, err), lock.Close())
+		return nil, fmt.Errorf("open conversation semantic outbox %s: %w", path, err)
 	}
-	outbox := &conversationSemanticOutbox{db: db, path: path, lock: lock}
+	outbox := &conversationSemanticOutbox{db: db, path: path, lock: nil}
 	if err := outbox.initializeSchema(ctx); err != nil {
-		return nil, errors.Join(err, outbox.Close())
+		return nil, errors.Join(err, outbox.closeDatabase())
 	}
+	outbox.lock = lock
 	return outbox, nil
 }
 
@@ -277,14 +266,39 @@ func (outbox *conversationSemanticOutbox) initializeSchema(ctx context.Context) 
 	return nil
 }
 
-// Close closes the outbox database and then the lock file, which releases the
-// outbox lock.
+// Close closes the outbox database and then releases the outbox lock. Both
+// helpers log their own failures.
 func (outbox *conversationSemanticOutbox) Close() error {
-	err := outbox.db.Close()
-	if outbox.lock != nil {
-		err = errors.Join(err, outbox.lock.Close())
+	databaseErr := outbox.closeDatabase()
+	lockErr := outbox.releaseLock()
+	if databaseErr != nil {
+		return databaseErr
 	}
-	if err != nil {
+	return lockErr
+}
+
+// releaseLock closes the lock file, which releases the outbox lock.
+func (outbox *conversationSemanticOutbox) releaseLock() error {
+	if outbox.lock == nil {
+		return nil
+	}
+	lock := outbox.lock
+	outbox.lock = nil
+	if err := lock.Close(); err != nil {
+		slog.Warn("daemon.conversation_semantic_outbox.unlock_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"path", outbox.path,
+			"err", err,
+		)
+		return fmt.Errorf("release conversation semantic outbox lock %s: %w", outbox.path, err)
+	}
+	return nil
+}
+
+// closeDatabase closes the outbox database.
+func (outbox *conversationSemanticOutbox) closeDatabase() error {
+	if err := outbox.db.Close(); err != nil {
 		slog.Warn("daemon.conversation_semantic_outbox.close_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",

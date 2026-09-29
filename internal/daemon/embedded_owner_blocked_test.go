@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"database/sql"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -147,11 +148,34 @@ func openUnmanagedBlockedTestStore(t *testing.T) (*embeddedConversationStore, *s
 		t.Fatalf("create embedder: %v", err)
 	}
 	capture := &semanticLogCapture{mu: sync.Mutex{}, records: nil}
-	store, err := openEmbeddedConversationLibrary(t.Context(), semantic, conversationSemanticOutboxPath(semantic.PoolID), vectors, embedder, slog.New(capture))
+	store, err := openLockedTestLibrary(t, semantic, conversationSemanticOutboxPath(semantic.PoolID), vectors, embedder, slog.New(capture))
 	if err != nil {
 		t.Fatalf("open library: %v", err)
 	}
 	return store, capture, semantic
+}
+
+// openLockedTestLibrary takes the outbox lock and opens the library over
+// vectors and embedder with openEmbeddedConversationLibrary. It releases the
+// lock when the open fails.
+func openLockedTestLibrary(
+	t *testing.T,
+	semantic config.ConversationSemanticConfig,
+	outboxPath string,
+	vectors library.VectorStore,
+	embedder library.Embedder,
+	log *slog.Logger,
+) (*embeddedConversationStore, error) {
+	t.Helper()
+	lock, err := lockConversationSemanticOutbox(t.Context(), outboxPath)
+	if err != nil {
+		return nil, err
+	}
+	store, err := openEmbeddedConversationLibrary(t.Context(), semantic, outboxPath, lock, vectors, embedder, log)
+	if err != nil {
+		return nil, errors.Join(err, lock.Close())
+	}
+	return store, nil
 }
 
 // recordBlockedTestBatch prepares one chat field of the batch owner at the

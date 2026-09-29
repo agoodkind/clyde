@@ -77,7 +77,15 @@ func TestEmbeddedOpenNeverLogsCredentialReferences(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), redactionOpenTimeout)
 			defer cancel()
-			store, err := openEmbeddedConversationStore(ctx, semantic, filepath.Join(root, testCase.name, "outbox.sqlite"), logger)
+			outboxPath := filepath.Join(root, testCase.name, "outbox.sqlite")
+			lock, err := lockConversationSemanticOutbox(ctx, outboxPath)
+			if err != nil {
+				t.Fatalf("lock outbox: %v", err)
+			}
+			store, err := openEmbeddedConversationStore(ctx, semantic, outboxPath, lock, logger)
+			if err != nil {
+				_ = lock.Close()
+			}
 			if err == nil {
 				_ = store.close(context.WithoutCancel(ctx))
 				t.Fatal("open succeeded against an unreachable Milvus address")
