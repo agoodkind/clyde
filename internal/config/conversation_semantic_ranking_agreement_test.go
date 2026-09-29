@@ -28,6 +28,8 @@ func TestConversationSemanticRankingMatchesLibraryValidation(t *testing.T) {
 		{name: "b zero", toml: "bm25_b = 0.0", apply: func(c *library.Config) { value := 0.0; c.BM25B = &value }, accept: true},
 		{name: "b above one", toml: "bm25_b = 1.5", apply: func(c *library.Config) { value := 1.5; c.BM25B = &value }, accept: false},
 		{name: "rrf_k negative", toml: "rrf_k = -1", apply: func(c *library.Config) { c.RRFK = -1 }, accept: false},
+		{name: "query block at bound", toml: "query_block_size = 16384", apply: func(c *library.Config) { c.QueryBlockSize = 16384 }, accept: true},
+		{name: "query block above bound", toml: "query_block_size = 16385", apply: func(c *library.Config) { c.QueryBlockSize = 16385 }, accept: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
