@@ -129,6 +129,9 @@ var conversationSemanticOutboxSchemaStatements = []string{
 type conversationSemanticOutbox struct {
 	db   *sql.DB
 	path string
+	// lock is the outbox lock file. The open outbox owns its exclusive kernel
+	// lock, and Close releases it.
+	lock *os.File
 }
 
 // embeddedOutboxBatch is one owner generation in the outbox. BatchID is the
@@ -199,8 +202,9 @@ func sanitizeOutboxPoolID(poolID string) string {
 	}, poolID)
 }
 
-// openConversationSemanticOutbox opens or creates the outbox at path in WAL
-// mode and checks its schema version.
+// openConversationSemanticOutbox takes the outbox lock, opens or creates the
+// outbox at path in WAL mode, and checks its schema version. An outbox that
+// another open outbox locks returns an error that wraps errOutboxOwned.
 func openConversationSemanticOutbox(ctx context.Context, path string) (*conversationSemanticOutbox, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		slog.WarnContext(ctx, "daemon.conversation_semantic_outbox.open_failed",
@@ -210,6 +214,10 @@ func openConversationSemanticOutbox(ctx context.Context, path string) (*conversa
 			"err", err,
 		)
 		return nil, fmt.Errorf("create conversation semantic outbox directory %s: %w", filepath.Dir(path), err)
+	}
+	lock, err := lockConversationSemanticOutbox(ctx, path)
+	if err != nil {
+		return nil, err
 	}
 	query := url.Values{}
 	query.Set("_busy_timeout", strconv.Itoa(conversationSemanticOutboxBusyTimeoutMilliseconds))
@@ -225,9 +233,9 @@ func openConversationSemanticOutbox(ctx context.Context, path string) (*conversa
 			"path", path,
 			"err", err,
 		)
-		return nil, fmt.Errorf("open conversation semantic outbox %s: %w", path, err)
+		return nil, errors.Join(fmt.Errorf("open conversation semantic outbox %s: %w", path, err), lock.Close())
 	}
-	outbox := &conversationSemanticOutbox{db: db, path: path}
+	outbox := &conversationSemanticOutbox{db: db, path: path, lock: lock}
 	if err := outbox.initializeSchema(ctx); err != nil {
 		return nil, errors.Join(err, outbox.Close())
 	}
@@ -269,9 +277,14 @@ func (outbox *conversationSemanticOutbox) initializeSchema(ctx context.Context) 
 	return nil
 }
 
-// Close closes the outbox database.
+// Close closes the outbox database and then the lock file, which releases the
+// outbox lock.
 func (outbox *conversationSemanticOutbox) Close() error {
-	if err := outbox.db.Close(); err != nil {
+	err := outbox.db.Close()
+	if outbox.lock != nil {
+		err = errors.Join(err, outbox.lock.Close())
+	}
+	if err != nil {
 		slog.Warn("daemon.conversation_semantic_outbox.close_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
