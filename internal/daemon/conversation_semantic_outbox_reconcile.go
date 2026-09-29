@@ -13,8 +13,8 @@ import (
 const embeddedOutboxStateAborted = "aborted"
 
 // embeddedUnknownFieldDigest is the committed_fields digest of a field that
-// reconciliation found published in the library while the outbox had lost its
-// digest. SelectNewFields treats the key as committed and sends no row for it.
+// reconciliation found published in the library while the outbox recorded no
+// digest for its key. SelectNewFields treats the key as committed and sends no row for it.
 // A later pass that projects the field counts it as changed_committed, because
 // no projected digest equals this marker.
 const embeddedUnknownFieldDigest = "reconciled:unknown-digest"
@@ -72,7 +72,62 @@ func (outbox *conversationSemanticOutbox) unfinishedBatches(ctx context.Context,
 	return batches, nil
 }
 
-// rebuildOwner replaces the committed fields of one owner with fields, records
+// rebuildCommittedFields makes the committed fields of one owner equal the
+// published fields. A field key that the outbox already records keeps its
+// digest and provider message ID. A new field key records
+// embeddedUnknownFieldDigest. A recorded key that the library did not publish
+// is deleted.
+func rebuildCommittedFields(ctx context.Context, tx *sql.Tx, namespace string, ownerID string, fields []embeddedReconciledField) (err error) {
+	defer func() {
+		if err != nil {
+			slog.WarnContext(ctx, "daemon.conversation_semantic_outbox.rebuild_fields_failed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"conversation_id", ownerID,
+				"err", err,
+			)
+		}
+	}()
+	published := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		published[field.FieldKey] = true
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT field_key FROM committed_fields WHERE namespace = ? AND owner_id = ?`, namespace, ownerID)
+	if err != nil {
+		return fmt.Errorf("read committed fields: %w", err)
+	}
+	var unpublished []string
+	for rows.Next() {
+		var fieldKey string
+		if err := rows.Scan(&fieldKey); err != nil {
+			return errors.Join(fmt.Errorf("scan committed field: %w", err), closeOutboxRows(rows))
+		}
+		if !published[fieldKey] {
+			unpublished = append(unpublished, fieldKey)
+		}
+	}
+	if err := errors.Join(rows.Err(), closeOutboxRows(rows)); err != nil {
+		return fmt.Errorf("read committed fields: %w", err)
+	}
+	for _, fieldKey := range unpublished {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM committed_fields WHERE namespace = ? AND owner_id = ? AND field_key = ?`, namespace, ownerID, fieldKey); err != nil {
+			return fmt.Errorf("delete unpublished committed field %s: %w", fieldKey, err)
+		}
+	}
+	for _, field := range fields {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO committed_fields (namespace, owner_id, field_key, digest, provider_message_id, committed_generation) VALUES (?, ?, ?, ?, '', ?)
+			ON CONFLICT (namespace, owner_id, field_key) DO UPDATE SET committed_generation = excluded.committed_generation`,
+			namespace, ownerID, field.FieldKey, embeddedUnknownFieldDigest, field.GenerationOrder,
+		); err != nil {
+			return fmt.Errorf("record committed field %s: %w", field.FieldKey, err)
+		}
+	}
+	return nil
+}
+
+// rebuildOwner rebuilds the committed fields of one owner from fields, records
 // metadata as stale owner metadata at the library projection order, marks the
 // aborted batches and every pending or blocked projection of the owner
 // aborted, marks every other blocked batch of the owner aborted, and deletes
@@ -87,17 +142,8 @@ func (outbox *conversationSemanticOutbox) rebuildOwner(
 	abortedBatchIDs []string,
 ) error {
 	err := outbox.write(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM committed_fields WHERE namespace = ? AND owner_id = ?`, namespace, ownerID); err != nil {
-			return fmt.Errorf("clear committed fields: %w", err)
-		}
-		for _, field := range fields {
-			if _, err := tx.ExecContext(
-				ctx,
-				`INSERT INTO committed_fields (namespace, owner_id, field_key, digest, provider_message_id, committed_generation) VALUES (?, ?, ?, ?, '', ?)`,
-				namespace, ownerID, field.FieldKey, embeddedUnknownFieldDigest, field.GenerationOrder,
-			); err != nil {
-				return fmt.Errorf("record committed field %s: %w", field.FieldKey, err)
-			}
+		if err := rebuildCommittedFields(ctx, tx, namespace, ownerID, fields); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(
 			ctx,
