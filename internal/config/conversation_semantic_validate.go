@@ -13,6 +13,11 @@ import (
 // validation error.
 const conversationSemanticKey = "conversation.semantic."
 
+// maxConversationSemanticBM25K1 is the largest bm25_k1 the shared search
+// library accepts at Open. The library computes BM25 in float32 and also
+// rejects a nonzero value that converts to a float32 zero.
+const maxConversationSemanticBM25K1 = 1e6
+
 // normalizeAndValidateConversationSemantic trims the embedded search settings,
 // expands the catalog and lock paths, and rejects values the embedded library
 // cannot accept. The range checks run for every backend. After the embedded
@@ -153,8 +158,9 @@ func rejectNegativeConversationSemanticSettings(settings []conversationSemanticS
 }
 
 func validateConversationSemanticRanking(semantic *ConversationSemanticConfig) error {
-	if math.IsNaN(semantic.BM25K1) || math.IsInf(semantic.BM25K1, 0) || semantic.BM25K1 < 0 {
-		return invalidConversationSemanticSetting("bm25_k1", fmt.Sprintf("must be a finite number at least 0, got %v", semantic.BM25K1))
+	k1 := semantic.BM25K1
+	if math.IsNaN(k1) || k1 < 0 || k1 > maxConversationSemanticBM25K1 || (k1 != 0 && float32(k1) == 0) {
+		return invalidConversationSemanticSetting("bm25_k1", fmt.Sprintf("must be 0 or positive as a float32 and at most %v, got %v", maxConversationSemanticBM25K1, k1))
 	}
 	if semantic.BM25B != nil {
 		value := *semantic.BM25B
