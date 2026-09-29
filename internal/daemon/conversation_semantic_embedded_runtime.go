@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"strings"
@@ -209,17 +210,45 @@ func embeddedLibraryConfig(semantic config.ConversationSemanticConfig, vectors l
 	}
 }
 
+// embeddedCredentialSource is the kind of embedding credential reference the
+// configuration sets.
+type embeddedCredentialSource string
+
+const (
+	embeddedCredentialSourceNone embeddedCredentialSource = "none"
+	embeddedCredentialSourceEnv  embeddedCredentialSource = "env"
+	embeddedCredentialSourceFile embeddedCredentialSource = "file"
+)
+
+// errEmbeddedCredentialUnavailable wraps every credential resolution failure.
+// The failure messages state the source kind only. They never contain the
+// environment variable name, the key file path, or the credential.
+var errEmbeddedCredentialUnavailable = errors.New("embedding credential unavailable")
+
+func embeddedCredentialSourceOf(semantic config.ConversationSemanticConfig) embeddedCredentialSource {
+	switch {
+	case semantic.EmbeddingAPIKeyEnv != "":
+		return embeddedCredentialSourceEnv
+	case semantic.EmbeddingAPIKeyFile != "":
+		return embeddedCredentialSourceFile
+	default:
+		return embeddedCredentialSourceNone
+	}
+}
+
 // newEmbeddedConversationEmbedder builds the OpenAI-compatible embedder from
-// the embedding keys. It resolves the credential reference and never logs the
-// credential.
+// the embedding keys. It resolves the credential reference. Its log records
+// and errors state only whether a credential is configured and its source
+// kind.
 func newEmbeddedConversationEmbedder(ctx context.Context, semantic config.ConversationSemanticConfig) (library.Embedder, error) {
 	apiKey, err := resolveEmbeddedConversationAPIKey(semantic)
 	if err != nil {
+		source := embeddedCredentialSourceOf(semantic)
 		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.credential_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
-			"embedding_api_key_env", semantic.EmbeddingAPIKeyEnv,
-			"embedding_api_key_file", semantic.EmbeddingAPIKeyFile,
+			"embedding_credential_configured", source != embeddedCredentialSourceNone,
+			"embedding_credential_source", string(source),
 			"err", err,
 		)
 		return nil, err
@@ -253,29 +282,37 @@ func newEmbeddedConversationEmbedder(ctx context.Context, semantic config.Conver
 // resolveEmbeddedConversationAPIKey reads the credential that
 // embedding_api_key_env or embedding_api_key_file names. With neither key the
 // embedder sends no Authorization header. A named source that yields an empty
-// value is an error.
+// value is an error. A file read failure keeps only its [fs.ErrNotExist] or
+// [fs.ErrPermission] class and drops the path.
 func resolveEmbeddedConversationAPIKey(semantic config.ConversationSemanticConfig) (string, error) {
 	if semantic.EmbeddingAPIKeyEnv != "" {
 		value := strings.TrimSpace(os.Getenv(semantic.EmbeddingAPIKeyEnv))
 		if value == "" {
-			return "", fmt.Errorf("environment variable %s named by conversation.semantic.embedding_api_key_env is empty or unset", semantic.EmbeddingAPIKeyEnv)
+			return "", fmt.Errorf("%w: the configured embedding credential environment variable is empty or unset", errEmbeddedCredentialUnavailable)
 		}
 		return value, nil
 	}
 	if semantic.EmbeddingAPIKeyFile != "" {
 		contents, err := os.ReadFile(semantic.EmbeddingAPIKeyFile)
 		if err != nil {
+			reason := "read failed"
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				reason = "file does not exist"
+			case errors.Is(err, fs.ErrPermission):
+				reason = "permission denied"
+			}
 			slog.Warn("daemon.conversation_semantic_embedded.credential_file_failed",
 				"concern", "conversation.semantic",
 				"component", "daemon",
-				"path", semantic.EmbeddingAPIKeyFile,
-				"err", err,
+				"embedding_credential_source", string(embeddedCredentialSourceFile),
+				"err", reason,
 			)
-			return "", fmt.Errorf("read conversation.semantic.embedding_api_key_file %s: %w", semantic.EmbeddingAPIKeyFile, err)
+			return "", fmt.Errorf("%w: read the configured embedding credential file: %s", errEmbeddedCredentialUnavailable, reason)
 		}
 		value := strings.TrimSpace(string(contents))
 		if value == "" {
-			return "", fmt.Errorf("conversation.semantic.embedding_api_key_file %s is empty", semantic.EmbeddingAPIKeyFile)
+			return "", fmt.Errorf("%w: the configured embedding credential file is empty", errEmbeddedCredentialUnavailable)
 		}
 		return value, nil
 	}
