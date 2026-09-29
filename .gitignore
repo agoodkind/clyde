@@ -62,6 +62,7 @@ tmp_*
 /.DS_Store
 /.clyde-build.lock
 /.make/
+/.bin/
 /.tmp/
 /.tmp_print_clyde_models.go
 /clyde
