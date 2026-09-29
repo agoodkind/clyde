@@ -88,9 +88,13 @@ type searchConversationsMatchOutput struct {
 	// back as load_rules on an around read so the window counts over the same
 	// message sequence message_index refers to.
 	LoadRules string `json:"load_rules,omitempty"`
-	// ContextState reports how context_window relates to the source transcript:
-	// excerpt_only, available, or unavailable.
-	ContextState string `json:"context_state,omitempty"`
+	// ContextState states whether the source verified context_window against
+	// the transcript. excerpt_only: context_window is the stored matched
+	// passage, and the source read no transcript. available: the source read
+	// the transcript and verified the matched message. unavailable: the
+	// transcript is missing or changed, and context_window is the stored
+	// excerpt.
+	ContextState conv.SearchContextState `json:"context_state,omitempty"`
 }
 
 type searchFacetsOutput struct {
@@ -202,7 +206,7 @@ func searchConversationsOutputFromDomain(result conv.SearchConversationsResult) 
 			Score:         match.Score,
 			ContextWindow: match.ContextWindow,
 			LoadRules:     match.LoadRules,
-			ContextState:  string(match.ContextState),
+			ContextState:  match.ContextState,
 		})
 	}
 	return searchConversationsOutput{

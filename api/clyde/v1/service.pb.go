@@ -22,12 +22,13 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SearchContextState reports how a match's context_window relates to the
-// source transcript.
+// SearchContextState states whether the source verified a match's
+// context_window against the source transcript.
 type SearchContextState int32
 
 const (
-	// UNSPECIFIED is the value a daemon that predates the field sends.
+	// UNSPECIFIED is the zero value. A client reads it when the daemon omits the
+	// field.
 	SearchContextState_SEARCH_CONTEXT_STATE_UNSPECIFIED SearchContextState = 0
 	// EXCERPT_ONLY means context_window is the stored matched passage and the
 	// source read no transcript context for the match.

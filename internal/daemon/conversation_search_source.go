@@ -43,7 +43,7 @@ func (s *semanticConversationSearchSource) SearchConversations(
 		return conversation.SearchConversationsResult{}, disabledConversationSearchSourceError(nil)
 	}
 	// The engine ranks each request independently and returns no continuation
-	// token. A cursor is refused here instead of being read as a first page.
+	// token. This source refuses a cursor instead of reading it as a first page.
 	if options.Cursor != "" {
 		return conversation.SearchConversationsResult{}, refusedConversationSearchSourceError(errSemanticSourceCursorUnsupported)
 	}

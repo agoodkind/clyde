@@ -144,9 +144,10 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 }
 
 // TestConversationSemanticEmbeddedBackendChecksRequiredSettings selects the
-// embedded backend with a missing setting and then with a complete section. The
-// first load fails on the missing key. The second load fails because this
-// build has no embedded runtime.
+// embedded backend three times. The first load omits pool_id and fails on that
+// key. The second load sets a relative catalog_path and fails on the absolute
+// path requirement. The third load sets a complete section and fails because
+// this build has no embedded runtime.
 func TestConversationSemanticEmbeddedBackendChecksRequiredSettings(t *testing.T) {
 	t.Parallel()
 

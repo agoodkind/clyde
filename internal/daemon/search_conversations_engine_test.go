@@ -217,10 +217,10 @@ func TestSemanticConversationSearchSourceReturnsEngineHits(t *testing.T) {
 		t.Fatalf("timestamp = %v, want %v", match.Timestamp, time.Unix(7, 0))
 	}
 	if match.ContextState != conversation.SearchContextStateExcerptOnly {
-		t.Fatalf("context state = %q, want %q for an engine excerpt", match.ContextState, conversation.SearchContextStateExcerptOnly)
+		t.Fatalf("The context state is %q, but the engine excerpt requires %q.", match.ContextState, conversation.SearchContextStateExcerptOnly)
 	}
 	if result.NextCursor != "" {
-		t.Fatalf("next cursor = %q, want empty from the offset-paged source", result.NextCursor)
+		t.Fatalf("The next cursor is %q, but the offset-paged source requires an empty cursor.", result.NextCursor)
 	}
 }
 

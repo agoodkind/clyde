@@ -64,18 +64,19 @@ type SearchConversationsOptions struct {
 	// ContextWindow is the number of messages before and after each hit to render
 	// inline on the match. Zero means the daemon's default small window.
 	ContextWindow int
-	// Cursor continues a previous page from its NextCursor under the same query
-	// and filters. Empty starts a new search.
+	// Cursor is the NextCursor of a previous page with the same query and
+	// filters. Empty starts a new search. The current search source refuses a
+	// nonempty cursor.
 	Cursor string
 }
 
-// SearchContextState reports how a match's ContextWindow relates to the source
-// transcript.
+// SearchContextState states whether the source verified a match's
+// ContextWindow against the source transcript.
 type SearchContextState string
 
 const (
-	// SearchContextStateUnspecified is the state a daemon that predates the
-	// field reports.
+	// SearchContextStateUnspecified is the zero value. The client reads it when
+	// the daemon omits the field.
 	SearchContextStateUnspecified SearchContextState = ""
 	// SearchContextStateExcerptOnly means ContextWindow is the stored matched
 	// passage and the source read no transcript context for the match.
@@ -105,7 +106,8 @@ type SearchMatch struct {
 	// read passes it back so the context is counted over the same message
 	// sequence MessageIndex refers to. Empty on rows written before tagging.
 	LoadRules string
-	// ContextState reports how ContextWindow relates to the source transcript.
+	// ContextState states whether the source verified ContextWindow against the
+	// source transcript. The SearchContextState constants define each value.
 	ContextState SearchContextState
 }
 
