@@ -500,8 +500,8 @@ github.com/mediocregopher/radix/v3 v3.4.2/go.mod h1:8FL3F6UQRXHXIBSPUs5h0RybMF8i
 github.com/mfridman/tparse v0.18.0 h1:wh6dzOKaIwkUGyKgOntDW4liXSo37qg5AXbIhkMV3vE=
 github.com/mfridman/tparse v0.18.0/go.mod h1:gEvqZTuCgEhPbYk/2lS3Kcxg1GmTxxU7kTC8DvP0i/A=
 github.com/microcosm-cc/bluemonday v1.0.2/go.mod h1:iVP4YcDBq+n/5fb23BhYFvIMq/leAFZyRl6bYmGDlGc=
-github.com/milvus-io/milvus-proto/go-api/v2 v2.6.23 h1:o+Bgz6W3C4R7ih3FTIWefkDFGVZi/SwtAtHY1Z177Kk=
-github.com/milvus-io/milvus-proto/go-api/v2 v2.6.23/go.mod h1:/6UT4zZl6awVeXLeE7UGDWZvXj3IWkRsh3mqsn0DiAs=
+github.com/milvus-io/milvus-proto/go-api/v2 v2.6.25 h1:Pq/bfFyBEEWOdzeky30lp52ZpXlCFIdkIp/Ux+8uk04=
+github.com/milvus-io/milvus-proto/go-api/v2 v2.6.25/go.mod h1:/6UT4zZl6awVeXLeE7UGDWZvXj3IWkRsh3mqsn0DiAs=
 github.com/milvus-io/milvus/client/v2 v2.6.5 h1:aVbw/1+buWbevsdjeI8ttSXxhmZQqMwcz1n0eW3CVzc=
 github.com/milvus-io/milvus/client/v2 v2.6.5/go.mod h1:n8Z5fOqsWwwnIb90VWvvw9IGCT4ZOy++mLc3LaU7Iss=
 github.com/milvus-io/milvus/pkg/v2 v2.6.7-0.20251201120310-af64f2acba38 h1:75pdNz8Ln9jdBxlkUQRJu+P8tz4q+G48XAybS3O30FQ=
@@ -997,8 +997,8 @@ goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996 h1:e+gojRXDzLC7aI6k2EGPo
 goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996/go.mod h1:3JLFnrp91eEKlJy10WzsUECoOnypuhhv9uJxKcmvE24=
 goodkind.io/go-makefile v0.0.0-20260929122444-d9d1d0827cd2 h1:KapgxSnHiWlmtMGCWX8VV7vcXg0xYsku/aW0weH+zYY=
 goodkind.io/go-makefile v0.0.0-20260929122444-d9d1d0827cd2/go.mod h1:n3rZSoH1Ru/7LVDq534mSbsOMnKY/ndvusw1haJP8Cs=
-goodkind.io/lm-semantic-search v0.0.0-20260929074505-c29c4b70d8d0 h1:LmmXRrJOB1Vye29zuSnwJPciaA6zhdj6nCMs4ZNoeOI=
-goodkind.io/lm-semantic-search v0.0.0-20260929074505-c29c4b70d8d0/go.mod h1:0meVBKdo1BmH3Z1S+XeTMbrkUwkFUuDcMH5E2hrD6Vg=
+goodkind.io/lm-semantic-search v0.0.0-20260929124830-1e81c83b115e h1:mZdUo6Fy1iPWVB7x3vKjeERWoBFlN90SoOuMhPtVi5g=
+goodkind.io/lm-semantic-search v0.0.0-20260929124830-1e81c83b115e/go.mod h1:qN3iZxU8DjsQ284r1mi0+Er+MHkD2dotQEK24J5B9uE=
 google.golang.org/api v0.283.0 h1:0lkp8u0MPwJVHqRL+nJlMAoZVVzbmiXmFHXMOTmSPik=
 google.golang.org/api v0.283.0/go.mod h1:6Wssta4c5n9qHq5CBhmlai5h/PUa1djdDAIhYEHyvcM=
 google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9YwlJXL52JkM=
