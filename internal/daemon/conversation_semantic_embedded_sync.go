@@ -55,6 +55,9 @@ type embeddedConversationSync struct {
 	// mu serializes every use of store: the sync passes, the store close, and
 	// the reconciliations that the daemon control socket requests.
 	mu sync.Mutex
+	// closed reports that closeStore ran. ensureStore opens no store after
+	// close. closeStore sets it under mu.
+	closed bool
 }
 
 // embeddedRecordLister lists every cached conversation record with its artifact
@@ -86,11 +89,17 @@ func newEmbeddedConversationSync(
 		records:          records,
 		libraryAbsent:    make(map[string]bool),
 		mu:               sync.Mutex{},
+		closed:           false,
 	}
 }
 
-// ensureStore opens the store when no open store exists.
+// ensureStore opens the store when no open store exists. After closeStore it
+// returns errEmbeddedReconcileUnavailable and opens nothing. The caller locks
+// mu.
 func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *slog.Logger) (*embeddedConversationStore, error) {
+	if embedded.closed {
+		return nil, errEmbeddedReconcileUnavailable
+	}
 	if embedded.store != nil {
 		return embedded.store, nil
 	}
@@ -102,10 +111,12 @@ func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *
 	return store, nil
 }
 
-// closeStore closes the open store after the worker stops.
+// closeStore closes the open store after the worker stops and marks the
+// state closed. No later pass or reconcile request opens the store again.
 func (embedded *embeddedConversationSync) closeStore(ctx context.Context) {
 	embedded.mu.Lock()
 	defer embedded.mu.Unlock()
+	embedded.closed = true
 	if embedded.store == nil {
 		return
 	}
