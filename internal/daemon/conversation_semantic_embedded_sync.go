@@ -46,6 +46,11 @@ type embeddedConversationSync struct {
 	// conversations that raw index visibility hides. The admits method applies
 	// the embedded subagent setting to them.
 	records embeddedRecordLister
+	// libraryAbsent lists owners that the outbox has no owner metadata for and
+	// that the library reported without a committed generation or published
+	// rows. A later pass reads the library for these owners again only after
+	// the worker restarts.
+	libraryAbsent map[string]bool
 }
 
 // embeddedRecordLister lists every cached conversation record with its artifact
@@ -75,6 +80,7 @@ func newEmbeddedConversationSync(
 		changedCommitted: 0,
 		status:           status,
 		records:          records,
+		libraryAbsent:    make(map[string]bool),
 	}
 }
 
@@ -223,15 +229,22 @@ type embeddedSyncStats struct {
 	// blockedOwners counts owners with a blocked batch or projection after
 	// the pass.
 	blockedOwners int
+	// reconciledOwners, abortedTokens, and reconcileFailed count owner
+	// reconciliations from the library.
+	reconciledOwners int
+	abortedTokens    int
+	reconcileFailed  int
 }
 
-// runEmbeddedPass replays pending outbox batches and projections, reprojects
-// the metadata of indexed owners with changed metadata, then projects every
-// admitted conversation that changed since the worker processed it, selects
-// the fields that the outbox has not committed, and delivers one generation
-// per conversation with new rows. A conversation that the index no longer
-// lists keeps every committed occurrence and its last applied metadata. An
-// owner with a blocked outbox item receives no delivery and no reprojection.
+// runEmbeddedPass replays pending outbox batches and projections, reconciles
+// every listed owner with a blocked outbox item or with library state that the
+// outbox lacks, reprojects the metadata of indexed owners with changed
+// metadata, then projects every admitted conversation that changed since the
+// worker processed it, selects the fields that the outbox has not committed,
+// and delivers one generation per conversation with new rows. A conversation
+// that the index no longer lists keeps every committed occurrence and its last
+// applied metadata. An owner with a blocked outbox item that reconciliation
+// did not clear receives no delivery and no reprojection.
 func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) error {
 	store, err := w.embedded.ensureStore(ctx, w.log)
 	if err != nil {
@@ -245,15 +258,9 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	if err != nil {
 		return err
 	}
-	for ownerID := range projectionBlocked {
-		replay.blockedOwners[ownerID] = true
-	}
 	blockedInOutbox, err := store.outbox.blockedOwners(ctx, store.namespace.ID)
 	if err != nil {
 		return err
-	}
-	for _, ownerID := range blockedInOutbox {
-		replay.blockedOwners[ownerID] = true
 	}
 	var stats embeddedSyncStats
 	stats.replayed = replay.replayed
@@ -268,9 +275,15 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 		)
 		return fmt.Errorf("list conversation records with stamps: %w", err)
 	}
-	w.reprojectEmbeddedOwners(ctx, store, stampedRecords, replay.blockedOwners, &stats)
+	blockedSet := make(map[string]bool, len(blockedInOutbox))
+	for _, ownerID := range blockedInOutbox {
+		blockedSet[ownerID] = true
+	}
+	reconciled := w.reconcileEmbeddedOwners(ctx, store, stampedRecords, blockedSet, &stats)
+	excluded := embeddedExcludedOwners(replay.blockedOwners, projectionBlocked, blockedSet, reconciled)
+	w.reprojectEmbeddedOwners(ctx, store, stampedRecords, excluded, &stats)
 	candidates := w.embeddedCandidates(stampedRecords, &stats)
-	w.deliverEmbeddedCandidates(ctx, store, candidates, replay.blockedOwners, &stats)
+	w.deliverEmbeddedCandidates(ctx, store, candidates, excluded, &stats)
 	blockedAfterPass, err := store.outbox.blockedOwners(ctx, store.namespace.ID)
 	if err == nil {
 		stats.blockedOwners = len(blockedAfterPass)
@@ -278,6 +291,32 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	w.embedded.status.publishStore(ctx, store)
 	w.logEmbeddedPass(ctx, stats)
 	return nil
+}
+
+// embeddedExcludedOwners returns the owners that a pass must not deliver to
+// or reproject: owners with a pending batch or projection that the replay did
+// not acknowledge, and owners with a blocked outbox item. Reconciliation
+// aborts the blocked items and pending projections of an owner. A reconciled
+// owner stays excluded only while a pending batch above the committed order
+// waits for replay.
+func embeddedExcludedOwners(
+	replayBlocked map[string]bool,
+	projectionBlocked map[string]bool,
+	blockedInOutbox map[string]bool,
+	reconciled map[string]bool,
+) map[string]bool {
+	excluded := make(map[string]bool, len(replayBlocked)+len(projectionBlocked)+len(blockedInOutbox))
+	for _, source := range []map[string]bool{replayBlocked, projectionBlocked, blockedInOutbox} {
+		for ownerID := range source {
+			excluded[ownerID] = true
+		}
+	}
+	for ownerID := range reconciled {
+		if !replayBlocked[ownerID] {
+			delete(excluded, ownerID)
+		}
+	}
+	return excluded
 }
 
 // embeddedCandidates returns the admitted conversations that need a pass,
@@ -590,11 +629,15 @@ func (w *conversationSemanticSyncWorker) logEmbeddedPass(ctx context.Context, st
 		slog.Int("metadata_reprojected_owners", stats.reprojectedOwners),
 		slog.Int("metadata_reprojection_failed", stats.reprojectionFailed),
 		slog.Int("blocked_owners", stats.blockedOwners),
+		slog.Int("reconciled_owners", stats.reconciledOwners),
+		slog.Int("reconcile_aborted_tokens", stats.abortedTokens),
+		slog.Int("reconcile_failed", stats.reconcileFailed),
 	}
 	level := slog.LevelDebug
 	if stats.delivery.recordedBatches > 0 || stats.replayed > 0 || stats.sourceFailed > 0 || stats.projectionFailed > 0 ||
 		stats.deliveryFailed > 0 || stats.failedSuppressed > 0 || stats.changedCommitted > 0 || stats.pendingBlocked > 0 ||
-		stats.replayedProjections > 0 || stats.reprojectedOwners > 0 || stats.reprojectionFailed > 0 || stats.blockedOwners > 0 {
+		stats.replayedProjections > 0 || stats.reprojectedOwners > 0 || stats.reprojectionFailed > 0 || stats.blockedOwners > 0 ||
+		stats.reconciledOwners > 0 || stats.reconcileFailed > 0 {
 		level = slog.LevelInfo
 	}
 	w.log.LogAttrs(ctx, level, "daemon.conversation_semantic_sync.pass_completed", attributes...)

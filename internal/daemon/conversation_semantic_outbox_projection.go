@@ -58,31 +58,6 @@ func (outbox *conversationSemanticOutbox) ownerMetadata(ctx context.Context, nam
 	return stored, nil
 }
 
-// committedRowKeys returns the row keys of every delivered batch of one owner
-// in row key order.
-func (outbox *conversationSemanticOutbox) committedRowKeys(ctx context.Context, namespace string, ownerID string) ([]string, error) {
-	rows, err := outbox.db.QueryContext(
-		ctx,
-		`SELECT DISTINCT batch_rows.row_key FROM batch_rows JOIN batches ON batches.batch_id = batch_rows.batch_id
-		WHERE batches.namespace = ? AND batches.owner_id = ? AND batches.state = ? ORDER BY batch_rows.row_key`,
-		namespace, ownerID, embeddedOutboxStateDelivered,
-	)
-	var rowKeys []string
-	if err == nil {
-		rowKeys, err = scanOutboxRowKeys(rows)
-	}
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_semantic_outbox.read_row_keys_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", ownerID,
-			"err", err,
-		)
-		return nil, fmt.Errorf("read committed row keys of %s: %w", ownerID, err)
-	}
-	return rowKeys, nil
-}
-
 // projectionRowKeys returns the row keys that one recorded projection covers
 // in row key order.
 func (outbox *conversationSemanticOutbox) projectionRowKeys(ctx context.Context, projection embeddedOutboxProjection) ([]string, error) {
