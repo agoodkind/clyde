@@ -128,6 +128,8 @@ func TestEmbeddedIngestionRecovery(t *testing.T) {
 	}
 	assertLiveAppendedRows(t, firstIngestion.rows, afterAppend.rows)
 
+	appended.close(t)
+	removeLiveOutbox(t, appended.semantic.PoolID)
 	archivedPath := filepath.Join(stores.codexHome, "archived_sessions", filepath.Base(rolloutPath))
 	if err := os.MkdirAll(filepath.Dir(archivedPath), 0o755); err != nil {
 		t.Fatalf("create archived sessions directory: %v", err)
@@ -136,31 +138,29 @@ func TestEmbeddedIngestionRecovery(t *testing.T) {
 		t.Fatalf("archive rollout: %v", err)
 	}
 	refreshLiveIndex(t, index)
-	afterArchive := appended.runPass(t)
-	assertLiveSnapshotsEqual(t, "archive reprojection", afterAppend, afterArchive)
-	archivedRows := countLiveEffectiveScalars(t, appended.semantic.CatalogPath, embeddedScalarArchived, true)
-	if archivedRows != len(afterAppend.rows) || afterArchive.appliedProjections != 1 {
-		t.Fatalf("archive reprojection archived rows/applied projections = %d/%d, want %d/1",
-			archivedRows, afterArchive.appliedProjections, len(afterAppend.rows))
-	}
+	reconciled := newLiveScenario(t, database, storeRoot, "uninterrupted", index)
+	afterOutboxLoss := reconciled.runPass(t)
+	assertLiveOutboxLossReconciled(t, reconciled, afterAppend, afterOutboxLoss, true, 1)
 
-	appended.close(t)
-	removeLiveOutbox(t, appended.semantic.PoolID)
 	if err := os.Rename(archivedPath, rolloutPath); err != nil {
 		t.Fatalf("unarchive rollout: %v", err)
 	}
 	refreshLiveIndex(t, index)
-	reconciled := newLiveScenario(t, database, storeRoot, "uninterrupted", index)
-	afterOutboxLoss := reconciled.runPass(t)
-	assertLiveOutboxLossReconciled(t, reconciled, afterArchive, afterOutboxLoss)
+	afterUnarchive := reconciled.runPass(t)
+	assertLiveSnapshotsEqual(t, "unarchive reprojection", afterOutboxLoss, afterUnarchive)
+	unarchivedRows := countLiveEffectiveScalars(t, reconciled.semantic.CatalogPath, embeddedScalarArchived, false)
+	if unarchivedRows != len(afterAppend.rows) || afterUnarchive.appliedProjections != 2 {
+		t.Fatalf("unarchive reprojection unarchived rows/applied projections = %d/%d, want %d/2",
+			unarchivedRows, afterUnarchive.appliedProjections, len(afterAppend.rows))
+	}
 
 	if err := os.Remove(rolloutPath); err != nil {
 		t.Fatalf("remove rollout: %v", err)
 	}
 	refreshLiveIndex(t, index)
 	afterSourceLoss := reconciled.runPass(t)
-	assertLiveSnapshotsEqual(t, "source loss", afterOutboxLoss, afterSourceLoss)
-	if countLiveEffectiveScalars(t, reconciled.semantic.CatalogPath, embeddedScalarArchived, false) != len(afterAppend.rows) {
+	assertLiveSnapshotsEqual(t, "source loss", afterUnarchive, afterSourceLoss)
+	if countLiveEffectiveScalars(t, reconciled.semantic.CatalogPath, embeddedScalarArchived, false) != unarchivedRows {
 		t.Fatalf("source loss changed the archived metadata of committed rows")
 	}
 	reconciled.close(t)
@@ -178,12 +178,24 @@ func removeLiveOutbox(t *testing.T, poolID string) {
 	}
 }
 
-// assertLiveOutboxLossReconciled requires the pass after outbox loss and an
-// unarchive to keep every published row and vector, send no generation, record
-// every published field under the unknown-digest marker, block no owner, and
-// apply archived false to every row at projection order 2.
-func assertLiveOutboxLossReconciled(t *testing.T, scenario *liveScenario, before liveSnapshot, after liveSnapshot) {
+// assertLiveOutboxLossReconciled requires the pass after outbox loss and a
+// metadata change to keep every published row and vector, send no generation,
+// record every published field under the unknown-digest marker, block no
+// owner, and apply the archived value to every row at projectionOrder.
+func assertLiveOutboxLossReconciled(
+	t *testing.T,
+	scenario *liveScenario,
+	before liveSnapshot,
+	after liveSnapshot,
+	archived bool,
+	projectionOrder uint64,
+) {
 	t.Helper()
+	store := scenario.worker.embedded.store
+	blocked, err := store.outbox.blockedOwners(t.Context(), store.namespace.ID)
+	if err != nil || len(blocked) != 0 {
+		t.Fatalf("outbox loss blocked owners = %q, %v, want none", blocked, err)
+	}
 	if after.owner != before.owner || !maps.Equal(after.rows, before.rows) {
 		t.Fatalf("outbox loss owner/rows = %+v/%d, want %+v/%d unchanged", after.owner, len(after.rows), before.owner, len(before.rows))
 	}
@@ -203,17 +215,12 @@ func assertLiveOutboxLossReconciled(t *testing.T, scenario *liveScenario, before
 			t.Fatalf("reconciled field %s digest = %q, want %q", fieldKey, digest, embeddedUnknownFieldDigest)
 		}
 	}
-	store := scenario.worker.embedded.store
-	blocked, err := store.outbox.blockedOwners(t.Context(), store.namespace.ID)
-	if err != nil || len(blocked) != 0 {
-		t.Fatalf("outbox loss blocked owners = %q, %v, want none", blocked, err)
-	}
 	listed, err := store.library.ListOwnerOccurrences(t.Context(), store.namespace.ID, liveOwnerID)
-	if err != nil || listed.ProjectionOrder != 2 {
-		t.Fatalf("outbox loss library projection order = %d, %v, want 2", listed.ProjectionOrder, err)
+	if err != nil || listed.ProjectionOrder != projectionOrder {
+		t.Fatalf("outbox loss library projection order = %d, %v, want %d", listed.ProjectionOrder, err, projectionOrder)
 	}
-	if unarchived := countLiveEffectiveScalars(t, scenario.semantic.CatalogPath, embeddedScalarArchived, false); unarchived != len(after.rows) {
-		t.Fatalf("outbox loss unarchived rows = %d, want %d", unarchived, len(after.rows))
+	if rows := countLiveEffectiveScalars(t, scenario.semantic.CatalogPath, embeddedScalarArchived, archived); rows != len(after.rows) {
+		t.Fatalf("outbox loss rows with archived %t = %d, want %d", archived, rows, len(after.rows))
 	}
 }
 
@@ -241,9 +248,13 @@ type liveScenario struct {
 func newLiveScenario(t *testing.T, database string, storeRoot string, name string, index *conversation.Index) *liveScenario {
 	t.Helper()
 	semantic := config.ConversationSemanticConfig{
-		IngestionEnabled:        true,
-		CollectionID:            liveCollectionID,
-		Backend:                 config.ConversationSemanticBackendEmbedded,
+		IngestionEnabled: true,
+		CollectionID:     liveCollectionID,
+		Backend:          config.ConversationSemanticBackendEmbedded,
+		// The pass after outbox loss and archiving admits the archived
+		// conversation and reads its transcript. Without reconciliation it
+		// resends every committed row with archived true.
+		IncludeArchived:         true,
 		CatalogPath:             filepath.Join(storeRoot, name, "catalog.sqlite"),
 		LockPath:                filepath.Join(storeRoot, name, "catalog.lock"),
 		PoolID:                  "live-" + name,
