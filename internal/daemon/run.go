@@ -145,7 +145,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	if runtime.semantic != nil && cfg.Conversation.Semantic.FeedsEngine() {
 		resolveSemanticClient = runtime.semantic.syncClient
 	}
-	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, resolveSemanticClient, semanticFreshness, runtime.embeddedStatus, runtime.group); err != nil {
+	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, resolveSemanticClient, semanticFreshness, runtime.embeddedStatus, runtime.embeddedReconcile, runtime.group); err != nil {
 		return err
 	}
 
@@ -332,7 +332,8 @@ func newControlServer(
 		mitmStatus: func() MITMStatus {
 			return collectMITMStatus(cfg.MITM, runtime.mitmListeners)
 		},
-		runtimeStatus: runtime.statusSnapshot,
+		runtimeStatus:     runtime.statusSnapshot,
+		embeddedReconcile: runtime.embeddedReconcile,
 		showCapture: func(showCtx context.Context, id string) (mitmshow.ShowOutput, error) {
 			return mitmshow.Lookup(showCtx, cfg, id)
 		},
