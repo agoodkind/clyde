@@ -191,6 +191,9 @@ type embeddedSyncStats struct {
 	replayedProjections int
 	reprojectedOwners   int
 	reprojectionFailed  int
+	// blockedOwners counts owners with a blocked batch or projection after
+	// the pass.
+	blockedOwners int
 }
 
 // runEmbeddedPass replays pending outbox batches and projections, reprojects
@@ -198,7 +201,8 @@ type embeddedSyncStats struct {
 // admitted conversation that changed since the worker processed it, selects
 // the fields that the outbox has not committed, and delivers one generation
 // per conversation with new rows. A conversation that the index no longer
-// lists keeps every committed occurrence and its last applied metadata.
+// lists keeps every committed occurrence and its last applied metadata. An
+// owner with a blocked outbox item receives no delivery and no reprojection.
 func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) error {
 	store, err := w.embedded.ensureStore(ctx, w.log)
 	if err != nil {
@@ -213,6 +217,13 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 		return err
 	}
 	for ownerID := range projectionBlocked {
+		replay.blockedOwners[ownerID] = true
+	}
+	blockedInOutbox, err := store.outbox.blockedOwners(ctx, store.namespace.ID)
+	if err != nil {
+		return err
+	}
+	for _, ownerID := range blockedInOutbox {
 		replay.blockedOwners[ownerID] = true
 	}
 	var stats embeddedSyncStats
@@ -231,6 +242,10 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	w.reprojectEmbeddedOwners(ctx, store, stampedRecords, replay.blockedOwners, &stats)
 	candidates := w.embeddedCandidates(stampedRecords, &stats)
 	w.deliverEmbeddedCandidates(ctx, store, candidates, replay.blockedOwners, &stats)
+	blockedAfterPass, err := store.outbox.blockedOwners(ctx, store.namespace.ID)
+	if err == nil {
+		stats.blockedOwners = len(blockedAfterPass)
+	}
 	w.logEmbeddedPass(ctx, stats)
 	return nil
 }
@@ -544,11 +559,12 @@ func (w *conversationSemanticSyncWorker) logEmbeddedPass(ctx context.Context, st
 		slog.Int("metadata_replayed_projections", stats.replayedProjections),
 		slog.Int("metadata_reprojected_owners", stats.reprojectedOwners),
 		slog.Int("metadata_reprojection_failed", stats.reprojectionFailed),
+		slog.Int("blocked_owners", stats.blockedOwners),
 	}
 	level := slog.LevelDebug
 	if stats.delivery.recordedBatches > 0 || stats.replayed > 0 || stats.sourceFailed > 0 || stats.projectionFailed > 0 ||
 		stats.deliveryFailed > 0 || stats.failedSuppressed > 0 || stats.changedCommitted > 0 || stats.pendingBlocked > 0 ||
-		stats.replayedProjections > 0 || stats.reprojectedOwners > 0 || stats.reprojectionFailed > 0 {
+		stats.replayedProjections > 0 || stats.reprojectedOwners > 0 || stats.reprojectionFailed > 0 || stats.blockedOwners > 0 {
 		level = slog.LevelInfo
 	}
 	w.log.LogAttrs(ctx, level, "daemon.conversation_semantic_sync.pass_completed", attributes...)

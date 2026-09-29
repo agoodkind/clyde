@@ -118,7 +118,8 @@ func (delivery *embeddedConversationDelivery) reproject(
 
 // applyProjection sends one recorded projection to ReprojectScalars and
 // acknowledges the receipt. ReprojectScalars returns the saved receipt for a
-// token that the library already applied.
+// token that the library already applied. A permanent library error moves the
+// projection to the blocked state.
 func (delivery *embeddedConversationDelivery) applyProjection(
 	ctx context.Context,
 	projection embeddedOutboxProjection,
@@ -148,6 +149,7 @@ func (delivery *embeddedConversationDelivery) applyProjection(
 			"rows", len(rowKeys),
 			"err", err,
 		)
+		delivery.blockProjectionOnPermanentError(ctx, projection, err)
 		return fmt.Errorf("reproject %d rows of %s at order %d: %w", len(rowKeys), projection.OwnerID, projection.ProjectionOrder, err)
 	}
 	return delivery.outbox.acknowledgeProjection(ctx, projection, receipt.Fingerprint)

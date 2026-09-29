@@ -57,7 +57,10 @@ var conversationSemanticOutboxSchemaStatements = []string{
 		state TEXT NOT NULL,
 		receipt_fingerprint TEXT NOT NULL,
 		created_unix INTEGER NOT NULL,
-		delivered_unix INTEGER NOT NULL
+		delivered_unix INTEGER NOT NULL,
+		blocked_class TEXT NOT NULL DEFAULT '',
+		blocked_library_order INTEGER NOT NULL DEFAULT 0,
+		blocked_unix INTEGER NOT NULL DEFAULT 0
 	)`,
 	`CREATE INDEX IF NOT EXISTS batches_state ON batches (state, created_unix)`,
 	`CREATE TABLE IF NOT EXISTS batch_rows (
@@ -102,6 +105,9 @@ var conversationSemanticOutboxSchemaStatements = []string{
 		state TEXT NOT NULL,
 		receipt_fingerprint TEXT NOT NULL,
 		created_unix INTEGER NOT NULL,
+		blocked_class TEXT NOT NULL DEFAULT '',
+		blocked_library_order INTEGER NOT NULL DEFAULT 0,
+		blocked_unix INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (namespace, owner_id, projection_order)
 	)`,
 	`CREATE INDEX IF NOT EXISTS projections_state ON projections (state, created_unix)`,
