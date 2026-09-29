@@ -39,15 +39,23 @@ type embeddedConversationSync struct {
 	// digest that differs from the committed digest under the same key. The
 	// committed occurrence stays and no row is sent for the key.
 	changedCommitted int
+	// status receives the library and outbox state for the daemon status RPC.
+	// Nil disables publishing.
+	status *embeddedSemanticStatus
 }
 
-func newEmbeddedConversationSync(semantic config.ConversationSemanticConfig, outboxPath string) *embeddedConversationSync {
+func newEmbeddedConversationSync(
+	semantic config.ConversationSemanticConfig,
+	outboxPath string,
+	status *embeddedSemanticStatus,
+) *embeddedConversationSync {
 	return &embeddedConversationSync{
 		semantic:         semantic,
 		outboxPath:       outboxPath,
 		store:            nil,
 		processed:        make(map[string]string),
 		changedCommitted: 0,
+		status:           status,
 	}
 }
 
@@ -74,6 +82,7 @@ func (embedded *embeddedConversationSync) closeStore(ctx context.Context) {
 	if err := embedded.store.close(closeCtx); err == nil {
 		embedded.store = nil
 	}
+	embedded.status.markClosed()
 }
 
 // admits applies the conversation admission settings: indexed providers,
@@ -116,6 +125,7 @@ func startEmbeddedConversationSemanticSync(
 	semantic config.ConversationSemanticConfig,
 	index conversationSemanticIndex,
 	freshness *conversationSemanticFreshness,
+	status *embeddedSemanticStatus,
 	group *livetrack.Group,
 	contentKinds conversation.ContentKindSet,
 ) bool {
@@ -136,7 +146,7 @@ func startEmbeddedConversationSemanticSync(
 	}
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, log, contentKinds)
 	worker.freshness = freshness
-	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID))
+	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), status)
 	go func() {
 		defer close(done)
 		defer worker.embedded.closeStore(ctx)
@@ -246,6 +256,7 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	if err == nil {
 		stats.blockedOwners = len(blockedAfterPass)
 	}
+	w.embedded.status.publishStore(ctx, store)
 	w.logEmbeddedPass(ctx, stats)
 	return nil
 }

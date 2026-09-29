@@ -23,6 +23,19 @@ type SemanticStatus struct {
 	Connection       SemanticConnectionState `json:"connection"`
 	NextRetryUnix    int64                   `json:"next_retry_unix"`
 	Attempts         uint64                  `json:"attempts"`
+	// Embedded is absent unless the daemon uses the embedded backend.
+	Embedded *EmbeddedSemanticStatus `json:"embedded,omitempty"`
+}
+
+// EmbeddedSemanticStatus reports the embedded ingestion store after the last
+// sync pass: whether the library is open, the pending outbox items, and the
+// blocked owners with up to 10 of their conversation IDs.
+type EmbeddedSemanticStatus struct {
+	LibraryOpen            bool     `json:"library_open"`
+	PendingBatches         uint64   `json:"pending_batches"`
+	PendingProjections     uint64   `json:"pending_projections"`
+	BlockedOwners          uint64   `json:"blocked_owners"`
+	BlockedConversationIDs []string `json:"blocked_conversation_ids"`
 }
 
 // SemanticConnectionState is the wire enum's lowercase connection-state name.
@@ -53,6 +66,7 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 			IngestionEnabled: semantic.GetIngestionEnabled(), SearchEnabled: semantic.GetSearchEnabled(),
 			Connection:    SemanticConnectionState(strings.ToLower(strings.TrimPrefix(semantic.GetConnection().String(), "SEMANTIC_CONNECTION_STATE_"))),
 			NextRetryUnix: semantic.GetNextRetryUnix(), Attempts: semantic.GetAttempts(),
+			Embedded: embeddedStatusFromProto(semantic.GetEmbedded()),
 		},
 		Listeners:                make([]BoundListenerStatus, 0, len(response.GetListeners())),
 		Profiling:                nil,
@@ -66,6 +80,19 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 		result.Profiling = &profiling
 	}
 	return result, nil
+}
+
+func embeddedStatusFromProto(embedded *clydev1.EmbeddedSemanticStatus) *EmbeddedSemanticStatus {
+	if embedded == nil {
+		return nil
+	}
+	return &EmbeddedSemanticStatus{
+		LibraryOpen:            embedded.GetLibraryOpen(),
+		PendingBatches:         embedded.GetPendingBatches(),
+		PendingProjections:     embedded.GetPendingProjections(),
+		BlockedOwners:          embedded.GetBlockedOwners(),
+		BlockedConversationIDs: append([]string{}, embedded.GetBlockedConversationIds()...),
+	}
 }
 
 func listenerStatusFromProto(listener *clydev1.BoundListenerStatus) BoundListenerStatus {
