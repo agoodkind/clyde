@@ -53,7 +53,7 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 	}
 	if semantic.SearchEnabled {
 		return invalidConversationSemanticSetting("backend", fmt.Sprintf(
-			"= %q requires %ssearch_enabled = false, because embedded search is not available in this Clyde build",
+			"= %q requires %ssearch_enabled = false, because embedded search is not available in this Clyde build (CLYDE-761)",
 			ConversationSemanticBackendEmbedded,
 			conversationSemanticKey,
 		))

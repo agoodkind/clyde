@@ -174,7 +174,7 @@ func TestConversationSemanticEmbeddedBackendChecksRequiredSettings(t *testing.T)
 	}
 
 	_, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\nsearch_enabled = true\n"+embeddedSemanticSettings)
-	if err == nil || !strings.Contains(err.Error(), "embedded search is not available in this Clyde build") {
+	if err == nil || !strings.Contains(err.Error(), "embedded search is not available in this Clyde build (CLYDE-761)") {
 		t.Fatalf("embedded section with search enabled error = %v, want the unavailable search error", err)
 	}
 }
