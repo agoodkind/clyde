@@ -88,9 +88,10 @@ func embeddedProjectionToken(namespace string, ownerID string, projectionOrder u
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-// reproject records one projection of every committed row of an owner in the
-// outbox and applies it with ReprojectScalars. The projection order is the
-// recorded order plus one.
+// reproject records one projection of every published row of an owner in the
+// outbox and applies it with ReprojectScalars. ListOwnerOccurrences supplies
+// the published row keys. The projection order is the recorded order plus
+// one.
 func (delivery *embeddedConversationDelivery) reproject(
 	ctx context.Context,
 	namespace string,
@@ -98,9 +99,19 @@ func (delivery *embeddedConversationDelivery) reproject(
 	stored embeddedStoredOwnerMetadata,
 	metadata embeddedOwnerMetadata,
 ) error {
-	rowKeys, err := delivery.outbox.committedRowKeys(ctx, namespace, ownerID)
+	listed, err := delivery.library.ListOwnerOccurrences(ctx, namespace, ownerID)
 	if err != nil {
-		return err
+		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.owner_occurrences_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"conversation_id", ownerID,
+			"err", err,
+		)
+		return fmt.Errorf("list published rows of %s: %w", ownerID, err)
+	}
+	rowKeys := make([]string, 0, len(listed.Rows))
+	for _, row := range listed.Rows {
+		rowKeys = append(rowKeys, row.RowKey)
 	}
 	order := stored.ProjectionOrder + 1
 	projection := embeddedOutboxProjection{
