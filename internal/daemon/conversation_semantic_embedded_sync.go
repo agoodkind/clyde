@@ -20,6 +20,13 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
+// embeddedTrailingSettleWindow is how long an artifact must stay unchanged
+// before the worker commits a trailing message that the provider can still
+// extend. A later message in the transcript releases the trailing message
+// earlier. The pass deferral of an actively growing artifact is one sync
+// interval, which is shorter.
+const embeddedTrailingSettleWindow = 30 * time.Minute
+
 // embeddedStoreCloseTimeout bounds the Milvus client close after the embedded
 // ingestion worker stops.
 const embeddedStoreCloseTimeout = 5 * time.Second
@@ -560,7 +567,7 @@ func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 	stats *embeddedSyncStats,
 ) ([]searchbackend.Field, int, error) {
 	record := candidate.record
-	artifactSettled := !w.isActivelyGrowing(candidate.stamp)
+	artifactSettled := w.now().Sub(candidate.stamp.Mtime) >= embeddedTrailingSettleWindow
 	projected, built, err := projectEmbeddedConversationFields(record, messages, w.contentKinds, artifactSettled)
 	if err != nil {
 		stats.projectionFailed++

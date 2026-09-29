@@ -9,8 +9,8 @@ import (
 // projectEmbeddedConversationFields builds the embedded search fields for one
 // loaded conversation. BuildSemanticConversationDocuments selects the content,
 // and each document keeps its position in the complete loaded message
-// sequence. artifactSettled reports that the artifact stamp passed the growing
-// artifact deferral unchanged.
+// sequence. artifactSettled reports that the artifact stayed unchanged for
+// embeddedTrailingSettleWindow.
 func projectEmbeddedConversationFields(
 	record conversation.Record,
 	messages []transcript.Message,

@@ -28,8 +28,8 @@ type ProjectedFields struct {
 
 // ProjectFields builds the selected nonempty fields of each message. A
 // trailing message that the provider can still extend produces no field until
-// a later message exists or the artifact stamp passes the growing artifact
-// deferral unchanged.
+// a later message exists or Conversation.ArtifactSettled reports that the
+// artifact settled.
 func ProjectFields(conversation Conversation, messages []Message) ProjectedFields {
 	profile := ProjectionProfile(conversation.LoadRules)
 	projected := ProjectedFields{Fields: make([]Field, 0, len(messages)), WithheldOpenFields: 0}

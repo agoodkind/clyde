@@ -56,8 +56,8 @@ type Conversation struct {
 	// TrailingMessageMayGrow reports that the provider can extend the last
 	// loaded message in place when the artifact grows.
 	TrailingMessageMayGrow bool
-	// ArtifactSettled reports that the artifact stamp passed the growing
-	// artifact deferral without a change.
+	// ArtifactSettled reports that the artifact stayed unchanged long enough
+	// for the caller to commit a trailing message that may still grow.
 	ArtifactSettled bool
 	// ToolDetail is the selected tool content level.
 	ToolDetail ToolDetail
