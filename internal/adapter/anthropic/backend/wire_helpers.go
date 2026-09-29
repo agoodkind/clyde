@@ -488,10 +488,22 @@ func UsageFromAnthropic(a anthropic.Usage) adapteropenai.Usage {
 		InputTokens:      totalInput,
 		OutputTokens:     a.OutputTokens,
 		CacheReadTokens:  a.CacheReadInputTokens,
-		CacheWriteTokens: a.CacheCreationInputTokens, PromptTokensDetails: nil, MaxTokens: 0,
+		CacheWriteTokens: a.CacheCreationInputTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, MaxTokens: 0,
 	}
-	if a.CacheReadInputTokens > 0 {
-		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: a.CacheReadInputTokens}
+	if a.CacheCountsReported || a.CacheReadInputTokens > 0 {
+		var cacheWrite *int
+		if a.CacheCountsReported {
+			written := a.CacheCreationInputTokens
+			cacheWrite = &written
+		}
+		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{
+			CachedTokens:               a.CacheReadInputTokens,
+			CacheWriteTokens:           cacheWrite,
+			CompatibilityOmitsUncached: true,
+		}
+	}
+	if a.ThinkingTokens != nil {
+		u.CompletionTokensDetails = &adapteropenai.CompletionTokensDetails{ReasoningTokens: *a.ThinkingTokens}
 	}
 	return u
 }

@@ -247,16 +247,23 @@ func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []a
 
 func mapUsage(c completedResponse) adapteropenai.Usage {
 	if c.Response.Usage == nil {
-		return adapteropenai.Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0}
+		return adapteropenai.Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0}
 	}
 	usage := c.Response.Usage
 	u := adapteropenai.Usage{
 		PromptTokens:     usage.InputTokens,
 		CompletionTokens: usage.OutputTokens,
-		TotalTokens:      usage.TotalTokens, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+		TotalTokens:      usage.TotalTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
 	}
 	if usage.InputTokensDetails != nil {
-		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: usage.InputTokensDetails.CachedTokens}
+		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{
+			CachedTokens:               usage.InputTokensDetails.CachedTokens,
+			CacheWriteTokens:           usage.InputTokensDetails.CacheWriteTokens,
+			CompatibilityOmitsUncached: false,
+		}
+	}
+	if usage.OutputTokensDetails != nil {
+		u.CompletionTokensDetails = &adapteropenai.CompletionTokensDetails{ReasoningTokens: usage.OutputTokensDetails.ReasoningTokens}
 	}
 	return u
 }

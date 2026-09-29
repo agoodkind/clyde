@@ -560,6 +560,7 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 			"output_tokens":               8,
 			"cache_creation_input_tokens": 640,
 			"cache_read_input_tokens":     3200,
+			"output_tokens_details":       map[string]any{"thinking_tokens": 5},
 		},
 	})
 	if err != nil {
@@ -640,6 +641,12 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 	}
 	if usage.CacheReadInputTokens != 3200 {
 		t.Fatalf("cache_read_input_tokens = %d want 3200", usage.CacheReadInputTokens)
+	}
+	if !usage.CacheCountsReported {
+		t.Fatal("cache counts reported = false, want true")
+	}
+	if usage.ThinkingTokens == nil || *usage.ThinkingTokens != 5 {
+		t.Fatalf("thinking tokens = %v, want 5", usage.ThinkingTokens)
 	}
 }
 

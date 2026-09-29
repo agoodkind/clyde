@@ -324,3 +324,64 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	aerr.Message = folded
 	return aerr
 }
+
+// applyDocumentedShape reads this table only for an error without an
+// upstream HTTP status. A local class missing from the table retains its
+// default status.
+var documentedStatusByClass = map[adapterErrorClass]int{
+	adapterErrorModelNotFound:           http.StatusNotFound,
+	adapterErrorUpstreamRateLimited:     http.StatusTooManyRequests,
+	adapterErrorUpstreamAuthFailed:      http.StatusUnauthorized,
+	adapterErrorUpstreamSchemaViolation: http.StatusBadRequest,
+	adapterErrorUpstreamNetworkError:    http.StatusBadGateway,
+	adapterErrorUpstreamUnavailable:     http.StatusServiceUnavailable,
+	adapterErrorUpstreamFailed:          http.StatusBadGateway,
+}
+
+// applyDocumentedShape changes only the HTTP status. An upstream failure
+// returns the upstream 4xx, 500, 502, 503, or 504 status.
+func applyDocumentedShape(aerr *adapterError) *adapterError {
+	if aerr == nil {
+		return nil
+	}
+	if status := documentedUpstreamStatus(aerr); status > 0 {
+		aerr.HTTPStatus = status
+		return aerr
+	}
+	if status, ok := documentedStatusByClass[aerr.Class]; ok {
+		aerr.HTTPStatus = status
+	}
+	return aerr
+}
+
+// documentedUpstreamStatus returns zero when the error has no usable
+// upstream HTTP status and 500 for a nonstandard upstream server status.
+func documentedUpstreamStatus(aerr *adapterError) int {
+	if !adapterErrorFromUpstream(aerr) {
+		return 0
+	}
+	status := aerr.UpstreamStatus
+	switch {
+	case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
+		return status
+	case status == http.StatusInternalServerError,
+		status == http.StatusBadGateway,
+		status == http.StatusServiceUnavailable,
+		status == http.StatusGatewayTimeout:
+		return status
+	case status > http.StatusInternalServerError:
+		return http.StatusInternalServerError
+	default:
+		return 0
+	}
+}
+
+// Local rejections and upstream invalid requests share the invalid_request
+// class. adapterErrorFromUpstream treats an invalid_request error with a
+// nonzero UpstreamStatus as an upstream error.
+func adapterErrorFromUpstream(aerr *adapterError) bool {
+	if strings.HasPrefix(string(aerr.Class), "upstream_") {
+		return true
+	}
+	return aerr.Class == adapterErrorInvalidRequest && aerr.UpstreamStatus > 0
+}

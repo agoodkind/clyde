@@ -12,8 +12,10 @@ import (
 	"strings"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	adaptercompat "goodkind.io/clyde/internal/adapter/compat"
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
@@ -27,22 +29,17 @@ import (
 func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	w := hctx.Writer
 	r := hctx.Request
+	if listenerFollowsDocumentedContract(ctx) && r.Method != http.MethodGet {
+		return newAdapterError(adapterErrorMethodNotAllowed, "GET required")
+	}
 	corr := hctx.Correlation
 	clydeingress.SetHTTPHeaders(corr, w.Header())
-	entries := s.modelRegistry().List()
+	registry := s.modelRegistry()
+	entries := registry.List()
 	fingerprint := modelCatalogFingerprint(entries)
 	resp := ModelsResponse{Object: "list", Data: nil}
 	for _, m := range entries {
-		entry := modelEntryFromResolved(m)
-		if m.Backend == BackendCodex {
-			entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(m, adaptercodex.CapabilityMode{
-				WebsocketEnabled: s.codexWebsocketEnabled(),
-			}))
-		}
-		if m.Backend == BackendAnthropic {
-			entry = applyModelContextLimit(entry, m.TransportLimits[config.AdapterModelTransportAnthropic])
-		}
-		resp.Data = append(resp.Data, entry)
+		resp.Data = append(resp.Data, s.advertisedModelEntry(ctx, registry, m))
 	}
 	respBody, err := json.Marshal(resp)
 	if err != nil {
@@ -63,11 +60,92 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	return nil
 }
 
+// On the OpenAI listener, advertisedModelEntry sets created to the catalog
+// load time.
+func (s *Server) advertisedModelEntry(ctx context.Context, registry *Registry, m adaptermodel.ResolvedAlias) ModelEntry {
+	entry := modelEntryFromResolved(m)
+	if m.Backend == BackendCodex {
+		entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(m, adaptercodex.CapabilityMode{
+			WebsocketEnabled: s.codexWebsocketEnabled(),
+		}))
+	}
+	if m.Backend == BackendAnthropic {
+		entry = applyModelContextLimit(entry, m.TransportLimits[config.AdapterModelTransportAnthropic])
+	}
+	if listenerFollowsDocumentedContract(ctx) {
+		entry.Created = registry.LoadedUnix()
+	}
+	return entry
+}
+
+// handleModel returns an advertised model or a model that a route rule
+// resolves for the ingress surface. For a fallback-only model, handleModel
+// requests its metadata from the OpenAI-compatible upstream. Any other
+// identifier returns the documented model_not_found error.
+func (s *Server) handleModel(ctx context.Context, hctx *handlerCtx) error {
+	w := hctx.Writer
+	r := hctx.Request
+	if r.Method != http.MethodGet {
+		return newAdapterError(adapterErrorMethodNotAllowed, "GET required")
+	}
+	clydeingress.SetHTTPHeaders(hctx.Correlation, w.Header())
+	requestedModel := strings.TrimSpace(r.PathValue("model"))
+	registry := s.modelRegistry()
+	entry, found := s.lookupModelEntry(ctx, registry, requestedModel)
+	if !found {
+		if fallback, ok := fallbackOnlyModel(ctx, registry, requestedModel); ok {
+			return s.forwardPassthroughModel(ctx, w, fallback, requestedModel)
+		}
+		return adapterErrModelNotFound("The model '" + requestedModel + "' does not exist")
+	}
+	body, err := json.Marshal(entry)
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.models.retrieve_marshal_failed", "concern", "adapter.models.catalog", "err", err)
+		return fmt.Errorf("marshal model response: %w", err)
+	}
+	writeJSON(w, body)
+	return nil
+}
+
+func fallbackOnlyModel(ctx context.Context, registry *Registry, requestedModel string) (adaptermodel.ResolvedAlias, bool) {
+	var none adaptermodel.ResolvedAlias
+	if requestedModel == "" {
+		return none, false
+	}
+	resolved, _, err := registry.Resolve(openAIIngressSurface(ctx), requestedModel, "")
+	if err != nil || resolved.Backend != adaptermodel.BackendPassthroughOverride {
+		return none, false
+	}
+	return resolved, true
+}
+
+// lookupModelEntry returns false for a fallback-only model. handleModel
+// requests that model from the OpenAI-compatible upstream.
+func (s *Server) lookupModelEntry(ctx context.Context, registry *Registry, requestedModel string) (ModelEntry, bool) {
+	var notFound ModelEntry
+	if requestedModel == "" {
+		return notFound, false
+	}
+	for _, m := range registry.List() {
+		if m.Alias == requestedModel {
+			return s.advertisedModelEntry(ctx, registry, m), true
+		}
+	}
+	resolved, _, err := registry.Resolve(openAIIngressSurface(ctx), requestedModel, "")
+	if err != nil || resolved.Backend == adaptermodel.BackendPassthroughOverride {
+		return notFound, false
+	}
+	entry := s.advertisedModelEntry(ctx, registry, resolved)
+	entry.ID = requestedModel
+	return entry, true
+}
+
 func modelEntryFromResolved(m adaptermodel.ResolvedAlias) ModelEntry {
 	advertised := m.Context
 	return ModelEntry{
 		ID:                               m.Alias,
 		Object:                           "model",
+		Created:                          0,
 		OwnedBy:                          "clyde",
 		Context:                          advertised,
 		ContextWindow:                    advertised,
@@ -183,6 +261,10 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 		return err
 	}
 
+	if rejectErr := rejectUndocumentedChatFields(ctx, recorder, body, req, discovery, &resolvedReq); rejectErr != nil {
+		return rejectErr
+	}
+
 	toolNames := chatToolNames(req)
 	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, &resolvedReq, toolNames)
 	if ingressCtx.PathKind == ingresscontract.PathKindSubagent && ingressCtx.GenerationID == "" {
@@ -200,11 +282,91 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	return nil
 }
 
+func rejectUndocumentedChatFields(ctx context.Context, recorder *logevent.Recorder, body []byte, req ChatRequest, discovery RequestDiscovery, resolvedReq *adapterresolver.ResolvedRequest) error {
+	if !listenerFollowsDocumentedContract(ctx) {
+		return nil
+	}
+	rejectErr := documentedChatRejection(body, req, discovery, resolvedReq)
+	if rejectErr == nil {
+		return nil
+	}
+	recorder.EmitError(ctx, "unsupported_parameter", rejectErr.Error())
+	return rejectErr
+}
+
+// handleChat runs documentedChatRejection on the generic OpenAI listener
+// before any provider request starts.
+func documentedChatRejection(body []byte, req ChatRequest, discovery RequestDiscovery, resolvedReq *adapterresolver.ResolvedRequest) *adapterError {
+	fields, err := adapteropenai.DecodeFieldSet(body)
+	if err != nil {
+		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
+	}
+	var n *int
+	if req.N != 0 {
+		n = &req.N
+	}
+	values := adaptercompat.ChatRequestValues{
+		Stream:           req.Stream,
+		Temperature:      req.Temperature,
+		TopP:             req.TopP,
+		PresencePenalty:  req.PresencePenalty,
+		FrequencyPenalty: req.FrequencyPenalty,
+		N:                n,
+		Logprobs:         req.Logprobs,
+		TopLogprobs:      req.TopLogprobs,
+		Store:            req.Store,
+		ServiceTier:      req.ServiceTier,
+		ToolChoice:       req.ToolChoice,
+		FunctionCall:     req.FunctionCall,
+		Modalities:       req.Modalities,
+		ResponseFormat:   req.ResponseFormat,
+		UnknownKeys:      discovery.UnknownKeys,
+	}
+	presenceFor := func(param string) int { return int(fields.Presence(param)) }
+	rejection, rejected := adaptercompat.ChatRejection(presenceFor, values, resolvedReq.Provider)
+	if !rejected {
+		return nil
+	}
+	return adapterErrRejectedParameter(rejection)
+}
+
 func openAIIngressSurface(ctx context.Context) adapterresolver.IngressSurface {
 	if ingressLabelFromContext(ctx) == string(adapterresolver.IngressCursor) {
 		return adapterresolver.IngressCursor
 	}
 	return adapterresolver.IngressOpenAI
+}
+
+// On the generic OpenAI listener, marshalChatResponseForListener writes
+// logprobs, content, and refusal on every choice. On other listeners it
+// applies CompatibilityUsage and the compatibility encoding.
+func marshalChatResponseForListener(ctx context.Context, resp ChatResponse) ([]byte, error) {
+	if listenerFollowsDocumentedContract(ctx) {
+		encoded, err := adapteropenai.MarshalDocumentedChatResponse(resp)
+		if err != nil {
+			slog.WarnContext(ctx, "adapter.chat.documented_response_marshal_failed", "concern", "adapter.chat.render", "err", err)
+			return nil, fmt.Errorf("marshal documented chat response: %w", err)
+		}
+		return encoded, nil
+	}
+	if resp.Usage != nil {
+		compatibilityUsage := adapteropenai.CompatibilityUsage(*resp.Usage)
+		resp.Usage = &compatibilityUsage
+	}
+	encoded, err := json.Marshal(resp)
+	if err != nil {
+		slog.WarnContext(ctx, "adapter.chat.response_marshal_failed", "concern", "adapter.chat.render", "err", err)
+		return nil, fmt.Errorf("marshal chat response: %w", err)
+	}
+	return encoded, nil
+}
+
+// listenerFollowsDocumentedContract returns true only for the "openai"
+// label. [Server.StartOnListeners] labels each accepted connection "openai"
+// or "cursor". An unlabeled in-process request uses the compatibility
+// behavior.
+func listenerFollowsDocumentedContract(ctx context.Context) bool {
+	return ingressLabelFromContext(ctx) == string(adapterresolver.IngressOpenAI)
 }
 
 func applyHeaderIngressContext(ctx context.Context, r *http.Request, corr correlation.Context, ingress ingresscontract.IngressContract) (context.Context, *http.Request, correlation.Context, []logevent.Facet) {
@@ -250,7 +412,9 @@ func (s *Server) prepareChatRequest(ctx context.Context, corr correlation.Contex
 		s.logChatParseFailed(ctx, corr, reqID, bodyBytes, parseErr)
 		return ChatRequest{}, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
 	}
-	forceStreamUsageOptIn(&req)
+	if !listenerFollowsDocumentedContract(ctx) {
+		forceStreamUsageOptIn(&req)
+	}
 	if normErr := normalizeRequestMessages(&req); normErr != nil {
 		recorder.EmitError(ctx, "message_normalization_failed", normErr.Error())
 		return ChatRequest{}, normErr
@@ -468,6 +632,9 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	if r.Method != http.MethodPost {
 		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
+	if listenerFollowsDocumentedContract(ctx) {
+		return s.handleDocumentedLegacy(ctx, hctx)
+	}
 	var legacy struct {
 		Model           string `json:"model"`
 		Prompt          string `json:"prompt"`
@@ -500,6 +667,109 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	r.Header.Set("Content-Type", "application/json")
 	hctx.Request = r
 	return s.handleChat(ctx, hctx)
+}
+
+// handleDocumentedLegacy runs a legacy prompt as a one-message Chat
+// Completions request. LegacyCompletionWriter rewrites the Chat output into
+// text_completion objects and chunks.
+func (s *Server) handleDocumentedLegacy(ctx context.Context, hctx *handlerCtx) error {
+	r := hctx.Request
+	body, err := io.ReadAll(http.MaxBytesReader(hctx.Writer, r.Body, 8<<20))
+	if err != nil {
+		return adapterErrInvalidRequest("failed to read body", err)
+	}
+	fields, err := adapteropenai.DecodeFieldSet(body)
+	if err != nil {
+		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
+	}
+	var legacy adapteropenai.CompletionRequest
+	if err := json.Unmarshal(body, &legacy); err != nil {
+		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
+	}
+	prompt, rejectErr := legacyCompletionPrompt(legacy, fields)
+	if rejectErr != nil {
+		return rejectErr
+	}
+	chatBody, err := json.Marshal(legacyChatRequest(legacy, prompt))
+	if err != nil {
+		return adapterErrInternal("serialize legacy completion request", err)
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(chatBody)))
+	r.ContentLength = int64(len(chatBody))
+	r.Header.Set("Content-Type", "application/json")
+	hctx.Request = r
+	includeUsage := legacy.StreamOptions != nil && legacy.StreamOptions.IncludeUsage
+	writer := adapteropenai.NewLegacyCompletionWriter(hctx.Writer, includeUsage)
+	hctx.Writer = writer
+	if chatErr := s.handleChat(ctx, hctx); chatErr != nil {
+		return chatErr
+	}
+	if finishErr := writer.Finish(); finishErr != nil {
+		return adapterErrInternal("write legacy completion", finishErr)
+	}
+	return nil
+}
+
+func legacyCompletionPrompt(legacy adapteropenai.CompletionRequest, fields adapteropenai.ResponsesFieldSet) (string, *adapterError) {
+	if unknown := fields.UnknownCompletionKeys(); len(unknown) > 0 {
+		return "", adapterErrRejectedParameter(adaptercompat.Rejection{
+			Code:    adaptercompat.RejectionCodeUnknownParameter,
+			Param:   unknown[0],
+			Message: "Unrecognized request argument supplied: " + unknown[0],
+		})
+	}
+	unsupported := []struct {
+		param   string
+		present bool
+	}{
+		{param: "suffix", present: legacy.Suffix != nil && *legacy.Suffix != ""},
+		{param: "echo", present: legacy.Echo != nil && *legacy.Echo},
+		{param: "logprobs", present: legacy.Logprobs != nil},
+		{param: "best_of", present: legacy.BestOf != nil && *legacy.BestOf > 1},
+		{param: "n", present: legacy.N != nil && *legacy.N > 1},
+	}
+	for _, field := range unsupported {
+		if field.present {
+			return "", adapterErrRejectedParameter(adaptercompat.Rejection{
+				Code:    adaptercompat.RejectionCodeUnsupportedParameter,
+				Param:   field.param,
+				Message: "Unsupported parameter: '" + field.param + "' is not supported by Clyde.",
+			})
+		}
+	}
+	prompt, err := legacy.PromptText()
+	if err != nil {
+		return "", adapterErrRejectedParameter(adaptercompat.Rejection{
+			Code:    adaptercompat.RejectionCodeUnsupportedParameter,
+			Param:   "prompt",
+			Message: err.Error(),
+		})
+	}
+	return prompt, nil
+}
+
+// handleChat rejects each copied field that the resolved provider cannot
+// honor.
+func legacyChatRequest(legacy adapteropenai.CompletionRequest, prompt string) ChatRequest {
+	var chat ChatRequest
+	chat.Model = legacy.Model
+	chat.Messages = []ChatMessage{{
+		Role:    "user",
+		Content: json.RawMessage(strconv.Quote(prompt)), Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
+	}}
+	chat.Stream = legacy.Stream
+	chat.StreamOptions = legacy.StreamOptions
+	chat.MaxTokens = legacy.MaxTokens
+	chat.Temperature = legacy.Temperature
+	chat.TopP = legacy.TopP
+	chat.Stop = legacy.Stop
+	chat.PresencePenalty = legacy.PresencePenalty
+	chat.FrequencyPenalty = legacy.FrequencyPenalty
+	chat.LogitBias = legacy.LogitBias
+	chat.Seed = legacy.Seed
+	chat.User = legacy.User
+	chat.ReasoningEffort = legacy.ReasoningEffort
+	return chat
 }
 
 func forceStreamUsageOptIn(req *ChatRequest) {

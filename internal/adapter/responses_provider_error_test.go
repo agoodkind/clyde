@@ -218,8 +218,10 @@ func TestResponsesNonStreamingProviderErrorCarriesCanonicalWarnings(t *testing.T
 			return adapterprovider.Result{}, errors.New("provider-visible failure")
 		},
 	})
-	openAIURL, _ := startRoutingListeners(t, srv)
-	response, body := postResponsesRaw(t, openAIURL+"/v1/responses", `{"model":"claude-future","input":"hello","background":true}`)
+	// Only the Cursor listener returns compatibility warnings. The OpenAI
+	// listener rejects background before the provider runs.
+	_, cursorURL := startRoutingListeners(t, srv)
+	response, body := postResponsesRaw(t, cursorURL+"/v1/responses", `{"model":"claude-future","input":"hello","background":true}`)
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", response.StatusCode, body)
 	}

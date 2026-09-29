@@ -27,12 +27,48 @@ func TestChatRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	}
 }
 
+// The OpenAI listener rejects every Responses key missing from
+// knownResponsesRequestKeys. This test fails when that set differs from the
+// ResponsesRequest JSON tags.
+func TestResponsesRequestJSONTagsMatchKnownKeys(t *testing.T) {
+	actual := structJSONTags(reflect.TypeOf(ResponsesRequest{}))
+	for key := range actual {
+		if !knownResponsesRequestKeys[key] {
+			t.Errorf("ResponsesRequest serializes JSON key %q absent from knownResponsesRequestKeys", key)
+		}
+	}
+	for key := range knownResponsesRequestKeys {
+		if !actual[key] {
+			t.Errorf("knownResponsesRequestKeys lists %q but ResponsesRequest no longer serializes that JSON key", key)
+		}
+	}
+}
+
+// This test fails when knownCompletionRequestKeys differs from the
+// CompletionRequest JSON tags.
+func TestCompletionRequestJSONTagsMatchKnownKeys(t *testing.T) {
+	actual := structJSONTags(reflect.TypeOf(CompletionRequest{}))
+	for key := range actual {
+		if !knownCompletionRequestKeys[key] {
+			t.Errorf("CompletionRequest serializes JSON key %q absent from knownCompletionRequestKeys", key)
+		}
+	}
+	for key := range knownCompletionRequestKeys {
+		if !actual[key] {
+			t.Errorf("knownCompletionRequestKeys lists %q but CompletionRequest no longer serializes that JSON key", key)
+		}
+	}
+}
+
 // chatRequestJSONTags reflects the ChatRequest struct into the set of
 // JSON key names it serializes, dropping the omitempty suffix and any
 // field tagged json:"-".
 func chatRequestJSONTags() map[string]bool {
+	return structJSONTags(reflect.TypeOf(ChatRequest{}))
+}
+
+func structJSONTags(typ reflect.Type) map[string]bool {
 	out := map[string]bool{}
-	typ := reflect.TypeOf(ChatRequest{})
 	for fieldIndex := 0; fieldIndex < typ.NumField(); fieldIndex++ {
 		tag := typ.Field(fieldIndex).Tag.Get("json")
 		if tag == "" || tag == "-" {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,20 +41,24 @@ func TestDeclarativeRoutesDispatchToLoopbackEndpoints(t *testing.T) {
 	srv := newRoutingIntegrationServer(t, fakes)
 	openAIURL, cursorURL := startRoutingListeners(t, srv)
 
-	chatBody := `{"model":"gpt-future","messages":[{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"reasoning_effort":"future-tier","tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"max_output_tokens":73}`
-	for _, ingress := range []struct {
-		name    string
-		baseURL string
-	}{
-		{name: "cursor", baseURL: cursorURL},
-		{name: "openai", baseURL: openAIURL},
-	} {
-		response := postRoutingJSON(t, ingress.baseURL+"/v1/chat/completions", chatBody)
-		if response.status != http.StatusOK {
-			t.Fatalf("%s chat status = %d; body=%s", ingress.name, response.status, response.body)
-		}
-		assertCodexWildcardRequest(t, <-fakes.codexReqs)
+	chatBody := `{"model":"gpt-future","messages":[{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"reasoning_effort":"future-tier","tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`
+	cappedChatBody := strings.TrimSuffix(chatBody, "}") + `,"max_output_tokens":73}`
+	// The Cursor listener drops the output cap Codex cannot honor.
+	cursorChat := postRoutingJSON(t, cursorURL+"/v1/chat/completions", cappedChatBody)
+	if cursorChat.status != http.StatusOK {
+		t.Fatalf("cursor chat status = %d; body=%s", cursorChat.status, cursorChat.body)
 	}
+	assertCodexWildcardRequest(t, <-fakes.codexReqs)
+	// The OpenAI listener rejects that cap and accepts the request without it.
+	rejectedChat := postRoutingJSON(t, openAIURL+"/v1/chat/completions", cappedChatBody)
+	if rejectedChat.status != http.StatusBadRequest || !bytes.Contains(rejectedChat.body, []byte(`"param":"max_output_tokens"`)) {
+		t.Fatalf("openai capped chat = %d %s, want 400 for max_output_tokens", rejectedChat.status, rejectedChat.body)
+	}
+	openAIChat := postRoutingJSON(t, openAIURL+"/v1/chat/completions", chatBody)
+	if openAIChat.status != http.StatusOK {
+		t.Fatalf("openai chat status = %d; body=%s", openAIChat.status, openAIChat.body)
+	}
+	assertCodexWildcardRequest(t, <-fakes.codexReqs)
 
 	legacy := postRoutingJSON(t, openAIURL+"/v1/completions", `{"model":"gpt-legacy-future","prompt":"legacy prompt"}`)
 	if legacy.status != http.StatusOK {
@@ -105,6 +110,16 @@ func TestDeclarativeRoutesDispatchToLoopbackEndpoints(t *testing.T) {
 	assertAdvertisedExactModels(t, srv)
 }
 
+// The fallback fake answers GET /v1/models/{model} with
+// routingFallbackModelBody when the model ID equals routingFallbackModelID.
+// It answers routingFallbackOversizedModelID with a body one byte over
+// passthroughModelLookupLimit and every other model ID with 404.
+const (
+	routingFallbackModelID          = "unrelated-model"
+	routingFallbackModelBody        = `{"id":"unrelated-model","object":"model","created":1700000000,"owned_by":"fallback-upstream"}`
+	routingFallbackOversizedModelID = "oversized-model"
+)
+
 func newRoutingFakeEndpoints(t *testing.T) routingFakeEndpoints {
 	t.Helper()
 	fakes := routingFakeEndpoints{
@@ -139,6 +154,20 @@ func newRoutingFakeEndpoints(t *testing.T) routingFakeEndpoints {
 		_, _ = writer.Write([]byte(`{"ok":true}`))
 	}))
 	fakes.fallback = newLoopbackHTTPServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/") {
+			writer.Header().Set("Content-Type", "application/json")
+			if strings.TrimPrefix(request.URL.Path, "/v1/models/") == routingFallbackOversizedModelID {
+				_, _ = writer.Write(bytes.Repeat([]byte(" "), passthroughModelLookupLimit+1))
+				return
+			}
+			if strings.TrimPrefix(request.URL.Path, "/v1/models/") != routingFallbackModelID {
+				writer.WriteHeader(http.StatusNotFound)
+				_, _ = writer.Write([]byte(`{"error":{"message":"model not found","type":"invalid_request_error","code":"model_not_found","param":"model"}}`))
+				return
+			}
+			_, _ = writer.Write([]byte(routingFallbackModelBody))
+			return
+		}
 		var body adapteropenai.ChatRequest
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Errorf("decode fallback request: %v", err)
@@ -257,6 +286,10 @@ func startRoutingListeners(t *testing.T, srv *Server) (string, string) {
 	t.Helper()
 	openAIListener := listenLoopback(t)
 	cursorListener := listenLoopback(t)
+	// The accept hook labels a connection "cursor" when its local port equals
+	// cfg.CursorIngressPort. This helper sets that field to the port that
+	// listenerPort returns for cursorListener before serving.
+	srv.cfg.CursorIngressPort = listenerPort(t, cursorListener)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {

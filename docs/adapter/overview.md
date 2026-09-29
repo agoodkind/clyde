@@ -81,8 +81,9 @@ here:
 The adapter serves the OpenAI Responses API at `POST /v1/responses` on the same
 OpenAI-compatible route family and bearer auth as `/v1/chat/completions`.
 Generic requests use a typed projection into the shared chat pipeline. They run
-the same resolver, preflight, provider dispatch, and compatibility warnings as
-chat requests.
+the same resolver, preflight, and provider dispatch as chat requests. The
+Cursor listener adds compatibility warnings, and the generic OpenAI listener
+rejects the same fields before dispatch.
 
 An authenticated native Codex request takes a narrower path. It must carry
 valid `X-Codex-Turn-Metadata`, and its top-level model must resolve to Codex.
@@ -104,8 +105,9 @@ list the full lifecycle set.
 
 The adapter also reports which request fields and tool types the resolved
 provider cannot honor. See [adapter compatibility warnings](compatibility.md)
-for the warning contract, the per-provider field dispositions, and the
-unsupported-tool behavior.
+for the Cursor warning contract, the per-provider field dispositions, and the
+unsupported-tool behavior. The [OpenAI conformance matrix](openai-conformance.md)
+records the generic OpenAI listener contract for every advertised route.
 
 When `capture_ingress` is enabled, the daemon opens the shared capture database
 even if MITM listeners are disabled. A native request records the ingress

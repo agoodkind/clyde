@@ -385,22 +385,55 @@ type StreamDelta struct {
 	Refusal          string     `json:"refusal,omitempty"`
 }
 
-// Usage is part of Clyde's typed adapter surface.
+// Usage encodes Chat Completions usage. PromptTokensDetails and
+// CompletionTokensDetails are nil when the provider
+// omits the breakdown. A non-nil detail stores the reported value,
+// including a reported zero.
 type Usage struct {
-	PromptTokens        int                  `json:"prompt_tokens"`
-	CompletionTokens    int                  `json:"completion_tokens"`
-	TotalTokens         int                  `json:"total_tokens"`
-	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
-	InputTokens         int                  `json:"input_tokens,omitempty"`
-	OutputTokens        int                  `json:"output_tokens,omitempty"`
-	CacheReadTokens     int                  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens    int                  `json:"cache_write_tokens,omitempty"`
-	MaxTokens           int                  `json:"max_tokens,omitempty"`
+	PromptTokens            int                      `json:"prompt_tokens"`
+	CompletionTokens        int                      `json:"completion_tokens"`
+	TotalTokens             int                      `json:"total_tokens"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	InputTokens             int                      `json:"input_tokens,omitempty"`
+	OutputTokens            int                      `json:"output_tokens,omitempty"`
+	CacheReadTokens         int                      `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens        int                      `json:"cache_write_tokens,omitempty"`
+	MaxTokens               int                      `json:"max_tokens,omitempty"`
 }
 
-// PromptTokensDetails is part of Clyde's typed adapter surface.
+// PromptTokensDetails leaves CacheWriteTokens nil when the provider omits
+// cache writes.
+// CompatibilityUsage removes these details when CompatibilityOmitsUncached
+// is true and CachedTokens is zero. UsageFromAnthropic sets the flag. The
+// previous Anthropic compatibility usage wrote prompt details only for a
+// cache read.
 type PromptTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens               int  `json:"cached_tokens"`
+	CacheWriteTokens           *int `json:"cache_write_tokens,omitempty"`
+	CompatibilityOmitsUncached bool `json:"-"`
+}
+
+// CompatibilityUsage removes completion_tokens_details and
+// prompt_tokens_details.cache_write_tokens. The Cursor listener sent usage
+// without both details before the documented contract added them.
+func CompatibilityUsage(usage Usage) Usage {
+	usage.CompletionTokensDetails = nil
+	if usage.PromptTokensDetails != nil {
+		details := *usage.PromptTokensDetails
+		details.CacheWriteTokens = nil
+		usage.PromptTokensDetails = &details
+		if details.CompatibilityOmitsUncached && details.CachedTokens == 0 {
+			usage.PromptTokensDetails = nil
+		}
+	}
+	return usage
+}
+
+// CompletionTokensDetails encodes only reasoning_tokens. No Clyde provider
+// reports another output token breakdown.
+type CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 // CachedTokens is part of Clyde's typed adapter surface.
@@ -417,10 +450,13 @@ type ModelsResponse struct {
 	Data   []ModelEntry `json:"data"`
 }
 
-// ModelEntry is part of Clyde's typed adapter surface.
+// ModelEntry encodes one Models entry. The OpenAI listener sets Created
+// because the documented Models contract requires it. The Cursor listener
+// leaves Created zero, and the encoder omits it.
 type ModelEntry struct {
 	ID                               string   `json:"id"`
 	Object                           string   `json:"object"`
+	Created                          int64    `json:"created,omitempty"`
 	OwnedBy                          string   `json:"owned_by"`
 	Context                          int      `json:"context,omitempty"`
 	ContextWindow                    int      `json:"context_window,omitempty"`

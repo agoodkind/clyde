@@ -55,8 +55,8 @@ func TestWildcardUnknownCapabilitiesReachAnthropicProviderPath(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			status, response := serveOpenAIJSON(t, srv, "/v1/chat/completions", "openai", test.body)
-			if status != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400; response=%+v", status, response)
+			if status != http.StatusServiceUnavailable || response.Error.Type != "service_unavailable_error" {
+				t.Fatalf("status = %d, want documented 503 service_unavailable_error; response=%+v", status, response)
 			}
 			if response.Error.Code != "upstream_unavailable" {
 				t.Fatalf("error = %+v, want provider-path upstream_unavailable", response.Error)
@@ -106,6 +106,7 @@ func TestHTTPListenersPassTypedModelRoutingSurfaces(t *testing.T) {
 		path        string
 		body        string
 		wantMessage string
+		wantStatus  int
 	}{
 		{
 			name:        "Cursor chat listener",
@@ -113,6 +114,7 @@ func TestHTTPListenersPassTypedModelRoutingSurfaces(t *testing.T) {
 			path:        "/v1/chat/completions",
 			body:        `{"model":"surface-model","messages":[{"role":"user","content":"hello"}]}`,
 			wantMessage: "anthropic backend is not enabled",
+			wantStatus:  http.StatusBadRequest,
 		},
 		{
 			name:        "OpenAI chat listener",
@@ -120,6 +122,7 @@ func TestHTTPListenersPassTypedModelRoutingSurfaces(t *testing.T) {
 			path:        "/v1/chat/completions",
 			body:        `{"model":"surface-model","messages":[{"role":"user","content":"hello"}]}`,
 			wantMessage: "codex backend is not enabled",
+			wantStatus:  http.StatusServiceUnavailable,
 		},
 		{
 			name:        "OpenAI legacy completions listener",
@@ -127,13 +130,14 @@ func TestHTTPListenersPassTypedModelRoutingSurfaces(t *testing.T) {
 			path:        "/v1/completions",
 			body:        `{"model":"surface-model","prompt":"hello"}`,
 			wantMessage: "codex backend is not enabled",
+			wantStatus:  http.StatusServiceUnavailable,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			status, response := postOpenAIJSON(t, test.baseURL+test.path, test.body)
-			if status != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400; response=%+v", status, response)
+			if status != test.wantStatus {
+				t.Fatalf("status = %d, want %d; response=%+v", status, test.wantStatus, response)
 			}
 			if !strings.Contains(response.Error.Message, test.wantMessage) {
 				t.Fatalf("message = %q, want substring %q", response.Error.Message, test.wantMessage)

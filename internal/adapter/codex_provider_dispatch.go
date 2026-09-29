@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -169,6 +168,7 @@ func (s *Server) dispatchCodexProviderStream(
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
 	}
+	writer.configureStreamUsage(req.StreamOptions != nil && req.StreamOptions.IncludeUsage)
 
 	s.emitRequestStreamOpened(ctx, &resolvedReq, "direct", reqID, alias)
 
@@ -325,7 +325,7 @@ func (s *Server) dispatchCodexProviderCollect(
 	if merged.Usage != nil {
 		merged.Usage.MaxTokens = usage.MaxTokens
 	}
-	mergedBody, err := json.Marshal(merged)
+	mergedBody, err := marshalChatResponseForListener(ctx, merged)
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.codex.collect_marshal_failed", "concern", "adapter.providers.codex.request", "err", err)
 		return
@@ -420,12 +420,14 @@ func codexProviderAdapterError(err error) *adapterError {
 	// Error() is snippet-free for logs; fold the snippet into the client
 	// message here, the one place that builds the Cursor-facing envelope.
 	message := err.Error()
+	upstreamStatus := 0
 	var upstreamStatusErr *adaptercodex.UpstreamStatusError
 	if errors.As(err, &upstreamStatusErr) {
 		message = upstreamStatusErr.ClientMessage()
+		upstreamStatus = upstreamStatusErr.Status
 	}
 	codeClass := codexClassifyError(message)
-	aerr := mapUpstreamForFamily(adapterRouteOpenAI, "codex", 0, codeClass, "", message)
+	aerr := mapUpstreamForFamily(adapterRouteOpenAI, "codex", upstreamStatus, codeClass, "", message)
 	aerr.Cause = err
 	return aerr
 }

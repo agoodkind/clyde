@@ -19,8 +19,14 @@ const (
 	ResponsesEventRefusalDone           = "response.refusal.done"
 	ResponsesEventReasoningSummaryDelta = "response.reasoning_summary_text.delta"
 	ResponsesEventReasoningSummaryDone  = "response.reasoning_summary_text.done"
-	ResponsesEventFunctionArgsDelta     = "response.function_call_arguments.delta"
-	ResponsesEventFunctionArgsDone      = "response.function_call_arguments.done"
+	// ResponsesEventReasoningSummaryPartAdded precedes the text deltas of a
+	// reasoning summary part.
+	ResponsesEventReasoningSummaryPartAdded = "response.reasoning_summary_part.added"
+	// ResponsesEventReasoningSummaryPartDone follows
+	// response.reasoning_summary_text.done.
+	ResponsesEventReasoningSummaryPartDone = "response.reasoning_summary_part.done"
+	ResponsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
+	ResponsesEventFunctionArgsDone         = "response.function_call_arguments.done"
 )
 
 // ResponsesStreamEvent is the closed set of typed Responses SSE event
@@ -59,25 +65,48 @@ type ResponsesContentPartEvent struct {
 	SequenceNumber int                  `json:"sequence_number"`
 }
 
-// ResponsesOutputTextDeltaEvent is the frame shape for
-// output_text.delta.
-type ResponsesOutputTextDeltaEvent struct {
-	Type           string `json:"type"`
-	ItemID         string `json:"item_id"`
-	OutputIndex    int    `json:"output_index"`
-	ContentIndex   int    `json:"content_index"`
-	Delta          string `json:"delta"`
-	SequenceNumber int    `json:"sequence_number"`
+// ResponsesTokenLogprob encodes one output_text token log probability. No
+// Clyde provider reports token log probabilities, and the documented
+// logprobs array is always empty.
+type ResponsesTokenLogprob struct {
+	Token   string  `json:"token"`
+	Logprob float64 `json:"logprob"`
 }
 
-// ResponsesOutputTextDoneEvent is the frame shape for output_text.done.
+// ResponsesOutputTextDeltaEvent encodes an output_text.delta frame. The
+// documented contract writes an empty Logprobs array. The compatibility
+// contract leaves Logprobs nil and omits the member.
+type ResponsesOutputTextDeltaEvent struct {
+	Type           string                   `json:"type"`
+	ItemID         string                   `json:"item_id"`
+	OutputIndex    int                      `json:"output_index"`
+	ContentIndex   int                      `json:"content_index"`
+	Delta          string                   `json:"delta"`
+	Logprobs       *[]ResponsesTokenLogprob `json:"logprobs,omitempty"`
+	SequenceNumber int                      `json:"sequence_number"`
+}
+
+// ResponsesOutputTextDoneEvent encodes an output_text.done frame. Logprobs
+// uses the same contract rule as ResponsesOutputTextDeltaEvent.
 type ResponsesOutputTextDoneEvent struct {
-	Type           string `json:"type"`
-	ItemID         string `json:"item_id"`
-	OutputIndex    int    `json:"output_index"`
-	ContentIndex   int    `json:"content_index"`
-	Text           string `json:"text"`
-	SequenceNumber int    `json:"sequence_number"`
+	Type           string                   `json:"type"`
+	ItemID         string                   `json:"item_id"`
+	OutputIndex    int                      `json:"output_index"`
+	ContentIndex   int                      `json:"content_index"`
+	Text           string                   `json:"text"`
+	Logprobs       *[]ResponsesTokenLogprob `json:"logprobs,omitempty"`
+	SequenceNumber int                      `json:"sequence_number"`
+}
+
+// ResponsesReasoningSummaryPartEvent encodes reasoning_summary_part.added
+// and reasoning_summary_part.done frames.
+type ResponsesReasoningSummaryPartEvent struct {
+	Type           string               `json:"type"`
+	ItemID         string               `json:"item_id"`
+	OutputIndex    int                  `json:"output_index"`
+	SummaryIndex   int                  `json:"summary_index"`
+	Part           ResponsesSummaryPart `json:"part"`
+	SequenceNumber int                  `json:"sequence_number"`
 }
 
 // ResponsesRefusalDeltaEvent is the frame shape for refusal.delta.
@@ -154,3 +183,4 @@ func (ResponsesReasoningSummaryDeltaEvent) isResponsesStreamEvent() {}
 func (ResponsesReasoningSummaryDoneEvent) isResponsesStreamEvent()  {}
 func (ResponsesFunctionArgsDeltaEvent) isResponsesStreamEvent()     {}
 func (ResponsesFunctionArgsDoneEvent) isResponsesStreamEvent()      {}
+func (ResponsesReasoningSummaryPartEvent) isResponsesStreamEvent()  {}

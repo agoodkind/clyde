@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 )
 
-// streamMessageUsage is the usage object inside a message_start event.
+// The decoder stores nil for a cache count that message_start omits or sets
+// to null.
 type streamMessageUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	InputTokens              int  `json:"input_tokens"`
+	OutputTokens             int  `json:"output_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // streamMessage is the message object inside a message_start event.
@@ -86,14 +87,18 @@ type streamMessageDeltaPayload struct {
 	StopReason string `json:"stop_reason"`
 }
 
-// streamMessageDeltaUsage is the usage delta on a message_delta event
-// (only output_tokens is updated mid-stream). Cache token counts from
-// message_start are authoritative; message_delta may echo them for
-// completeness.
+// streamMessageDeltaUsage decodes the usage object in a message_delta
+// event. handleSSEMessageDelta copies each positive count into Usage.
 type streamMessageDeltaUsage struct {
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	OutputTokens             int                             `json:"output_tokens"`
+	CacheCreationInputTokens int                             `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int                             `json:"cache_read_input_tokens,omitempty"`
+	OutputTokensDetails      *streamMessageOutputTokenDetail `json:"output_tokens_details,omitempty"`
+}
+
+// output_tokens includes ThinkingTokens.
+type streamMessageOutputTokenDetail struct {
+	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 
 // streamMessageDeltaEvent is the full payload for `event: message_delta`.
@@ -178,8 +183,15 @@ func handleSSEMessageStart(data string, usage *Usage) {
 	}
 	usage.InputTokens = ev.Message.Usage.InputTokens
 	usage.OutputTokens = ev.Message.Usage.OutputTokens
-	usage.CacheCreationInputTokens = ev.Message.Usage.CacheCreationInputTokens
-	usage.CacheReadInputTokens = ev.Message.Usage.CacheReadInputTokens
+	creation := ev.Message.Usage.CacheCreationInputTokens
+	read := ev.Message.Usage.CacheReadInputTokens
+	if creation != nil {
+		usage.CacheCreationInputTokens = *creation
+	}
+	if read != nil {
+		usage.CacheReadInputTokens = *read
+	}
+	usage.CacheCountsReported = creation != nil && read != nil
 }
 
 func handleSSEContentBlockStart(data string, sink EventSink, blockTypes map[int]string) error {
@@ -283,6 +295,10 @@ func handleSSEMessageDelta(data string, usage *Usage, stop *string) {
 	}
 	if ev.Usage.CacheReadInputTokens > 0 {
 		usage.CacheReadInputTokens = ev.Usage.CacheReadInputTokens
+	}
+	if details := ev.Usage.OutputTokensDetails; details != nil && details.ThinkingTokens != nil {
+		thinking := *details.ThinkingTokens
+		usage.ThinkingTokens = &thinking
 	}
 }
 

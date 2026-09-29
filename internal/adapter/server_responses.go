@@ -61,7 +61,9 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	}
 	handledNative, nativeErr := s.tryDispatchNativeCodexResponses(ctx, w, r, reqID, wireBody, body, corr)
 	if nativeErr != nil {
-		return nativeErr
+		// tryDispatchNativeCodexResponses returns an error only after it
+		// classifies the request for native Codex raw forwarding.
+		return markRawForwardingError(nativeErr)
 	}
 	if handledNative {
 		return nil
@@ -99,6 +101,11 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	if overrideErr := s.applyBackendOverride(r, req, &resolvedReq, reqID); overrideErr != nil {
 		return overrideErr
 	}
+	if listenerFollowsDocumentedContract(ctx) {
+		if rejectErr := documentedResponsesRejection(rr, resolvedReq.Provider, droppedTools); rejectErr != nil {
+			return rejectErr
+		}
+	}
 	if preErr := s.preflightChat(ctx, &req, &resolvedReq, reqID); preErr != nil {
 		return preErr
 	}
@@ -107,15 +114,44 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 		return nil
 	}
 
-	// The compatibility boundary describes which request fields the resolved
-	// provider omits or overrides, plus the built-in / custom tool types the
-	// projection dropped. It reads the raw body for top-level field presence
-	// and never performs the omission itself.
-	warningValues := adaptercompat.ResponsesWarningValues{N: rr.N, ToolChoice: rr.ToolChoice}
-	warnings := adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, warningValues, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
+	// The Cursor listener warns about request fields that the resolved
+	// provider omits or overrides and about built-in or custom tool types
+	// that the Chat translation drops. The warning code reads top-level field
+	// presence and never removes a field. The generic OpenAI listener
+	// already rejected those fields and computes no warnings.
+	var warnings adaptercompat.WarningSet
+	if !listenerFollowsDocumentedContract(ctx) {
+		warningValues := adaptercompat.ResponsesWarningValues{N: rr.N, ToolChoice: rr.ToolChoice}
+		warnings = adaptercompat.ComputeWarningsFromResponsesPresence(func(param string) int { return int(rr.Fields.Presence(param)) }, warningValues, resolvedReq.Provider, adaptercompat.EndpointResponses, droppedTools)
+	}
 
 	s.dispatchResolvedResponsesWithID(w, r, req, reqID, responseID, body, resolvedReq, warnings)
 	return nil
+}
+
+// handleResponses runs documentedResponsesRejection on the generic OpenAI
+// listener before any provider request starts. The Cursor listener returns
+// compatibility warnings for the same fields instead.
+func documentedResponsesRejection(rr adapteropenai.ResponsesRequest, provider adapterresolver.ProviderID, droppedTools []string) *adapterError {
+	values := adaptercompat.ResponsesRequestValues{
+		N:             rr.N,
+		ToolChoice:    rr.ToolChoice,
+		Temperature:   rr.Temperature,
+		TopP:          rr.TopP,
+		TopLogprobs:   rr.TopLogprobs,
+		Background:    rr.Background,
+		Store:         rr.Store,
+		ParallelTools: rr.ParallelTools,
+		Truncation:    rr.Truncation,
+		ServiceTier:   rr.ServiceTier,
+		UnknownKeys:   rr.Fields.UnknownResponsesKeys(),
+	}
+	presenceFor := func(param string) int { return int(rr.Fields.Presence(param)) }
+	rejection, rejected := adaptercompat.ResponsesRejection(presenceFor, values, provider, droppedTools)
+	if !rejected {
+		return nil
+	}
+	return adapterErrRejectedParameter(rejection)
 }
 
 func (s *Server) tryDispatchNativeCodexResponses(
@@ -265,7 +301,7 @@ func (s *Server) dispatchNativeCodexResponses(
 		if v2Recovery != nil {
 			v2Recovery.ReleaseRecovery()
 		}
-		s.respondAdapterError(w, r, codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured))
+		s.respondAdapterError(w, r, markRawForwardingError(codexProviderAdapterError(adaptercodex.ErrCodexProviderNotConfigured)))
 		return
 	}
 	ctx, lifecycle := s.beginProviderRequestLifecycle(r.Context(), &resolved, "direct", requestID, resolved.Model, raw.Stream)
@@ -278,7 +314,7 @@ func (s *Server) dispatchNativeCodexResponses(
 		}
 		var result adapterprovider.Result
 		lifecycle.terminal(ctx, result, err)
-		s.respondAdapterError(w, r, codexProviderAdapterError(err))
+		s.respondAdapterError(w, r, markRawForwardingError(codexProviderAdapterError(err)))
 		return
 	}
 	streamingResponse := strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") ||
@@ -500,6 +536,9 @@ func (s *Server) dispatchResponsesStream(
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
 	}
+	if echo := documentedResponsesEcho(ctx, resolvedReq); echo != nil {
+		writer.useDocumentedContract(*echo)
+	}
 	if beginErr := writer.begin(); beginErr != nil {
 		s.log.LogAttrs(
 			ctx, slog.LevelWarn, "adapter.responses.begin_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", resolvedReq.RequestID),
@@ -586,23 +625,25 @@ func (s *Server) dispatchResponsesCollect(
 		}
 	}
 	status, incompleteDetails := adapteropenai.ResponsesTerminalForFinishReason(result.FinishReason)
-	output := responsesOutputFromEvents(responseID, collector.events, status)
+	output := responsesOutputFromEvents(responseID, collector.events, status, listenerFollowsDocumentedContract(ctx))
 	if result.FinalResponse != nil {
 		output = nil
 	}
 	resp := adapteropenai.BuildResponsesResponse(adapteropenai.ResponsesResponseParams{
-		ID:         responseID,
-		Model:      alias,
-		CreatedAt:  clock.Now().Unix(),
-		Status:     status,
-		Text:       text,
-		Reasoning:  reasoning,
-		Refusal:    refusal,
-		ToolCalls:  toolCalls,
-		Output:     output,
-		Usage:      &usage,
-		ItemIDBase: responsesItemBase(responseID),
-		Warnings:   warnings,
+		ID:              responseID,
+		Model:           alias,
+		CreatedAt:       clock.Now().Unix(),
+		Status:          status,
+		Text:            text,
+		Reasoning:       reasoning,
+		Refusal:         refusal,
+		ToolCalls:       toolCalls,
+		Output:          output,
+		Usage:           &usage,
+		ItemIDBase:      responsesItemBase(responseID),
+		Warnings:        warnings,
+		Echo:            documentedResponsesEcho(ctx, resolvedReq),
+		DocumentedUsage: listenerFollowsDocumentedContract(ctx),
 	})
 	resp.IncompleteDetails = incompleteDetails
 	body, marshalErr := json.Marshal(resp)
@@ -611,6 +652,14 @@ func (s *Server) dispatchResponsesCollect(
 		return
 	}
 	writeJSON(w, body)
+}
+
+func documentedResponsesEcho(ctx context.Context, resolvedReq adapterresolver.ResolvedRequest) *adapteropenai.ResponsesEcho {
+	if !listenerFollowsDocumentedContract(ctx) || resolvedReq.Responses == nil {
+		return nil
+	}
+	echo := adapteropenai.NewResponsesEcho(*resolvedReq.Responses)
+	return &echo
 }
 
 // responsesFieldsFromChatResponse extracts the assistant text, reasoning,

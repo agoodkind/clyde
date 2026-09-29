@@ -178,8 +178,8 @@ func writeResponseFeedbackEvents(
 	events := []ResponsesStreamEvent{
 		ResponsesOutputItemEvent{Type: ResponsesEventOutputItemAdded, OutputIndex: outputIndex, Item: emptyItem, SequenceNumber: firstSequence},
 		ResponsesContentPartEvent{Type: ResponsesEventContentPartAdded, ItemID: item.ID, OutputIndex: outputIndex, ContentIndex: 0, Part: emptyPart, SequenceNumber: firstSequence + 1},
-		ResponsesOutputTextDeltaEvent{Type: ResponsesEventOutputTextDelta, ItemID: item.ID, OutputIndex: outputIndex, ContentIndex: 0, Delta: completePart.Text, SequenceNumber: firstSequence + 2},
-		ResponsesOutputTextDoneEvent{Type: ResponsesEventOutputTextDone, ItemID: item.ID, OutputIndex: outputIndex, ContentIndex: 0, Text: completePart.Text, SequenceNumber: firstSequence + 3},
+		ResponsesOutputTextDeltaEvent{Type: ResponsesEventOutputTextDelta, ItemID: item.ID, OutputIndex: outputIndex, ContentIndex: 0, Delta: completePart.Text, Logprobs: nil, SequenceNumber: firstSequence + 2},
+		ResponsesOutputTextDoneEvent{Type: ResponsesEventOutputTextDone, ItemID: item.ID, OutputIndex: outputIndex, ContentIndex: 0, Text: completePart.Text, Logprobs: nil, SequenceNumber: firstSequence + 3},
 		ResponsesContentPartEvent{Type: ResponsesEventContentPartDone, ItemID: item.ID, OutputIndex: outputIndex, ContentIndex: 0, Part: completePart, SequenceNumber: firstSequence + 4},
 		ResponsesOutputItemEvent{Type: ResponsesEventOutputItemDone, OutputIndex: outputIndex, Item: item, SequenceNumber: firstSequence + 5},
 	}

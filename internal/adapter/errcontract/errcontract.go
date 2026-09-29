@@ -43,7 +43,30 @@ type ErrorInfo struct {
 	// string, so the generic boundary stays blind to envelope syntax.
 	UpstreamStatus int
 	Diagnostics    *ErrorDiagnostics
+	// Contract selects the error contract that the family renderer encodes.
+	// The zero value selects the compatibility contract.
+	Contract ClientContract
+	// Status stores the HTTP status that the adapter error writer chose. A
+	// renderer encoding ClientContractDocumented derives error.type from
+	// Status. StreamErrorRenderer.WriteStreamError has no status argument
+	// and reads Status instead.
+	Status int
 }
+
+// ClientContract selects the error contract a family renderer encodes. The
+// adapter error writers choose it from the accepting listener label, never
+// from request headers or body content.
+type ClientContract string
+
+const (
+	// ClientContractCompatibility selects the error shape that the family
+	// mapper and renderer produce by default.
+	ClientContractCompatibility ClientContract = ""
+	// ClientContractDocumented selects the vendor's documented error
+	// contract. The OpenAI renderer derives error.type from the documented
+	// HTTP status.
+	ClientContractDocumented ClientContract = "documented"
+)
 
 // ErrorDiagnostics carries primitive, client-visible breadcrumbs that let an
 // operator or follow-up LLM jump from a displayed provider error back to the

@@ -90,7 +90,7 @@ func (c *Client) StreamEvents(ctx context.Context, req Request, sink EventSink) 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	usage := Usage{InputTokens: 0, OutputTokens: 0, CacheCreationInputTokens: 0, CacheReadInputTokens: 0}
+	usage := Usage{InputTokens: 0, OutputTokens: 0, CacheCreationInputTokens: 0, CacheReadInputTokens: 0, CacheCountsReported: false, ThinkingTokens: nil}
 	stopReason := ""
 	blockTypes := make(map[int]string)
 

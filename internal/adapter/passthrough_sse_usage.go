@@ -944,7 +944,7 @@ func (p *passthroughUsageJSONParser) recordUsageNumber(value int) {
 			usage.container == passthroughJSONObject && usage.pathKey == passthroughUsageKeyUsage &&
 			details.container == passthroughJSONObject && details.pathKey == passthroughUsageKeyInputTokensDetails &&
 			details.currentKey == passthroughUsageKeyCachedTokens {
-			p.usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: value}
+			p.usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: value, CacheWriteTokens: nil, CompatibilityOmitsUncached: false}
 		}
 	}
 }

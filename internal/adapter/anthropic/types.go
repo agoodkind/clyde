@@ -401,15 +401,22 @@ type Thinking struct {
 	Display      string `json:"display,omitempty"`
 }
 
-// Usage mirrors the prompt/completion token counts from the response.
-// CacheCreationInputTokens is the count of input tokens written into
-// the prompt cache on this request; CacheReadInputTokens is the count
-// served from cache. Both are zero when prompt caching is disabled.
+// Usage stores the token counts from a Messages response.
+// CacheCreationInputTokens counts input tokens this request wrote to the
+// prompt cache. CacheReadInputTokens counts input tokens the request read
+// from the cache. Both counts are zero when prompt caching is off.
+//
+// CacheCountsReported is true when message_start sends both cache counts as
+// numbers. ThinkingTokens stores message_delta
+// usage.output_tokens_details.thinking_tokens and is nil when the upstream
+// omits that count.
 type Usage struct {
 	InputTokens              int
 	OutputTokens             int
 	CacheCreationInputTokens int
 	CacheReadInputTokens     int
+	CacheCountsReported      bool
+	ThinkingTokens           *int
 }
 
 // Sink receives a single text delta chunk during streaming. Empty

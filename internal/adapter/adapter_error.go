@@ -125,6 +125,13 @@ func adapterErrInvalidRequest(message string, cause error) *adapterError {
 	return e
 }
 
+func adapterErrRejectedParameter(rejection adaptercompat.Rejection) *adapterError {
+	e := newAdapterError(adapterErrorInvalidRequest, rejection.Message)
+	e.Code = rejection.Code
+	e.Param = rejection.Param
+	return e
+}
+
 func adapterErrModelNotFound(message string) *adapterError {
 	return newAdapterError(adapterErrorModelNotFound, message)
 }
@@ -216,6 +223,54 @@ func (e *adapterError) applyDefaults() {
 	}
 }
 
+// writeShapedError and respondAdapterStreamError encode a rawForwardingError
+// with the compatibility contract on every listener. Only requests that the
+// adapter translates receive the documented contract.
+type rawForwardingError struct {
+	cause error
+}
+
+func (e *rawForwardingError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *rawForwardingError) Unwrap() error {
+	return e.cause
+}
+
+func markRawForwardingError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &rawForwardingError{cause: err}
+}
+
+// errorContractForRequest returns the compatibility contract for raw
+// forwarding errors.
+func errorContractForRequest(ctx context.Context, family adapterRouteFamily, err error) errcontract.ClientContract {
+	var forwarding *rawForwardingError
+	if errors.As(err, &forwarding) {
+		return errcontract.ClientContractCompatibility
+	}
+	return errorContractForListener(ctx, family)
+}
+
+// errorContractForListener returns the documented contract only for an
+// OpenAI family request on the "openai" listener.
+func errorContractForListener(ctx context.Context, family adapterRouteFamily) errcontract.ClientContract {
+	if family == adapterRouteOpenAI && listenerFollowsDocumentedContract(ctx) {
+		return errcontract.ClientContractDocumented
+	}
+	return errcontract.ClientContractCompatibility
+}
+
+func applyContractShape(family adapterRouteFamily, contract errcontract.ClientContract, aerr *adapterError) *adapterError {
+	if contract == errcontract.ClientContractDocumented {
+		return applyDocumentedShape(aerr)
+	}
+	return applyFamilyShape(family, aerr)
+}
+
 func adapterRouteFamilyForPath(path string) adapterRouteFamily {
 	switch {
 	case strings.HasPrefix(path, "/v1/messages"):
@@ -259,7 +314,8 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
 	family := adapterRouteFamilyForPath(r.URL.Path)
-	aerr = applyFamilyShape(family, aerr)
+	contract := errorContractForRequest(r.Context(), family, err)
+	aerr = applyContractShape(family, contract, aerr)
 	corr := correlationForRequest(r)
 	message := aerr.Message
 	if !aerr.SafeForClient {
@@ -288,6 +344,8 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 	attrs = append(attrs, corr.Attrs()...)
 	s.adapterErrorLog().LogAttrs(r.Context(), slog.LevelWarn, "adapter.error.responded", attrs...)
 	info := adapterErrorInfoForRequest(family, aerr, message, corr, r)
+	info.Contract = contract
+	info.Status = aerr.HTTPStatus
 	renderer, ok := s.lookupErrorRenderer(family)
 	if !ok {
 		s.writeFallbackError(r.Context(), w, family, aerr.HTTPStatus, info)
@@ -332,6 +390,8 @@ func adapterErrorInfoForFamily(_ adapterRouteFamily, aerr *adapterError, message
 			Param:          "",
 			UpstreamStatus: 0,
 			Diagnostics:    nil,
+			Contract:       errcontract.ClientContractCompatibility,
+			Status:         http.StatusInternalServerError,
 		}
 	}
 	aerr.applyDefaults()
@@ -346,6 +406,8 @@ func adapterErrorInfoForFamily(_ adapterRouteFamily, aerr *adapterError, message
 		Param:          aerr.Param,
 		UpstreamStatus: aerr.UpstreamStatus,
 		Diagnostics:    nil,
+		Contract:       errcontract.ClientContractCompatibility,
+		Status:         aerr.HTTPStatus,
 	}
 }
 
@@ -521,7 +583,8 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse errcontract.
 	if aerr == nil {
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
-	aerr = applyFamilyShape(adapterRouteOpenAI, aerr)
+	contract := errorContractForRequest(ctx, adapterRouteOpenAI, err)
+	aerr = applyContractShape(adapterRouteOpenAI, contract, aerr)
 	message := aerr.Message
 	if !aerr.SafeForClient {
 		message = "adapter internal error"
@@ -530,6 +593,8 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse errcontract.
 	message = maybeAppendClydeRequestID(adapterRouteOpenAI, aerr, message, corr.RequestID)
 	info := adapterErrorInfoForFamily(adapterRouteOpenAI, aerr, message)
 	info.Diagnostics = errorDiagnosticsForRequest(adapterRouteOpenAI, aerr, corr, nil)
+	info.Contract = contract
+	info.Status = aerr.HTTPStatus
 	renderer, ok := s.lookupStreamErrorRenderer(adapterRouteOpenAI)
 	if !ok {
 		return fmt.Errorf("no stream error renderer registered for route family %q", adapterRouteOpenAI)

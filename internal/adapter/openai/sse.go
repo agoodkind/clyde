@@ -24,6 +24,46 @@ type SSEWriter struct {
 	w                http.ResponseWriter
 	f                http.Flusher
 	headersCommitted bool
+	// When explicitNullUsage is true, EmitStreamChunk writes "usage":null on
+	// a chunk without usage. The Chat Completions contract requires that
+	// member on every ordinary chunk when stream_options.include_usage is
+	// true.
+	explicitNullUsage bool
+}
+
+// SetExplicitNullUsage makes a chunk without usage write "usage":null
+// instead of omitting the member.
+func (sw *SSEWriter) SetExplicitNullUsage(enabled bool) {
+	sw.explicitNullUsage = enabled
+}
+
+// streamChunkNullUsageWire writes a nil Usage as JSON null instead of
+// omitting the member.
+type streamChunkNullUsageWire struct {
+	ID                string         `json:"id"`
+	Object            string         `json:"object"`
+	Created           int64          `json:"created"`
+	Model             string         `json:"model"`
+	Choices           []StreamChoice `json:"choices"`
+	Usage             *Usage         `json:"usage"`
+	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
+}
+
+func (sw *SSEWriter) marshalStreamChunk(chunk StreamChunk) ([]byte, error) {
+	if !sw.explicitNullUsage {
+		encoded, err := json.Marshal(chunk)
+		if err != nil {
+			slog.Warn("adapter.openai_sse.marshal_stream_chunk_failed", "concern", "adapter.chat.render", "err", err)
+			return nil, fmt.Errorf("marshal stream chunk: %w", err)
+		}
+		return encoded, nil
+	}
+	encoded, err := json.Marshal(streamChunkNullUsageWire(chunk))
+	if err != nil {
+		slog.Warn("adapter.openai_sse.marshal_null_usage_chunk_failed", "concern", "adapter.chat.render", "err", err)
+		return nil, fmt.Errorf("marshal stream chunk with null usage: %w", err)
+	}
+	return encoded, nil
 }
 
 // NewSSEWriter is part of Clyde's typed adapter surface.
@@ -32,10 +72,7 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	if !ok {
 		return nil, ErrSSENoFlusher
 	}
-	return &SSEWriter{w: w, f: f, headersCommitted:
-
-	// WriteSSEHeaders is part of Clyde's typed adapter surface.
-	false}, nil
+	return &SSEWriter{w: w, f: f, headersCommitted: false, explicitNullUsage: false}, nil
 }
 
 // WriteSSEHeaders is part of Clyde's typed adapter surface.
@@ -56,7 +93,7 @@ func (sw *SSEWriter) WriteSSEHeaders() {
 func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk) error {
 	sw.WriteSSEHeaders()
 	chunk.SystemFingerprint = systemFingerprint
-	b, err := json.Marshal(chunk)
+	b, err := sw.marshalStreamChunk(chunk)
 	if err != nil {
 		slog.Warn("adapter.openai_sse.marshal_chunk_failed", "concern", "adapter.chat.render", "err", err)
 		return fmt.Errorf("marshal OpenAI stream chunk: %w", err)
@@ -144,10 +181,7 @@ func (r StreamErrorRenderer) WriteStreamError(w errcontract.StreamErrorWriter, i
 }
 
 func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
-	envelopeType := info.Type
-	if envelopeType == "" {
-		envelopeType = openAITypeForClass(info.Class)
-	}
+	envelopeType := envelopeTypeFor(info.Status, info)
 	body := ErrorBody{
 		Message: info.Message,
 		Type:    envelopeType,

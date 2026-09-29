@@ -127,6 +127,21 @@ Ordinary test runs still cover the handler and compatibility contracts through t
 [compat warning surfaces test](../../internal/adapter/server_responses_compat_test.go),
 and [compat catalog tests](../../internal/adapter/compat/compat_test.go).
 
+## Run the OpenAI SDK smoke test
+
+The SDK smoke test runs the official OpenAI Python SDK against the generic OpenAI listener and a local Codex upstream. It validates every response and stream event with the SDK's Pydantic models. It skips unless `CLYDE_OPENAI_SDK_PYTHON` is set.
+
+1. Create a virtual environment outside the repository and install the SDK:
+
+       uv venv "${TMPDIR:-/tmp}/openai-sdk"
+       uv pip install --python "${TMPDIR:-/tmp}/openai-sdk/bin/python" openai
+
+2. Run the test with the interpreter path:
+
+       CLYDE_OPENAI_SDK_PYTHON="${TMPDIR:-/tmp}/openai-sdk/bin/python" go test ./internal/adapter/ -run TestOpenAISDKSmoke -v
+
+The [OpenAI conformance matrix](../adapter/openai-conformance.md) records the SDK version the matrix was checked against.
+
 ## Native Codex Responses validation
 
 Native route tests use a real HTTP boundary and SQLite capture database. They

@@ -85,7 +85,7 @@ func (e *NativePatchInputError) Error() string {
 func NewRunResult(finishReason string) RunResult {
 	return RunResult{
 		FinishReason: finishreason.FromCodex(finishReason), Usage: adapteropenai.
-				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
 
 		UsageTelemetry: UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0},
 
@@ -124,8 +124,11 @@ type completedUsage struct {
 	TotalTokens         int                           `json:"total_tokens"`
 }
 
+// CacheWriteTokens is nil when the upstream omits cache_write_tokens. The
+// Codex client also decodes that field as optional.
 type completedInputTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens     int  `json:"cached_tokens"`
+	CacheWriteTokens *int `json:"cache_write_tokens"`
 }
 
 type completedOutputTokensDetails struct {
@@ -734,7 +737,7 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 	if err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{
 			Usage: adapteropenai.
-				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
 
 			UsageTelemetry: UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0},
 

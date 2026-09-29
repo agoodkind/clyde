@@ -974,19 +974,19 @@ func passthroughOverrideUsageFromBody(body []byte) Usage {
 		wire.CompletionTokens = wire.OutputTokens
 	}
 	if wire.PromptTokens == 0 && wire.CompletionTokens == 0 && wire.TotalTokens == 0 {
-		return Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0}
+		return Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0}
 	}
 	usage := Usage{
 		PromptTokens:     wire.PromptTokens,
 		CompletionTokens: wire.CompletionTokens,
-		TotalTokens:      wire.TotalTokens, PromptTokensDetails: nil, InputTokens: wire.InputTokens, OutputTokens: wire.OutputTokens, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+		TotalTokens:      wire.TotalTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: wire.InputTokens, OutputTokens: wire.OutputTokens, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
 	}
 	cachedTokens := wire.PromptDetails.CachedTokens
 	if wire.InputDetails.CachedTokens > 0 {
 		cachedTokens = wire.InputDetails.CachedTokens
 	}
 	if cachedTokens > 0 {
-		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: cachedTokens}
+		usage.PromptTokensDetails = &PromptTokensDetails{CachedTokens: cachedTokens, CacheWriteTokens: nil, CompatibilityOmitsUncached: false}
 	}
 	return usage
 }

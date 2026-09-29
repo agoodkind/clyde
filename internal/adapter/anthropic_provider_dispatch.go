@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -68,7 +67,7 @@ func (s *Server) dispatchAnthropicProviderCollect(
 	if len(notices) > 0 {
 		finalResponse = updated
 	}
-	respBody, err := json.Marshal(finalResponse)
+	respBody, err := marshalChatResponseForListener(ctx, finalResponse)
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.anthropic.collect_marshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
 		return fmt.Errorf("marshal anthropic collect response: %w", err)
@@ -88,11 +87,12 @@ func (s *Server) dispatchAnthropicProviderStream(
 	if err != nil {
 		return adapterErrInternal(err.Error(), err)
 	}
+	includeUsage := resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage
+	streamWriter.configureStreamUsage(includeUsage)
 	ctx, lifecycle := s.beginProviderRequestLifecycle(ctx, &resolvedReq, "oauth", reqID, resolvedReq.Model, true)
 	streamWriter.onStreamOpened = func() { lifecycle.streamOpened(ctx) }
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
 	lifecycle.terminal(ctx, result, runErr)
-	includeUsage := resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage
 	// Anthropic streams sometimes end with a non-nil runErr after the
 	// answer text has fully streamed (a late SSE error frame, a
 	// scanner error, or a non-clean upstream close). When that
@@ -619,15 +619,16 @@ func anthropicProviderResultFromResponse(resp *adapteropenai.ChatResponse) adapt
 
 func emptyAnthropicOpenAIUsage() adapteropenai.Usage {
 	return adapteropenai.Usage{
-		PromptTokens:        0,
-		CompletionTokens:    0,
-		TotalTokens:         0,
-		PromptTokensDetails: nil,
-		InputTokens:         0,
-		OutputTokens:        0,
-		CacheReadTokens:     0,
-		CacheWriteTokens:    0,
-		MaxTokens:           0,
+		PromptTokens:            0,
+		CompletionTokens:        0,
+		TotalTokens:             0,
+		PromptTokensDetails:     nil,
+		CompletionTokensDetails: nil,
+		InputTokens:             0,
+		OutputTokens:            0,
+		CacheReadTokens:         0,
+		CacheWriteTokens:        0,
+		MaxTokens:               0,
 	}
 }
 

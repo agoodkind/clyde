@@ -155,14 +155,15 @@ func (p *Provider) ExecutePrepared(ctx context.Context, req PreparedRequest, w a
 
 func emptyOpenAIUsage() openai.Usage {
 	return openai.Usage{
-		PromptTokens:        0,
-		CompletionTokens:    0,
-		TotalTokens:         0,
-		PromptTokensDetails: nil,
-		InputTokens:         0,
-		OutputTokens:        0,
-		CacheReadTokens:     0,
-		CacheWriteTokens:    0,
-		MaxTokens:           0,
+		PromptTokens:            0,
+		CompletionTokens:        0,
+		TotalTokens:             0,
+		PromptTokensDetails:     nil,
+		CompletionTokensDetails: nil,
+		InputTokens:             0,
+		OutputTokens:            0,
+		CacheReadTokens:         0,
+		CacheWriteTokens:        0,
+		MaxTokens:               0,
 	}
 }
