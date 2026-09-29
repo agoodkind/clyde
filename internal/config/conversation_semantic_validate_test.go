@@ -144,10 +144,11 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 }
 
 // TestConversationSemanticEmbeddedBackendChecksRequiredSettings selects the
-// embedded backend three times. The first load omits pool_id and fails on that
+// embedded backend four times. The first load omits pool_id and fails on that
 // key. The second load sets a relative catalog_path and fails on the absolute
-// path requirement. The third load sets a complete section and fails because
-// this build has no embedded runtime.
+// path requirement. The third load sets a complete ingestion-only section and
+// succeeds. The fourth load adds search_enabled = true and fails because this
+// build has no embedded search.
 func TestConversationSemanticEmbeddedBackendChecksRequiredSettings(t *testing.T) {
 	t.Parallel()
 
@@ -163,9 +164,18 @@ func TestConversationSemanticEmbeddedBackendChecksRequiredSettings(t *testing.T)
 		t.Fatalf("relative catalog_path error = %v, want the absolute path requirement", err)
 	}
 
-	_, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\n"+embeddedSemanticSettings)
-	if err == nil || !strings.Contains(err.Error(), "is not available in this Clyde build") {
-		t.Fatalf("complete embedded section error = %v, want the unavailable runtime error", err)
+	cfg, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\ningestion_enabled = true\n"+embeddedSemanticSettings)
+	if err != nil {
+		t.Fatalf("load complete ingestion-only embedded section: %v", err)
+	}
+	semantic := cfg.Conversation.Semantic
+	if semantic.Backend != ConversationSemanticBackendEmbedded || !semantic.FeedsEngine() || semantic.AnswersSearch() {
+		t.Fatalf("backend/feeds/answers = %q/%v/%v, want embedded/true/false", semantic.Backend, semantic.FeedsEngine(), semantic.AnswersSearch())
+	}
+
+	_, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\nsearch_enabled = true\n"+embeddedSemanticSettings)
+	if err == nil || !strings.Contains(err.Error(), "embedded search is not available in this Clyde build") {
+		t.Fatalf("embedded section with search enabled error = %v, want the unavailable search error", err)
 	}
 }
 

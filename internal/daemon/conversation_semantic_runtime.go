@@ -186,6 +186,11 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 	if cfg == nil || !cfg.Conversation.Semantic.UsesEngine() {
 		return nil
 	}
+	// The embedded backend opens the in-process library in its ingestion worker
+	// and never dials the lm-semantic-search daemon.
+	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
+		return nil
+	}
 	if log == nil {
 		log = slog.Default()
 	}

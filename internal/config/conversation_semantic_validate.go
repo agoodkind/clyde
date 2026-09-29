@@ -17,7 +17,8 @@ const conversationSemanticKey = "conversation.semantic."
 // expands the catalog and lock paths, and rejects values the embedded library
 // cannot accept. The range checks run for every backend. After the embedded
 // backend settings pass their required checks, the function rejects
-// `backend = "embedded"`, because this build has no embedded runtime.
+// `backend = "embedded"` together with `search_enabled = true`, because this
+// build contains embedded ingestion and no embedded search.
 func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConfig) error {
 	normalizeConversationSemanticStrings(semantic)
 	if err := validateConversationSemanticBackend(semantic.Backend); err != nil {
@@ -41,7 +42,14 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 	if err := validateEmbeddedConversationSemanticRequired(semantic); err != nil {
 		return err
 	}
-	return invalidConversationSemanticSetting("backend", fmt.Sprintf("= %q is not available in this Clyde build; remove the key to use the lm-semantic-search daemon", ConversationSemanticBackendEmbedded))
+	if semantic.SearchEnabled {
+		return invalidConversationSemanticSetting("backend", fmt.Sprintf(
+			"= %q requires %ssearch_enabled = false, because embedded search is not available in this Clyde build",
+			ConversationSemanticBackendEmbedded,
+			conversationSemanticKey,
+		))
+	}
+	return nil
 }
 
 // invalidConversationSemanticSetting logs one rejected setting and returns an
