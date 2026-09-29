@@ -84,7 +84,8 @@ const (
 	// verified the matched message against the stored occurrence.
 	SearchContextStateAvailable SearchContextState = "available"
 	// SearchContextStateUnavailable means the transcript is missing or no longer
-	// matches the stored occurrence, so only the stored excerpt is returned.
+	// matches the stored occurrence. The source returns only the stored excerpt
+	// as ContextWindow.
 	SearchContextStateUnavailable SearchContextState = "unavailable"
 )
 

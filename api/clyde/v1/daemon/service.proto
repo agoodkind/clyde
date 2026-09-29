@@ -286,7 +286,7 @@ enum SearchContextState {
   // message against the stored occurrence.
   SEARCH_CONTEXT_STATE_AVAILABLE = 2;
   // UNAVAILABLE means the transcript is missing or no longer matches the stored
-  // occurrence, so only the stored excerpt is returned.
+  // occurrence. The source returns only the stored excerpt as context_window.
   SEARCH_CONTEXT_STATE_UNAVAILABLE = 3;
 }
 

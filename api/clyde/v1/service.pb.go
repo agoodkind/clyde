@@ -36,7 +36,7 @@ const (
 	// message against the stored occurrence.
 	SearchContextState_SEARCH_CONTEXT_STATE_AVAILABLE SearchContextState = 2
 	// UNAVAILABLE means the transcript is missing or no longer matches the stored
-	// occurrence, so only the stored excerpt is returned.
+	// occurrence. The source returns only the stored excerpt as context_window.
 	SearchContextState_SEARCH_CONTEXT_STATE_UNAVAILABLE SearchContextState = 3
 )
 
