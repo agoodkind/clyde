@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -30,7 +31,9 @@ type embeddedConversationDelivery struct {
 	outbox        *conversationSemanticOutbox
 	maxBatchRows  int
 	maxBatchBytes int64
-	log           *slog.Logger
+	// maxReplayBytes bounds the stored row bytes that one replay attempts.
+	maxReplayBytes int64
+	log            *slog.Logger
 }
 
 // embeddedGeneration is one owner generation: its outbox batch, its rows, and
@@ -239,6 +242,9 @@ type embeddedReplayResult struct {
 	counts embeddedDeliveryCounts
 	// replayed counts pending batches that this replay acknowledged.
 	replayed int
+	// deferred counts pending batches that this replay did not attempt after
+	// the replay stopped.
+	deferred int
 	// blockedOwners lists owners with a pending batch that this replay did not
 	// acknowledge, and owners with a blocked batch or projection. A new
 	// generation for such an owner would take the same order. A pass delivers
@@ -246,11 +252,24 @@ type embeddedReplayResult struct {
 	blockedOwners map[string]bool
 }
 
-// replayPending publishes every pending outbox batch from its stored rows. The
-// stored seal must equal the seal of the stored rows. CommitGeneration returns
-// the saved receipt for a token that the library already committed, and the
-// replay acknowledges that receipt. A blocked batch is not pending and is never
-// replayed.
+// errReplayStoredRows wraps a replay failure that reading or sealing the stored
+// rows of one batch caused, before any library call.
+var errReplayStoredRows = errors.New("stored outbox rows are unreadable or do not match their seal")
+
+// replayPending publishes pending outbox batches from their stored rows in the
+// order the outbox recorded them. The stored seal must equal the seal of the
+// stored rows. CommitGeneration returns the saved receipt for a token that the
+// library already committed, and the replay acknowledges that receipt. A
+// blocked batch is not pending and is never replayed.
+//
+// One replay is bounded. It stops at the first batch that fails with a
+// transient library or embedding error. The next batch would call the same
+// endpoint while the pass keeps the store locked. The replay also starts a
+// batch only when no batch started yet or when the stored row bytes of the
+// attempted batches plus this batch stay within maxReplayBytes, the 8 MiB
+// delivery byte target. A permanent library error or a stored-row error does
+// not stop the replay. Every batch that the replay did not acknowledge,
+// attempted or not, keeps its owner out of delivery for this pass.
 func (delivery *embeddedConversationDelivery) replayPending(ctx context.Context) (embeddedReplayResult, error) {
 	var result embeddedReplayResult
 	result.blockedOwners = make(map[string]bool)
@@ -258,32 +277,71 @@ func (delivery *embeddedConversationDelivery) replayPending(ctx context.Context)
 	if err != nil {
 		return result, err
 	}
+	var attemptedBytes int64
+	stopped := false
 	for _, batch := range pending {
-		if ctx.Err() != nil {
+		if stopped || ctx.Err() != nil {
 			result.blockedOwners[batch.OwnerID] = true
+			result.deferred++
 			continue
 		}
-		counts, err := delivery.replayBatch(ctx, batch)
+		rows, rowsErr := delivery.outbox.batchRows(ctx, batch.BatchID)
+		rowBytes := embeddedOutboxRowBytes(rows)
+		if attemptedBytes > 0 && attemptedBytes+rowBytes > delivery.maxReplayBytes {
+			stopped = true
+			result.blockedOwners[batch.OwnerID] = true
+			result.deferred++
+			continue
+		}
+		attemptedBytes += rowBytes
+		counts, err := delivery.replayBatch(ctx, batch, rows, rowsErr)
 		result.counts.add(counts)
-		if err != nil {
-			result.blockedOwners[batch.OwnerID] = true
+		if err == nil {
+			result.replayed++
 			continue
 		}
-		result.replayed++
+		result.blockedOwners[batch.OwnerID] = true
+		if _, permanent := permanentLibraryErrorClass(err); !permanent && !errors.Is(err, errReplayStoredRows) {
+			stopped = true
+		}
+	}
+	if result.deferred > 0 {
+		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.replay_deferred",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"deferred_batches", result.deferred,
+			"attempted_bytes", attemptedBytes,
+			"max_replay_bytes", delivery.maxReplayBytes,
+		)
 	}
 	return result, nil
 }
 
-func (delivery *embeddedConversationDelivery) replayBatch(ctx context.Context, batch embeddedOutboxBatch) (embeddedDeliveryCounts, error) {
-	rows, err := delivery.outbox.batchRows(ctx, batch.BatchID)
-	if err != nil {
-		return embeddedDeliveryCounts{}, err
+// embeddedOutboxRowBytes returns the byte length of the source text, search
+// text, and embedding input of rows.
+func embeddedOutboxRowBytes(rows []embeddedOutboxRow) int64 {
+	var total int64
+	for _, row := range rows {
+		total += int64(len(row.Occurrence.SourceText) + len(row.Occurrence.SearchText) + len(row.Occurrence.EmbeddingInput))
 	}
+	return total
+}
+
+func (delivery *embeddedConversationDelivery) replayBatch(
+	ctx context.Context,
+	batch embeddedOutboxBatch,
+	rows []embeddedOutboxRow,
+	rowsErr error,
+) (embeddedDeliveryCounts, error) {
 	occurrences := make([]library.Occurrence, 0, len(rows))
 	for _, row := range rows {
 		occurrences = append(occurrences, row.Occurrence)
 	}
-	seal, err := library.SealRows(occurrences)
+	err := rowsErr
+	var seal library.GenerationSeal
+	if err == nil {
+		seal, err = library.SealRows(occurrences)
+	}
 	if err == nil && (seal.RowCount != batch.RowCount || seal.ManifestHash != batch.ManifestHash) {
 		err = fmt.Errorf("stored rows seal %d rows with manifest %s, the batch states %d rows with manifest %s",
 			seal.RowCount, seal.ManifestHash, batch.RowCount, batch.ManifestHash)
@@ -296,7 +354,7 @@ func (delivery *embeddedConversationDelivery) replayBatch(ctx context.Context, b
 			"batch_id", batch.BatchID,
 			"err", err,
 		)
-		return embeddedDeliveryCounts{}, fmt.Errorf("replay batch %s of %s: %w", batch.BatchID, batch.OwnerID, err)
+		return embeddedDeliveryCounts{}, fmt.Errorf("replay batch %s of %s: %w: %w", batch.BatchID, batch.OwnerID, errReplayStoredRows, err)
 	}
 	return delivery.publish(ctx, embeddedGeneration{batch: batch, rows: rows, seal: seal})
 }

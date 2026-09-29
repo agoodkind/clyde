@@ -164,11 +164,12 @@ func openEmbeddedConversationLibrary(
 		outbox:       outbox,
 		namespace:    namespace,
 		delivery: &embeddedConversationDelivery{
-			library:       opened,
-			outbox:        outbox,
-			maxBatchRows:  maxBatchRows,
-			maxBatchBytes: maxBatchBytes,
-			log:           log,
+			library:        opened,
+			outbox:         outbox,
+			maxBatchRows:   maxBatchRows,
+			maxBatchBytes:  maxBatchBytes,
+			maxReplayBytes: conversationSemanticBatchBytes,
+			log:            log,
 		},
 	}, nil
 }

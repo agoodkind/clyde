@@ -240,6 +240,7 @@ type embeddedSyncStats struct {
 	policySkipped    int
 	rows             int
 	replayed         int
+	replayDeferred   int
 	deliveryFailed   int
 	delivery         embeddedDeliveryCounts
 	// replayedProjections, reprojectedOwners, and reprojectionFailed count
@@ -287,6 +288,7 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	}
 	var stats embeddedSyncStats
 	stats.replayed = replay.replayed
+	stats.replayDeferred = replay.deferred
 	stats.delivery = replay.counts
 	stats.replayedProjections = replayedProjections
 	stampedRecords, err := w.embedded.records.ListAllWithStamps(ctx)
@@ -643,6 +645,7 @@ func (w *conversationSemanticSyncWorker) logEmbeddedPass(ctx context.Context, st
 		slog.Int64("embedding_stage_ms", stats.delivery.stageMilliseconds),
 		slog.Int("persistence_recorded_batches", stats.delivery.recordedBatches),
 		slog.Int("persistence_replayed_batches", stats.replayed),
+		slog.Int("persistence_replay_deferred_batches", stats.replayDeferred),
 		slog.Int("searchable_generations", stats.delivery.committedGenerations),
 		slog.Int("searchable_rows", stats.delivery.committedRows),
 		slog.Int("searchable_conversations", stats.completed),
