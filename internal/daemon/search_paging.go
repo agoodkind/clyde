@@ -66,9 +66,11 @@ func semanticSearchResult(
 		Limit:                normalizedLimit,
 		Offset:               normalizedOffset,
 		NextOffset:           normalizedOffset + len(matches),
-		// A page the over-fetch budget could not fill still has ranked hits
-		// behind it, so it must not be reported as the end of the results.
-		HasMore:          (len(matches) >= normalizedLimit && normalizedLimit > 0) || page.short,
+		// HasMore is true only on a page with at least one row. NextOffset is
+		// then greater than the request offset, and a caller that follows it
+		// never requests the same page again. A short page with rows reports
+		// HasMore because ranked hits remain after the over-fetch budget ran out.
+		HasMore:          len(matches) > 0 && (len(matches) >= normalizedLimit || page.short),
 		NextCursor:       "",
 		Source:           conversation.SearchSourceSemantic,
 		Facets:           conversation.ComputeFacets(matches, searchFacetTopN),

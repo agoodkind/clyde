@@ -13,17 +13,19 @@ import (
 )
 
 const (
-	// searchOverfetchAttempts bounds how many times one page is re-queried at a
-	// larger engine limit after hits that no longer resolve consumed ranked slots.
-	// Hidden subagent rows stay in the vector store under the retain reconcile
-	// mode and stay rankable, so without headroom every one of them costs the
-	// caller a result.
+	// searchOverfetchAttempts bounds how many times a page that already returned
+	// at least one row is re-queried at a larger engine limit after hits that no
+	// longer resolve consumed ranked slots. A page with no row keeps growing
+	// until the engine ranking window. Hidden subagent rows stay in the vector
+	// store under the retain reconcile mode and stay rankable, so without
+	// headroom every one of them costs the caller a result.
 	searchOverfetchAttempts = 3
 	// searchOverfetchFactor multiplies the engine limit on each retry.
 	searchOverfetchFactor = 4
-	// maxEngineOverfetchLimit caps the retry so one query can never ask the engine
-	// for an unbounded ranked set.
-	maxEngineOverfetchLimit = 2000
+	// maxEngineOverfetchLimit caps the retry at the engine ranking window. The
+	// engine ranks at most 16,384 rows for one query (lm-semantic-search
+	// CollectionRankingDepth) and returns no hit past that depth.
+	maxEngineOverfetchLimit = 16384
 )
 
 // engineSearchPage is one resolved page of engine hits.
@@ -39,8 +41,8 @@ type engineSearchPage struct {
 	// ranked hits exist beyond the ones this page saw.
 	truncated bool
 	// short reports a page that could not be filled while ranked hits were being
-	// withheld and the engine still had more, which is the one case where the
-	// caller must not be told the results are complete.
+	// withheld and the engine still had more inside its ranking window, which is
+	// the one case where the caller must not be told the results are complete.
 	short bool
 }
 
@@ -77,10 +79,11 @@ func emptySearchFilter() semsearch.SearchFilter {
 // engineSearchMatches resolves engine hits to cached records, skipping hits with
 // no record or that fail the request provider, workspace, or archived filter,
 // and returns the bounded page. A page that comes up short because hidden
-// conversations occupied ranked slots is re-queried at a larger engine limit, a
-// bounded number of times, so hiding a conversation cannot silently shrink a
-// result set. The engine wire filter carries no exclusion field, so the headroom
-// has to be taken clyde-side.
+// conversations occupied ranked slots is re-queried at a larger engine limit.
+// A page with at least one row stops after searchOverfetchAttempts queries. A
+// page with no row grows until the engine ranking window, and a page still
+// short at the window ends the results the engine can rank. The engine wire
+// filter has no exclusion field, and this function adds the headroom.
 //
 // Every engine failure stays a typed conversationSearchSourceError; only a
 // successful search may return an empty page.
@@ -122,21 +125,35 @@ func engineSearchMatches(
 		}
 		page = resolveEngineHits(idx, hits, limit, offset, options.IncludeArchived, engineLimit)
 		nextLimit := nextEngineOverfetchLimit(engineLimit)
-		if !page.needsMoreHeadroom(limit) || attempt >= searchOverfetchAttempts || nextLimit == engineLimit {
+		attemptsSpent := attempt >= searchOverfetchAttempts && len(page.matches) > 0
+		if !page.needsMoreHeadroom(limit) || attemptsSpent || nextLimit == engineLimit {
 			break
 		}
 		engineLimit = nextLimit
 	}
-	if page.needsMoreHeadroom(limit) {
-		page.short = true
-		slog.WarnContext(ctx, "daemon.search_conversations.page_short_after_overfetch", "concern", "process.daemon.lifecycle", "component", "daemon",
+	if !page.needsMoreHeadroom(limit) {
+		return page, nil
+	}
+	if engineLimit >= maxEngineOverfetchLimit {
+		slog.WarnContext(ctx, "daemon.search_conversations.page_truncated_at_engine_window", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"offset", offset,
 			"limit", limit,
 			"returned", len(page.matches),
 			"ranked", page.ranked,
 			"withheld", page.withheld,
 			"engine_limit", engineLimit,
 		)
+		return page, nil
 	}
+	page.short = true
+	slog.WarnContext(ctx, "daemon.search_conversations.page_short_after_overfetch", "concern", "process.daemon.lifecycle", "component", "daemon",
+		"offset", offset,
+		"limit", limit,
+		"returned", len(page.matches),
+		"ranked", page.ranked,
+		"withheld", page.withheld,
+		"engine_limit", engineLimit,
+	)
 	return page, nil
 }
 
