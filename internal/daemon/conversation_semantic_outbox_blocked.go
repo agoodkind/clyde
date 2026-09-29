@@ -59,7 +59,7 @@ func (outbox *conversationSemanticOutbox) blockBatch(
 }
 
 // blockProjection moves one pending projection to the blocked state with the
-// error class, the library owner order, and the time. It reports whether this
+// error class, the library projection order, and the time. It reports whether this
 // call made the transition.
 func (outbox *conversationSemanticOutbox) blockProjection(
 	ctx context.Context,

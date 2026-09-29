@@ -56,7 +56,7 @@ func (delivery *embeddedConversationDelivery) blockProjectionOnPermanentError(
 	if !permanent {
 		return
 	}
-	libraryOrder := delivery.libraryOwnerOrder(ctx, projection.Namespace, projection.OwnerID)
+	libraryOrder := delivery.libraryProjectionOrder(ctx, projection.Namespace, projection.OwnerID)
 	transitioned, blockErr := delivery.outbox.blockProjection(ctx, projection, class, libraryOrder)
 	if blockErr != nil || !transitioned {
 		return
@@ -70,6 +70,23 @@ func (delivery *embeddedConversationDelivery) blockProjectionOnPermanentError(
 		"library_order", libraryOrder,
 		"err", err,
 	)
+}
+
+// libraryProjectionOrder returns the highest saved ReprojectScalars order of
+// one owner from ListOwnerOccurrences. A failed read logs the error and
+// returns zero.
+func (delivery *embeddedConversationDelivery) libraryProjectionOrder(ctx context.Context, namespace string, ownerID string) uint64 {
+	listed, err := delivery.library.ListOwnerOccurrences(ctx, namespace, ownerID)
+	if err != nil {
+		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.owner_occurrences_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"conversation_id", ownerID,
+			"err", err,
+		)
+		return 0
+	}
+	return listed.ProjectionOrder
 }
 
 // libraryOwnerOrder returns the committed generation order of one owner. A
