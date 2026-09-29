@@ -26,6 +26,7 @@ require (
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
+	goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996
 	goodkind.io/go-makefile v0.0.0-20260929122444-d9d1d0827cd2
 	goodkind.io/lm-semantic-search v0.0.0-20260928132351-bdf15019d693
 	google.golang.org/grpc v1.84.0
@@ -95,6 +96,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
+	github.com/mattn/go-pointer v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
@@ -121,6 +123,25 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
+	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0 // indirect
+	github.com/tree-sitter-grammars/tree-sitter-objc v1.2.1-0.20250131075517-181a81b8f23a // indirect
+	github.com/tree-sitter/go-tree-sitter v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-bash v0.25.1 // indirect
+	github.com/tree-sitter/tree-sitter-c v0.24.2 // indirect
+	github.com/tree-sitter/tree-sitter-c-sharp v0.23.5 // indirect
+	github.com/tree-sitter/tree-sitter-cpp v0.23.4 // indirect
+	github.com/tree-sitter/tree-sitter-css v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-go v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-html v0.23.2 // indirect
+	github.com/tree-sitter/tree-sitter-java v0.23.5 // indirect
+	github.com/tree-sitter/tree-sitter-javascript v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-json v0.24.8 // indirect
+	github.com/tree-sitter/tree-sitter-php v0.24.2 // indirect
+	github.com/tree-sitter/tree-sitter-python v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-ruby v0.23.1 // indirect
+	github.com/tree-sitter/tree-sitter-rust v0.24.2 // indirect
+	github.com/tree-sitter/tree-sitter-scala v0.26.0 // indirect
+	github.com/tree-sitter/tree-sitter-typescript v0.23.2 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
