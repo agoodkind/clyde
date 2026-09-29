@@ -50,6 +50,10 @@ var conversationSemanticOutboxSchemaStatements = []string{
 		projection_profile TEXT NOT NULL,
 		row_count INTEGER NOT NULL,
 		manifest_hash TEXT NOT NULL,
+		provider TEXT NOT NULL,
+		workspace_root TEXT NOT NULL,
+		archived INTEGER NOT NULL,
+		subagent INTEGER NOT NULL,
 		state TEXT NOT NULL,
 		receipt_fingerprint TEXT NOT NULL,
 		created_unix INTEGER NOT NULL,
@@ -74,6 +78,39 @@ var conversationSemanticOutboxSchemaStatements = []string{
 		provider_message_id TEXT NOT NULL,
 		committed_generation INTEGER NOT NULL,
 		PRIMARY KEY (namespace, owner_id, field_key)
+	)`,
+	`CREATE TABLE IF NOT EXISTS owner_metadata (
+		namespace TEXT NOT NULL,
+		owner_id TEXT NOT NULL,
+		provider TEXT NOT NULL,
+		workspace_root TEXT NOT NULL,
+		archived INTEGER NOT NULL,
+		subagent INTEGER NOT NULL,
+		projection_order INTEGER NOT NULL,
+		stale INTEGER NOT NULL,
+		PRIMARY KEY (namespace, owner_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS projections (
+		namespace TEXT NOT NULL,
+		owner_id TEXT NOT NULL,
+		projection_order INTEGER NOT NULL,
+		token TEXT NOT NULL,
+		provider TEXT NOT NULL,
+		workspace_root TEXT NOT NULL,
+		archived INTEGER NOT NULL,
+		subagent INTEGER NOT NULL,
+		state TEXT NOT NULL,
+		receipt_fingerprint TEXT NOT NULL,
+		created_unix INTEGER NOT NULL,
+		PRIMARY KEY (namespace, owner_id, projection_order)
+	)`,
+	`CREATE INDEX IF NOT EXISTS projections_state ON projections (state, created_unix)`,
+	`CREATE TABLE IF NOT EXISTS projection_rows (
+		namespace TEXT NOT NULL,
+		owner_id TEXT NOT NULL,
+		projection_order INTEGER NOT NULL,
+		row_key TEXT NOT NULL,
+		PRIMARY KEY (namespace, owner_id, projection_order, row_key)
 	)`,
 }
 
@@ -100,6 +137,9 @@ type embeddedOutboxBatch struct {
 	ProjectionProfile string
 	RowCount          uint64
 	ManifestHash      string
+	// Metadata is the mutable owner metadata that every row of the batch
+	// stores.
+	Metadata embeddedOwnerMetadata
 }
 
 // embeddedOutboxRow is one occurrence of a batch with the field it was
@@ -243,10 +283,11 @@ func (outbox *conversationSemanticOutbox) recordBatch(ctx context.Context, batch
 		if _, err := tx.ExecContext(
 			ctx,
 			`INSERT INTO batches (batch_id, namespace, owner_id, generation_order, source_path, source_stamp, projection_profile,
-			row_count, manifest_hash, state, receipt_fingerprint, created_unix, delivered_unix)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, 0)`,
+			row_count, manifest_hash, provider, workspace_root, archived, subagent, state, receipt_fingerprint, created_unix, delivered_unix)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, 0)`,
 			batch.BatchID, batch.Namespace, batch.OwnerID, batch.GenerationOrder, batch.SourcePath, batch.SourceStamp,
-			batch.ProjectionProfile, batch.RowCount, batch.ManifestHash, embeddedOutboxStatePending, clock.Now().Unix(),
+			batch.ProjectionProfile, batch.RowCount, batch.ManifestHash, batch.Metadata.Provider, batch.Metadata.WorkspaceRoot,
+			batch.Metadata.Archived, batch.Metadata.Subagent, embeddedOutboxStatePending, clock.Now().Unix(),
 		); err != nil {
 			return fmt.Errorf("save batch: %w", err)
 		}
@@ -293,7 +334,8 @@ func (outbox *conversationSemanticOutbox) pendingBatches(ctx context.Context) (b
 	}()
 	rows, err := outbox.db.QueryContext(
 		ctx,
-		`SELECT batch_id, namespace, owner_id, generation_order, source_path, source_stamp, projection_profile, row_count, manifest_hash
+		`SELECT batch_id, namespace, owner_id, generation_order, source_path, source_stamp, projection_profile, row_count, manifest_hash,
+		provider, workspace_root, archived, subagent
 		FROM batches WHERE state = ? ORDER BY created_unix, owner_id, generation_order`,
 		embeddedOutboxStatePending,
 	)
@@ -307,7 +349,8 @@ func (outbox *conversationSemanticOutbox) pendingBatches(ctx context.Context) (b
 		var batch embeddedOutboxBatch
 		if err := rows.Scan(
 			&batch.BatchID, &batch.Namespace, &batch.OwnerID, &batch.GenerationOrder, &batch.SourcePath, &batch.SourceStamp,
-			&batch.ProjectionProfile, &batch.RowCount, &batch.ManifestHash,
+			&batch.ProjectionProfile, &batch.RowCount, &batch.ManifestHash, &batch.Metadata.Provider, &batch.Metadata.WorkspaceRoot,
+			&batch.Metadata.Archived, &batch.Metadata.Subagent,
 		); err != nil {
 			return nil, fmt.Errorf("scan pending outbox batch: %w", err)
 		}
@@ -363,8 +406,8 @@ func (outbox *conversationSemanticOutbox) batchRows(ctx context.Context, batchID
 }
 
 // acknowledgeBatch marks one pending batch delivered with its receipt
-// fingerprint and records the batch fields as committed at the batch
-// generation order, in one transaction.
+// fingerprint, records the batch fields as committed at the batch generation
+// order, and records the batch owner metadata, in one transaction.
 func (outbox *conversationSemanticOutbox) acknowledgeBatch(ctx context.Context, batch embeddedOutboxBatch, receiptFingerprint string) error {
 	err := outbox.write(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(
@@ -391,6 +434,23 @@ func (outbox *conversationSemanticOutbox) acknowledgeBatch(ctx context.Context, 
 			batch.Namespace, batch.OwnerID, batch.GenerationOrder, batch.BatchID,
 		); err != nil {
 			return fmt.Errorf("record committed fields: %w", err)
+		}
+		// SQLite evaluates every SET expression against the row before the
+		// update. The owner turns stale when the batch rows store other
+		// metadata than the rows that committed earlier.
+		metadata := batch.Metadata
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO owner_metadata (namespace, owner_id, provider, workspace_root, archived, subagent, projection_order, stale)
+			VALUES (?, ?, ?, ?, ?, ?, 0, 0)
+			ON CONFLICT (namespace, owner_id) DO UPDATE SET
+			stale = CASE WHEN provider = excluded.provider AND workspace_root = excluded.workspace_root
+				AND archived = excluded.archived AND subagent = excluded.subagent THEN stale ELSE 1 END,
+			provider = excluded.provider, workspace_root = excluded.workspace_root,
+			archived = excluded.archived, subagent = excluded.subagent`,
+			batch.Namespace, batch.OwnerID, metadata.Provider, metadata.WorkspaceRoot, metadata.Archived, metadata.Subagent,
+		); err != nil {
+			return fmt.Errorf("record owner metadata: %w", err)
 		}
 		return nil
 	})

@@ -186,13 +186,19 @@ type embeddedSyncStats struct {
 	replayed         int
 	deliveryFailed   int
 	delivery         embeddedDeliveryCounts
+	// replayedProjections, reprojectedOwners, and reprojectionFailed count
+	// scalar reprojections of already indexed owners.
+	replayedProjections int
+	reprojectedOwners   int
+	reprojectionFailed  int
 }
 
-// runEmbeddedPass replays pending outbox batches, then projects every admitted
-// conversation that changed since the worker processed it, selects the fields
-// that the outbox has not committed, and delivers one generation per
-// conversation with new rows. A conversation that the index no longer lists
-// keeps every committed occurrence.
+// runEmbeddedPass replays pending outbox batches and projections, reprojects
+// the metadata of indexed owners with changed metadata, then projects every
+// admitted conversation that changed since the worker processed it, selects
+// the fields that the outbox has not committed, and delivers one generation
+// per conversation with new rows. A conversation that the index no longer
+// lists keeps every committed occurrence and its last applied metadata.
 func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) error {
 	store, err := w.embedded.ensureStore(ctx, w.log)
 	if err != nil {
@@ -202,9 +208,17 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	if err != nil {
 		return err
 	}
+	replayedProjections, projectionBlocked, err := store.delivery.replayPendingProjections(ctx)
+	if err != nil {
+		return err
+	}
+	for ownerID := range projectionBlocked {
+		replay.blockedOwners[ownerID] = true
+	}
 	var stats embeddedSyncStats
 	stats.replayed = replay.replayed
 	stats.delivery = replay.counts
+	stats.replayedProjections = replayedProjections
 	stampedRecords, err := w.index.ListWithStamps(ctx)
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.list_failed",
@@ -214,6 +228,7 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 		)
 		return fmt.Errorf("list conversation records with stamps: %w", err)
 	}
+	w.reprojectEmbeddedOwners(ctx, store, stampedRecords, replay.blockedOwners, &stats)
 	candidates := w.embeddedCandidates(stampedRecords, &stats)
 	w.deliverEmbeddedCandidates(ctx, store, candidates, replay.blockedOwners, &stats)
 	w.logEmbeddedPass(ctx, stats)
@@ -391,6 +406,7 @@ func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 		ProjectionProfile: owner.ProjectionProfile,
 		RowCount:          0,
 		ManifestHash:      "",
+		Metadata:          embeddedOwnerMetadataOf(record),
 	}, rows)
 	if err != nil {
 		stats.deliveryFailed++
@@ -525,10 +541,14 @@ func (w *conversationSemanticSyncWorker) logEmbeddedPass(ctx context.Context, st
 		slog.Int("searchable_conversations", stats.completed),
 		slog.String("searchable_conversation_ids", strings.Join(boundedConversationIDs(stats.completedIDs), ",")),
 		slog.Int("delivery_failed", stats.deliveryFailed),
+		slog.Int("metadata_replayed_projections", stats.replayedProjections),
+		slog.Int("metadata_reprojected_owners", stats.reprojectedOwners),
+		slog.Int("metadata_reprojection_failed", stats.reprojectionFailed),
 	}
 	level := slog.LevelDebug
 	if stats.delivery.recordedBatches > 0 || stats.replayed > 0 || stats.sourceFailed > 0 || stats.projectionFailed > 0 ||
-		stats.deliveryFailed > 0 || stats.failedSuppressed > 0 || stats.changedCommitted > 0 || stats.pendingBlocked > 0 {
+		stats.deliveryFailed > 0 || stats.failedSuppressed > 0 || stats.changedCommitted > 0 || stats.pendingBlocked > 0 ||
+		stats.replayedProjections > 0 || stats.reprojectedOwners > 0 || stats.reprojectionFailed > 0 {
 		level = slog.LevelInfo
 	}
 	w.log.LogAttrs(ctx, level, "daemon.conversation_semantic_sync.pass_completed", attributes...)
