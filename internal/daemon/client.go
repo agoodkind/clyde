@@ -240,6 +240,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		PerConversationLimit: int64(options.PerConversationLimit),
 		ConversationId:       options.ConversationID,
 		ContextWindow:        int64(options.ContextWindow),
+		Cursor:               options.Cursor,
 	})
 	if err != nil {
 		return conversation.SearchConversationsResult{}, daemonRPCError(rpcCtx, "search conversations", err)
@@ -256,6 +257,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 			Score:         wire.GetScore(),
 			ContextWindow: wire.GetContextWindow(),
 			LoadRules:     wire.GetLoadRules(),
+			ContextState:  searchContextStateFromProto(wire.GetContextState()),
 		})
 	}
 	return conversation.SearchConversationsResult{
@@ -266,6 +268,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		Offset:               int(resp.GetOffset()),
 		NextOffset:           int(resp.GetNextOffset()),
 		HasMore:              resp.GetHasMore(),
+		NextCursor:           resp.GetNextCursor(),
 		Source:               searchSourceFromProto(resp.GetSource()),
 		Facets:               searchFacetsFromProto(resp.GetFacets()),
 		Freshness:            searchFreshnessFromProto(resp.GetSemanticFreshness()),
@@ -316,6 +319,22 @@ func searchSourceFromProto(source clydev1.SearchSource) conversation.SearchSourc
 		return conversation.SearchSourceUnspecified
 	default:
 		return conversation.SearchSourceUnspecified
+	}
+}
+
+// searchContextStateFromProto maps the wire context state onto its domain enum.
+func searchContextStateFromProto(state clydev1.SearchContextState) conversation.SearchContextState {
+	switch state {
+	case clydev1.SearchContextState_SEARCH_CONTEXT_STATE_EXCERPT_ONLY:
+		return conversation.SearchContextStateExcerptOnly
+	case clydev1.SearchContextState_SEARCH_CONTEXT_STATE_AVAILABLE:
+		return conversation.SearchContextStateAvailable
+	case clydev1.SearchContextState_SEARCH_CONTEXT_STATE_UNAVAILABLE:
+		return conversation.SearchContextStateUnavailable
+	case clydev1.SearchContextState_SEARCH_CONTEXT_STATE_UNSPECIFIED:
+		return conversation.SearchContextStateUnspecified
+	default:
+		return conversation.SearchContextStateUnspecified
 	}
 }
 

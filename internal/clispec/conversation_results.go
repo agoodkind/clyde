@@ -68,6 +68,7 @@ type searchConversationsOutput struct {
 	NextOffset           int                              `json:"next_offset"`
 	ConversationsScanned int                              `json:"conversations_scanned"`
 	HasMore              bool                             `json:"has_more"`
+	NextCursor           string                           `json:"next_cursor,omitempty"`
 	Source               string                           `json:"source"`
 	Facets               searchFacetsOutput               `json:"facets"`
 	SemanticFreshness    searchFreshnessOutput            `json:"semantic_freshness"`
@@ -87,6 +88,13 @@ type searchConversationsMatchOutput struct {
 	// back as load_rules on an around read so the window counts over the same
 	// message sequence message_index refers to.
 	LoadRules string `json:"load_rules,omitempty"`
+	// ContextState states whether the source verified context_window against
+	// the transcript. excerpt_only: context_window is the stored matched
+	// passage, and the source read no transcript. available: the source read
+	// the transcript and verified the matched message. unavailable: the
+	// transcript is missing or changed, and context_window is the stored
+	// excerpt.
+	ContextState conv.SearchContextState `json:"context_state,omitempty"`
 }
 
 type searchFacetsOutput struct {
@@ -198,6 +206,7 @@ func searchConversationsOutputFromDomain(result conv.SearchConversationsResult) 
 			Score:         match.Score,
 			ContextWindow: match.ContextWindow,
 			LoadRules:     match.LoadRules,
+			ContextState:  match.ContextState,
 		})
 	}
 	return searchConversationsOutput{
@@ -207,6 +216,7 @@ func searchConversationsOutputFromDomain(result conv.SearchConversationsResult) 
 		NextOffset:           result.NextOffset,
 		ConversationsScanned: result.ConversationsScanned,
 		HasMore:              result.HasMore,
+		NextCursor:           result.NextCursor,
 		Source:               result.Source.String(),
 		Facets:               searchFacetsOutputFromDomain(result.Facets),
 		SemanticFreshness:    searchFreshnessOutputFromDomain(result.Freshness),

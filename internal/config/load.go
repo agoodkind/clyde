@@ -278,8 +278,9 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 
-	applyConversationDefaults(&cfg.Conversation)
-
+	if err := applyConversationDefaults(&cfg.Conversation); err != nil {
+		return err
+	}
 	applyExportDefaults(&cfg.Export)
 
 	cfg.Adapter.Codex.ReasoningSummary = normalizeCodexReasoningSummary(cfg.Adapter.Codex.ReasoningSummary)

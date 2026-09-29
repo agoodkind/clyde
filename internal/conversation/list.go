@@ -64,7 +64,31 @@ type SearchConversationsOptions struct {
 	// ContextWindow is the number of messages before and after each hit to render
 	// inline on the match. Zero means the daemon's default small window.
 	ContextWindow int
+	// Cursor is the NextCursor of a previous page with the same query and
+	// filters. Empty starts a new search. The current search source refuses a
+	// nonempty cursor.
+	Cursor string
 }
+
+// SearchContextState states whether the source verified a match's
+// ContextWindow against the source transcript.
+type SearchContextState string
+
+const (
+	// SearchContextStateUnspecified is the zero value. The client reads it when
+	// the daemon omits the field.
+	SearchContextStateUnspecified SearchContextState = ""
+	// SearchContextStateExcerptOnly means ContextWindow is the stored matched
+	// passage and the source read no transcript context for the match.
+	SearchContextStateExcerptOnly SearchContextState = "excerpt_only"
+	// SearchContextStateAvailable means the source read the transcript and
+	// verified the matched message against the stored occurrence.
+	SearchContextStateAvailable SearchContextState = "available"
+	// SearchContextStateUnavailable means the transcript is missing or no longer
+	// matches the stored occurrence. The source returns only the stored excerpt
+	// as ContextWindow.
+	SearchContextStateUnavailable SearchContextState = "unavailable"
+)
 
 // SearchMatch is one matching message returned during cross-conversation
 // discovery.
@@ -82,6 +106,9 @@ type SearchMatch struct {
 	// read passes it back so the context is counted over the same message
 	// sequence MessageIndex refers to. Empty on rows written before tagging.
 	LoadRules string
+	// ContextState states whether the source verified ContextWindow against the
+	// source transcript. The SearchContextState constants define each value.
+	ContextState SearchContextState
 }
 
 // SearchConversationsResult is a bounded set of candidate conversations.
@@ -93,6 +120,9 @@ type SearchConversationsResult struct {
 	Offset               int
 	NextOffset           int
 	HasMore              bool
+	// NextCursor continues this search from the next page. Empty when no more
+	// results exist or the search source has no cursor paging.
+	NextCursor string
 	// Source names the provider that produced the matches.
 	Source SearchSource
 	// Facets summarizes the match set by workspace, provider, and model.

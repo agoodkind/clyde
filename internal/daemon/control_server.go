@@ -213,6 +213,7 @@ func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest
 		PerConversationLimit: int(req.GetPerConversationLimit()),
 		ConversationID:       req.GetConversationId(),
 		ContextWindow:        int(req.GetContextWindow()),
+		Cursor:               req.GetCursor(),
 	}
 }
 
@@ -309,6 +310,7 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 			Score:         match.Score,
 			ContextWindow: match.ContextWindow,
 			LoadRules:     match.LoadRules,
+			ContextState:  protoSearchContextState(match.ContextState),
 		})
 	}
 	return &clydev1.SearchConversationsResponse{
@@ -323,6 +325,23 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 		Facets:               protoSearchFacets(result.Facets),
 		SemanticFreshness:    protoSearchFreshness(result.Freshness),
 		FilterAccounting:     protoFilterAccounting(result.FilterAccounting),
+		NextCursor:           result.NextCursor,
+	}
+}
+
+// protoSearchContextState maps the domain context state onto its wire enum.
+func protoSearchContextState(state conversation.SearchContextState) clydev1.SearchContextState {
+	switch state {
+	case conversation.SearchContextStateExcerptOnly:
+		return clydev1.SearchContextState_SEARCH_CONTEXT_STATE_EXCERPT_ONLY
+	case conversation.SearchContextStateAvailable:
+		return clydev1.SearchContextState_SEARCH_CONTEXT_STATE_AVAILABLE
+	case conversation.SearchContextStateUnavailable:
+		return clydev1.SearchContextState_SEARCH_CONTEXT_STATE_UNAVAILABLE
+	case conversation.SearchContextStateUnspecified:
+		return clydev1.SearchContextState_SEARCH_CONTEXT_STATE_UNSPECIFIED
+	default:
+		return clydev1.SearchContextState_SEARCH_CONTEXT_STATE_UNSPECIFIED
 	}
 }
 

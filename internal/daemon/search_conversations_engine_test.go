@@ -216,6 +216,12 @@ func TestSemanticConversationSearchSourceReturnsEngineHits(t *testing.T) {
 	if !match.Timestamp.Equal(time.Unix(7, 0)) {
 		t.Fatalf("timestamp = %v, want %v", match.Timestamp, time.Unix(7, 0))
 	}
+	if match.ContextState != conversation.SearchContextStateExcerptOnly {
+		t.Fatalf("The context state is %q, but the engine excerpt requires %q.", match.ContextState, conversation.SearchContextStateExcerptOnly)
+	}
+	if result.NextCursor != "" {
+		t.Fatalf("The next cursor is %q, but the offset-paged source requires an empty cursor.", result.NextCursor)
+	}
 }
 
 func TestSearchConversationsResultEngineAppliesOffset(t *testing.T) {
@@ -484,6 +490,44 @@ func TestSemanticConversationSearchSourceReportsUnavailableClient(t *testing.T) 
 	var failure conversationSearchSourceError
 	if !errors.As(err, &failure) || failure.code != conversationSearchSourceUnavailable {
 		t.Fatalf("error = %v, want unavailable conversationSearchSourceError", err)
+	}
+}
+
+// TestControlServerRefusesCursorForOffsetSearchSource sends a continuation
+// cursor through the gRPC handler to the engine-backed source, which pages by
+// offset. The handler returns InvalidArgument with the refused code before any
+// engine lookup. The same request without a cursor calls the client lookup and
+// returns the unavailable-engine error instead.
+func TestControlServerRefusesCursorForOffsetSearchSource(t *testing.T) {
+	t.Parallel()
+	server := &controlServer{
+		index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
+		searchSource: &semanticConversationSearchSource{
+			index:         &fakeSearchIndex{records: nil, matchingErr: nil},
+			searchEnabled: func() bool { return true },
+			searchClient:  func() conversationSemanticSearchClient { return nil },
+			collectionID:  "conversations",
+		},
+	}
+
+	_, err := server.SearchConversations(context.Background(), &clydev1.SearchConversationsRequest{
+		Query:  "auth",
+		Limit:  10,
+		Cursor: "page-two",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("cursor request code = %v, want InvalidArgument: %v", status.Code(err), err)
+	}
+	if !strings.Contains(status.Convert(err).Message(), string(conversationSearchSourceRefused)) {
+		t.Fatalf("cursor request message = %q, want %s", status.Convert(err).Message(), conversationSearchSourceRefused)
+	}
+
+	_, err = server.SearchConversations(context.Background(), &clydev1.SearchConversationsRequest{
+		Query: "auth",
+		Limit: 10,
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("request without cursor code = %v, want FailedPrecondition from the unavailable engine: %v", status.Code(err), err)
 	}
 }
 
