@@ -75,8 +75,8 @@ func (outbox *conversationSemanticOutbox) unfinishedBatches(ctx context.Context,
 // rebuildOwner replaces the committed fields of one owner with fields, records
 // metadata as stale owner metadata at the library projection order, marks the
 // aborted batches and every pending or blocked projection of the owner
-// aborted, and marks every other blocked batch of the owner aborted, in one
-// transaction.
+// aborted, marks every other blocked batch of the owner aborted, and deletes
+// the stored rows of every aborted batch of the owner, in one transaction.
 func (outbox *conversationSemanticOutbox) rebuildOwner(
 	ctx context.Context,
 	namespace string,
@@ -120,6 +120,14 @@ func (outbox *conversationSemanticOutbox) rebuildOwner(
 			embeddedOutboxStateAborted, namespace, ownerID, embeddedOutboxStateBlocked,
 		); err != nil {
 			return fmt.Errorf("clear blocked batches: %w", err)
+		}
+		// An aborted batch keeps no stored text.
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM batch_rows WHERE batch_id IN (SELECT batch_id FROM batches WHERE namespace = ? AND owner_id = ? AND state = ?)`,
+			namespace, ownerID, embeddedOutboxStateAborted,
+		); err != nil {
+			return fmt.Errorf("delete aborted batch rows: %w", err)
 		}
 		if _, err := tx.ExecContext(
 			ctx,
