@@ -64,8 +64,9 @@ type ConversationSemanticConfig struct {
 
 	// Backend selects the implementation behind ingestion and search. An empty
 	// value selects the lm-semantic-search daemon at SocketPath. The embedded
-	// value selects the in-process library configured by the keys below, and
-	// the loader rejects it until this build contains that runtime.
+	// value selects the in-process library configured by the keys below. This
+	// build ingests into the embedded library and has no embedded search, so
+	// the loader rejects the embedded value when SearchEnabled is true.
 	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
 
 	// IndexedProviders and IndexedRoles limit embedded ingestion and search to
