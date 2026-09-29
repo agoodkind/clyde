@@ -413,7 +413,8 @@ func (outbox *conversationSemanticOutbox) batchRows(ctx context.Context, batchID
 
 // acknowledgeBatch marks one pending batch delivered with its receipt
 // fingerprint, records the batch fields as committed at the batch generation
-// order, and records the batch owner metadata, in one transaction.
+// order, deletes the stored rows of the batch, and records the batch owner
+// metadata, in one transaction.
 func (outbox *conversationSemanticOutbox) acknowledgeBatch(ctx context.Context, batch embeddedOutboxBatch, receiptFingerprint string) error {
 	err := outbox.write(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(
@@ -440,6 +441,12 @@ func (outbox *conversationSemanticOutbox) acknowledgeBatch(ctx context.Context, 
 			batch.Namespace, batch.OwnerID, batch.GenerationOrder, batch.BatchID,
 		); err != nil {
 			return fmt.Errorf("record committed fields: %w", err)
+		}
+		// A delivered batch keeps no stored text. Replay reads batch_rows only
+		// of pending batches, and reconciliation and reprojection read the
+		// published row keys from the library.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM batch_rows WHERE batch_id = ?`, batch.BatchID); err != nil {
+			return fmt.Errorf("delete delivered batch rows: %w", err)
 		}
 		// SQLite evaluates every SET expression against the row before the
 		// update. The owner turns stale when the batch rows store other
