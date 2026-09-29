@@ -131,16 +131,18 @@ func (delivery *embeddedConversationDelivery) deliver(ctx context.Context, gener
 }
 
 // publish stages, commits, and acknowledges one generation after the outbox
-// recorded it.
+// recorded it. A permanent library error moves the batch to the blocked state.
 func (delivery *embeddedConversationDelivery) publish(ctx context.Context, generation embeddedGeneration) (embeddedDeliveryCounts, error) {
 	var counts embeddedDeliveryCounts
 	staged, err := delivery.stage(ctx, generation)
 	counts.add(staged)
 	if err != nil {
+		delivery.blockBatchOnPermanentError(ctx, generation.batch, err)
 		return counts, err
 	}
 	receipt, err := delivery.commit(ctx, generation)
 	if err != nil {
+		delivery.blockBatchOnPermanentError(ctx, generation.batch, err)
 		return counts, err
 	}
 	if err := delivery.outbox.acknowledgeBatch(ctx, generation.batch, receipt.Fingerprint); err != nil {
@@ -238,15 +240,17 @@ type embeddedReplayResult struct {
 	// replayed counts pending batches that this replay acknowledged.
 	replayed int
 	// blockedOwners lists owners with a pending batch that this replay did not
-	// acknowledge. A new generation for such an owner would take the same
-	// order. A pass delivers no new work for these owners.
+	// acknowledge, and owners with a blocked batch or projection. A new
+	// generation for such an owner would take the same order. A pass delivers
+	// no new work and applies no reprojection for these owners.
 	blockedOwners map[string]bool
 }
 
 // replayPending publishes every pending outbox batch from its stored rows. The
 // stored seal must equal the seal of the stored rows. CommitGeneration returns
 // the saved receipt for a token that the library already committed, and the
-// replay acknowledges that receipt.
+// replay acknowledges that receipt. A blocked batch is not pending and is never
+// replayed.
 func (delivery *embeddedConversationDelivery) replayPending(ctx context.Context) (embeddedReplayResult, error) {
 	var result embeddedReplayResult
 	result.blockedOwners = make(map[string]bool)
