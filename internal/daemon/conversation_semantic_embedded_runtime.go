@@ -325,8 +325,10 @@ func (store *embeddedConversationStore) close(ctx context.Context) error {
 	libraryErr := store.library.Close()
 	outboxErr := store.outbox.Close()
 	var milvusErr error
-	if err := store.milvusClient.Close(ctx); err != nil {
-		milvusErr = fmt.Errorf("close Milvus client: %w", err)
+	if store.milvusClient != nil {
+		if err := store.milvusClient.Close(ctx); err != nil {
+			milvusErr = fmt.Errorf("close Milvus client: %w", err)
+		}
 	}
 	err := errors.Join(libraryErr, outboxErr, milvusErr)
 	if err != nil {

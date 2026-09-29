@@ -107,6 +107,22 @@ func TestEmbeddedOwnerBlockedOnStaleGeneration(t *testing.T) {
 
 func openBlockedTestStore(t *testing.T) (*embeddedConversationStore, *semanticLogCapture) {
 	t.Helper()
+	store, capture, _ := openUnmanagedBlockedTestStore(t)
+	t.Cleanup(func() {
+		if err := store.library.Close(); err != nil {
+			t.Errorf("close library: %v", err)
+		}
+		if err := store.outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
+	return store, capture
+}
+
+// openUnmanagedBlockedTestStore opens the blocked test store and registers no
+// close. The caller closes the store.
+func openUnmanagedBlockedTestStore(t *testing.T) (*embeddedConversationStore, *semanticLogCapture, config.ConversationSemanticConfig) {
+	t.Helper()
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
 	semantic := config.ConversationSemanticConfig{
@@ -135,15 +151,7 @@ func openBlockedTestStore(t *testing.T) (*embeddedConversationStore, *semanticLo
 	if err != nil {
 		t.Fatalf("open library: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := store.library.Close(); err != nil {
-			t.Errorf("close library: %v", err)
-		}
-		if err := store.outbox.Close(); err != nil {
-			t.Errorf("close outbox: %v", err)
-		}
-	})
-	return store, capture
+	return store, capture, semantic
 }
 
 // recordBlockedTestBatch prepares one chat field of the batch owner at the
