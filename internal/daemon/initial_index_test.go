@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +171,45 @@ func TestRunInitialConversationIndexTriesSemanticOnce(t *testing.T) {
 	}
 	if got := strings.Count(output.String(), "semantic service is unavailable"); got != 1 {
 		t.Fatalf("semantic unavailable messages = %d, want 1: %q", got, output.String())
+	}
+}
+
+// TestRunInitialConversationIndexLeavesEmbeddedIngestionToDaemon loads an
+// embedded ingestion configuration and runs the initial index with the
+// production dial function. The run must build the raw index, dial no
+// lm-semantic-search socket, and state that the daemon worker ingests.
+func TestRunInitialConversationIndexLeavesEmbeddedIngestionToDaemon(t *testing.T) {
+	configureInitialIndexTest(t, true)
+	state := os.Getenv("XDG_STATE_HOME")
+	body := "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\nbackend = \"embedded\"\n" +
+		"catalog_path = " + strconv.Quote(filepath.Join(state, "catalog.sqlite")) + "\n" +
+		"lock_path = " + strconv.Quote(filepath.Join(state, "catalog.lock")) + "\n" +
+		"pool_id = \"initial-index\"\nmilvus_address = \"localhost:1\"\nmilvus_database = \"clyde_initial_index\"\n" +
+		"milvus_collection = \"vectors\"\nembedding_base_url = \"http://localhost:1/v1\"\n" +
+		"embedding_model = \"nvidia/NV-EmbedCode-7b-v1\"\nembedding_revision = \"initial-index\"\n" +
+		"vector_dimension = 4096\nnormalization = \"l2\"\n"
+	if err := os.WriteFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "clyde", "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := RunInitialConversationIndex(context.Background(), &output, nil); err != nil {
+		t.Fatalf("RunInitialConversationIndex: %v", err)
+	}
+	got := output.String()
+	if strings.Contains(got, "semantic service is unavailable") {
+		t.Fatalf("embedded initial index dialed the lm-semantic-search socket: %q", got)
+	}
+	for _, want := range []string{
+		"Initial indexing: embedded semantic ingestion starts in the daemon sync worker",
+		"Initial indexing: complete with 0 conversations",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output = %q, missing %q", got, want)
+		}
+	}
+	if _, err := os.Stat(conversation.CachePath()); err != nil {
+		t.Fatalf("conversation cache not created: %v", err)
 	}
 }
 
