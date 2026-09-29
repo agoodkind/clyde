@@ -126,3 +126,33 @@ func TestFormatSearchConversationsResultShowsOffsetHint(t *testing.T) {
 		t.Fatalf("pagination output mismatch:\nwant:\n%s\ngot:\n%s", want, out)
 	}
 }
+
+// TestFormatSearchConversationsResultPrefersCursorHint renders a page that has
+// both a next offset and a next cursor. The continuation hint must name the
+// cursor and not the offset.
+func TestFormatSearchConversationsResultPrefersCursorHint(t *testing.T) {
+	t.Parallel()
+	result := conv.SearchConversationsResult{
+		Matches: []conv.SearchMatch{
+			{
+				Record:    conv.Record{ID: "claude:abc", Provider: conv.ProviderClaude},
+				Role:      "user",
+				Timestamp: time.Date(2026, 4, 26, 13, 53, 48, 0, time.UTC),
+				Snippet:   "auth timeout",
+			},
+		},
+		ReturnedCount: 1,
+		Limit:         1,
+		NextOffset:    21,
+		HasMore:       true,
+		NextCursor:    "page-two",
+	}
+
+	out := formatSearchConversationsResult(result, "auth")
+	if !strings.HasSuffix(out, "\nMore: --cursor page-two\n") {
+		t.Fatalf("cursor hint missing:\n%s", out)
+	}
+	if strings.Contains(out, "--offset") {
+		t.Fatalf("cursor page rendered an offset hint:\n%s", out)
+	}
+}
