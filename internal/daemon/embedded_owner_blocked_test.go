@@ -89,7 +89,7 @@ func TestEmbeddedOwnerBlockedOnStaleGeneration(t *testing.T) {
 	assertBlockedRow(t, outbox, `SELECT state, blocked_class, blocked_library_order, blocked_unix FROM batches WHERE batch_id = ?`,
 		generation.batch.BatchID, 2)
 	assertBlockedRow(t, outbox, `SELECT state, blocked_class, blocked_library_order, blocked_unix FROM projections WHERE owner_id = ?`,
-		blockedProjectionOwnerID, 0)
+		blockedProjectionOwnerID, 2)
 	blocked, err := store.outbox.blockedOwners(ctx, store.namespace.ID)
 	if err != nil || !slices.Equal(blocked, []string{blockedBatchOwnerID, blockedProjectionOwnerID}) {
 		t.Fatalf("blocked owners = %q, %v, want both owners", blocked, err)
