@@ -68,6 +68,14 @@ func ContentFingerprint(record Record, stamp FileStamp) string {
 	return stamp.Fingerprint()
 }
 
+// TrailingMessageMayGrow reports whether an artifact kind can extend its last
+// message in place when the artifact grows. Cursor's agent transcript groups
+// consecutive same-role lines into one turn, and a later line extends the
+// trailing turn.
+func TrailingMessageMayGrow(record Record) bool {
+	return ArtifactKind(record.ArtifactKind) == ArtifactKindCursorAgentTranscript
+}
+
 // ScanCandidate is one artifact a provider's [Parser.Discover] surfaced for the
 // incremental scan. Stamp lets the scan driver skip files whose size and mtime
 // are unchanged, reusing the prior record without re-reading the file.
