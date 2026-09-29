@@ -43,7 +43,7 @@ func TestEmbeddedConversationLibraryOpens(t *testing.T) {
 		if err != nil {
 			t.Fatalf("attempt %d: create embedder: %v", attempt, err)
 		}
-		store, err := openEmbeddedConversationLibrary(t.Context(), semantic, outboxPath, vectors, embedder, slog.Default())
+		store, err := openLockedTestLibrary(t, semantic, outboxPath, vectors, embedder, slog.Default())
 		if err != nil {
 			t.Fatalf("attempt %d: open library through the daemon open path: %v", attempt, err)
 		}

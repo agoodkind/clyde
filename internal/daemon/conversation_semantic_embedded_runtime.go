@@ -32,11 +32,14 @@ type embeddedConversationStore struct {
 // address and database, the Milvus vector adapter, and the OpenAI-compatible
 // embedder, opens the library with the configured store descriptor and
 // budgets, registers the conversation namespace, and opens the outbox at
-// outboxPath. A failure closes every part that already opened.
+// outboxPath under lock, the outbox lock that the caller already took. A
+// failure closes every part that already opened. The caller still owns lock
+// after a failure.
 func openEmbeddedConversationStore(
 	ctx context.Context,
 	semantic config.ConversationSemanticConfig,
 	outboxPath string,
+	lock *os.File,
 	log *slog.Logger,
 ) (*embeddedConversationStore, error) {
 	embedder, err := newEmbeddedConversationEmbedder(ctx, semantic)
@@ -61,7 +64,7 @@ func openEmbeddedConversationStore(
 		)
 		return nil, fmt.Errorf("create Milvus client for %s database %s: %w", semantic.MilvusAddress, semantic.MilvusDatabase, err)
 	}
-	store, err := openEmbeddedConversationStoreWithClient(ctx, semantic, outboxPath, client, embedder, log)
+	store, err := openEmbeddedConversationStoreWithClient(ctx, semantic, outboxPath, lock, client, embedder, log)
 	if err != nil {
 		log.WarnContext(ctx, "daemon.conversation_semantic_embedded.open_failed",
 			"concern", "conversation.semantic",
@@ -88,12 +91,13 @@ func openEmbeddedConversationStore(
 }
 
 // openEmbeddedConversationStoreWithClient opens the library over client and
-// embedder, registers the namespace, and opens the outbox. The caller closes
-// client when this function fails.
+// embedder, registers the namespace, and opens the outbox under lock. The
+// caller closes client and lock when this function fails.
 func openEmbeddedConversationStoreWithClient(
 	ctx context.Context,
 	semantic config.ConversationSemanticConfig,
 	outboxPath string,
+	lock *os.File,
 	client *milvusclient.Client,
 	embedder library.Embedder,
 	log *slog.Logger,
@@ -107,7 +111,7 @@ func openEmbeddedConversationStoreWithClient(
 		)
 		return nil, fmt.Errorf("create Milvus vector adapter for %s: %w", semantic.MilvusCollection, err)
 	}
-	store, err := openEmbeddedConversationLibrary(ctx, semantic, outboxPath, vectors, embedder, log)
+	store, err := openEmbeddedConversationLibrary(ctx, semantic, outboxPath, lock, vectors, embedder, log)
 	if err != nil {
 		return nil, err
 	}
@@ -116,12 +120,14 @@ func openEmbeddedConversationStoreWithClient(
 }
 
 // openEmbeddedConversationLibrary opens the library over vectors and
-// embedder, registers the conversation namespace, and opens the outbox. The
-// returned store has no Milvus client. The caller sets it.
+// embedder, registers the conversation namespace, and opens the outbox under
+// lock. The returned store has no Milvus client. The caller sets it. The
+// caller still owns lock after a failure.
 func openEmbeddedConversationLibrary(
 	ctx context.Context,
 	semantic config.ConversationSemanticConfig,
 	outboxPath string,
+	lock *os.File,
 	vectors library.VectorStore,
 	embedder library.Embedder,
 	log *slog.Logger,
@@ -146,7 +152,7 @@ func openEmbeddedConversationLibrary(
 		)
 		return nil, errors.Join(fmt.Errorf("register namespace %s: %w", semantic.CollectionID, err), opened.Close())
 	}
-	outbox, err := openConversationSemanticOutbox(ctx, outboxPath)
+	outbox, err := openLockedConversationSemanticOutbox(ctx, outboxPath, lock)
 	if err != nil {
 		return nil, errors.Join(err, opened.Close())
 	}
@@ -320,18 +326,20 @@ func resolveEmbeddedConversationAPIKey(semantic config.ConversationSemanticConfi
 	return "", nil
 }
 
-// close closes the library, then the outbox, then the Milvus client. The
-// library leaves the Milvus client open, and Clyde closes it last.
+// close runs in the reverse order of the open. It closes the outbox database,
+// then the library, then the Milvus client, and then releases the outbox
+// lock. The library leaves the Milvus client open, and Clyde closes it.
 func (store *embeddedConversationStore) close(ctx context.Context) error {
+	outboxErr := store.outbox.closeDatabase()
 	libraryErr := store.library.Close()
-	outboxErr := store.outbox.Close()
 	var milvusErr error
 	if store.milvusClient != nil {
 		if err := store.milvusClient.Close(ctx); err != nil {
 			milvusErr = fmt.Errorf("close Milvus client: %w", err)
 		}
 	}
-	err := errors.Join(libraryErr, outboxErr, milvusErr)
+	lockErr := store.outbox.releaseLock()
+	err := errors.Join(outboxErr, libraryErr, milvusErr, lockErr)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.close_failed",
 			"concern", "conversation.semantic",

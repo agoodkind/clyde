@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -58,7 +59,14 @@ type embeddedConversationSync struct {
 	// closed reports that closeStore ran. ensureStore opens no store after
 	// close. closeStore sets it under mu.
 	closed bool
+	// open opens the store under the outbox lock that ensureStore took. The
+	// default opens the Milvus-backed store with openEmbeddedConversationStore.
+	open embeddedStoreOpener
 }
+
+// embeddedStoreOpener opens the embedded store under lock, the outbox lock.
+// The caller still owns lock after a failure.
+type embeddedStoreOpener func(ctx context.Context, lock *os.File, log *slog.Logger) (*embeddedConversationStore, error)
 
 // embeddedRecordLister lists every cached conversation record with its artifact
 // stamp, independent of conversation.include_subagent_conversations.
@@ -90,6 +98,9 @@ func newEmbeddedConversationSync(
 		libraryAbsent:    make(map[string]bool),
 		mu:               sync.Mutex{},
 		closed:           false,
+		open: func(ctx context.Context, lock *os.File, log *slog.Logger) (*embeddedConversationStore, error) {
+			return openEmbeddedConversationStore(ctx, semantic, outboxPath, lock, log)
+		},
 	}
 }
 
@@ -103,8 +114,22 @@ func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *
 	if embedded.store != nil {
 		return embedded.store, nil
 	}
-	store, err := openEmbeddedConversationStore(ctx, embedded.semantic, embedded.outboxPath, log)
+	// ensureStore takes the outbox lock first. When another worker owns the
+	// lock, this worker creates no Milvus client, opens no library, and
+	// registers no namespace.
+	lock, err := lockConversationSemanticOutbox(ctx, embedded.outboxPath)
 	if err != nil {
+		return nil, err
+	}
+	store, err := embedded.open(ctx, lock, log)
+	if err != nil {
+		if closeErr := lock.Close(); closeErr != nil {
+			log.WarnContext(ctx, "daemon.conversation_semantic_embedded.unlock_failed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"err", closeErr,
+			)
+		}
 		return nil, err
 	}
 	embedded.store = store
