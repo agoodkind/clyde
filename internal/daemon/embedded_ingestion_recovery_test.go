@@ -128,13 +128,46 @@ func TestEmbeddedIngestionRecovery(t *testing.T) {
 	}
 	assertLiveAppendedRows(t, firstIngestion.rows, afterAppend.rows)
 
-	if err := os.Remove(rolloutPath); err != nil {
-		t.Fatalf("remove rollout: %v", err)
+	archivedPath := filepath.Join(stores.codexHome, "archived_sessions", filepath.Base(rolloutPath))
+	if err := os.MkdirAll(filepath.Dir(archivedPath), 0o755); err != nil {
+		t.Fatalf("create archived sessions directory: %v", err)
+	}
+	if err := os.Rename(rolloutPath, archivedPath); err != nil {
+		t.Fatalf("archive rollout: %v", err)
+	}
+	refreshLiveIndex(t, index)
+	afterArchive := appended.runPass(t)
+	assertLiveSnapshotsEqual(t, "archive reprojection", afterAppend, afterArchive)
+	archivedRows := countLiveEffectiveScalars(t, appended.semantic.CatalogPath, embeddedScalarArchived, true)
+	if archivedRows != len(afterAppend.rows) || afterArchive.appliedProjections != 1 {
+		t.Fatalf("archive reprojection archived rows/applied projections = %d/%d, want %d/1",
+			archivedRows, afterArchive.appliedProjections, len(afterAppend.rows))
+	}
+
+	if err := os.Remove(archivedPath); err != nil {
+		t.Fatalf("remove archived rollout: %v", err)
 	}
 	refreshLiveIndex(t, index)
 	afterSourceLoss := appended.runPass(t)
-	assertLiveSnapshotsEqual(t, "source loss", afterAppend, afterSourceLoss)
+	assertLiveSnapshotsEqual(t, "source loss", afterArchive, afterSourceLoss)
+	if countLiveEffectiveScalars(t, appended.semantic.CatalogPath, embeddedScalarArchived, true) != archivedRows {
+		t.Fatalf("source loss changed the archived metadata of committed rows")
+	}
 	appended.close(t)
+}
+
+// countLiveEffectiveScalars counts the rows with a reprojected Bool value for
+// column in the catalog.
+func countLiveEffectiveScalars(t *testing.T, catalogPath string, column string, value bool) int {
+	t.Helper()
+	catalog := openLiveReadOnly(t, catalogPath)
+	var count int
+	if err := catalog.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM effective_scalars WHERE column_name = ? AND bool_value = ?`, column, value,
+	).Scan(&count); err != nil {
+		t.Fatalf("count effective %s scalars: %v", column, err)
+	}
+	return count
 }
 
 // liveScenario is one catalog, outbox, and Milvus collection with a sync
@@ -238,6 +271,7 @@ type liveSnapshot struct {
 	vectors               int
 	vectorWriteGeneration int
 	milvusVectors         int64
+	appliedProjections    int
 }
 
 type liveOwnerState struct {
@@ -265,10 +299,12 @@ func (scenario *liveScenario) snapshot(t *testing.T) liveSnapshot {
 		vectors:               0,
 		vectorWriteGeneration: 0,
 		milvusVectors:         0,
+		appliedProjections:    0,
 	}
 	outbox := openLiveReadOnly(t, conversationSemanticOutboxPath(scenario.semantic.PoolID))
 	snapshot.deliveredBatches = queryLiveCount(t, outbox, `SELECT COUNT(*) FROM batches WHERE state = 'delivered'`)
 	snapshot.pendingBatches = queryLiveCount(t, outbox, `SELECT COUNT(*) FROM batches WHERE state = 'pending'`)
+	snapshot.appliedProjections = queryLiveCount(t, outbox, `SELECT COUNT(*) FROM projections WHERE state = 'applied'`)
 	queryLivePairs(t, outbox, `SELECT CAST(generation_order AS TEXT), receipt_fingerprint FROM batches WHERE state = 'delivered'`, snapshot.receipts)
 	queryLivePairs(t, outbox, `SELECT field_key, digest FROM committed_fields`, snapshot.committedFields)
 	catalog := openLiveReadOnly(t, scenario.semantic.CatalogPath)
