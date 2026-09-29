@@ -41,6 +41,7 @@ func startConfiguredConversationSemanticSync(
 	index conversationSemanticIndex,
 	resolveClient conversationSemanticClientResolver,
 	freshness *conversationSemanticFreshness,
+	embeddedStatus *embeddedSemanticStatus,
 	group *livetrack.Group,
 ) error {
 	kinds, err := SemanticContentKinds(cfg.Conversation.Semantic)
@@ -51,7 +52,7 @@ func startConfiguredConversationSemanticSync(
 		return err
 	}
 	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
-		startEmbeddedConversationSemanticSync(ctx, log, cfg.Conversation.Semantic, index, freshness, group, kinds)
+		startEmbeddedConversationSemanticSync(ctx, log, cfg.Conversation.Semantic, index, freshness, embeddedStatus, group, kinds)
 		return nil
 	}
 	startConversationSemanticSync(ctx, log, index, resolveClient, cfg.Conversation.Semantic.CollectionID, freshness, group, kinds)

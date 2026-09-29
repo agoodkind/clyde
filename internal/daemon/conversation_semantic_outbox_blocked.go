@@ -155,3 +155,23 @@ func (outbox *conversationSemanticOutbox) blockedOwners(ctx context.Context, nam
 	sort.Strings(owners)
 	return owners, nil
 }
+
+// pendingCounts returns the counts of pending batches and pending projections.
+func (outbox *conversationSemanticOutbox) pendingCounts(ctx context.Context) (uint64, uint64, error) {
+	var batches, projections uint64
+	err := outbox.db.QueryRowContext(
+		ctx,
+		`SELECT (SELECT COUNT(*) FROM batches WHERE state = ?), (SELECT COUNT(*) FROM projections WHERE state = ?)`,
+		embeddedOutboxStatePending, embeddedProjectionStatePending,
+	).Scan(&batches, &projections)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.conversation_semantic_outbox.count_pending_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"path", outbox.path,
+			"err", err,
+		)
+		return 0, 0, fmt.Errorf("count pending outbox items: %w", err)
+	}
+	return batches, projections, nil
+}

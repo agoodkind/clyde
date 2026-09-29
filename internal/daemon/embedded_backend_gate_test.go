@@ -57,7 +57,7 @@ func TestSemanticSyncStartLeavesEmbeddedStoreOffForProductionConfig(t *testing.T
 			if runtime != nil && cfg.Conversation.Semantic.FeedsEngine() {
 				resolveClient = runtime.syncClient
 			}
-			if err := startConfiguredConversationSemanticSync(ctx, log, cfg, index, resolveClient, newConversationSemanticFreshness(), group); err != nil {
+			if err := startConfiguredConversationSemanticSync(ctx, log, cfg, index, resolveClient, newConversationSemanticFreshness(), newEmbeddedSemanticStatus(), group); err != nil {
 				t.Fatalf("start configured semantic sync: %v", err)
 			}
 			if testCase.wantLMSSkipped {

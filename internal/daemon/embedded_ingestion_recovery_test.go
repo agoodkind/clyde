@@ -198,7 +198,7 @@ func newLiveScenario(t *testing.T, database string, storeRoot string, name strin
 		EmbeddingRequestTimeout: config.Duration(2 * time.Minute),
 	}
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
-	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID))
+	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), newEmbeddedSemanticStatus())
 	return &liveScenario{semantic: semantic, worker: worker}
 }
 

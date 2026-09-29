@@ -145,7 +145,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	if runtime.semantic != nil && cfg.Conversation.Semantic.FeedsEngine() {
 		resolveSemanticClient = runtime.semantic.syncClient
 	}
-	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, resolveSemanticClient, semanticFreshness, runtime.group); err != nil {
+	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, resolveSemanticClient, semanticFreshness, runtime.embeddedStatus, runtime.group); err != nil {
 		return err
 	}
 
