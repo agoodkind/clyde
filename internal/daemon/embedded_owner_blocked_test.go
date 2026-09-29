@@ -158,16 +158,23 @@ func openUnmanagedBlockedTestStore(t *testing.T) (*embeddedConversationStore, *s
 // next library order and records it in the outbox without staging it.
 func recordBlockedTestBatch(t *testing.T, store *embeddedConversationStore) embeddedGeneration {
 	t.Helper()
+	return recordOwnerTestBatch(t, store, blockedBatchOwnerID, "blocked owner text")
+}
+
+// recordOwnerTestBatch prepares one chat field with text for ownerID at the
+// next library order and records it in the outbox without staging it.
+func recordOwnerTestBatch(t *testing.T, store *embeddedConversationStore, ownerID string, text string) embeddedGeneration {
+	t.Helper()
 	ctx := t.Context()
 	projected := searchbackend.ProjectFields(searchbackend.Conversation{
-		ID:                     blockedBatchOwnerID,
+		ID:                     ownerID,
 		LoadRules:              conversation.LoadRulesTag(defaultSemanticContentKinds()),
 		MessageCount:           1,
 		TrailingMessageMayGrow: false,
 		ArtifactSettled:        true,
 		ToolDetail:             embeddedToolDetail(defaultSemanticContentKinds()),
-	}, []searchbackend.Message{embeddedOccurrenceChatMessage("blocked owner text")})
-	record := conversation.Record{ID: blockedBatchOwnerID, Provider: conversation.ProviderCodex}
+	}, []searchbackend.Message{embeddedOccurrenceChatMessage(text)})
+	record := conversation.Record{ID: ownerID, Provider: conversation.ProviderCodex}
 	owner := newEmbeddedConversationOwner(record, defaultSemanticContentKinds())
 	rows, err := embeddedOutboxRows(ctx, store.namespace, owner, projected.Fields)
 	if err != nil {
@@ -176,7 +183,7 @@ func recordBlockedTestBatch(t *testing.T, store *embeddedConversationStore) embe
 	generation, err := store.delivery.prepareGeneration(ctx, embeddedOutboxBatch{
 		BatchID:           "",
 		Namespace:         store.namespace.ID,
-		OwnerID:           blockedBatchOwnerID,
+		OwnerID:           ownerID,
 		GenerationOrder:   0,
 		SourcePath:        "/rollout.jsonl",
 		SourceStamp:       "1:1",
