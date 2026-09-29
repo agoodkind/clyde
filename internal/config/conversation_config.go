@@ -16,8 +16,10 @@ type ConversationConfig struct {
 	//
 	// It selects whole conversations, which is a different level from
 	// [ConversationSemanticConfig.IndexedContent]. A conversation this hides is
-	// absent from every clyde surface, and the engine retains whatever a short
-	// manifest omits, so hiding one removes nothing already stored.
+	// absent from every clyde listing and search surface, and the engine retains
+	// whatever a short manifest omits, so hiding one removes nothing already
+	// stored. Embedded semantic ingestion ignores this setting and admits
+	// subagent conversations by [ConversationSemanticConfig.IncludeSubagents].
 	IncludeSubagentConversations bool                       `json:"includeSubagentConversations,omitempty" toml:"include_subagent_conversations,omitempty"`
 	Cursor                       CursorConversationConfig   `json:"cursor,omitzero" toml:"cursor,omitempty"`
 	Semantic                     ConversationSemanticConfig `json:"semantic,omitzero" toml:"semantic,omitempty"`

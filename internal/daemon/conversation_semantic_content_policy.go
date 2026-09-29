@@ -38,7 +38,7 @@ func startConfiguredConversationSemanticSync(
 	ctx context.Context,
 	log *slog.Logger,
 	cfg *config.Config,
-	index conversationSemanticIndex,
+	index embeddedRecordIndex,
 	resolveClient conversationSemanticClientResolver,
 	freshness *conversationSemanticFreshness,
 	embeddedStatus *embeddedSemanticStatus,
