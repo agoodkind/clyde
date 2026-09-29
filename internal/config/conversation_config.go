@@ -61,7 +61,102 @@ type ConversationSemanticConfig struct {
 	// how an operator turns indexing off, because that would quietly stop
 	// embedding everything; `ingestion_enabled = false` is.
 	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
+
+	// Backend selects the implementation behind ingestion and search. An empty
+	// value selects the lm-semantic-search daemon at SocketPath. The embedded
+	// value selects the in-process library configured by the keys below, and
+	// the loader rejects it until this build contains that runtime.
+	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
+
+	// IndexedProviders and IndexedRoles limit embedded ingestion and search to
+	// the listed providers and message roles. Empty lists select every one.
+	IndexedProviders []string `json:"indexedProviders,omitempty" toml:"indexed_providers,omitempty"`
+	IndexedRoles     []string `json:"indexedRoles,omitempty" toml:"indexed_roles,omitempty"`
+	// IncludeArchived and IncludeSubagents admit archived and subagent
+	// conversations to embedded ingestion and search.
+	IncludeArchived  bool `json:"includeArchived,omitempty" toml:"include_archived,omitempty"`
+	IncludeSubagents bool `json:"includeSubagents,omitempty" toml:"include_subagents,omitempty"`
+
+	// CatalogPath, LockPath, and PoolID identify the embedded library's SQLite
+	// catalog, writer lock file, and vector pool.
+	CatalogPath string `json:"catalogPath,omitempty" toml:"catalog_path,omitempty"`
+	LockPath    string `json:"lockPath,omitempty" toml:"lock_path,omitempty"`
+	PoolID      string `json:"poolId,omitempty" toml:"pool_id,omitempty"`
+
+	// MilvusAddress, MilvusDatabase, and MilvusCollection locate the Milvus
+	// collection that stores the embedded library's vectors.
+	MilvusAddress    string `json:"milvusAddress,omitempty" toml:"milvus_address,omitempty"`
+	MilvusDatabase   string `json:"milvusDatabase,omitempty" toml:"milvus_database,omitempty"`
+	MilvusCollection string `json:"milvusCollection,omitempty" toml:"milvus_collection,omitempty"`
+
+	// EmbeddingBaseURL is the OpenAI-compatible embedding endpoint. The loader
+	// accepts at most one of EmbeddingAPIKeyEnv and EmbeddingAPIKeyFile, and a
+	// local endpoint may set neither.
+	EmbeddingBaseURL    string `json:"embeddingBaseUrl,omitempty" toml:"embedding_base_url,omitempty"`
+	EmbeddingAPIKeyEnv  string `json:"embeddingApiKeyEnv,omitempty" toml:"embedding_api_key_env,omitempty"`
+	EmbeddingAPIKeyFile string `json:"embeddingApiKeyFile,omitempty" toml:"embedding_api_key_file,omitempty"`
+	// EmbeddingRequestTimeout bounds one embedding request. Zero uses the
+	// caller deadline. EmbeddingMaxAttempts and EmbeddingBackoffBase configure
+	// retries; unset values use 4 attempts and 200 milliseconds.
+	EmbeddingRequestTimeout Duration `json:"embeddingRequestTimeout,omitempty" toml:"embedding_request_timeout,omitempty"`
+	EmbeddingMaxAttempts    *int     `json:"embeddingMaxAttempts,omitempty" toml:"embedding_max_attempts,omitempty"`
+	EmbeddingBackoffBase    Duration `json:"embeddingBackoffBase,omitempty" toml:"embedding_backoff_base,omitempty"`
+
+	// EmbeddingModel, EmbeddingRevision, VectorDimension, and Normalization
+	// form the store descriptor that binds a catalog to one model generation.
+	// The catalog saves AnalyzerIdentity as its lexical analyzer identity, and
+	// an empty value selects the library's standard analyzer.
+	// The query embedding input begins with QueryInstructionPrefix.
+	EmbeddingModel         string `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
+	EmbeddingRevision      string `json:"embeddingRevision,omitempty" toml:"embedding_revision,omitempty"`
+	VectorDimension        int    `json:"vectorDimension,omitempty" toml:"vector_dimension,omitempty"`
+	Normalization          string `json:"normalization,omitempty" toml:"normalization,omitempty"`
+	AnalyzerIdentity       string `json:"analyzerIdentity,omitempty" toml:"analyzer_identity,omitempty"`
+	QueryInstructionPrefix string `json:"queryInstructionPrefix,omitempty" toml:"query_instruction_prefix,omitempty"`
+
+	// MaxBatchRows and MaxBatchBytes bound one library write batch.
+	// RawBatchTargetBytes bounds the transcript bytes Clyde loads per batch.
+	// Zero values use the library and Clyde defaults.
+	MaxBatchRows        int   `json:"maxBatchRows,omitempty" toml:"max_batch_rows,omitempty"`
+	MaxBatchBytes       int64 `json:"maxBatchBytes,omitempty" toml:"max_batch_bytes,omitempty"`
+	RawBatchTargetBytes int64 `json:"rawBatchTargetBytes,omitempty" toml:"raw_batch_target_bytes,omitempty"`
+
+	// The query budgets set the same named library configuration fields.
+	// Zero values use the library defaults.
+	QueryBlockSize    int      `json:"queryBlockSize,omitempty" toml:"query_block_size,omitempty"`
+	QueryWorkers      int      `json:"queryWorkers,omitempty" toml:"query_workers,omitempty"`
+	MaxTemporaryBytes int64    `json:"maxTemporaryBytes,omitempty" toml:"max_temporary_bytes,omitempty"`
+	MaxSnapshotBytes  int64    `json:"maxSnapshotBytes,omitempty" toml:"max_snapshot_bytes,omitempty"`
+	SnapshotTTL       Duration `json:"snapshotTtl,omitempty" toml:"snapshot_ttl,omitempty"`
+	QueryTimeout      Duration `json:"queryTimeout,omitempty" toml:"query_timeout,omitempty"`
+
+	// The request limits set the same named library configuration fields.
+	// Zero disables each limit.
+	MaxPageSize     int `json:"maxPageSize,omitempty" toml:"max_page_size,omitempty"`
+	MaxQueryBytes   int `json:"maxQueryBytes,omitempty" toml:"max_query_bytes,omitempty"`
+	MaxFilterDepth  int `json:"maxFilterDepth,omitempty" toml:"max_filter_depth,omitempty"`
+	MaxFilterValues int `json:"maxFilterValues,omitempty" toml:"max_filter_values,omitempty"`
+
+	// BM25K1, BM25B, and RRFK set the ranking parameters. Zero BM25K1 and RRFK
+	// and an unset BM25B use the library defaults; an explicit BM25B of zero is
+	// valid.
+	BM25K1 float64  `json:"bm25K1,omitempty" toml:"bm25_k1,omitempty"`
+	BM25B  *float64 `json:"bm25B,omitempty" toml:"bm25_b,omitempty"`
+	RRFK   int      `json:"rrfK,omitempty" toml:"rrf_k,omitempty"`
 }
+
+// ConversationSemanticBackend is the implementation behind conversation
+// semantic ingestion and search.
+type ConversationSemanticBackend string
+
+const (
+	// ConversationSemanticBackendLMS selects the lm-semantic-search daemon. The
+	// empty value selects it too.
+	ConversationSemanticBackendLMS ConversationSemanticBackend = "lms"
+	// ConversationSemanticBackendEmbedded selects the in-process shared search
+	// library.
+	ConversationSemanticBackendEmbedded ConversationSemanticBackend = "embedded"
+)
 
 // FeedsEngine reports whether the daemon offers conversations to the search
 // engine.
@@ -81,9 +176,9 @@ func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
-func applyConversationDefaults(conversation *ConversationConfig) {
+func applyConversationDefaults(conversation *ConversationConfig) error {
 	if conversation == nil {
-		return
+		return nil
 	}
 	conversation.Semantic.SocketPath = strings.TrimSpace(conversation.Semantic.SocketPath)
 	conversation.Semantic.CollectionID = strings.TrimSpace(conversation.Semantic.CollectionID)
@@ -97,4 +192,5 @@ func applyConversationDefaults(conversation *ConversationConfig) {
 		}
 	}
 	conversation.Semantic.IndexedContent = trimmed
+	return normalizeAndValidateConversationSemantic(&conversation.Semantic)
 }
