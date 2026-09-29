@@ -396,6 +396,15 @@ func resetProtectedFiles(cfg *config.Config) []string {
 			protected = append(protected, override.Path)
 		}
 	}
+	// The embedded search catalog and its writer lock keep committed
+	// occurrences that a reset must not delete.
+	semantic := cfg.Conversation.Semantic
+	if semantic.CatalogPath != "" {
+		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+			protected = append(protected, semantic.CatalogPath+suffix)
+		}
+	}
+	protected = append(protected, semantic.LockPath)
 	return protected
 }
 
@@ -501,6 +510,7 @@ func resetProtectedDirectories(ctx context.Context, cfg *config.Config) (_ []str
 		slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleCLI),
 		slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleDaemon),
 		filepath.Join(config.DefaultStateDir(), "exports"),
+		filepath.Join(config.DefaultStateDir(), "conversation-semantic"),
 	}
 	for _, root := range cursor {
 		roots = append(roots, root.RootDir)
