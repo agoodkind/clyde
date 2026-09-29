@@ -277,6 +277,7 @@ func resolveEngineHits(
 			// window is a separate windowed read; search never inlines it.
 			ContextWindow: conversation.Excerpt(hit.Content),
 			LoadRules:     hit.LoadRules,
+			ContextState:  conversation.SearchContextStateExcerptOnly,
 		})
 		seenMatches++
 		if limit > 0 && len(matches) >= limit {

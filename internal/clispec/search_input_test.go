@@ -106,3 +106,42 @@ func TestPrepareSearchCarriesOffset(t *testing.T) {
 		t.Fatalf("browse offset = %d, want 40", browsePayload.ListOpts.Offset)
 	}
 }
+
+// TestPrepareSearchCarriesCursorOnlyWithQuery proves prepareSearch copies the
+// trimmed --cursor value into the search options for a query and rejects a
+// cursor in read and browse modes, which have no search to continue.
+func TestPrepareSearchCarriesCursorOnlyWithQuery(t *testing.T) {
+	t.Parallel()
+
+	searchPayload, err := prepareSearch(searchInput{
+		Query:  "auth timeout",
+		Cursor: " page-two ",
+		Limit:  20,
+		Window: 5,
+		Around: -1,
+	})
+	if err != nil {
+		t.Fatalf("prepare search: %v", err)
+	}
+	if searchPayload.SearchOpts.Cursor != "page-two" {
+		t.Fatalf("search cursor = %q, want page-two", searchPayload.SearchOpts.Cursor)
+	}
+
+	if _, err := prepareSearch(searchInput{
+		ConversationID: "claude:abc",
+		Cursor:         "page-two",
+		Limit:          20,
+		Window:         5,
+		Around:         -1,
+	}); err == nil {
+		t.Fatal("prepare read with a cursor succeeded, want an error")
+	}
+	if _, err := prepareSearch(searchInput{
+		Cursor: "page-two",
+		Limit:  20,
+		Window: 5,
+		Around: -1,
+	}); err == nil {
+		t.Fatal("prepare browse with a cursor succeeded, want an error")
+	}
+}

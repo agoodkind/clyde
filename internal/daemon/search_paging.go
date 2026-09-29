@@ -69,6 +69,7 @@ func semanticSearchResult(
 		// A page the over-fetch budget could not fill still has ranked hits
 		// behind it, so it must not be reported as the end of the results.
 		HasMore:          (len(matches) >= normalizedLimit && normalizedLimit > 0) || page.short,
+		NextCursor:       "",
 		Source:           conversation.SearchSourceSemantic,
 		Facets:           conversation.ComputeFacets(matches, searchFacetTopN),
 		Freshness:        conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},

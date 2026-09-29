@@ -33,6 +33,7 @@ type searchInput struct {
 	Around          int
 	Window          int
 	LoadRules       string
+	Cursor          string
 	MinScore        float64
 	IncludeArchived bool
 }
@@ -197,6 +198,8 @@ func searchParams() []Param[searchInput] {
 			func(in *searchInput, v int) { in.Window = v }),
 		StringParam("load_rules", "Loading-rules tag from the search hit being read around, so the window counts over the same message sequence its message index refers to. Leave empty for hits without one.", "", false,
 			func(in *searchInput, v string) { in.LoadRules = v }),
+		StringParam("cursor", "Continuation cursor from a previous search result's next_cursor. Requires query, and continues the same query and filters.", "", false,
+			func(in *searchInput, v string) { in.Cursor = v }),
 		FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
 			func(in *searchInput, v float64) { in.MinScore = v }),
 		BoolParam("include_archived", "Include archived conversations.", false,
@@ -218,6 +221,7 @@ func newSearchInput() searchInput {
 		Around:          -1,
 		Window:          5,
 		LoadRules:       "",
+		Cursor:          "",
 		MinScore:        0,
 		IncludeArchived: false,
 	}
@@ -265,6 +269,9 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 	if in.Around >= 0 && conversation == "" {
 		return searchPayload{}, fmt.Errorf("around requires a conversation to center on")
 	}
+	if strings.TrimSpace(in.Cursor) != "" && query == "" {
+		return searchPayload{}, fmt.Errorf("cursor requires a query to continue")
+	}
 
 	switch {
 	case query != "":
@@ -289,7 +296,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         mode,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     conv.ListOptions{Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", Query: "", IncludeArchived: false, All: false},
 			Conversation: conversation,
 			Around:       in.Around,
@@ -303,7 +310,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         searchModeBrowse,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     opts,
 			Conversation: "",
 			Around:       in.Around,
@@ -410,6 +417,7 @@ func searchConversationsOptionsFromInput(in searchInput) (conv.SearchConversatio
 		PerConversationLimit: 0,
 		ConversationID:       strings.TrimSpace(in.ConversationID),
 		ContextWindow:        in.Window,
+		Cursor:               strings.TrimSpace(in.Cursor),
 	}, nil
 }
 
@@ -546,7 +554,11 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 		}
 	}
 	if result.HasMore {
-		fmt.Fprintf(&out, "\nMore: --offset %d\n", result.NextOffset)
+		if result.NextCursor != "" {
+			fmt.Fprintf(&out, "\nMore: --cursor %s\n", result.NextCursor)
+		} else {
+			fmt.Fprintf(&out, "\nMore: --offset %d\n", result.NextOffset)
+		}
 	}
 	return out.String()
 }

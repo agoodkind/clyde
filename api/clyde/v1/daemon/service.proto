@@ -268,6 +268,26 @@ message SearchConversationsRequest {
   int64 context_window = 12;
   // offset skips this many matching results before returning the current page.
   int64 offset = 13;
+  // cursor continues a previous page from that page's next_cursor under the
+  // same query and filters. Empty starts a new search. A search source without
+  // cursor paging refuses a non-empty cursor.
+  string cursor = 14;
+}
+
+// SearchContextState reports how a match's context_window relates to the
+// source transcript.
+enum SearchContextState {
+  // UNSPECIFIED is the value a daemon that predates the field sends.
+  SEARCH_CONTEXT_STATE_UNSPECIFIED = 0;
+  // EXCERPT_ONLY means context_window is the stored matched passage and the
+  // source read no transcript context for the match.
+  SEARCH_CONTEXT_STATE_EXCERPT_ONLY = 1;
+  // AVAILABLE means the source read the transcript and verified the matched
+  // message against the stored occurrence.
+  SEARCH_CONTEXT_STATE_AVAILABLE = 2;
+  // UNAVAILABLE means the transcript is missing or no longer matches the stored
+  // occurrence, so only the stored excerpt is returned.
+  SEARCH_CONTEXT_STATE_UNAVAILABLE = 3;
 }
 
 // SearchSource names the provider that produced the returned matches.
@@ -294,6 +314,7 @@ message ConversationSearchMatch {
   // same message sequence message_index refers to. Empty on rows written
   // before tagging existed.
   string load_rules = 8;
+  SearchContextState context_state = 9;
 }
 
 // SearchFacetCount is one facet value and how many matched conversations carry
@@ -345,6 +366,9 @@ message SearchConversationsResponse {
   FilterAccounting filter_accounting = 9;
   int64 offset = 10;
   int64 next_offset = 11;
+  // next_cursor continues this search from the next page. Empty when no more
+  // results exist or the search source has no cursor paging.
+  string next_cursor = 12;
 }
 
 message ConversationInfoStats {

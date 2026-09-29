@@ -64,7 +64,29 @@ type SearchConversationsOptions struct {
 	// ContextWindow is the number of messages before and after each hit to render
 	// inline on the match. Zero means the daemon's default small window.
 	ContextWindow int
+	// Cursor continues a previous page from its NextCursor under the same query
+	// and filters. Empty starts a new search.
+	Cursor string
 }
+
+// SearchContextState reports how a match's ContextWindow relates to the source
+// transcript.
+type SearchContextState string
+
+const (
+	// SearchContextStateUnspecified is the state a daemon that predates the
+	// field reports.
+	SearchContextStateUnspecified SearchContextState = ""
+	// SearchContextStateExcerptOnly means ContextWindow is the stored matched
+	// passage and the source read no transcript context for the match.
+	SearchContextStateExcerptOnly SearchContextState = "excerpt_only"
+	// SearchContextStateAvailable means the source read the transcript and
+	// verified the matched message against the stored occurrence.
+	SearchContextStateAvailable SearchContextState = "available"
+	// SearchContextStateUnavailable means the transcript is missing or no longer
+	// matches the stored occurrence, so only the stored excerpt is returned.
+	SearchContextStateUnavailable SearchContextState = "unavailable"
+)
 
 // SearchMatch is one matching message returned during cross-conversation
 // discovery.
@@ -82,6 +104,8 @@ type SearchMatch struct {
 	// read passes it back so the context is counted over the same message
 	// sequence MessageIndex refers to. Empty on rows written before tagging.
 	LoadRules string
+	// ContextState reports how ContextWindow relates to the source transcript.
+	ContextState SearchContextState
 }
 
 // SearchConversationsResult is a bounded set of candidate conversations.
@@ -93,6 +117,9 @@ type SearchConversationsResult struct {
 	Offset               int
 	NextOffset           int
 	HasMore              bool
+	// NextCursor continues this search from the next page. Empty when no more
+	// results exist or the search source has no cursor paging.
+	NextCursor string
 	// Source names the provider that produced the matches.
 	Source SearchSource
 	// Facets summarizes the match set by workspace, provider, and model.
