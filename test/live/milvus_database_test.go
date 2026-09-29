@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	// liveMilvusAddress is the isolated test Milvus. Live tests never use the
-	// production or validation Milvus instances.
+	// liveMilvusAddress is the production Milvus server. A live test creates
+	// its own database there with a unique name, reads and writes only that
+	// database, and drops it in cleanup.
 	liveMilvusAddress = "localhost:19530"
 	// liveMilvusDatabasePrefix starts the name of every database a live test
 	// creates. The rest of the name is 32 random hex characters.
@@ -52,8 +53,8 @@ type milvusNamesResponse struct {
 }
 
 // createLiveMilvusDatabase creates a database named clyde_live_ followed by
-// 32 random hex characters on the isolated test Milvus. It fails when the name
-// exists. Cleanup drops every collection in the database, drops the database,
+// 32 random hex characters on the Milvus server at liveMilvusAddress. It fails
+// when the name exists. Cleanup drops every collection in the database, drops the database,
 // and fails when the database remains.
 func createLiveMilvusDatabase(t *testing.T) string {
 	t.Helper()
@@ -134,8 +135,8 @@ func listMilvusDatabases() ([]string, error) {
 	return listed.Data, nil
 }
 
-// callMilvusREST posts one JSON request to the Milvus REST API on the isolated
-// test Milvus and decodes the JSON response into response.
+// callMilvusREST posts one JSON request to the Milvus REST API at
+// liveMilvusAddress and decodes the JSON response into response.
 func callMilvusREST[Request milvusDatabaseRequest | milvusCollectionRequest, Response milvusStatusResponse | milvusNamesResponse](
 	path string,
 	request Request,
