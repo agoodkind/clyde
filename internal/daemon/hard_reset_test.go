@@ -336,7 +336,10 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 	t.Setenv("LOG_PATH", filepath.Join(root, "native.log"))
 	rotatedLog := filepath.Join(config.DefaultStateDir(), "clyde-daemon-old.jsonl.gz")
 	writeResetFixture(t, rotatedLog, []byte("old incompatible store bytes"))
-	configBody := []byte("# Preserve these exact bytes.\n[logging.cleanup]\nenabled = false\n[conversation.semantic]\ningestion_enabled = true\n[mitm.capture_store]\ndb_path = " + strconv.Quote(filepath.Join(config.DefaultStateDir(), "custom", "capture.db")) + "\n")
+	semanticDir := filepath.Join(config.DefaultStateDir(), "conversation-semantic")
+	semanticCatalog := filepath.Join(semanticDir, "catalog.sqlite")
+	semanticLock := filepath.Join(semanticDir, "catalog.lock")
+	configBody := []byte("# Preserve these exact bytes.\n[logging.cleanup]\nenabled = false\n[conversation.semantic]\ningestion_enabled = true\ncatalog_path = " + strconv.Quote(semanticCatalog) + "\nlock_path = " + strconv.Quote(semanticLock) + "\n[mitm.capture_store]\ndb_path = " + strconv.Quote(filepath.Join(config.DefaultStateDir(), "custom", "capture.db")) + "\n")
 	writeResetFixture(t, config.GlobalConfigPath(), configBody)
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
@@ -359,7 +362,7 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 		inventory = append(inventory, path)
 	}
 	writeResetFixture(t, filepath.Join(root, "inventory"), []byte(strings.Join(inventory, "\n")))
-	protected := []string{config.GlobalConfigPath(), cfg.MITM.CA.CertPath, cfg.MITM.CA.KeyPath, filepath.Join(config.DefaultStateDir(), "exports", "transcript.md"), filepath.Join(config.DefaultStateDir(), "sibling.db"), filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), filepath.Join(os.Getenv("CODEX_HOME"), "state_5.sqlite"), filepath.Join(os.Getenv("CLYDE_CURSOR_DATA_DIRS"), "User", "globalStorage", "state.vscdb"), filepath.Join(root, "lm-semantic-search", "collection.db"), filepath.Join(root, "sibling-repo", "database.db")}
+	protected := []string{config.GlobalConfigPath(), cfg.MITM.CA.CertPath, cfg.MITM.CA.KeyPath, filepath.Join(config.DefaultStateDir(), "exports", "transcript.md"), filepath.Join(config.DefaultStateDir(), "sibling.db"), filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"), filepath.Join(os.Getenv("CODEX_HOME"), "state_5.sqlite"), filepath.Join(os.Getenv("CLYDE_CURSOR_DATA_DIRS"), "User", "globalStorage", "state.vscdb"), filepath.Join(root, "lm-semantic-search", "collection.db"), filepath.Join(root, "sibling-repo", "database.db"), semanticCatalog, semanticLock, filepath.Join(semanticDir, "outbox-pool.sqlite")}
 	for _, path := range protected {
 		if path != config.GlobalConfigPath() {
 			writeResetFixture(t, path, []byte("protected sentinel: "+path))
