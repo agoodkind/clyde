@@ -155,6 +155,13 @@ func runInitialSemanticIndex(
 	if err != nil {
 		return false, err
 	}
+	// The embedded backend has no lm-semantic-search socket. The daemon sync
+	// worker lists the records of the conversation index cache that this run
+	// wrote and loads each admitted transcript once for its first delivery.
+	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
+		_, _ = fmt.Fprintln(output, "Initial indexing: embedded semantic ingestion starts in the daemon sync worker from the written conversation index")
+		return false, nil
+	}
 	client, err := dialInitialSemantic(ctx, cfg.Conversation.Semantic.SocketPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(output, "Initial indexing: semantic indexing skipped because semantic service is unavailable: %v\n", err)
