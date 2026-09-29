@@ -49,6 +49,9 @@ type runtimeServices struct {
 	// embeddedStatus receives the embedded ingestion state for the daemon
 	// status RPC. The embedded sync worker publishes it.
 	embeddedStatus *embeddedSemanticStatus
+	// embeddedReconcile gives the control socket access to the running
+	// embedded ingestion worker for operator reconciliation.
+	embeddedReconcile *embeddedReconcileGate
 	// pprofListener is the optional loopback pprof socket. It is nil when pprof
 	// is off. When set, it is inherited across reload like the adapter and MITM
 	// listeners so the debug surface survives a hot reload with no bind gap.
@@ -101,6 +104,7 @@ func startRuntime(
 		captureStore:          nil,
 		semantic:              nil,
 		embeddedStatus:        newEmbeddedSemanticStatus(),
+		embeddedReconcile:     newEmbeddedReconcileGate(log),
 		pprofListener:         nil,
 		errors:                make(chan error, 3),
 		reloadMu:              sync.Mutex{},

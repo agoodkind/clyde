@@ -7,57 +7,102 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 
-	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/conversation"
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
-// errEmbeddedReconcileBackend reports a reconcile request under a
-// configuration that does not use the embedded backend.
-var errEmbeddedReconcileBackend = errors.New("embedded conversation reconciliation requires conversation.semantic.backend = \"embedded\"")
+// errEmbeddedReconcileUnavailable reports a reconcile request to a daemon
+// without a running embedded ingestion worker.
+var errEmbeddedReconcileUnavailable = errors.New("the daemon runs no embedded conversation ingestion worker; conversation.semantic.backend must be \"embedded\" with ingestion enabled")
 
-// ReconcileEmbeddedConversation reconciles the outbox state of one
-// conversation with the embedded search library. It loads the configuration,
-// refreshes the conversation index, opens the embedded store, aborts the
-// unfinished tokens of the owner, rebuilds its committed fields and owner
-// metadata from the published rows, and clears its blocked state. The daemon
-// applies the current record metadata through ReprojectScalars on its next
-// pass.
-func ReconcileEmbeddedConversation(ctx context.Context, output io.Writer, conversationID string) error {
-	cfg, err := config.LoadGlobalOrDefault()
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.reconcile_config_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"err", err,
-		)
-		return fmt.Errorf("load config: %w", err)
+// embeddedReconcileGate gives the daemon control socket access to the running
+// embedded ingestion worker. The worker attaches its state when it starts and
+// detaches it after its last pass.
+type embeddedReconcileGate struct {
+	mu       sync.Mutex
+	embedded *embeddedConversationSync
+	log      *slog.Logger
+}
+
+func newEmbeddedReconcileGate(log *slog.Logger) *embeddedReconcileGate {
+	if log == nil {
+		log = slog.Default()
 	}
-	semantic := cfg.Conversation.Semantic
-	if semantic.Backend != config.ConversationSemanticBackendEmbedded {
-		return errEmbeddedReconcileBackend
+	return &embeddedReconcileGate{mu: sync.Mutex{}, embedded: nil, log: log}
+}
+
+func (gate *embeddedReconcileGate) attach(embedded *embeddedConversationSync) {
+	if gate == nil {
+		return
 	}
-	index := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
-	if err := index.Refresh(ctx); err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.reconcile_refresh_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"err", err,
-		)
-		return fmt.Errorf("refresh conversation index: %w", err)
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	gate.embedded = embedded
+}
+
+func (gate *embeddedReconcileGate) detach(embedded *embeddedConversationSync) {
+	if gate == nil {
+		return
 	}
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.embedded == embedded {
+		gate.embedded = nil
+	}
+}
+
+// reconcile reconciles one conversation in the running worker. It locks the
+// worker store after the current sync pass ends and unlocks it after the
+// reconciliation.
+func (gate *embeddedReconcileGate) reconcile(ctx context.Context, conversationID string) (embeddedReconcileResult, error) {
+	var embedded *embeddedConversationSync
 	log := slog.Default()
-	store, err := openEmbeddedConversationStore(ctx, semantic, conversationSemanticOutboxPath(semantic.PoolID), log)
-	if err != nil {
-		return err
+	if gate != nil {
+		gate.mu.Lock()
+		embedded = gate.embedded
+		log = gate.log
+		gate.mu.Unlock()
 	}
-	result, reconcileErr := reconcileEmbeddedConversationWithStore(ctx, store, index, conversationID)
-	closeErr := store.close(context.WithoutCancel(ctx))
-	if err := errors.Join(reconcileErr, closeErr); err != nil {
-		return err
+	if embedded == nil {
+		return embeddedReconcileResult{}, errEmbeddedReconcileUnavailable
+	}
+	embedded.mu.Lock()
+	defer embedded.mu.Unlock()
+	store, err := embedded.ensureStore(ctx, log)
+	if err != nil {
+		return embeddedReconcileResult{}, err
+	}
+	return reconcileEmbeddedConversationWithStore(ctx, store, embedded.records, conversationID)
+}
+
+// ReconcileEmbeddedConversation asks the running daemon to reconcile the
+// embedded ingestion outbox state of one conversation with the embedded search
+// library. The daemon runs the reconciliation between two sync passes with
+// the store that its worker owns. The daemon applies the current record
+// metadata through ReprojectScalars on its next pass.
+func ReconcileEmbeddedConversation(ctx context.Context, output io.Writer, conversationID string) error {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.reconcile_connect_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"err", err,
+		)
+		return fmt.Errorf("reconcile runs inside the running daemon; connect to the daemon: %w", err)
+	}
+	defer func() { _ = client.conn.Close() }()
+	response, err := client.rpc.ReconcileEmbeddedConversation(ctx, &clydev1.ReconcileEmbeddedConversationRequest{
+		ConversationId: strings.TrimSpace(conversationID),
+	})
+	if err != nil {
+		return daemonRPCError(ctx, "reconcile embedded conversation", err)
 	}
 	if _, err := fmt.Fprintf(output, "Reconciled %s: %d published rows, projection order %d, %d aborted tokens.\n",
-		strings.TrimSpace(conversationID), result.committedRows, result.projectionOrder, result.abortedTokens); err != nil {
+		strings.TrimSpace(conversationID), response.GetPublishedRows(), response.GetProjectionOrder(), response.GetAbortedTokens()); err != nil {
 		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.reconcile_write_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -66,6 +111,35 @@ func ReconcileEmbeddedConversation(ctx context.Context, output io.Writer, conver
 		return fmt.Errorf("write reconcile result: %w", err)
 	}
 	return nil
+}
+
+// ReconcileEmbeddedConversation reconciles one conversation in the embedded
+// ingestion worker of this daemon.
+func (s *controlServer) ReconcileEmbeddedConversation(
+	ctx context.Context,
+	request *clydev1.ReconcileEmbeddedConversationRequest,
+) (*clydev1.ReconcileEmbeddedConversationResponse, error) {
+	client, _ := peer.FromContext(ctx)
+	conversationID := strings.TrimSpace(request.GetConversationId())
+	if conversationID == "" {
+		return nil, status.Error(codes.InvalidArgument, "conversation_id is required")
+	}
+	result, err := s.embeddedReconcile.reconcile(ctx, conversationID)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.reconcile_request_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", conversationID,
+			"err", err,
+		)
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return &clydev1.ReconcileEmbeddedConversationResponse{
+		PublishedRows:   int64(result.committedRows),
+		ProjectionOrder: result.projectionOrder,
+		AbortedTokens:   int64(result.abortedTokens),
+	}, nil
 }
 
 // reconcileEmbeddedConversationWithStore finds one conversation record in the

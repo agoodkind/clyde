@@ -45,6 +45,20 @@ service ClydeService {
   // the same freshness that rides each search response, so a status view can
   // read it without running a search.
   rpc GetSemanticSearchFreshness(GetSemanticSearchFreshnessRequest) returns (GetSemanticSearchFreshnessResponse);
+  // ReconcileEmbeddedConversation rebuilds the embedded ingestion outbox state
+  // of one conversation from the embedded search library inside the running
+  // daemon, between two sync passes.
+  rpc ReconcileEmbeddedConversation(ReconcileEmbeddedConversationRequest) returns (ReconcileEmbeddedConversationResponse);
+}
+
+message ReconcileEmbeddedConversationRequest {
+  string conversation_id = 1;
+}
+
+message ReconcileEmbeddedConversationResponse {
+  int64 published_rows = 1;
+  uint64 projection_order = 2;
+  int64 aborted_tokens = 3;
 }
 
 message GetSemanticSearchFreshnessRequest {

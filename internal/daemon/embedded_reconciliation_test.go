@@ -1,8 +1,6 @@
 package daemon
 
 import (
-	"bytes"
-	"errors"
 	"log/slog"
 	"testing"
 
@@ -216,10 +214,9 @@ func assertNoBlockedReconcileOwners(t *testing.T, store *embeddedConversationSto
 }
 
 // TestEmbeddedReconcileCommandClearsBlockedOwner blocks one owner with a real
-// library.ErrStaleGeneration and runs the operator reconciliation for that
-// conversation. The owner must lose its blocked state with one aborted token.
-// An unknown conversation ID must fail, and a configuration without the
-// embedded backend must be refused before any store opens.
+// library.ErrStaleGeneration and reconciles that conversation with the store.
+// The owner must lose its blocked state with one aborted token. An unknown
+// conversation ID must fail.
 func TestEmbeddedReconcileCommandClearsBlockedOwner(t *testing.T) {
 	stores := isolateEmbeddedProjectionStores(t)
 	ageLiveArtifactForGate(t, writeEmbeddedProjectionCodexRollout(t, stores))
@@ -248,9 +245,5 @@ func TestEmbeddedReconcileCommandClearsBlockedOwner(t *testing.T) {
 	}
 	if _, err := reconcileEmbeddedConversationWithStore(t.Context(), store, index, "codex:not-indexed"); err == nil {
 		t.Fatal("reconcile of an unindexed conversation succeeded")
-	}
-	var output bytes.Buffer
-	if err := ReconcileEmbeddedConversation(t.Context(), &output, reconcileKnownOwnerID); !errors.Is(err, errEmbeddedReconcileBackend) {
-		t.Fatalf("reconcile without the embedded backend error = %v, want the backend refusal", err)
 	}
 }

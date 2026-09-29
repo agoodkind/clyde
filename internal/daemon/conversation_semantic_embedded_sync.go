@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"goodkind.io/lm-semantic-search/library"
@@ -51,6 +52,9 @@ type embeddedConversationSync struct {
 	// rows. A later pass reads the library for these owners again only after
 	// the worker restarts.
 	libraryAbsent map[string]bool
+	// mu serializes every use of store: the sync passes, the store close, and
+	// the reconciliations that the daemon control socket requests.
+	mu sync.Mutex
 }
 
 // embeddedRecordLister lists every cached conversation record with its artifact
@@ -81,6 +85,7 @@ func newEmbeddedConversationSync(
 		status:           status,
 		records:          records,
 		libraryAbsent:    make(map[string]bool),
+		mu:               sync.Mutex{},
 	}
 }
 
@@ -99,6 +104,8 @@ func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *
 
 // closeStore closes the open store after the worker stops.
 func (embedded *embeddedConversationSync) closeStore(ctx context.Context) {
+	embedded.mu.Lock()
+	defer embedded.mu.Unlock()
 	if embedded.store == nil {
 		return
 	}
@@ -151,6 +158,7 @@ func startEmbeddedConversationSemanticSync(
 	index embeddedRecordIndex,
 	freshness *conversationSemanticFreshness,
 	status *embeddedSemanticStatus,
+	reconcileGate *embeddedReconcileGate,
 	group *livetrack.Group,
 	contentKinds conversation.ContentKindSet,
 ) bool {
@@ -172,9 +180,11 @@ func startEmbeddedConversationSemanticSync(
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, log, contentKinds)
 	worker.freshness = freshness
 	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), status, index)
+	reconcileGate.attach(worker.embedded)
 	go func() {
 		defer close(done)
 		defer worker.embedded.closeStore(ctx)
+		defer reconcileGate.detach(worker.embedded)
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				worker.log.ErrorContext(workerCtx, "daemon.conversation_semantic_sync.panic",
@@ -246,6 +256,8 @@ type embeddedSyncStats struct {
 // applied metadata. An owner with a blocked outbox item that reconciliation
 // did not clear receives no delivery and no reprojection.
 func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) error {
+	w.embedded.mu.Lock()
+	defer w.embedded.mu.Unlock()
 	store, err := w.embedded.ensureStore(ctx, w.log)
 	if err != nil {
 		return err

@@ -54,6 +54,9 @@ type controlServer struct {
 	exportTokens       exportTokenConfig
 	providerStatsNow   func() time.Time
 	providerStatsTicks <-chan time.Time
+	// embeddedReconcile reconciles one conversation in the running embedded
+	// ingestion worker. Nil reports that no such worker runs.
+	embeddedReconcile *embeddedReconcileGate
 }
 
 // GetDaemonStatus reads only daemon-owned flags, connections, and listener handles.
