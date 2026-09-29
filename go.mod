@@ -14,6 +14,7 @@ require (
 	github.com/klauspost/compress v1.18.6
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/mattn/go-sqlite3 v1.14.44
+	github.com/milvus-io/milvus/client/v2 v2.6.5
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.40.0
 	github.com/openai/openai-go/v3 v3.66.0
@@ -127,7 +128,6 @@ require (
 	github.com/mattn/go-pointer v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.23 // indirect
-	github.com/milvus-io/milvus/client/v2 v2.6.5 // indirect
 	github.com/milvus-io/milvus/pkg/v2 v2.6.7-0.20251201120310-af64f2acba38 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
