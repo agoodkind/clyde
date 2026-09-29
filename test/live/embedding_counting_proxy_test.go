@@ -5,6 +5,7 @@ package live
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ type embeddingCounts struct {
 // embedding endpoint and counts the embedding requests and their inputs. A
 // live run reports the counts as its embedding cost.
 type embeddingCountingProxy struct {
+	t      *testing.T
 	server *httptest.Server
 	mu     sync.Mutex
 	counts embeddingCounts
@@ -48,7 +50,7 @@ func startEmbeddingCountingProxy(t *testing.T, upstream string) *embeddingCounti
 	if err != nil {
 		t.Fatalf("parse embedding endpoint %q: %v", upstream, err)
 	}
-	proxy := &embeddingCountingProxy{server: nil, mu: sync.Mutex{}, counts: embeddingCounts{Requests: 0, Inputs: 0}}
+	proxy := &embeddingCountingProxy{t: t, server: nil, mu: sync.Mutex{}, counts: embeddingCounts{Requests: 0, Inputs: 0}}
 	forward := &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
 			request.SetURL(&url.URL{Scheme: target.Scheme, Host: target.Host})
@@ -82,19 +84,38 @@ func (proxy *embeddingCountingProxy) baseURL(upstreamPath string) string {
 	return proxy.server.URL + upstreamPath
 }
 
+// record counts one embedding request and its inputs. A body with an input
+// field that is neither a string nor an array of strings fails the test,
+// because the counts would otherwise misreport the embedding cost.
 func (proxy *embeddingCountingProxy) record(body []byte) {
-	inputCount := 1
-	var decoded embeddingInputs
-	if err := json.Unmarshal(body, &decoded); err == nil {
-		var inputs []string
-		if json.Unmarshal(decoded.Input, &inputs) == nil {
-			inputCount = len(inputs)
-		}
+	inputCount, err := countEmbeddingInputs(body)
+	if err != nil {
+		proxy.t.Errorf("embedding counting proxy: %v", err)
+		return
 	}
 	proxy.mu.Lock()
 	defer proxy.mu.Unlock()
 	proxy.counts.Requests++
 	proxy.counts.Inputs += inputCount
+}
+
+// countEmbeddingInputs returns the number of inputs in an OpenAI-compatible
+// embeddings request body: 1 for a string input and the array length for a
+// string array input.
+func countEmbeddingInputs(body []byte) (int, error) {
+	var decoded embeddingInputs
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return 0, fmt.Errorf("decode embedding request body: %w", err)
+	}
+	var single string
+	if err := json.Unmarshal(decoded.Input, &single); err == nil {
+		return 1, nil
+	}
+	var inputs []string
+	if err := json.Unmarshal(decoded.Input, &inputs); err != nil {
+		return 0, fmt.Errorf("decode embedding request input as a string or a string array: %w", err)
+	}
+	return len(inputs), nil
 }
 
 // snapshot returns the counts so far.
