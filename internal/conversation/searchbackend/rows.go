@@ -61,7 +61,7 @@ func messageFields(profile string, toolDetail ToolDetail, message Message) []Fie
 }
 
 func toolFields(profile string, toolDetail ToolDetail, message Message, toolIndex int, tool Tool) []Field {
-	name := strings.TrimSpace(strings.ToValidUTF8(tool.Name, ""))
+	name := strings.TrimSpace(cleanText(tool.Name))
 	switch toolDetail {
 	case ToolDetailNone:
 		return nil
@@ -94,7 +94,7 @@ func toolFields(profile string, toolDetail ToolDetail, message Message, toolInde
 func toolCallPrefixAndText(tool Tool, name string) (string, string) {
 	sanitized := Tool{
 		Name:        name,
-		Display:     strings.ToValidUTF8(tool.Display, ""),
+		Display:     cleanText(tool.Display),
 		DisplayLang: tool.DisplayLang,
 		Output:      "",
 	}
@@ -115,14 +115,21 @@ func toolNamePrefix(name string) string {
 	return name + "\n"
 }
 
-// selectedText replaces invalid UTF-8 and treats text with only whitespace as
-// no content.
+// selectedText cleans value with cleanText and treats text with only
+// whitespace as no content.
 func selectedText(value string) string {
-	text := strings.ToValidUTF8(value, "")
+	text := cleanText(value)
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
 	return text
+}
+
+// cleanText removes invalid UTF-8 and replaces each NUL byte with a space. The
+// shared search library rejects lexical text with a NUL byte, because its
+// analyzer tokenizes nothing after the first NUL.
+func cleanText(value string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(value, ""), "\x00", " ")
 }
 
 func newField(profile string, message Message, kind FieldKind, toolIndex int, prefix string, text string) Field {
