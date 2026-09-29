@@ -18,6 +18,10 @@ const conversationSemanticKey = "conversation.semantic."
 // rejects a nonzero value that converts to a float32 zero.
 const maxConversationSemanticBM25K1 = 1e6
 
+// maxConversationSemanticQueryBlockSize is the largest query_block_size the
+// shared search library accepts at Open, the Milvus single-search limit.
+const maxConversationSemanticQueryBlockSize = 16384
+
 // normalizeAndValidateConversationSemantic trims the embedded search settings,
 // expands the catalog and lock paths, and rejects values the embedded library
 // cannot accept. The range checks run for every backend. After the embedded
@@ -145,7 +149,13 @@ func validateConversationSemanticCounts(semantic *ConversationSemanticConfig) er
 		{key: "max_filter_values", value: int64(semantic.MaxFilterValues)},
 		{key: "rrf_k", value: int64(semantic.RRFK)},
 	}
-	return rejectNegativeConversationSemanticSettings(settings)
+	if err := rejectNegativeConversationSemanticSettings(settings); err != nil {
+		return err
+	}
+	if semantic.QueryBlockSize > maxConversationSemanticQueryBlockSize {
+		return invalidConversationSemanticSetting("query_block_size", fmt.Sprintf("must be at most %d, got %d", maxConversationSemanticQueryBlockSize, semantic.QueryBlockSize))
+	}
+	return nil
 }
 
 func rejectNegativeConversationSemanticSettings(settings []conversationSemanticSetting) error {
