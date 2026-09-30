@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/providerid"
 )
 
 // FrozenBattery preserves the original workload before oracle expectations exist.
@@ -150,6 +153,7 @@ func validateFrozenBattery(battery FrozenBattery, constraints BatteryConstraints
 			return fmt.Errorf("original query %s has repeated identity or invalid controls", query.ID)
 		}
 		if err := validateFrozenFilter(query.Filter); err != nil {
+			slog.Warn("search.acceptance.battery_filter_rejected", "component", "searchacceptance", "concern", "battery", "query_id", query.ID, "err", err)
 			return fmt.Errorf("validate original query %s: %w", query.ID, err)
 		}
 		queries[query.ID] = true
@@ -169,8 +173,12 @@ func validateFrozenBattery(battery FrozenBattery, constraints BatteryConstraints
 
 func validateFrozenFilter(filter Filter) error {
 	if filter.Provider != nil {
-		switch *filter.Provider {
-		case "claude", "codex", "cursor", "zed", "copilot":
+		provider, ok := providerid.Parse(*filter.Provider)
+		if !ok || provider.String() != *filter.Provider {
+			return errors.New("original filter provider is unsupported")
+		}
+		switch provider {
+		case conversation.ProviderClaude, conversation.ProviderCodex, conversation.ProviderCursor, conversation.ProviderZed, conversation.ProviderCopilot:
 		default:
 			return errors.New("original filter provider is unsupported")
 		}
@@ -188,6 +196,7 @@ func validateFrozenFilter(filter Filter) error {
 			parsed, err = time.Parse(time.DateOnly, *value)
 		}
 		if err != nil {
+			slog.Warn("search.acceptance.battery_date_rejected", "component", "searchacceptance", "concern", "battery", "err", err)
 			return fmt.Errorf("parse original filter date: %w", err)
 		}
 		dates[index] = parsed

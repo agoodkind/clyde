@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"goodkind.io/clyde/internal/searchacceptance"
@@ -14,6 +15,7 @@ func runBatteryInspection(arguments []string) error {
 	path := flags.String("battery", "", "absolute original frozen query battery")
 	digest := flags.String("sha256", "", "expected original battery SHA-256")
 	if err := flags.Parse(arguments); err != nil {
+		slog.Warn("search.acceptance.battery_arguments_rejected", "component", "searchacceptance", "concern", "battery", "err", err)
 		return fmt.Errorf("parse battery inspection arguments: %w", err)
 	}
 	if flags.NArg() != 0 {
@@ -21,9 +23,11 @@ func runBatteryInspection(arguments []string) error {
 	}
 	inspection, err := searchacceptance.InspectFrozenBattery(*path, *digest, originalBatteryConstraints())
 	if err != nil {
+		slog.Warn("search.acceptance.battery_inspection_failed", "component", "searchacceptance", "concern", "battery", "err", err)
 		return fmt.Errorf("inspect original battery: %w", err)
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(inspection); err != nil {
+		slog.Warn("search.acceptance.battery_output_failed", "component", "searchacceptance", "concern", "battery", "err", err)
 		return fmt.Errorf("write battery inspection: %w", err)
 	}
 	return nil
