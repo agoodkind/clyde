@@ -2,7 +2,11 @@ package parser
 
 import (
 	"os"
+	"reflect"
 	"testing"
+
+	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 // claudeAssistantReplyLine is the assistant reply that follows the first user
@@ -57,4 +61,65 @@ func TestStreamAppendKeepsEarlierPositions(t *testing.T) {
 	if got := after[len(before)]; got != "vendor it again" {
 		t.Errorf("appended message text = %q, want %q", got, "vendor it again")
 	}
+}
+
+// Stable message positions preserve row identity when tool outputs are requested.
+func TestToolOutputLoadAppendKeepsEarlierPositions(t *testing.T) {
+	t.Parallel()
+	path := writeInjectedFixture(t, `"why is the build failing?"`)
+	appendTranscriptLine(t, path, assistantCall("a1", "call-1", "Bash"))
+	appendTranscriptLine(t, path, `{"uuid":"r1","type":"user","timestamp":"2026-07-30T12:00:01Z","message":{"role":"user","content":[`+
+		`{"type":"tool_result","tool_use_id":"call-1","content":"exit status 2: missing vendor directory"}]}}`+"\n")
+	appendTranscriptLine(t, path, claudeAssistantReplyLine)
+
+	before := streamToolOutputFixture(t, path)
+	if len(before) != 3 || toolOutputCount(before) != 1 {
+		t.Fatalf("first parse = %d messages with %d tool outputs, want 3 messages with 1 tool output", len(before), toolOutputCount(before))
+	}
+
+	appendTranscriptLine(t, path, assistantCall("a2", "call-2", "Bash"))
+	appendTranscriptLine(t, path, `{"uuid":"r2","type":"user","timestamp":"2026-07-30T12:00:03Z","message":{"role":"user","content":[`+
+		`{"type":"tool_result","tool_use_id":"call-2","content":"vendored 14 modules"}]}}`+"\n")
+	after := streamToolOutputFixture(t, path)
+
+	if len(after) != len(before)+1 {
+		t.Fatalf("second parse messages = %d, want %d", len(after), len(before)+1)
+	}
+	for i, earlier := range before {
+		if !reflect.DeepEqual(after[i], earlier) {
+			t.Errorf("message %d changed after append: text %q tools %+v, want text %q tools %+v",
+				i, after[i].Text, after[i].Tools, earlier.Text, earlier.Tools)
+		}
+	}
+	appended := after[len(before)]
+	if len(appended.Tools) != 1 || appended.Tools[0].Output != "vendored 14 modules" {
+		t.Errorf("appended message tools = %+v, want one call with output %q", appended.Tools, "vendored 14 modules")
+	}
+}
+
+func streamToolOutputFixture(t *testing.T, path string) []transcript.Message {
+	t.Helper()
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    true,
+		IncludeInjected:       false,
+		HarnessTally:          nil,
+	}))
+	if err != nil {
+		t.Fatalf("stream fixture: %v", err)
+	}
+	return messages
+}
+
+func toolOutputCount(messages []transcript.Message) int {
+	count := 0
+	for _, message := range messages {
+		for _, tool := range message.Tools {
+			if tool.Output != "" {
+				count++
+			}
+		}
+	}
+	return count
 }
