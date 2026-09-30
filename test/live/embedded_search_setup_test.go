@@ -6,12 +6,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/pelletier/go-toml/v2"
-	"goodkind.io/clyde/internal/config"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/pelletier/go-toml/v2"
+	"goodkind.io/clyde/internal/config"
 )
 
 func writeEmbeddedLifecycleConfig(t *testing.T, harness *harness, configuration config.Config) {
