@@ -97,6 +97,16 @@ type ScenarioConstraint struct {
 	RequireReferences bool
 }
 
+type batteryValidationFailure struct {
+	QueryID   string
+	Operation string
+	Cause     error
+}
+
+func batteryFailure(cause error) batteryValidationFailure {
+	return batteryValidationFailure{QueryID: "", Operation: "", Cause: cause}
+}
+
 // InspectFrozenBattery validates only workload structure and byte identity.
 // It does not read the corpus or establish expected results or acceptance.
 func InspectFrozenBattery(path, expectedDigest string, constraints BatteryConstraints) (inspection BatteryInspection, err error) {
@@ -124,69 +134,76 @@ func InspectFrozenBattery(path, expectedDigest string, constraints BatteryConstr
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return inspection, errors.New("original battery requires one JSON document")
 	}
-	if err := validateFrozenBattery(inspection.Battery, constraints); err != nil {
-		return BatteryInspection{}, err
+	if failure := validateFrozenBattery(inspection.Battery, constraints); failure.Cause != nil {
+		cause := failure.Cause
+		if failure.Operation != "" {
+			cause = fmt.Errorf("%s: %w", failure.Operation, cause)
+		}
+		if failure.QueryID != "" {
+			cause = fmt.Errorf("validate original query %s: %w", failure.QueryID, cause)
+		}
+		return BatteryInspection{}, cause
 	}
 	inspection.OriginalDigest = expectedDigest
 	return inspection, nil
 }
 
-func validateFrozenBattery(battery FrozenBattery, constraints BatteryConstraints) error {
+func validateFrozenBattery(battery FrozenBattery, constraints BatteryConstraints) batteryValidationFailure {
 	if constraints.SchemaVersion <= 0 || constraints.QuerySetID == "" || len(constraints.QueryIDs) == 0 || len(constraints.Scenarios) == 0 {
-		return errors.New("battery constraints require schema and workload identities")
+		return batteryFailure(errors.New("battery constraints require schema and workload identities"))
 	}
 	if battery.SchemaVersion != constraints.SchemaVersion || battery.QuerySetID != constraints.QuerySetID || strings.TrimSpace(battery.Identity) == "" {
-		return errors.New("unsupported original battery schema or identity")
+		return batteryFailure(errors.New("unsupported original battery schema or identity"))
 	}
 	if !filepath.IsAbs(battery.CorpusSnapshot.Path) || !validDigest(battery.CorpusSnapshot.ManifestSHA256) || !filepath.IsAbs(battery.RecoveredRequests.Path) || !validDigest(battery.RecoveredRequests.SHA256) {
-		return errors.New("original battery requires absolute provenance paths and digests")
+		return batteryFailure(errors.New("original battery requires absolute provenance paths and digests"))
 	}
 	if battery.Concurrency <= 0 || battery.LatencyConcurrency <= 0 || battery.PageTimeoutSeconds <= 0 || battery.TraversalTimeoutSeconds < battery.PageTimeoutSeconds {
-		return errors.New("original battery concurrency and timeouts are invalid")
+		return batteryFailure(errors.New("original battery concurrency and timeouts are invalid"))
 	}
 	if len(battery.Entries) != len(constraints.QueryIDs) || len(battery.Scenarios) != len(constraints.Scenarios) {
-		return errors.New("original battery query or scenario count differs from constraints")
+		return batteryFailure(errors.New("original battery query or scenario count differs from constraints"))
 	}
 	queries := make(map[string]bool, len(constraints.QueryIDs))
 	for _, query := range battery.Entries {
 		if queries[query.ID] || strings.TrimSpace(query.Query) == "" || query.PageSize <= 0 || len(query.Tags) == 0 {
-			return fmt.Errorf("original query %s has repeated identity or invalid controls", query.ID)
+			return batteryFailure(fmt.Errorf("original query %s has repeated identity or invalid controls", query.ID))
 		}
-		if err := validateFrozenFilter(query.Filter); err != nil {
-			slog.Warn("search.acceptance.battery_filter_rejected", "component", "searchacceptance", "concern", "battery", "query_id", query.ID, "err", err)
-			return fmt.Errorf("validate original query %s: %w", query.ID, err)
+		if failure := validateFrozenFilter(query.Filter); failure.Cause != nil {
+			failure.QueryID = query.ID
+			return failure
 		}
 		queries[query.ID] = true
 	}
 	expected := make(map[string]bool, len(constraints.QueryIDs))
 	for _, id := range constraints.QueryIDs {
 		if id == "" || expected[id] {
-			return errors.New("battery constraints contain invalid query identities")
+			return batteryFailure(errors.New("battery constraints contain invalid query identities"))
 		}
 		expected[id] = true
 		if !queries[id] {
-			return errors.New("original battery query identity is missing")
+			return batteryFailure(errors.New("original battery query identity is missing"))
 		}
 	}
-	return validateFrozenScenarios(battery.Scenarios, queries, constraints.Scenarios)
+	return batteryFailure(validateFrozenScenarios(battery.Scenarios, queries, constraints.Scenarios))
 }
 
-func validateFrozenFilter(filter Filter) error {
+func validateFrozenFilter(filter Filter) batteryValidationFailure {
 	if filter.Provider != nil {
 		provider, ok := providerid.Parse(*filter.Provider)
 		if !ok || provider.String() != *filter.Provider {
-			return errors.New("original filter provider is unsupported")
+			return batteryFailure(errors.New("original filter provider is unsupported"))
 		}
 		switch provider {
 		case conversation.ProviderClaude, conversation.ProviderCodex, conversation.ProviderCursor, conversation.ProviderZed, conversation.ProviderCopilot:
 		case providerid.ProviderUnspecified, providerid.ProviderAnthropic, providerid.ProviderOpenAICompat, providerid.ProviderMITM, providerid.ProviderArtifact, providerid.ProviderConductor:
-			return errors.New("original filter provider is unsupported")
+			return batteryFailure(errors.New("original filter provider is unsupported"))
 		default:
-			return errors.New("original filter provider is unsupported")
+			return batteryFailure(errors.New("original filter provider is unsupported"))
 		}
 	}
 	if filter.MinScore != nil && !finiteNonnegative(*filter.MinScore) || filter.PerConversationLimit != nil && *filter.PerConversationLimit < 0 {
-		return errors.New("original filter score or group limit is invalid")
+		return batteryFailure(errors.New("original filter score or group limit is invalid"))
 	}
 	var dates [2]time.Time
 	for index, value := range []*string{filter.After, filter.Before} {
@@ -198,15 +215,14 @@ func validateFrozenFilter(filter Filter) error {
 			parsed, err = time.Parse(time.DateOnly, *value)
 		}
 		if err != nil {
-			slog.Warn("search.acceptance.battery_date_rejected", "component", "searchacceptance", "concern", "battery", "err", err)
-			return fmt.Errorf("parse original filter date: %w", err)
+			return batteryValidationFailure{QueryID: "", Operation: "parse original filter date", Cause: err}
 		}
 		dates[index] = parsed
 	}
 	if !dates[0].IsZero() && !dates[1].IsZero() && !dates[0].Before(dates[1]) {
-		return errors.New("original filter time range is empty or reversed")
+		return batteryFailure(errors.New("original filter time range is empty or reversed"))
 	}
-	return nil
+	return batteryFailure(nil)
 }
 
 func validateFrozenScenarios(scenarios []FrozenScenario, queries map[string]bool, constraints []ScenarioConstraint) error {
