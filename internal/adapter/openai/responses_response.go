@@ -417,8 +417,7 @@ type ResponsesSummaryPart struct {
 	Text string `json:"text"`
 }
 
-// ResponsesUsage omits a details object that the provider did not report
-// instead of writing a zero count.
+// ResponsesUsage contains the token counts required by the Responses API.
 type ResponsesUsage struct {
 	InputTokens         int                           `json:"input_tokens"`
 	OutputTokens        int                           `json:"output_tokens"`
@@ -439,22 +438,22 @@ type ResponsesOutputTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
-// ResponsesUsageFromChat copies prompt_tokens to input_tokens,
-// completion_tokens to output_tokens, prompt token details to
-// input_tokens_details, and completion token details to
-// output_tokens_details. It omits each detail that the provider did not
-// report.
+// ResponsesUsageFromChat maps provider token counts to the Responses API.
+// An absent provider breakdown contributes zero to the required detail fields.
 func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
-	var inputDetails *ResponsesInputTokensDetails
+	cacheWriteTokens := 0
+	inputDetails := &ResponsesInputTokensDetails{
+		CachedTokens:     usage.CachedTokens(),
+		CacheWriteTokens: &cacheWriteTokens,
+	}
 	if usage.PromptTokensDetails != nil {
-		inputDetails = &ResponsesInputTokensDetails{
-			CachedTokens:     usage.PromptTokensDetails.CachedTokens,
-			CacheWriteTokens: usage.PromptTokensDetails.CacheWriteTokens,
+		if usage.PromptTokensDetails.CacheWriteTokens != nil {
+			inputDetails.CacheWriteTokens = usage.PromptTokensDetails.CacheWriteTokens
 		}
 	}
-	var outputDetails *ResponsesOutputTokensDetails
+	outputDetails := &ResponsesOutputTokensDetails{ReasoningTokens: 0}
 	if usage.CompletionTokensDetails != nil {
-		outputDetails = &ResponsesOutputTokensDetails{ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens}
+		outputDetails.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
 	}
 	return ResponsesUsage{
 		InputTokens:         usage.PromptTokens,
