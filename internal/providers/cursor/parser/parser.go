@@ -614,13 +614,7 @@ func discoverLegacyForEntry(
 	return candidates
 }
 
-func streamComposer(
-	discovered discoveredArtifact,
-	opts conversation.LoadOptions,
-	yield func(transcript.Message, error) bool,
-) {
-	ctx := context.Background()
-
+func streamComposerContext(ctx context.Context, discovered discoveredArtifact, opts conversation.LoadOptions, yield func(transcript.Message, error) bool) {
 	dbPath, err := globalDBPathForDiscovered(ctx, discovered)
 	if err != nil {
 		yield(emptyMessage(), err)
@@ -632,7 +626,10 @@ func streamComposer(
 		return
 	}
 	defer func() { _ = db.Close() }()
+	streamComposerDatabase(ctx, db, dbPath, discovered, opts, yield)
+}
 
+func streamComposerDatabase(ctx context.Context, db *sql.DB, dbPath string, discovered discoveredArtifact, opts conversation.LoadOptions, yield func(transcript.Message, error) bool) {
 	// Ordering needs every stored bubble's write time before it can place any of
 	// them, because the header's reference list is not a complete index of the
 	// chat and following it lazily would stream a conversation with real turns
@@ -641,7 +638,7 @@ func streamComposer(
 	// declining a message here stops the read.
 	// The id comes from the artifact rather than the header payload, because the
 	// artifact's id is the one derived from the key the rows are stored under.
-	err = cursorstore.StreamComposerBubbles(ctx, db, discovered.ComposerID, discovered.ComposerHeader, func(bubble cursorstore.Bubble) bool {
+	err := cursorstore.StreamComposerBubbles(ctx, db, discovered.ComposerID, discovered.ComposerHeader, func(bubble cursorstore.Bubble) bool {
 		mapped, include := mapComposerBubble(bubble, opts)
 		if !include {
 			return true

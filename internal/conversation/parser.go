@@ -152,6 +152,12 @@ type Parser interface {
 	Stream(path string, opts LoadOptions) iter.Seq2[transcript.Message, error]
 }
 
+// FreshContextParser reads selected source content without cached transcripts.
+// The callback runs between actual backing-source stability checks.
+type FreshContextParser interface {
+	ReadContextWindow(ctx context.Context, path, selector string, start, end int, options LoadOptions, visit func([]transcript.Message) error) error
+}
+
 // CachedDiscoveryParser can reuse provider input stamps persisted by the scan
 // cache before opening a provider store again.
 type CachedDiscoveryParser interface {
