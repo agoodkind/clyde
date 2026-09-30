@@ -191,7 +191,7 @@ func embeddedAliasRecordKey(record conversation.Record) string {
 	return record.Provider.String() + "\x00" + record.ArtifactPath + "\x00" + record.NativeID + "\x00" + record.Selector
 }
 
-func (w *conversationSemanticSyncWorker) readEmbeddedAliasHistory(ctx context.Context, store *embeddedConversationStore, ownerID string) (history embeddedAliasHistory, resultErr error) {
+func (w *conversationSemanticSyncWorker) readEmbeddedAliasHistory(ctx context.Context, store *embeddedConversationStore, ownerID string, singleSource bool) (history embeddedAliasHistory, resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			slog.WarnContext(ctx, "read alias history failed", "conversation_id", ownerID, "err", resultErr)
@@ -223,6 +223,9 @@ func (w *conversationSemanticSyncWorker) readEmbeddedAliasHistory(ctx context.Co
 		return history, nil
 	}
 	if len(history.rows) == 0 {
+		if singleSource {
+			return history, nil
+		}
 		return history, fmt.Errorf("committed owner %s has no accepted scalar anchor: %w", ownerID, library.ErrAppendConflict)
 	}
 	history.identities, err = store.outbox.committedFieldIdentities(ctx, store.namespace.ID, ownerID)
@@ -301,7 +304,8 @@ func (w *conversationSemanticSyncWorker) resolveEmbeddedAliasGroup(ctx context.C
 			slog.WarnContext(ctx, "alias group resolution failed", "conversation_id", group.ownerID, "err", resultErr)
 		}
 	}()
-	history, err := w.readEmbeddedAliasHistory(ctx, store, group.ownerID)
+	singleSource := len(group.aliases) == 1
+	history, err := w.readEmbeddedAliasHistory(ctx, store, group.ownerID, singleSource)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +327,7 @@ func (w *conversationSemanticSyncWorker) resolveEmbeddedAliasGroup(ctx context.C
 	}
 	selection := embeddedAliasSelection{maximal: nil, comparison: nil, parent: library.ScalarValue{}, metadata: embeddedOwnerMetadata{Provider: "", WorkspaceRoot: "", Archived: false, Subagent: false}, covered: make(map[string]bool, len(history.rows)), admitted: false}
 	for _, alias := range group.aliases {
-		if err = w.considerEmbeddedAlias(ctx, alias, history, &selection, decision, stats); err != nil {
+		if err = w.considerEmbeddedAlias(ctx, alias, history, &selection, decision, stats, singleSource); err != nil {
 			return nil, err
 		}
 	}
@@ -368,20 +372,20 @@ func (w *conversationSemanticSyncWorker) embeddedAliasSuppressed(group embeddedA
 	return true
 }
 
-func (w *conversationSemanticSyncWorker) considerEmbeddedAlias(ctx context.Context, alias conversation.StampedRecord, history embeddedAliasHistory, selection *embeddedAliasSelection, decision *embeddedAliasDecision, stats *embeddedSyncStats) (resultErr error) {
+func (w *conversationSemanticSyncWorker) considerEmbeddedAlias(ctx context.Context, alias conversation.StampedRecord, history embeddedAliasHistory, selection *embeddedAliasSelection, decision *embeddedAliasDecision, stats *embeddedSyncStats, singleSource bool) (resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			slog.WarnContext(ctx, "alias source proof failed", "conversation_id", alias.Record.ID, "err", resultErr)
 		}
 	}()
-	fields, err := w.loadEmbeddedAliasFields(ctx, alias, stats)
+	fields, err := w.loadEmbeddedAliasFields(ctx, alias, stats, singleSource)
 	if err != nil {
 		w.recordLoadFailure(alias.Record.ID, decision.fingerprint)
 		return err
 	}
 	owner := newEmbeddedConversationOwner(alias.Record, w.contentKinds)
 	parent := embeddedOptionalStringScalar(owner.ParentConversationID)
-	if selection.comparison != nil && parent != selection.parent || history.snapshot.State.GenerationOrder != 0 && parent != history.parent {
+	if selection.comparison != nil && parent != selection.parent || len(history.rows) != 0 && parent != history.parent {
 		return fmt.Errorf("alias parent differs for owner %s: %w", alias.Record.ID, library.ErrAppendConflict)
 	}
 	accepted := embeddedAliasAcceptedGenerations(alias.Record, history.provenance)
@@ -442,7 +446,7 @@ func embeddedAliasAcceptedGenerations(record conversation.Record, provenance map
 	return result
 }
 
-func (w *conversationSemanticSyncWorker) loadEmbeddedAliasFields(ctx context.Context, alias conversation.StampedRecord, stats *embeddedSyncStats) (fields []searchbackend.Field, resultErr error) {
+func (w *conversationSemanticSyncWorker) loadEmbeddedAliasFields(ctx context.Context, alias conversation.StampedRecord, stats *embeddedSyncStats, singleSource bool) (fields []searchbackend.Field, resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			slog.WarnContext(ctx, "load alias fields failed", "conversation_id", alias.Record.ID, "err", resultErr)
@@ -465,7 +469,7 @@ func (w *conversationSemanticSyncWorker) loadEmbeddedAliasFields(ctx context.Con
 	if err != nil {
 		return nil, fmt.Errorf("project alias source for %s: %w", alias.Record.ID, err)
 	}
-	if projected.WithheldOpenFields != 0 {
+	if projected.WithheldOpenFields != 0 && !singleSource {
 		return nil, fmt.Errorf("alias source has an open trailing field for %s: %w", alias.Record.ID, library.ErrAppendConflict)
 	}
 	return projected.Fields, nil
