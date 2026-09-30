@@ -153,12 +153,9 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 	return protoConversationInfo(ctx, s.index, info), nil
 }
 
-// SearchConversations returns a relevance-ranked list of conversation hits.
-// Each hit carries the matched passage as a byte-bounded excerpt (set in
-// engineSearchMatches), so the list is self-sufficient for triage and small
-// enough for any transport. The full surrounding window is a separate windowed
-// read; search never inlines it. The freshness snapshot lets a thin result be
-// distinguished from a cold index.
+// SearchConversations returns ranked matches from the configured source.
+// Matches include stored excerpts and the source's explicit context state.
+// The freshness snapshot reports the ingestion state at query time.
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
 	// Establish correlation before any blocking search work so the operation is
 	// traceable, including a source failure.

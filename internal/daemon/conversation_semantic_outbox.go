@@ -519,27 +519,13 @@ func (outbox *conversationSemanticOutbox) committedFields(ctx context.Context, n
 			)
 		}
 	}()
-	rows, err := outbox.db.QueryContext(
-		ctx,
-		`SELECT field_key, digest FROM committed_fields WHERE namespace = ? AND owner_id = ?`,
-		namespace, ownerID,
-	)
+	identities, err := outbox.committedFieldIdentities(ctx, namespace, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("query committed fields of %s: %w", ownerID, err)
 	}
-	defer func() {
-		err = errors.Join(err, closeOutboxRows(rows))
-	}()
-	committed = make(map[string]string)
-	for rows.Next() {
-		var fieldKey, digest string
-		if err := rows.Scan(&fieldKey, &digest); err != nil {
-			return nil, fmt.Errorf("scan committed field of %s: %w", ownerID, err)
-		}
-		committed[fieldKey] = digest
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read committed fields of %s: %w", ownerID, err)
+	committed = make(map[string]string, len(identities))
+	for fieldKey, identity := range identities {
+		committed[fieldKey] = identity.digest
 	}
 	return committed, nil
 }

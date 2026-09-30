@@ -65,8 +65,8 @@ type SearchConversationsOptions struct {
 	// inline on the match. Zero means the daemon's default small window.
 	ContextWindow int
 	// Cursor is the NextCursor of a previous page with the same query and
-	// filters. Empty starts a new search. The current search source refuses a
-	// nonempty cursor.
+	// filters. Empty starts a new search. A source without cursor support
+	// refuses a nonempty cursor.
 	Cursor string
 }
 

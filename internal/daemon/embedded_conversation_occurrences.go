@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"goodkind.io/lm-semantic-search/library"
 
@@ -134,8 +135,8 @@ func embeddedFieldOccurrences(
 		return nil, fmt.Errorf("prepare field %s of %s: unknown field kind %q", field.Key, owner.ConversationID, field.Kind)
 	}
 	parts, err := library.PrepareText(ctx, library.PrepareRequest{
-		Text:           field.Text,
-		DocumentPrefix: field.DocumentPrefix,
+		Text:           strings.ReplaceAll(field.Text, "\x00", " "),
+		DocumentPrefix: strings.ReplaceAll(field.DocumentPrefix, "\x00", " "),
 		MaxTokens:      embeddedConversationPrepareMaxTokens,
 		MaxBytes:       0,
 		Tokenizer:      nil,
@@ -169,7 +170,7 @@ func embeddedFieldOccurrences(
 			RowKey:         field.Key + "/" + part.Suffix,
 			SortKey:        embeddedOccurrenceSortKey(field.MessageIndex, kindRank, field.ToolIndex, partNumber),
 			SourceText:     sourceText,
-			SearchText:     field.DocumentPrefix + sourceText,
+			SearchText:     strings.ReplaceAll(field.DocumentPrefix+sourceText, "\x00", " "),
 			EmbeddingInput: part.EmbeddingInput,
 			Scalars:        scalars,
 		})

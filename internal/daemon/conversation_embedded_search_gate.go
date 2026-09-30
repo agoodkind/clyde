@@ -9,7 +9,7 @@ import (
 
 // search serializes source access with worker shutdown and reconciliation.
 // Runtime search-only ownership is added before enabling embedded search.
-func (gate *embeddedReconcileGate) search(ctx context.Context, semantic config.ConversationSemanticConfig, options conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error) {
+func (gate *embeddedReconcileGate) search(ctx context.Context, semantic config.ConversationSemanticConfig, options conversation.SearchConversationsOptions, index *conversation.Index) (conversation.SearchConversationsResult, error) {
 	gate.mu.Lock()
 	embedded, log := gate.embedded, gate.log
 	gate.mu.Unlock()
@@ -22,6 +22,6 @@ func (gate *embeddedReconcileGate) search(ctx context.Context, semantic config.C
 	if err != nil {
 		return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, err)
 	}
-	source := embeddedConversationSearchSource{library: store.library, semantic: semantic, gate: nil}
+	source := embeddedConversationSearchSource{library: store.library, semantic: semantic, gate: nil, index: index, outbox: store.outbox}
 	return source.SearchConversations(ctx, options)
 }

@@ -94,17 +94,15 @@ func testEmbeddedProjectionCodexAppend(t *testing.T) {
 	assertEmbeddedProjectionChatText(t, firstProjection.Fields, first.messages)
 
 	toolField := embeddedProjectionFieldAt(t, firstProjection.Fields, 2, searchbackend.FieldKindToolCall)
-	if toolField.DocumentPrefix != embeddedProjectionCodexToolName+"\n" {
-		t.Fatalf("tool call prefix = %q, want %q", toolField.DocumentPrefix, embeddedProjectionCodexToolName+"\n")
+	if !strings.HasPrefix(toolField.DocumentPrefix, embeddedProjectionCodexToolName+"\n") {
+		t.Fatalf("tool call prefix = %q, want tool attribution", toolField.DocumentPrefix)
 	}
-	toolLines := strings.Split(toolField.Text, "\n")
-	// The display line is the whole command. A line equal to the program name
-	// alone comes from the shell decomposition.
+	toolLines := strings.Split(toolField.DocumentPrefix, "\n")
 	if !slices.Contains(toolLines, embeddedProjectionShellProgram) {
 		t.Fatalf("tool call text lines = %q, want the shell program %q", toolLines, embeddedProjectionShellProgram)
 	}
-	if !slices.Contains(toolLines, embeddedProjectionShellCommand) {
-		t.Fatalf("tool call text lines = %q, want the displayed command %q", toolLines, embeddedProjectionShellCommand)
+	if toolField.Text != first.messages[2].Tools[0].Display {
+		t.Fatalf("tool source = %q, want original displayed command %q", toolField.Text, first.messages[2].Tools[0].Display)
 	}
 
 	appendEmbeddedProjectionLines(t, rolloutPath, embeddedProjectionCodexAppendedLines)

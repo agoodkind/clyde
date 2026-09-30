@@ -324,7 +324,7 @@ func newControlServer(
 		collectionID: cfg.Conversation.Semantic.CollectionID,
 	}
 	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
-		searchSource = &embeddedConversationSearchSource{library: nil, semantic: cfg.Conversation.Semantic, gate: runtime.embeddedReconcile}
+		searchSource = &embeddedConversationSearchSource{library: nil, semantic: cfg.Conversation.Semantic, gate: runtime.embeddedReconcile, index: index, outbox: nil}
 	}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},

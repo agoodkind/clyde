@@ -198,7 +198,7 @@ func searchParams() []Param[searchInput] {
 			func(in *searchInput, v int) { in.Window = v }),
 		StringParam("load_rules", "Loading-rules tag from the search hit being read around, so the window counts over the same message sequence its message index refers to. Leave empty for hits without one.", "", false,
 			func(in *searchInput, v string) { in.LoadRules = v }),
-		StringParam("cursor", "Continuation cursor from a previous search result's next_cursor, with the same query and filters. Requires query. The current search source returns no next_cursor and refuses a cursor; page with offset.", "", false,
+		StringParam("cursor", "Continuation cursor from a previous search result's next_cursor, with the same query and filters. Requires query.", "", false,
 			func(in *searchInput, v string) { in.Cursor = v }),
 		FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
 			func(in *searchInput, v float64) { in.MinScore = v }),

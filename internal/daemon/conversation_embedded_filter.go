@@ -20,7 +20,7 @@ func embeddedConversationFilter(semantic config.ConversationSemanticConfig, opti
 	}
 	children := []library.Filter{{
 		Op: library.Equal, Column: embeddedScalarProjectionProfile,
-		Values: []library.ScalarValue{embeddedStringScalar(searchbackend.ProjectionProfile(conversation.LoadRulesTag(kinds)))},
+		Values: []library.ScalarValue{embeddedStringScalar(embeddedQueryProjectionProfile(semantic, conversation.LoadRulesTag(kinds)))},
 	}}
 	if !semantic.IncludeArchived && !options.IncludeArchived {
 		children = append(children, embeddedEqualFilter(embeddedScalarArchived, embeddedBoolScalar(false)))
@@ -64,6 +64,13 @@ func embeddedConversationFilter(semantic config.ConversationSemanticConfig, opti
 		children = append(children, rangeFilter)
 	}
 	return &library.Filter{Op: library.All, Children: children}, nil
+}
+
+func embeddedQueryProjectionProfile(semantic config.ConversationSemanticConfig, loadRules string) string {
+	if semantic.ProjectionProfile == config.ConversationProjectionProfileLegacy {
+		return "p1|" + loadRules
+	}
+	return searchbackend.ProjectionProfile(loadRules)
 }
 
 func embeddedEqualFilter(column string, value library.ScalarValue) library.Filter {

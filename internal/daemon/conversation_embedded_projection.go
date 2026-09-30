@@ -17,6 +17,12 @@ func projectEmbeddedConversationFields(
 	kinds conversation.ContentKindSet,
 	artifactSettled bool,
 ) (searchbackend.ProjectedFields, SemanticConversationDocuments, error) {
+	return projectEmbeddedConversationWindow(record, messages, 0, kinds, artifactSettled)
+}
+
+// projectEmbeddedConversationWindow retains absolute message positions while
+// projecting a bounded context window.
+func projectEmbeddedConversationWindow(record conversation.Record, messages []transcript.Message, start int, kinds conversation.ContentKindSet, artifactSettled bool) (searchbackend.ProjectedFields, SemanticConversationDocuments, error) {
 	built, err := BuildSemanticConversationDocuments(record, messages, kinds)
 	if err != nil {
 		return searchbackend.ProjectedFields{Fields: nil, WithheldOpenFields: 0}, built, err
@@ -34,7 +40,7 @@ func projectEmbeddedConversationFields(
 			})
 		}
 		projectionMessages = append(projectionMessages, searchbackend.Message{
-			Index:             messageIndex,
+			Index:             start + messageIndex,
 			ProviderMessageID: messages[messageIndex].UUID,
 			Role:              doc.Role,
 			Timestamp:         messages[messageIndex].Timestamp,
@@ -46,7 +52,7 @@ func projectEmbeddedConversationFields(
 	projected := searchbackend.ProjectFields(searchbackend.Conversation{
 		ID:                     record.ID,
 		LoadRules:              conversation.LoadRulesTag(kinds),
-		MessageCount:           len(messages),
+		MessageCount:           start + len(messages),
 		TrailingMessageMayGrow: conversation.TrailingMessageMayGrow(record),
 		ArtifactSettled:        artifactSettled,
 		ToolDetail:             embeddedToolDetail(kinds),

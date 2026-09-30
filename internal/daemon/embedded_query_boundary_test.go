@@ -37,7 +37,7 @@ func TestEmbeddedQueryBoundary(t *testing.T) {
 		embeddedQueryTestOwner("codex:a-sibling", "/test/project-sibling", false, false),
 		embeddedQueryTestOwner("codex:a-old-profile", "/test/project", false, false),
 	}
-	owners[len(owners)-1].ProjectionProfile = "old-profile"
+	owners[len(owners)-1].ProjectionProfile = "p1|" + owners[len(owners)-1].LoadRules
 	for _, owner := range owners {
 		publishEmbeddedQueryTestOwner(t, store.library, semantic.CollectionID, owner)
 	}
@@ -80,6 +80,12 @@ func TestEmbeddedQueryBoundary(t *testing.T) {
 	if err != nil || len(fresh.Matches) != 9 || fresh.HasMore {
 		t.Fatalf("fresh page = %+v, %v, want nine eligible occurrences", fresh, err)
 	}
+	options.Query = "embedded\x00query boundary"
+	normalized, err := source.SearchConversations(t.Context(), options)
+	if err != nil || !slices.EqualFunc(normalized.Matches, fresh.Matches, sameEmbeddedQueryMatch) {
+		t.Fatalf("NUL query returned %d, %v, want the space-normalized ranking", len(normalized.Matches), err)
+	}
+	options.Query = "embedded query boundary"
 	options.Offset, options.Limit = 2, 3
 	offsetPage, err := source.SearchConversations(t.Context(), options)
 	if err != nil || len(offsetPage.Matches) != 3 || !slices.EqualFunc(offsetPage.Matches, fresh.Matches[2:5], sameEmbeddedQueryMatch) {
@@ -113,6 +119,18 @@ func TestEmbeddedQueryBoundary(t *testing.T) {
 	}
 	if count := countLiveMilvusVectors(t, semantic); count != 1 {
 		t.Fatalf("canonical vector count = %d, want one for repeated content", count)
+	}
+	legacySemantic := semantic
+	legacySemantic.ProjectionProfile = config.ConversationProjectionProfileLegacy
+	legacy := &embeddedConversationSearchSource{library: store.library, semantic: legacySemantic}
+	legacyPage, err := legacy.SearchConversations(t.Context(), conversation.SearchConversationsOptions{Query: "embedded query boundary", Limit: 10})
+	if err != nil || len(legacyPage.Matches) != 3 {
+		t.Fatalf("explicit p1 search = %+v, %v, want three retained legacy occurrences", legacyPage, err)
+	}
+	for _, match := range legacyPage.Matches {
+		if match.Record.ID != "codex:a-old-profile" || match.ContextState != conversation.SearchContextStateUnavailable || match.Snippet != "embedded query boundary" {
+			t.Fatalf("legacy excerpt = %+v, want original stored excerpt with unavailable context", match)
+		}
 	}
 }
 
@@ -168,7 +186,8 @@ func openEmbeddedQueryTestStore(t *testing.T) (*embeddedConversationStore, confi
 	}
 	root := t.TempDir()
 	semantic := config.ConversationSemanticConfig{
-		Backend: config.ConversationSemanticBackendEmbedded, SearchEnabled: true, CollectionID: liveCollectionID,
+		ProjectionProfile: config.ConversationProjectionProfileOriginal,
+		Backend:           config.ConversationSemanticBackendEmbedded, SearchEnabled: true, CollectionID: liveCollectionID,
 		CatalogPath: filepath.Join(root, "catalog.sqlite"), LockPath: filepath.Join(root, "catalog.lock"), PoolID: "query-live",
 		MilvusAddress: embeddedQueryMilvusAddress, MilvusDatabase: database, MilvusCollection: "query_vectors",
 		EmbeddingBaseURL: liveEmbeddingBaseURL, EmbeddingModel: liveEmbeddingModel, EmbeddingRevision: "query-live",

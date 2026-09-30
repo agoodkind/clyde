@@ -48,6 +48,14 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 	if semantic.Backend != ConversationSemanticBackendEmbedded {
 		return nil
 	}
+	if semantic.UsesEngine() {
+		if semantic.ProjectionProfile != ConversationProjectionProfileLegacy && semantic.ProjectionProfile != ConversationProjectionProfileOriginal {
+			return invalidConversationSemanticSetting("projection_profile", "must explicitly select p1 or p2 for an enabled embedded store")
+		}
+		if semantic.IngestionEnabled && semantic.ProjectionProfile != ConversationProjectionProfileOriginal {
+			return invalidConversationSemanticSetting("projection_profile", "must select p2 for embedded ingestion; p1 is read-only")
+		}
+	}
 	if err := validateEmbeddedConversationSemanticRequired(semantic); err != nil {
 		return err
 	}
@@ -77,6 +85,7 @@ func invalidConversationSemanticSetting(key string, problem string) error {
 
 func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) {
 	semantic.Backend = ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend)))
+	semantic.ProjectionProfile = ConversationProjectionProfile(strings.TrimSpace(string(semantic.ProjectionProfile)))
 	semantic.IndexedProviders = trimmedNonEmpty(semantic.IndexedProviders)
 	semantic.IndexedRoles = trimmedNonEmpty(semantic.IndexedRoles)
 	semantic.CatalogPath = cleanExpandedPath(strings.TrimSpace(semantic.CatalogPath))

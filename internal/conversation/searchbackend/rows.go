@@ -87,25 +87,32 @@ func toolFields(profile string, toolDetail ToolDetail, message Message, toolInde
 	}
 }
 
-// toolCallPrefixAndText splits the tool call tokens into the tool name prefix
-// and the remaining token text. The prefix followed by the text equals the
-// newline-joined token list. A call with no token beyond its name returns the
-// name as text with no prefix.
+// toolCallPrefixAndText preserves the displayed text as the source. The
+// prefix supplies tool attribution and derived tokens on every prepared part.
 func toolCallPrefixAndText(tool Tool, name string) (string, string) {
+	sourceText := selectedText(tool.Display)
+	if sourceText == "" {
+		return "", name
+	}
+	normalizedDisplay := strings.ReplaceAll(sourceText, "\x00", " ")
+	normalizedName := strings.TrimSpace(strings.ReplaceAll(name, "\x00", " "))
 	sanitized := Tool{
-		Name:        name,
-		Display:     cleanText(tool.Display),
+		Name:        normalizedName,
+		Display:     normalizedDisplay,
 		DisplayLang: tool.DisplayLang,
 		Output:      "",
 	}
 	tokens := toolCallTokens(sanitized)
-	if len(tokens) == 0 {
-		return "", ""
+	var prefix strings.Builder
+	prefix.WriteString(toolNamePrefix(name))
+	for _, token := range tokens {
+		if token == normalizedName || token == strings.TrimSpace(normalizedDisplay) {
+			continue
+		}
+		prefix.WriteString(token)
+		prefix.WriteByte('\n')
 	}
-	if name == "" || tokens[0] != name || len(tokens) == 1 {
-		return "", strings.Join(tokens, "\n")
-	}
-	return toolNamePrefix(name), strings.Join(tokens[1:], "\n")
+	return prefix.String(), sourceText
 }
 
 func toolNamePrefix(name string) string {
@@ -125,11 +132,10 @@ func selectedText(value string) string {
 	return text
 }
 
-// cleanText removes invalid UTF-8 and replaces each NUL byte with a space. The
-// shared search library rejects lexical text with a NUL byte, because its
-// analyzer tokenizes nothing after the first NUL.
+// cleanText removes invalid UTF-8 from selected source text. Search and
+// embedding preparation normalize NUL separately from the source identity.
 func cleanText(value string) string {
-	return strings.ReplaceAll(strings.ToValidUTF8(value, ""), "\x00", " ")
+	return strings.ToValidUTF8(value, "")
 }
 
 func newField(profile string, message Message, kind FieldKind, toolIndex int, prefix string, text string) Field {

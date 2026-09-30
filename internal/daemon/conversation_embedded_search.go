@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"goodkind.io/lm-semantic-search/library"
@@ -21,6 +22,8 @@ type embeddedConversationSearchSource struct {
 	library  *library.Library
 	semantic config.ConversationSemanticConfig
 	gate     *embeddedReconcileGate
+	index    *conversation.Index
+	outbox   *conversationSemanticOutbox
 }
 
 func (source *embeddedConversationSearchSource) SearchConversations(ctx context.Context, options conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error) {
@@ -31,7 +34,7 @@ func (source *embeddedConversationSearchSource) SearchConversations(ctx context.
 		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
 	}
 	if source.gate != nil {
-		return source.gate.search(ctx, source.semantic, options)
+		return source.gate.search(ctx, source.semantic, options, source.index)
 	}
 	if source.library == nil {
 		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
@@ -43,7 +46,7 @@ func (source *embeddedConversationSearchSource) SearchConversations(ctx context.
 	limit := normalizedSearchLimit(options.Limit)
 	offset := normalizedPagingOffset(options.Offset)
 	request := library.SearchRequest{
-		Namespace: source.semantic.CollectionID, Query: options.Query,
+		Namespace: source.semantic.CollectionID, Query: strings.ReplaceAll(options.Query, "\x00", " "),
 		Filter: filter, MinScore: options.MinScore, PageSize: limit,
 		Cursor: options.Cursor, PerGroupLimit: options.PerConversationLimit,
 	}
@@ -81,6 +84,10 @@ func (source *embeddedConversationSearchSource) SearchConversations(ctx context.
 		match, hydrateErr := embeddedSearchMatch(hit)
 		if hydrateErr != nil {
 			return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, hydrateErr)
+		}
+		match, contextErr := source.verifyContext(ctx, hit, match, options)
+		if contextErr != nil {
+			return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, contextErr)
 		}
 		matches = append(matches, match)
 	}

@@ -19,6 +19,7 @@ func loadConversationSemanticTestConfig(t *testing.T, contents string) (*Config,
 // embeddedSemanticSettings is a complete embedded backend section body without
 // the backend key.
 const embeddedSemanticSettings = `catalog_path = "/tmp/clyde-test/catalog.sqlite"
+projection_profile = "p2"
 lock_path = "/tmp/clyde-test/catalog.lock"
 pool_id = "conversations-v1"
 milvus_address = "localhost:19530"
@@ -189,5 +190,19 @@ func TestConversationSemanticSettingChangeRoutesToReload(t *testing.T) {
 	newCfg.Conversation.Semantic.QueryWorkers = 4
 	if route := ClassifyConfigChange(oldCfg, newCfg); route != RouteReload {
 		t.Fatalf("route = %s, want reload", route)
+	}
+}
+
+func TestEmbeddedIngestionRequiresOriginalProjectionProfile(t *testing.T) {
+	t.Parallel()
+	for _, profile := range []string{"", "p1", "unknown"} {
+		t.Run(profile, func(t *testing.T) {
+			t.Parallel()
+			settings := strings.Replace(embeddedSemanticSettings, "projection_profile = \"p2\"", "projection_profile = \""+profile+"\"", 1)
+			_, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\ningestion_enabled = true\n"+settings)
+			if err == nil || !strings.Contains(err.Error(), "conversation.semantic.projection_profile") {
+				t.Fatalf("profile %q ingestion = %v, want explicit p2 requirement", profile, err)
+			}
+		})
 	}
 }
