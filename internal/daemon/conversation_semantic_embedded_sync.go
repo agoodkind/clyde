@@ -21,7 +21,6 @@ import (
 	"goodkind.io/clyde/internal/conversation/searchbackend"
 	"goodkind.io/clyde/internal/daemonsupervisor"
 	"goodkind.io/clyde/internal/livetrack"
-	"goodkind.io/clyde/internal/transcript"
 )
 
 // embeddedTrailingSettleWindow is how long an artifact must stay unchanged
@@ -44,12 +43,12 @@ type embeddedConversationSync struct {
 	semantic   config.ConversationSemanticConfig
 	outboxPath string
 	store      *embeddedConversationStore
-	// processed maps a conversation ID to the content fingerprint at which the
-	// outbox records every selected field of the conversation as committed. A
-	// pass skips a conversation at that fingerprint without reading its
-	// artifact. The map is in memory. After a restart the first pass reads
-	// each conversation once and sends no row for a committed field.
-	processed map[string]string
+	// The cache includes every alias and the accepted catalog generation.
+	// A restart discards it and repeats the source proof before selecting additions.
+	processed          map[string]string
+	processedSources   map[string]conversation.StampedRecord
+	aliasDecision      *embeddedAliasDecision
+	aliasOwnerMetadata map[string]embeddedStoredOwnerMetadata
 	// changedCommitted counts conflicting committed field digests since worker
 	// startup. A conflict rejects the entire candidate and retains prior rows.
 	changedCommitted int
@@ -105,21 +104,24 @@ func newEmbeddedConversationSync(
 	records embeddedRecordLister,
 ) *embeddedConversationSync {
 	return &embeddedConversationSync{
-		semantic:         semantic,
-		outboxPath:       outboxPath,
-		store:            nil,
-		processed:        make(map[string]string),
-		changedCommitted: 0,
-		status:           status,
-		records:          records,
-		libraryAbsent:    make(map[string]bool),
-		mu:               sync.Mutex{},
-		closed:           false,
-		closing:          atomic.Bool{},
-		closeOnce:        sync.Once{},
-		closeDone:        make(chan struct{}),
-		closeErr:         nil,
-		workerDone:       nil,
+		semantic:           semantic,
+		outboxPath:         outboxPath,
+		store:              nil,
+		processed:          make(map[string]string),
+		processedSources:   nil,
+		aliasDecision:      nil,
+		aliasOwnerMetadata: nil,
+		changedCommitted:   0,
+		status:             status,
+		records:            records,
+		libraryAbsent:      make(map[string]bool),
+		mu:                 sync.Mutex{},
+		closed:             false,
+		closing:            atomic.Bool{},
+		closeOnce:          sync.Once{},
+		closeDone:          make(chan struct{}),
+		closeErr:           nil,
+		workerDone:         nil,
 		open: func(ctx context.Context, lock *os.File, log *slog.Logger) (*embeddedConversationStore, error) {
 			return openEmbeddedConversationStore(ctx, semantic, outboxPath, lock, log)
 		},
@@ -380,9 +382,12 @@ func (embedded *embeddedConversationSync) lockStore(ctx context.Context) error {
 // embeddedCandidate is one admitted conversation that the worker has not
 // processed at its current fingerprint.
 type embeddedCandidate struct {
-	record      conversation.Record
-	stamp       conversation.FileStamp
-	fingerprint string
+	record           conversation.Record
+	stamp            conversation.FileStamp
+	fingerprint      string
+	groupFingerprint string
+	aliases          []conversation.StampedRecord
+	sourceBytes      int64
 }
 
 // embeddedSyncStats reports one embedded pass by phase: source reading,
@@ -432,15 +437,8 @@ type embeddedSyncStats struct {
 	reconcileFailed  int
 }
 
-// runEmbeddedPass replays pending outbox batches and projections, reconciles
-// every listed owner with a blocked outbox item or with library state that the
-// outbox lacks, reprojects the metadata of indexed owners with changed
-// metadata, then projects every admitted conversation that changed since the
-// worker processed it, selects the fields that the outbox has not committed,
-// and delivers one generation per conversation with new rows. A conversation
-// that the index no longer lists keeps every committed occurrence and its last
-// applied metadata. An owner with a blocked outbox item that reconciliation
-// did not clear receives no delivery and no reprojection.
+// runEmbeddedPass resolves each owner after replay and uses one accepted
+// decision for reconciliation, metadata publication and missing-field delivery.
 func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) (resultErr error) {
 	w.embedded.mu.Lock()
 	defer w.embedded.mu.Unlock()
@@ -492,11 +490,7 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) (r
 	for _, ownerID := range blockedInOutbox {
 		blockedSet[ownerID] = true
 	}
-	reconciled := w.reconcileEmbeddedOwners(ctx, store, stampedRecords, blockedSet, &stats)
-	excluded := embeddedExcludedOwners(replay.blockedOwners, projectionBlocked, blockedSet, reconciled)
-	w.reprojectEmbeddedOwners(ctx, store, stampedRecords, excluded, &stats)
-	candidates := w.embeddedCandidates(stampedRecords, &stats)
-	w.deliverEmbeddedCandidates(ctx, store, candidates, excluded, &stats)
+	w.processEmbeddedAliasGroups(ctx, store, stampedRecords, replay.blockedOwners, projectionBlocked, blockedSet, &stats)
 	blockedAfterPass, err := store.outbox.blockedOwners(ctx, store.namespace.ID)
 	if err == nil {
 		stats.blockedOwners = len(blockedAfterPass)
@@ -532,46 +526,40 @@ func embeddedExcludedOwners(
 	return excluded
 }
 
-// embeddedCandidates returns the admitted conversations that need a pass,
-// sorted and rotated after the delivery cursor. It skips conversations
-// processed at their current fingerprint and conversations suppressed after
-// repeated failures at their current fingerprint.
+// embeddedCandidates preserves the selected source after alias preflight.
+// Recovery callers resolve their original alias group during generation preparation.
 func (w *conversationSemanticSyncWorker) embeddedCandidates(
 	stampedRecords []conversation.StampedRecord,
 	stats *embeddedSyncStats,
 ) []embeddedCandidate {
 	seen := make(map[string]bool, len(stampedRecords))
 	candidatesByID := make(map[string]embeddedCandidate)
-	for _, stampedRecord := range stampedRecords {
-		conversationID := strings.TrimSpace(stampedRecord.Record.ID)
-		if conversationID == "" || seen[conversationID] {
-			continue
-		}
-		seen[conversationID] = true
-		if !w.embedded.admits(stampedRecord.Record) {
-			continue
-		}
-		stats.admitted++
-		fingerprint := conversation.ContentFingerprint(stampedRecord.Record, stampedRecord.Stamp)
-		if w.embedded.processed[conversationID] == fingerprint {
-			continue
-		}
-		if record, failed := w.failedLoad[conversationID]; failed {
-			if record.fingerprint != fingerprint {
-				delete(w.failedLoad, conversationID)
-			} else if record.failures >= failedLoadSuppressThreshold {
-				stats.failedSuppressed++
+	for _, group := range groupEmbeddedAliases(stampedRecords) {
+		seen[group.ownerID] = true
+		for _, alias := range group.aliases {
+			if !w.embedded.admits(alias.Record) {
 				continue
 			}
+			if w.embedded.aliasDecision == nil {
+				stats.admitted++
+			}
+			candidate := embeddedCandidate{record: alias.Record, stamp: alias.Stamp, fingerprint: conversation.ContentFingerprint(alias.Record, alias.Stamp), groupFingerprint: "", aliases: group.aliases, sourceBytes: group.bytes}
+			if decision := w.embedded.aliasDecision; decision != nil && decision.source.Record.ID == group.ownerID {
+				if decision.cached || !decision.admitted {
+					break
+				}
+				candidate.record, candidate.stamp = decision.source.Record, decision.source.Stamp
+				candidate.fingerprint = conversation.ContentFingerprint(candidate.record, candidate.stamp)
+				candidate.groupFingerprint = decision.fingerprint
+			}
+			candidatesByID[group.ownerID] = candidate
+			break
 		}
-		candidatesByID[conversationID] = embeddedCandidate{record: stampedRecord.Record, stamp: stampedRecord.Stamp, fingerprint: fingerprint}
 	}
-	for conversationID := range w.embedded.processed {
-		if !seen[conversationID] {
-			delete(w.embedded.processed, conversationID)
-		}
+	if w.embedded.aliasDecision == nil {
+		w.pruneEmbeddedAliasCaches(seen)
 	}
-	w.pruneFailedLoad(seen)
+
 	ids := make([]string, 0, len(candidatesByID))
 	for conversationID := range candidatesByID {
 		ids = append(ids, conversationID)
@@ -582,7 +570,9 @@ func (w *conversationSemanticSyncWorker) embeddedCandidates(
 	for _, conversationID := range ids {
 		candidates = append(candidates, candidatesByID[conversationID])
 	}
-	stats.needed = len(candidates)
+	if w.embedded.aliasDecision == nil {
+		stats.needed += len(candidates)
+	}
 	return candidates
 }
 
@@ -611,11 +601,15 @@ func (w *conversationSemanticSyncWorker) deliverEmbeddedCandidates(
 			stats.deferred++
 			continue
 		}
-		if loaded > 0 && artifactBytes+candidate.stamp.Size > conversationSemanticBatchBytes {
+		candidateBytes := candidate.sourceBytes
+		if candidateBytes == 0 {
+			candidateBytes = max(candidate.stamp.Size, 0)
+		}
+		if loaded > 0 && candidateBytes > conversationSemanticBatchBytes-artifactBytes {
 			return
 		}
 		loaded++
-		artifactBytes += candidate.stamp.Size
+		artifactBytes += candidateBytes
 		w.deliverEmbeddedCandidate(ctx, store, candidate, stats)
 		w.deliveryCursor = candidate.record.ID
 		if artifactBytes >= conversationSemanticBatchBytes {
@@ -634,7 +628,7 @@ func (w *conversationSemanticSyncWorker) deliverEmbeddedCandidate(
 	candidate embeddedCandidate,
 	stats *embeddedSyncStats,
 ) {
-	generation, withheld, err := w.buildEmbeddedGeneration(ctx, store, candidate, stats)
+	generation, err := w.buildEmbeddedGeneration(ctx, store, candidate, stats)
 	if err != nil {
 		return
 	}
@@ -648,56 +642,56 @@ func (w *conversationSemanticSyncWorker) deliverEmbeddedCandidate(
 	}
 	stats.completed++
 	stats.completedIDs = append(stats.completedIDs, candidate.record.ID)
-	if withheld == 0 {
-		w.embedded.processed[candidate.record.ID] = candidate.fingerprint
+	{
+		w.embedded.processed[candidate.record.ID] = candidate.groupFingerprint
+		if w.embedded.processedSources == nil {
+			w.embedded.processedSources = make(map[string]conversation.StampedRecord)
+		}
+		w.embedded.processedSources[candidate.record.ID] = conversation.StampedRecord{Record: candidate.record, Stamp: candidate.stamp}
 	}
 }
 
-// buildEmbeddedGeneration loads one conversation, selects its new fields, and
-// prepares their occurrences as one generation. It returns a nil generation
-// when no field is new, and the count of withheld open trailing fields. A
-// source read failure or a projection failure counts toward failed-load
-// suppression at the conversation fingerprint.
+// buildEmbeddedGeneration prepares only missing fields from a proven alias group.
 func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 	ctx context.Context,
 	store *embeddedConversationStore,
 	candidate embeddedCandidate,
 	stats *embeddedSyncStats,
-) (*embeddedGeneration, int, error) {
-	record := candidate.record
-	w.log.DebugContext(ctx, "daemon.conversation_semantic_embedded.source_read_started", "concern", "conversation.semantic", "pid", os.Getpid(), "conversation_id", record.ID)
-	started := w.now()
-	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentKinds))
-	stats.sourceReadDuration += w.now().Sub(started)
-	w.log.DebugContext(ctx, "daemon.conversation_semantic_embedded.source_read_finished", "concern", "conversation.semantic", "pid", os.Getpid(), "conversation_id", record.ID, "err", err)
-	if err != nil {
-		stats.sourceFailed++
-		w.recordLoadFailure(record.ID, candidate.fingerprint)
-		w.log.WarnContext(
-			ctx, "daemon.conversation_semantic_sync.load_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", record.ID,
-			"provider", record.Provider.String(),
-			"err", err,
-		)
-		return nil, 0, fmt.Errorf("load conversation messages for %s: %w", record.ID, err)
+) (*embeddedGeneration, error) {
+	decision := w.embedded.aliasDecision
+	if decision == nil || decision.source.Record.ID != candidate.record.ID {
+		aliases := candidate.aliases
+		if len(aliases) == 0 {
+			aliases = []conversation.StampedRecord{{Record: candidate.record, Stamp: candidate.stamp}}
+		}
+		group := groupEmbeddedAliases(aliases)[0]
+		var err error
+		decision, err = w.resolveEmbeddedAliasGroup(ctx, store, group, stats)
+		if err != nil {
+			w.aliasFailure(ctx, group, err, stats)
+			return nil, err
+		}
 	}
-	stats.sourceRead++
-	stats.sourceBytes += candidate.stamp.Size
+	if decision.cached || !decision.admitted {
+		return nil, nil
+	}
+	record := decision.source.Record
+	candidate.record, candidate.stamp = record, decision.source.Stamp
+	candidate.fingerprint = conversation.ContentFingerprint(record, candidate.stamp)
+	candidate.groupFingerprint = decision.fingerprint
 	delete(w.failedLoad, record.ID)
-	fields, withheld, err := w.selectEmbeddedFields(ctx, store, candidate, messages, stats)
+	fields, err := w.selectEmbeddedFields(ctx, store, candidate, decision.fields, stats)
 	if err != nil || len(fields) == 0 {
-		return nil, withheld, err
+		return nil, err
 	}
-	owner := newEmbeddedConversationOwner(record, w.contentKinds)
-	started = w.now()
+	owner := embeddedAliasOwner(decision, w.contentKinds)
+	started := w.now()
 	rows, err := embeddedOutboxRows(ctx, store.namespace, owner, fields)
 	stats.occurrencePreparationDuration += w.now().Sub(started)
 	if err != nil {
 		stats.projectionFailed++
 		w.recordLoadFailure(record.ID, candidate.fingerprint)
-		return nil, withheld, err
+		return nil, err
 	}
 	stats.rows += len(rows)
 	started = w.now()
@@ -711,48 +705,27 @@ func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 		ProjectionProfile: owner.ProjectionProfile,
 		RowCount:          0,
 		ManifestHash:      "",
-		Metadata:          embeddedOwnerMetadataOf(record),
+		Metadata:          decision.metadata,
 	}, rows)
 	stats.outboxPreparationDuration += w.now().Sub(started)
 	if err != nil {
 		stats.deliveryFailed++
-		return nil, withheld, err
+		return nil, err
 	}
-	return &generation, withheld, nil
+	return &generation, nil
 }
 
-// selectEmbeddedFields projects the loaded messages, keeps the fields of the
-// indexed roles, and rejects the candidate when a committed field digest
-// differs. It returns new fields only for a compatible candidate, plus the
-// count of withheld open trailing fields.
+// selectEmbeddedFields applies role policy after the complete alias proof.
 func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 	ctx context.Context,
 	store *embeddedConversationStore,
 	candidate embeddedCandidate,
-	messages []transcript.Message,
+	projected []searchbackend.Field,
 	stats *embeddedSyncStats,
-) ([]searchbackend.Field, int, error) {
+) ([]searchbackend.Field, error) {
 	record := candidate.record
-	artifactSettled := w.now().Sub(candidate.stamp.Mtime) >= embeddedTrailingSettleWindow
 	started := w.now()
-	projected, built, err := projectEmbeddedConversationFields(record, messages, w.contentKinds, artifactSettled)
-	stats.projectionDuration += w.now().Sub(started)
-	if err != nil {
-		stats.projectionFailed++
-		w.recordLoadFailure(record.ID, candidate.fingerprint)
-		w.log.WarnContext(
-			ctx, "daemon.conversation_semantic_sync.projection_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", record.ID,
-			"err", err,
-		)
-		return nil, 0, fmt.Errorf("project fields of %s: %w", record.ID, err)
-	}
-	stats.policySkipped += built.PolicySkipped
-	stats.withheldFields += projected.WithheldOpenFields
-	started = w.now()
-	fields := w.embedded.admittedFields(projected.Fields)
+	fields := w.embedded.admittedFields(projected)
 	stats.policySelectionDuration += w.now().Sub(started)
 	stats.fields += len(fields)
 	started = w.now()
@@ -760,7 +733,7 @@ func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 	stats.committedReadDuration += w.now().Sub(started)
 	if err != nil {
 		stats.deliveryFailed++
-		return nil, projected.WithheldOpenFields, err
+		return nil, err
 	}
 	started = w.now()
 	selection := searchbackend.SelectNewFields(fields, committed)
@@ -776,9 +749,9 @@ func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 			"concern", "conversation.semantic", "component", "daemon",
 			"conversation_id", record.ID, "source_fingerprint", candidate.fingerprint,
 			"conflicting_fields", selection.ChangedCommitted, "err", err)
-		return nil, projected.WithheldOpenFields, err
+		return nil, err
 	}
-	return selection.New, projected.WithheldOpenFields, nil
+	return selection.New, nil
 }
 
 // embeddedOutboxRows prepares the occurrences of each field and validates

@@ -198,11 +198,18 @@ func openEmbeddedQueryTestStore(t *testing.T) (*embeddedConversationStore, confi
 	if err != nil {
 		t.Fatalf("connect to isolated Milvus: %v", err)
 	}
+	t.Cleanup(func() { closeLiveMilvusAdmin(t, admin) })
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		t.Fatalf("generate isolated database name: %v", err)
 	}
 	database := "clyde_query_" + hex.EncodeToString(random)
+	existing, err := admin.ListDatabase(t.Context(), milvusclient.NewListDatabaseOption())
+	if err != nil || slices.Contains(existing, database) {
+		t.Fatalf("verify isolated query database absence: %v, exists=%t", err, slices.Contains(existing, database))
+	}
+	registerLiveMilvusDatabase(t, database, embeddedQueryMilvusAddress)
+	t.Cleanup(func() { dropLiveMilvusDatabase(t, admin, database) })
 	if err := admin.CreateDatabase(t.Context(), milvusclient.NewCreateDatabaseOption(database)); err != nil {
 		t.Fatalf("create isolated query database: %v", err)
 	}
@@ -225,18 +232,10 @@ func openEmbeddedQueryTestStore(t *testing.T) (*embeddedConversationStore, confi
 		t.Fatalf("open isolated query store: %v", err)
 	}
 	t.Cleanup(func() {
-		ctx := context.WithoutCancel(t.Context())
-		if err := store.milvusClient.DropCollection(ctx, milvusclient.NewDropCollectionOption(semantic.MilvusCollection)); err != nil {
-			t.Errorf("drop isolated query collection: %v", err)
-		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer cancel()
 		if err := store.close(ctx); err != nil {
 			t.Errorf("close isolated query store: %v", err)
-		}
-		if err := admin.DropDatabase(ctx, milvusclient.NewDropDatabaseOption(database)); err != nil {
-			t.Errorf("drop isolated query database: %v", err)
-		}
-		if err := admin.Close(ctx); err != nil {
-			t.Errorf("close isolated query admin: %v", err)
 		}
 	})
 	return store, semantic

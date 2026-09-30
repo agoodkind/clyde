@@ -10,14 +10,41 @@ import (
 	"testing"
 	"time"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/conversation"
 )
 
-func TestEmbeddedOwnerAliasMetadataUsesIngestionSource(t *testing.T) {
+func TestEmbeddedColdAliasMetadataDisagreementRemainsPending(t *testing.T) {
+	testEmbeddedAliasMetadata(t, false)
+}
+
+func TestEmbeddedAcceptedAliasMetadataRetainsStoredValues(t *testing.T) {
+	testEmbeddedAliasMetadata(t, true)
+}
+
+func testEmbeddedAliasMetadata(t *testing.T, acceptedFirst bool) {
+	t.Helper()
 	requireLiveLocalEmbeddingModel(t)
 	stores := isolateEmbeddedProjectionStores(t)
 	primary := writeEmbeddedProjectionCodexRollout(t, stores)
 	ageLiveArtifact(t, primary)
+	index := newEmbeddedProjectionIndex()
+	refreshLiveIndex(t, index)
+	store, semantic := openEmbeddedQueryTestStore(t)
+	if err := store.outbox.releaseLock(); err != nil {
+		t.Fatal(err)
+	}
+	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
+	worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
+	worker.embedded.store = store
+	freshness := newConversationSemanticFreshness()
+	worker.freshness = freshness
+	server := &controlServer{freshness: freshness.snapshot}
+	if acceptedFirst {
+		if err := worker.runPass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	alias := filepath.Join(stores.codexHome, "sessions", "2026", "05", "01", filepath.Base(primary))
 	if err := os.MkdirAll(filepath.Dir(alias), 0o755); err != nil {
 		t.Fatal(err)
@@ -29,26 +56,22 @@ func TestEmbeddedOwnerAliasMetadataUsesIngestionSource(t *testing.T) {
 	if err := os.Chtimes(alias, older, older); err != nil {
 		t.Fatal(err)
 	}
-	index := newEmbeddedProjectionIndex()
 	refreshLiveIndex(t, index)
-	records, err := index.ListAllWithStamps(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 2 || records[0].Record.ID != records[1].Record.ID || records[0].Record.ArtifactPath != primary {
-		t.Fatalf("discovered records = %+v, want newer primary and older alias under one ID", records)
-	}
-	store, semantic := openEmbeddedQueryTestStore(t)
-	if err := store.outbox.releaseLock(); err != nil {
-		t.Fatal(err)
-	}
-	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
-	worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
-	worker.embedded.store = store
 	source := &embeddedConversationSearchSource{library: store.library, semantic: semantic, gate: nil, index: index, outbox: store.outbox}
 	for pass := range 3 {
 		if err := worker.runPass(t.Context()); err != nil {
 			t.Fatalf("ingestion pass %d: %v", pass, err)
+		}
+		if !acceptedFirst {
+			owner, err := store.library.ListOwnerOccurrences(t.Context(), semantic.CollectionID, liveOwnerID)
+			if err != nil || owner.State.GenerationOrder != 0 || len(owner.Rows) != 0 {
+				t.Fatalf("cold disagreement published owner: %+v, %v", owner, err)
+			}
+			status, err := server.GetSemanticSearchFreshness(t.Context(), &clydev1.GetSemanticSearchFreshnessRequest{})
+			if err != nil || status.GetSemanticFreshness().GetPending() != 1 {
+				t.Fatalf("cold disagreement freshness = %+v, %v", status, err)
+			}
+			continue
 		}
 		for _, workspace := range []string{"/repo", "/older-repo"} {
 			result, err := source.SearchConversations(t.Context(), conversation.SearchConversationsOptions{
