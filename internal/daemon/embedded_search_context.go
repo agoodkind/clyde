@@ -18,25 +18,52 @@ import (
 // verifyContext compares committed identities and digests before rendering
 // selected fields. A later append can preserve an earlier context window.
 func (source *embeddedConversationSearchSource) verifyContext(ctx context.Context, hit library.SearchHit, match conversation.SearchMatch, options conversation.SearchConversationsOptions) (conversation.SearchMatch, error) {
+	if ctx.Err() != nil {
+		return unavailableEmbeddedContext(ctx, match, ctx.Err())
+	}
 	if source.semantic.ProjectionProfile != config.ConversationProjectionProfileSourceSpan {
 		return match, nil
 	}
 	if source.index == nil || source.outbox == nil {
 		return match, nil
 	}
+	if hit.ID.OwnerID != match.Record.ID {
+		return match, nil
+	}
+	identities, err := source.outbox.committedFieldIdentities(ctx, hit.ID.Namespace, hit.ID.OwnerID)
+	if err != nil {
+		return conversation.SearchMatch{}, err
+	}
+	generation, found := embeddedContextGeneration(identities, hit.ID.RowKey)
+	if !found {
+		return match, nil
+	}
+	provenance, unique, err := source.outbox.committedContextProvenance(ctx, hit.ID.Namespace, hit.ID.OwnerID, generation)
+	if err != nil {
+		return conversation.SearchMatch{}, err
+	}
+	if !unique || provenance.provider != match.Record.Provider.String() {
+		return match, nil
+	}
 	stamped, err := source.index.ListAllWithStamps(ctx)
 	if err != nil {
 		return unavailableEmbeddedContext(ctx, match, err)
 	}
+	var record conversation.Record
+	count := 0
 	for _, current := range stamped {
-		if current.Record.ID == match.Record.ID && current.Record.Provider == match.Record.Provider {
-			return source.verifyRecordContext(ctx, current.Record, hit, match, options)
+		if current.Record.ID == hit.ID.OwnerID && current.Record.Provider == match.Record.Provider && current.Record.ArtifactPath == provenance.sourcePath {
+			record = current.Record
+			count++
 		}
 	}
-	return match, nil
+	if count != 1 {
+		return match, nil
+	}
+	return source.verifyRecordContext(ctx, record, identities, hit, match, options)
 }
 
-func (source *embeddedConversationSearchSource) verifyRecordContext(ctx context.Context, record conversation.Record, hit library.SearchHit, match conversation.SearchMatch, options conversation.SearchConversationsOptions) (conversation.SearchMatch, error) {
+func (source *embeddedConversationSearchSource) verifyRecordContext(ctx context.Context, record conversation.Record, identities map[string]embeddedCommittedFieldIdentity, hit library.SearchHit, match conversation.SearchMatch, options conversation.SearchConversationsOptions) (conversation.SearchMatch, error) {
 	before, err := os.Stat(record.ArtifactPath)
 	if err != nil {
 		return unavailableEmbeddedContext(ctx, match, err)
@@ -64,10 +91,6 @@ func (source *embeddedConversationSearchSource) verifyRecordContext(ctx context.
 	fields, _, err := projectEmbeddedConversationWindow(record, messages, start, kinds, true)
 	if err != nil {
 		return unavailableEmbeddedContext(ctx, match, err)
-	}
-	identities, err := source.outbox.committedFieldIdentities(ctx, hit.ID.Namespace, hit.ID.OwnerID)
-	if err != nil {
-		return conversation.SearchMatch{}, err
 	}
 	if missingEmbeddedContextField(fields.Fields, identities, embeddedQueryProjectionProfile(source.semantic, match.LoadRules), start, end) {
 		return match, nil
@@ -113,6 +136,10 @@ func missingEmbeddedContextField(fields []searchbackend.Field, identities map[st
 }
 
 func unavailableEmbeddedContext(ctx context.Context, match conversation.SearchMatch, cause error) (conversation.SearchMatch, error) {
+	if ctx.Err() != nil {
+		slog.WarnContext(ctx, "daemon.conversation_embedded_search.context_cancelled", "component", "daemon", "concern", "conversation.semantic", "conversation_id", match.Record.ID, "err", ctx.Err())
+		return conversation.SearchMatch{}, fmt.Errorf("verify embedded context: %w", ctx.Err())
+	}
 	slog.DebugContext(ctx, "daemon.conversation_embedded_search.context_unavailable", "component", "daemon", "concern", "conversation.semantic", "conversation_id", match.Record.ID, "err", cause)
 	return match, nil
 }

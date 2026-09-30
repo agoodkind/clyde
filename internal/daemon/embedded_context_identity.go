@@ -2,15 +2,20 @@ package daemon
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"log/slog"
 )
 
 type embeddedCommittedFieldIdentity struct {
-	digest            string
-	providerMessageID string
+	digest              string
+	providerMessageID   string
+	committedGeneration uint64
 }
+
+//go:embed embedded_context_identity.sql
+var embeddedContextIdentitySQL string
 
 // committedFieldIdentities includes the provider identity captured at commit.
 // Reconciled unknown digests cannot verify context.
@@ -20,7 +25,7 @@ func (outbox *conversationSemanticOutbox) committedFieldIdentities(ctx context.C
 			slog.WarnContext(ctx, "daemon.conversation_semantic_outbox.read_context_identity_failed", "component", "daemon", "concern", "conversation.semantic", "conversation_id", owner, "err", err)
 		}
 	}()
-	rows, err := outbox.db.QueryContext(ctx, `SELECT field_key, digest, provider_message_id FROM committed_fields WHERE namespace = ? AND owner_id = ?`, namespace, owner)
+	rows, err := outbox.db.QueryContext(ctx, embeddedContextIdentitySQL, namespace, owner)
 	if err != nil {
 		return nil, fmt.Errorf("read committed context identities: %w", err)
 	}
@@ -29,7 +34,7 @@ func (outbox *conversationSemanticOutbox) committedFieldIdentities(ctx context.C
 	for rows.Next() {
 		var key string
 		var identity embeddedCommittedFieldIdentity
-		if err := rows.Scan(&key, &identity.digest, &identity.providerMessageID); err != nil {
+		if err := rows.Scan(&key, &identity.digest, &identity.providerMessageID, &identity.committedGeneration); err != nil {
 			return nil, fmt.Errorf("read committed context identity: %w", err)
 		}
 		identities[key] = identity
