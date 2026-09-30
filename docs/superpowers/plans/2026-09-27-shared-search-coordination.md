@@ -8,7 +8,7 @@ This is the sole coordination plan. Component plans provide exact implementation
 
 ## Current behavior
 
-LMS main includes the generic library, canonical vector storage, lexical ranking, complete query results, and cursors. LMS codebase adoption remains in #326. Clyde main still compiles the LMS daemon client. Clyde #385 implements embedded ingestion, and #388 implements embedded queries and context verification. Full runtime integration, joint acceptance, and conversation subsystem removal remain incomplete.
+LMS main includes the generic library, canonical vector storage, lexical ranking, complete query results, cursors, and codebase adoption from merged #326. Clyde main still compiles the LMS daemon client. Clyde #385 implements embedded ingestion, and #388 implements embedded queries, context verification, lifecycle fixes, and measured public traversal. Joint measured acceptance and conversation subsystem removal remain incomplete.
 
 The planning bases are LMS `d2c763db23271bb28d17ec4198da843b5d6c67df` and Clyde `3860a8c4ed843fcf52592b0aa558849522f9d25f`. Refresh repository and deployed revisions before implementation.
 
@@ -216,12 +216,12 @@ Only the coordinator edits this table. Add each branch/PR, exact commit, depende
 | L2 | LMS #315 merged at `b12919be`. L3 includes lexical generations and Hybrid search. | Verify ranking with the final application revisions. |
 | L3 | LMS #318 merged at `73e8f0b6`. The recovered oracle output proves 21 comparisons and 23,040 unfiltered occurrences. The complete original run-8 log remains missing. | Preserve complete ranking and cursor contracts during performance changes. |
 | C4.1 | Clyde #382 merged native bootstrap at `02d14822b`. | Pin the reviewed LMS revision. |
-| C1 | Clyde #385 includes projection at `066c60997`. Raw source integrity requires the p2 correction in #388. | Verify original source spans and immutable p1 compatibility. |
-| C2 | Clyde #385 at `066c60997` passed isolated recovery and Cursor trailing-turn tests with exit 0. All eleven required checks pass. | Complete review and C4 lifecycle acceptance. |
-| C3 | Clyde #388 publishes query boundaries at `de967d683` with LMS `73e8f0b6`. Context verification and p2 compatibility edits remain unpublished. | Complete context, CLI, and MCP tests. |
-| L4 | LMS #326 at `2ef3f984` passed the real three-file matched baseline in 13.30 seconds. The source-preservation and NUL query regression passed in 3.16 seconds. The fix remains unpublished. | Verify the final #326 head with C4. |
-| C4 runtime | The outbox lock persists until worker closure and contradicts the required operation scope. Actual reload and timed-out stop acceptance remain incomplete. | Integrate C2 and C3 with the corrected lifecycle. |
-| Joint acceptance | The Mac legacy-vector subset run completed 160 samples and 40 fits. At 178,543 rows, warm unfiltered first pages took seconds. Full current-projection acceptance remains incomplete. | Complete C4 and L4, the matched healthy baseline, and resource measurements. |
+| C1 | Clyde #388 adds p3 source spans at `bf07454c`. Public fixture tests preserve original source bytes and distinct tool identities. | Preserve p1 and p2 namespace compatibility. |
+| C2 | Clyde #385 at `066c60997` passed isolated recovery and Cursor trailing-turn tests with exit 0. All eleven required checks pass. | Complete review and joint acceptance. |
+| C3 | Clyde #388 publishes membership, subagent and group filters at `7095bbe8`. The strict target passed 14 required tests without skips. CLI/MCP identities, scores, excerpts and context match. | Complete the frozen full-corpus battery. |
+| L4 | LMS #326 merged at `a1fbd888` after all nine required checks passed. Public cancellation, real backend failure, process recovery, retention and ordered codebase tests passed. | Complete joint measured acceptance; LMS-713 remains In Progress. |
+| C4 runtime | Clyde #388 publishes operation-scoped locking and shutdown ownership at `9712208`. Actual reload, failed admission, source-read stop timeout and pending replacement termination tests passed. | Preserve lifecycle proof in the final integrated revision. |
+| Joint acceptance | Clyde #388 publishes the measured collector at `cb09ece6`, pure source projection at `1c41bb350`, and snapshot verification at `3d29cc60`. All 61,873 frozen files and 40,879,678,005 bytes match the approved source manifest. Warm fixture traversals return all 38 identities in identical order. The legacy subset's first-page latency still blocks a performance verdict. | Complete full source-derived expectations, actual ingestion observations, the healthy baseline, and 16/24 GB measurements. |
 | L5 | The removal inventory is complete. Clyde still compiles legacy LMS conversation RPC calls. The removal candidate has not started. | Pass joint acceptance before subsystem removal. |
 | Production migration | Production LMS and Clyde search and ingestion remain stopped. Reset, migration, re-embedding, restoration, and cutover require explicit approval. Existing stored duplicates may remain. | Evaluate measured source coverage, compatibility, disk, and rebuild evidence. |
 
