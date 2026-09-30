@@ -50,9 +50,8 @@ type embeddedConversationSync struct {
 	// artifact. The map is in memory. After a restart the first pass reads
 	// each conversation once and sends no row for a committed field.
 	processed map[string]string
-	// changedCommitted counts the fields, since the worker started, with a
-	// digest that differs from the committed digest under the same key. The
-	// committed occurrence stays and no row is sent for the key.
+	// changedCommitted counts conflicting committed field digests since worker
+	// startup. A conflict rejects the entire candidate and retains prior rows.
 	changedCommitted int
 	// status receives the library and outbox state for the daemon status RPC.
 	// Nil disables publishing.
@@ -723,8 +722,9 @@ func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 }
 
 // selectEmbeddedFields projects the loaded messages, keeps the fields of the
-// indexed roles, and returns the fields with keys that the outbox has not
-// committed. It also returns the count of withheld open trailing fields.
+// indexed roles, and rejects the candidate when a committed field digest
+// differs. It returns new fields only for a compatible candidate, plus the
+// count of withheld open trailing fields.
 func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 	ctx context.Context,
 	store *embeddedConversationStore,
@@ -769,6 +769,15 @@ func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 	stats.unchangedFields += selection.Unchanged
 	stats.changedCommitted += selection.ChangedCommitted
 	w.embedded.changedCommitted += selection.ChangedCommitted
+	if selection.ChangedCommitted > 0 {
+		stats.projectionFailed++
+		err := fmt.Errorf("select fields of %s: %w", record.ID, library.ErrAppendConflict)
+		w.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.source_conflict",
+			"concern", "conversation.semantic", "component", "daemon",
+			"conversation_id", record.ID, "source_fingerprint", candidate.fingerprint,
+			"conflicting_fields", selection.ChangedCommitted, "err", err)
+		return nil, projected.WithheldOpenFields, err
+	}
 	return selection.New, projected.WithheldOpenFields, nil
 }
 
