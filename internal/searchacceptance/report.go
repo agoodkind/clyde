@@ -1,6 +1,13 @@
 // Package searchacceptance validates isolated search measurement reports.
 package searchacceptance
 
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+)
+
 // SchemaVersion selects the serialized measurement contract.
 const SchemaVersion = 1
 
@@ -48,6 +55,30 @@ type Page struct {
 	OccurrenceIDs []string `json:"occurrence_ids"`
 	ElapsedMS     float64  `json:"elapsed_ms"`
 	HasMore       bool     `json:"has_more"`
+	// Limit is absent only in legacy reports that validate requested page size.
+	Limit *int `json:"limit,omitempty"`
+}
+
+// UnmarshalJSON permits legacy omission but rejects an explicit null limit.
+func (page *Page) UnmarshalJSON(data []byte) error {
+	type decodedPage Page
+	var decoded decodedPage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return fmt.Errorf("decode recorded search page: %w", err)
+	}
+	var presence struct {
+		Limit json.RawMessage `json:"limit"`
+	}
+	if err := json.Unmarshal(data, &presence); err != nil {
+		return fmt.Errorf("decode recorded page limit presence: %w", err)
+	}
+	if bytes.Equal(bytes.TrimSpace(presence.Limit), []byte("null")) {
+		return errors.New("recorded page limit must be an integer or omitted")
+	}
+	*page = Page(decoded)
+	return nil
 }
 
 // Traversal records every page from one search snapshot.
