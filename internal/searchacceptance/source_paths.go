@@ -65,6 +65,24 @@ func FrozenProviderEnvironment(snapshotRoot string, provider conversation.Provid
 	}
 }
 
+// FrozenSourceEnvironments binds both Cursor source formats and Zed to the snapshot.
+func FrozenSourceEnvironments(snapshotRoot string) ([]FrozenSourceEnvironment, error) {
+	if !cleanAbsoluteRoot(snapshotRoot) {
+		return nil, errors.New("frozen root must be a clean absolute directory")
+	}
+	environments := []FrozenSourceEnvironment{
+		{Name: "CLYDE_CURSOR_PROJECTS_DIRS", Value: filepath.Join(snapshotRoot, "home/.cursor/projects")},
+	}
+	for _, provider := range []conversation.Provider{conversation.ProviderCursor, conversation.ProviderZed} {
+		environment, err := FrozenProviderEnvironment(snapshotRoot, provider)
+		if err != nil {
+			return nil, err
+		}
+		environments = append(environments, environment)
+	}
+	return environments, nil
+}
+
 func cleanAbsoluteRoot(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path && path != string(filepath.Separator)
 }

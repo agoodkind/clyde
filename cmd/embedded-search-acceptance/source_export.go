@@ -16,7 +16,6 @@ import (
 	"syscall"
 
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/searchacceptance"
 )
 
@@ -121,11 +120,11 @@ func runSourceExportChild(ctx context.Context, options sourceExportOptions, argu
 	command := exec.CommandContext(ctx, executable)
 	command.Args = append(command.Args, childArguments...)
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + options.originalHome, "TMPDIR=" + os.TempDir()}
-	for _, provider := range []conversation.Provider{conversation.ProviderCursor, conversation.ProviderZed} {
-		environment, err := searchacceptance.FrozenProviderEnvironment(options.root, provider)
-		if err != nil {
-			return fmt.Errorf("resolve frozen provider environment: %w", err)
-		}
+	environments, err := searchacceptance.FrozenSourceEnvironments(options.root)
+	if err != nil {
+		return fmt.Errorf("resolve frozen provider environments: %w", err)
+	}
+	for _, environment := range environments {
 		command.Env = append(command.Env, environment.Name+"="+environment.Value)
 	}
 	command.Stdout = os.Stdout

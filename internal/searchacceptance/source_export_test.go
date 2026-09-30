@@ -234,17 +234,17 @@ func runFrozenSourceExportChild(t *testing.T, request searchacceptance.FrozenSou
 	writeFrozenSourceBytes(t, path, data)
 	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestFrozenSourceExportChild$")
 	for _, value := range os.Environ() {
-		if strings.HasPrefix(value, sourceExportChildRequest+"=") || strings.HasPrefix(value, "CLYDE_CURSOR_DATA_DIRS=") || strings.HasPrefix(value, "CLYDE_ZED_DATA_DIRS=") {
+		if strings.HasPrefix(value, sourceExportChildRequest+"=") || strings.HasPrefix(value, "CLYDE_CURSOR_DATA_DIRS=") || strings.HasPrefix(value, "CLYDE_CURSOR_PROJECTS_DIRS=") || strings.HasPrefix(value, "CLYDE_ZED_DATA_DIRS=") {
 			continue
 		}
 		command.Env = append(command.Env, value)
 	}
 	command.Env = append(command.Env, sourceExportChildRequest+"="+path)
-	for _, provider := range []conversation.Provider{conversation.ProviderCursor, conversation.ProviderZed} {
-		environment, err := searchacceptance.FrozenProviderEnvironment(request.SnapshotRoot, provider)
-		if err != nil {
-			t.Fatal(err)
-		}
+	environments, err := searchacceptance.FrozenSourceEnvironments(request.SnapshotRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, environment := range environments {
 		command.Env = append(command.Env, environment.Name+"="+environment.Value)
 	}
 	var errors bytes.Buffer

@@ -111,6 +111,46 @@ func TestSourceExportCLIUsesVerifiedFrozenSources(t *testing.T) {
 	}
 }
 
+func TestSourceExportCLICursorPhysicalUsesFrozenProjects(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "embedded-search-acceptance")
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build real source exporter: %v\n%s", err, output)
+	}
+	fixture := createSourceCLIFixture(t)
+	relative := "home/.cursor/projects/1790459369826/agent-transcripts/frozen-cursor/frozen-cursor.jsonl"
+	originalPath := filepath.Join(fixture.originalHome, strings.TrimPrefix(relative, "home/"))
+	text := "frozen Cursor source\x00text"
+	encoded, err := json.Marshal(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.source = filepath.Join(fixture.root, relative)
+	writeSourceCLIFile(t, fixture.source, []byte(fmt.Sprintf(`{"role":"user","message":{"content":[{"type":"text","text":%s}]}}
+`, encoded)))
+	var record conversation.Record
+	record.ID = conversation.DerivedID(conversation.ProviderCursor, "frozen-cursor", originalPath)
+	record.NativeID = "frozen-cursor"
+	record.Provider = conversation.ProviderCursor
+	record.ArtifactPath = originalPath
+	record.ArtifactKind = "cursor_agent_transcript"
+	writeSourceCLIJSON(t, filepath.Join(fixture.root, "clyde-cache/conversation-index.json"), sourceCLIIndex{Version: 5, Records: []conversation.Record{record}})
+	var manifest strings.Builder
+	for _, path := range []string{"home/.claude/projects/subagents/agent.jsonl", relative, "clyde-cache/conversation-index.json"} {
+		fmt.Fprintf(&manifest, "%s  ./%s\n", searchacceptance.Digest(readSourceCLIFile(t, filepath.Join(fixture.root, path))), path)
+	}
+	writeSourceCLIFile(t, fixture.manifest, []byte(manifest.String()))
+	fixture.digest = searchacceptance.Digest([]byte(manifest.String()))
+	if output, err := runSourceCLI(t, binary, fixture); err != nil {
+		t.Fatalf("export frozen Cursor physical transcript: %v\n%s", err, output)
+	}
+	rows, summary := readSourceCLIArtifact(t, fixture.output)
+	identity := searchacceptance.SourceIdentity{ConversationID: record.ID, MessageIndex: 0, ContentKind: "chat", ToolIndex: -1, SourceByteStart: 0, SourceByteEnd: int64(len(text))}
+	if !summary.Complete || summary.Records != 1 || summary.Occurrences != 1 || len(rows) != 1 || rows[0].Identity != identity || rows[0].OriginalArtifactPath != originalPath || rows[0].SourceDigest != searchacceptance.Digest([]byte(text)) {
+		t.Fatalf("frozen Cursor identity differs: %+v, %+v", rows, summary)
+	}
+}
+
 func createSourceCLIFixture(t *testing.T) sourceCLIFixture {
 	t.Helper()
 	root := t.TempDir()
@@ -164,13 +204,13 @@ func runSourceCLI(t *testing.T, binary string, fixture sourceCLIFixture) ([]byte
 	t.Helper()
 	command := exec.CommandContext(t.Context(), binary, "export-sources", "--root", fixture.root, "--original-home", fixture.originalHome, "--manifest", fixture.manifest, "--sha256", fixture.digest, "--settings", fixture.settings, "--output", fixture.output)
 	for _, value := range os.Environ() {
-		if strings.HasPrefix(value, "CLYDE_CURSOR_DATA_DIRS=") || strings.HasPrefix(value, "CLYDE_ZED_DATA_DIRS=") {
+		if strings.HasPrefix(value, "CLYDE_CURSOR_DATA_DIRS=") || strings.HasPrefix(value, "CLYDE_CURSOR_PROJECTS_DIRS=") || strings.HasPrefix(value, "CLYDE_ZED_DATA_DIRS=") {
 			continue
 		}
 		command.Env = append(command.Env, value)
 	}
 	unrelatedRoot := t.TempDir()
-	command.Env = append(command.Env, "CLYDE_CURSOR_DATA_DIRS="+unrelatedRoot, "CLYDE_ZED_DATA_DIRS="+unrelatedRoot)
+	command.Env = append(command.Env, "CLYDE_CURSOR_DATA_DIRS="+unrelatedRoot, "CLYDE_CURSOR_PROJECTS_DIRS="+unrelatedRoot, "CLYDE_ZED_DATA_DIRS="+unrelatedRoot)
 	return command.CombinedOutput()
 }
 

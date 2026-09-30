@@ -177,11 +177,11 @@ func readFrozenSourceIndex(request FrozenSourceRequest) (index frozenSourceIndex
 	if !cleanAbsoluteRoot(request.SnapshotRoot) || !cleanAbsoluteRoot(request.OriginalHome) {
 		return index, "", errors.New("source export roots must be clean absolute directories")
 	}
-	for _, provider := range []conversation.Provider{conversation.ProviderCursor, conversation.ProviderZed} {
-		environment, err := FrozenProviderEnvironment(request.SnapshotRoot, provider)
-		if err != nil {
-			return index, "", err
-		}
+	environments, err := FrozenSourceEnvironments(request.SnapshotRoot)
+	if err != nil {
+		return index, "", err
+	}
+	for _, environment := range environments {
 		if os.Getenv(environment.Name) != environment.Value {
 			return index, "", fmt.Errorf("isolated child requires frozen %s", environment.Name)
 		}
