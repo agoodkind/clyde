@@ -11,6 +11,10 @@ import (
 // noToolIndex is the ToolIndex of a message field.
 const noToolIndex = -1
 
+// toolDerivedPrefixMaxBytes reserves embedding input space for selected source
+// text instead of repeating an unbounded shell decomposition on every part.
+const toolDerivedPrefixMaxBytes = 1024
+
 // ProjectionProfile returns the projection profile identity for fields loaded
 // under loadRules. Row keys include the profile. A new loading-rules tag or a
 // new projection rule version produces new row keys.
@@ -107,6 +111,9 @@ func toolCallPrefixAndText(tool Tool, name string) (string, string) {
 	prefix.WriteString(toolNamePrefix(name))
 	for _, token := range tokens {
 		if token == normalizedName || token == strings.TrimSpace(normalizedDisplay) {
+			continue
+		}
+		if prefix.Len()+len(token)+1 > toolDerivedPrefixMaxBytes {
 			continue
 		}
 		prefix.WriteString(token)
