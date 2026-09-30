@@ -53,8 +53,7 @@ func startConfiguredConversationSemanticSync(
 		return err
 	}
 	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
-		startEmbeddedConversationSemanticSync(ctx, log, cfg.Conversation.Semantic, index, freshness, embeddedStatus, embeddedReconcile, group, kinds)
-		return nil
+		return startEmbeddedConversationSemanticSync(ctx, log, cfg.Conversation.Semantic, index, freshness, embeddedStatus, embeddedReconcile, group, kinds)
 	}
 	startConversationSemanticSync(ctx, log, index, resolveClient, cfg.Conversation.Semantic.CollectionID, freshness, group, kinds)
 	return nil

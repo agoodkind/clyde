@@ -40,7 +40,7 @@ func TestEmbeddedReconciliationRebuildsPartiallyLostOutbox(t *testing.T) {
 	acknowledgeReconcileTestGeneration(t, store, records[reconcileKnownOwnerID], reconcileKnownOwnerToken)
 	commitReconcileTestGeneration(t, store, reconcileUnknownOwnerID, 1, reconcileUnknownOwnerToken)
 
-	worker := newReconcileTestWorker(store, index)
+	worker := newReconcileTestWorker(t, store, index)
 	if err := worker.runPass(t.Context()); err != nil {
 		t.Fatalf("run embedded pass: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestEmbeddedReconciliationClearsBlockedOwner(t *testing.T) {
 		t.Fatalf("blocked owners before the pass = %q, %v, want the owner", blocked, err)
 	}
 
-	worker := newReconcileTestWorker(store, index)
+	worker := newReconcileTestWorker(t, store, index)
 	if err := worker.runPass(t.Context()); err != nil {
 		t.Fatalf("run embedded pass: %v", err)
 	}
@@ -101,7 +101,11 @@ func TestEmbeddedReconciliationClearsBlockedOwner(t *testing.T) {
 	}
 }
 
-func newReconcileTestWorker(store *embeddedConversationStore, index *conversation.Index) *conversationSemanticSyncWorker {
+func newReconcileTestWorker(t *testing.T, store *embeddedConversationStore, index *conversation.Index) *conversationSemanticSyncWorker {
+	t.Helper()
+	if err := store.outbox.releaseLock(); err != nil {
+		t.Fatalf("release fixture admission lock: %v", err)
+	}
 	semantic := config.ConversationSemanticConfig{
 		IngestionEnabled: true,
 		CollectionID:     store.namespace.ID,
@@ -109,7 +113,7 @@ func newReconcileTestWorker(store *embeddedConversationStore, index *conversatio
 		IncludeSubagents: true,
 	}
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
-	worker.embedded = newEmbeddedConversationSync(semantic, "", newEmbeddedSemanticStatus(), index)
+	worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
 	worker.embedded.store = store
 	return worker
 }

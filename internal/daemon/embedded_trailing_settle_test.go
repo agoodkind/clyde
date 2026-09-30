@@ -38,7 +38,7 @@ func TestEmbeddedPassWithholdsGrowingCursorTurn(t *testing.T) {
 			setTrailingTestAge(t, transcriptPath, trailingTestQuietAge)
 			index := newEmbeddedProjectionIndex()
 			store, _ := openBlockedTestStore(t)
-			worker := newReconcileTestWorker(store, index)
+			worker := newReconcileTestWorker(t, store, index)
 			runTrailingTestPass(t, worker, index)
 			if pending := trailingTestPendingFieldKeys(t, store); len(pending) != 0 {
 				t.Fatalf("pass with an open trailing turn recorded fields %q, want none", pending)

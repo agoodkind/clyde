@@ -7,8 +7,7 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 )
 
-// search serializes source access with worker shutdown and reconciliation.
-// Runtime search-only ownership is added before enabling embedded search.
+// search serializes source access with publication and storage closure.
 func (gate *embeddedReconcileGate) search(ctx context.Context, semantic config.ConversationSemanticConfig, options conversation.SearchConversationsOptions, index *conversation.Index) (conversation.SearchConversationsResult, error) {
 	gate.mu.Lock()
 	embedded, log := gate.embedded, gate.log
@@ -16,7 +15,9 @@ func (gate *embeddedReconcileGate) search(ctx context.Context, semantic config.C
 	if embedded == nil {
 		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
 	}
-	embedded.mu.Lock()
+	if err := embedded.lockStore(ctx); err != nil {
+		return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, err)
+	}
 	defer embedded.mu.Unlock()
 	store, err := embedded.ensureStore(ctx, log)
 	if err != nil {

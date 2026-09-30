@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goodkind.io/lm-semantic-search/library"
@@ -16,6 +18,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/searchbackend"
+	"goodkind.io/clyde/internal/daemonsupervisor"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -31,9 +34,9 @@ const embeddedTrailingSettleWindow = 30 * time.Minute
 // ingestion worker stops.
 const embeddedStoreCloseTimeout = 5 * time.Second
 
-// embeddedConversationSync is the embedded backend state of the semantic sync
-// worker. The worker opens the store on its first pass, retries a failed open
-// on the next pass, and closes the store after its last pass.
+const embeddedStoreOpenTimeout = 4 * time.Second
+
+// embeddedConversationSync owns the store for one daemon generation.
 type embeddedConversationSync struct {
 	semantic   config.ConversationSemanticConfig
 	outboxPath string
@@ -65,7 +68,12 @@ type embeddedConversationSync struct {
 	mu sync.Mutex
 	// closed reports that closeStore ran. ensureStore opens no store after
 	// close. closeStore sets it under mu.
-	closed bool
+	closed     bool
+	closing    atomic.Bool
+	closeOnce  sync.Once
+	closeDone  chan struct{}
+	closeErr   error
+	workerDone <-chan struct{}
 	// open opens the store under the outbox lock that ensureStore took. The
 	// default opens the Milvus-backed store with openEmbeddedConversationStore.
 	open embeddedStoreOpener
@@ -105,6 +113,11 @@ func newEmbeddedConversationSync(
 		libraryAbsent:    make(map[string]bool),
 		mu:               sync.Mutex{},
 		closed:           false,
+		closing:          atomic.Bool{},
+		closeOnce:        sync.Once{},
+		closeDone:        make(chan struct{}),
+		closeErr:         nil,
+		workerDone:       nil,
 		open: func(ctx context.Context, lock *os.File, log *slog.Logger) (*embeddedConversationStore, error) {
 			return openEmbeddedConversationStore(ctx, semantic, outboxPath, lock, log)
 		},
@@ -115,20 +128,22 @@ func newEmbeddedConversationSync(
 // returns errEmbeddedReconcileUnavailable and opens nothing. The caller locks
 // mu.
 func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *slog.Logger) (*embeddedConversationStore, error) {
-	if embedded.closed {
+	if embedded.closed || embedded.closing.Load() {
 		return nil, errEmbeddedReconcileUnavailable
 	}
 	if embedded.store != nil {
 		return embedded.store, nil
 	}
+	openCtx, cancel := context.WithTimeout(ctx, embeddedStoreOpenTimeout)
+	defer cancel()
 	// ensureStore takes the outbox lock first. When another worker owns the
 	// lock, this worker creates no Milvus client, opens no library, and
 	// registers no namespace.
-	lock, err := lockConversationSemanticOutbox(ctx, embedded.outboxPath)
+	lock, err := lockConversationSemanticOutbox(openCtx, embedded.outboxPath)
 	if err != nil {
 		return nil, err
 	}
-	store, err := embedded.open(ctx, lock, log)
+	store, err := embedded.open(openCtx, lock, log)
 	if err != nil {
 		if closeErr := lock.Close(); closeErr != nil {
 			log.WarnContext(ctx, "daemon.conversation_semantic_embedded.unlock_failed",
@@ -139,25 +154,63 @@ func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *
 		}
 		return nil, err
 	}
+	if err := store.outbox.releaseLock(); err != nil {
+		return nil, errors.Join(err, store.close(context.WithoutCancel(ctx)))
+	}
 	embedded.store = store
 	return store, nil
 }
 
 // closeStore closes the open store after the worker stops and marks the
 // state closed. No later pass or reconcile request opens the store again.
-func (embedded *embeddedConversationSync) closeStore(ctx context.Context) {
+func (embedded *embeddedConversationSync) closeStore(ctx context.Context) error {
 	embedded.mu.Lock()
 	defer embedded.mu.Unlock()
 	embedded.closed = true
 	if embedded.store == nil {
-		return
+		return nil
 	}
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), embeddedStoreCloseTimeout)
 	defer cancel()
-	if err := embedded.store.close(closeCtx); err == nil {
-		embedded.store = nil
-	}
+	err := embedded.store.close(closeCtx)
+	embedded.store = nil
 	embedded.status.markClosed()
+	slog.InfoContext(ctx, "daemon.conversation_semantic_embedded.closed", "concern", "conversation.semantic", "pid", os.Getpid(), "err", err)
+	return err
+}
+
+func (embedded *embeddedConversationSync) closeGeneration(ctx context.Context) error {
+	embedded.closing.Store(true)
+	embedded.closeOnce.Do(func() {
+		embedded.startGenerationClose(context.WithoutCancel(ctx))
+	})
+	select {
+	case <-embedded.closeDone:
+		return embedded.closeErr
+	case <-ctx.Done():
+		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.close_pending", "concern", "conversation.semantic", "err", ctx.Err())
+		return fmt.Errorf("wait for embedded generation storage closure: %w", ctx.Err())
+	}
+}
+
+func (embedded *embeddedConversationSync) startGenerationClose(ctx context.Context) {
+	go func(closeCtx context.Context) {
+		defer close(embedded.closeDone)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				embedded.closeErr = fmt.Errorf("embedded generation close panic: %v", recovered)
+				slog.ErrorContext(closeCtx, "daemon.conversation_semantic_embedded.close_panic", "concern", "conversation.semantic", "err", embedded.closeErr)
+			}
+		}()
+		embedded.finishGenerationClose(closeCtx)
+	}(ctx)
+}
+
+func (embedded *embeddedConversationSync) finishGenerationClose(ctx context.Context) {
+	if embedded.workerDone != nil {
+		<-embedded.workerDone
+	}
+	embedded.closeErr = embedded.closeStore(ctx)
 }
 
 // admits applies the conversation admission settings: indexed providers,
@@ -190,10 +243,8 @@ func (embedded *embeddedConversationSync) admittedFields(fields []searchbackend.
 	return admitted
 }
 
-// startEmbeddedConversationSemanticSync starts the sync worker for the
-// embedded backend when ingestion is enabled. The worker goroutine closes the
-// store after its last pass, before the lifecycle hook observes the worker
-// stop. It reports whether a worker started.
+// startEmbeddedConversationSemanticSync registers storage closure after the
+// worker phase. Search-only generations retry store admission without ingestion.
 func startEmbeddedConversationSemanticSync(
 	ctx context.Context,
 	log *slog.Logger,
@@ -204,12 +255,21 @@ func startEmbeddedConversationSemanticSync(
 	reconcileGate *embeddedReconcileGate,
 	group *livetrack.Group,
 	contentKinds conversation.ContentKindSet,
-) bool {
-	if !semantic.FeedsEngine() {
-		return false
+) error {
+	if !semantic.UsesEngine() || group == nil {
+		return nil
 	}
 	if log == nil {
 		log = slog.Default()
+	}
+	embedded := newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), status, index)
+	reconcileGate.attach(embedded)
+	group.AddHook(livetrack.PhaseStorage, "conversation.semantic.embedded_storage_close", func(closeCtx context.Context) error {
+		reconcileGate.detach(embedded)
+		return embedded.closeGeneration(closeCtx)
+	})
+	if err := embedded.openForStartup(ctx, log, os.Getenv(daemonsupervisor.EnvReloadChild) == "1"); err != nil {
+		return err
 	}
 	workerCtx, done, owned := installConversationSemanticSyncStop(ctx, group, log)
 	if !owned {
@@ -218,16 +278,15 @@ func startEmbeddedConversationSemanticSync(
 			"component", "daemon",
 			"collection_id", semantic.CollectionID,
 		)
-		return false
+		return nil
 	}
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, log, contentKinds)
 	worker.freshness = freshness
-	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), status, index)
-	reconcileGate.attach(worker.embedded)
+	worker.embedded = embedded
+	embedded.workerDone = done
 	go func() {
 		defer close(done)
-		defer worker.embedded.closeStore(ctx)
-		defer reconcileGate.detach(worker.embedded)
+		defer worker.log.InfoContext(workerCtx, "daemon.conversation_semantic_embedded.worker_exited", "concern", "conversation.semantic", "pid", os.Getpid())
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				worker.log.ErrorContext(workerCtx, "daemon.conversation_semantic_sync.panic",
@@ -237,9 +296,80 @@ func startEmbeddedConversationSemanticSync(
 				)
 			}
 		}()
-		worker.run(workerCtx)
+		if semantic.FeedsEngine() {
+			worker.run(workerCtx)
+			return
+		}
+		embedded.retryStoreOpen(workerCtx, log)
 	}()
-	return true
+	return nil
+}
+
+func (embedded *embeddedConversationSync) openForStartup(ctx context.Context, log *slog.Logger, replacement bool) error {
+	startupCtx, cancel := context.WithTimeout(ctx, embeddedStoreOpenTimeout)
+	defer cancel()
+	for {
+		attemptCtx, attemptCancel := context.WithTimeout(startupCtx, embeddedStoreOpenTimeout)
+		embedded.mu.Lock()
+		_, err := embedded.ensureStore(attemptCtx, log)
+		embedded.mu.Unlock()
+		attemptCancel()
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, library.ErrStoreMismatch) || errors.Is(err, library.ErrInvalidRequest) {
+			return err
+		}
+		if !replacement {
+			return nil
+		}
+		select {
+		case <-startupCtx.Done():
+			log.WarnContext(ctx, "daemon.conversation_semantic_embedded.replacement_unavailable", "concern", "conversation.semantic", "err", err)
+			return err
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (embedded *embeddedConversationSync) retryStoreOpen(ctx context.Context, log *slog.Logger) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, embeddedStoreOpenTimeout)
+		embedded.mu.Lock()
+		_, err := embedded.ensureStore(attemptCtx, log)
+		embedded.mu.Unlock()
+		cancel()
+		if err == nil || errors.Is(err, library.ErrStoreMismatch) || errors.Is(err, library.ErrInvalidRequest) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (embedded *embeddedConversationSync) lockStore(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.admission_canceled", "concern", "conversation.semantic", "err", err)
+			return fmt.Errorf("wait for embedded store access: %w", err)
+		}
+		if embedded.mu.TryLock() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.admission_canceled", "concern", "conversation.semantic", "err", ctx.Err())
+			return fmt.Errorf("wait for embedded store access: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // embeddedCandidate is one admitted conversation that the worker has not
@@ -299,13 +429,21 @@ type embeddedSyncStats struct {
 // that the index no longer lists keeps every committed occurrence and its last
 // applied metadata. An owner with a blocked outbox item that reconciliation
 // did not clear receives no delivery and no reprojection.
-func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) error {
+func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) (resultErr error) {
 	w.embedded.mu.Lock()
 	defer w.embedded.mu.Unlock()
 	store, err := w.embedded.ensureStore(ctx, w.log)
 	if err != nil {
 		return err
 	}
+	lock, err := lockConversationSemanticOutbox(ctx, w.embedded.outboxPath)
+	if err != nil {
+		return err
+	}
+	store.outbox.lock = lock
+	defer func() {
+		resultErr = errors.Join(resultErr, store.outbox.releaseLock())
+	}()
 	replay, err := store.delivery.replayPending(ctx)
 	if err != nil {
 		return err
@@ -509,7 +647,9 @@ func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 	stats *embeddedSyncStats,
 ) (*embeddedGeneration, int, error) {
 	record := candidate.record
+	w.log.DebugContext(ctx, "daemon.conversation_semantic_embedded.source_read_started", "concern", "conversation.semantic", "pid", os.Getpid(), "conversation_id", record.ID)
 	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentKinds))
+	w.log.DebugContext(ctx, "daemon.conversation_semantic_embedded.source_read_finished", "concern", "conversation.semantic", "pid", os.Getpid(), "conversation_id", record.ID, "err", err)
 	if err != nil {
 		stats.sourceFailed++
 		w.recordLoadFailure(record.ID, candidate.fingerprint)

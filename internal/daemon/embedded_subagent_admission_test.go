@@ -52,7 +52,10 @@ func TestEmbeddedSubagentAdmissionIgnoresRawVisibility(t *testing.T) {
 				IncludeSubagents: testCase.embeddedIncludes,
 			}
 			worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
-			worker.embedded = newEmbeddedConversationSync(semantic, "", newEmbeddedSemanticStatus(), index)
+			if err := store.outbox.releaseLock(); err != nil {
+				t.Fatalf("release fixture admission lock: %v", err)
+			}
+			worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
 			worker.embedded.store = store
 			if err := worker.runPass(t.Context()); err != nil {
 				t.Fatalf("run embedded pass: %v", err)
