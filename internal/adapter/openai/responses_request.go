@@ -40,6 +40,7 @@ func (s ResponsesFieldSet) Presence(name string) ResponsesFieldPresence {
 // TestResponsesRequestJSONTagsMatchKnownKeys fails when this set differs
 // from the ResponsesRequest JSON tags.
 var knownResponsesRequestKeys = map[string]bool{
+	"access_programs":        true,
 	"previous_response_id":   true,
 	"model":                  true,
 	"background":             true,
@@ -113,6 +114,7 @@ const (
 // a comment, because their full shape is an external contract the
 // adapter forwards rather than models.
 type ResponsesRequest struct {
+	AccessPrograms       json.RawMessage   `json:"access_programs,omitempty"`
 	PreviousResponseID   *string           `json:"previous_response_id,omitempty"`
 	Model                string            `json:"model"`
 	Background           *bool             `json:"background,omitempty"`

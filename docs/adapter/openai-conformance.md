@@ -4,7 +4,7 @@ This reference records the OpenAI contract for every route the generic OpenAI li
 
 ## Reference snapshot
 
-The contract comes from these sources, read on 2026-09-27:
+The contract comes from these sources, read on 2026-09-27. The `access_programs` request field was checked against the Responses create reference on 2026-09-29.
 
 - [Chat Completions reference](https://developers.openai.com/api/reference/resources/chat)
 - [Responses create reference](https://developers.openai.com/api/reference/resources/responses/methods/create)
@@ -84,13 +84,14 @@ The provider columns show the disposition of each request field that one provide
 | `response.output_text.delta` and `response.output_text.done` have an empty `logprobs` array. | Responses streaming events | Implemented | `TestOpenAIConformanceResponsesStreamEventsAndEcho` |
 | Each reasoning segment is its own reasoning output item. A reasoning segment after a message or tool item starts a new item with a new id, in the stream and in the nonstreaming object. | Responses streaming events, Response object | Implemented | `TestOpenAIConformanceResponsesSeparatesReasoningItems` |
 | A field the provider omits or overrides returns 400 unless the field is a hint or its value is the documented default. Hints are `prompt_cache_key`, `prompt_cache_options`, `prompt_cache_retention`, `user`, `safety_identifier`, `metadata`, and `stream_options`. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest`, `TestOpenAIConformanceResponsesAcceptsDocumentedDefaults` |
+| `access_programs: null` is accepted. A non-null access program returns 400 with `access_programs` in `error.param` because neither Codex nor Anthropic supports OpenAI access program selection. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest`, `TestOpenAIConformanceResponsesAcceptsDocumentedDefaults` |
 | A built-in or custom tool the provider cannot run returns 400 for `tools`. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest` |
 | `previous_response_id`, `prompt`, and `conversation` return 400. Clyde stores no responses, prompts, or conversations. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest` |
 | A top-level field outside the documented schema returns 400 with code `unknown_parameter`. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest` |
 | The generic OpenAI listener sends no `X-Clyde-Warning` header and no `clyde.warnings` member. | Create request body | Implemented | `TestOpenAIConformanceResponsesAcceptsDocumentedDefaults` |
 | Retrieve, delete, cancel, input items, compact, and input token methods under `/v1/responses/{id}`. | Responses methods | Not advertised | None |
 
-The per-provider field dispositions come from the same catalog as the Cursor listener's [compatibility warnings](compatibility.md).
+The existing per-provider field dispositions come from the same catalog as the Cursor listener's [compatibility warnings](compatibility.md). The generic OpenAI listener checks `access_programs` separately.
 
 ## Legacy Completions
 
