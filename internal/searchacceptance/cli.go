@@ -152,6 +152,7 @@ func appendPublicWirePresence(data []byte, pointer string, presence PublicWirePr
 	case '{':
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(data, &fields); err != nil {
+			slog.Warn("search.acceptance.object_presence_decode_failed", "component", "searchacceptance", "concern", "query", "err", err)
 			return fmt.Errorf("decode object field presence at %q: %w", pointer, err)
 		}
 		for field, value := range fields {
@@ -163,6 +164,7 @@ func appendPublicWirePresence(data []byte, pointer string, presence PublicWirePr
 	case '[':
 		var values []json.RawMessage
 		if err := json.Unmarshal(data, &values); err != nil {
+			slog.Warn("search.acceptance.array_presence_decode_failed", "component", "searchacceptance", "concern", "query", "err", err)
 			return fmt.Errorf("decode array field presence at %q: %w", pointer, err)
 		}
 		for index, value := range values {

@@ -140,7 +140,6 @@ func TestComparisonCommandValidatesEffectivePageLimit(t *testing.T) {
 	if _, err := comparisonCommand(t, binaryPath, batteryPath, baselinePath, candidatePath); err == nil {
 		t.Fatal("public command accepted an explicit null limit")
 	}
-
 }
 
 func comparisonCommand(t *testing.T, binary, battery, baseline, candidate string) (searchacceptance.Comparison, error) {

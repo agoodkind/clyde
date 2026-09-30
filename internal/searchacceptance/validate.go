@@ -44,11 +44,8 @@ func ValidateTraversal(query Query, traversal Traversal, timeoutMS int64) error 
 	}
 	seen := make(map[string]bool, query.ExpectedTotal)
 	for index, page := range traversal.Pages {
-		if firstLimit == nil && page.Limit != nil {
-			return fmt.Errorf("query %s changes recorded page limit presence", query.ID)
-		}
-		if firstLimit != nil && (page.Limit == nil || *page.Limit != *firstLimit) {
-			return fmt.Errorf("query %s changes its effective page limit", query.ID)
+		if err := validatePageLimit(query.ID, firstLimit, page.Limit); err != nil {
+			return err
 		}
 		last := index == len(traversal.Pages)-1
 		if err := validatePage(effectiveQuery, page, index, last, len(traversal.Pages), timeoutMS); err != nil {
@@ -63,6 +60,16 @@ func ValidateTraversal(query Query, traversal Traversal, timeoutMS int64) error 
 	}
 	if len(seen) != len(expected) {
 		return fmt.Errorf("query %s returns %d of %d expected occurrences", query.ID, len(seen), len(expected))
+	}
+	return nil
+}
+
+func validatePageLimit(queryID string, firstLimit, pageLimit *int) error {
+	if firstLimit == nil && pageLimit != nil {
+		return fmt.Errorf("query %s changes recorded page limit presence", queryID)
+	}
+	if firstLimit != nil && (pageLimit == nil || *pageLimit != *firstLimit) {
+		return fmt.Errorf("query %s changes its effective page limit", queryID)
 	}
 	return nil
 }
