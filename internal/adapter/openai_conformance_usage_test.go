@@ -63,7 +63,7 @@ func TestOpenAIConformanceReportsUpstreamReasoningTokens(t *testing.T) {
 	}
 }
 
-func TestOpenAIConformanceOmitsAbsentReasoningDetail(t *testing.T) {
+func TestOpenAIConformanceIncludesRequiredUsageDetails(t *testing.T) {
 	upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
 	listeners := startConformanceServer(t, upstream)
 
@@ -83,7 +83,9 @@ func TestOpenAIConformanceOmitsAbsentReasoningDetail(t *testing.T) {
 	}
 	drainConformanceRequest(t, upstream)
 	responsesUsage := decodeJSONObject(t, requireMember(t, decodeJSONObject(t, responses.body), "usage"))
-	if _, present := responsesUsage["output_tokens_details"]; present {
-		t.Fatalf("responses usage reported output_tokens_details the provider never sent: %s", responses.body)
+	inputDetails := decodeJSONObject(t, requireMember(t, responsesUsage, "input_tokens_details"))
+	outputDetails := decodeJSONObject(t, requireMember(t, responsesUsage, "output_tokens_details"))
+	if string(inputDetails["cached_tokens"]) != "0" || string(inputDetails["cache_write_tokens"]) != "0" || string(outputDetails["reasoning_tokens"]) != "0" {
+		t.Fatalf("responses usage details = %s, want zero counts", responses.body)
 	}
 }
