@@ -9,7 +9,7 @@ import (
 
 func TestResponsesRequestJSONTagsMatchCurrentOfficialFields(t *testing.T) {
 	want := []string{
-		"previous_response_id", "model", "background", "max_tool_calls", "text", "tools", "tool_choice", "prompt", "prompt_cache_options", "top_logprobs", "metadata", "temperature", "top_p", "user", "safety_identifier", "prompt_cache_key", "service_tier", "prompt_cache_retention", "truncation", "reasoning", "input", "include", "parallel_tool_calls", "store", "instructions", "moderation", "stream", "stream_options", "conversation", "context_management", "max_output_tokens", "max_tokens", "max_completion_tokens", "n", "stop",
+		"access_programs", "previous_response_id", "model", "background", "max_tool_calls", "text", "tools", "tool_choice", "prompt", "prompt_cache_options", "top_logprobs", "metadata", "temperature", "top_p", "user", "safety_identifier", "prompt_cache_key", "service_tier", "prompt_cache_retention", "truncation", "reasoning", "input", "include", "parallel_tool_calls", "store", "instructions", "moderation", "stream", "stream_options", "conversation", "context_management", "max_output_tokens", "max_tokens", "max_completion_tokens", "n", "stop",
 	}
 	got := responsesRequestJSONTags()
 	if strings.Join(got, ",") != strings.Join(want, ",") {

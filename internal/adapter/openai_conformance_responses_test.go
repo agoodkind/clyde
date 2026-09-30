@@ -35,6 +35,12 @@ func TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest(t *testing
 			wantParam: "tool_choice",
 		},
 		{
+			name:      "access program",
+			body:      `{"model":"gpt-future","input":"hi","access_programs":{"cyber":"standard"}}`,
+			wantCode:  "unsupported_parameter",
+			wantParam: "access_programs",
+		},
+		{
 			name:      "unknown field",
 			body:      `{"model":"gpt-future","input":"hi","vendor_only_field":1}`,
 			wantCode:  "unknown_parameter",
@@ -63,6 +69,9 @@ func TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest(t *testing
 			if cursor.status != http.StatusOK {
 				t.Fatalf("Cursor listener status = %d; body=%s", cursor.status, cursor.body)
 			}
+			if test.wantParam == "access_programs" && len(cursor.header.Values("X-Clyde-Warning")) != 0 {
+				t.Fatalf("Cursor listener added an access program warning: %v", cursor.header.Values("X-Clyde-Warning"))
+			}
 			drainConformanceRequest(t, upstream)
 		})
 	}
@@ -71,7 +80,7 @@ func TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest(t *testing
 func TestOpenAIConformanceResponsesAcceptsDocumentedDefaults(t *testing.T) {
 	upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
 	listeners := startConformanceServer(t, upstream)
-	body := `{"model":"gpt-future","input":"hi","temperature":1,"top_p":1,"store":false,"background":false,"truncation":"disabled","parallel_tool_calls":true,"tool_choice":"auto","metadata":{"k":"v"},"user":"caller","prompt_cache_key":"cache"}`
+	body := `{"model":"gpt-future","input":"hi","access_programs":null,"temperature":1,"top_p":1,"store":false,"background":false,"truncation":"disabled","parallel_tool_calls":true,"tool_choice":"auto","metadata":{"k":"v"},"user":"caller","prompt_cache_key":"cache"}`
 	accepted := postConformance(t, listeners.openAI+"/v1/responses", body)
 	if accepted.status != http.StatusOK {
 		t.Fatalf("default-valued Responses request status = %d; body=%s", accepted.status, accepted.body)

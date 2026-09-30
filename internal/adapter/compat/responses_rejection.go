@@ -55,6 +55,9 @@ func ResponsesRejection(presenceFor func(string) int, values ResponsesRequestVal
 	if !known {
 		return noRejection(), false
 	}
+	if presenceSet(presenceFor("access_programs")) {
+		return unsupportedParameter("access_programs", column), true
+	}
 	for _, entry := range responsesCatalog {
 		if !valueSet(presenceFor(entry.param)) {
 			continue
