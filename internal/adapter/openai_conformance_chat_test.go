@@ -187,3 +187,37 @@ func TestOpenAIConformanceChatAcceptsDocumentedDefaults(t *testing.T) {
 	}
 	drainConformanceRequest(t, upstream)
 }
+
+func TestOpenAIConformanceChatSendsStructuredFormatToCodex(t *testing.T) {
+	upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+	listeners := startConformanceServer(t, upstream)
+	body := `{"model":"gpt-future","messages":[{"role":"user","content":"Return a result"}],"response_format":{"type":"json_schema","json_schema":{"name":"result","strict":true,"schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}}}`
+
+	openAI := postConformance(t, listeners.openAI+"/v1/chat/completions", body)
+	if openAI.status != http.StatusOK {
+		t.Fatalf("OpenAI status = %d; body=%s", openAI.status, openAI.body)
+	}
+	request := drainConformanceRequest(t, upstream)
+	var text struct {
+		Format struct {
+			Type   string          `json:"type"`
+			Name   string          `json:"name"`
+			Strict bool            `json:"strict"`
+			Schema json.RawMessage `json:"schema"`
+		} `json:"format"`
+	}
+	if err := json.Unmarshal(request.Text, &text); err != nil {
+		t.Fatalf("decode upstream text format: %v", err)
+	}
+	if text.Format.Type != "json_schema" || text.Format.Name != "result" || !text.Format.Strict || !json.Valid(text.Format.Schema) {
+		t.Fatalf("upstream text format = %s", request.Text)
+	}
+
+	cursor := postConformance(t, listeners.cursor+"/v1/chat/completions", body)
+	if cursor.status != http.StatusOK {
+		t.Fatalf("Cursor status = %d; body=%s", cursor.status, cursor.body)
+	}
+	if cursorRequest := drainConformanceRequest(t, upstream); len(cursorRequest.Text) != 0 {
+		t.Fatalf("Cursor upstream text format = %s, want absent", cursorRequest.Text)
+	}
+}

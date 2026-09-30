@@ -41,21 +41,22 @@ type Rejection struct {
 // ChatRequestValues stores the decoded values that ChatRejection compares
 // against provider limits.
 type ChatRequestValues struct {
-	Stream           bool
-	Temperature      *float64
-	TopP             *float64
-	PresencePenalty  *float64
-	FrequencyPenalty *float64
-	N                *int
-	Logprobs         *bool
-	TopLogprobs      *int
-	Store            *bool
-	ServiceTier      string
-	ToolChoice       json.RawMessage
-	FunctionCall     json.RawMessage
-	Modalities       json.RawMessage
-	ResponseFormat   json.RawMessage
-	UnknownKeys      []string
+	Stream                   bool
+	Temperature              *float64
+	TopP                     *float64
+	PresencePenalty          *float64
+	FrequencyPenalty         *float64
+	N                        *int
+	Logprobs                 *bool
+	TopLogprobs              *int
+	Store                    *bool
+	ServiceTier              string
+	ToolChoice               json.RawMessage
+	FunctionCall             json.RawMessage
+	Modalities               json.RawMessage
+	ResponseFormat           json.RawMessage
+	AllowCodexResponseFormat bool
+	UnknownKeys              []string
 }
 
 // The typed Chat request omits these documented fields. They tune caching,
@@ -135,7 +136,9 @@ func chatFieldChecks(presenceFor func(string) int, values ChatRequestValues, col
 		{param: "service_tier", unsupported: func() bool { return !codex && serviceTierUnsupported(values.ServiceTier) }},
 		{param: "tool_choice", unsupported: func() bool { return codex && !choiceIsAuto(values.ToolChoice) }},
 		{param: "function_call", unsupported: func() bool { return !choiceIsAuto(values.FunctionCall) }},
-		{param: "response_format", unsupported: func() bool { return codex && !responseFormatIsText(values.ResponseFormat) }},
+		{param: "response_format", unsupported: func() bool {
+			return codex && !values.AllowCodexResponseFormat && !responseFormatIsText(values.ResponseFormat)
+		}},
 	}
 }
 
