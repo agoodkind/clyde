@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/clyde/internal/sandbox"
 	"goodkind.io/clyde/internal/searchacceptance"
@@ -29,6 +30,13 @@ func TestLiveEmbeddedSearchMeasurementCollector(t *testing.T) {
 	waitEmbeddedPublicPublication(t, h)
 	h.teardown(t)
 	assertEmbeddedSourceMeasurements(t, h.stateRoot)
+	initialRunID := assertEmbeddedIngestionOperations(t, h.stateRoot)
+	h.boot(t)
+	if !h.waitForDaemonLog(`"projection_unchanged_fields":36`, 20*time.Second) {
+		t.Fatal("unchanged ingestion did not finish its real source pass")
+	}
+	h.teardown(t)
+	assertEmbeddedUnchangedOperations(t, h.stateRoot, initialRunID)
 	configuration.Conversation.Semantic.IngestionEnabled = false
 	configuration.Conversation.Semantic.SearchEnabled = true
 	writeEmbeddedLifecycleConfig(t, h, configuration)
@@ -61,6 +69,8 @@ func TestLiveEmbeddedSearchMeasurementCollector(t *testing.T) {
 		previous = ordered
 		traversals = append(traversals, traversal)
 	}
+	h.teardown(t)
+	assertEmbeddedQueryOperations(t, h.stateRoot)
 	body, err := json.MarshalIndent(traversals, "", "  ")
 	if err != nil {
 		t.Fatal(err)

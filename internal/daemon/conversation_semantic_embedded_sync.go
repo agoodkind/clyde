@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"goodkind.io/lm-semantic-search/library"
+	"goodkind.io/lm-semantic-search/library/observation"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
@@ -35,6 +36,8 @@ const embeddedTrailingSettleWindow = 30 * time.Minute
 const embeddedStoreCloseTimeout = 5 * time.Second
 
 const embeddedStoreOpenTimeout = 4 * time.Second
+
+var nextEmbeddedPassID atomic.Uint64
 
 // embeddedConversationSync owns the store for one daemon generation.
 type embeddedConversationSync struct {
@@ -442,6 +445,11 @@ type embeddedSyncStats struct {
 func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) (resultErr error) {
 	w.embedded.mu.Lock()
 	defer w.embedded.mu.Unlock()
+	scope := observation.ScopeFromContext(ctx)
+	scope.RunID = fmt.Sprintf("ingestion-%d-%d", os.Getpid(), nextEmbeddedPassID.Add(1))
+	scope.Purpose = observation.Ingestion
+	ctx = observation.WithScope(ctx, scope)
+	w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_started", "concern", "conversation.semantic", "run_id", scope.RunID, "pid", os.Getpid())
 	store, err := w.embedded.ensureStore(ctx, w.log)
 	if err != nil {
 		return err
@@ -823,6 +831,7 @@ func (w *conversationSemanticSyncWorker) logEmbeddedPass(ctx context.Context, st
 	attributes := []slog.Attr{
 		slog.String("concern", "conversation.semantic"),
 		slog.String("component", "daemon"),
+		slog.String("run_id", observation.ScopeFromContext(ctx).RunID),
 		slog.String("backend", string(config.ConversationSemanticBackendEmbedded)),
 		slog.Int("admitted", stats.admitted),
 		slog.Int("needed", stats.needed),

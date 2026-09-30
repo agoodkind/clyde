@@ -81,7 +81,8 @@ func (delivery *embeddedConversationDelivery) prepareGeneration(
 	}
 	seal, err := library.SealRows(occurrences)
 	if err != nil {
-		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.seal_failed",
+		delivery.log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.seal_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", batch.OwnerID,
@@ -91,7 +92,8 @@ func (delivery *embeddedConversationDelivery) prepareGeneration(
 	}
 	state, err := delivery.library.GetOwnerState(ctx, batch.Namespace, batch.OwnerID)
 	if err != nil {
-		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.owner_state_failed",
+		delivery.log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.owner_state_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", batch.OwnerID,
@@ -136,6 +138,7 @@ func (delivery *embeddedConversationDelivery) deliver(ctx context.Context, gener
 // publish stages, commits, and acknowledges one generation after the outbox
 // recorded it. A permanent library error moves the batch to the blocked state.
 func (delivery *embeddedConversationDelivery) publish(ctx context.Context, generation embeddedGeneration) (embeddedDeliveryCounts, error) {
+	ctx = embeddedGenerationObservationContext(ctx, generation.batch)
 	var counts embeddedDeliveryCounts
 	staged, err := delivery.stage(ctx, generation)
 	counts.add(staged)
@@ -194,7 +197,8 @@ func (delivery *embeddedConversationDelivery) stage(ctx context.Context, generat
 	}
 	counts.stageMilliseconds = clock.Since(started).Milliseconds()
 	if stageErr != nil {
-		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.stage_failed",
+		delivery.log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.stage_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", generation.batch.OwnerID,
@@ -216,7 +220,8 @@ func (delivery *embeddedConversationDelivery) commit(ctx context.Context, genera
 		err = fmt.Errorf("receipt order %d differs from batch order %d", receipt.GenerationOrder, generation.batch.GenerationOrder)
 	}
 	if err != nil {
-		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.commit_failed",
+		delivery.log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.commit_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", generation.batch.OwnerID,
@@ -306,7 +311,8 @@ func (delivery *embeddedConversationDelivery) replayPending(ctx context.Context)
 		}
 	}
 	if result.deferred > 0 {
-		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.replay_deferred",
+		delivery.log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.replay_deferred",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"deferred_batches", result.deferred,
@@ -347,7 +353,8 @@ func (delivery *embeddedConversationDelivery) replayBatch(
 			seal.RowCount, seal.ManifestHash, batch.RowCount, batch.ManifestHash)
 	}
 	if err != nil {
-		delivery.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.replay_seal_failed",
+		delivery.log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.replay_seal_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", batch.OwnerID,

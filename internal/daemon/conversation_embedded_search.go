@@ -43,6 +43,7 @@ func (source *embeddedConversationSearchSource) SearchConversations(ctx context.
 	if source.library == nil {
 		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
 	}
+	ctx = embeddedQueryObservationContext(ctx)
 	filter, err := embeddedConversationFilter(source.semantic, options)
 	if err != nil {
 		return conversation.SearchConversationsResult{}, refusedConversationSearchSourceError(err)

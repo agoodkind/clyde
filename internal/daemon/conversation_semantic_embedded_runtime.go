@@ -13,6 +13,7 @@ import (
 	"goodkind.io/lm-semantic-search/library"
 	"goodkind.io/lm-semantic-search/library/embedding"
 	"goodkind.io/lm-semantic-search/library/milvus"
+	"goodkind.io/lm-semantic-search/library/observation"
 
 	"goodkind.io/clyde/internal/config"
 )
@@ -42,9 +43,10 @@ func openEmbeddedConversationStore(
 	lock *os.File,
 	log *slog.Logger,
 ) (*embeddedConversationStore, error) {
-	embedder, err := newEmbeddedConversationEmbedder(ctx, semantic)
+	embedder, err := newObservedEmbeddedConversationEmbedder(ctx, semantic, embeddedOperationObserver{log: log})
 	if err != nil {
-		log.WarnContext(ctx, "daemon.conversation_semantic_embedded.open_failed",
+		log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.open_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"stage", "embedder",
@@ -54,7 +56,8 @@ func openEmbeddedConversationStore(
 	}
 	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: semantic.MilvusAddress, DBName: semantic.MilvusDatabase})
 	if err != nil {
-		log.WarnContext(ctx, "daemon.conversation_semantic_embedded.open_failed",
+		log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.open_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"stage", "milvus_client",
@@ -66,7 +69,8 @@ func openEmbeddedConversationStore(
 	}
 	store, err := openEmbeddedConversationStoreWithClient(ctx, semantic, outboxPath, lock, client, embedder, log)
 	if err != nil {
-		log.WarnContext(ctx, "daemon.conversation_semantic_embedded.open_failed",
+		log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.open_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"stage", "library",
@@ -78,7 +82,8 @@ func openEmbeddedConversationStore(
 		}
 		return nil, err
 	}
-	log.InfoContext(ctx, "daemon.conversation_semantic_embedded.opened",
+	log.InfoContext(
+		ctx, "daemon.conversation_semantic_embedded.opened",
 		"pid", os.Getpid(),
 		"concern", "conversation.semantic",
 		"component", "daemon",
@@ -103,9 +108,10 @@ func openEmbeddedConversationStoreWithClient(
 	embedder library.Embedder,
 	log *slog.Logger,
 ) (*embeddedConversationStore, error) {
-	vectors, err := milvus.New(client, milvus.Config{Database: semantic.MilvusDatabase, Collection: semantic.MilvusCollection})
+	vectors, err := milvus.New(client, milvus.Config{Observer: embeddedOperationObserver{log: log}, Database: semantic.MilvusDatabase, Collection: semantic.MilvusCollection})
 	if err != nil {
-		log.WarnContext(ctx, "daemon.conversation_semantic_embedded.vector_adapter_failed",
+		log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.vector_adapter_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"err", err,
@@ -133,9 +139,12 @@ func openEmbeddedConversationLibrary(
 	embedder library.Embedder,
 	log *slog.Logger,
 ) (*embeddedConversationStore, error) {
-	opened, err := library.Open(ctx, embeddedLibraryConfig(semantic, vectors, embedder))
+	libraryConfig := embeddedLibraryConfig(semantic, vectors, embedder)
+	libraryConfig.Observer = embeddedOperationObserver{log: log}
+	opened, err := library.Open(ctx, libraryConfig)
 	if err != nil {
-		log.WarnContext(ctx, "daemon.conversation_semantic_embedded.library_open_failed",
+		log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.library_open_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"catalog_path", semantic.CatalogPath,
@@ -145,7 +154,8 @@ func openEmbeddedConversationLibrary(
 	}
 	namespace := embeddedConversationNamespaceForProfile(semantic.CollectionID, semantic.ProjectionProfile)
 	if err := opened.RegisterNamespace(ctx, namespace); err != nil {
-		log.WarnContext(ctx, "daemon.conversation_semantic_embedded.register_failed",
+		log.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.register_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"collection_id", semantic.CollectionID,
@@ -186,6 +196,7 @@ func openEmbeddedConversationLibrary(
 // analyzer identity selects [library.StandardAnalyzer].
 func embeddedLibraryConfig(semantic config.ConversationSemanticConfig, vectors library.VectorStore, embedder library.Embedder) library.Config {
 	return library.Config{
+		Observer: nil,
 		Store: library.StoreDescriptor{
 			CatalogPath:       semantic.CatalogPath,
 			LockPath:          semantic.LockPath,
@@ -249,10 +260,15 @@ func embeddedCredentialSourceOf(semantic config.ConversationSemanticConfig) embe
 // and errors state only whether a credential is configured and its source
 // kind.
 func newEmbeddedConversationEmbedder(ctx context.Context, semantic config.ConversationSemanticConfig) (library.Embedder, error) {
+	return newObservedEmbeddedConversationEmbedder(ctx, semantic, nil)
+}
+
+func newObservedEmbeddedConversationEmbedder(ctx context.Context, semantic config.ConversationSemanticConfig, observer observation.Observer) (library.Embedder, error) {
 	apiKey, err := resolveEmbeddedConversationAPIKey(semantic)
 	if err != nil {
 		source := embeddedCredentialSourceOf(semantic)
-		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.credential_failed",
+		slog.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.credential_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"embedding_credential_configured", source != embeddedCredentialSourceNone,
@@ -266,6 +282,7 @@ func newEmbeddedConversationEmbedder(ctx context.Context, semantic config.Conver
 		maxAttempts = *semantic.EmbeddingMaxAttempts
 	}
 	embedder, err := embedding.NewOpenAI(ctx, embedding.OpenAIConfig{
+		Observer:       observer,
 		BaseURL:        semantic.EmbeddingBaseURL,
 		APIKey:         apiKey,
 		Model:          semantic.EmbeddingModel,
@@ -275,7 +292,8 @@ func newEmbeddedConversationEmbedder(ctx context.Context, semantic config.Conver
 		BackoffBase:    semantic.EmbeddingBackoffBase.AsDuration(),
 	})
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.embedder_failed",
+		slog.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.embedder_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"embedding_base_url", semantic.EmbeddingBaseURL,
@@ -310,7 +328,8 @@ func resolveEmbeddedConversationAPIKey(semantic config.ConversationSemanticConfi
 			case errors.Is(err, fs.ErrPermission):
 				reason = "permission denied"
 			}
-			slog.Warn("daemon.conversation_semantic_embedded.credential_file_failed",
+			slog.Warn(
+				"daemon.conversation_semantic_embedded.credential_file_failed",
 				"concern", "conversation.semantic",
 				"component", "daemon",
 				"embedding_credential_source", string(embeddedCredentialSourceFile),
@@ -342,7 +361,8 @@ func (store *embeddedConversationStore) close(ctx context.Context) error {
 	lockErr := store.outbox.releaseLock()
 	err := errors.Join(outboxErr, libraryErr, milvusErr, lockErr)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.close_failed",
+		slog.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.close_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"err", err,
