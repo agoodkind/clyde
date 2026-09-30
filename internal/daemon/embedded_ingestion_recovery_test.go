@@ -230,7 +230,8 @@ func countLiveEffectiveScalars(t *testing.T, catalogPath string, column string, 
 	t.Helper()
 	catalog := openLiveReadOnly(t, catalogPath)
 	var count int
-	if err := catalog.QueryRowContext(t.Context(),
+	if err := catalog.QueryRowContext(
+		t.Context(),
 		`SELECT COUNT(*) FROM effective_scalars WHERE column_name = ? AND bool_value = ?`, column, value,
 	).Scan(&count); err != nil {
 		t.Fatalf("count effective %s scalars: %v", column, err)
@@ -515,7 +516,8 @@ func createLiveMilvusDatabase(t *testing.T) string {
 
 func dropLiveMilvusDatabase(t *testing.T, admin *milvusclient.Client, name string) {
 	t.Helper()
-	ctx := context.WithoutCancel(t.Context())
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+	defer cancel()
 	scoped, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: liveMilvusAddress, DBName: name})
 	if err != nil {
 		t.Errorf("connect to Milvus database %s for cleanup: %v", name, err)
