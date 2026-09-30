@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -21,6 +22,9 @@ func main() {
 }
 
 func run() (err error) {
+	if len(os.Args) > 1 && os.Args[1] == "verify-snapshot" {
+		return runSnapshot(os.Args[2:])
+	}
 	defer func() {
 		if err != nil {
 			slog.Warn("search.acceptance.comparison_rejected", "component", "searchacceptance", "concern", "report", "err", err)
@@ -44,6 +48,32 @@ func run() (err error) {
 	}
 	if comparisonErr != nil {
 		return fmt.Errorf("compare search reports: %w", comparisonErr)
+	}
+	return nil
+}
+
+func runSnapshot(arguments []string) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Warn("search.acceptance.snapshot_command_rejected", "component", "searchacceptance", "concern", "source", "err", err)
+		}
+	}()
+	flags := flag.NewFlagSet("verify-snapshot", flag.ContinueOnError)
+	root := flags.String("root", "", "absolute frozen snapshot root")
+	manifest := flags.String("manifest", "", "absolute SHA-256 manifest path")
+	digest := flags.String("sha256", "", "approved manifest SHA-256 digest")
+	if err := flags.Parse(arguments); err != nil {
+		return fmt.Errorf("parse snapshot verification arguments: %w", err)
+	}
+	if *root == "" || *manifest == "" || *digest == "" || flags.NArg() != 0 {
+		return fmt.Errorf("snapshot root, manifest, and approved SHA-256 digest are required")
+	}
+	result, err := searchacceptance.VerifySnapshot(context.Background(), *root, *manifest, *digest)
+	if err != nil {
+		return fmt.Errorf("verify frozen snapshot: %w", err)
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+		return fmt.Errorf("write snapshot verification: %w", err)
 	}
 	return nil
 }
