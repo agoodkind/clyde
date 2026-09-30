@@ -18,10 +18,18 @@ import (
 // outbox. It closes everything and opens the same catalog again. The test
 // never embeds text, and its embedding endpoint is a closed local port.
 func TestEmbeddedConversationLibraryOpens(t *testing.T) {
+	for _, profile := range []config.ConversationProjectionProfile{config.ConversationProjectionProfileLegacy, config.ConversationProjectionProfileOriginal, config.ConversationProjectionProfileSourceSpan} {
+		t.Run(string(profile), func(t *testing.T) { testEmbeddedConversationLibraryProfile(t, profile) })
+	}
+}
+
+func testEmbeddedConversationLibraryProfile(t *testing.T, profile config.ConversationProjectionProfile) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
 	semantic := config.ConversationSemanticConfig{
-		IngestionEnabled:  true,
+		ProjectionProfile: profile,
+		IngestionEnabled:  profile == config.ConversationProjectionProfileSourceSpan,
+		SearchEnabled:     true,
 		CollectionID:      "clyde-conversations",
 		Backend:           config.ConversationSemanticBackendEmbedded,
 		CatalogPath:       filepath.Join(root, "catalog", "catalog.sqlite"),

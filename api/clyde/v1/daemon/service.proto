@@ -330,6 +330,17 @@ message ConversationSearchMatch {
   // before tagging existed.
   string load_rules = 8;
   SearchContextState context_state = 9;
+  SearchSourceIdentity source_identity = 10;
+}
+
+// SearchSourceIdentity identifies an original selected field span.
+message SearchSourceIdentity {
+  string conversation_id = 1;
+  int64 message_index = 2;
+  string content_kind = 3;
+  int64 tool_index = 4;
+  int64 source_byte_start = 5;
+  int64 source_byte_end = 6;
 }
 
 // SearchFacetCount is one facet value and how many matched conversations carry

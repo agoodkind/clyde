@@ -79,6 +79,7 @@ func openEmbeddedConversationStore(
 		return nil, err
 	}
 	log.InfoContext(ctx, "daemon.conversation_semantic_embedded.opened",
+		"pid", os.Getpid(),
 		"concern", "conversation.semantic",
 		"component", "daemon",
 		"collection_id", semantic.CollectionID,
@@ -142,7 +143,7 @@ func openEmbeddedConversationLibrary(
 		)
 		return nil, fmt.Errorf("open shared search library catalog %s: %w", semantic.CatalogPath, err)
 	}
-	namespace := embeddedConversationNamespace(semantic.CollectionID)
+	namespace := embeddedConversationNamespaceForProfile(semantic.CollectionID, semantic.ProjectionProfile)
 	if err := opened.RegisterNamespace(ctx, namespace); err != nil {
 		log.WarnContext(ctx, "daemon.conversation_semantic_embedded.register_failed",
 			"concern", "conversation.semantic",

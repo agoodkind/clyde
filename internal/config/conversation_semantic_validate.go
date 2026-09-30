@@ -24,10 +24,7 @@ const maxConversationSemanticQueryBlockSize = 16384
 
 // normalizeAndValidateConversationSemantic trims the embedded search settings,
 // expands the catalog and lock paths, and rejects values the embedded library
-// cannot accept. The range checks run for every backend. After the embedded
-// backend settings pass their required checks, the function rejects
-// `backend = "embedded"` together with `search_enabled = true`, because this
-// build contains embedded ingestion and no embedded search.
+// cannot accept. The range checks run for every backend.
 func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConfig) error {
 	normalizeConversationSemanticStrings(semantic)
 	if err := validateConversationSemanticBackend(semantic.Backend); err != nil {
@@ -49,22 +46,15 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 		return nil
 	}
 	if semantic.UsesEngine() {
-		if semantic.ProjectionProfile != ConversationProjectionProfileLegacy && semantic.ProjectionProfile != ConversationProjectionProfileOriginal {
-			return invalidConversationSemanticSetting("projection_profile", "must explicitly select p1 or p2 for an enabled embedded store")
+		if semantic.ProjectionProfile != ConversationProjectionProfileLegacy && semantic.ProjectionProfile != ConversationProjectionProfileOriginal && semantic.ProjectionProfile != ConversationProjectionProfileSourceSpan {
+			return invalidConversationSemanticSetting("projection_profile", "must explicitly select p1, p2 or p3 for an enabled embedded store")
 		}
-		if semantic.IngestionEnabled && semantic.ProjectionProfile != ConversationProjectionProfileOriginal {
-			return invalidConversationSemanticSetting("projection_profile", "must select p2 for embedded ingestion; p1 is read-only")
+		if semantic.IngestionEnabled && semantic.ProjectionProfile != ConversationProjectionProfileSourceSpan {
+			return invalidConversationSemanticSetting("projection_profile", "must select p3 for embedded ingestion; p1 and p2 are read-only")
 		}
 	}
 	if err := validateEmbeddedConversationSemanticRequired(semantic); err != nil {
 		return err
-	}
-	if semantic.SearchEnabled {
-		return invalidConversationSemanticSetting("backend", fmt.Sprintf(
-			"= %q requires %ssearch_enabled = false, because embedded search is not available in this Clyde build (CLYDE-761)",
-			ConversationSemanticBackendEmbedded,
-			conversationSemanticKey,
-		))
 	}
 	return nil
 }

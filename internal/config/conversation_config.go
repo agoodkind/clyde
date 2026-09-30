@@ -49,7 +49,7 @@ type ConversationSemanticConfig struct {
 	SocketPath       string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
 	CollectionID     string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
 	// ProjectionProfile explicitly selects source identity rules. p1 is
-	// readable without raw context verification; new ingestion requires p2.
+	// readable without raw context verification; new ingestion requires p3.
 	ProjectionProfile ConversationProjectionProfile `json:"projectionProfile,omitempty" toml:"projection_profile,omitempty"`
 	// IndexedContent names the content kinds offered to the search engine, using
 	// the same selector vocabulary the export surface accepts. The names and their
@@ -163,6 +163,8 @@ const (
 	ConversationProjectionProfileLegacy ConversationProjectionProfile = "p1"
 	// ConversationProjectionProfileOriginal preserves selected source text.
 	ConversationProjectionProfileOriginal ConversationProjectionProfile = "p2"
+	// ConversationProjectionProfileSourceSpan records original prepared spans.
+	ConversationProjectionProfileSourceSpan ConversationProjectionProfile = "p3"
 )
 
 const (

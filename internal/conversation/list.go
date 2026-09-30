@@ -93,11 +93,12 @@ const (
 // SearchMatch is one matching message returned during cross-conversation
 // discovery.
 type SearchMatch struct {
-	Record       Record
-	MessageIndex int
-	Role         string
-	Timestamp    time.Time
-	Snippet      string
+	SourceIdentity *SearchSourceIdentity
+	Record         Record
+	MessageIndex   int
+	Role           string
+	Timestamp      time.Time
+	Snippet        string
 	// Score is the source's retrieval relevance.
 	Score float64
 	// ContextWindow is the rendered messages surrounding this hit.
@@ -109,6 +110,17 @@ type SearchMatch struct {
 	// ContextState states whether the source verified ContextWindow against the
 	// source transcript. The SearchContextState constants define each value.
 	ContextState SearchContextState
+}
+
+// SearchSourceIdentity identifies an original selected field span independently
+// of the search engine's storage key.
+type SearchSourceIdentity struct {
+	ConversationID  string `json:"conversation_id"`
+	MessageIndex    int    `json:"message_index"`
+	ContentKind     string `json:"content_kind"`
+	ToolIndex       int    `json:"tool_index"`
+	SourceByteStart int64  `json:"source_byte_start"`
+	SourceByteEnd   int64  `json:"source_byte_end"`
 }
 
 // SearchConversationsResult is a bounded set of candidate conversations.

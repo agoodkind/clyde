@@ -302,15 +302,16 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 	matches := make([]*clydev1.ConversationSearchMatch, 0, len(result.Matches))
 	for _, match := range result.Matches {
 		matches = append(matches, &clydev1.ConversationSearchMatch{
-			Conversation:  protoConversationRecord(ctx, idx, match.Record),
-			MessageIndex:  int64(match.MessageIndex),
-			Role:          match.Role,
-			TimestampUnix: match.Timestamp.Unix(),
-			Snippet:       match.Snippet,
-			Score:         match.Score,
-			ContextWindow: match.ContextWindow,
-			LoadRules:     match.LoadRules,
-			ContextState:  protoSearchContextState(match.ContextState),
+			Conversation:   protoConversationRecord(ctx, idx, match.Record),
+			MessageIndex:   int64(match.MessageIndex),
+			Role:           match.Role,
+			TimestampUnix:  match.Timestamp.Unix(),
+			Snippet:        match.Snippet,
+			Score:          match.Score,
+			ContextWindow:  match.ContextWindow,
+			LoadRules:      match.LoadRules,
+			ContextState:   protoSearchContextState(match.ContextState),
+			SourceIdentity: protoSearchSourceIdentity(match.SourceIdentity),
 		})
 	}
 	return &clydev1.SearchConversationsResponse{

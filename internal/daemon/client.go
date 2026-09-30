@@ -249,15 +249,16 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	for _, wire := range resp.GetMatches() {
 		record := conversationRecordFromProto(wire.GetConversation())
 		matches = append(matches, conversation.SearchMatch{
-			Record:        record,
-			MessageIndex:  int(wire.GetMessageIndex()),
-			Role:          wire.GetRole(),
-			Timestamp:     time.Unix(wire.GetTimestampUnix(), 0),
-			Snippet:       wire.GetSnippet(),
-			Score:         wire.GetScore(),
-			ContextWindow: wire.GetContextWindow(),
-			LoadRules:     wire.GetLoadRules(),
-			ContextState:  searchContextStateFromProto(wire.GetContextState()),
+			Record:         record,
+			MessageIndex:   int(wire.GetMessageIndex()),
+			Role:           wire.GetRole(),
+			Timestamp:      time.Unix(wire.GetTimestampUnix(), 0),
+			Snippet:        wire.GetSnippet(),
+			Score:          wire.GetScore(),
+			ContextWindow:  wire.GetContextWindow(),
+			LoadRules:      wire.GetLoadRules(),
+			ContextState:   searchContextStateFromProto(wire.GetContextState()),
+			SourceIdentity: searchSourceIdentityFromProto(wire.GetSourceIdentity()),
 		})
 	}
 	return conversation.SearchConversationsResult{

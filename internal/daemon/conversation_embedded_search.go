@@ -13,6 +13,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/conversation/searchbackend"
 	"goodkind.io/clyde/internal/providerid"
 )
 
@@ -180,12 +181,57 @@ func embeddedSearchMatch(hit library.SearchHit) (conversation.SearchMatch, error
 	if subagent.Bool {
 		record.Origin = conversation.OriginSubagent
 	}
+	identity, err := embeddedHitSourceIdentity(hit, record.ID, int(messageIndex.Int64))
+	if err != nil {
+		return conversation.SearchMatch{}, err
+	}
 	return conversation.SearchMatch{
-		Record: record, MessageIndex: int(messageIndex.Int64), Role: role.String,
+		SourceIdentity: identity,
+		Record:         record, MessageIndex: int(messageIndex.Int64), Role: role.String,
 		Timestamp: time.Unix(timestamp.Int64, 0), Score: hit.Score,
 		Snippet: conversation.Snippet(hit.SourceText), ContextWindow: conversation.Excerpt(hit.SourceText),
 		LoadRules: loadRules.String, ContextState: conversation.SearchContextStateUnavailable,
 	}, nil
+}
+
+func embeddedHitSourceIdentity(hit library.SearchHit, conversationID string, messageIndex int) (*conversation.SearchSourceIdentity, error) {
+	profile, err := embeddedHitScalar(hit, embeddedScalarProjectionProfile, library.String, false)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(profile.String, "p3|") {
+		return nil, nil
+	}
+	kind, err := embeddedHitScalar(hit, embeddedScalarFieldKind, library.String, false)
+	if err != nil {
+		return nil, err
+	}
+	tool, err := embeddedHitScalar(hit, embeddedScalarToolIndex, library.Int64, true)
+	if err != nil {
+		return nil, err
+	}
+	start, err := embeddedHitScalar(hit, embeddedScalarSourceByteStart, library.Int64, false)
+	if err != nil {
+		return nil, err
+	}
+	end, err := embeddedHitScalar(hit, embeddedScalarSourceByteEnd, library.Int64, false)
+	if err != nil {
+		return nil, err
+	}
+	if start.Int64 < 0 || end.Int64 <= start.Int64 || end.Int64-start.Int64 != int64(len(hit.SourceText)) {
+		return nil, errors.New("embedded occurrence has an invalid original source span")
+	}
+	if _, known := embeddedFieldKindRanks[searchbackend.FieldKind(kind.String)]; !known {
+		return nil, errors.New("embedded occurrence has an invalid content kind")
+	}
+	toolIndex := -1
+	if !tool.Null {
+		if tool.Int64 < 0 || int64(int(tool.Int64)) != tool.Int64 {
+			return nil, errors.New("embedded occurrence has an invalid tool index")
+		}
+		toolIndex = int(tool.Int64)
+	}
+	return &conversation.SearchSourceIdentity{ConversationID: conversationID, MessageIndex: messageIndex, ContentKind: kind.String, ToolIndex: toolIndex, SourceByteStart: start.Int64, SourceByteEnd: end.Int64}, nil
 }
 
 func embeddedHitScalar(hit library.SearchHit, column string, scalarType library.ScalarType, nullable bool) (library.ScalarValue, error) {

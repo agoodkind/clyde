@@ -9,6 +9,7 @@ import (
 
 	"goodkind.io/lm-semantic-search/library"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/searchbackend"
 )
@@ -33,6 +34,8 @@ const (
 	embeddedScalarToolIndex            = "tool_index"
 	embeddedScalarLoadRules            = "load_rules"
 	embeddedScalarProjectionProfile    = "projection_profile"
+	embeddedScalarSourceByteStart      = "source_byte_start"
+	embeddedScalarSourceByteEnd        = "source_byte_end"
 )
 
 // Maximum byte lengths of the string scalar columns. The values were measured
@@ -52,7 +55,11 @@ const (
 // Clyde conversation occurrences. ReprojectScalars can change the provider,
 // workspace_root, archived, and subagent columns of a published occurrence.
 func embeddedConversationNamespace(collectionID string) library.NamespaceSpec {
-	return library.NamespaceSpec{
+	return embeddedConversationNamespaceForProfile(collectionID, config.ConversationProjectionProfileSourceSpan)
+}
+
+func embeddedConversationNamespaceForProfile(collectionID string, profile config.ConversationProjectionProfile) library.NamespaceSpec {
+	namespace := library.NamespaceSpec{
 		ID:     collectionID,
 		Policy: library.AppendOnly,
 		Scalars: []library.ScalarColumn{
@@ -71,6 +78,13 @@ func embeddedConversationNamespace(collectionID string) library.NamespaceSpec {
 			{Name: embeddedScalarProjectionProfile, Type: library.String, Nullable: false, Mutable: false, MaxLength: embeddedProjectionProfileMaxBytes},
 		},
 	}
+	if profile != config.ConversationProjectionProfileLegacy && profile != config.ConversationProjectionProfileOriginal {
+		namespace.Scalars = append(namespace.Scalars,
+			library.ScalarColumn{Name: embeddedScalarSourceByteStart, Type: library.Int64, Nullable: false, Mutable: false, MaxLength: 0},
+			library.ScalarColumn{Name: embeddedScalarSourceByteEnd, Type: library.Int64, Nullable: false, Mutable: false, MaxLength: 0},
+		)
+	}
+	return namespace
 }
 
 // embeddedConversationOwner is the conversation metadata that every occurrence
@@ -151,7 +165,6 @@ func embeddedFieldOccurrences(
 		)
 		return nil, fmt.Errorf("prepare field %s of %s: %w", field.Key, owner.ConversationID, err)
 	}
-	scalars := owner.fieldScalars(field)
 	occurrences := make([]library.Occurrence, 0, len(parts))
 	for _, part := range parts {
 		partNumber, err := strconv.Atoi(part.Suffix)
@@ -166,6 +179,9 @@ func embeddedFieldOccurrences(
 			return nil, fmt.Errorf("prepare field %s of %s: part suffix %q is not a number: %w", field.Key, owner.ConversationID, part.Suffix, err)
 		}
 		sourceText := field.Text[part.ByteStart:part.ByteEnd]
+		scalars := owner.fieldScalars(field)
+		scalars[embeddedScalarSourceByteStart] = embeddedInt64Scalar(int64(part.ByteStart))
+		scalars[embeddedScalarSourceByteEnd] = embeddedInt64Scalar(int64(part.ByteEnd))
 		occurrences = append(occurrences, library.Occurrence{
 			RowKey:         field.Key + "/" + part.Suffix,
 			SortKey:        embeddedOccurrenceSortKey(field.MessageIndex, kindRank, field.ToolIndex, partNumber),
@@ -206,6 +222,8 @@ func (owner embeddedConversationOwner) fieldScalars(field searchbackend.Field) m
 		embeddedScalarToolIndex:            toolIndex,
 		embeddedScalarLoadRules:            embeddedStringScalar(owner.LoadRules),
 		embeddedScalarProjectionProfile:    embeddedStringScalar(owner.ProjectionProfile),
+		embeddedScalarSourceByteStart:      embeddedInt64Scalar(0),
+		embeddedScalarSourceByteEnd:        embeddedInt64Scalar(int64(len(field.Text))),
 	}
 }
 

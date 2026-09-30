@@ -77,13 +77,14 @@ type searchConversationsOutput struct {
 }
 
 type searchConversationsMatchOutput struct {
-	Conversation  conv.Record `json:"conversation"`
-	MessageIndex  int         `json:"message_index"`
-	Role          string      `json:"role"`
-	Timestamp     time.Time   `json:"timestamp"`
-	Snippet       string      `json:"snippet"`
-	Score         float64     `json:"score"`
-	ContextWindow string      `json:"context_window,omitempty"`
+	SourceIdentity *conv.SearchSourceIdentity `json:"source_identity,omitempty"`
+	Conversation   conv.Record                `json:"conversation"`
+	MessageIndex   int                        `json:"message_index"`
+	Role           string                     `json:"role"`
+	Timestamp      time.Time                  `json:"timestamp"`
+	Snippet        string                     `json:"snippet"`
+	Score          float64                    `json:"score"`
+	ContextWindow  string                     `json:"context_window,omitempty"`
 	// LoadRules is the loading-rules tag stored with the matched row; pass it
 	// back as load_rules on an around read so the window counts over the same
 	// message sequence message_index refers to.
@@ -198,15 +199,16 @@ func searchConversationsOutputFromDomain(result conv.SearchConversationsResult) 
 	matches := make([]searchConversationsMatchOutput, 0, len(result.Matches))
 	for _, match := range result.Matches {
 		matches = append(matches, searchConversationsMatchOutput{
-			Conversation:  match.Record,
-			MessageIndex:  match.MessageIndex,
-			Role:          match.Role,
-			Timestamp:     match.Timestamp,
-			Snippet:       match.Snippet,
-			Score:         match.Score,
-			ContextWindow: match.ContextWindow,
-			LoadRules:     match.LoadRules,
-			ContextState:  match.ContextState,
+			Conversation:   match.Record,
+			MessageIndex:   match.MessageIndex,
+			Role:           match.Role,
+			Timestamp:      match.Timestamp,
+			Snippet:        match.Snippet,
+			Score:          match.Score,
+			ContextWindow:  match.ContextWindow,
+			LoadRules:      match.LoadRules,
+			ContextState:   match.ContextState,
+			SourceIdentity: match.SourceIdentity,
 		})
 	}
 	return searchConversationsOutput{

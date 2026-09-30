@@ -18,7 +18,7 @@ import (
 // verifyContext compares committed identities and digests before rendering
 // selected fields. A later append can preserve an earlier context window.
 func (source *embeddedConversationSearchSource) verifyContext(ctx context.Context, hit library.SearchHit, match conversation.SearchMatch, options conversation.SearchConversationsOptions) (conversation.SearchMatch, error) {
-	if source.semantic.ProjectionProfile == config.ConversationProjectionProfileLegacy {
+	if source.semantic.ProjectionProfile != config.ConversationProjectionProfileSourceSpan {
 		return match, nil
 	}
 	if source.index == nil || source.outbox == nil {

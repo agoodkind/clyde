@@ -186,7 +186,7 @@ func openEmbeddedQueryTestStore(t *testing.T) (*embeddedConversationStore, confi
 	}
 	root := t.TempDir()
 	semantic := config.ConversationSemanticConfig{
-		ProjectionProfile: config.ConversationProjectionProfileOriginal,
+		ProjectionProfile: config.ConversationProjectionProfileSourceSpan,
 		Backend:           config.ConversationSemanticBackendEmbedded, SearchEnabled: true, CollectionID: liveCollectionID,
 		CatalogPath: filepath.Join(root, "catalog.sqlite"), LockPath: filepath.Join(root, "catalog.lock"), PoolID: "query-live",
 		MilvusAddress: embeddedQueryMilvusAddress, MilvusDatabase: database, MilvusCollection: "query_vectors",
