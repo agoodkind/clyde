@@ -290,12 +290,8 @@ func (w *conversationSemanticSyncWorker) embeddedAliasFingerprint(group embedded
 }
 
 type embeddedAliasSelection struct {
-	maximal    []searchbackend.Field
-	comparison []embeddedAliasFieldProof
-	parent     library.ScalarValue
-	metadata   embeddedOwnerMetadata
-	covered    map[string]bool
-	admitted   bool
+	embeddedAliasProjection
+	covered map[string]bool
 }
 
 func (w *conversationSemanticSyncWorker) resolveEmbeddedAliasGroup(ctx context.Context, store *embeddedConversationStore, group embeddedAliasGroup, stats *embeddedSyncStats) (decision *embeddedAliasDecision, resultErr error) {
@@ -325,7 +321,8 @@ func (w *conversationSemanticSyncWorker) resolveEmbeddedAliasGroup(ctx context.C
 	if err = validateEmbeddedAliasAcceptedRecords(ctx, group, history); err != nil {
 		return nil, err
 	}
-	selection := embeddedAliasSelection{maximal: nil, comparison: nil, parent: library.ScalarValue{}, metadata: embeddedOwnerMetadata{Provider: "", WorkspaceRoot: "", Archived: false, Subagent: false}, covered: make(map[string]bool, len(history.rows)), admitted: false}
+	var selection embeddedAliasSelection
+	selection.covered = make(map[string]bool, len(history.rows))
 	for _, alias := range group.aliases {
 		if err = w.considerEmbeddedAlias(ctx, alias, history, &selection, decision, stats, singleSource); err != nil {
 			return nil, err
@@ -385,34 +382,20 @@ func (w *conversationSemanticSyncWorker) considerEmbeddedAlias(ctx context.Conte
 	}
 	owner := newEmbeddedConversationOwner(alias.Record, w.contentKinds)
 	parent := embeddedOptionalStringScalar(owner.ParentConversationID)
-	if selection.comparison != nil && parent != selection.parent || len(history.rows) != 0 && parent != history.parent {
+	if len(history.rows) != 0 && parent != history.parent {
 		return fmt.Errorf("alias parent differs for owner %s: %w", alias.Record.ID, library.ErrAppendConflict)
 	}
 	accepted := embeddedAliasAcceptedGenerations(alias.Record, history.provenance)
 	if err = verifyEmbeddedAliasAcceptedFields(ctx, owner, fields, accepted, history, selection.covered); err != nil {
 		return err
 	}
-	metadata := embeddedOwnerMetadataOf(alias.Record)
-	if selection.comparison != nil && history.snapshot.State.GenerationOrder == 0 && selection.metadata != metadata {
-		return fmt.Errorf("cold alias metadata differs for owner %s: %w", alias.Record.ID, library.ErrAppendConflict)
-	}
-	if err = compareEmbeddedAliasProof(ctx, selection.comparison, fields); err != nil {
+	selected, err := selection.consider(ctx, alias.Record, fields, w.embedded.admits(alias.Record), history.snapshot.State.GenerationOrder == 0)
+	if err != nil {
 		return err
 	}
-	if selection.comparison == nil || len(fields) > len(selection.comparison) {
-		selection.comparison = embeddedAliasProof(fields)
+	if selected || decision.source.Record.ID == "" {
+		decision.source = alias
 	}
-	selection.parent, selection.metadata = parent, metadata
-	if !w.embedded.admits(alias.Record) {
-		if decision.source.Record.ID == "" {
-			decision.source = alias
-		}
-		return nil
-	}
-	if !selection.admitted || len(fields) > len(selection.maximal) {
-		selection.maximal, decision.source = fields, alias
-	}
-	selection.admitted = true
 	return nil
 }
 
@@ -483,7 +466,7 @@ func embeddedAliasProof(fields []searchbackend.Field) []embeddedAliasFieldProof 
 	return proof
 }
 
-func compareEmbeddedAliasProof(ctx context.Context, first []embeddedAliasFieldProof, second []searchbackend.Field) (resultErr error) {
+func compareEmbeddedAliasProof(ctx context.Context, leftRecord, rightRecord conversation.Record, first []embeddedAliasFieldProof, second []searchbackend.Field) (resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			slog.WarnContext(ctx, "compare alias prefix failed", "err", resultErr)
@@ -492,7 +475,12 @@ func compareEmbeddedAliasProof(ctx context.Context, first []embeddedAliasFieldPr
 	for i := range min(len(first), len(second)) {
 		a, b := first[i], second[i]
 		if a.key != b.Key || a.digest != b.Digest || a.messageID != b.ProviderMessageID || a.role != b.Role || !a.timestamp.Equal(b.Timestamp) || a.kind != b.Kind || a.toolIndex != b.ToolIndex || a.messageIndex != b.MessageIndex {
-			return fmt.Errorf("projected aliases diverge at field %d: %w", i, library.ErrAppendConflict)
+			conflict := newEmbeddedAliasConflict(EmbeddedAliasConflictFieldPrefix, leftRecord, rightRecord, fmt.Sprintf("projected aliases diverge at field %d", i))
+			right := embeddedAliasFieldProof{key: b.Key, digest: b.Digest, messageID: b.ProviderMessageID, role: b.Role, kind: b.Kind, timestamp: b.Timestamp, toolIndex: b.ToolIndex, messageIndex: b.MessageIndex}
+			conflict.FieldIndex = &i
+			conflict.Properties = embeddedAliasFieldDifferences(a, right)
+			conflict.LeftField, conflict.RightField = embeddedAliasPublicField(a), embeddedAliasPublicField(right)
+			return conflict
 		}
 	}
 	return nil
