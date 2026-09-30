@@ -25,6 +25,9 @@ func run() (err error) {
 	if len(os.Args) > 1 && os.Args[1] == "verify-snapshot" {
 		return runSnapshot(os.Args[2:])
 	}
+	if len(os.Args) > 1 && os.Args[1] == "export-sources" {
+		return runSourceExport(os.Args[2:])
+	}
 	defer func() {
 		if err != nil {
 			slog.Warn("search.acceptance.comparison_rejected", "component", "searchacceptance", "concern", "report", "err", err)
