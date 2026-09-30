@@ -23,7 +23,7 @@ import (
 	"goodkind.io/clyde/internal/conversation/searchbackend"
 )
 
-const embeddedQueryMilvusAddress = "localhost:39530"
+const embeddedQueryMilvusAddress = "localhost:39630"
 
 // TestEmbeddedQueryBoundary searches the production source against a real
 // SQLite catalog, Milvus vector pool, and local embedding endpoint.

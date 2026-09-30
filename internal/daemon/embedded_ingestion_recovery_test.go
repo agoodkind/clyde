@@ -27,11 +27,11 @@ import (
 )
 
 const (
-	liveEmbeddingBaseURL     = "http://localhost:5400/v1"
+	liveEmbeddingBaseURL     = "http://[::1]:5400/v1"
 	liveEmbeddingModel       = "nvidia/NV-EmbedCode-7b-v1"
 	liveEmbeddingDimension   = 4096
 	liveEmbeddingAPIKeyEnv   = "OPENAI_API_KEY"
-	liveMilvusAddress        = "localhost:39530"
+	liveMilvusAddress        = "localhost:39630"
 	liveMilvusDatabasePrefix = "clyde_live_"
 	liveCollectionID         = "clyde-conversations"
 	liveOwnerID              = "codex:" + embeddedProjectionCodexThreadID
