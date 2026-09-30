@@ -3,11 +3,14 @@
 package live
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/sandbox"
@@ -17,9 +20,15 @@ import (
 func TestLiveEmbeddedSearchMeasurementCollector(t *testing.T) {
 	home, _, _ := writeEmbeddedPublicCorpus(t)
 	h, configuration := newEmbeddedPublicHarness(t, home)
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("measurement failure logs: %s", h.dumpLogsOnFailure(t))
+		}
+	})
 	h.boot(t)
 	waitEmbeddedPublicPublication(t, h)
 	h.teardown(t)
+	assertEmbeddedSourceMeasurements(t, h.stateRoot)
 	configuration.Conversation.Semantic.IngestionEnabled = false
 	configuration.Conversation.Semantic.SearchEnabled = true
 	writeEmbeddedLifecycleConfig(t, h, configuration)
@@ -67,6 +76,77 @@ func TestLiveEmbeddedSearchMeasurementCollector(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("measured warm public traversal artifact: %s", path)
+}
+
+func assertEmbeddedSourceMeasurements(t *testing.T, stateRoot string) {
+	t.Helper()
+	found := false
+	err := filepath.WalkDir(stateRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, filepath.Join("conversation", "semantic.jsonl")) {
+			return nil
+		}
+		present, err := readEmbeddedSourceMeasurement(t, path)
+		found = found || present
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("real ingestion did not publish complete source operation measurements")
+	}
+}
+
+func readEmbeddedSourceMeasurement(t *testing.T, path string) (bool, error) {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	found := false
+	for scanner.Scan() {
+		var event map[string]json.RawMessage
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			slog.Warn("decode ingestion measurement log failed", "path", path, "err", err)
+			return false, fmt.Errorf("decode measurement log %s: %w", path, err)
+		}
+		if !isEmbeddedSourceMeasurement(event) {
+			continue
+		}
+		assertEmbeddedSourceDurations(t, event)
+		found = true
+	}
+	return found, scanner.Err()
+}
+
+func isEmbeddedSourceMeasurement(event map[string]json.RawMessage) bool {
+	var message string
+	if err := json.Unmarshal(event["msg"], &message); err != nil || message != "daemon.conversation_semantic_sync.pass_completed" {
+		return false
+	}
+	var rows int
+	return json.Unmarshal(event["projection_rows"], &rows) == nil && rows == embeddedPublicRows
+}
+
+func assertEmbeddedSourceDurations(t *testing.T, event map[string]json.RawMessage) {
+	t.Helper()
+	for _, field := range []string{
+		"source_read_us", "projection_us", "policy_selection_us", "committed_field_read_us",
+		"field_selection_us", "occurrence_preparation_us", "outbox_preparation_us",
+	} {
+		var duration int64
+		if err := json.Unmarshal(event[field], &duration); err != nil || duration < 0 {
+			t.Fatalf("published ingestion measurement %s is absent or invalid", field)
+		}
+		if (field == "source_read_us" || field == "occurrence_preparation_us" || field == "outbox_preparation_us") && duration == 0 {
+			t.Fatalf("published ingestion measurement %s recorded no duration", field)
+		}
+	}
 }
 
 func acceptanceSourceIdentities(t *testing.T) []string {

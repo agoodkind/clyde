@@ -146,7 +146,8 @@ func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *
 	store, err := embedded.open(openCtx, lock, log)
 	if err != nil {
 		if closeErr := lock.Close(); closeErr != nil {
-			log.WarnContext(ctx, "daemon.conversation_semantic_embedded.unlock_failed",
+			log.WarnContext(
+				ctx, "daemon.conversation_semantic_embedded.unlock_failed",
 				"concern", "conversation.semantic",
 				"component", "daemon",
 				"err", closeErr,
@@ -273,7 +274,8 @@ func startEmbeddedConversationSemanticSync(
 	}
 	workerCtx, done, owned := installConversationSemanticSyncStop(ctx, group, log)
 	if !owned {
-		log.WarnContext(ctx, "daemon.conversation_semantic_sync.start_skipped_unowned",
+		log.WarnContext(
+			ctx, "daemon.conversation_semantic_sync.start_skipped_unowned",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"collection_id", semantic.CollectionID,
@@ -289,7 +291,8 @@ func startEmbeddedConversationSemanticSync(
 		defer worker.log.InfoContext(workerCtx, "daemon.conversation_semantic_embedded.worker_exited", "concern", "conversation.semantic", "pid", os.Getpid())
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				worker.log.ErrorContext(workerCtx, "daemon.conversation_semantic_sync.panic",
+				worker.log.ErrorContext(
+					workerCtx, "daemon.conversation_semantic_sync.panic",
 					"concern", "conversation.semantic",
 					"component", "daemon",
 					"err", fmt.Sprintf("panic: %v", recovered),
@@ -383,28 +386,35 @@ type embeddedCandidate struct {
 // embeddedSyncStats reports one embedded pass by phase: source reading,
 // projection, embedding, persistence, and searchable completion.
 type embeddedSyncStats struct {
-	admitted         int
-	needed           int
-	completed        int
-	completedIDs     []string
-	deferred         int
-	pendingBlocked   int
-	sourceRead       int
-	sourceBytes      int64
-	sourceFailed     int
-	failedSuppressed int
-	projectionFailed int
-	fields           int
-	newFields        int
-	unchangedFields  int
-	changedCommitted int
-	withheldFields   int
-	policySkipped    int
-	rows             int
-	replayed         int
-	replayDeferred   int
-	deliveryFailed   int
-	delivery         embeddedDeliveryCounts
+	admitted                      int
+	needed                        int
+	completed                     int
+	completedIDs                  []string
+	deferred                      int
+	pendingBlocked                int
+	sourceRead                    int
+	sourceBytes                   int64
+	sourceFailed                  int
+	sourceReadDuration            time.Duration
+	projectionDuration            time.Duration
+	policySelectionDuration       time.Duration
+	committedReadDuration         time.Duration
+	fieldSelectionDuration        time.Duration
+	occurrencePreparationDuration time.Duration
+	outboxPreparationDuration     time.Duration
+	failedSuppressed              int
+	projectionFailed              int
+	fields                        int
+	newFields                     int
+	unchangedFields               int
+	changedCommitted              int
+	withheldFields                int
+	policySkipped                 int
+	rows                          int
+	replayed                      int
+	replayDeferred                int
+	deliveryFailed                int
+	delivery                      embeddedDeliveryCounts
 	// replayedProjections, reprojectedOwners, and reprojectionFailed count
 	// scalar reprojections of already indexed owners.
 	replayedProjections int
@@ -463,7 +473,8 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) (r
 	stats.replayedProjections = replayedProjections
 	stampedRecords, err := w.embedded.records.ListAllWithStamps(ctx)
 	if err != nil {
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.list_failed",
+		w.log.WarnContext(
+			ctx, "daemon.conversation_semantic_sync.list_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"err", err,
@@ -648,12 +659,15 @@ func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 ) (*embeddedGeneration, int, error) {
 	record := candidate.record
 	w.log.DebugContext(ctx, "daemon.conversation_semantic_embedded.source_read_started", "concern", "conversation.semantic", "pid", os.Getpid(), "conversation_id", record.ID)
+	started := w.now()
 	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentKinds))
+	stats.sourceReadDuration += w.now().Sub(started)
 	w.log.DebugContext(ctx, "daemon.conversation_semantic_embedded.source_read_finished", "concern", "conversation.semantic", "pid", os.Getpid(), "conversation_id", record.ID, "err", err)
 	if err != nil {
 		stats.sourceFailed++
 		w.recordLoadFailure(record.ID, candidate.fingerprint)
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
+		w.log.WarnContext(
+			ctx, "daemon.conversation_semantic_sync.load_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", record.ID,
@@ -670,13 +684,16 @@ func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 		return nil, withheld, err
 	}
 	owner := newEmbeddedConversationOwner(record, w.contentKinds)
+	started = w.now()
 	rows, err := embeddedOutboxRows(ctx, store.namespace, owner, fields)
+	stats.occurrencePreparationDuration += w.now().Sub(started)
 	if err != nil {
 		stats.projectionFailed++
 		w.recordLoadFailure(record.ID, candidate.fingerprint)
 		return nil, withheld, err
 	}
 	stats.rows += len(rows)
+	started = w.now()
 	generation, err := store.delivery.prepareGeneration(ctx, embeddedOutboxBatch{
 		BatchID:           "",
 		Namespace:         store.namespace.ID,
@@ -689,6 +706,7 @@ func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 		ManifestHash:      "",
 		Metadata:          embeddedOwnerMetadataOf(record),
 	}, rows)
+	stats.outboxPreparationDuration += w.now().Sub(started)
 	if err != nil {
 		stats.deliveryFailed++
 		return nil, withheld, err
@@ -708,11 +726,14 @@ func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 ) ([]searchbackend.Field, int, error) {
 	record := candidate.record
 	artifactSettled := w.now().Sub(candidate.stamp.Mtime) >= embeddedTrailingSettleWindow
+	started := w.now()
 	projected, built, err := projectEmbeddedConversationFields(record, messages, w.contentKinds, artifactSettled)
+	stats.projectionDuration += w.now().Sub(started)
 	if err != nil {
 		stats.projectionFailed++
 		w.recordLoadFailure(record.ID, candidate.fingerprint)
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.projection_failed",
+		w.log.WarnContext(
+			ctx, "daemon.conversation_semantic_sync.projection_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", record.ID,
@@ -722,14 +743,20 @@ func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 	}
 	stats.policySkipped += built.PolicySkipped
 	stats.withheldFields += projected.WithheldOpenFields
+	started = w.now()
 	fields := w.embedded.admittedFields(projected.Fields)
+	stats.policySelectionDuration += w.now().Sub(started)
 	stats.fields += len(fields)
+	started = w.now()
 	committed, err := store.outbox.committedFields(ctx, store.namespace.ID, record.ID)
+	stats.committedReadDuration += w.now().Sub(started)
 	if err != nil {
 		stats.deliveryFailed++
 		return nil, projected.WithheldOpenFields, err
 	}
+	started = w.now()
 	selection := searchbackend.SelectNewFields(fields, committed)
+	stats.fieldSelectionDuration += w.now().Sub(started)
 	stats.newFields += len(selection.New)
 	stats.unchangedFields += selection.Unchanged
 	stats.changedCommitted += selection.ChangedCommitted
@@ -754,7 +781,8 @@ func embeddedOutboxRows(
 		}
 		for _, occurrence := range occurrences {
 			if err := namespace.ValidateOccurrence(occurrence); err != nil {
-				slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.occurrence_invalid",
+				slog.WarnContext(
+					ctx, "daemon.conversation_semantic_embedded.occurrence_invalid",
 					"concern", "conversation.semantic",
 					"component", "daemon",
 					"conversation_id", owner.ConversationID,
@@ -801,6 +829,13 @@ func (w *conversationSemanticSyncWorker) logEmbeddedPass(ctx context.Context, st
 		slog.Int("deferred", stats.deferred),
 		slog.Int("pending_blocked", stats.pendingBlocked),
 		slog.Int("source_read", stats.sourceRead),
+		slog.Int64("source_read_us", stats.sourceReadDuration.Microseconds()),
+		slog.Int64("projection_us", stats.projectionDuration.Microseconds()),
+		slog.Int64("policy_selection_us", stats.policySelectionDuration.Microseconds()),
+		slog.Int64("committed_field_read_us", stats.committedReadDuration.Microseconds()),
+		slog.Int64("field_selection_us", stats.fieldSelectionDuration.Microseconds()),
+		slog.Int64("occurrence_preparation_us", stats.occurrencePreparationDuration.Microseconds()),
+		slog.Int64("outbox_preparation_us", stats.outboxPreparationDuration.Microseconds()),
 		slog.Int64("source_bytes", stats.sourceBytes),
 		slog.Int("source_failed", stats.sourceFailed),
 		slog.Int("source_failed_suppressed", stats.failedSuppressed),
