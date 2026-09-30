@@ -34,6 +34,9 @@ const frozenCorpusDriverRequestEnv = "CLYDE_FROZEN_INGESTION_REQUEST"
 
 const frozenCorpusMilvusAddressEnv = "CLYDE_FROZEN_MILVUS_ADDRESS"
 
+// A 256-vector batch at 4096 dimensions uses 4 MiB of raw float payload.
+const frozenVectorVerificationBatchSize = 256
+
 //go:embed frozen_corpus_published_rows.sql
 var frozenPublishedRowsQuery string
 
@@ -933,7 +936,21 @@ func verifyFrozenPublishedContent(ctx context.Context, database *sql.DB, verifie
 		}
 		verifier.bound = true
 	}
-	return verifier.store.VerifyStrong(ctx, identities)
+	return verifyFrozenVectorBatches(ctx, verifier.store, identities)
+}
+
+func verifyFrozenVectorBatches(ctx context.Context, store *librarymilvus.Store, identities []library.VectorIdentity) error {
+	for start := 0; start < len(identities); start += frozenVectorVerificationBatchSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := min(start+frozenVectorVerificationBatchSize, len(identities))
+		if err := store.VerifyStrong(ctx, identities[start:end]); err != nil {
+			return fmt.Errorf("verify frozen canonical vectors [%d:%d] of %d: %w", start, end, len(identities), err)
+		}
+		slog.InfoContext(ctx, "frozen canonical vector batch verified", "start", start, "end", end, "identities", len(identities))
+	}
+	return nil
 }
 
 func readFrozenPublishedScalars(ctx context.Context, database *sql.DB, namespace, owner string) (map[string]map[string]library.ScalarValue, error) {
