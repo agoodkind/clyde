@@ -228,7 +228,7 @@ func frozenAliasEvent(t *testing.T, timestamp, text string) string {
 
 func assertFrozenAliasProvenance(t *testing.T, output []byte, longest string) {
 	t.Helper()
-	var statuses []struct {
+	type aliasStatus struct {
 		Type     string `json:"type"`
 		Selected struct {
 			ArtifactPath string `json:"artifact_path"`
@@ -237,16 +237,9 @@ func assertFrozenAliasProvenance(t *testing.T, output []byte, longest string) {
 			ArtifactPath string `json:"artifact_path"`
 		} `json:"aliases"`
 	}
+	var statuses []aliasStatus
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		var status struct {
-			Type     string `json:"type"`
-			Selected struct {
-				ArtifactPath string `json:"artifact_path"`
-			} `json:"selected_source"`
-			Aliases []struct {
-				ArtifactPath string `json:"artifact_path"`
-			} `json:"aliases"`
-		}
+		var status aliasStatus
 		if err := json.Unmarshal([]byte(line), &status); err != nil {
 			t.Fatal(err)
 		}
