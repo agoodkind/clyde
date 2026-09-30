@@ -10,6 +10,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -62,6 +63,7 @@ func TestDaemonStatusReadsExistingConnectionAndBoundListeners(t *testing.T) {
 	if state := runtime.statusSnapshot().Semantic.Connection; state != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_IDLE {
 		t.Fatalf("reading an idle connection activated it: %v", state)
 	}
+	waitForStatusConnectionReady(t, connection)
 	client := clydev1.NewClydeServiceClient(connection)
 	response, err := client.GetDaemonStatus(t.Context(), &emptypb.Empty{})
 	if err != nil {
@@ -93,5 +95,21 @@ func TestDaemonStatusReadsExistingConnectionAndBoundListeners(t *testing.T) {
 	}
 	if state := runtime.statusSnapshot().Semantic.Connection; state != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_SHUTDOWN {
 		t.Fatalf("closed connection still reads ready: %v", state)
+	}
+}
+
+func waitForStatusConnectionReady(t *testing.T, connection *grpc.ClientConn) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	connection.Connect()
+	for {
+		state := connection.GetState()
+		if state == connectivity.Ready {
+			return
+		}
+		if !connection.WaitForStateChange(ctx, state) {
+			t.Fatalf("real status connection did not become ready: state=%v, err=%v", connection.GetState(), ctx.Err())
+		}
 	}
 }
