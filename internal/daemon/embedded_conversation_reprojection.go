@@ -207,11 +207,16 @@ func (w *conversationSemanticSyncWorker) reprojectEmbeddedOwners(
 		stats.reprojectionFailed++
 		return
 	}
+	seen := make(map[string]bool, len(stampedRecords))
 	for _, stampedRecord := range stampedRecords {
 		if semanticSyncContextDone(ctx) {
 			return
 		}
 		ownerID := strings.TrimSpace(stampedRecord.Record.ID)
+		if ownerID == "" || seen[ownerID] {
+			continue
+		}
+		seen[ownerID] = true
 		stored, indexed := storedByOwner[ownerID]
 		if !indexed || blockedOwners[ownerID] {
 			continue
