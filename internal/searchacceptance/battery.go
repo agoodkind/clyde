@@ -179,6 +179,8 @@ func validateFrozenFilter(filter Filter) error {
 		}
 		switch provider {
 		case conversation.ProviderClaude, conversation.ProviderCodex, conversation.ProviderCursor, conversation.ProviderZed, conversation.ProviderCopilot:
+		case providerid.ProviderUnspecified, providerid.ProviderAnthropic, providerid.ProviderOpenAICompat, providerid.ProviderMITM, providerid.ProviderArtifact, providerid.ProviderConductor:
+			return errors.New("original filter provider is unsupported")
 		default:
 			return errors.New("original filter provider is unsupported")
 		}
