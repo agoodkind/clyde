@@ -264,6 +264,11 @@ func (p *responsesStreamWriter) finish(result adapterprovider.Result) error {
 	if err := p.begin(); err != nil {
 		return err
 	}
+	if p.documented {
+		if missing := adapteropenai.MissingResponsesUsageDetail(result.Usage); missing != "" {
+			return p.fail(adapterErrUpstreamFailed("", "model provider omitted usage."+missing, nil))
+		}
+	}
 	status, incompleteDetails := adapteropenai.ResponsesTerminalForFinishReason(result.FinishReason)
 	itemStatus := responsesTerminalItemStatus(status)
 	if err := p.closeReasoning(itemStatus); err != nil {
