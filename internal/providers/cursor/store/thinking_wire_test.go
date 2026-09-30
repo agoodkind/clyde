@@ -59,8 +59,11 @@ func TestCursorThinkingWireThroughRealStore(t *testing.T) {
 			if err != nil {
 				t.Fatalf("stream actual store: %v", err)
 			}
-			if len(got) != 1 || got[0].Thinking.Text != testCase.want {
-				t.Fatalf("thinking result differs: count=%d", len(got))
+			if len(got) != 1 {
+				t.Fatalf("thinking result count = %d, want 1", len(got))
+			}
+			if got[0].Thinking.Text != testCase.want {
+				t.Fatalf("thinking text = %q, want %q", got[0].Thinking.Text, testCase.want)
 			}
 		})
 	}
