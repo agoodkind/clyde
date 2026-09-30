@@ -624,6 +624,12 @@ func (s *Server) dispatchResponsesCollect(
 			usage = *result.FinalResponse.Usage
 		}
 	}
+	if listenerFollowsDocumentedContract(ctx) {
+		if missing := adapteropenai.MissingResponsesUsageDetail(usage); missing != "" {
+			s.respondAdapterError(w, r, adapterErrUpstreamFailed(responsesProviderPath(prepared.provider), "model provider omitted usage."+missing, nil))
+			return
+		}
+	}
 	status, incompleteDetails := adapteropenai.ResponsesTerminalForFinishReason(result.FinishReason)
 	output := responsesOutputFromEvents(responseID, collector.events, status, listenerFollowsDocumentedContract(ctx))
 	if result.FinalResponse != nil {

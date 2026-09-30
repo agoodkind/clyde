@@ -78,7 +78,7 @@ func TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest(t *testing
 }
 
 func TestOpenAIConformanceResponsesAcceptsDocumentedDefaults(t *testing.T) {
-	upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+	upstream := newConformanceUpstream(conformanceUsageWithReasoning)
 	listeners := startConformanceServer(t, upstream)
 	body := `{"model":"gpt-future","input":"hi","access_programs":null,"temperature":1,"top_p":1,"store":false,"background":false,"truncation":"disabled","parallel_tool_calls":true,"tool_choice":"auto","metadata":{"k":"v"},"user":"caller","prompt_cache_key":"cache"}`
 	accepted := postConformance(t, listeners.openAI+"/v1/responses", body)

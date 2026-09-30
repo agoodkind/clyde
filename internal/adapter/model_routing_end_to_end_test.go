@@ -221,6 +221,15 @@ func newRoutingIntegrationServer(t *testing.T, fakes routingFakeEndpoints) *Serv
 				returnNativeAnthropicResponse(t, writer, prepared.Request.Model)
 				return adapterprovider.Result{}, nil
 			}
+			cacheWrites := 0
+			usage := adapteropenai.Usage{
+				PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2,
+				PromptTokensDetails: &adapteropenai.PromptTokensDetails{
+					CachedTokens: 0, CacheWriteTokens: &cacheWrites, CompatibilityOmitsUncached: false,
+				},
+				CompletionTokensDetails: &adapteropenai.CompletionTokensDetails{ReasoningTokens: 0},
+				InputTokens:             0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+			}
 			response := &adapteropenai.ChatResponse{
 				ID:     "chatcmpl-anthropic-fake",
 				Object: "chat.completion",
@@ -233,8 +242,9 @@ func newRoutingIntegrationServer(t *testing.T, fakes routingFakeEndpoints) *Serv
 					},
 					FinishReason: "stop",
 				}},
+				Usage: &usage,
 			}
-			return adapterprovider.Result{FinalResponse: response, FinishReason: "stop"}, nil
+			return adapterprovider.Result{FinalResponse: response, FinishReason: "stop", Usage: usage}, nil
 		},
 	})
 	srv.providerRegistry.Register(srv.anthropicProvider)
@@ -415,5 +425,5 @@ func codexRoutingSSEBody() string {
 		"event: response.output_text.delta\n" +
 		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
 		"event: response.completed\n" +
-		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-routing\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens_details\":{\"reasoning_tokens\":0}}}}\n\n"
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-routing\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2,\"input_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0},\"output_tokens_details\":{\"reasoning_tokens\":0}}}}\n\n"
 }

@@ -439,6 +439,21 @@ type ResponsesOutputTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
+// MissingResponsesUsageDetail returns the first required Responses field
+// absent from provider usage.
+func MissingResponsesUsageDetail(usage Usage) string {
+	if usage.PromptTokensDetails == nil {
+		return "input_tokens_details"
+	}
+	if usage.PromptTokensDetails.CacheWriteTokens == nil {
+		return "input_tokens_details.cache_write_tokens"
+	}
+	if usage.CompletionTokensDetails == nil {
+		return "output_tokens_details"
+	}
+	return ""
+}
+
 // ResponsesUsageFromChat copies prompt_tokens to input_tokens,
 // completion_tokens to output_tokens, prompt token details to
 // input_tokens_details, and completion token details to
