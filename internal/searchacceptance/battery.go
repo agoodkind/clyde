@@ -79,9 +79,24 @@ type BatteryInspection struct {
 	Battery        FrozenBattery `json:"battery"`
 }
 
+// BatteryConstraints supplies the caller's required workload identities.
+type BatteryConstraints struct {
+	SchemaVersion int
+	QuerySetID    string
+	QueryIDs      []string
+	Scenarios     []ScenarioConstraint
+}
+
+// ScenarioConstraint specifies the required identity, kind, and references.
+type ScenarioConstraint struct {
+	ID                string
+	Kind              string
+	RequireReferences bool
+}
+
 // InspectFrozenBattery validates only workload structure and byte identity.
 // It does not read the corpus or establish expected results or acceptance.
-func InspectFrozenBattery(path, expectedDigest string) (inspection BatteryInspection, err error) {
+func InspectFrozenBattery(path, expectedDigest string, constraints BatteryConstraints) (inspection BatteryInspection, err error) {
 	defer func() {
 		if err != nil {
 			slog.Warn("search.acceptance.battery_rejected", "component", "searchacceptance", "concern", "battery", "err", err)
@@ -106,15 +121,18 @@ func InspectFrozenBattery(path, expectedDigest string) (inspection BatteryInspec
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return inspection, errors.New("original battery requires one JSON document")
 	}
-	if err := validateFrozenBattery(inspection.Battery); err != nil {
+	if err := validateFrozenBattery(inspection.Battery, constraints); err != nil {
 		return BatteryInspection{}, err
 	}
 	inspection.OriginalDigest = expectedDigest
 	return inspection, nil
 }
 
-func validateFrozenBattery(battery FrozenBattery) error {
-	if battery.SchemaVersion != 1 || battery.QuerySetID != "shared-search-query-set-20260928T0730Z" || strings.TrimSpace(battery.Identity) == "" {
+func validateFrozenBattery(battery FrozenBattery, constraints BatteryConstraints) error {
+	if constraints.SchemaVersion <= 0 || constraints.QuerySetID == "" || len(constraints.QueryIDs) == 0 || len(constraints.Scenarios) == 0 {
+		return errors.New("battery constraints require schema and workload identities")
+	}
+	if battery.SchemaVersion != constraints.SchemaVersion || battery.QuerySetID != constraints.QuerySetID || strings.TrimSpace(battery.Identity) == "" {
 		return errors.New("unsupported original battery schema or identity")
 	}
 	if !filepath.IsAbs(battery.CorpusSnapshot.Path) || !validDigest(battery.CorpusSnapshot.ManifestSHA256) || !filepath.IsAbs(battery.RecoveredRequests.Path) || !validDigest(battery.RecoveredRequests.SHA256) {
@@ -123,10 +141,10 @@ func validateFrozenBattery(battery FrozenBattery) error {
 	if battery.Concurrency <= 0 || battery.LatencyConcurrency <= 0 || battery.PageTimeoutSeconds <= 0 || battery.TraversalTimeoutSeconds < battery.PageTimeoutSeconds {
 		return errors.New("original battery concurrency and timeouts are invalid")
 	}
-	if len(battery.Entries) != 51 || len(battery.Scenarios) != 3 {
-		return errors.New("original battery requires 51 queries and three scenarios")
+	if len(battery.Entries) != len(constraints.QueryIDs) || len(battery.Scenarios) != len(constraints.Scenarios) {
+		return errors.New("original battery query or scenario count differs from constraints")
 	}
-	queries := make(map[string]bool, 51)
+	queries := make(map[string]bool, len(constraints.QueryIDs))
 	for _, query := range battery.Entries {
 		if queries[query.ID] || strings.TrimSpace(query.Query) == "" || query.PageSize <= 0 || len(query.Tags) == 0 {
 			return fmt.Errorf("original query %s has repeated identity or invalid controls", query.ID)
@@ -136,12 +154,17 @@ func validateFrozenBattery(battery FrozenBattery) error {
 		}
 		queries[query.ID] = true
 	}
-	for index := 1; index <= 51; index++ {
-		if !queries[fmt.Sprintf("q%03d", index)] {
+	expected := make(map[string]bool, len(constraints.QueryIDs))
+	for _, id := range constraints.QueryIDs {
+		if id == "" || expected[id] {
+			return errors.New("battery constraints contain invalid query identities")
+		}
+		expected[id] = true
+		if !queries[id] {
 			return errors.New("original battery query identity is missing")
 		}
 	}
-	return validateFrozenScenarios(battery.Scenarios, queries)
+	return validateFrozenScenarios(battery.Scenarios, queries, constraints.Scenarios)
 }
 
 func validateFrozenFilter(filter Filter) error {
@@ -175,11 +198,18 @@ func validateFrozenFilter(filter Filter) error {
 	return nil
 }
 
-func validateFrozenScenarios(scenarios []FrozenScenario, queries map[string]bool) error {
-	kinds := map[string]string{"s001": "missing_artifact", "s002": "concurrent_append", "s003": "unchanged_second_pass"}
-	seen := make(map[string]bool, 3)
+func validateFrozenScenarios(scenarios []FrozenScenario, queries map[string]bool, constraints []ScenarioConstraint) error {
+	expected := make(map[string]ScenarioConstraint, len(constraints))
+	for _, constraint := range constraints {
+		if _, exists := expected[constraint.ID]; exists || constraint.ID == "" || constraint.Kind == "" {
+			return errors.New("battery constraints contain invalid scenario identities")
+		}
+		expected[constraint.ID] = constraint
+	}
+	seen := make(map[string]bool, len(constraints))
 	for _, scenario := range scenarios {
-		if seen[scenario.ID] || kinds[scenario.ID] != scenario.Kind || scenario.Kind == "" || strings.TrimSpace(scenario.Description) == "" {
+		constraint, exists := expected[scenario.ID]
+		if !exists || seen[scenario.ID] || constraint.Kind != scenario.Kind || strings.TrimSpace(scenario.Description) == "" {
 			return errors.New("original scenario identity or kind is invalid")
 		}
 		seen[scenario.ID] = true
@@ -188,7 +218,7 @@ func validateFrozenScenarios(scenarios []FrozenScenario, queries map[string]bool
 				return errors.New("original scenario references an unknown query")
 			}
 		}
-		if scenario.ID != "s003" && (len(scenario.QueryIDs) == 0 || len(scenario.ConversationIDs) == 0) {
+		if constraint.RequireReferences && (len(scenario.QueryIDs) == 0 || len(scenario.ConversationIDs) == 0) {
 			return errors.New("original scenario requires conversation and query identities")
 		}
 	}
