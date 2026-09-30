@@ -70,7 +70,7 @@ The provider columns show the disposition of each request field that one provide
 | `service_tier` | Forwarded | Rejected unless `auto` or `default` |
 | `tool_choice` | Rejected unless `auto` | Forwarded |
 | `function_call` | Rejected unless `auto` | Rejected unless `auto` |
-| `response_format` | Rejected unless `text` | Forwarded |
+| `response_format` | `json_object` and `json_schema` use Responses `text.format`; `text` uses the default format. | Forwarded |
 
 ## Responses
 

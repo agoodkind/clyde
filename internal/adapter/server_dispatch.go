@@ -261,8 +261,8 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 		return err
 	}
 
-	if rejectErr := rejectUndocumentedChatFields(ctx, recorder, body, req, discovery, &resolvedReq); rejectErr != nil {
-		return rejectErr
+	if contractErr := prepareDocumentedChat(ctx, recorder, body, &req, discovery, &resolvedReq); contractErr != nil {
+		return contractErr
 	}
 
 	toolNames := chatToolNames(req)
@@ -279,6 +279,31 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	s.emitChatProviderSendStartedLeg(ctx, recorder, corr, req, &resolvedReq, effort, bodyFacets)
 	s.dispatchResolvedChat(w, r, req, effort, reqID, body, ingressCtx, resolvedReq)
 	s.completeChatDispatchLegs(ctx, recorder, corr, req, &resolvedReq, effort, bodyFacets)
+	return nil
+}
+
+func prepareDocumentedChat(ctx context.Context, recorder *logevent.Recorder, body []byte, req *ChatRequest, discovery RequestDiscovery, resolved *adapterresolver.ResolvedRequest) error {
+	if err := rejectUndocumentedChatFields(ctx, recorder, body, *req, discovery, resolved); err != nil {
+		return err
+	}
+	return prepareCodexChatFormat(ctx, req, resolved)
+}
+
+func prepareCodexChatFormat(ctx context.Context, req *ChatRequest, resolved *adapterresolver.ResolvedRequest) error {
+	if !listenerFollowsDocumentedContract(ctx) || resolved.Provider != BackendCodex {
+		return nil
+	}
+	text, err := adapteropenai.MarshalResponsesTextForChatFormat(req.ResponseFormat)
+	if err != nil {
+		return adapterErrInvalidRequest(err.Error(), err)
+	}
+	if len(text) == 0 {
+		return nil
+	}
+	req.Text = text
+	req.ResponseFormat = nil
+	resolved.OpenAI.Text = text
+	resolved.OpenAI.ResponseFormat = nil
 	return nil
 }
 
@@ -306,21 +331,22 @@ func documentedChatRejection(body []byte, req ChatRequest, discovery RequestDisc
 		n = &req.N
 	}
 	values := adaptercompat.ChatRequestValues{
-		Stream:           req.Stream,
-		Temperature:      req.Temperature,
-		TopP:             req.TopP,
-		PresencePenalty:  req.PresencePenalty,
-		FrequencyPenalty: req.FrequencyPenalty,
-		N:                n,
-		Logprobs:         req.Logprobs,
-		TopLogprobs:      req.TopLogprobs,
-		Store:            req.Store,
-		ServiceTier:      req.ServiceTier,
-		ToolChoice:       req.ToolChoice,
-		FunctionCall:     req.FunctionCall,
-		Modalities:       req.Modalities,
-		ResponseFormat:   req.ResponseFormat,
-		UnknownKeys:      discovery.UnknownKeys,
+		Stream:                   req.Stream,
+		Temperature:              req.Temperature,
+		TopP:                     req.TopP,
+		PresencePenalty:          req.PresencePenalty,
+		FrequencyPenalty:         req.FrequencyPenalty,
+		N:                        n,
+		Logprobs:                 req.Logprobs,
+		TopLogprobs:              req.TopLogprobs,
+		Store:                    req.Store,
+		ServiceTier:              req.ServiceTier,
+		ToolChoice:               req.ToolChoice,
+		FunctionCall:             req.FunctionCall,
+		Modalities:               req.Modalities,
+		ResponseFormat:           req.ResponseFormat,
+		AllowCodexResponseFormat: true,
+		UnknownKeys:              discovery.UnknownKeys,
 	}
 	presenceFor := func(param string) int { return int(fields.Presence(param)) }
 	rejection, rejected := adaptercompat.ChatRejection(presenceFor, values, resolvedReq.Provider)
