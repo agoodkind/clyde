@@ -24,12 +24,15 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/lm-semantic-search/library"
 	librarymilvus "goodkind.io/lm-semantic-search/library/milvus"
 	"goodkind.io/lm-semantic-search/library/observation"
 )
 
 const frozenCorpusDriverRequestEnv = "CLYDE_FROZEN_INGESTION_REQUEST"
+
+const frozenCorpusMilvusAddressEnv = "CLYDE_FROZEN_MILVUS_ADDRESS"
 
 //go:embed frozen_corpus_published_rows.sql
 var frozenPublishedRowsQuery string
@@ -52,14 +55,60 @@ type frozenCatalogVersions struct {
 }
 
 type frozenCorpusPassProof struct {
-	RunID               string `json:"run_id"`
-	Completed           bool   `json:"completed"`
-	EmbeddingAttempts   int    `json:"embedding_sdk_attempts"`
-	RequestedInputs     int    `json:"embedding_requested_inputs"`
-	VectorCalls         int    `json:"milvus_sdk_upsert_calls"`
-	CatalogTransactions int    `json:"catalog_transactions"`
-	Stages              int    `json:"stages"`
-	FailedOperations    int    `json:"failed_operations"`
+	Summary             frozenPassSummary `json:"summary"`
+	RunID               string            `json:"run_id"`
+	Completed           bool              `json:"completed"`
+	EmbeddingAttempts   int               `json:"embedding_sdk_attempts"`
+	RequestedInputs     int               `json:"embedding_requested_inputs"`
+	VectorCalls         int               `json:"milvus_sdk_upsert_calls"`
+	CatalogTransactions int               `json:"catalog_transactions"`
+	Stages              int               `json:"stages"`
+	FailedOperations    int               `json:"failed_operations"`
+}
+
+type frozenPassSummary struct {
+	Admitted         int `json:"admitted"`
+	Needed           int `json:"needed"`
+	Deferred         int `json:"deferred"`
+	PendingBlocked   int `json:"pending_blocked"`
+	SourceFailed     int `json:"source_failed"`
+	Suppressed       int `json:"source_failed_suppressed"`
+	ProjectionFailed int `json:"projection_failed"`
+	DeliveryFailed   int `json:"delivery_failed"`
+	MetadataFailed   int `json:"metadata_reprojection_failed"`
+	ReconcileFailed  int `json:"reconcile_failed"`
+	Blocked          int `json:"blocked_owners"`
+	Changed          int `json:"projection_changed_committed"`
+	Withheld         int `json:"projection_withheld_fields"`
+	ReplayDeferred   int `json:"persistence_replay_deferred_batches"`
+	Generations      int `json:"searchable_generations"`
+	Rows             int `json:"searchable_rows"`
+	Conversations    int `json:"searchable_conversations"`
+}
+
+type frozenExpectedOwner struct {
+	Source conversation.StampedRecord
+	Seal   library.GenerationSeal
+}
+
+type frozenSweepProof struct {
+	Namespace            frozenNamespaceInventory `json:"actual_namespace"`
+	Phase                string                   `json:"phase"`
+	Pass                 frozenCorpusPassProof    `json:"pass"`
+	PublishedOwners      int                      `json:"published_owners"`
+	PublishedOccurrences int                      `json:"published_occurrences"`
+	ProvenSources        int                      `json:"proven_sources"`
+	Missing              []string                 `json:"missing_owner_ids"`
+	UnprovenSources      []string                 `json:"unproven_source_owner_ids"`
+	CatalogVersions      *frozenCatalogVersions   `json:"catalog_versions,omitempty"`
+	ElapsedMilliseconds  int64                    `json:"elapsed_ms"`
+	Error                string                   `json:"error,omitempty"`
+}
+
+type frozenNamespaceInventory struct {
+	OwnerIDs    []string `json:"owner_ids"`
+	Owners      int64    `json:"owners"`
+	Occurrences int64    `json:"occurrences"`
 }
 
 type frozenVectorVerifier struct {
@@ -70,6 +119,10 @@ type frozenVectorVerifier struct {
 }
 
 type frozenCorpusProof struct {
+	ExpectedOwnerIDs                []string              `json:"expected_source_owner_ids"`
+	RejectedUnexpectedOwner         string                `json:"rejected_unexpected_owner,omitempty"`
+	InitialPasses                   []frozenSweepProof    `json:"initial_passes"`
+	RestartPasses                   []frozenSweepProof    `json:"restart_passes"`
 	Complete                        bool                  `json:"complete"`
 	Database                        string                `json:"database"`
 	Records                         int                   `json:"records"`
@@ -103,7 +156,7 @@ func TestFrozenCorpusIngestionDriver(t *testing.T) {
 	if err = decoder.Decode(&request); err != nil {
 		t.Fatal(err)
 	}
-	proof, err := runFrozenCorpusIngestion(t, request)
+	proof, err := runFrozenCorpusIngestion(t, request, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +174,7 @@ func TestFrozenCorpusIngestionDriver(t *testing.T) {
 
 func TestFrozenCorpusIngestionPreservesOriginalOwnersAcrossRestart(t *testing.T) {
 	requireLiveLocalEmbeddingModel(t)
-	request := createFrozenCorpusFixture(t)
+	request := createFrozenCorpusFixtureWithPadding(t, conversationSemanticBatchBytes)
 	root := t.TempDir()
 	request.RuntimeRoot = root
 	request.OutputPath = filepath.Join(root, "proof.json")
@@ -131,24 +184,46 @@ func TestFrozenCorpusIngestionPreservesOriginalOwnersAcrossRestart(t *testing.T)
 	request.Semantic.PoolID = "frozen-fixture"
 	request.Semantic.CollectionID = "frozen-fixture"
 	request.Semantic.MilvusCollection = "frozen_vectors"
-	request.Semantic.MilvusAddress = liveMilvusAddress
+	address, err := frozenCorpusMilvusAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Semantic.MilvusAddress = address
 	request.Semantic.MilvusDatabase = "clyde_frozen_" + fmt.Sprint(time.Now().UnixNano())
 	if registeredDatabase := os.Getenv("CLYDE_FROZEN_FIXTURE_DATABASE"); registeredDatabase != "" {
 		request.Semantic.MilvusDatabase = registeredDatabase
 	}
 	request.Semantic.EmbeddingBaseURL = liveEmbeddingBaseURL
 	request.Semantic.EmbeddingRequestTimeout = config.Duration(2 * time.Minute)
-	proof, err := runFrozenCorpusIngestion(t, request)
+	proof, err := runFrozenCorpusIngestion(t, request, true)
 	if err != nil {
+		t.Fatal(err)
+	}
+	proofPath := request.OutputPath
+	if evidenceRoot := os.Getenv("CLYDE_FROZEN_FIXTURE_EVIDENCE_ROOT"); evidenceRoot != "" {
+		proofPath = filepath.Join(evidenceRoot, "frozen-fixture-proof.json")
+	}
+	file, err := os.OpenFile(proofPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodeErr := json.NewEncoder(file).Encode(proof)
+	if err = errors.Join(encodeErr, file.Sync(), file.Close()); err != nil {
 		t.Fatal(err)
 	}
 	if !proof.Complete || proof.Records != 4 || proof.AdmittedOwners != 4 || proof.Occurrences != 4 || proof.First.EmbeddingAttempts == 0 || proof.First.VectorCalls == 0 || proof.Restart.EmbeddingAttempts != 0 || proof.Restart.VectorCalls != 0 || proof.Restart.Stages != 0 || proof.CatalogBeforeRestart != proof.CatalogAfterRestart {
 		t.Fatalf("real frozen worker proof=%+v", proof)
 	}
+	if len(proof.InitialPasses) < 2 || len(proof.RestartPasses) < 2 || proof.InitialPasses[0].PublishedOwners >= 4 || proof.RestartPasses[0].ProvenSources >= 4 {
+		t.Fatalf("real source budget did not split initial and restart sweeps: %+v", proof)
+	}
+	if proof.RejectedUnexpectedOwner == "" {
+		t.Fatal("real catalog did not reject an unexpected committed owner")
+	}
 	t.Logf("verified frozen worker proof=%+v", proof)
 }
 
-func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest) (proof frozenCorpusProof, resultErr error) {
+func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest, verifyUnexpectedOwner bool) (proof frozenCorpusProof, resultErr error) {
 	t.Helper()
 	ctx, stop := signal.NotifyContext(t.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -157,6 +232,15 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest) (proof 
 		return proof, err
 	}
 	if err = validateFrozenRuntime(request); err != nil {
+		return proof, err
+	}
+	if request.CompletionTimeoutSeconds <= 0 || request.CompletionTimeoutSeconds > int((1<<63-1)/int64(time.Second)) || request.ExpectedOwners <= 0 || request.ExpectedOccurrences <= 0 {
+		return proof, errors.New("positive completion deadline and exact source counts required")
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(request.CompletionTimeoutSeconds)*time.Second)
+	defer cancel()
+	expected, err := preflightFrozenOwners(ctx, index)
+	if err != nil {
 		return proof, err
 	}
 	admin, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: request.Semantic.MilvusAddress})
@@ -183,10 +267,9 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest) (proof 
 				return
 			}
 			if slices.Contains(databases, database) {
-				dropLiveMilvusDatabase(t, admin, database)
-			} else {
-				resultErr = errors.Join(resultErr, closeFrozenAdmin(ctx, admin))
+				resultErr = errors.Join(resultErr, dropFrozenDatabase(cleanupCtx, admin, request.Semantic.MilvusAddress, database))
 			}
+			resultErr = errors.Join(resultErr, closeFrozenAdmin(ctx, admin))
 		} else {
 			resultErr = errors.Join(resultErr, closeFrozenAdmin(ctx, admin))
 		}
@@ -225,19 +308,25 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest) (proof 
 	}
 	worker := createWorker()
 	defer func() { resultErr = errors.Join(resultErr, worker.embedded.closeStore(context.WithoutCancel(ctx))) }()
-	if err = worker.runEmbeddedPass(ctx); err != nil {
-		return proof, err
-	}
-	firstOwners, occurrences, err := verifyFrozenPublishedOwners(t, ctx, index, worker)
+	passFile, err := os.OpenFile(logPath+".passes.jsonl", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return proof, err
 	}
-	first, err := readFrozenPassProof(logPath)
+	defer func() { resultErr = errors.Join(resultErr, passFile.Close()) }()
+	initial, err := runFrozenCompletion(ctx, worker, expected, logPath, passFile, nil, frozenCatalogVersions{})
 	if err != nil {
 		return proof, err
 	}
-	if first.FailedOperations != 0 {
-		return proof, errors.New("first pass contains failed observed operation")
+	firstOwners, occurrences, err := verifyFrozenPublishedOwners(t, ctx, index, worker, expected)
+	if err != nil {
+		return proof, err
+	}
+	var rejectedOwner string
+	if verifyUnexpectedOwner {
+		rejectedOwner, err = verifyFrozenUnexpectedOwner(ctx, worker.embedded.store.library, worker.embedded.store.namespace.ID, expected)
+		if err != nil {
+			return proof, err
+		}
 	}
 	catalog := openLiveReadOnly(t, request.Semantic.CatalogPath)
 	defer catalog.Close()
@@ -254,10 +343,11 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest) (proof 
 		return proof, err
 	}
 	worker = createWorker()
-	if err = worker.runEmbeddedPass(ctx); err != nil {
+	restarted, err := runFrozenCompletion(ctx, worker, expected, logPath, passFile, observer, beforeRestart)
+	if err != nil {
 		return proof, err
 	}
-	restartedOwners, restartedOccurrences, err := verifyFrozenPublishedOwners(t, ctx, index, worker)
+	restartedOwners, restartedOccurrences, err := verifyFrozenPublishedOwners(t, ctx, index, worker, expected)
 	if err != nil {
 		return proof, err
 	}
@@ -271,21 +361,276 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest) (proof 
 	if beforeRestart != afterRestart {
 		return proof, fmt.Errorf("unchanged restart committed catalog changes: before=%+v after=%+v", beforeRestart, afterRestart)
 	}
-	restart, err := readFrozenPassProof(logPath)
-	if err != nil {
-		return proof, err
+	proof = frozenCorpusProof{InitialPasses: initial, RestartPasses: restarted, Complete: true, Database: database, Records: len(index.records), AdmittedOwners: len(firstOwners), Occurrences: occurrences, First: initial[0].Pass, Restart: restarted[0].Pass, CatalogBeforeRestart: beforeRestart, CatalogAfterRestart: afterRestart, Retained: request.RetainOnSuccess, PublicCLIContextMappingVerified: false}
+	proof.RejectedUnexpectedOwner = rejectedOwner
+	for owner := range expected {
+		proof.ExpectedOwnerIDs = append(proof.ExpectedOwnerIDs, owner)
 	}
-	if restart.RunID == first.RunID || restart.EmbeddingAttempts != 0 || restart.RequestedInputs != 0 || restart.VectorCalls != 0 || restart.Stages != 0 || restart.FailedOperations != 0 {
-		return proof, fmt.Errorf("unchanged restarted pass performed operations: %+v", restart)
-	}
-	proof = frozenCorpusProof{Complete: true, Database: database, Records: len(index.records), AdmittedOwners: len(firstOwners), Occurrences: occurrences, First: first, Restart: restart, CatalogBeforeRestart: beforeRestart, CatalogAfterRestart: afterRestart, Retained: request.RetainOnSuccess, PublicCLIContextMappingVerified: false}
+	slices.Sort(proof.ExpectedOwnerIDs)
 	return proof, nil
+}
+
+func verifyFrozenUnexpectedOwner(ctx context.Context, catalog *library.Library, namespace string, expected map[string]frozenExpectedOwner) (string, error) {
+	owners := make([]string, 0, len(expected))
+	for owner := range expected {
+		owners = append(owners, owner)
+	}
+	slices.Sort(owners)
+	if len(owners) != 4 {
+		return "", errors.New("unexpected-owner regression requires four committed owners")
+	}
+	rejected := owners[0]
+	subset := make(map[string]frozenExpectedOwner, len(expected)-1)
+	for owner, source := range expected {
+		if owner != rejected {
+			subset[owner] = source
+		}
+	}
+	inventory, err := readFrozenNamespaceInventory(ctx, catalog, namespace, subset, true)
+	if err == nil || err.Error() != "actual frozen namespace has unexpected committed owner "+rejected {
+		return "", fmt.Errorf("expected exact unexpected owner %s rejection, got %v", rejected, err)
+	}
+	if inventory.Owners != 4 || inventory.Occurrences != 4 {
+		return "", fmt.Errorf("unexpected-owner regression changed actual inventory: %+v", inventory)
+	}
+	return rejected, nil
 }
 
 func readFrozenCatalogVersions(ctx context.Context, connection *sql.Conn) (frozenCatalogVersions, error) {
 	var versions frozenCatalogVersions
 	err := connection.QueryRowContext(ctx, frozenCatalogVersionsQuery).Scan(&versions.Data, &versions.Schema)
 	return versions, err
+}
+
+func preflightFrozenOwners(ctx context.Context, index *frozenCorpusIndex) (map[string]frozenExpectedOwner, error) {
+	kinds, err := SemanticContentKinds(index.request.Semantic)
+	if err != nil {
+		return nil, fmt.Errorf("resolve frozen preflight content: %w", err)
+	}
+	expected := make(map[string]frozenExpectedOwner)
+	total := 0
+	for _, source := range index.records {
+		if err = ctx.Err(); err != nil {
+			return nil, fmt.Errorf("project frozen preflight: %w", err)
+		}
+		admission, admissionErr := ProjectEmbeddedConversationOccurrences(ctx, index.request.Semantic, source.Record, nil, true)
+		if admissionErr != nil {
+			return nil, fmt.Errorf("admit frozen owner %s: %w", source.Record.ID, admissionErr)
+		}
+		if !admission.Admitted {
+			continue
+		}
+		messages, loadErr := index.LoadMessagesWithOptions(source.Record, SemanticConversationLoadOptions(kinds))
+		if loadErr != nil {
+			return nil, fmt.Errorf("load frozen owner %s: %w", source.Record.ID, loadErr)
+		}
+		projected, projectionErr := ProjectEmbeddedConversationOccurrences(ctx, index.request.Semantic, source.Record, messages, true)
+		if projectionErr != nil {
+			return nil, fmt.Errorf("project frozen owner %s: %w", source.Record.ID, projectionErr)
+		}
+		if projected.WithheldOpenFields != 0 || len(projected.Occurrences) == 0 {
+			return nil, fmt.Errorf("frozen owner %s is empty or has withheld fields", source.Record.ID)
+		}
+		seal, sealErr := library.SealRows(projected.Occurrences)
+		if sealErr != nil {
+			return nil, fmt.Errorf("seal frozen owner %s: %w", source.Record.ID, sealErr)
+		}
+		expected[source.Record.ID] = frozenExpectedOwner{Source: source, Seal: seal}
+		total += len(projected.Occurrences)
+	}
+	if len(expected) != index.request.ExpectedOwners || total != index.request.ExpectedOccurrences {
+		return nil, fmt.Errorf("frozen preflight counts owners=%d occurrences=%d differ from required owners=%d occurrences=%d", len(expected), total, index.request.ExpectedOwners, index.request.ExpectedOccurrences)
+	}
+	return expected, nil
+}
+
+func runFrozenCompletion(ctx context.Context, worker *conversationSemanticSyncWorker, expected map[string]frozenExpectedOwner, logPath string, evidence *os.File, observer *sql.Conn, versions frozenCatalogVersions) ([]frozenSweepProof, error) {
+	var passes []frozenSweepProof
+	started := time.Now()
+	priorOwners, priorRows, priorSources := 0, 0, 0
+	priorRun := ""
+	completedOwners := make(map[string][32]byte)
+	for attempt := 0; attempt <= len(expected); attempt++ {
+		entry := frozenSweepProof{Phase: "initial"}
+		if observer != nil {
+			entry.Phase = "restart"
+		}
+		passErr := worker.runEmbeddedPass(ctx)
+		entry.Pass, passErr = readFrozenPassResult(logPath, passErr)
+		if passErr == nil && entry.Pass.RunID == priorRun {
+			passErr = errors.New("frozen pass reused an observation RunID")
+		}
+		if passErr == nil {
+			passErr = validateFrozenPass(entry.Pass, observer != nil)
+		}
+		if passErr == nil {
+			passErr = readFrozenCoverage(ctx, worker, expected, completedOwners, &entry)
+		}
+		if passErr == nil && observer != nil {
+			current, versionErr := readFrozenCatalogVersions(ctx, observer)
+			entry.CatalogVersions = &current
+			passErr = versionErr
+			if passErr == nil && current != versions {
+				passErr = fmt.Errorf("unchanged restart changed catalog versions: before=%+v after=%+v", versions, current)
+			}
+		}
+		entry.ElapsedMilliseconds = time.Since(started).Milliseconds()
+		complete := len(entry.Missing) == 0 && entry.PublishedOwners == len(expected)
+		if observer != nil {
+			complete = complete && entry.ProvenSources == len(expected)
+		}
+		if passErr == nil && !complete {
+			progress := entry.PublishedOwners > priorOwners || entry.PublishedOccurrences > priorRows
+			if observer != nil {
+				progress = entry.ProvenSources > priorSources
+			}
+			if !progress {
+				passErr = errors.New("bounded frozen pass made no committed coverage or source-proof progress")
+			}
+		}
+		if passErr == nil && complete {
+			passErr = requireFrozenOutboxComplete(ctx, worker)
+		}
+		if passErr != nil {
+			entry.Error = passErr.Error()
+		}
+		if err := json.NewEncoder(evidence).Encode(entry); err != nil {
+			return passes, errors.Join(passErr, fmt.Errorf("write frozen pass evidence: %w", err))
+		}
+		if err := evidence.Sync(); err != nil {
+			return passes, errors.Join(passErr, fmt.Errorf("sync frozen pass evidence: %w", err))
+		}
+		passes = append(passes, entry)
+		if passErr != nil {
+			return passes, fmt.Errorf("frozen %s pass %d: %w", entry.Phase, attempt+1, passErr)
+		}
+		if complete {
+			return passes, nil
+		}
+		priorOwners, priorRows, priorSources = entry.PublishedOwners, entry.PublishedOccurrences, entry.ProvenSources
+		priorRun = entry.Pass.RunID
+	}
+	return passes, errors.New("frozen completion exceeded the bounded pass count")
+}
+
+func readFrozenPassResult(path string, passErr error) (frozenCorpusPassProof, error) {
+	proof, readErr := readFrozenPassProof(path)
+	return proof, errors.Join(passErr, readErr)
+}
+
+func validateFrozenPass(pass frozenCorpusPassProof, restart bool) error {
+	summary := pass.Summary
+	if pass.FailedOperations != 0 || summary.SourceFailed != 0 || summary.Suppressed != 0 || summary.ProjectionFailed != 0 || summary.DeliveryFailed != 0 || summary.MetadataFailed != 0 || summary.ReconcileFailed != 0 || summary.Blocked != 0 || summary.Changed != 0 || summary.Withheld != 0 {
+		return fmt.Errorf("frozen pass has observed or reported failures: %+v", pass)
+	}
+	if restart && (pass.EmbeddingAttempts != 0 || pass.RequestedInputs != 0 || pass.VectorCalls != 0 || pass.Stages != 0) {
+		return fmt.Errorf("unchanged restarted pass performed model or write operations: %+v", pass)
+	}
+	return nil
+}
+
+func readFrozenCoverage(ctx context.Context, worker *conversationSemanticSyncWorker, expected map[string]frozenExpectedOwner, completed map[string][32]byte, entry *frozenSweepProof) error {
+	inventory, err := readFrozenNamespaceInventory(ctx, worker.embedded.store.library, worker.embedded.store.namespace.ID, expected, false)
+	entry.Namespace = inventory
+	if err != nil {
+		return err
+	}
+	for owner, expectation := range expected {
+		published, err := worker.embedded.store.library.ListOwnerOccurrences(ctx, worker.embedded.store.namespace.ID, owner)
+		if err != nil {
+			return fmt.Errorf("read frozen coverage of %s: %w", owner, err)
+		}
+		if uint64(len(published.Rows)) > expectation.Seal.RowCount {
+			return fmt.Errorf("frozen owner %s has unexpected extra rows", owner)
+		}
+		entry.PublishedOccurrences += len(published.Rows)
+		if uint64(len(published.Rows)) == expectation.Seal.RowCount && published.State.GenerationOrder > 0 {
+			encoded, encodeErr := json.Marshal(published)
+			if encodeErr != nil {
+				return fmt.Errorf("seal frozen public snapshot %s: %w", owner, encodeErr)
+			}
+			digest := sha256.Sum256(encoded)
+			if prior, found := completed[owner]; found && prior != digest {
+				return fmt.Errorf("completed frozen owner %s changed generation or rows", owner)
+			}
+			completed[owner] = digest
+			entry.PublishedOwners++
+		} else {
+			if _, found := completed[owner]; found {
+				return fmt.Errorf("completed frozen owner %s lost published rows", owner)
+			}
+			entry.Missing = append(entry.Missing, owner)
+		}
+		if source, found := worker.embedded.processedSources[owner]; found {
+			if !reflect.DeepEqual(source, expectation.Source) {
+				return fmt.Errorf("processed source identity changed for frozen owner %s", owner)
+			}
+			entry.ProvenSources++
+		} else {
+			entry.UnprovenSources = append(entry.UnprovenSources, owner)
+		}
+	}
+	slices.Sort(entry.Missing)
+	slices.Sort(entry.UnprovenSources)
+	if int64(entry.PublishedOccurrences) != inventory.Occurrences {
+		return errors.New("expected-owner row reads differ from actual namespace occurrence count")
+	}
+	return nil
+}
+
+func readFrozenNamespaceInventory(ctx context.Context, catalog *library.Library, namespace string, expected map[string]frozenExpectedOwner, complete bool) (frozenNamespaceInventory, error) {
+	var inventory frozenNamespaceInventory
+	stats, err := catalog.NamespaceStats(ctx, namespace)
+	if err != nil {
+		return inventory, fmt.Errorf("count actual frozen namespace: %w", err)
+	}
+	inventory.Owners, inventory.Occurrences = stats.Owners, stats.Occurrences
+	inventory.OwnerIDs, err = catalog.ListOwners(ctx, namespace)
+	if err != nil {
+		return inventory, fmt.Errorf("enumerate actual frozen namespace owners: %w", err)
+	}
+	if inventory.Owners != int64(len(inventory.OwnerIDs)) {
+		return inventory, errors.New("actual namespace owner enumeration differs from its catalog count")
+	}
+	for _, owner := range inventory.OwnerIDs {
+		if _, found := expected[owner]; !found {
+			return inventory, fmt.Errorf("actual frozen namespace has unexpected committed owner %s", owner)
+		}
+	}
+	if !complete {
+		return inventory, nil
+	}
+	wanted := make([]string, 0, len(expected))
+	var occurrences uint64
+	for owner, expectation := range expected {
+		wanted = append(wanted, owner)
+		occurrences += expectation.Seal.RowCount
+	}
+	slices.Sort(wanted)
+	if !slices.Equal(inventory.OwnerIDs, wanted) || inventory.Occurrences < 0 || uint64(inventory.Occurrences) != occurrences {
+		return inventory, fmt.Errorf("actual frozen namespace is incomplete: owners=%d occurrences=%d", inventory.Owners, inventory.Occurrences)
+	}
+	return inventory, nil
+}
+
+func requireFrozenOutboxComplete(ctx context.Context, worker *conversationSemanticSyncWorker) error {
+	outbox := worker.embedded.store.outbox
+	batches, err := outbox.pendingBatches(ctx)
+	if err != nil {
+		return fmt.Errorf("read pending frozen batches: %w", err)
+	}
+	projections, err := outbox.pendingProjections(ctx)
+	if err != nil {
+		return fmt.Errorf("read pending frozen projections: %w", err)
+	}
+	blocked, err := outbox.blockedOwners(ctx, worker.embedded.store.namespace.ID)
+	if err != nil {
+		return fmt.Errorf("read blocked frozen owners: %w", err)
+	}
+	if len(batches)+len(projections)+len(blocked) != 0 {
+		return errors.New("frozen coverage retains pending or blocked outbox work")
+	}
+	return nil
 }
 
 func TestFrozenCatalogVersionObserverDetectsCommittedWrites(t *testing.T) {
@@ -375,7 +720,11 @@ func validateFrozenRuntime(request frozenCorpusRequest) error {
 		}
 	}
 	semantic := request.Semantic
-	if semantic.MilvusAddress != liveMilvusAddress || semantic.EmbeddingBaseURL != liveEmbeddingBaseURL || !strings.HasPrefix(semantic.MilvusDatabase, "clyde_frozen_") || semantic.MilvusCollection == "" || semantic.CollectionID == "" || semantic.PoolID == "" {
+	address, err := frozenCorpusMilvusAddress()
+	if err != nil {
+		return err
+	}
+	if semantic.MilvusAddress != address || semantic.EmbeddingBaseURL != liveEmbeddingBaseURL || !strings.HasPrefix(semantic.MilvusDatabase, "clyde_frozen_") || semantic.MilvusCollection == "" || semantic.CollectionID == "" || semantic.PoolID == "" {
 		return errors.New("driver requires explicit fresh clyde_frozen_ database and approved isolated Mac endpoints")
 	}
 	if _, err := os.Lstat(conversationSemanticOutboxPath(semantic.PoolID)); !errors.Is(err, os.ErrNotExist) {
@@ -384,13 +733,58 @@ func validateFrozenRuntime(request frozenCorpusRequest) error {
 	return nil
 }
 
+func frozenCorpusMilvusAddress() (string, error) {
+	address := os.Getenv(frozenCorpusMilvusAddressEnv)
+	if address == "" {
+		address = liveMilvusAddress
+	}
+	if address != "localhost:39530" && address != "localhost:39630" {
+		return "", errors.New("frozen Milvus address must be localhost:39530 or localhost:39630")
+	}
+	return address, nil
+}
+
 func closeFrozenAdmin(ctx context.Context, admin *milvusclient.Client) error {
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	return admin.Close(closeCtx)
 }
 
-func verifyFrozenPublishedOwners(t *testing.T, ctx context.Context, index *frozenCorpusIndex, worker *conversationSemanticSyncWorker) (map[string]library.OwnerOccurrences, int, error) {
+func dropFrozenDatabase(ctx context.Context, admin *milvusclient.Client, address, database string) (resultErr error) {
+	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: database})
+	if err != nil {
+		return fmt.Errorf("connect to frozen database %s at %s for cleanup: %w", database, address, err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, closeFrozenAdmin(ctx, client)) }()
+	collections, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
+	if err != nil {
+		return fmt.Errorf("list frozen database %s collections for cleanup: %w", database, err)
+	}
+	for _, collection := range collections {
+		if err = client.DropCollection(ctx, milvusclient.NewDropCollectionOption(collection)); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("drop frozen collection %s in %s: %w", collection, database, err))
+		}
+	}
+	if resultErr != nil {
+		return resultErr
+	}
+	if err = admin.DropDatabase(ctx, milvusclient.NewDropDatabaseOption(database)); err != nil {
+		return fmt.Errorf("drop frozen database %s: %w", database, err)
+	}
+	remaining, err := admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
+	if err != nil {
+		return fmt.Errorf("verify frozen database %s deletion: %w", database, err)
+	}
+	if slices.Contains(remaining, database) {
+		return fmt.Errorf("frozen database %s remains after cleanup", database)
+	}
+	return nil
+}
+
+func verifyFrozenPublishedOwners(t *testing.T, ctx context.Context, index *frozenCorpusIndex, worker *conversationSemanticSyncWorker, expectedOwners map[string]frozenExpectedOwner) (map[string]library.OwnerOccurrences, int, error) {
+	if _, err := readFrozenNamespaceInventory(ctx, worker.embedded.store.library, worker.embedded.store.namespace.ID, expectedOwners, true); err != nil {
+		return nil, 0, err
+	}
 	database := openLiveReadOnly(t, index.request.Semantic.CatalogPath)
 	defer database.Close()
 	vectors, err := librarymilvus.New(worker.embedded.store.milvusClient, librarymilvus.Config{Database: index.request.Semantic.MilvusDatabase, Collection: index.request.Semantic.MilvusCollection})
@@ -435,6 +829,14 @@ func verifyFrozenPublishedOwners(t *testing.T, ctx context.Context, index *froze
 		}
 		if projected.WithheldOpenFields != 0 {
 			return nil, 0, fmt.Errorf("frozen source has withheld open fields: %s", record.ID)
+		}
+		seal, sealErr := library.SealRows(projected.Occurrences)
+		if sealErr != nil {
+			return nil, 0, sealErr
+		}
+		expectation, found := expectedOwners[record.ID]
+		if !found || expectation.Seal != seal {
+			return nil, 0, fmt.Errorf("source seal changed since preflight for owner %s", record.ID)
 		}
 		published, err := worker.embedded.store.library.ListOwnerOccurrences(ctx, worker.embedded.store.namespace.ID, record.ID)
 		if err != nil {
@@ -618,6 +1020,9 @@ func readFrozenPassProof(path string) (frozenCorpusPassProof, error) {
 		}
 		if event.Message == "daemon.conversation_semantic_sync.pass_completed" {
 			proof.Completed = true
+			if err = json.Unmarshal(scanner.Bytes(), &proof.Summary); err != nil {
+				return proof, err
+			}
 		}
 		if event.Message != "daemon.conversation_semantic_embedded.operation_completed" {
 			continue

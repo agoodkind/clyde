@@ -35,17 +35,20 @@ type frozenCorpusModel struct {
 }
 
 type frozenCorpusRequest struct {
-	SnapshotRoot    string                            `json:"snapshot_root"`
-	ReadRoot        string                            `json:"read_root"`
-	OriginalHome    string                            `json:"original_home"`
-	ManifestPath    string                            `json:"manifest_path"`
-	ManifestDigest  string                            `json:"manifest_sha256"`
-	IndexDigest     string                            `json:"index_sha256"`
-	RuntimeRoot     string                            `json:"runtime_root"`
-	OutputPath      string                            `json:"output_path"`
-	Semantic        config.ConversationSemanticConfig `json:"semantic"`
-	Model           frozenCorpusModel                 `json:"model"`
-	RetainOnSuccess bool                              `json:"retain_on_success"`
+	ExpectedOwners           int                               `json:"expected_eligible_owners"`
+	ExpectedOccurrences      int                               `json:"expected_occurrences"`
+	CompletionTimeoutSeconds int                               `json:"completion_timeout_seconds"`
+	SnapshotRoot             string                            `json:"snapshot_root"`
+	ReadRoot                 string                            `json:"read_root"`
+	OriginalHome             string                            `json:"original_home"`
+	ManifestPath             string                            `json:"manifest_path"`
+	ManifestDigest           string                            `json:"manifest_sha256"`
+	IndexDigest              string                            `json:"index_sha256"`
+	RuntimeRoot              string                            `json:"runtime_root"`
+	OutputPath               string                            `json:"output_path"`
+	Semantic                 config.ConversationSemanticConfig `json:"semantic"`
+	Model                    frozenCorpusModel                 `json:"model"`
+	RetainOnSuccess          bool                              `json:"retain_on_success"`
 }
 
 type frozenCorpusCache struct {
@@ -292,6 +295,36 @@ func TestFrozenCorpusSourceRejectsRepeatedOwner(t *testing.T) {
 
 func createFrozenCorpusFixture(t *testing.T) frozenCorpusRequest {
 	t.Helper()
+	return createFrozenCorpusFixtureWithPadding(t, 0)
+}
+
+func TestFrozenCorpusPaddedSourcePreflight(t *testing.T) {
+	request := createFrozenCorpusFixtureWithPadding(t, conversationSemanticBatchBytes)
+	index, err := openFrozenCorpusIndex(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := preflightFrozenOwners(t.Context(), index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversized := 0
+	for _, owner := range expected {
+		if owner.Seal.RowCount != 1 {
+			t.Fatalf("padded source changed original occurrence count: %+v", owner.Seal)
+		}
+		if owner.Source.Stamp.Size > conversationSemanticBatchBytes {
+			oversized++
+		}
+	}
+	if len(expected) != 4 || oversized != 1 {
+		t.Fatalf("padded source inventory owners=%d oversized=%d, want 4 and 1", len(expected), oversized)
+	}
+	t.Log("actual padded source preserves four original owners and occurrences; one physical source exceeds the unchanged production pass budget")
+}
+
+func createFrozenCorpusFixtureWithPadding(t *testing.T, padding int) frozenCorpusRequest {
+	t.Helper()
 	root := t.TempDir()
 	original := filepath.Join(t.TempDir(), "original")
 	files := []string{"home/.claude/projects/subagents/agent.jsonl", "home/.codex/archived_sessions/rollout.jsonl", "home/.copilot/session-state/frozen/events.jsonl"}
@@ -301,6 +334,7 @@ func createFrozenCorpusFixture(t *testing.T) frozenCorpusRequest {
 		`{"id":"1","timestamp":"2026-09-28T07:00:00Z","type":"session.start","data":{"sessionId":"frozen","version":1,"context":{"cwd":"/source"}}}` + "\n" + `{"id":"2","timestamp":"2026-09-28T07:00:01Z","type":"user.message","data":{"content":"frozen root source"}}` + "\n" + `{"id":"3","timestamp":"2026-09-28T07:00:02Z","agentId":"agent-1","type":"subagent.started","data":{"agentDisplayName":"Researcher","toolCallId":"call-agent"}}` + "\n" + `{"id":"4","timestamp":"2026-09-28T07:00:03Z","agentId":"agent-1","type":"user.message","data":{"content":"frozen selected source","source":"agent-agent-1"}}` + "\n",
 	}
 	bindFrozenFixture(t, root)
+	texts[0] += strings.Repeat("\n", padding)
 	parsers := []conversation.Parser{claudeparser.New(), codexparser.New(), copilotparser.New()}
 	cache := frozenCorpusCache{Version: 5, Stamps: make(map[string]conversation.FileStamp)}
 	for position, relative := range files {
@@ -369,7 +403,7 @@ func createFrozenCorpusFixture(t *testing.T) frozenCorpusRequest {
 	semantic.EmbeddingRevision = "frozen-fixture"
 	semantic.VectorDimension = liveEmbeddingDimension
 	semantic.Normalization = "l2"
-	return frozenCorpusRequest{SnapshotRoot: root, ReadRoot: root, OriginalHome: original, ManifestPath: manifestPath, ManifestDigest: hex.EncodeToString(manifestHash[:]), IndexDigest: hex.EncodeToString(indexHash[:]), Semantic: semantic, Model: frozenCorpusModel{Name: semantic.EmbeddingModel, Revision: semantic.EmbeddingRevision, Dimension: semantic.VectorDimension, Normalization: semantic.Normalization}}
+	return frozenCorpusRequest{ExpectedOwners: 4, ExpectedOccurrences: 4, CompletionTimeoutSeconds: 180, SnapshotRoot: root, ReadRoot: root, OriginalHome: original, ManifestPath: manifestPath, ManifestDigest: hex.EncodeToString(manifestHash[:]), IndexDigest: hex.EncodeToString(indexHash[:]), Semantic: semantic, Model: frozenCorpusModel{Name: semantic.EmbeddingModel, Revision: semantic.EmbeddingRevision, Dimension: semantic.VectorDimension, Normalization: semantic.Normalization}}
 }
 
 func bindFrozenFixture(t *testing.T, root string) {
