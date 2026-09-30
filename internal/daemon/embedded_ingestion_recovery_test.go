@@ -7,8 +7,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,7 +30,7 @@ const (
 	liveEmbeddingModel       = "nvidia/NV-EmbedCode-7b-v1"
 	liveEmbeddingDimension   = 4096
 	liveEmbeddingAPIKeyEnv   = "OPENAI_API_KEY"
-	liveMilvusAddress        = "localhost:19530"
+	liveMilvusAddress        = "localhost:39530"
 	liveMilvusDatabasePrefix = "clyde_live_"
 	liveCollectionID         = "clyde-conversations"
 	liveOwnerID              = "codex:" + embeddedProjectionCodexThreadID
@@ -45,9 +47,7 @@ const (
 // CommitGeneration and before the outbox acknowledgment, appended messages,
 // and source loss.
 func TestEmbeddedIngestionRecovery(t *testing.T) {
-	if strings.TrimSpace(os.Getenv(liveEmbeddingAPIKeyEnv)) == "" {
-		t.Fatalf("environment variable %s is required for the embedding endpoint", liveEmbeddingAPIKeyEnv)
-	}
+	requireLiveLocalEmbeddingModel(t)
 	t.Logf("embedding window start %s", time.Now().UTC().Format(time.RFC3339))
 	t.Cleanup(func() {
 		t.Logf("embedding window end %s", time.Now().UTC().Format(time.RFC3339))
@@ -248,9 +248,10 @@ type liveScenario struct {
 func newLiveScenario(t *testing.T, database string, storeRoot string, name string, index *conversation.Index) *liveScenario {
 	t.Helper()
 	semantic := config.ConversationSemanticConfig{
-		IngestionEnabled: true,
-		CollectionID:     liveCollectionID,
-		Backend:          config.ConversationSemanticBackendEmbedded,
+		IngestionEnabled:  true,
+		ProjectionProfile: config.ConversationProjectionProfileSourceSpan,
+		CollectionID:      liveCollectionID,
+		Backend:           config.ConversationSemanticBackendEmbedded,
 		// The pass after outbox loss and archiving admits the archived
 		// conversation and reads its transcript. Without reconciliation it
 		// resends every committed row with archived true.
@@ -262,7 +263,7 @@ func newLiveScenario(t *testing.T, database string, storeRoot string, name strin
 		MilvusDatabase:          database,
 		MilvusCollection:        "vectors_" + strings.ReplaceAll(name, "-", "_"),
 		EmbeddingBaseURL:        liveEmbeddingBaseURL,
-		EmbeddingAPIKeyEnv:      liveEmbeddingAPIKeyEnv,
+		EmbeddingAPIKeyEnv:      "",
 		EmbeddingModel:          liveEmbeddingModel,
 		EmbeddingRevision:       "live-test",
 		VectorDimension:         liveEmbeddingDimension,
@@ -272,6 +273,38 @@ func newLiveScenario(t *testing.T, database string, storeRoot string, name strin
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), newEmbeddedSemanticStatus(), index)
 	return &liveScenario{semantic: semantic, worker: worker}
+}
+
+func requireLiveLocalEmbeddingModel(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, liveEmbeddingBaseURL+"/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("local embedding model prerequisite: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("local models endpoint returned %s", response.Status)
+	}
+	var models struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&models); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range models.Data {
+		if model.ID == liveEmbeddingModel {
+			return
+		}
+	}
+	t.Fatalf("local endpoint does not advertise %s", liveEmbeddingModel)
 }
 
 func (scenario *liveScenario) runPass(t *testing.T) liveSnapshot {

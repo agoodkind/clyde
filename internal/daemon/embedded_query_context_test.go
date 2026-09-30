@@ -22,6 +22,9 @@ func TestEmbeddedQueryContextBoundary(t *testing.T) {
 	index := newEmbeddedProjectionIndex()
 	refreshLiveIndex(t, index)
 	store, semantic := openEmbeddedQueryTestStore(t)
+	if err := store.outbox.releaseLock(); err != nil {
+		t.Fatal(err)
+	}
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 	worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
 	worker.embedded.store = store
@@ -132,6 +135,9 @@ func TestEmbeddedOriginalSourceIdentity(t *testing.T) {
 			index := newEmbeddedProjectionIndex()
 			refreshLiveIndex(t, index)
 			store, semantic := openEmbeddedQueryTestStore(t)
+			if err := store.outbox.releaseLock(); err != nil {
+				t.Fatal(err)
+			}
 			worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 			worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
 			worker.embedded.store = store

@@ -36,8 +36,10 @@ func TestEmbeddedQueryBoundary(t *testing.T) {
 		embeddedQueryTestOwner("codex:a-subagent", "/test/project", false, true),
 		embeddedQueryTestOwner("codex:a-sibling", "/test/project-sibling", false, false),
 		embeddedQueryTestOwner("codex:a-old-profile", "/test/project", false, false),
+		embeddedQueryTestOwner("codex:a-p2-profile", "/test/project", false, false),
 	}
-	owners[len(owners)-1].ProjectionProfile = "p1|" + owners[len(owners)-1].LoadRules
+	owners[len(owners)-2].ProjectionProfile = "p1|" + owners[len(owners)-2].LoadRules
+	owners[len(owners)-1].ProjectionProfile = "p2|" + owners[len(owners)-1].LoadRules
 	for _, owner := range owners {
 		publishEmbeddedQueryTestOwner(t, store.library, semantic.CollectionID, owner)
 	}
@@ -120,16 +122,36 @@ func TestEmbeddedQueryBoundary(t *testing.T) {
 	if count := countLiveMilvusVectors(t, semantic); count != 1 {
 		t.Fatalf("canonical vector count = %d, want one for repeated content", count)
 	}
-	legacySemantic := semantic
-	legacySemantic.ProjectionProfile = config.ConversationProjectionProfileLegacy
-	legacy := &embeddedConversationSearchSource{library: store.library, semantic: legacySemantic}
-	legacyPage, err := legacy.SearchConversations(t.Context(), conversation.SearchConversationsOptions{Query: "embedded query boundary", Limit: 10})
-	if err != nil || len(legacyPage.Matches) != 3 {
-		t.Fatalf("explicit p1 search = %+v, %v, want three retained legacy occurrences", legacyPage, err)
+	semantic.IncludeSubagents = true
+	source.semantic = semantic
+	membership, err := source.SearchConversations(t.Context(), conversation.SearchConversationsOptions{Query: "embedded query boundary", Limit: 50, ConversationIDs: []string{"codex:z-root", "codex:z-child"}})
+	if err != nil || len(membership.Matches) != 6 {
+		t.Fatalf("multi-owner membership returned %d, %v", len(membership.Matches), err)
 	}
-	for _, match := range legacyPage.Matches {
-		if match.Record.ID != "codex:a-old-profile" || match.ContextState != conversation.SearchContextStateUnavailable || match.Snippet != "embedded query boundary" {
-			t.Fatalf("legacy excerpt = %+v, want original stored excerpt with unavailable context", match)
+	excluded, err := source.SearchConversations(t.Context(), conversation.SearchConversationsOptions{Query: "embedded query boundary", Limit: 50, ConversationID: "codex:a-subagent"})
+	if err != nil || len(excluded.Matches) != 0 {
+		t.Fatalf("default subagent exclusion returned %d, %v", len(excluded.Matches), err)
+	}
+	included, err := source.SearchConversations(t.Context(), conversation.SearchConversationsOptions{Query: "embedded query boundary", Limit: 50, ConversationID: "codex:a-subagent", IncludeSubagents: true})
+	if err != nil || len(included.Matches) != 3 {
+		t.Fatalf("explicit subagent inclusion returned %d, %v", len(included.Matches), err)
+	}
+	for _, profile := range []config.ConversationProjectionProfile{config.ConversationProjectionProfileLegacy, config.ConversationProjectionProfileOriginal} {
+		legacySemantic := semantic
+		legacySemantic.ProjectionProfile = profile
+		legacy := &embeddedConversationSearchSource{library: store.library, semantic: legacySemantic}
+		legacyPage, err := legacy.SearchConversations(t.Context(), conversation.SearchConversationsOptions{Query: "embedded query boundary", Limit: 10})
+		if err != nil || len(legacyPage.Matches) != 3 {
+			t.Fatalf("explicit %s search = %+v, %v, want three retained occurrences", profile, legacyPage, err)
+		}
+		expectedID := "codex:a-old-profile"
+		if profile == config.ConversationProjectionProfileOriginal {
+			expectedID = "codex:a-p2-profile"
+		}
+		for _, match := range legacyPage.Matches {
+			if match.Record.ID != expectedID || match.ContextState != conversation.SearchContextStateUnavailable || match.SourceIdentity != nil || match.Snippet != "embedded query boundary" {
+				t.Fatalf("legacy excerpt = %+v, want original stored excerpt without source identity", match)
+			}
 		}
 	}
 }

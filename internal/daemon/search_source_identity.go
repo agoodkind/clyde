@@ -26,3 +26,40 @@ func protoSearchSourceIdentity(identity *conversation.SearchSourceIdentity) *cly
 		SourceByteStart: identity.SourceByteStart, SourceByteEnd: identity.SourceByteEnd,
 	}
 }
+
+func protoConversationSelection(ids []string) *clydev1.ConversationSelection {
+	if ids == nil {
+		return nil
+	}
+	return &clydev1.ConversationSelection{Ids: ids}
+}
+
+func conversationSelectionFromProto(selection *clydev1.ConversationSelection) []string {
+	if selection == nil {
+		return nil
+	}
+	ids := make([]string, len(selection.GetIds()))
+	copy(ids, selection.GetIds())
+	return ids
+}
+
+func protoSearchConversationsRequest(options conversation.SearchConversationsOptions) *clydev1.SearchConversationsRequest {
+	return &clydev1.SearchConversationsRequest{
+		Query:                 options.Query,
+		Limit:                 int64(options.Limit),
+		Offset:                int64(options.Offset),
+		Provider:              protoProvider(options.Provider),
+		Workspace:             options.WorkspaceRoot,
+		IncludeArchived:       options.IncludeArchived,
+		Roles:                 options.Roles,
+		FromUnix:              options.FromUnix,
+		UntilUnix:             options.UntilUnix,
+		MinScore:              options.MinScore,
+		PerConversationLimit:  int64(options.PerConversationLimit),
+		ConversationId:        options.ConversationID,
+		ConversationSelection: protoConversationSelection(options.ConversationIDs),
+		IncludeSubagents:      options.IncludeSubagents,
+		ContextWindow:         int64(options.ContextWindow),
+		Cursor:                options.Cursor,
+	}
+}

@@ -25,7 +25,7 @@ func embeddedConversationFilter(semantic config.ConversationSemanticConfig, opti
 	if !semantic.IncludeArchived && !options.IncludeArchived {
 		children = append(children, embeddedEqualFilter(embeddedScalarArchived, embeddedBoolScalar(false)))
 	}
-	if !semantic.IncludeSubagents {
+	if !options.IncludeSubagents {
 		children = append(children, embeddedEqualFilter(embeddedScalarSubagent, embeddedBoolScalar(false)))
 	}
 	if len(semantic.IndexedProviders) > 0 {
@@ -39,6 +39,9 @@ func embeddedConversationFilter(semantic config.ConversationSemanticConfig, opti
 	}
 	if len(options.Roles) > 0 {
 		children = append(children, embeddedStringSetFilter(embeddedScalarRole, options.Roles))
+	}
+	if options.ConversationIDs != nil {
+		children = append(children, embeddedStringSetFilter(embeddedScalarConversationID, options.ConversationIDs))
 	}
 	if options.ConversationID != "" {
 		children = append(children, embeddedStringSetFilter(embeddedScalarConversationID, []string{options.ConversationID}))
@@ -67,8 +70,8 @@ func embeddedConversationFilter(semantic config.ConversationSemanticConfig, opti
 }
 
 func embeddedQueryProjectionProfile(semantic config.ConversationSemanticConfig, loadRules string) string {
-	if semantic.ProjectionProfile == config.ConversationProjectionProfileLegacy {
-		return "p1|" + loadRules
+	if semantic.ProjectionProfile == config.ConversationProjectionProfileLegacy || semantic.ProjectionProfile == config.ConversationProjectionProfileOriginal {
+		return string(semantic.ProjectionProfile) + "|" + loadRules
 	}
 	return searchbackend.ProjectionProfile(loadRules)
 }

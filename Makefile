@@ -149,6 +149,10 @@ EMBEDDED_SEARCH_PACKAGES := goodkind.io/gksyntax/shelldecomp
 embedded-search-bootstrap: | $(GO_MK_PREREQS) ## Compile the embedded search native imports in the pinned workspace
 	CGO_ENABLED=1 go build $(EMBEDDED_SEARCH_PACKAGES)
 
+.PHONY: embedded-search-live
+embedded-search-live: embedded-search-bootstrap ## Verify embedded conversation boundaries with isolated dependencies
+	bash scripts/embedded-search-live.sh
+
 # ---------------------------------------------------------------------------
 # Protobuf / gRPC codegen. Sources live under api/**/*.proto; config is
 # buf.yaml + buf.gen.yaml (remote plugins, so only the buf binary is needed).

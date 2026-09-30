@@ -34,6 +34,9 @@ func (source *embeddedConversationSearchSource) SearchConversations(ctx context.
 	if source == nil {
 		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
 	}
+	if options.ConversationIDs != nil && len(options.ConversationIDs) == 0 {
+		return embeddedSearchResult(nil, normalizedSearchLimit(options.Limit), normalizedPagingOffset(options.Offset), library.SearchPage{}), nil
+	}
 	if source.gate != nil {
 		return source.gate.search(ctx, source.semantic, options, source.index)
 	}

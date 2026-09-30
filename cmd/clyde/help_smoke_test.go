@@ -64,7 +64,7 @@ func TestSearchLeafHelpListsFlags(t *testing.T) {
 			t.Errorf("conversation search help missing flag %q:\n%s", name, out)
 		}
 	}
-	if strings.Contains(out, "--conversation") {
+	if strings.Contains(out, "--conversation ") {
 		t.Errorf("conversation search help still exposes --conversation:\n%s", out)
 	}
 	for _, want := range []string{

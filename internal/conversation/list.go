@@ -45,12 +45,15 @@ type ListResult struct {
 
 // SearchConversationsOptions filters a bounded transcript discovery pass.
 type SearchConversationsOptions struct {
-	Query           string
-	Limit           int
-	Offset          int
-	Provider        Provider
-	WorkspaceRoot   string
-	IncludeArchived bool
+	Query            string
+	Limit            int
+	Offset           int
+	Provider         Provider
+	WorkspaceRoot    string
+	IncludeArchived  bool
+	IncludeSubagents bool
+	// ConversationIDs distinguishes an absent membership filter from an explicit empty set.
+	ConversationIDs []string
 	// Roles, FromUnix, UntilUnix, and MinScore narrow retrieval by row
 	// attributes. PerConversationLimit caps hits per conversation.
 	Roles                []string
