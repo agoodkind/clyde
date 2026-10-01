@@ -9,6 +9,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/conversation/searchbackend"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -49,13 +50,23 @@ func ProjectEmbeddedConversationOccurrences(ctx context.Context, semantic config
 		return result, err
 	}
 	result.WithheldOpenFields = projected.WithheldOpenFields
-	owner := newEmbeddedConversationOwner(record, kinds)
-	for _, field := range admission.admittedFields(projected.Fields) {
-		occurrences, err := embeddedFieldOccurrences(ctx, owner, field)
-		if err != nil {
-			return result, err
+	result.Occurrences, err = prepareEmbeddedSourceOccurrences(ctx, admission, record, kinds, projected.Fields)
+	return result, err
+}
+
+func prepareEmbeddedSourceOccurrences(ctx context.Context, admission *embeddedConversationSync, record conversation.Record, kinds conversation.ContentKindSet, fields []searchbackend.Field) (occurrences []library.Occurrence, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			slog.WarnContext(ctx, "prepare source occurrences failed", "conversation_id", record.ID, "err", resultErr)
 		}
-		result.Occurrences = append(result.Occurrences, occurrences...)
+	}()
+	owner := newEmbeddedConversationOwner(record, kinds)
+	for _, field := range admission.admittedFields(fields) {
+		parts, err := embeddedFieldOccurrences(ctx, owner, field)
+		if err != nil {
+			return nil, err
+		}
+		occurrences = append(occurrences, parts...)
 	}
-	return result, nil
+	return occurrences, nil
 }

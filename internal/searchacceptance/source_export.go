@@ -19,6 +19,7 @@ import (
 	copilotparser "goodkind.io/clyde/internal/providers/copilot/parser"
 	cursorparser "goodkind.io/clyde/internal/providers/cursor/parser"
 	zedparser "goodkind.io/clyde/internal/providers/zed/parser"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 // FrozenSourceRequest binds source export to an already verified snapshot.
@@ -36,17 +37,19 @@ type FrozenSourceRequest struct {
 
 // FrozenSourceSummary marks a stream complete only after every record succeeds.
 type FrozenSourceSummary struct {
-	Type               string `json:"type"`
-	Complete           bool   `json:"complete"`
-	Records            int    `json:"records"`
-	AdmittedRecords    int    `json:"admitted_records"`
-	ExcludedRecords    int    `json:"excluded_records"`
-	EmptyRecords       int    `json:"empty_records"`
-	WithheldRecords    int    `json:"withheld_records"`
-	WithheldOpenFields int    `json:"withheld_open_fields"`
-	Occurrences        int64  `json:"occurrences"`
-	FailedRecordID     string `json:"failed_record_id,omitempty"`
-	Error              string `json:"error,omitempty"`
+	Type               string                             `json:"type"`
+	Complete           bool                               `json:"complete"`
+	Records            int                                `json:"records"`
+	Owners             int                                `json:"owners"`
+	AdmittedRecords    int                                `json:"admitted_records"`
+	ExcludedRecords    int                                `json:"excluded_records"`
+	EmptyRecords       int                                `json:"empty_records"`
+	WithheldRecords    int                                `json:"withheld_records"`
+	WithheldOpenFields int                                `json:"withheld_open_fields"`
+	Occurrences        int64                              `json:"occurrences"`
+	FailedRecordID     string                             `json:"failed_record_id,omitempty"`
+	Error              string                             `json:"error,omitempty"`
+	Conflict           *daemon.EmbeddedAliasConflictError `json:"conflict,omitempty"`
 }
 
 // FrozenSourceHeader records the source, configuration and preparation identity.
@@ -87,12 +90,20 @@ type frozenSourceIndex struct {
 }
 
 type frozenSourceRecordStatus struct {
-	Type               string `json:"type"`
-	ConversationID     string `json:"conversation_id"`
-	Admitted           bool   `json:"admitted"`
-	Empty              bool   `json:"empty"`
-	WithheldOpenFields int    `json:"withheld_open_fields"`
-	Occurrences        int    `json:"occurrences"`
+	Type               string              `json:"type"`
+	ConversationID     string              `json:"conversation_id"`
+	Admitted           bool                `json:"admitted"`
+	Empty              bool                `json:"empty"`
+	WithheldOpenFields int                 `json:"withheld_open_fields"`
+	Occurrences        int                 `json:"occurrences"`
+	SelectedSource     frozenSourceAlias   `json:"selected_source"`
+	Aliases            []frozenSourceAlias `json:"aliases"`
+}
+
+type frozenSourceAlias struct {
+	Provider     string `json:"provider"`
+	ArtifactPath string `json:"artifact_path"`
+	Selector     string `json:"selector"`
 }
 
 // ExportFrozenSources streams source-derived JSONL from one conversation at a
@@ -104,6 +115,10 @@ func ExportFrozenSources(ctx context.Context, request FrozenSourceRequest, outpu
 		if err != nil {
 			summary.Complete = false
 			summary.Error = err.Error()
+			var conflict *daemon.EmbeddedAliasConflictError
+			if errors.As(err, &conflict) {
+				summary.Conflict = conflict
+			}
 			slog.WarnContext(ctx, "search.acceptance.source_export_failed", "component", "searchacceptance", "concern", "source", "record_id", summary.FailedRecordID, "err", err)
 			if encodeErr := encoder.Encode(summary); encodeErr != nil {
 				err = errors.Join(err, fmt.Errorf("write incomplete source summary: %w", encodeErr))
@@ -130,24 +145,39 @@ func ExportFrozenSources(ctx context.Context, request FrozenSourceRequest, outpu
 		return summary, fmt.Errorf("write source header: %w", err)
 	}
 	reader := frozenSourceReader()
-	seen := make(map[string]bool, len(index.Records))
+	groups := make(map[string][]conversation.Record, len(index.Records))
+	var owners []string
 	for _, record := range index.Records {
-		summary.FailedRecordID = record.ID
+		if record.ID == "" {
+			return summary, errors.New("frozen index has an empty conversation identity")
+		}
+		if _, found := groups[record.ID]; !found {
+			owners = append(owners, record.ID)
+		}
+		groups[record.ID] = append(groups[record.ID], record)
+	}
+	seen := make(map[string]bool)
+	for _, owner := range owners {
+		summary.FailedRecordID = owner
 		if err := ctx.Err(); err != nil {
 			return summary, fmt.Errorf("export source record: %w", err)
 		}
-		if record.ID == "" || seen[record.ID] {
-			return summary, errors.New("frozen index has an empty or repeated conversation identity")
-		}
-		seen[record.ID] = true
-		projection, err := projectFrozenSource(ctx, request, reader, record, kinds)
+		aliases := groups[owner]
+		projection, err := projectFrozenSourceAliases(ctx, request, reader, aliases, kinds)
 		if err != nil {
 			return summary, err
 		}
-		if err := writeFrozenSourceRecord(encoder, record, projection); err != nil {
+		if err := writeFrozenSourceRecord(encoder, projection, seen); err != nil {
 			return summary, err
 		}
-		countFrozenSourceRecord(&summary, projection)
+		countFrozenSourceRecord(&summary, projection.Projection)
+		summary.Owners++
+		summary.Records += len(aliases) - 1
+		if projection.Projection.Admitted {
+			summary.AdmittedRecords += len(aliases) - 1
+		} else {
+			summary.ExcludedRecords += len(aliases) - 1
+		}
 	}
 	summary.FailedRecordID = ""
 	summary.Complete = true
@@ -217,30 +247,33 @@ func frozenSourceReader() *conversation.Index {
 	return conversation.NewIndex(registry, config.NewConfigWithDefaults().Conversation)
 }
 
-func projectFrozenSource(ctx context.Context, request FrozenSourceRequest, reader *conversation.Index, original conversation.Record, kinds conversation.ContentKindSet) (daemon.EmbeddedConversationOccurrences, error) {
-	readRecord, err := MapFrozenRecord(request.SnapshotRoot, request.OriginalHome, original, request.ManifestFiles)
-	if err != nil {
-		return daemon.EmbeddedConversationOccurrences{}, err
+func projectFrozenSourceAliases(ctx context.Context, request FrozenSourceRequest, reader *conversation.Index, records []conversation.Record, kinds conversation.ContentKindSet) (result daemon.EmbeddedConversationAliasOccurrences, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			slog.WarnContext(ctx, "search.acceptance.source_aliases_failed", "component", "searchacceptance", "concern", "source", "err", resultErr)
+		}
+	}()
+	for _, record := range records {
+		if _, err := MapFrozenRecord(request.SnapshotRoot, request.OriginalHome, record, request.ManifestFiles); err != nil {
+			return result, err
+		}
 	}
-	admission, err := daemon.ProjectEmbeddedConversationOccurrences(ctx, request.Semantic, original, nil, request.ArtifactSettled)
-	if err != nil {
-		slog.WarnContext(ctx, "search.acceptance.source_admission_failed", "component", "searchacceptance", "concern", "source", "record_id", original.ID, "err", err)
-		return admission, fmt.Errorf("admit frozen source %s: %w", original.ID, err)
+	result, resultErr = daemon.ProjectEmbeddedConversationAliases(ctx, request.Semantic, records, func(ctx context.Context, record conversation.Record) ([]transcript.Message, bool, error) {
+		mapped, err := MapFrozenRecord(request.SnapshotRoot, request.OriginalHome, record, request.ManifestFiles)
+		if err != nil {
+			return nil, false, err
+		}
+		messages, err := reader.LoadMessagesWithOptions(mapped, daemon.SemanticConversationLoadOptions(kinds))
+		if err != nil {
+			slog.WarnContext(ctx, "search.acceptance.source_read_failed", "component", "searchacceptance", "concern", "source", "record_id", record.ID, "err", err)
+			return nil, false, fmt.Errorf("read frozen alias source: %w", err)
+		}
+		return messages, request.ArtifactSettled, nil
+	})
+	if resultErr != nil {
+		return result, fmt.Errorf("project frozen aliases: %w", resultErr)
 	}
-	if !admission.Admitted {
-		return admission, nil
-	}
-	messages, err := reader.LoadMessagesWithOptions(readRecord, daemon.SemanticConversationLoadOptions(kinds))
-	if err != nil {
-		slog.WarnContext(ctx, "search.acceptance.source_read_failed", "component", "searchacceptance", "concern", "source", "record_id", original.ID, "err", err)
-		return admission, fmt.Errorf("load frozen source %s: %w", original.ID, err)
-	}
-	projection, err := daemon.ProjectEmbeddedConversationOccurrences(ctx, request.Semantic, original, messages, request.ArtifactSettled)
-	if err != nil {
-		slog.WarnContext(ctx, "search.acceptance.source_projection_failed", "component", "searchacceptance", "concern", "source", "record_id", original.ID, "err", err)
-		return projection, fmt.Errorf("project frozen source %s: %w", original.ID, err)
-	}
-	return projection, nil
+	return result, nil
 }
 
 func countFrozenSourceRecord(summary *FrozenSourceSummary, projection daemon.EmbeddedConversationOccurrences) {
@@ -260,17 +293,21 @@ func countFrozenSourceRecord(summary *FrozenSourceSummary, projection daemon.Emb
 	summary.Occurrences += int64(len(projection.Occurrences))
 }
 
-func writeFrozenSourceRecord(encoder *json.Encoder, record conversation.Record, projection daemon.EmbeddedConversationOccurrences) (err error) {
+func writeFrozenSourceRecord(encoder *json.Encoder, group daemon.EmbeddedConversationAliasOccurrences, seen map[string]bool) (err error) {
+	record, projection := group.Selected, group.Projection
 	defer func() {
 		if err != nil {
 			slog.Warn("search.acceptance.source_write_failed", "component", "searchacceptance", "concern", "source", "record_id", record.ID, "err", err)
 		}
 	}()
-	status := frozenSourceRecordStatus{Type: "record", ConversationID: record.ID, Admitted: projection.Admitted, Empty: projection.Admitted && len(projection.Occurrences) == 0 && projection.WithheldOpenFields == 0, WithheldOpenFields: projection.WithheldOpenFields, Occurrences: len(projection.Occurrences)}
+	aliases := make([]frozenSourceAlias, 0, len(group.Aliases))
+	for _, alias := range group.Aliases {
+		aliases = append(aliases, frozenSourceAlias{Provider: alias.Provider.String(), ArtifactPath: alias.ArtifactPath, Selector: alias.Selector})
+	}
+	status := frozenSourceRecordStatus{Type: "record", ConversationID: record.ID, Admitted: projection.Admitted, Empty: projection.Admitted && len(projection.Occurrences) == 0 && projection.WithheldOpenFields == 0, WithheldOpenFields: projection.WithheldOpenFields, Occurrences: len(projection.Occurrences), SelectedSource: frozenSourceAlias{Provider: record.Provider.String(), ArtifactPath: record.ArtifactPath, Selector: record.Selector}, Aliases: aliases}
 	if err := encoder.Encode(status); err != nil {
 		return fmt.Errorf("write source record status: %w", err)
 	}
-	seen := make(map[string]bool, len(projection.Occurrences))
 	for _, occurrence := range projection.Occurrences {
 		row, err := frozenSourceOccurrence(record, occurrence)
 		if err != nil {

@@ -21,7 +21,7 @@ func registerLiveMilvusDatabase(t *testing.T, database, address string) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != "database-registration.jsonl" || filepath.Dir(directory) != "/private/tmp" || !strings.HasPrefix(filepath.Base(directory), "clyde-alias-live-") {
 		t.Fatal("database registry requires an absolute private alias fixture path")
 	}
-	if address != "localhost:39530" {
+	if address != "localhost:39630" {
 		t.Fatalf("database registry rejects endpoint %s", address)
 	}
 	suffix := strings.TrimPrefix(database, "clyde_live_")
