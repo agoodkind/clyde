@@ -79,7 +79,8 @@ func embeddedConversationNamespaceForProfile(collectionID string, profile config
 		},
 	}
 	if profile != config.ConversationProjectionProfileLegacy && profile != config.ConversationProjectionProfileOriginal {
-		namespace.Scalars = append(namespace.Scalars,
+		namespace.Scalars = append(
+			namespace.Scalars,
 			library.ScalarColumn{Name: embeddedScalarSourceByteStart, Type: library.Int64, Nullable: false, Mutable: false, MaxLength: 0},
 			library.ScalarColumn{Name: embeddedScalarSourceByteEnd, Type: library.Int64, Nullable: false, Mutable: false, MaxLength: 0},
 		)
@@ -148,15 +149,20 @@ func embeddedFieldOccurrences(
 	if !knownKind {
 		return nil, fmt.Errorf("prepare field %s of %s: unknown field kind %q", field.Key, owner.ConversationID, field.Kind)
 	}
+	sanitizedText := strings.ReplaceAll(field.Text, "\x00", " ")
+	if strings.TrimSpace(sanitizedText) == "" {
+		return nil, nil
+	}
 	parts, err := library.PrepareText(ctx, library.PrepareRequest{
-		Text:           strings.ReplaceAll(field.Text, "\x00", " "),
+		Text:           sanitizedText,
 		DocumentPrefix: strings.ReplaceAll(field.DocumentPrefix, "\x00", " "),
 		MaxTokens:      embeddedConversationPrepareMaxTokens,
 		MaxBytes:       0,
 		Tokenizer:      nil,
 	})
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.prepare_failed",
+		slog.WarnContext(
+			ctx, "daemon.conversation_semantic_embedded.prepare_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", owner.ConversationID,
@@ -169,7 +175,8 @@ func embeddedFieldOccurrences(
 	for _, part := range parts {
 		partNumber, err := strconv.Atoi(part.Suffix)
 		if err != nil {
-			slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.prepare_failed",
+			slog.WarnContext(
+				ctx, "daemon.conversation_semantic_embedded.prepare_failed",
 				"concern", "conversation.semantic",
 				"component", "daemon",
 				"conversation_id", owner.ConversationID,
