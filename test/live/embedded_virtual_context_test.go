@@ -72,7 +72,7 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 	executeVirtualContextSQL(t, db, "virtual-context-cursor.sql")
 	h := newVirtualContextHarness(t)
 	verifyVirtualContextArtifactPath(t, artifactPath, home, h)
-	h.extraEnv = []string{"HOME=" + home, "CODEX_HOME=" + filepath.Join(home, ".codex"), "CODEX_SQLITE_HOME=" + filepath.Join(home, ".codex"), "COPILOT_HOME=" + filepath.Join(home, ".copilot"), "CLYDE_CURSOR_PROJECTS_DIRS=" + filepath.Join(home, "cursor-projects"), "CLYDE_CURSOR_DATA_DIRS=" + filepath.Join(home, "cursor-data"), "CLYDE_ZED_DATA_DIRS=" + filepath.Join(home, "zed-data")}
+	h.extraEnv = []string{"HOME=" + home, "CODEX_HOME=" + filepath.Join(home, ".codex"), "CODEX_SQLITE_HOME=" + filepath.Join(home, ".codex"), "COPILOT_HOME=" + filepath.Join(home, ".copilot"), "CLYDE_CURSOR_PROJECTS_DIRS=" + filepath.Join(home, "cursor-projects"), "CLYDE_CURSOR_DATA_DIRS=" + filepath.Join(home, "cursor-data", "User"), "CLYDE_ZED_DATA_DIRS=" + filepath.Join(home, "zed-data")}
 	h.writeConversationOnlyConfig(t, nil, "")
 	contents, err := os.ReadFile(h.configPath)
 	if err != nil {
@@ -117,7 +117,7 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 			ConversationID string `json:"conversation_id"`
 			Query          string `json:"query"`
 			Limit          int    `json:"limit"`
-			ContextWindow  int    `json:"context_window"`
+			Window         int    `json:"window"`
 		}{virtualContextOwner, "virtual context checkpoint", 10, 2}
 		body, marshalErr := json.Marshal(arguments)
 		if marshalErr != nil {
@@ -292,7 +292,7 @@ func virtualContextCLI(t *testing.T, h *harness) virtualContextPage {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, h.binPath, "conversation", "search", virtualContextOwner, "--query", "virtual context checkpoint", "--limit", "10", "--context-window", "2", "--output-format", "json")
+	command := exec.CommandContext(ctx, h.binPath, "conversation", "search", virtualContextOwner, "--query", "virtual context checkpoint", "--limit", "10", "--window", "2", "--output-format", "json")
 	command.Env = h.env()
 	var stderr strings.Builder
 	command.Stderr = &stderr
