@@ -67,7 +67,7 @@ The search snapshot expires after ten minutes of inactivity by default. Every su
 | Library result | Clyde CLI and MCP result | gRPC status |
 | --- | --- | --- |
 | `ErrInvalidRequest`, `ErrCursorMismatch` | `conversation_search_source_refused` with the safe reason. | `InvalidArgument` |
-| `ErrCursorExpired` | `conversation_search_source_refused` with a restart paging reason. | `FailedPrecondition` |
+| `ErrCursorExpired` | `conversation_search_cursor_expired` with the message "conversation search cursor expired. Restart paging". | `FailedPrecondition` |
 | `ErrStoreMismatch` | Opening the mismatched store fails. Any prior valid generation remains readable. | `FailedPrecondition` |
 | `ErrAppendConflict`, `ErrStaleGeneration` | The ingestion operation fails. Freshness reports pending work or the error; search continues on prior committed data. | `FailedPrecondition` |
 | `ErrVectorMissing`, `ErrVectorCorrupt` | `conversation_search_source_failed`; never return a partial page. | `Internal` |
