@@ -122,6 +122,9 @@ func withCursorContextDatabase(ctx context.Context, path string, read func(*sql.
 		if openErr != nil {
 			return &conversation.ContextReadError{Operation: "open cursor context database", Cause: openErr}
 		}
+		if readErr := conversation.WithStableContextSources(ctx, cursorContextFiles(path), func() error { return read(db) }); readErr != nil {
+			return &conversation.ContextReadError{Operation: "verify cursor context database", Cause: readErr}
+		}
 		return nil
 	})
 	if db != nil {
@@ -133,9 +136,6 @@ func withCursorContextDatabase(ctx context.Context, path string, read func(*sql.
 	}
 	if err != nil {
 		return &conversation.ContextReadError{Operation: "admit cursor context database", Cause: err}
-	}
-	if err := conversation.WithStableContextSources(ctx, cursorContextFiles(path), func() error { return read(db) }); err != nil {
-		return &conversation.ContextReadError{Operation: "verify cursor context database", Cause: err}
 	}
 	return nil
 }

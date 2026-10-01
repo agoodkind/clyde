@@ -75,17 +75,17 @@ func withZedContextDatabases(ctx context.Context, root zedstore.DataRoot, virtua
 			}
 			dbs = append(dbs, db)
 		}
+		var threads *sql.DB
+		if len(dbs) == 2 {
+			threads = dbs[1]
+		}
+		if readErr := conversation.WithStableContextSources(ctx, files, func() error { return read(dbs[0], threads) }); readErr != nil {
+			return &conversation.ContextReadError{Operation: "verify zed context databases", Cause: readErr}
+		}
 		return nil
 	})
 	if err != nil {
 		return &conversation.ContextReadError{Operation: "admit zed context databases", Cause: err}
-	}
-	var threads *sql.DB
-	if len(dbs) == 2 {
-		threads = dbs[1]
-	}
-	if err := conversation.WithStableContextSources(ctx, files, func() error { return read(dbs[0], threads) }); err != nil {
-		return &conversation.ContextReadError{Operation: "verify zed context databases", Cause: err}
 	}
 	return nil
 }
