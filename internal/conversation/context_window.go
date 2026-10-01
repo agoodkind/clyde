@@ -67,7 +67,7 @@ func VisitContextWindow(ctx context.Context, stream iter.Seq2[transcript.Message
 				return err
 			}
 			if err := ctx.Err(); err != nil {
-				return &contextReadError{operation: "read context stream", cause: err}
+				return &ContextReadError{Operation: "read context stream", Cause: err}
 			}
 			if position >= start {
 				messages = append(messages, message)
@@ -79,7 +79,7 @@ func VisitContextWindow(ctx context.Context, stream iter.Seq2[transcript.Message
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return &contextReadError{operation: "visit context window", cause: err}
+		return &ContextReadError{Operation: "visit context window", Cause: err}
 	}
 	return visit(messages)
 }
@@ -99,13 +99,13 @@ func WithStableContextSources(ctx context.Context, sources []ContextSourceFile, 
 		before[index] = info
 	}
 	if err := ctx.Err(); err != nil {
-		return &contextReadError{operation: "read context sources", cause: err}
+		return &ContextReadError{Operation: "read context sources", Cause: err}
 	}
 	if err := read(); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
-		return &contextReadError{operation: "verify context sources", cause: err}
+		return &ContextReadError{Operation: "verify context sources", Cause: err}
 	}
 	for index, source := range sources {
 		after, err := contextSourceInfo(source)
@@ -129,20 +129,23 @@ func contextSourceInfo(source ContextSourceFile) (os.FileInfo, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, &contextReadError{operation: "stat context source", cause: err}
+		return nil, &ContextReadError{Operation: "stat context source", Cause: err}
 	}
 	return info, nil
 }
 
-type contextReadError struct {
-	operation string
-	cause     error
+// ContextReadError wraps a source failure without logging it.
+type ContextReadError struct {
+	Operation string
+	Cause     error
 }
 
-func (failure *contextReadError) Error() string {
-	return failure.operation + ": " + failure.cause.Error()
+// Error returns the operation followed by the original error text.
+func (failure *ContextReadError) Error() string {
+	return failure.Operation + ": " + failure.Cause.Error()
 }
 
-func (failure *contextReadError) Unwrap() error {
-	return failure.cause
+// Unwrap returns the original error for [errors.Is] and [errors.As].
+func (failure *ContextReadError) Unwrap() error {
+	return failure.Cause
 }

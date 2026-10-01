@@ -24,7 +24,7 @@ func (*Parser) ReadContextWindow(ctx context.Context, path, selector string, sta
 			return visitCursorContext(ctx, streamPhysicalContext(ctx, path, options), start, end, visit)
 		})
 		if err != nil {
-			return &contextReadError{operation: "read physical cursor context", cause: err}
+			return &conversation.ContextReadError{Operation: "read physical cursor context", Cause: err}
 		}
 		return nil
 	}
@@ -34,7 +34,7 @@ func (*Parser) ReadContextWindow(ctx context.Context, path, selector string, sta
 	}
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		return &contextReadError{operation: "resolve cursor context roots", cause: err}
+		return &conversation.ContextReadError{Operation: "resolve cursor context roots", Cause: err}
 	}
 	for _, root := range roots {
 		if RootHash(root.RootDir) == virtual.RootHash {
@@ -59,7 +59,7 @@ func readComposerContext(ctx context.Context, root cursorstore.DataRoot, id, pat
 	err := withCursorContextDatabase(ctx, root.GlobalDBPath, func(db *sql.DB) error {
 		header, found, readErr := cursorstore.ReadComposerHeader(ctx, db, id)
 		if readErr != nil {
-			return &contextReadError{operation: "read cursor context header", cause: readErr}
+			return &conversation.ContextReadError{Operation: "read cursor context header", Cause: readErr}
 		}
 		if !found {
 			return errors.New("cursor context composer is absent")
@@ -73,7 +73,7 @@ func readComposerContext(ctx context.Context, root cursorstore.DataRoot, id, pat
 		return visitCursorContext(ctx, stream, start, end, visit)
 	})
 	if err != nil {
-		return &contextReadError{operation: "read composer context", cause: err}
+		return &conversation.ContextReadError{Operation: "read composer context", Cause: err}
 	}
 	return nil
 }
@@ -85,7 +85,7 @@ func readLegacyContext(ctx context.Context, root cursorstore.DataRoot, id string
 	}
 	listing, err := root.ListWorkspaceEntries()
 	if err != nil {
-		return &contextReadError{operation: "list cursor context workspaces", cause: err}
+		return &conversation.ContextReadError{Operation: "list cursor context workspaces", Cause: err}
 	}
 	for _, entry := range listing.Entries {
 		if entry.WorkspaceHash != workspace {
@@ -94,7 +94,7 @@ func readLegacyContext(ctx context.Context, root cursorstore.DataRoot, id string
 		err = withCursorContextDatabase(ctx, entry.StateDBPath, func(db *sql.DB) error {
 			chat, found, readErr := cursorstore.ReadLegacyChatData(ctx, db)
 			if readErr != nil {
-				return &contextReadError{operation: "read cursor context legacy chat", cause: readErr}
+				return &conversation.ContextReadError{Operation: "read cursor context legacy chat", Cause: readErr}
 			}
 			if !found {
 				return errors.New("cursor context legacy chat is absent")
@@ -107,7 +107,7 @@ func readLegacyContext(ctx context.Context, root cursorstore.DataRoot, id string
 			return errors.New("cursor context legacy tab is absent")
 		})
 		if err != nil {
-			return &contextReadError{operation: "read legacy cursor context", cause: err}
+			return &conversation.ContextReadError{Operation: "read legacy cursor context", Cause: err}
 		}
 		return nil
 	}
@@ -120,22 +120,22 @@ func withCursorContextDatabase(ctx context.Context, path string, read func(*sql.
 		var openErr error
 		db, openErr = cursorstore.OpenReadOnlyDatabase(ctx, path)
 		if openErr != nil {
-			return &contextReadError{operation: "open cursor context database", cause: openErr}
+			return &conversation.ContextReadError{Operation: "open cursor context database", Cause: openErr}
 		}
 		return nil
 	})
 	if db != nil {
 		defer func() {
 			if closeErr := db.Close(); closeErr != nil {
-				err = errors.Join(err, &contextReadError{operation: "close cursor context database", cause: closeErr})
+				err = errors.Join(err, &conversation.ContextReadError{Operation: "close cursor context database", Cause: closeErr})
 			}
 		}()
 	}
 	if err != nil {
-		return &contextReadError{operation: "admit cursor context database", cause: err}
+		return &conversation.ContextReadError{Operation: "admit cursor context database", Cause: err}
 	}
 	if err := conversation.WithStableContextSources(ctx, cursorContextFiles(path), func() error { return read(db) }); err != nil {
-		return &contextReadError{operation: "verify cursor context database", cause: err}
+		return &conversation.ContextReadError{Operation: "verify cursor context database", Cause: err}
 	}
 	return nil
 }
@@ -155,7 +155,7 @@ func streamPhysicalContext(ctx context.Context, path string, options conversatio
 	return func(yield func(transcript.Message, error) bool) {
 		err := cursorjsonl.StreamMessages(path, func(message cursorjsonl.TranscriptMessage) error {
 			if err := ctx.Err(); err != nil {
-				return &contextReadError{operation: "read cursor context transcript", cause: err}
+				return &conversation.ContextReadError{Operation: "read cursor context transcript", Cause: err}
 			}
 			mapped, include := mapJSONLMessage(message, options)
 			if include && !yield(mapped, nil) {
@@ -171,22 +171,9 @@ func streamPhysicalContext(ctx context.Context, path string, options conversatio
 
 func visitCursorContext(ctx context.Context, stream iter.Seq2[transcript.Message, error], start, end int, visit func([]transcript.Message) error) error {
 	if err := conversation.VisitContextWindow(ctx, stream, start, end, visit); err != nil {
-		return &contextReadError{operation: "visit cursor context", cause: err}
+		return &conversation.ContextReadError{Operation: "visit cursor context", Cause: err}
 	}
 	return nil
-}
-
-type contextReadError struct {
-	operation string
-	cause     error
-}
-
-func (failure *contextReadError) Error() string {
-	return failure.operation + ": " + failure.cause.Error()
-}
-
-func (failure *contextReadError) Unwrap() error {
-	return failure.cause
 }
 
 func cursorContextFiles(path string) []conversation.ContextSourceFile {

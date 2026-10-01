@@ -25,7 +25,7 @@ func (*Parser) ReadContextWindow(ctx context.Context, path, selector string, sta
 	}
 	roots, err := zedstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		return &contextReadError{operation: "resolve zed context roots", cause: err}
+		return &conversation.ContextReadError{Operation: "resolve zed context roots", Cause: err}
 	}
 	for _, root := range roots {
 		if RootHash(root.RootDir) != virtual.RootHash {
@@ -40,7 +40,7 @@ func (*Parser) ReadContextWindow(ctx context.Context, path, selector string, sta
 				streamDiscoveredContext(discovered, options, yield)
 			})
 			if err := conversation.VisitContextWindow(ctx, stream, start, end, visit); err != nil {
-				return &contextReadError{operation: "visit zed context", cause: err}
+				return &conversation.ContextReadError{Operation: "visit zed context", Cause: err}
 			}
 			return nil
 		})
@@ -63,7 +63,7 @@ func withZedContextDatabases(ctx context.Context, root zedstore.DataRoot, virtua
 	defer func() {
 		for _, db := range dbs {
 			if closeErr := db.Close(); closeErr != nil {
-				err = errors.Join(err, &contextReadError{operation: "close zed context database", cause: closeErr})
+				err = errors.Join(err, &conversation.ContextReadError{Operation: "close zed context database", Cause: closeErr})
 			}
 		}
 	}()
@@ -71,21 +71,21 @@ func withZedContextDatabases(ctx context.Context, root zedstore.DataRoot, virtua
 		for _, path := range paths {
 			db, openErr := zedstore.OpenContextReadOnlyDatabase(ctx, path)
 			if openErr != nil {
-				return &contextReadError{operation: "open zed context database", cause: openErr}
+				return &conversation.ContextReadError{Operation: "open zed context database", Cause: openErr}
 			}
 			dbs = append(dbs, db)
 		}
 		return nil
 	})
 	if err != nil {
-		return &contextReadError{operation: "admit zed context databases", cause: err}
+		return &conversation.ContextReadError{Operation: "admit zed context databases", Cause: err}
 	}
 	var threads *sql.DB
 	if len(dbs) == 2 {
 		threads = dbs[1]
 	}
 	if err := conversation.WithStableContextSources(ctx, files, func() error { return read(dbs[0], threads) }); err != nil {
-		return &contextReadError{operation: "verify zed context databases", cause: err}
+		return &conversation.ContextReadError{Operation: "verify zed context databases", Cause: err}
 	}
 	return nil
 }
@@ -109,7 +109,7 @@ func readFreshContextThread(ctx context.Context, root zedstore.DataRoot, virtual
 	if terminal {
 		metadata, found, err := zedstore.ReadSidebarTerminalByID(ctx, metadataDB, terminalID)
 		if err != nil {
-			return emptyDiscoveredThread(), &contextReadError{operation: "read zed context terminal", cause: err}
+			return emptyDiscoveredThread(), &conversation.ContextReadError{Operation: "read zed context terminal", Cause: err}
 		}
 		if !found {
 			return emptyDiscoveredThread(), errors.New("zed context terminal is absent")
@@ -118,21 +118,21 @@ func readFreshContextThread(ctx context.Context, root zedstore.DataRoot, virtual
 	}
 	metadata, found, err := zedstore.ReadSidebarThreadBySession(ctx, metadataDB, virtual.SessionID)
 	if err != nil {
-		return emptyDiscoveredThread(), &contextReadError{operation: "read zed context metadata", cause: err}
+		return emptyDiscoveredThread(), &conversation.ContextReadError{Operation: "read zed context metadata", Cause: err}
 	}
 	if !found {
 		return emptyDiscoveredThread(), errors.New("zed context metadata is absent")
 	}
 	row, found, err := zedstore.ReadThreadRowByID(ctx, threads, virtual.SessionID)
 	if err != nil {
-		return emptyDiscoveredThread(), &contextReadError{operation: "read zed context thread", cause: err}
+		return emptyDiscoveredThread(), &conversation.ContextReadError{Operation: "read zed context thread", Cause: err}
 	}
 	if !found {
 		return emptyDiscoveredThread(), errors.New("zed context thread is absent")
 	}
 	thread, err := zedstore.ParseThreadDocument(row.DataType, row.Data)
 	if err != nil {
-		return emptyDiscoveredThread(), &contextReadError{operation: "parse zed context thread", cause: err}
+		return emptyDiscoveredThread(), &conversation.ContextReadError{Operation: "parse zed context thread", Cause: err}
 	}
 	return newNativeDiscoveredThread(row, thread, metadata, root.RootDir, virtual.Channel), nil
 }
@@ -143,17 +143,4 @@ func zedContextFiles(path string) []conversation.ContextSourceFile {
 		{Path: path + "-wal", Required: false},
 		{Path: path + "-shm", Required: false},
 	}
-}
-
-type contextReadError struct {
-	operation string
-	cause     error
-}
-
-func (failure *contextReadError) Error() string {
-	return failure.operation + ": " + failure.cause.Error()
-}
-
-func (failure *contextReadError) Unwrap() error {
-	return failure.cause
 }
