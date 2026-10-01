@@ -67,7 +67,7 @@ func TestLoadDocsReportsTheLoadTally(t *testing.T) {
 		loadOptions: nil,
 		tally:       transcript.HarnessStrips{Injected: 3, System: 2},
 	}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(&fakeConversationSemanticClient{needed: []string{conversationID}}), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(index, "collection-test", semanticTestLogger(), semanticTestContentKinds())
 
 	built, err := worker.loadDocs(context.Background(), conversation.Record{ID: conversationID, Provider: providerid.ProviderCodex})
 	if err != nil {

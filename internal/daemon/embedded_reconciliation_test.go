@@ -109,10 +109,10 @@ func newReconcileTestWorker(t *testing.T, store *embeddedConversationStore, inde
 	semantic := config.ConversationSemanticConfig{
 		IngestionEnabled: true,
 		CollectionID:     store.namespace.ID,
-		Backend:          config.ConversationSemanticBackendEmbedded,
+
 		IncludeSubagents: true,
 	}
-	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
+	worker := newConversationSemanticSyncWorker(index, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 	worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
 	worker.embedded.store = store
 	return worker

@@ -56,7 +56,6 @@ func TestReconcileCommandRunsInsideDaemonWorker(t *testing.T) {
 	semantic := config.ConversationSemanticConfig{
 		IngestionEnabled: true,
 		CollectionID:     store.namespace.ID,
-		Backend:          config.ConversationSemanticBackendEmbedded,
 	}
 	if err := store.outbox.releaseLock(); err != nil {
 		t.Fatalf("release fixture admission lock: %v", err)
@@ -81,7 +80,7 @@ func TestReconcileCommandRunsInsideDaemonWorker(t *testing.T) {
 func runReconcileCommand(t *testing.T, binary string, index *conversation.Index, gate *embeddedReconcileGate) (string, error) {
 	t.Helper()
 	cfg := config.NewConfig()
-	cfg.Conversation.Semantic.Backend = config.ConversationSemanticBackendEmbedded
+
 	cfg.Conversation.Semantic.IngestionEnabled = true
 	socket := conversationSearchSocketPath(t)
 	listener, err := net.Listen("unix", socket)

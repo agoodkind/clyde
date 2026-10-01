@@ -4,13 +4,34 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
+	"goodkind.io/clyde/internal/clock"
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/lm-semantic-search/library/observation"
 )
 
 type embeddedOperationObserver struct {
 	log *slog.Logger
+}
+
+func observeEmbeddedPageContext(ctx context.Context, started time.Time, hits, groups int, stats conversation.ContextReadStats, err error) {
+	scope := observation.ScopeFromContext(ctx)
+	status := "success"
+	if err != nil {
+		status = "failure"
+	}
+	slog.InfoContext(ctx, "daemon.conversation_embedded_search.context_page_completed",
+		"component", "daemon", "concern", "conversation.semantic",
+		"run_id", scope.RunID, "generation_order", scope.Generation,
+		"pid", scope.ProcessID, "purpose", string(scope.Purpose),
+		"operation_id", scope.OperationID, "parent_operation_id", scope.ParentOperationID,
+		"outcome", status, "duration_ns", clock.Since(started).Nanoseconds(),
+		"page_hits", hits, "source_groups", groups, "source_reads", stats.SourceReads,
+		"messages_visited", stats.MessagesVisited, "messages_retained", stats.MessagesRetained,
+		"windows", stats.Windows,
+	)
 }
 
 func (observer embeddedOperationObserver) Observe(event observation.Event) {

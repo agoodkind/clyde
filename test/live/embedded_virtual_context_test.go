@@ -1,4 +1,4 @@
-//go:build live
+//go:build live && frozen_context
 
 package live
 
@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,6 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	semantic := &configuration.Conversation.Semantic
-	semantic.Backend = config.ConversationSemanticBackendEmbedded
 	semantic.ProjectionProfile = config.ConversationProjectionProfileSourceSpan
 	semantic.IndexedContent = []string{"chat", "tool_calls"}
 	semantic.IndexedProviders = []string{"cursor"}
@@ -111,14 +111,14 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 	writeEmbeddedLifecycleConfig(t, h, configuration)
 	h.boot(t)
 	connection := embeddedPublicMCP(t, h)
-	read := func() virtualContextPage {
-		cli := virtualContextCLI(t, h)
+	read := func(radius int) virtualContextPage {
+		cli := virtualContextCLI(t, h, radius)
 		arguments := struct {
 			ConversationID string `json:"conversation_id"`
 			Query          string `json:"query"`
 			Limit          int    `json:"limit"`
 			Window         int    `json:"window"`
-		}{virtualContextOwner, "virtual context checkpoint", 10, 2}
+		}{virtualContextOwner, "virtual context checkpoint", 10, radius}
 		body, marshalErr := json.Marshal(arguments)
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
@@ -132,8 +132,9 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 		}
 		return cli
 	}
-	initial := read()
-	expectedContext := "Message 0 (chat):\nvirtual context checkpoint question\n\nMessage 1 (chat):\nvirtual context checkpoint answer\n\nMessage 1 (tool_call):\nread_file\nREADME.md"
+	initial := read(2)
+	assertVirtualContextPageReads(t, readEmbeddedOperationMeasurements(t, h.stateRoot), 2)
+	expectedContext := "Message 0 (chat):\nvirtual context checkpoint question\n\nMessage 2 (chat):\nvirtual context checkpoint answer\n\nMessage 2 (tool_call):\nread_file\nREADME.md"
 	for _, hit := range initial.Matches {
 		if hit.ContextState != conversation.SearchContextStateAvailable || hit.ContextWindow != expectedContext {
 			t.Fatalf("public virtual context did not verify selected content: %+v", hit)
@@ -145,6 +146,9 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 			t.Fatal("public accepted provenance differs")
 		}
 	}
+	narrow := read(1)
+	assertVirtualNarrowContexts(t, narrow, initial, false)
+	assertVirtualContextPageReads(t, readEmbeddedOperationMeasurements(t, h.stateRoot)[len(ingestion):], 4)
 	executeVirtualContextSQL(t, db, "virtual-context-cursor-edit.sql")
 	assertUnavailable := func(page virtualContextPage) {
 		for index, hit := range page.Matches {
@@ -153,11 +157,13 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 			}
 		}
 	}
-	assertUnavailable(read())
+	assertUnavailable(read(2))
+	assertVirtualNarrowContexts(t, read(1), narrow, true)
+	assertVirtualContextPageReads(t, readEmbeddedOperationMeasurements(t, h.stateRoot)[len(ingestion):], 8)
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	assertUnavailable(read())
+	assertUnavailable(read(2))
 	h.teardown(t)
 	retainVirtualContextProof(t, artifactPath, database, ingestion, readEmbeddedOperationMeasurements(t, h.stateRoot))
 }
@@ -172,6 +178,7 @@ type virtualContextProof struct {
 	SearchUpserts    int                            `json:"search_upsert_calls"`
 	SearchIngestion  int                            `json:"search_ingestion_operations"`
 	Operations       []embeddedOperationMeasurement `json:"operations"`
+	ContextPages     []embeddedOperationMeasurement `json:"context_pages"`
 }
 
 func retainVirtualContextProof(t *testing.T, path, database string, initial, final []embeddedOperationMeasurement) {
@@ -179,15 +186,33 @@ func retainVirtualContextProof(t *testing.T, path, database string, initial, fin
 	if len(final) < len(initial) || !reflect.DeepEqual(initial, final[:len(initial)]) {
 		t.Fatal("search-only operation log changed the initial ingestion prefix")
 	}
-	proof := virtualContextProof{Complete: false, Database: database, PublicationRows: 0, InitialStageRows: 0, QueryRequests: 0, SearchStageCalls: 0, SearchUpserts: 0, SearchIngestion: 0, Operations: nil}
+	proof := virtualContextProof{Complete: false, Database: database, PublicationRows: 0, InitialStageRows: 0, QueryRequests: 0, SearchStageCalls: 0, SearchUpserts: 0, SearchIngestion: 0, Operations: nil, ContextPages: nil}
 	for index, event := range final {
+		if event.Message == "daemon.conversation_embedded_search.context_page_completed" {
+			proof.ContextPages = append(proof.ContextPages, event)
+		}
 		if event.Message == "daemon.conversation_semantic_sync.pass_completed" && index < len(initial) && event.ProjectionRows == 3 {
 			proof.PublicationRows = event.ProjectionRows
 		}
 		if event.Message != "daemon.conversation_semantic_embedded.operation_completed" {
 			continue
 		}
-		if event.OperationID == 0 || event.RunID == "" || event.PID <= 0 || event.Outcome != observation.Success {
+		if index >= len(initial) {
+			if event.Purpose == observation.Ingestion {
+				proof.SearchIngestion++
+			}
+			if event.Operation == observation.Stage {
+				proof.SearchStageCalls++
+			}
+			if event.Operation == observation.UpsertCall {
+				proof.SearchUpserts++
+			}
+		}
+		// Startup catalog transactions have no caller run scope.
+		if event.Purpose != observation.Ingestion && event.Purpose != observation.Query {
+			continue
+		}
+		if event.OperationID == 0 || event.RunID == "" || event.PID <= 0 || event.Duration < 0 || event.Outcome != observation.Success {
 			t.Fatalf("operation identity or outcome is invalid: %+v", event)
 		}
 		proof.Operations = append(proof.Operations, event)
@@ -196,15 +221,6 @@ func retainVirtualContextProof(t *testing.T, path, database string, initial, fin
 				proof.InitialStageRows += event.StageRows
 			}
 			continue
-		}
-		if event.Purpose == observation.Ingestion {
-			proof.SearchIngestion++
-		}
-		if event.Operation == observation.Stage {
-			proof.SearchStageCalls++
-		}
-		if event.Operation == observation.UpsertCall {
-			proof.SearchUpserts++
 		}
 		if event.Purpose == observation.Query && event.Operation == observation.EmbeddingAttempt {
 			proof.QueryRequests += event.EmbeddingInputs
@@ -232,6 +248,62 @@ func retainVirtualContextProof(t *testing.T, path, database string, initial, fin
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertVirtualContextPageReads(t *testing.T, measurements []embeddedOperationMeasurement, expectedPages int) {
+	t.Helper()
+	seen := make(map[string]bool)
+	for _, event := range measurements {
+		if event.Message != "daemon.conversation_embedded_search.context_page_completed" {
+			continue
+		}
+		if event.RunID == "" || seen[event.RunID] || event.PID <= 0 || event.Purpose != observation.Query || event.Outcome != observation.Success {
+			t.Fatalf("page context observation scope differs: %+v", event)
+		}
+		seen[event.RunID] = true
+		if event.PageHits != 3 || event.SourceGroups != 1 || event.SourceReads != 1 || event.MessagesVisited != 3 || event.MessagesRetained != 3 || event.Windows != 3 {
+			t.Fatalf("public page repeated source reads or retained messages outside the union: %+v", event)
+		}
+	}
+	if len(seen) != expectedPages {
+		t.Fatalf("actual CLI and MCP pages emitted %d context observations", len(seen))
+	}
+}
+
+func assertVirtualNarrowContexts(t *testing.T, page, baseline virtualContextPage, edited bool) {
+	t.Helper()
+	questionCount, assistantCount := 0, 0
+	for index, hit := range page.Matches {
+		prior := baseline.Matches[index]
+		if hit.Conversation.ID != prior.Conversation.ID || hit.Conversation.Provider != prior.Conversation.Provider || hit.Snippet != prior.Snippet || hit.Score != prior.Score || hit.MessageIndex != prior.MessageIndex || hit.Role != prior.Role || !hit.Timestamp.Equal(prior.Timestamp) || hit.LoadRules != prior.LoadRules || !reflect.DeepEqual(hit.SourceIdentity, prior.SourceIdentity) {
+			t.Fatalf("public window selection changed occurrence order or committed metadata: %+v", hit)
+		}
+		expected := ""
+		state := conversation.SearchContextStateAvailable
+		switch hit.MessageIndex {
+		case 0:
+			questionCount++
+			expected = "Message 0 (chat):\nvirtual context checkpoint question"
+			if edited {
+				state = conversation.SearchContextStateUnavailable
+				expected = "virtual context checkpoint question"
+			}
+		case 2:
+			assistantCount++
+			expected = "Message 2 (chat):\nvirtual context checkpoint answer\n\nMessage 2 (tool_call):\nread_file\nREADME.md"
+			if edited && !reflect.DeepEqual(hit, prior) {
+				t.Fatalf("an edit outside the requested window changed available context: %+v", hit)
+			}
+		default:
+			t.Fatalf("public narrow context returned unexpected message index %d", hit.MessageIndex)
+		}
+		if hit.ContextState != state || hit.ContextWindow != expected {
+			t.Fatalf("public narrow context returned incorrect content or availability: %+v", hit)
+		}
+	}
+	if questionCount != 1 || assistantCount != 2 {
+		t.Fatalf("public narrow context returned %d question and %d assistant occurrences", questionCount, assistantCount)
 	}
 }
 
@@ -288,11 +360,11 @@ func newVirtualContextHarness(t *testing.T) *harness {
 	return h
 }
 
-func virtualContextCLI(t *testing.T, h *harness) virtualContextPage {
+func virtualContextCLI(t *testing.T, h *harness, radius int) virtualContextPage {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, h.binPath, "conversation", "search", virtualContextOwner, "--query", "virtual context checkpoint", "--limit", "10", "--window", "2", "--output-format", "json")
+	command := exec.CommandContext(ctx, h.binPath, "conversation", "search", virtualContextOwner, "--query", "virtual context checkpoint", "--limit", "10", "--window", strconv.Itoa(radius), "--output-format", "json")
 	command.Env = h.env()
 	var stderr strings.Builder
 	command.Stderr = &stderr

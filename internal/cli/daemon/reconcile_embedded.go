@@ -21,7 +21,7 @@ func newReconcileEmbeddedConversationCmd(f *cli.Factory) *cobra.Command {
 			"owner metadata from the rows the embedded search library published, and clear its blocked state. The daemon runs " +
 			"the reconciliation between two sync passes with the store its ingestion worker owns, and applies the current " +
 			"conversation metadata through ReprojectScalars on its next pass. Requires a running daemon with " +
-			"conversation.semantic.backend = \"embedded\" and ingestion enabled.",
+			"conversation.semantic.ingestion_enabled = true.",
 		Example: "clyde daemon reconcile-embedded-conversation --conversation codex:019de9aa-3a00-7010-bd9f-a6ee71559357",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

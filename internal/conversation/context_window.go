@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"log/slog"
 	"os"
 
 	"goodkind.io/clyde/internal/transcript"
@@ -20,38 +19,13 @@ type ContextSourceFile struct {
 // ReadVerifiedMessageWindow validates source stability around the callback.
 // The callback must compare the messages with the caller's committed content.
 func (idx *Index) ReadVerifiedMessageWindow(ctx context.Context, record Record, start, end int, loadRules string, visit func([]transcript.Message) error) (err error) {
-	defer func() {
-		if err != nil {
-			slog.WarnContext(ctx, "conversation.context_read.failed", "component", "conversation", "concern", "conversation.load", "conversation_id", record.ID, "err", err)
-		}
-	}()
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("read verified context: %w", err)
-	}
-	if visit == nil || start < 0 || end < start {
+	if visit == nil {
 		return errors.New("invalid verified conversation message window")
 	}
-	options, known := LoadOptionsForRules(loadRules)
-	if !known {
-		return fmt.Errorf("unknown conversation loading rules %q", loadRules)
-	}
-	parser, err := idx.registry.Lookup(record.Provider)
-	if err != nil {
-		return err
-	}
-	if fresh, ok := parser.(FreshContextParser); ok {
-		if err := fresh.ReadContextWindow(ctx, record.ArtifactPath, record.Selector, start, end, options, visit); err != nil {
-			return fmt.Errorf("read fresh provider context: %w", err)
-		}
-		return nil
-	}
-	return WithStableContextSources(ctx, []ContextSourceFile{{Path: record.ArtifactPath, Required: true}}, func() error {
-		messages, _, readErr := idx.readMessageWindow(ctx, record, start, end, options)
-		if readErr != nil {
-			return readErr
-		}
-		return visit(messages)
+	_, err = idx.ReadVerifiedMessageWindows(ctx, record, []ContextMessageWindow{{Start: start, End: end}}, loadRules, func(windows [][]transcript.Message) error {
+		return visit(windows[0])
 	})
+	return err
 }
 
 // VisitContextWindow retains only the requested positions from a fresh stream.
@@ -59,29 +33,10 @@ func VisitContextWindow(ctx context.Context, stream iter.Seq2[transcript.Message
 	if start < 0 || end < start || visit == nil {
 		return errors.New("invalid provider context window")
 	}
-	var messages []transcript.Message
-	position := 0
-	if end > start {
-		for message, err := range stream {
-			if err != nil {
-				return err
-			}
-			if err := ctx.Err(); err != nil {
-				return &ContextReadError{Operation: "read context stream", Cause: err}
-			}
-			if position >= start {
-				messages = append(messages, message)
-			}
-			position++
-			if position >= end {
-				break
-			}
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return &ContextReadError{Operation: "visit context window", Cause: err}
-	}
-	return visit(messages)
+	_, err := VisitContextWindows(ctx, stream, []ContextMessageWindow{{Start: start, End: end}}, func(windows [][]transcript.Message) error {
+		return visit(windows[0])
+	})
+	return err
 }
 
 // WithStableContextSources rejects replacement, edits, loss and sidecar changes

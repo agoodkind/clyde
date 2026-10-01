@@ -58,9 +58,9 @@ func TestEmbeddedOpenNeverLogsCredentialReferences(t *testing.T) {
 			slog.SetDefault(logger)
 			t.Cleanup(func() { slog.SetDefault(original) })
 			semantic := config.ConversationSemanticConfig{
-				IngestionEnabled:    true,
-				CollectionID:        "clyde-conversations",
-				Backend:             config.ConversationSemanticBackendEmbedded,
+				IngestionEnabled: true,
+				CollectionID:     "clyde-conversations",
+
 				CatalogPath:         filepath.Join(root, testCase.name, "catalog.sqlite"),
 				LockPath:            filepath.Join(root, testCase.name, "catalog.lock"),
 				PoolID:              "redaction-" + testCase.name,

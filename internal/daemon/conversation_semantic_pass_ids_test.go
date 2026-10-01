@@ -1,66 +1,8 @@
 package daemon
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"log/slog"
-	"strings"
 	"testing"
-	"time"
-
-	"goodkind.io/clyde/internal/conversation"
-	"goodkind.io/clyde/internal/transcript"
 )
-
-// TestPassLogNamesDeliveredConversations proves a delivering pass writes the
-// delivered conversation ids on its pass_completed line, so a batch in the log
-// attributes to specific conversations instead of a bare count. The hourly
-// re-offer diagnosis (CLYDE-640) was blocked on exactly this absence.
-func TestPassLogNamesDeliveredConversations(t *testing.T) {
-	firstID := "codex:pass-ids-a"
-	secondID := "codex:pass-ids-b"
-	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{
-			{Record: semanticTestRecord(firstID), Stamp: semanticTestStamp(20, 200)},
-			{Record: semanticTestRecord(secondID), Stamp: semanticTestStamp(30, 300)},
-		},
-		messagesByID: map[string][]transcript.Message{
-			firstID:  {{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "alpha"}},
-			secondID: {{Role: "user", Timestamp: time.Unix(1710000100, 0), Text: "beta"}},
-		},
-		loadOptions: nil,
-	}
-	client := &fakeConversationSemanticClient{needed: []string{firstID, secondID}}
-	var logBuffer bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuffer, nil))
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", logger, semanticTestContentKinds())
-
-	if err := worker.runPass(context.Background()); err != nil {
-		t.Fatalf("runPass returned error: %v", err)
-	}
-
-	var loggedIDs []string
-	for _, line := range strings.Split(logBuffer.String(), "\n") {
-		if !strings.Contains(line, "pass_completed") {
-			continue
-		}
-		var record struct {
-			SentConversationIDs []string `json:"sent_conversation_ids"`
-		}
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatalf("unmarshal pass log line: %v", err)
-		}
-		loggedIDs = record.SentConversationIDs
-	}
-	if len(loggedIDs) != 2 {
-		t.Fatalf("sent_conversation_ids = %v, want both delivered ids", loggedIDs)
-	}
-	logged := map[string]bool{loggedIDs[0]: true, loggedIDs[1]: true}
-	if !logged[firstID] || !logged[secondID] {
-		t.Fatalf("sent_conversation_ids = %v, want %q and %q", loggedIDs, firstID, secondID)
-	}
-}
 
 // TestBoundedConversationIDsCapsTheLogLine pins the bound: a backlog pass
 // delivering hundreds of conversations logs only the batch head, and the

@@ -8,7 +8,6 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/livetrack"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
@@ -52,16 +51,8 @@ func TestDaemonStatusReadsExistingConnectionAndBoundListeners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	semantic, group := newTestSemanticRuntime(t, func(context.Context) (semanticConnection, error) {
-		return semanticConnection{connCloser: connection, close: connection.Close}, nil
-	})
-	t.Cleanup(func() { group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: time.Second}) })
-	if err := semantic.attemptRegister(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	runtime.semantic = semantic
-	if state := runtime.statusSnapshot().Semantic.Connection; state != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_IDLE {
-		t.Fatalf("reading an idle connection activated it: %v", state)
+	if state := runtime.statusSnapshot().Semantic.Connection; state != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_EMBEDDED {
+		t.Fatalf("direct library status: %v", state)
 	}
 	waitForStatusConnectionReady(t, connection)
 	client := clydev1.NewClydeServiceClient(connection)
@@ -69,7 +60,7 @@ func TestDaemonStatusReadsExistingConnectionAndBoundListeners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Semantic.Connection != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_READY || response.Semantic.Attempts != 1 || response.Semantic.NextRetryUnix != 0 {
+	if response.Semantic.Connection != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_EMBEDDED || response.Semantic.Attempts != 0 || response.Semantic.NextRetryUnix != 0 {
 		t.Fatalf("connected status: %v", response.Semantic)
 	}
 	expected := map[string]string{
@@ -93,8 +84,8 @@ func TestDaemonStatusReadsExistingConnectionAndBoundListeners(t *testing.T) {
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if state := runtime.statusSnapshot().Semantic.Connection; state != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_SHUTDOWN {
-		t.Fatalf("closed connection still reads ready: %v", state)
+	if state := runtime.statusSnapshot().Semantic.Connection; state != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_EMBEDDED {
+		t.Fatalf("daemon transport changed direct library status: %v", state)
 	}
 }
 

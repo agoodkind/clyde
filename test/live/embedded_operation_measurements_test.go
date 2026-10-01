@@ -15,24 +15,30 @@ import (
 )
 
 type embeddedOperationMeasurement struct {
-	Message         string                `json:"msg"`
-	RunID           string                `json:"run_id"`
-	OperationID     uint64                `json:"operation_id"`
-	ParentID        uint64                `json:"parent_operation_id"`
-	PID             int                   `json:"pid"`
-	Purpose         observation.Purpose   `json:"purpose"`
-	Operation       observation.Operation `json:"operation"`
-	Outcome         observation.Outcome   `json:"outcome"`
-	Duration        int64                 `json:"duration_ns"`
-	StageRows       int                   `json:"stage_rows"`
-	EmbeddingInputs int                   `json:"embedding_requested"`
-	Acknowledged    int64                 `json:"vector_acknowledged"`
-	DuplicateInputs int                   `json:"identity_duplicate_inputs"`
-	SecondLookup    bool                  `json:"identity_second_lookup"`
-	ProjectionRows  int                   `json:"projection_rows"`
-	SourceRead      int                   `json:"source_read"`
-	NewFields       int                   `json:"projection_new_fields"`
-	UnchangedFields int                   `json:"projection_unchanged_fields"`
+	Message          string                `json:"msg"`
+	RunID            string                `json:"run_id"`
+	OperationID      uint64                `json:"operation_id"`
+	ParentID         uint64                `json:"parent_operation_id"`
+	PID              int                   `json:"pid"`
+	Purpose          observation.Purpose   `json:"purpose"`
+	Operation        observation.Operation `json:"operation"`
+	Outcome          observation.Outcome   `json:"outcome"`
+	Duration         int64                 `json:"duration_ns"`
+	StageRows        int                   `json:"stage_rows"`
+	EmbeddingInputs  int                   `json:"embedding_requested"`
+	Acknowledged     int64                 `json:"vector_acknowledged"`
+	DuplicateInputs  int                   `json:"identity_duplicate_inputs"`
+	SecondLookup     bool                  `json:"identity_second_lookup"`
+	ProjectionRows   int                   `json:"projection_rows"`
+	SourceRead       int                   `json:"source_read"`
+	NewFields        int                   `json:"projection_new_fields"`
+	UnchangedFields  int                   `json:"projection_unchanged_fields"`
+	PageHits         int                   `json:"page_hits"`
+	SourceGroups     int                   `json:"source_groups"`
+	SourceReads      int                   `json:"source_reads"`
+	MessagesVisited  int                   `json:"messages_visited"`
+	MessagesRetained int                   `json:"messages_retained"`
+	Windows          int                   `json:"windows"`
 }
 
 func readEmbeddedOperationMeasurements(t *testing.T, stateRoot string) []embeddedOperationMeasurement {

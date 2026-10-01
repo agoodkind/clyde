@@ -18,7 +18,6 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
-	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/loginventory"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
@@ -65,14 +64,6 @@ func (s *controlServer) GetDaemonStatus(context.Context, *emptypb.Empty) (*clyde
 		return nil, status.Error(codes.Unavailable, "daemon runtime status is unavailable")
 	}
 	return s.runtimeStatus(), nil
-}
-
-// conversationSemanticSearchClient is the vector engine client adapted by
-// semanticConversationSearchSource. The semsearch client satisfies it and tests
-// supply a fake.
-type conversationSemanticSearchClient interface {
-	SearchConversations(ctx context.Context, collectionID, query string, limit int32, filter semsearch.SearchFilter, perConversationLimit int32) ([]semsearch.SemHit, error)
-	SearchWithinConversation(ctx context.Context, collectionID, conversationID, query string, limit int32, filter semsearch.SearchFilter) ([]semsearch.SemHit, string, error)
 }
 
 func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
@@ -168,7 +159,7 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
 	if s.searchSource == nil {
-		failure := unavailableConversationSearchSourceError(nil)
+		failure := unavailableConversationSearchSourceError()
 		return nil, status.Error(failure.grpcCode(), failure.Error())
 	}
 	result, err := s.searchSource.SearchConversations(ctx, searchConversationsOptionsFromProto(req))
@@ -261,41 +252,7 @@ func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
 	return s.freshness()
 }
 
-// searchFacetTopN bounds each facet dimension to its top values by count.
 const searchFacetTopN = 5
-
-// filterAccounting builds the ordered candidate-count funnel from the index:
-// the indexed baseline first, then one stage per active filter, computed by
-// reusing ConversationIDsMatching. A stage whose count cannot be resolved is
-// omitted rather than fabricated; the indexed baseline and the caller-appended
-// returned stage keep the funnel honest.
-func filterAccounting(ctx context.Context, idx conversationSearchIndex, options conversation.SearchConversationsOptions) []conversation.FilterStage {
-	var anyProvider conversation.Provider
-	stages := make([]conversation.FilterStage, 0, 5)
-	if all, err := idx.ConversationIDsMatching(ctx, anyProvider, "", true); err == nil {
-		stages = append(stages, conversation.FilterStage{Name: "indexed", Remaining: len(all)})
-	}
-	provider := options.Provider
-	if provider.Valid() {
-		if matched, err := idx.ConversationIDsMatching(ctx, provider, "", true); err == nil {
-			stages = append(stages, conversation.FilterStage{Name: "provider", Remaining: len(matched)})
-		}
-	}
-	if options.WorkspaceRoot != "" {
-		if matched, err := idx.ConversationIDsMatching(ctx, provider, options.WorkspaceRoot, true); err == nil {
-			stages = append(stages, conversation.FilterStage{Name: "workspace", Remaining: len(matched)})
-		}
-	}
-	if !options.IncludeArchived {
-		if matched, err := idx.ConversationIDsMatching(ctx, provider, options.WorkspaceRoot, false); err == nil {
-			stages = append(stages, conversation.FilterStage{Name: "archived_excluded", Remaining: len(matched)})
-		}
-	}
-	if options.ConversationID != "" {
-		stages = append(stages, conversation.FilterStage{Name: "conversation", Remaining: 1})
-	}
-	return stages
-}
 
 // appendReturnedStage closes the funnel with the count actually returned.
 func appendReturnedStage(stages []conversation.FilterStage, returned int) []conversation.FilterStage {

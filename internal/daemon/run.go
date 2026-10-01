@@ -135,17 +135,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	startConversationIndex(ctx, log, conversationIndex, runtime.group)
 	semanticFreshness := newConversationSemanticFreshness()
 
-	// Resolve the feeder client per pass rather than once here: when the engine
-	// is down at boot the resolver returns nil, and the worker starts anyway and
-	// picks the client up once the background registration retry succeeds, with
-	// no daemon reload. A nil resolver means semantic search is not configured.
-	// A nil resolver is how the feeder is left unstarted, so offering
-	// conversations is gated here rather than inside the worker.
-	var resolveSemanticClient conversationSemanticClientResolver
-	if runtime.semantic != nil && cfg.Conversation.Semantic.FeedsEngine() {
-		resolveSemanticClient = runtime.semantic.syncClient
-	}
-	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, resolveSemanticClient, semanticFreshness, runtime.embeddedStatus, runtime.embeddedReconcile, runtime.group); err != nil {
+	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, semanticFreshness, runtime.embeddedStatus, runtime.embeddedReconcile, runtime.group); err != nil {
 		return err
 	}
 
@@ -189,7 +179,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	log.InfoContext(ctx, "daemon.worker.ready", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"adapter_enabled", cfg.Adapter.Enabled,
 		"mitm_enabled", cfg.MITM.EnabledDefault,
-		"conversation_semantic_enabled", runtime.semantic != nil,
+		"conversation_semantic_enabled", cfg.Conversation.Semantic.UsesEngine(),
 	)
 	// Start the config watcher only after readiness so a config edit landing
 	// during boot cannot trigger a reload before this worker is the
@@ -309,23 +299,7 @@ func newControlServer(
 	runtime *runtimeServices,
 	exportTokens exportTokenConfig,
 ) *controlServer {
-	semanticSearch := func() conversationSemanticSearchClient {
-		if !cfg.Conversation.Semantic.AnswersSearch() || runtime.semantic == nil {
-			return nil
-		}
-		return runtime.semantic.currentSearchClient()
-	}
-	var searchSource conversationSearchSource = &semanticConversationSearchSource{
-		index: index,
-		searchEnabled: func() bool {
-			return cfg.Conversation.Semantic.AnswersSearch()
-		},
-		searchClient: semanticSearch,
-		collectionID: cfg.Conversation.Semantic.CollectionID,
-	}
-	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
-		searchSource = &embeddedConversationSearchSource{library: nil, semantic: cfg.Conversation.Semantic, gate: runtime.embeddedReconcile, index: index, outbox: nil}
-	}
+	searchSource := &embeddedConversationSearchSource{library: nil, semantic: cfg.Conversation.Semantic, gate: runtime.embeddedReconcile, index: index, outbox: nil}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
 		stats:                           stats,

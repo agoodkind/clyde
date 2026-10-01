@@ -99,14 +99,17 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		configText := "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = true\nsocket_path = \"/tmp/lm-semantic.sock\"\ncollection_id = \"custom-conversations\"\n"
+		configText := "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = true\ncollection_id = \"custom-conversations\"\nprojection_profile = \"p3\"\n" +
+			"catalog_path = \"/tmp/config-test-catalog.sqlite\"\nlock_path = \"/tmp/config-test-catalog.lock\"\n" +
+			"pool_id = \"config-test\"\nmilvus_address = \"localhost:1\"\nmilvus_database = \"config_test\"\n" +
+			"milvus_collection = \"vectors\"\nembedding_base_url = \"http://localhost:1/v1\"\n" +
+			"embedding_model = \"test-model\"\nembedding_revision = \"r1\"\nvector_dimension = 2\nnormalization = \"l2\"\n"
 		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.Conversation.Semantic.IngestionEnabled).To(BeTrue())
 		Expect(cfg.Conversation.Semantic.SearchEnabled).To(BeTrue())
-		Expect(cfg.Conversation.Semantic.SocketPath).To(Equal("/tmp/lm-semantic.sock"))
 		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("custom-conversations"))
 	})
 
@@ -140,7 +143,11 @@ cc_entrypoint = "sdk-cli"
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		configText := "[conversation.semantic]\ningestion_enabled = true\ncollection_id = \"   \"\n"
+		configText := "[conversation.semantic]\ningestion_enabled = true\ncollection_id = \"   \"\nprojection_profile = \"p3\"\n" +
+			"catalog_path = \"/tmp/config-test-catalog.sqlite\"\nlock_path = \"/tmp/config-test-catalog.lock\"\n" +
+			"pool_id = \"config-test\"\nmilvus_address = \"localhost:1\"\nmilvus_database = \"config_test\"\n" +
+			"milvus_collection = \"vectors\"\nembedding_base_url = \"http://localhost:1/v1\"\n" +
+			"embedding_model = \"test-model\"\nembedding_revision = \"r1\"\nvector_dimension = 2\nnormalization = \"l2\"\n"
 		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()

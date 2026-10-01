@@ -286,7 +286,7 @@ func startEmbeddedConversationSemanticSync(
 		)
 		return nil
 	}
-	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, log, contentKinds)
+	worker := newConversationSemanticSyncWorker(index, semantic.CollectionID, log, contentKinds)
 	worker.freshness = freshness
 	worker.embedded = embedded
 	embedded.workerDone = done
@@ -814,7 +814,7 @@ func (w *conversationSemanticSyncWorker) logEmbeddedPass(ctx context.Context, st
 		slog.String("concern", "conversation.semantic"),
 		slog.String("component", "daemon"),
 		slog.String("run_id", observation.ScopeFromContext(ctx).RunID),
-		slog.String("backend", string(config.ConversationSemanticBackendEmbedded)),
+		slog.String("backend", "embedded"),
 		slog.Int("admitted", stats.admitted),
 		slog.Int("needed", stats.needed),
 		slog.Int("deferred", stats.deferred),

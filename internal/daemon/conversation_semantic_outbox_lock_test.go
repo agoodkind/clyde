@@ -74,9 +74,9 @@ func TestEmbeddedWorkerOpensNothingWhileOutboxLocked(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
 	semantic := config.ConversationSemanticConfig{
-		IngestionEnabled:  true,
-		CollectionID:      "clyde-conversations",
-		Backend:           config.ConversationSemanticBackendEmbedded,
+		IngestionEnabled: true,
+		CollectionID:     "clyde-conversations",
+
 		CatalogPath:       filepath.Join(root, "catalog", "catalog.sqlite"),
 		LockPath:          filepath.Join(root, "catalog", "catalog.lock"),
 		PoolID:            "lock-worker-test",
@@ -95,7 +95,7 @@ func TestEmbeddedWorkerOpensNothingWhileOutboxLocked(t *testing.T) {
 	if err := index.Refresh(t.Context()); err != nil {
 		t.Fatalf("refresh index: %v", err)
 	}
-	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
+	worker := newConversationSemanticSyncWorker(index, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 	worker.embedded = newEmbeddedConversationSync(semantic, outboxPath, newEmbeddedSemanticStatus(), index)
 	storeOpens := 0
 	worker.embedded.open = func(ctx context.Context, lock *os.File, log *slog.Logger) (*embeddedConversationStore, error) {

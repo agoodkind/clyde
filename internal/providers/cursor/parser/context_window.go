@@ -14,14 +14,13 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// ReadContextWindow bypasses cached headers and transcripts for virtual stores.
-func (*Parser) ReadContextWindow(ctx context.Context, path, selector string, start, end int, options conversation.LoadOptions, visit func([]transcript.Message) error) error {
+func (*Parser) readContextWindows(ctx context.Context, path, selector string, options conversation.LoadOptions, read *contextWindowsRead) error {
 	if selector != "" {
 		return errors.New("cursor context does not accept a selector")
 	}
 	if !strings.HasPrefix(path, virtualPathPrefix) {
 		err := conversation.WithStableContextSources(ctx, []conversation.ContextSourceFile{{Path: path, Required: true}}, func() error {
-			return visitCursorContext(ctx, streamPhysicalContext(ctx, path, options), start, end, visit)
+			return visitCursorContext(ctx, streamPhysicalContext(ctx, path, options), read)
 		})
 		if err != nil {
 			return &conversation.ContextReadError{Operation: "read physical cursor context", Cause: err}
@@ -38,24 +37,24 @@ func (*Parser) ReadContextWindow(ctx context.Context, path, selector string, sta
 	}
 	for _, root := range roots {
 		if RootHash(root.RootDir) == virtual.RootHash {
-			return readVirtualCursorContext(ctx, root, virtual, path, options, start, end, visit)
+			return readVirtualCursorContext(ctx, root, virtual, path, options, read)
 		}
 	}
 	return fmt.Errorf("cursor context source not found: %s", path)
 }
 
-func readVirtualCursorContext(ctx context.Context, root cursorstore.DataRoot, virtual CursorVirtualPath, path string, options conversation.LoadOptions, start, end int, visit func([]transcript.Message) error) error {
+func readVirtualCursorContext(ctx context.Context, root cursorstore.DataRoot, virtual CursorVirtualPath, path string, options conversation.LoadOptions, read *contextWindowsRead) error {
 	switch virtual.Kind {
 	case VirtualKindComposer:
-		return readComposerContext(ctx, root, virtual.ID, path, options, start, end, visit)
+		return readComposerContext(ctx, root, virtual.ID, path, options, read)
 	case VirtualKindLegacy:
-		return readLegacyContext(ctx, root, virtual.ID, options, start, end, visit)
+		return readLegacyContext(ctx, root, virtual.ID, options, read)
 	default:
 		return errors.New("unsupported cursor context kind")
 	}
 }
 
-func readComposerContext(ctx context.Context, root cursorstore.DataRoot, id, path string, options conversation.LoadOptions, start, end int, visit func([]transcript.Message) error) error {
+func readComposerContext(ctx context.Context, root cursorstore.DataRoot, id, path string, options conversation.LoadOptions, read *contextWindowsRead) error {
 	err := withCursorContextDatabase(ctx, root.GlobalDBPath, func(db *sql.DB) error {
 		header, found, readErr := cursorstore.ReadComposerHeader(ctx, db, id)
 		if readErr != nil {
@@ -70,7 +69,7 @@ func readComposerContext(ctx context.Context, root cursorstore.DataRoot, id, pat
 		stream := iter.Seq2[transcript.Message, error](func(yield func(transcript.Message, error) bool) {
 			streamComposerDatabase(ctx, db, root.GlobalDBPath, artifact, options, yield)
 		})
-		return visitCursorContext(ctx, stream, start, end, visit)
+		return visitCursorContext(ctx, stream, read)
 	})
 	if err != nil {
 		return &conversation.ContextReadError{Operation: "read composer context", Cause: err}
@@ -78,7 +77,7 @@ func readComposerContext(ctx context.Context, root cursorstore.DataRoot, id, pat
 	return nil
 }
 
-func readLegacyContext(ctx context.Context, root cursorstore.DataRoot, id string, options conversation.LoadOptions, start, end int, visit func([]transcript.Message) error) error {
+func readLegacyContext(ctx context.Context, root cursorstore.DataRoot, id string, options conversation.LoadOptions, read *contextWindowsRead) error {
 	workspace, tab, ok := splitLegacyID(id)
 	if !ok {
 		return errors.New("invalid cursor context legacy identity")
@@ -101,7 +100,7 @@ func readLegacyContext(ctx context.Context, root cursorstore.DataRoot, id string
 			}
 			for _, current := range chat.Tabs {
 				if current.TabID == tab && len(current.Bubbles) > 0 {
-					return visitCursorContext(ctx, streamLegacyContext(current, options), start, end, visit)
+					return visitCursorContext(ctx, streamLegacyContext(current, options), read)
 				}
 			}
 			return errors.New("cursor context legacy tab is absent")
@@ -169,8 +168,10 @@ func streamPhysicalContext(ctx context.Context, path string, options conversatio
 	}
 }
 
-func visitCursorContext(ctx context.Context, stream iter.Seq2[transcript.Message, error], start, end int, visit func([]transcript.Message) error) error {
-	if err := conversation.VisitContextWindow(ctx, stream, start, end, visit); err != nil {
+func visitCursorContext(ctx context.Context, stream iter.Seq2[transcript.Message, error], read *contextWindowsRead) error {
+	stats, err := conversation.VisitContextWindows(ctx, stream, read.windows, read.visit)
+	read.stats = stats
+	if err != nil {
 		return &conversation.ContextReadError{Operation: "visit cursor context", Cause: err}
 	}
 	return nil

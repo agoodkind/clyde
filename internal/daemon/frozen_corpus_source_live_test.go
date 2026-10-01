@@ -49,6 +49,7 @@ type frozenCorpusRequest struct {
 	Semantic                 config.ConversationSemanticConfig `json:"semantic"`
 	Model                    frozenCorpusModel                 `json:"model"`
 	RetainOnSuccess          bool                              `json:"retain_on_success"`
+	Resume                   bool                              `json:"resume"`
 }
 
 type frozenCorpusCache struct {
@@ -77,7 +78,7 @@ func openFrozenCorpusIndex(ctx context.Context, request frozenCorpusRequest) (*f
 	}
 	semantic := request.Semantic
 	model := request.Model
-	if semantic.ProjectionProfile != config.ConversationProjectionProfileSourceSpan || semantic.Backend != config.ConversationSemanticBackendEmbedded || !semantic.IngestionEnabled || semantic.SearchEnabled {
+	if semantic.ProjectionProfile != config.ConversationProjectionProfileSourceSpan || !semantic.IngestionEnabled || semantic.SearchEnabled {
 		return nil, errors.New("frozen driver requires explicit embedded p3 ingestion with search disabled")
 	}
 	if model.Name == "" || model.Revision == "" || model.Dimension <= 0 || model.Normalization == "" || model.Name != semantic.EmbeddingModel || model.Revision != semantic.EmbeddingRevision || model.Dimension != semantic.VectorDimension || model.Normalization != semantic.Normalization {
@@ -393,7 +394,7 @@ func createFrozenCorpusFixtureWithPadding(t *testing.T, padding int) frozenCorpu
 	manifestHash := sha256.Sum256([]byte(manifest.String()))
 	indexHash := sha256.Sum256(data)
 	semantic := config.NewConfigWithDefaults().Conversation.Semantic
-	semantic.Backend = config.ConversationSemanticBackendEmbedded
+
 	semantic.IngestionEnabled = true
 	semantic.SearchEnabled = false
 	semantic.ProjectionProfile = config.ConversationProjectionProfileSourceSpan

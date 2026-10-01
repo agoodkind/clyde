@@ -137,6 +137,7 @@ type frozenCorpusProof struct {
 	CatalogAfterRestart             frozenCatalogVersions `json:"catalog_after_restart"`
 	Retained                        bool                  `json:"retained"`
 	PublicCLIContextMappingVerified bool                  `json:"public_cli_context_mapping_verified"`
+	Resumed                         bool                  `json:"resumed"`
 }
 
 // TestFrozenCorpusIngestionDriver runs only with an explicit guarded request.
@@ -255,13 +256,20 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest, verifyU
 		return proof, errors.Join(err, closeFrozenAdmin(ctx, admin))
 	}
 	database := request.Semantic.MilvusDatabase
-	if slices.Contains(existing, database) {
+	if request.Resume && !slices.Contains(existing, database) {
+		return proof, errors.Join(errors.New("resume database is absent; preserved catalog cannot prove missing vectors"), closeFrozenAdmin(ctx, admin))
+	}
+	if !request.Resume && slices.Contains(existing, database) {
 		return proof, errors.Join(errors.New("explicit fresh database already exists"), closeFrozenAdmin(ctx, admin))
 	}
 	proof.Database = database
-	t.Logf("verified absent frozen database %s at isolated runtime %s before create request", database, request.RuntimeRoot)
+	if request.Resume {
+		t.Logf("verified existing frozen database %s and exact source proofs at isolated runtime %s before replay", database, request.RuntimeRoot)
+	} else {
+		t.Logf("verified absent frozen database %s at isolated runtime %s before create request", database, request.RuntimeRoot)
+	}
 	defer func() {
-		if resultErr != nil || !request.RetainOnSuccess {
+		if !request.RetainOnSuccess && !request.Resume {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			databases, inspectErr := admin.ListDatabase(cleanupCtx, milvusclient.NewListDatabaseOption())
@@ -277,8 +285,10 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest, verifyU
 			resultErr = errors.Join(resultErr, closeFrozenAdmin(ctx, admin))
 		}
 	}()
-	if err = admin.CreateDatabase(ctx, milvusclient.NewCreateDatabaseOption(database)); err != nil {
-		return proof, err
+	if !request.Resume {
+		if err = admin.CreateDatabase(ctx, milvusclient.NewCreateDatabaseOption(database)); err != nil {
+			return proof, err
+		}
 	}
 	logPath := filepath.Join(request.RuntimeRoot, "frozen-ingestion-operations.jsonl")
 	if evidenceRoot := os.Getenv("CLYDE_FROZEN_FIXTURE_EVIDENCE_ROOT"); evidenceRoot != "" {
@@ -294,6 +304,9 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest, verifyU
 		}
 		logPath = filepath.Join(evidenceRoot, "frozen-ingestion-operations.jsonl")
 	}
+	if request.Resume {
+		logPath = strings.TrimSuffix(logPath, ".jsonl") + "-resume-" + fmt.Sprint(time.Now().UnixNano()) + ".jsonl"
+	}
 	logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return proof, err
@@ -305,7 +318,7 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest, verifyU
 		return proof, err
 	}
 	createWorker := func() *conversationSemanticSyncWorker {
-		worker := newConversationSemanticSyncWorker(index, nil, request.Semantic.CollectionID, logger, kinds)
+		worker := newConversationSemanticSyncWorker(index, request.Semantic.CollectionID, logger, kinds)
 		worker.embedded = newEmbeddedConversationSync(request.Semantic, conversationSemanticOutboxPath(request.Semantic.PoolID), newEmbeddedSemanticStatus(), index)
 		return worker
 	}
@@ -366,6 +379,7 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest, verifyU
 	}
 	proof = frozenCorpusProof{InitialPasses: initial, RestartPasses: restarted, Complete: true, Database: database, Records: len(index.records), AdmittedOwners: len(firstOwners), Occurrences: occurrences, First: initial[0].Pass, Restart: restarted[0].Pass, CatalogBeforeRestart: beforeRestart, CatalogAfterRestart: afterRestart, Retained: request.RetainOnSuccess, PublicCLIContextMappingVerified: false}
 	proof.RejectedUnexpectedOwner = rejectedOwner
+	proof.Resumed = request.Resume
 	for owner := range expected {
 		proof.ExpectedOwnerIDs = append(proof.ExpectedOwnerIDs, owner)
 	}
@@ -712,7 +726,12 @@ func validateFrozenRuntime(request frozenCorpusRequest) error {
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path || !strings.HasPrefix(path, root+string(filepath.Separator)) {
 			return errors.New("catalog, lock, and result must be under explicit isolated runtime root")
 		}
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		info, err := os.Lstat(path)
+		if request.Resume && path != request.OutputPath {
+			if err != nil || !info.Mode().IsRegular() {
+				return errors.New("resume catalog and lock must be existing regular files")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return errors.New("runtime catalog, lock, or result already exists or cannot be inspected")
 		}
 	}
@@ -727,13 +746,18 @@ func validateFrozenRuntime(request frozenCorpusRequest) error {
 	if err != nil {
 		return err
 	}
-	if semantic.EmbeddingBaseURL != liveEmbeddingBaseURL && semantic.EmbeddingBaseURL != "http://[::1]:5400/v1" {
-		return errors.New("frozen embedding URL must be http://localhost:5400/v1 or http://[::1]:5400/v1")
+	if semantic.EmbeddingBaseURL != liveEmbeddingBaseURL && semantic.EmbeddingBaseURL != "http://[::1]:5400/v1" && semantic.EmbeddingBaseURL != "http://127.0.0.1:5400/v1" {
+		return errors.New("frozen embedding URL must be http://localhost:5400/v1, http://[::1]:5400/v1, or http://127.0.0.1:5400/v1")
 	}
 	if semantic.MilvusAddress != address || !strings.HasPrefix(semantic.MilvusDatabase, "clyde_frozen_") || semantic.MilvusCollection == "" || semantic.CollectionID == "" || semantic.PoolID == "" {
 		return errors.New("driver requires explicit fresh clyde_frozen_ database and approved isolated Mac endpoints")
 	}
-	if _, err := os.Lstat(conversationSemanticOutboxPath(semantic.PoolID)); !errors.Is(err, os.ErrNotExist) {
+	info, err := os.Lstat(conversationSemanticOutboxPath(semantic.PoolID))
+	if request.Resume {
+		if err != nil || !info.Mode().IsRegular() {
+			return errors.New("resume outbox must be an existing regular file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return errors.New("isolated outbox already exists or cannot be inspected")
 	}
 	return nil

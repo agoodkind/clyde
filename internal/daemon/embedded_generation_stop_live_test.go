@@ -55,7 +55,7 @@ func TestEmbeddedRuntimeTimedOutStopJoinsBeforeStorageClose(t *testing.T) {
 	configuration.Adapter.Enabled = false
 	configuration.MITM.EnabledDefault = false
 	configuration.Conversation.Semantic = config.ConversationSemanticConfig{
-		Backend: config.ConversationSemanticBackendEmbedded, IngestionEnabled: true,
+		IngestionEnabled:  true,
 		ProjectionProfile: config.ConversationProjectionProfileSourceSpan,
 		CollectionID:      "fifo-stop", PoolID: "fifo-stop",
 		CatalogPath: filepath.Join(t.TempDir(), "catalog.sqlite"), LockPath: filepath.Join(t.TempDir(), "catalog.lock"),
