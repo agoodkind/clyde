@@ -316,7 +316,7 @@ const composerBubbleProjectionColumns = "rowid, key," +
 	" json_extract(value, '$.createdAt')," +
 	" json_extract(value, '$.type')," +
 	" json_extract(value, '$.text')," +
-	" json_extract(value, '$.thinking.text')," +
+	" CASE json_type(value, '$.thinking') WHEN 'text' THEN json_extract(value, '$.thinking') ELSE json_extract(value, '$.thinking.text') END," +
 	" json_type(value, '$.toolFormerData')," +
 	" json_extract(value, '$.toolFormerData.toolCallId')," +
 	" json_extract(value, '$.toolFormerData.name')," +

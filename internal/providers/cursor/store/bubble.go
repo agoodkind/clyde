@@ -2,6 +2,7 @@ package cursorstore
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -72,6 +73,22 @@ func (bubble Bubble) HasContent() bool {
 // bubble payload.
 type BubbleThinking struct {
 	Text string `json:"text"`
+}
+
+// UnmarshalJSON accepts Cursor's string and object thinking representations.
+func (thinking *BubbleThinking) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		thinking.Text = text
+		return nil
+	}
+	type thinkingObject BubbleThinking
+	var decoded thinkingObject
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return fmt.Errorf("decode cursor thinking: %w", err)
+	}
+	*thinking = BubbleThinking(decoded)
+	return nil
 }
 
 // BubbleToolCall models the consumed tool call fields in a Cursor bubble
