@@ -25,14 +25,24 @@ level = "debug"
 include_subagent_conversations = false
 
 [conversation.semantic]
-# Offer conversations to the search engine. This embeds text, so it occupies the
-# GPU and grows the store. Turning it off stops new embedding.
+# Enable ingestion to embed new selected conversation content.
 ingestion_enabled = false
-# Answer conversation searches from the engine. Reading queries a corpus that
-# already exists and costs nothing. This opt-in works without ingestion.
+# Search reads committed conversations and embeds each new query.
 search_enabled = true
-socket_path = ""
 collection_id = "clyde-conversations"
+projection_profile = "p3"
+catalog_path = "~/.local/state/clyde/search/catalog.sqlite"
+lock_path = "~/.local/state/clyde/search/catalog.lock"
+pool_id = "clyde-conversations"
+milvus_address = "localhost:19530"
+milvus_database = "default"
+milvus_collection = "clyde_conversation_vectors"
+embedding_base_url = "http://[::1]:5400/v1"
+embedding_model = "nvidia/NV-EmbedCode-7b-v1"
+# Set the resolved revision of the installed model before opening this store.
+embedding_revision = "MODEL_ARTIFACT_SHA256"
+vector_dimension = 4096
+normalization = "l2"
 # Content kinds offered to the search engine, using the same selector names the
 # export surface accepts. Omit the key for this default, which is the chat turns
 # plus tool calls without their results. The three tool kinds are nested rather

@@ -58,7 +58,9 @@ The following keys are the proposed `[conversation.semantic]` contract. An omitt
 | `max_page_size`, `max_query_bytes`, `max_filter_depth`, `max_filter_values` | Nonnegative integers; default zero disables the individual request limit. | Same named `library.Config` fields. Reject an oversized request with `ErrInvalidRequest`; never truncate it. |
 | `bm25_k1`, `bm25_b`, `rrf_k` | Finite numbers; defaults 1.2, 0.75, and 60. | Same named `library.Config` fields. Query settings enter the cursor identity. |
 
-The global `conversation.include_subagent_conversations` setting currently controls raw index visibility. Clyde makes semantic subagent admission independent of ordinary list visibility while continuing to use the registered provider readers. Unknown selectors, missing enabled store fields, invalid numeric budgets, and model descriptor mismatches fail configuration or opening before search accepts requests. The old `socket_path` key is rejected with a migration error after the RPC client is removed.
+The global `conversation.include_subagent_conversations` setting currently controls raw index visibility. Clyde makes semantic subagent admission independent of ordinary list visibility while continuing to use the registered provider readers. Unknown selectors, missing enabled store fields, invalid numeric budgets, and model descriptor mismatches fail configuration or opening before search accepts requests. Remove the obsolete RPC client and its backend and socket settings.
+
+The search snapshot expires after ten minutes of inactivity by default. Every successful next-page request renews its saved expiration. Active paging can continue beyond ten minutes without changing the saved order. An expired session returns the expiration error.
 
 ## Error contract
 
