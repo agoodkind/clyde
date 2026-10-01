@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
@@ -91,11 +92,29 @@ func newBackfillConversationDocumentsCmd(f *cli.Factory) *cobra.Command {
 	return cmd
 }
 
+// refuseEmbeddedBackfill returns an error for the embedded semantic backend.
+// Both backfill commands dial the lm-semantic-search socket, which the embedded
+// backend does not use.
+func refuseEmbeddedBackfill(ctx context.Context, cfg *config.Config, command string) error {
+	if cfg.Conversation.Semantic.Backend != config.ConversationSemanticBackendEmbedded {
+		return nil
+	}
+	err := fmt.Errorf(
+		"clyde daemon %s is not available with conversation.semantic.backend = %q: the daemon updates the metadata of indexed conversations through ReprojectScalars automatically, and committed occurrences are append-only",
+		command, config.ConversationSemanticBackendEmbedded,
+	)
+	slog.WarnContext(ctx, "cli.daemon.backfill.embedded_refused", "concern", "cli.daemon", "component", "cli", "command", command, "err", err)
+	return err
+}
+
 func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun bool) error {
 	cfg, err := f.Config()
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.backfill.config_failed", "concern", "cli.daemon", "component", "cli", "err", err)
 		return fmt.Errorf("load config: %w", err)
+	}
+	if err := refuseEmbeddedBackfill(ctx, cfg, "backfill-conversation-scalars"); err != nil {
+		return err
 	}
 	index := daemonsvc.NewConversationIndex()
 	if refreshErr := index.Refresh(ctx); refreshErr != nil {
@@ -166,6 +185,14 @@ func runBackfillConversationDocumentsWithDeps(
 	}
 	if !options.DryRun && options.Limit == 0 && trimmedConversationID == "" && !options.AllowFullReexamine {
 		return fmt.Errorf("refusing a full uncapped --execute reexamine of every conversation; pass --conversation <id> to reexamine one, --limit <n> to reexamine a bounded batch, or --all to reexamine the whole corpus")
+	}
+	backendConfig, err := f.Config()
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.config_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return fmt.Errorf("load config: %w", err)
+	}
+	if err := refuseEmbeddedBackfill(ctx, backendConfig, "backfill-conversation-documents"); err != nil {
+		return err
 	}
 	if refreshErr := index.Refresh(ctx); refreshErr != nil {
 		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.refresh_failed", "concern", "cli.daemon", "component", "cli", "err", refreshErr)

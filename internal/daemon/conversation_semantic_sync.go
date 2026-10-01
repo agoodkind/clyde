@@ -230,6 +230,9 @@ type conversationSemanticSyncWorker struct {
 	// daemon startup from the export surface's selector vocabulary, so a change
 	// takes effect on the next daemon generation.
 	contentKinds conversation.ContentKindSet
+	// embedded is the embedded backend state. A worker with embedded state
+	// runs runEmbeddedPass and never resolves an lm-semantic-search client.
+	embedded *embeddedConversationSync
 }
 
 type conversationSemanticSyncStats struct {
@@ -394,6 +397,7 @@ func newConversationSemanticSyncWorker(
 		now:                time.Now,
 		freshness:          nil,
 		contentKinds:       contentKinds,
+		embedded:           nil,
 	}
 }
 
@@ -451,6 +455,9 @@ func (w *conversationSemanticSyncWorker) runPassAndLog(ctx context.Context) {
 func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	if semanticSyncContextDone(ctx) {
 		return nil
+	}
+	if w != nil && w.index != nil && w.embedded != nil {
+		return w.runEmbeddedPass(ctx)
 	}
 	if w == nil || w.index == nil || w.resolveClient == nil {
 		return fmt.Errorf("semantic conversation sync worker is not configured")

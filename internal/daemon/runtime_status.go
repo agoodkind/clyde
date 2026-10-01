@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 	"google.golang.org/grpc/connectivity"
 )
 
@@ -15,7 +16,10 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 		SearchEnabled:    cfg.Conversation.Semantic.AnswersSearch(),
 		Connection:       clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_DISABLED,
 	}
-	if cfg.Conversation.Semantic.UsesEngine() {
+	if cfg.Conversation.Semantic.UsesEngine() && cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
+		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_EMBEDDED
+		semantic.Embedded = r.embeddedStatus.proto()
+	} else if cfg.Conversation.Semantic.UsesEngine() {
 		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_UNAVAILABLE
 		if r.semantic != nil {
 			r.semantic.readStatus(semantic)

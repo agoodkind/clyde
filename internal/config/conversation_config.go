@@ -16,8 +16,10 @@ type ConversationConfig struct {
 	//
 	// It selects whole conversations, which is a different level from
 	// [ConversationSemanticConfig.IndexedContent]. A conversation this hides is
-	// absent from every clyde surface, and the engine retains whatever a short
-	// manifest omits, so hiding one removes nothing already stored.
+	// absent from every clyde listing and search surface, and the engine retains
+	// whatever a short manifest omits, so hiding one removes nothing already
+	// stored. Embedded semantic ingestion ignores this setting and admits
+	// subagent conversations by [ConversationSemanticConfig.IncludeSubagents].
 	IncludeSubagentConversations bool                       `json:"includeSubagentConversations,omitempty" toml:"include_subagent_conversations,omitempty"`
 	Cursor                       CursorConversationConfig   `json:"cursor,omitzero" toml:"cursor,omitempty"`
 	Semantic                     ConversationSemanticConfig `json:"semantic,omitzero" toml:"semantic,omitempty"`
@@ -64,8 +66,9 @@ type ConversationSemanticConfig struct {
 
 	// Backend selects the implementation behind ingestion and search. An empty
 	// value selects the lm-semantic-search daemon at SocketPath. The embedded
-	// value selects the in-process library configured by the keys below, and
-	// the loader rejects it until this build contains that runtime.
+	// value selects the in-process library configured by the keys below. This
+	// build ingests into the embedded library and has no embedded search, so
+	// the loader rejects the embedded value when SearchEnabled is true.
 	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
 
 	// IndexedProviders and IndexedRoles limit embedded ingestion and search to

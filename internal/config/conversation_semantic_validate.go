@@ -13,11 +13,21 @@ import (
 // validation error.
 const conversationSemanticKey = "conversation.semantic."
 
+// maxConversationSemanticBM25K1 is the largest bm25_k1 the shared search
+// library accepts at Open. The library computes BM25 in float32 and also
+// rejects a nonzero value that converts to a float32 zero.
+const maxConversationSemanticBM25K1 = 1e6
+
+// maxConversationSemanticQueryBlockSize is the largest query_block_size the
+// shared search library accepts at Open, the Milvus single-search limit.
+const maxConversationSemanticQueryBlockSize = 16384
+
 // normalizeAndValidateConversationSemantic trims the embedded search settings,
 // expands the catalog and lock paths, and rejects values the embedded library
 // cannot accept. The range checks run for every backend. After the embedded
 // backend settings pass their required checks, the function rejects
-// `backend = "embedded"`, because this build has no embedded runtime.
+// `backend = "embedded"` together with `search_enabled = true`, because this
+// build contains embedded ingestion and no embedded search.
 func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConfig) error {
 	normalizeConversationSemanticStrings(semantic)
 	if err := validateConversationSemanticBackend(semantic.Backend); err != nil {
@@ -41,7 +51,14 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 	if err := validateEmbeddedConversationSemanticRequired(semantic); err != nil {
 		return err
 	}
-	return invalidConversationSemanticSetting("backend", fmt.Sprintf("= %q is not available in this Clyde build; remove the key to use the lm-semantic-search daemon", ConversationSemanticBackendEmbedded))
+	if semantic.SearchEnabled {
+		return invalidConversationSemanticSetting("backend", fmt.Sprintf(
+			"= %q requires %ssearch_enabled = false, because embedded search is not available in this Clyde build (CLYDE-761)",
+			ConversationSemanticBackendEmbedded,
+			conversationSemanticKey,
+		))
+	}
+	return nil
 }
 
 // invalidConversationSemanticSetting logs one rejected setting and returns an
@@ -132,7 +149,13 @@ func validateConversationSemanticCounts(semantic *ConversationSemanticConfig) er
 		{key: "max_filter_values", value: int64(semantic.MaxFilterValues)},
 		{key: "rrf_k", value: int64(semantic.RRFK)},
 	}
-	return rejectNegativeConversationSemanticSettings(settings)
+	if err := rejectNegativeConversationSemanticSettings(settings); err != nil {
+		return err
+	}
+	if semantic.QueryBlockSize > maxConversationSemanticQueryBlockSize {
+		return invalidConversationSemanticSetting("query_block_size", fmt.Sprintf("must be at most %d, got %d", maxConversationSemanticQueryBlockSize, semantic.QueryBlockSize))
+	}
+	return nil
 }
 
 func rejectNegativeConversationSemanticSettings(settings []conversationSemanticSetting) error {
@@ -145,8 +168,9 @@ func rejectNegativeConversationSemanticSettings(settings []conversationSemanticS
 }
 
 func validateConversationSemanticRanking(semantic *ConversationSemanticConfig) error {
-	if math.IsNaN(semantic.BM25K1) || math.IsInf(semantic.BM25K1, 0) || semantic.BM25K1 < 0 {
-		return invalidConversationSemanticSetting("bm25_k1", fmt.Sprintf("must be a finite number at least 0, got %v", semantic.BM25K1))
+	k1 := semantic.BM25K1
+	if math.IsNaN(k1) || k1 < 0 || k1 > maxConversationSemanticBM25K1 || (k1 != 0 && float32(k1) == 0) {
+		return invalidConversationSemanticSetting("bm25_k1", fmt.Sprintf("must be 0 or positive as a float32 and at most %v, got %v", maxConversationSemanticBM25K1, k1))
 	}
 	if semantic.BM25B != nil {
 		value := *semantic.BM25B

@@ -27,7 +27,8 @@ func defaultSemanticContentKinds() conversation.ContentKindSet {
 }
 
 // startConfiguredConversationSemanticSync resolves the configured content kinds
-// and starts the feeder under them.
+// and starts the feeder under them. The embedded backend starts the embedded
+// ingestion worker instead of the lm-semantic-search feeder.
 //
 // It is called before the control server serves, because the feeder's stop is
 // installed on the lifecycle group inside the start call ahead of the goroutine
@@ -37,9 +38,11 @@ func startConfiguredConversationSemanticSync(
 	ctx context.Context,
 	log *slog.Logger,
 	cfg *config.Config,
-	index conversationSemanticIndex,
+	index embeddedRecordIndex,
 	resolveClient conversationSemanticClientResolver,
 	freshness *conversationSemanticFreshness,
+	embeddedStatus *embeddedSemanticStatus,
+	embeddedReconcile *embeddedReconcileGate,
 	group *livetrack.Group,
 ) error {
 	kinds, err := SemanticContentKinds(cfg.Conversation.Semantic)
@@ -48,6 +51,10 @@ func startConfiguredConversationSemanticSync(
 		// error with the config key, so returning it as-is keeps one boundary log
 		// per failure rather than two saying the same thing.
 		return err
+	}
+	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
+		startEmbeddedConversationSemanticSync(ctx, log, cfg.Conversation.Semantic, index, freshness, embeddedStatus, embeddedReconcile, group, kinds)
+		return nil
 	}
 	startConversationSemanticSync(ctx, log, index, resolveClient, cfg.Conversation.Semantic.CollectionID, freshness, group, kinds)
 	return nil
