@@ -133,6 +133,7 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 		return cli
 	}
 	initial := read()
+	assertVirtualContextPageReads(t, readEmbeddedOperationMeasurements(t, h.stateRoot))
 	expectedContext := "Message 0 (chat):\nvirtual context checkpoint question\n\nMessage 1 (chat):\nvirtual context checkpoint answer\n\nMessage 1 (tool_call):\nread_file\nREADME.md"
 	for _, hit := range initial.Matches {
 		if hit.ContextState != conversation.SearchContextStateAvailable || hit.ContextWindow != expectedContext {
@@ -172,6 +173,7 @@ type virtualContextProof struct {
 	SearchUpserts    int                            `json:"search_upsert_calls"`
 	SearchIngestion  int                            `json:"search_ingestion_operations"`
 	Operations       []embeddedOperationMeasurement `json:"operations"`
+	ContextPages     []embeddedOperationMeasurement `json:"context_pages"`
 }
 
 func retainVirtualContextProof(t *testing.T, path, database string, initial, final []embeddedOperationMeasurement) {
@@ -179,8 +181,11 @@ func retainVirtualContextProof(t *testing.T, path, database string, initial, fin
 	if len(final) < len(initial) || !reflect.DeepEqual(initial, final[:len(initial)]) {
 		t.Fatal("search-only operation log changed the initial ingestion prefix")
 	}
-	proof := virtualContextProof{Complete: false, Database: database, PublicationRows: 0, InitialStageRows: 0, QueryRequests: 0, SearchStageCalls: 0, SearchUpserts: 0, SearchIngestion: 0, Operations: nil}
+	proof := virtualContextProof{Complete: false, Database: database, PublicationRows: 0, InitialStageRows: 0, QueryRequests: 0, SearchStageCalls: 0, SearchUpserts: 0, SearchIngestion: 0, Operations: nil, ContextPages: nil}
 	for index, event := range final {
+		if event.Message == "daemon.conversation_embedded_search.context_page_completed" {
+			proof.ContextPages = append(proof.ContextPages, event)
+		}
 		if event.Message == "daemon.conversation_semantic_sync.pass_completed" && index < len(initial) && event.ProjectionRows == 3 {
 			proof.PublicationRows = event.ProjectionRows
 		}
@@ -232,6 +237,26 @@ func retainVirtualContextProof(t *testing.T, path, database string, initial, fin
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertVirtualContextPageReads(t *testing.T, measurements []embeddedOperationMeasurement) {
+	t.Helper()
+	seen := make(map[string]bool)
+	for _, event := range measurements {
+		if event.Message != "daemon.conversation_embedded_search.context_page_completed" {
+			continue
+		}
+		if event.RunID == "" || seen[event.RunID] || event.PID <= 0 || event.Purpose != observation.Query || event.Outcome != observation.Success {
+			t.Fatalf("page context observation scope differs: %+v", event)
+		}
+		seen[event.RunID] = true
+		if event.PageHits != 3 || event.SourceGroups != 1 || event.SourceReads != 1 || event.MessagesVisited != 2 || event.MessagesRetained != 2 || event.Windows != 3 {
+			t.Fatalf("public page repeated source reads or retained messages outside the union: %+v", event)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("actual CLI and MCP pages emitted %d context observations", len(seen))
 	}
 }
 

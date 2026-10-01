@@ -90,11 +90,11 @@ func (source *embeddedConversationSearchSource) SearchConversations(ctx context.
 		if hydrateErr != nil {
 			return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, hydrateErr)
 		}
-		match, contextErr := source.verifyContext(ctx, hit, match, options)
-		if contextErr != nil {
-			return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, contextErr)
-		}
 		matches = append(matches, match)
+	}
+	matches, err = source.readVerifiedPageContexts(ctx, page.Hits, matches, options)
+	if err != nil {
+		return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, err)
 	}
 	return embeddedSearchResult(matches, limit, offset, page), nil
 }

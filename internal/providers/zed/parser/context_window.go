@@ -14,8 +14,7 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// ReadContextWindow reloads the selected thread instead of cached discovery.
-func (*Parser) ReadContextWindow(ctx context.Context, path, selector string, start, end int, options conversation.LoadOptions, visit func([]transcript.Message) error) error {
+func (*Parser) readContextWindows(ctx context.Context, path, selector string, options conversation.LoadOptions, read *contextWindowsRead) error {
 	if selector != "" {
 		return errors.New("zed context does not accept a selector")
 	}
@@ -39,7 +38,9 @@ func (*Parser) ReadContextWindow(ctx context.Context, path, selector string, sta
 			stream := iter.Seq2[transcript.Message, error](func(yield func(transcript.Message, error) bool) {
 				streamDiscoveredContext(discovered, options, yield)
 			})
-			if err := conversation.VisitContextWindow(ctx, stream, start, end, visit); err != nil {
+			stats, err := conversation.VisitContextWindows(ctx, stream, read.windows, read.visit)
+			read.stats = stats
+			if err != nil {
 				return &conversation.ContextReadError{Operation: "visit zed context", Cause: err}
 			}
 			return nil
