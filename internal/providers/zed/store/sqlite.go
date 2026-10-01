@@ -12,13 +12,22 @@ import (
 
 // OpenReadOnlyDatabase opens one SQLite database in read-only immutable mode.
 func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
+	return openReadOnlyDatabase(ctx, path, "mode=ro&immutable=1&_busy_timeout=5000")
+}
+
+// OpenContextReadOnlyDatabase includes current committed WAL content.
+func OpenContextReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
+	return openReadOnlyDatabase(ctx, path, "mode=ro&_busy_timeout=5000")
+}
+
+func openReadOnlyDatabase(ctx context.Context, path, query string) (*sql.DB, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("open zed sqlite database %s: nil context", path)
 	}
 	dsn := (&url.URL{
 		Scheme:   "file",
 		Path:     path,
-		RawQuery: "mode=ro&immutable=1&_busy_timeout=5000",
+		RawQuery: query,
 	}).String()
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {

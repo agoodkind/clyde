@@ -17,6 +17,8 @@ import (
 type embeddedOperationMeasurement struct {
 	Message         string                `json:"msg"`
 	RunID           string                `json:"run_id"`
+	OperationID     uint64                `json:"operation_id"`
+	ParentID        uint64                `json:"parent_operation_id"`
 	PID             int                   `json:"pid"`
 	Purpose         observation.Purpose   `json:"purpose"`
 	Operation       observation.Operation `json:"operation"`

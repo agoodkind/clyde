@@ -210,35 +210,39 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 			yield(emptyMessage(), err)
 			return
 		}
-		if discovered.Source == artifactKindZedTerm {
-			if !opts.IncludeSystemMessages || discovered.Terminal == nil {
-				return
-			}
-			yield(transcript.Message{
-				UUID:              "",
-				ParentUUID:        "",
-				LogicalParentUUID: "",
-				Role:              "system",
-				Visibility:        transcript.MessageVisibilityMetaOnly,
-				Compaction:        nil,
-				Timestamp:         discovered.Terminal.CreatedAt,
-				Text:              terminalMetadataUnavailableText(*discovered.Terminal),
-				Thinking:          "",
-				HasTools:          false,
-				Tools:             nil,
-				Attachments:       nil,
-			}, nil)
+		streamDiscoveredContext(discovered, opts, yield)
+	}
+}
+
+func streamDiscoveredContext(discovered discoveredThread, opts conversation.LoadOptions, yield func(transcript.Message, error) bool) {
+	if discovered.Source == artifactKindZedTerm {
+		if !opts.IncludeSystemMessages || discovered.Terminal == nil {
 			return
 		}
-		thread := discovered.Thread
-		for _, message := range thread.Messages {
-			mapped, include := transcriptMessage(thread, message, opts)
-			if !include {
-				continue
-			}
-			if !yield(mapped, nil) {
-				return
-			}
+		yield(transcript.Message{
+			UUID:              "",
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "system",
+			Visibility:        transcript.MessageVisibilityMetaOnly,
+			Compaction:        nil,
+			Timestamp:         discovered.Terminal.CreatedAt,
+			Text:              terminalMetadataUnavailableText(*discovered.Terminal),
+			Thinking:          "",
+			HasTools:          false,
+			Tools:             nil,
+			Attachments:       nil,
+		}, nil)
+		return
+	}
+	thread := discovered.Thread
+	for _, message := range thread.Messages {
+		mapped, include := transcriptMessage(thread, message, opts)
+		if !include {
+			continue
+		}
+		if !yield(mapped, nil) {
+			return
 		}
 	}
 }

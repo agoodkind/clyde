@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 
@@ -13,6 +12,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/searchbackend"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 // verifyContext compares committed identities and digests before rendering
@@ -64,23 +64,11 @@ func (source *embeddedConversationSearchSource) verifyContext(ctx context.Contex
 }
 
 func (source *embeddedConversationSearchSource) verifyRecordContext(ctx context.Context, record conversation.Record, identities map[string]embeddedCommittedFieldIdentity, hit library.SearchHit, match conversation.SearchMatch, options conversation.SearchConversationsOptions) (conversation.SearchMatch, error) {
-	before, err := os.Stat(record.ArtifactPath)
-	if err != nil {
-		return unavailableEmbeddedContext(ctx, match, err)
-	}
 	window := options.ContextWindow
 	if window <= 0 {
 		window = 5
 	}
 	start, end := max(match.MessageIndex-window, 0), match.MessageIndex+window+1
-	messages, err := source.index.ReadMessageWindow(ctx, record, start, end, match.LoadRules)
-	if err != nil {
-		if ctx.Err() != nil {
-			slog.WarnContext(ctx, "daemon.conversation_embedded_search.context_cancelled", "component", "daemon", "concern", "conversation.semantic", "conversation_id", record.ID, "err", ctx.Err())
-			return conversation.SearchMatch{}, fmt.Errorf("verify embedded context: %w", ctx.Err())
-		}
-		return unavailableEmbeddedContext(ctx, match, err)
-	}
 	kinds, err := SemanticContentKinds(source.semantic)
 	if err != nil {
 		return conversation.SearchMatch{}, err
@@ -88,22 +76,27 @@ func (source *embeddedConversationSearchSource) verifyRecordContext(ctx context.
 	if conversation.LoadRulesTag(kinds) != match.LoadRules {
 		return match, nil
 	}
-	fields, _, err := projectEmbeddedConversationWindow(record, messages, start, kinds, true)
+	var rendered string
+	var matched bool
+	var verificationErr error
+	err = source.index.ReadVerifiedMessageWindow(ctx, record, start, end, match.LoadRules, func(messages []transcript.Message) error {
+		fields, _, projectionErr := projectEmbeddedConversationWindow(record, messages, start, kinds, true)
+		if projectionErr != nil {
+			return projectionErr
+		}
+		if missingEmbeddedContextField(fields.Fields, identities, embeddedQueryProjectionProfile(source.semantic, match.LoadRules), start, end) {
+			return nil
+		}
+		rendered, matched, verificationErr = verifiedEmbeddedContextFields(ctx, newEmbeddedConversationOwner(record, kinds), fields.Fields, identities, hit, match)
+		return verificationErr
+	})
+	if verificationErr != nil {
+		return conversation.SearchMatch{}, verificationErr
+	}
 	if err != nil {
 		return unavailableEmbeddedContext(ctx, match, err)
 	}
-	if missingEmbeddedContextField(fields.Fields, identities, embeddedQueryProjectionProfile(source.semantic, match.LoadRules), start, end) {
-		return match, nil
-	}
-	rendered, matched, err := verifiedEmbeddedContextFields(ctx, newEmbeddedConversationOwner(record, kinds), fields.Fields, identities, hit, match)
-	if err != nil {
-		return conversation.SearchMatch{}, err
-	}
-	after, err := os.Stat(record.ArtifactPath)
-	if err != nil {
-		return unavailableEmbeddedContext(ctx, match, err)
-	}
-	if !matched || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+	if !matched {
 		return match, nil
 	}
 	match.ContextWindow = rendered
