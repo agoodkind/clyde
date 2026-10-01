@@ -36,6 +36,7 @@ func TestConversationSemanticRankingMatchesLibraryValidation(t *testing.T) {
 
 			_, loadErr := loadConversationSemanticTestConfig(t, "[conversation.semantic]\n"+testCase.toml+"\n")
 			libraryConfig := library.Config{
+				Observer: nil,
 				Store: library.StoreDescriptor{
 					CatalogPath:       "/tmp/clyde-test/catalog.sqlite",
 					LockPath:          "/tmp/clyde-test/catalog.lock",

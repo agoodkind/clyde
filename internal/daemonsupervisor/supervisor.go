@@ -189,18 +189,26 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 		"pid", handle.cmd.Process.Pid,
 	)
 
-	replacementCh := make(chan workerHandle, 1)
+	controlCtx, cancelControl := context.WithCancel(ctx)
+	defer cancelControl()
+	replacementCh := make(chan workerHandle)
 	controlErrCh := make(chan error, 1)
+	controlDone := make(chan struct{})
 	go func() {
+		defer close(controlDone)
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				logSupervisorPanic(log, "daemon.supervisor.reload_control", fmt.Sprint(recovered))
 			}
 		}()
-		serveControl(log, controlListener, replacementCh, controlErrCh)
+		serveControl(controlCtx, log, controlListener, replacementCh, controlErrCh)
 	}()
 
-	return runSupervisorLoop(ctx, log, signalCh, handle, replacementCh, controlErrCh)
+	loopErr := runSupervisorLoop(ctx, log, signalCh, handle, replacementCh, controlErrCh)
+	cancelControl()
+	_ = controlListener.Close()
+	<-controlDone
+	return loopErr
 }
 
 // RequestReplacement asks the running supervisor to replace its worker process.
@@ -472,7 +480,7 @@ func workerExitError(err error) error {
 	return fmt.Errorf("daemon worker exited: %w", err)
 }
 
-func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh chan<- workerHandle, errCh chan<- error) {
+func serveControl(ctx context.Context, log *slog.Logger, listener *net.UnixListener, replacementCh chan<- workerHandle, errCh chan<- error) {
 	supervisorSocketPath := listener.Addr().String()
 	for {
 		conn, err := listener.AcceptUnix()
@@ -489,12 +497,12 @@ func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh ch
 					logSupervisorPanic(log, "daemon.supervisor.reload_request", fmt.Sprint(recovered))
 				}
 			}()
-			handleControl(log, conn, replacementCh, supervisorSocketPath)
+			handleControl(ctx, log, conn, replacementCh, supervisorSocketPath)
 		}()
 	}
 }
 
-func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- workerHandle, supervisorSocketPath string) {
+func handleControl(ctx context.Context, log *slog.Logger, conn *net.UnixConn, replacementCh chan<- workerHandle, supervisorSocketPath string) {
 	defer func() { _ = conn.Close() }()
 	req, files, err := readControlRequest(conn)
 	if err != nil {
@@ -526,6 +534,18 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 		writeControlError(conn, fmt.Errorf("supervisor reload request missing arguments"))
 		return
 	}
+	readyIndex := req.ReadyFD - 3
+	if readyIndex < 0 || readyIndex >= len(files) {
+		writeControlError(conn, fmt.Errorf("replacement readiness descriptor %d is unavailable", req.ReadyFD))
+		return
+	}
+	readyRead, readyWrite, err := os.Pipe()
+	if err != nil {
+		writeControlError(conn, err)
+		return
+	}
+	defer func() { _ = readyRead.Close() }()
+	defer func() { _ = readyWrite.Close() }()
 	env, err := replacementWorkerEnvironment(req, supervisorSocketPath)
 	if err != nil {
 		writeControlError(conn, err)
@@ -538,12 +558,17 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 	// reaches the launchd log instead of being discarded.
 	cmd.Env = env
 	cmd.ExtraFiles = append([]*os.File{}, files...)
+	cmd.ExtraFiles[readyIndex] = readyWrite
+	if err := ctx.Err(); err != nil {
+		writeControlError(conn, err)
+		return
+	}
 	handle, err := startWorker(cmd)
 	if err != nil {
 		writeControlError(conn, fmt.Errorf("start replacement daemon worker: %w", err))
 		return
 	}
-	replacementCh <- handle
+	_ = readyWrite.Close()
 	log.Info("daemon.supervisor.reload_replacement_started", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"pid", handle.cmd.Process.Pid,
 	)
@@ -557,7 +582,10 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 			"pid", handle.cmd.Process.Pid,
 			"err", err,
 		)
+		stopWorker(log, handle.cmd, syscall.SIGTERM, handle.waitCh)
+		return
 	}
+	admitReplacement(ctx, log, handle, readyRead, files[readyIndex], replacementCh)
 }
 
 func replacementWorkerEnvironment(req controlRequest, supervisorSocketPath string) ([]string, error) {

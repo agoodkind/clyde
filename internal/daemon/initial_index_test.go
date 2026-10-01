@@ -181,7 +181,7 @@ func TestRunInitialConversationIndexTriesSemanticOnce(t *testing.T) {
 func TestRunInitialConversationIndexLeavesEmbeddedIngestionToDaemon(t *testing.T) {
 	configureInitialIndexTest(t, true)
 	state := os.Getenv("XDG_STATE_HOME")
-	body := "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\nbackend = \"embedded\"\n" +
+	body := "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\nbackend = \"embedded\"\nprojection_profile = \"p3\"\n" +
 		"catalog_path = " + strconv.Quote(filepath.Join(state, "catalog.sqlite")) + "\n" +
 		"lock_path = " + strconv.Quote(filepath.Join(state, "catalog.lock")) + "\n" +
 		"pool_id = \"initial-index\"\nmilvus_address = \"localhost:1\"\nmilvus_database = \"clyde_initial_index\"\n" +

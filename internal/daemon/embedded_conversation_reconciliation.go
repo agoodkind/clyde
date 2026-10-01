@@ -31,6 +31,10 @@ func (delivery *embeddedConversationDelivery) reconcileOwner(
 	record conversation.Record,
 	listed library.OwnerOccurrences,
 ) (embeddedReconcileResult, error) {
+	return delivery.reconcileOwnerWithMetadata(ctx, namespace, record, listed, embeddedOwnerMetadataOf(record))
+}
+
+func (delivery *embeddedConversationDelivery) reconcileOwnerWithMetadata(ctx context.Context, namespace string, record conversation.Record, listed library.OwnerOccurrences, metadata embeddedOwnerMetadata) (embeddedReconcileResult, error) {
 	var result embeddedReconcileResult
 	unfinished, err := delivery.outbox.unfinishedBatches(ctx, namespace, record.ID)
 	if err != nil {
@@ -74,7 +78,6 @@ func (delivery *embeddedConversationDelivery) reconcileOwner(
 		)
 	}
 	fields := embeddedReconciledFields(listed.Rows)
-	metadata := embeddedOwnerMetadataOf(record)
 	if err := delivery.outbox.rebuildOwner(ctx, namespace, record.ID, fields, metadata, listed.ProjectionOrder, aborted); err != nil {
 		return result, err
 	}
@@ -131,7 +134,7 @@ func (w *conversationSemanticSyncWorker) reconcileEmbeddedOwners(
 	stats *embeddedSyncStats,
 ) map[string]bool {
 	reconciled := make(map[string]bool)
-	known, err := store.outbox.ownerMetadata(ctx, store.namespace.ID)
+	known, err := w.embeddedAliasOwnerMetadata(ctx, store)
 	if err != nil {
 		stats.reconcileFailed++
 		return reconciled
@@ -163,12 +166,17 @@ func (w *conversationSemanticSyncWorker) reconcileEmbeddedOwners(
 			w.embedded.libraryAbsent[record.ID] = true
 			continue
 		}
-		result, err := store.delivery.reconcileOwner(ctx, store.namespace.ID, record, listed)
+		metadata := embeddedOwnerMetadataOf(record)
+		if decision := w.embedded.aliasDecision; decision != nil && decision.source.Record.ID == record.ID {
+			metadata = decision.metadata
+		}
+		result, err := store.delivery.reconcileOwnerWithMetadata(ctx, store.namespace.ID, record, listed, metadata)
 		if err != nil {
 			stats.reconcileFailed++
 			continue
 		}
 		reconciled[record.ID] = true
+		known[record.ID] = embeddedStoredOwnerMetadata{Metadata: metadata, ProjectionOrder: listed.ProjectionOrder, Stale: true}
 		stats.reconciledOwners++
 		stats.abortedTokens += result.abortedTokens
 	}

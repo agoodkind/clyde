@@ -10,8 +10,7 @@ import (
 	"syscall"
 )
 
-// errOutboxOwned reports that another open outbox, in this or another daemon
-// worker process, owns the outbox lock of the same path.
+// errOutboxOwned reports a conflicting recovery or publication operation.
 var errOutboxOwned = errors.New("another embedded ingestion worker owns the conversation semantic outbox")
 
 // conversationSemanticOutboxLockPath returns the lock file of the outbox at
@@ -20,12 +19,9 @@ func conversationSemanticOutboxLockPath(path string) string {
 	return path + ".lock"
 }
 
-// lockConversationSemanticOutbox creates the outbox directory and takes an
-// exclusive kernel lock on the outbox lock file without waiting. During a daemon reload the replacement worker
-// starts its embedded sync before the old worker drains. The lock lets only
-// one of them open the outbox. The kernel releases the lock when the returned
-// file closes or the process exits. A lock that another open file owns returns
-// an error that wraps errOutboxOwned.
+// lockConversationSemanticOutbox serializes recovery and publication across
+// daemon generations without waiting. The caller closes the returned file
+// after its operation. Lock contention returns an error wrapping errOutboxOwned.
 func lockConversationSemanticOutbox(ctx context.Context, path string) (*os.File, error) {
 	lockPath := conversationSemanticOutboxLockPath(path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

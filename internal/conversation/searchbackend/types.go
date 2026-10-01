@@ -42,7 +42,7 @@ const (
 // package. A rule change ships as a new version. The new version gives every
 // field a new row key, and rows committed under the earlier version stay in
 // the catalog.
-const projectionProfileVersion = "p1"
+const projectionProfileVersion = "p3"
 
 // Conversation is one loaded conversation and the projection settings for it.
 type Conversation struct {
@@ -102,7 +102,7 @@ type Field struct {
 	// message field.
 	ToolIndex int
 	// DocumentPrefix starts every embedding input of the field. Tool fields
-	// use the tool name and a newline.
+	// use tool attribution and derived search tokens.
 	DocumentPrefix string
 	// Text is the selected source text that splitting divides into parts.
 	Text string

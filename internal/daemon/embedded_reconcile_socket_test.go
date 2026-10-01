@@ -58,7 +58,10 @@ func TestReconcileCommandRunsInsideDaemonWorker(t *testing.T) {
 		CollectionID:     store.namespace.ID,
 		Backend:          config.ConversationSemanticBackendEmbedded,
 	}
-	worker := newEmbeddedConversationSync(semantic, "", newEmbeddedSemanticStatus(), index)
+	if err := store.outbox.releaseLock(); err != nil {
+		t.Fatalf("release fixture admission lock: %v", err)
+	}
+	worker := newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
 	worker.store = store
 	withWorker := newEmbeddedReconcileGate(nil)
 	withWorker.attach(worker)

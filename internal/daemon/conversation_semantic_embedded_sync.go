@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,15 +10,17 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goodkind.io/lm-semantic-search/library"
+	"goodkind.io/lm-semantic-search/library/observation"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/searchbackend"
+	"goodkind.io/clyde/internal/daemonsupervisor"
 	"goodkind.io/clyde/internal/livetrack"
-	"goodkind.io/clyde/internal/transcript"
 )
 
 // embeddedTrailingSettleWindow is how long an artifact must stay unchanged
@@ -31,22 +34,23 @@ const embeddedTrailingSettleWindow = 30 * time.Minute
 // ingestion worker stops.
 const embeddedStoreCloseTimeout = 5 * time.Second
 
-// embeddedConversationSync is the embedded backend state of the semantic sync
-// worker. The worker opens the store on its first pass, retries a failed open
-// on the next pass, and closes the store after its last pass.
+const embeddedStoreOpenTimeout = 4 * time.Second
+
+var nextEmbeddedPassID atomic.Uint64
+
+// embeddedConversationSync owns the store for one daemon generation.
 type embeddedConversationSync struct {
 	semantic   config.ConversationSemanticConfig
 	outboxPath string
 	store      *embeddedConversationStore
-	// processed maps a conversation ID to the content fingerprint at which the
-	// outbox records every selected field of the conversation as committed. A
-	// pass skips a conversation at that fingerprint without reading its
-	// artifact. The map is in memory. After a restart the first pass reads
-	// each conversation once and sends no row for a committed field.
-	processed map[string]string
-	// changedCommitted counts the fields, since the worker started, with a
-	// digest that differs from the committed digest under the same key. The
-	// committed occurrence stays and no row is sent for the key.
+	// The cache includes every alias and the accepted catalog generation.
+	// A restart discards it and repeats the source proof before selecting additions.
+	processed          map[string]string
+	processedSources   map[string]conversation.StampedRecord
+	aliasDecision      *embeddedAliasDecision
+	aliasOwnerMetadata map[string]embeddedStoredOwnerMetadata
+	// changedCommitted counts conflicting committed field digests since worker
+	// startup. A conflict rejects the entire candidate and retains prior rows.
 	changedCommitted int
 	// status receives the library and outbox state for the daemon status RPC.
 	// Nil disables publishing.
@@ -65,7 +69,12 @@ type embeddedConversationSync struct {
 	mu sync.Mutex
 	// closed reports that closeStore ran. ensureStore opens no store after
 	// close. closeStore sets it under mu.
-	closed bool
+	closed     bool
+	closing    atomic.Bool
+	closeOnce  sync.Once
+	closeDone  chan struct{}
+	closeErr   error
+	workerDone <-chan struct{}
 	// open opens the store under the outbox lock that ensureStore took. The
 	// default opens the Milvus-backed store with openEmbeddedConversationStore.
 	open embeddedStoreOpener
@@ -95,16 +104,24 @@ func newEmbeddedConversationSync(
 	records embeddedRecordLister,
 ) *embeddedConversationSync {
 	return &embeddedConversationSync{
-		semantic:         semantic,
-		outboxPath:       outboxPath,
-		store:            nil,
-		processed:        make(map[string]string),
-		changedCommitted: 0,
-		status:           status,
-		records:          records,
-		libraryAbsent:    make(map[string]bool),
-		mu:               sync.Mutex{},
-		closed:           false,
+		semantic:           semantic,
+		outboxPath:         outboxPath,
+		store:              nil,
+		processed:          make(map[string]string),
+		processedSources:   nil,
+		aliasDecision:      nil,
+		aliasOwnerMetadata: nil,
+		changedCommitted:   0,
+		status:             status,
+		records:            records,
+		libraryAbsent:      make(map[string]bool),
+		mu:                 sync.Mutex{},
+		closed:             false,
+		closing:            atomic.Bool{},
+		closeOnce:          sync.Once{},
+		closeDone:          make(chan struct{}),
+		closeErr:           nil,
+		workerDone:         nil,
 		open: func(ctx context.Context, lock *os.File, log *slog.Logger) (*embeddedConversationStore, error) {
 			return openEmbeddedConversationStore(ctx, semantic, outboxPath, lock, log)
 		},
@@ -115,23 +132,26 @@ func newEmbeddedConversationSync(
 // returns errEmbeddedReconcileUnavailable and opens nothing. The caller locks
 // mu.
 func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *slog.Logger) (*embeddedConversationStore, error) {
-	if embedded.closed {
+	if embedded.closed || embedded.closing.Load() {
 		return nil, errEmbeddedReconcileUnavailable
 	}
 	if embedded.store != nil {
 		return embedded.store, nil
 	}
+	openCtx, cancel := context.WithTimeout(ctx, embeddedStoreOpenTimeout)
+	defer cancel()
 	// ensureStore takes the outbox lock first. When another worker owns the
 	// lock, this worker creates no Milvus client, opens no library, and
 	// registers no namespace.
-	lock, err := lockConversationSemanticOutbox(ctx, embedded.outboxPath)
+	lock, err := lockConversationSemanticOutbox(openCtx, embedded.outboxPath)
 	if err != nil {
 		return nil, err
 	}
-	store, err := embedded.open(ctx, lock, log)
+	store, err := embedded.open(openCtx, lock, log)
 	if err != nil {
 		if closeErr := lock.Close(); closeErr != nil {
-			log.WarnContext(ctx, "daemon.conversation_semantic_embedded.unlock_failed",
+			log.WarnContext(
+				ctx, "daemon.conversation_semantic_embedded.unlock_failed",
 				"concern", "conversation.semantic",
 				"component", "daemon",
 				"err", closeErr,
@@ -139,25 +159,63 @@ func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *
 		}
 		return nil, err
 	}
+	if err := store.outbox.releaseLock(); err != nil {
+		return nil, errors.Join(err, store.close(context.WithoutCancel(ctx)))
+	}
 	embedded.store = store
 	return store, nil
 }
 
 // closeStore closes the open store after the worker stops and marks the
 // state closed. No later pass or reconcile request opens the store again.
-func (embedded *embeddedConversationSync) closeStore(ctx context.Context) {
+func (embedded *embeddedConversationSync) closeStore(ctx context.Context) error {
 	embedded.mu.Lock()
 	defer embedded.mu.Unlock()
 	embedded.closed = true
 	if embedded.store == nil {
-		return
+		return nil
 	}
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), embeddedStoreCloseTimeout)
 	defer cancel()
-	if err := embedded.store.close(closeCtx); err == nil {
-		embedded.store = nil
-	}
+	err := embedded.store.close(closeCtx)
+	embedded.store = nil
 	embedded.status.markClosed()
+	slog.InfoContext(ctx, "daemon.conversation_semantic_embedded.closed", "concern", "conversation.semantic", "pid", os.Getpid(), "err", err)
+	return err
+}
+
+func (embedded *embeddedConversationSync) closeGeneration(ctx context.Context) error {
+	embedded.closing.Store(true)
+	embedded.closeOnce.Do(func() {
+		embedded.startGenerationClose(context.WithoutCancel(ctx))
+	})
+	select {
+	case <-embedded.closeDone:
+		return embedded.closeErr
+	case <-ctx.Done():
+		slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.close_pending", "concern", "conversation.semantic", "err", ctx.Err())
+		return fmt.Errorf("wait for embedded generation storage closure: %w", ctx.Err())
+	}
+}
+
+func (embedded *embeddedConversationSync) startGenerationClose(ctx context.Context) {
+	go func(closeCtx context.Context) {
+		defer close(embedded.closeDone)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				embedded.closeErr = fmt.Errorf("embedded generation close panic: %v", recovered)
+				slog.ErrorContext(closeCtx, "daemon.conversation_semantic_embedded.close_panic", "concern", "conversation.semantic", "err", embedded.closeErr)
+			}
+		}()
+		embedded.finishGenerationClose(closeCtx)
+	}(ctx)
+}
+
+func (embedded *embeddedConversationSync) finishGenerationClose(ctx context.Context) {
+	if embedded.workerDone != nil {
+		<-embedded.workerDone
+	}
+	embedded.closeErr = embedded.closeStore(ctx)
 }
 
 // admits applies the conversation admission settings: indexed providers,
@@ -190,10 +248,8 @@ func (embedded *embeddedConversationSync) admittedFields(fields []searchbackend.
 	return admitted
 }
 
-// startEmbeddedConversationSemanticSync starts the sync worker for the
-// embedded backend when ingestion is enabled. The worker goroutine closes the
-// store after its last pass, before the lifecycle hook observes the worker
-// stop. It reports whether a worker started.
+// startEmbeddedConversationSemanticSync registers storage closure after the
+// worker phase. Search-only generations retry store admission without ingestion.
 func startEmbeddedConversationSemanticSync(
 	ctx context.Context,
 	log *slog.Logger,
@@ -204,77 +260,168 @@ func startEmbeddedConversationSemanticSync(
 	reconcileGate *embeddedReconcileGate,
 	group *livetrack.Group,
 	contentKinds conversation.ContentKindSet,
-) bool {
-	if !semantic.FeedsEngine() {
-		return false
+) error {
+	if !semantic.UsesEngine() || group == nil {
+		return nil
 	}
 	if log == nil {
 		log = slog.Default()
 	}
+	embedded := newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), status, index)
+	reconcileGate.attach(embedded)
+	group.AddHook(livetrack.PhaseStorage, "conversation.semantic.embedded_storage_close", func(closeCtx context.Context) error {
+		reconcileGate.detach(embedded)
+		return embedded.closeGeneration(closeCtx)
+	})
+	if err := embedded.openForStartup(ctx, log, os.Getenv(daemonsupervisor.EnvReloadChild) == "1"); err != nil {
+		return err
+	}
 	workerCtx, done, owned := installConversationSemanticSyncStop(ctx, group, log)
 	if !owned {
-		log.WarnContext(ctx, "daemon.conversation_semantic_sync.start_skipped_unowned",
+		log.WarnContext(
+			ctx, "daemon.conversation_semantic_sync.start_skipped_unowned",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"collection_id", semantic.CollectionID,
 		)
-		return false
+		return nil
 	}
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, log, contentKinds)
 	worker.freshness = freshness
-	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), status, index)
-	reconcileGate.attach(worker.embedded)
+	worker.embedded = embedded
+	embedded.workerDone = done
 	go func() {
 		defer close(done)
-		defer worker.embedded.closeStore(ctx)
-		defer reconcileGate.detach(worker.embedded)
+		defer worker.log.InfoContext(workerCtx, "daemon.conversation_semantic_embedded.worker_exited", "concern", "conversation.semantic", "pid", os.Getpid())
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				worker.log.ErrorContext(workerCtx, "daemon.conversation_semantic_sync.panic",
+				worker.log.ErrorContext(
+					workerCtx, "daemon.conversation_semantic_sync.panic",
 					"concern", "conversation.semantic",
 					"component", "daemon",
 					"err", fmt.Sprintf("panic: %v", recovered),
 				)
 			}
 		}()
-		worker.run(workerCtx)
+		if semantic.FeedsEngine() {
+			worker.run(workerCtx)
+			return
+		}
+		embedded.retryStoreOpen(workerCtx, log)
 	}()
-	return true
+	return nil
+}
+
+func (embedded *embeddedConversationSync) openForStartup(ctx context.Context, log *slog.Logger, replacement bool) error {
+	startupCtx, cancel := context.WithTimeout(ctx, embeddedStoreOpenTimeout)
+	defer cancel()
+	for {
+		attemptCtx, attemptCancel := context.WithTimeout(startupCtx, embeddedStoreOpenTimeout)
+		embedded.mu.Lock()
+		_, err := embedded.ensureStore(attemptCtx, log)
+		embedded.mu.Unlock()
+		attemptCancel()
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, library.ErrStoreMismatch) || errors.Is(err, library.ErrInvalidRequest) {
+			return err
+		}
+		if !replacement {
+			return nil
+		}
+		select {
+		case <-startupCtx.Done():
+			log.WarnContext(ctx, "daemon.conversation_semantic_embedded.replacement_unavailable", "concern", "conversation.semantic", "err", err)
+			return err
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (embedded *embeddedConversationSync) retryStoreOpen(ctx context.Context, log *slog.Logger) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, embeddedStoreOpenTimeout)
+		embedded.mu.Lock()
+		_, err := embedded.ensureStore(attemptCtx, log)
+		embedded.mu.Unlock()
+		cancel()
+		if err == nil || errors.Is(err, library.ErrStoreMismatch) || errors.Is(err, library.ErrInvalidRequest) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (embedded *embeddedConversationSync) lockStore(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.admission_canceled", "concern", "conversation.semantic", "err", err)
+			return fmt.Errorf("wait for embedded store access: %w", err)
+		}
+		if embedded.mu.TryLock() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.admission_canceled", "concern", "conversation.semantic", "err", ctx.Err())
+			return fmt.Errorf("wait for embedded store access: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // embeddedCandidate is one admitted conversation that the worker has not
 // processed at its current fingerprint.
 type embeddedCandidate struct {
-	record      conversation.Record
-	stamp       conversation.FileStamp
-	fingerprint string
+	record           conversation.Record
+	stamp            conversation.FileStamp
+	fingerprint      string
+	groupFingerprint string
+	aliases          []conversation.StampedRecord
+	sourceBytes      int64
 }
 
 // embeddedSyncStats reports one embedded pass by phase: source reading,
 // projection, embedding, persistence, and searchable completion.
 type embeddedSyncStats struct {
-	admitted         int
-	needed           int
-	completed        int
-	completedIDs     []string
-	deferred         int
-	pendingBlocked   int
-	sourceRead       int
-	sourceBytes      int64
-	sourceFailed     int
-	failedSuppressed int
-	projectionFailed int
-	fields           int
-	newFields        int
-	unchangedFields  int
-	changedCommitted int
-	withheldFields   int
-	policySkipped    int
-	rows             int
-	replayed         int
-	replayDeferred   int
-	deliveryFailed   int
-	delivery         embeddedDeliveryCounts
+	admitted                      int
+	needed                        int
+	completed                     int
+	completedIDs                  []string
+	deferred                      int
+	pendingBlocked                int
+	sourceRead                    int
+	sourceBytes                   int64
+	sourceFailed                  int
+	sourceReadDuration            time.Duration
+	projectionDuration            time.Duration
+	policySelectionDuration       time.Duration
+	committedReadDuration         time.Duration
+	fieldSelectionDuration        time.Duration
+	occurrencePreparationDuration time.Duration
+	outboxPreparationDuration     time.Duration
+	failedSuppressed              int
+	projectionFailed              int
+	fields                        int
+	newFields                     int
+	unchangedFields               int
+	changedCommitted              int
+	withheldFields                int
+	policySkipped                 int
+	rows                          int
+	replayed                      int
+	replayDeferred                int
+	deliveryFailed                int
+	delivery                      embeddedDeliveryCounts
 	// replayedProjections, reprojectedOwners, and reprojectionFailed count
 	// scalar reprojections of already indexed owners.
 	replayedProjections int
@@ -290,22 +437,28 @@ type embeddedSyncStats struct {
 	reconcileFailed  int
 }
 
-// runEmbeddedPass replays pending outbox batches and projections, reconciles
-// every listed owner with a blocked outbox item or with library state that the
-// outbox lacks, reprojects the metadata of indexed owners with changed
-// metadata, then projects every admitted conversation that changed since the
-// worker processed it, selects the fields that the outbox has not committed,
-// and delivers one generation per conversation with new rows. A conversation
-// that the index no longer lists keeps every committed occurrence and its last
-// applied metadata. An owner with a blocked outbox item that reconciliation
-// did not clear receives no delivery and no reprojection.
-func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) error {
+// runEmbeddedPass resolves each owner after replay and uses one accepted
+// decision for reconciliation, metadata publication and missing-field delivery.
+func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) (resultErr error) {
 	w.embedded.mu.Lock()
 	defer w.embedded.mu.Unlock()
+	scope := observation.ScopeFromContext(ctx)
+	scope.RunID = fmt.Sprintf("ingestion-%d-%d", os.Getpid(), nextEmbeddedPassID.Add(1))
+	scope.Purpose = observation.Ingestion
+	ctx = observation.WithScope(ctx, scope)
+	w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_started", "concern", "conversation.semantic", "run_id", scope.RunID, "pid", os.Getpid())
 	store, err := w.embedded.ensureStore(ctx, w.log)
 	if err != nil {
 		return err
 	}
+	lock, err := lockConversationSemanticOutbox(ctx, w.embedded.outboxPath)
+	if err != nil {
+		return err
+	}
+	store.outbox.lock = lock
+	defer func() {
+		resultErr = errors.Join(resultErr, store.outbox.releaseLock())
+	}()
 	replay, err := store.delivery.replayPending(ctx)
 	if err != nil {
 		return err
@@ -325,7 +478,8 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	stats.replayedProjections = replayedProjections
 	stampedRecords, err := w.embedded.records.ListAllWithStamps(ctx)
 	if err != nil {
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.list_failed",
+		w.log.WarnContext(
+			ctx, "daemon.conversation_semantic_sync.list_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"err", err,
@@ -336,11 +490,7 @@ func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) er
 	for _, ownerID := range blockedInOutbox {
 		blockedSet[ownerID] = true
 	}
-	reconciled := w.reconcileEmbeddedOwners(ctx, store, stampedRecords, blockedSet, &stats)
-	excluded := embeddedExcludedOwners(replay.blockedOwners, projectionBlocked, blockedSet, reconciled)
-	w.reprojectEmbeddedOwners(ctx, store, stampedRecords, excluded, &stats)
-	candidates := w.embeddedCandidates(stampedRecords, &stats)
-	w.deliverEmbeddedCandidates(ctx, store, candidates, excluded, &stats)
+	w.processEmbeddedAliasGroups(ctx, store, stampedRecords, replay.blockedOwners, projectionBlocked, blockedSet, &stats)
 	blockedAfterPass, err := store.outbox.blockedOwners(ctx, store.namespace.ID)
 	if err == nil {
 		stats.blockedOwners = len(blockedAfterPass)
@@ -376,46 +526,40 @@ func embeddedExcludedOwners(
 	return excluded
 }
 
-// embeddedCandidates returns the admitted conversations that need a pass,
-// sorted and rotated after the delivery cursor. It skips conversations
-// processed at their current fingerprint and conversations suppressed after
-// repeated failures at their current fingerprint.
+// embeddedCandidates preserves the selected source after alias preflight.
+// Recovery callers resolve their original alias group during generation preparation.
 func (w *conversationSemanticSyncWorker) embeddedCandidates(
 	stampedRecords []conversation.StampedRecord,
 	stats *embeddedSyncStats,
 ) []embeddedCandidate {
 	seen := make(map[string]bool, len(stampedRecords))
 	candidatesByID := make(map[string]embeddedCandidate)
-	for _, stampedRecord := range stampedRecords {
-		conversationID := strings.TrimSpace(stampedRecord.Record.ID)
-		if conversationID == "" || seen[conversationID] {
-			continue
-		}
-		seen[conversationID] = true
-		if !w.embedded.admits(stampedRecord.Record) {
-			continue
-		}
-		stats.admitted++
-		fingerprint := conversation.ContentFingerprint(stampedRecord.Record, stampedRecord.Stamp)
-		if w.embedded.processed[conversationID] == fingerprint {
-			continue
-		}
-		if record, failed := w.failedLoad[conversationID]; failed {
-			if record.fingerprint != fingerprint {
-				delete(w.failedLoad, conversationID)
-			} else if record.failures >= failedLoadSuppressThreshold {
-				stats.failedSuppressed++
+	for _, group := range groupEmbeddedAliases(stampedRecords) {
+		seen[group.ownerID] = true
+		for _, alias := range group.aliases {
+			if !w.embedded.admits(alias.Record) {
 				continue
 			}
+			if w.embedded.aliasDecision == nil {
+				stats.admitted++
+			}
+			candidate := embeddedCandidate{record: alias.Record, stamp: alias.Stamp, fingerprint: conversation.ContentFingerprint(alias.Record, alias.Stamp), groupFingerprint: "", aliases: group.aliases, sourceBytes: group.bytes}
+			if decision := w.embedded.aliasDecision; decision != nil && decision.source.Record.ID == group.ownerID {
+				if decision.cached || !decision.admitted {
+					break
+				}
+				candidate.record, candidate.stamp = decision.source.Record, decision.source.Stamp
+				candidate.fingerprint = conversation.ContentFingerprint(candidate.record, candidate.stamp)
+				candidate.groupFingerprint = decision.fingerprint
+			}
+			candidatesByID[group.ownerID] = candidate
+			break
 		}
-		candidatesByID[conversationID] = embeddedCandidate{record: stampedRecord.Record, stamp: stampedRecord.Stamp, fingerprint: fingerprint}
 	}
-	for conversationID := range w.embedded.processed {
-		if !seen[conversationID] {
-			delete(w.embedded.processed, conversationID)
-		}
+	if w.embedded.aliasDecision == nil {
+		w.pruneEmbeddedAliasCaches(seen)
 	}
-	w.pruneFailedLoad(seen)
+
 	ids := make([]string, 0, len(candidatesByID))
 	for conversationID := range candidatesByID {
 		ids = append(ids, conversationID)
@@ -426,7 +570,9 @@ func (w *conversationSemanticSyncWorker) embeddedCandidates(
 	for _, conversationID := range ids {
 		candidates = append(candidates, candidatesByID[conversationID])
 	}
-	stats.needed = len(candidates)
+	if w.embedded.aliasDecision == nil {
+		stats.needed += len(candidates)
+	}
 	return candidates
 }
 
@@ -455,11 +601,15 @@ func (w *conversationSemanticSyncWorker) deliverEmbeddedCandidates(
 			stats.deferred++
 			continue
 		}
-		if loaded > 0 && artifactBytes+candidate.stamp.Size > conversationSemanticBatchBytes {
+		candidateBytes := candidate.sourceBytes
+		if candidateBytes == 0 {
+			candidateBytes = max(candidate.stamp.Size, 0)
+		}
+		if loaded > 0 && candidateBytes > conversationSemanticBatchBytes-artifactBytes {
 			return
 		}
 		loaded++
-		artifactBytes += candidate.stamp.Size
+		artifactBytes += candidateBytes
 		w.deliverEmbeddedCandidate(ctx, store, candidate, stats)
 		w.deliveryCursor = candidate.record.ID
 		if artifactBytes >= conversationSemanticBatchBytes {
@@ -478,7 +628,7 @@ func (w *conversationSemanticSyncWorker) deliverEmbeddedCandidate(
 	candidate embeddedCandidate,
 	stats *embeddedSyncStats,
 ) {
-	generation, withheld, err := w.buildEmbeddedGeneration(ctx, store, candidate, stats)
+	generation, err := w.buildEmbeddedGeneration(ctx, store, candidate, stats)
 	if err != nil {
 		return
 	}
@@ -492,51 +642,59 @@ func (w *conversationSemanticSyncWorker) deliverEmbeddedCandidate(
 	}
 	stats.completed++
 	stats.completedIDs = append(stats.completedIDs, candidate.record.ID)
-	if withheld == 0 {
-		w.embedded.processed[candidate.record.ID] = candidate.fingerprint
+	{
+		w.embedded.processed[candidate.record.ID] = candidate.groupFingerprint
+		if w.embedded.processedSources == nil {
+			w.embedded.processedSources = make(map[string]conversation.StampedRecord)
+		}
+		w.embedded.processedSources[candidate.record.ID] = conversation.StampedRecord{Record: candidate.record, Stamp: candidate.stamp}
 	}
 }
 
-// buildEmbeddedGeneration loads one conversation, selects its new fields, and
-// prepares their occurrences as one generation. It returns a nil generation
-// when no field is new, and the count of withheld open trailing fields. A
-// source read failure or a projection failure counts toward failed-load
-// suppression at the conversation fingerprint.
+// buildEmbeddedGeneration prepares only missing fields from a proven alias group.
 func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 	ctx context.Context,
 	store *embeddedConversationStore,
 	candidate embeddedCandidate,
 	stats *embeddedSyncStats,
-) (*embeddedGeneration, int, error) {
-	record := candidate.record
-	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions(w.contentKinds))
-	if err != nil {
-		stats.sourceFailed++
-		w.recordLoadFailure(record.ID, candidate.fingerprint)
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", record.ID,
-			"provider", record.Provider.String(),
-			"err", err,
-		)
-		return nil, 0, fmt.Errorf("load conversation messages for %s: %w", record.ID, err)
+) (*embeddedGeneration, error) {
+	decision := w.embedded.aliasDecision
+	if decision == nil || decision.source.Record.ID != candidate.record.ID {
+		aliases := candidate.aliases
+		if len(aliases) == 0 {
+			aliases = []conversation.StampedRecord{{Record: candidate.record, Stamp: candidate.stamp}}
+		}
+		group := groupEmbeddedAliases(aliases)[0]
+		var err error
+		decision, err = w.resolveEmbeddedAliasGroup(ctx, store, group, stats)
+		if err != nil {
+			w.aliasFailure(ctx, group, err, stats)
+			return nil, err
+		}
 	}
-	stats.sourceRead++
-	stats.sourceBytes += candidate.stamp.Size
+	if decision.cached || !decision.admitted {
+		return nil, nil
+	}
+	record := decision.source.Record
+	candidate.record, candidate.stamp = record, decision.source.Stamp
+	candidate.fingerprint = conversation.ContentFingerprint(record, candidate.stamp)
+	candidate.groupFingerprint = decision.fingerprint
 	delete(w.failedLoad, record.ID)
-	fields, withheld, err := w.selectEmbeddedFields(ctx, store, candidate, messages, stats)
+	fields, err := w.selectEmbeddedFields(ctx, store, candidate, decision.fields, stats)
 	if err != nil || len(fields) == 0 {
-		return nil, withheld, err
+		return nil, err
 	}
-	owner := newEmbeddedConversationOwner(record, w.contentKinds)
+	owner := embeddedAliasOwner(decision, w.contentKinds)
+	started := w.now()
 	rows, err := embeddedOutboxRows(ctx, store.namespace, owner, fields)
+	stats.occurrencePreparationDuration += w.now().Sub(started)
 	if err != nil {
 		stats.projectionFailed++
 		w.recordLoadFailure(record.ID, candidate.fingerprint)
-		return nil, withheld, err
+		return nil, err
 	}
 	stats.rows += len(rows)
+	started = w.now()
 	generation, err := store.delivery.prepareGeneration(ctx, embeddedOutboxBatch{
 		BatchID:           "",
 		Namespace:         store.namespace.ID,
@@ -547,54 +705,53 @@ func (w *conversationSemanticSyncWorker) buildEmbeddedGeneration(
 		ProjectionProfile: owner.ProjectionProfile,
 		RowCount:          0,
 		ManifestHash:      "",
-		Metadata:          embeddedOwnerMetadataOf(record),
+		Metadata:          decision.metadata,
 	}, rows)
+	stats.outboxPreparationDuration += w.now().Sub(started)
 	if err != nil {
 		stats.deliveryFailed++
-		return nil, withheld, err
+		return nil, err
 	}
-	return &generation, withheld, nil
+	return &generation, nil
 }
 
-// selectEmbeddedFields projects the loaded messages, keeps the fields of the
-// indexed roles, and returns the fields with keys that the outbox has not
-// committed. It also returns the count of withheld open trailing fields.
+// selectEmbeddedFields applies role policy after the complete alias proof.
 func (w *conversationSemanticSyncWorker) selectEmbeddedFields(
 	ctx context.Context,
 	store *embeddedConversationStore,
 	candidate embeddedCandidate,
-	messages []transcript.Message,
+	projected []searchbackend.Field,
 	stats *embeddedSyncStats,
-) ([]searchbackend.Field, int, error) {
+) ([]searchbackend.Field, error) {
 	record := candidate.record
-	artifactSettled := w.now().Sub(candidate.stamp.Mtime) >= embeddedTrailingSettleWindow
-	projected, built, err := projectEmbeddedConversationFields(record, messages, w.contentKinds, artifactSettled)
-	if err != nil {
-		stats.projectionFailed++
-		w.recordLoadFailure(record.ID, candidate.fingerprint)
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.projection_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", record.ID,
-			"err", err,
-		)
-		return nil, 0, fmt.Errorf("project fields of %s: %w", record.ID, err)
-	}
-	stats.policySkipped += built.PolicySkipped
-	stats.withheldFields += projected.WithheldOpenFields
-	fields := w.embedded.admittedFields(projected.Fields)
+	started := w.now()
+	fields := w.embedded.admittedFields(projected)
+	stats.policySelectionDuration += w.now().Sub(started)
 	stats.fields += len(fields)
+	started = w.now()
 	committed, err := store.outbox.committedFields(ctx, store.namespace.ID, record.ID)
+	stats.committedReadDuration += w.now().Sub(started)
 	if err != nil {
 		stats.deliveryFailed++
-		return nil, projected.WithheldOpenFields, err
+		return nil, err
 	}
+	started = w.now()
 	selection := searchbackend.SelectNewFields(fields, committed)
+	stats.fieldSelectionDuration += w.now().Sub(started)
 	stats.newFields += len(selection.New)
 	stats.unchangedFields += selection.Unchanged
 	stats.changedCommitted += selection.ChangedCommitted
 	w.embedded.changedCommitted += selection.ChangedCommitted
-	return selection.New, projected.WithheldOpenFields, nil
+	if selection.ChangedCommitted > 0 {
+		stats.projectionFailed++
+		err := fmt.Errorf("select fields of %s: %w", record.ID, library.ErrAppendConflict)
+		w.log.WarnContext(ctx, "daemon.conversation_semantic_embedded.source_conflict",
+			"concern", "conversation.semantic", "component", "daemon",
+			"conversation_id", record.ID, "source_fingerprint", candidate.fingerprint,
+			"conflicting_fields", selection.ChangedCommitted, "err", err)
+		return nil, err
+	}
+	return selection.New, nil
 }
 
 // embeddedOutboxRows prepares the occurrences of each field and validates
@@ -614,7 +771,8 @@ func embeddedOutboxRows(
 		}
 		for _, occurrence := range occurrences {
 			if err := namespace.ValidateOccurrence(occurrence); err != nil {
-				slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.occurrence_invalid",
+				slog.WarnContext(
+					ctx, "daemon.conversation_semantic_embedded.occurrence_invalid",
 					"concern", "conversation.semantic",
 					"component", "daemon",
 					"conversation_id", owner.ConversationID,
@@ -655,12 +813,20 @@ func (w *conversationSemanticSyncWorker) logEmbeddedPass(ctx context.Context, st
 	attributes := []slog.Attr{
 		slog.String("concern", "conversation.semantic"),
 		slog.String("component", "daemon"),
+		slog.String("run_id", observation.ScopeFromContext(ctx).RunID),
 		slog.String("backend", string(config.ConversationSemanticBackendEmbedded)),
 		slog.Int("admitted", stats.admitted),
 		slog.Int("needed", stats.needed),
 		slog.Int("deferred", stats.deferred),
 		slog.Int("pending_blocked", stats.pendingBlocked),
 		slog.Int("source_read", stats.sourceRead),
+		slog.Int64("source_read_us", stats.sourceReadDuration.Microseconds()),
+		slog.Int64("projection_us", stats.projectionDuration.Microseconds()),
+		slog.Int64("policy_selection_us", stats.policySelectionDuration.Microseconds()),
+		slog.Int64("committed_field_read_us", stats.committedReadDuration.Microseconds()),
+		slog.Int64("field_selection_us", stats.fieldSelectionDuration.Microseconds()),
+		slog.Int64("occurrence_preparation_us", stats.occurrencePreparationDuration.Microseconds()),
+		slog.Int64("outbox_preparation_us", stats.outboxPreparationDuration.Microseconds()),
 		slog.Int64("source_bytes", stats.sourceBytes),
 		slog.Int("source_failed", stats.sourceFailed),
 		slog.Int("source_failed_suppressed", stats.failedSuppressed),

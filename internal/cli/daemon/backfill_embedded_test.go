@@ -41,7 +41,7 @@ func TestBackfillCommandsRefuseEmbeddedBackend(t *testing.T) {
 			}
 			body := "[conversation.semantic]\ningestion_enabled = true\nsocket_path = " + strconv.Quote(filepath.Join(root, "missing.sock")) + "\n"
 			if testCase.embedded {
-				body += "backend = \"embedded\"\ncatalog_path = " + strconv.Quote(filepath.Join(root, "catalog.sqlite")) + "\n" +
+				body += "backend = \"embedded\"\nprojection_profile = \"p3\"\ncatalog_path = " + strconv.Quote(filepath.Join(root, "catalog.sqlite")) + "\n" +
 					"lock_path = " + strconv.Quote(filepath.Join(root, "catalog.lock")) + "\npool_id = \"backfill\"\n" +
 					"milvus_address = \"localhost:1\"\nmilvus_database = \"clyde_backfill\"\nmilvus_collection = \"vectors\"\n" +
 					"embedding_base_url = \"http://localhost:1/v1\"\nembedding_model = \"nvidia/NV-EmbedCode-7b-v1\"\n" +

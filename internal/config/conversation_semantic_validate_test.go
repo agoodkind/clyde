@@ -19,6 +19,7 @@ func loadConversationSemanticTestConfig(t *testing.T, contents string) (*Config,
 // embeddedSemanticSettings is a complete embedded backend section body without
 // the backend key.
 const embeddedSemanticSettings = `catalog_path = "/tmp/clyde-test/catalog.sqlite"
+projection_profile = "p3"
 lock_path = "/tmp/clyde-test/catalog.lock"
 pool_id = "conversations-v1"
 milvus_address = "localhost:19530"
@@ -147,8 +148,7 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 // embedded backend four times. The first load omits pool_id and fails on that
 // key. The second load sets a relative catalog_path and fails on the absolute
 // path requirement. The third load sets a complete ingestion-only section and
-// succeeds. The fourth load adds search_enabled = true and fails because this
-// build has no embedded search.
+// succeeds. The fourth load enables embedded search and ingestion together.
 func TestConversationSemanticEmbeddedBackendChecksRequiredSettings(t *testing.T) {
 	t.Parallel()
 
@@ -173,9 +173,9 @@ func TestConversationSemanticEmbeddedBackendChecksRequiredSettings(t *testing.T)
 		t.Fatalf("backend/feeds/answers = %q/%v/%v, want embedded/true/false", semantic.Backend, semantic.FeedsEngine(), semantic.AnswersSearch())
 	}
 
-	_, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\nsearch_enabled = true\n"+embeddedSemanticSettings)
-	if err == nil || !strings.Contains(err.Error(), "embedded search is not available in this Clyde build (CLYDE-761)") {
-		t.Fatalf("embedded section with search enabled error = %v, want the unavailable search error", err)
+	cfg, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\nsearch_enabled = true\ningestion_enabled = true\n"+embeddedSemanticSettings)
+	if err != nil || !cfg.Conversation.Semantic.AnswersSearch() {
+		t.Fatalf("embedded section with search enabled error = %v, want enabled search", err)
 	}
 }
 
@@ -189,5 +189,19 @@ func TestConversationSemanticSettingChangeRoutesToReload(t *testing.T) {
 	newCfg.Conversation.Semantic.QueryWorkers = 4
 	if route := ClassifyConfigChange(oldCfg, newCfg); route != RouteReload {
 		t.Fatalf("route = %s, want reload", route)
+	}
+}
+
+func TestEmbeddedIngestionRequiresSourceSpanProjectionProfile(t *testing.T) {
+	t.Parallel()
+	for _, profile := range []string{"", "p1", "p2", "unknown"} {
+		t.Run(profile, func(t *testing.T) {
+			t.Parallel()
+			settings := strings.Replace(embeddedSemanticSettings, "projection_profile = \"p3\"", "projection_profile = \""+profile+"\"", 1)
+			_, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\ningestion_enabled = true\n"+settings)
+			if err == nil || !strings.Contains(err.Error(), "conversation.semantic.projection_profile") {
+				t.Fatalf("profile %q ingestion = %v, want explicit p3 requirement", profile, err)
+			}
+		})
 	}
 }

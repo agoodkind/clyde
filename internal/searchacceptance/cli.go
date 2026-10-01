@@ -1,0 +1,178 @@
+package searchacceptance
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"goodkind.io/clyde/internal/clock"
+	"goodkind.io/clyde/internal/sandbox"
+)
+
+type publicHit struct {
+	SourceIdentity *SourceIdentity `json:"source_identity"`
+}
+
+type publicPage struct {
+	Matches       []publicHit `json:"matches"`
+	ReturnedCount int         `json:"returned_count"`
+	HasMore       bool        `json:"has_more"`
+	NextCursor    string      `json:"next_cursor"`
+}
+
+// ReadCLITraversal measures every public cursor page in an isolated daemon.
+// The caller establishes the recorded cache state before the first request.
+func ReadCLITraversal(ctx context.Context, binary string, roots sandbox.Roots, home string,
+	query Query, cold bool, timeoutMS int64,
+) (traversal Traversal, err error) {
+	traversal = Traversal{QueryID: query.ID, Cold: cold, Total: 0, Pages: nil, Error: ""}
+	defer func() {
+		if err != nil {
+			traversal.Error = err.Error()
+			slog.WarnContext(ctx, "search.acceptance.traversal_failed", "component", "searchacceptance",
+				"concern", "query", "query_id", query.ID, "err", err)
+		}
+	}()
+	if err := validateCLIPaths(binary, roots, home); err != nil {
+		return traversal, err
+	}
+	if query.PageSize <= 0 || timeoutMS <= 0 || query.ExpectedTotal < 0 {
+		return traversal, errors.New("query page size and timeout must be positive and expected total must be nonnegative")
+	}
+	args := queryArguments(query)
+	environment := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
+	for _, variable := range sandbox.Env(roots) {
+		environment = append(environment, variable.Name+"="+variable.Value)
+	}
+	cursor := ""
+	seenCursors := make(map[string]bool)
+	maximumPages := query.ExpectedTotal/query.PageSize + 2
+	for range maximumPages {
+		pageArgs := append([]string(nil), args...)
+		if cursor != "" {
+			pageArgs = append(pageArgs, "--cursor", cursor)
+		}
+		page, duration, err := readCLIPage(ctx, binary, environment, pageArgs, timeoutMS)
+		if err != nil {
+			return traversal, err
+		}
+		recorded, err := recordPublicPage(page, duration)
+		if err != nil {
+			return traversal, err
+		}
+		traversal.Pages = append(traversal.Pages, recorded)
+		traversal.Total += len(recorded.OccurrenceIDs)
+		if !page.HasMore {
+			return traversal, ValidateTraversal(query, traversal, timeoutMS)
+		}
+		if page.NextCursor == "" || seenCursors[page.NextCursor] {
+			return traversal, errors.New("public search returned an empty or repeated continuation cursor")
+		}
+		seenCursors[page.NextCursor] = true
+		cursor = page.NextCursor
+	}
+	return traversal, errors.New("public search did not terminate within the frozen expected result count")
+}
+
+func validateCLIPaths(binary string, roots sandbox.Roots, home string) error {
+	if !filepath.IsAbs(binary) || !sandbox.UnderTempRoot(home) {
+		return errors.New("measurement requires an absolute binary and temporary provider HOME")
+	}
+	if err := sandbox.PreflightRoots(roots); err != nil {
+		slog.Warn("search.acceptance.sandbox_rejected", "component", "searchacceptance", "concern", "query", "err", err)
+		return fmt.Errorf("validate measurement sandbox roots: %w", err)
+	}
+	if !strings.HasPrefix(filepath.Base(roots.Base), sandbox.RootPattern) {
+		return errors.New("measurement requires a dedicated Clyde sandbox root")
+	}
+	for _, path := range []string{roots.State, roots.Config, roots.Cache, roots.Runtime} {
+		if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(roots.Base)+string(os.PathSeparator)) {
+			return errors.New("measurement roots must be children of the dedicated sandbox")
+		}
+	}
+	return nil
+}
+
+func queryArguments(query Query) []string {
+	filter := query.Filter
+	args := []string{"conversation", "search"}
+	if filter.ConversationIDs != nil {
+		args = append(args, "--conversation-ids="+strings.Join(filter.ConversationIDs, ","))
+	}
+	args = append(args, "--query", query.Query, "--limit", strconv.Itoa(query.PageSize), "--output-format", "json")
+	for _, selector := range []struct {
+		flag  string
+		value *string
+	}{{"--provider", filter.Provider}, {"--workspace", filter.Workspace}, {"--after", filter.After}, {"--before", filter.Before}} {
+		if selector.value != nil {
+			args = append(args, selector.flag, *selector.value)
+		}
+	}
+	if len(filter.Roles) > 0 {
+		args = append(args, "--roles", strings.Join(filter.Roles, ","))
+	}
+	if filter.IncludeArchived {
+		args = append(args, "--include-archived")
+	}
+	if filter.IncludeSubagents {
+		args = append(args, "--include-subagents")
+	}
+	if filter.PerConversationLimit != nil {
+		args = append(args, "--per-conversation-limit", strconv.Itoa(*filter.PerConversationLimit))
+	}
+	if filter.MinScore != nil {
+		args = append(args, "--min-score", strconv.FormatFloat(*filter.MinScore, 'g', -1, 64))
+	}
+	return args
+}
+
+func readCLIPage(ctx context.Context, binary string, environment, args []string, timeoutMS int64) (publicPage, float64, error) {
+	pageContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutMS)*time.Millisecond)
+	defer cancel()
+	command := exec.CommandContext(pageContext, binary, args...)
+	command.Env = environment
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	slog.DebugContext(ctx, "search.acceptance.page_started", "component", "searchacceptance", "concern", "query")
+	started := clock.Now()
+	if err := command.Run(); err != nil {
+		slog.WarnContext(ctx, "search.acceptance.command_failed", "component", "searchacceptance", "concern", "query", "err", err)
+		return publicPage{}, 0, fmt.Errorf("public search command failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	duration := float64(clock.Since(started)) / float64(time.Millisecond)
+	var page publicPage
+	if err := json.Unmarshal(stdout.Bytes(), &page); err != nil {
+		slog.WarnContext(ctx, "search.acceptance.page_decode_failed", "component", "searchacceptance", "concern", "query", "err", err)
+		return page, duration, fmt.Errorf("decode public search page: %w", err)
+	}
+	return page, duration, nil
+}
+
+func recordPublicPage(page publicPage, duration float64) (Page, error) {
+	result := Page{OccurrenceIDs: nil, ElapsedMS: duration, HasMore: page.HasMore}
+	if page.ReturnedCount != len(page.Matches) || !page.HasMore && page.NextCursor != "" {
+		return result, errors.New("public search page has inconsistent count or terminal cursor")
+	}
+	for _, hit := range page.Matches {
+		if hit.SourceIdentity == nil {
+			return result, errors.New("public search hit lacks source-manifest identity")
+		}
+		identity, err := IdentityKey(*hit.SourceIdentity)
+		if err != nil {
+			return result, err
+		}
+		result.OccurrenceIDs = append(result.OccurrenceIDs, identity)
+	}
+	return result, nil
+}

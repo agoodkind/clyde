@@ -202,21 +202,29 @@ func (w *conversationSemanticSyncWorker) reprojectEmbeddedOwners(
 	blockedOwners map[string]bool,
 	stats *embeddedSyncStats,
 ) {
-	storedByOwner, err := store.outbox.ownerMetadata(ctx, store.namespace.ID)
+	storedByOwner, err := w.embeddedAliasOwnerMetadata(ctx, store)
 	if err != nil {
 		stats.reprojectionFailed++
 		return
 	}
+	seen := make(map[string]bool, len(stampedRecords))
 	for _, stampedRecord := range stampedRecords {
 		if semanticSyncContextDone(ctx) {
 			return
 		}
 		ownerID := strings.TrimSpace(stampedRecord.Record.ID)
+		if ownerID == "" || seen[ownerID] {
+			continue
+		}
+		seen[ownerID] = true
 		stored, indexed := storedByOwner[ownerID]
 		if !indexed || blockedOwners[ownerID] {
 			continue
 		}
 		metadata := embeddedOwnerMetadataOf(stampedRecord.Record)
+		if decision := w.embedded.aliasDecision; decision != nil && decision.source.Record.ID == ownerID {
+			metadata = decision.metadata
+		}
 		if stored.Metadata == metadata && !stored.Stale {
 			continue
 		}

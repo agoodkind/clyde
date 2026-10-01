@@ -315,13 +315,16 @@ func newControlServer(
 		}
 		return runtime.semantic.currentSearchClient()
 	}
-	searchSource := &semanticConversationSearchSource{
+	var searchSource conversationSearchSource = &semanticConversationSearchSource{
 		index: index,
 		searchEnabled: func() bool {
 			return cfg.Conversation.Semantic.AnswersSearch()
 		},
 		searchClient: semanticSearch,
 		collectionID: cfg.Conversation.Semantic.CollectionID,
+	}
+	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
+		searchSource = &embeddedConversationSearchSource{library: nil, semantic: cfg.Conversation.Semantic, gate: runtime.embeddedReconcile, index: index, outbox: nil}
 	}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},

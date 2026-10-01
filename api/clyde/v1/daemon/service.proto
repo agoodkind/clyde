@@ -261,6 +261,10 @@ message GetConversationContextRequest {
   string load_rules = 6;
 }
 
+message ConversationSelection {
+  repeated string ids = 1;
+}
+
 message SearchConversationsRequest {
   string query = 1;
   int64 limit = 2;
@@ -286,6 +290,8 @@ message SearchConversationsRequest {
   // same query and filters. Empty starts a new search. A search source without
   // cursor paging refuses a non-empty cursor.
   string cursor = 14;
+  ConversationSelection conversation_selection = 15;
+  bool include_subagents = 16;
 }
 
 // SearchContextState states whether the source verified a match's
@@ -330,6 +336,17 @@ message ConversationSearchMatch {
   // before tagging existed.
   string load_rules = 8;
   SearchContextState context_state = 9;
+  SearchSourceIdentity source_identity = 10;
+}
+
+// SearchSourceIdentity identifies an original selected field span.
+message SearchSourceIdentity {
+  string conversation_id = 1;
+  int64 message_index = 2;
+  string content_kind = 3;
+  int64 tool_index = 4;
+  int64 source_byte_start = 5;
+  int64 source_byte_end = 6;
 }
 
 // SearchFacetCount is one facet value and how many matched conversations carry

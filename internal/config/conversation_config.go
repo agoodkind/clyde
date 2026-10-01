@@ -48,6 +48,9 @@ type ConversationSemanticConfig struct {
 	SearchEnabled    bool   `json:"searchEnabled,omitempty" toml:"search_enabled,omitempty"`
 	SocketPath       string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
 	CollectionID     string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
+	// ProjectionProfile explicitly selects source identity rules. p1 is
+	// readable without raw context verification; new ingestion requires p3.
+	ProjectionProfile ConversationProjectionProfile `json:"projectionProfile,omitempty" toml:"projection_profile,omitempty"`
 	// IndexedContent names the content kinds offered to the search engine, using
 	// the same selector vocabulary the export surface accepts. The names and their
 	// validation belong to the conversation package's content-kind taxonomy, which
@@ -151,6 +154,18 @@ type ConversationSemanticConfig struct {
 // ConversationSemanticBackend is the implementation behind conversation
 // semantic ingestion and search.
 type ConversationSemanticBackend string
+
+// ConversationProjectionProfile selects immutable occurrence identity rules.
+type ConversationProjectionProfile string
+
+const (
+	// ConversationProjectionProfileLegacy reads normalized legacy excerpts.
+	ConversationProjectionProfileLegacy ConversationProjectionProfile = "p1"
+	// ConversationProjectionProfileOriginal preserves selected source text.
+	ConversationProjectionProfileOriginal ConversationProjectionProfile = "p2"
+	// ConversationProjectionProfileSourceSpan records original prepared spans.
+	ConversationProjectionProfileSourceSpan ConversationProjectionProfile = "p3"
+)
 
 const (
 	// ConversationSemanticBackendLMS selects the lm-semantic-search daemon. The

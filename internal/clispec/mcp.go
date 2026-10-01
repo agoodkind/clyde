@@ -251,7 +251,11 @@ func (p Param[I]) decodeMCP(in *I, req mcp.CallToolRequest) {
 	case KindFloat:
 		p.bindFloat(in, req.GetFloat(p.Canonical, p.DefaultFloat))
 	case KindStringList:
-		p.bindStrSlice(in, req.GetStringSlice(p.Canonical, p.DefaultStrSlice))
+		values := req.GetStringSlice(p.Canonical, p.DefaultStrSlice)
+		if raw, supplied := req.GetArguments()[p.Canonical]; supplied && raw != nil && values == nil {
+			values = []string{}
+		}
+		p.bindStrSlice(in, values)
 	case KindEnumList:
 		raw := req.GetStringSlice(p.Canonical, nil)
 		valid := make([]string, 0, len(raw))

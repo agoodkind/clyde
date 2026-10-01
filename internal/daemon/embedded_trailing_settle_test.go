@@ -38,7 +38,7 @@ func TestEmbeddedPassWithholdsGrowingCursorTurn(t *testing.T) {
 			setTrailingTestAge(t, transcriptPath, trailingTestQuietAge)
 			index := newEmbeddedProjectionIndex()
 			store, _ := openBlockedTestStore(t)
-			worker := newReconcileTestWorker(store, index)
+			worker := newReconcileTestWorker(t, store, index)
 			runTrailingTestPass(t, worker, index)
 			if pending := trailingTestPendingFieldKeys(t, store); len(pending) != 0 {
 				t.Fatalf("pass with an open trailing turn recorded fields %q, want none", pending)
@@ -58,6 +58,49 @@ func TestEmbeddedPassWithholdsGrowingCursorTurn(t *testing.T) {
 				t.Fatalf("pass after the %s release recorded fields %q, want only the message 0 chat field", release, pending)
 			}
 		})
+	}
+}
+
+func TestEmbeddedPassWithholdsGrowingCursorAliases(t *testing.T) {
+	stores := isolateEmbeddedProjectionStores(t)
+	secondRoot := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", stores.cursorProjects+string(os.PathListSeparator)+secondRoot)
+	var paths []string
+	for _, root := range []string{stores.cursorProjects, secondRoot} {
+		path := filepath.Join(root, embeddedProjectionCursorProjectKey, "agent-transcripts", embeddedProjectionCursorConversation, embeddedProjectionCursorConversation+".jsonl")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		appendEmbeddedProjectionLines(t, path, []string{
+			`{"role":"user","message":{"content":[{"type":"text","text":"open the config"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"part one"}]}}`,
+		})
+		setTrailingTestAge(t, path, trailingTestQuietAge)
+		paths = append(paths, path)
+	}
+	index := newEmbeddedProjectionIndex()
+	if err := index.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	records, err := index.ListAllWithStamps(t.Context())
+	if err != nil || len(records) != 2 {
+		t.Fatalf("real Cursor aliases = %d, %v, want two", len(records), err)
+	}
+	if records[0].Record.ID != records[1].Record.ID || embeddedOwnerMetadataOf(records[0].Record) != embeddedOwnerMetadataOf(records[1].Record) {
+		t.Fatal("real Cursor aliases must share an owner and metadata")
+	}
+	store, _ := openBlockedTestStore(t)
+	worker := newReconcileTestWorker(t, store, index)
+	runTrailingTestPass(t, worker, index)
+	if pending := trailingTestPendingFieldKeys(t, store); len(pending) != 0 {
+		t.Fatalf("open Cursor aliases recorded fields %q, want none", pending)
+	}
+	for _, path := range paths {
+		setTrailingTestAge(t, path, embeddedTrailingSettleWindow+time.Minute)
+	}
+	runTrailingTestPass(t, worker, index)
+	if pending := trailingTestPendingFieldKeys(t, store); len(pending) != 2 {
+		t.Fatalf("settled Cursor aliases recorded fields %q, want both chat fields", pending)
 	}
 }
 

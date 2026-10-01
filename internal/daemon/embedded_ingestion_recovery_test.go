@@ -7,8 +7,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +21,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 )
@@ -28,7 +31,7 @@ const (
 	liveEmbeddingModel       = "nvidia/NV-EmbedCode-7b-v1"
 	liveEmbeddingDimension   = 4096
 	liveEmbeddingAPIKeyEnv   = "OPENAI_API_KEY"
-	liveMilvusAddress        = "localhost:19530"
+	liveMilvusAddress        = "localhost:39530"
 	liveMilvusDatabasePrefix = "clyde_live_"
 	liveCollectionID         = "clyde-conversations"
 	liveOwnerID              = "codex:" + embeddedProjectionCodexThreadID
@@ -45,9 +48,7 @@ const (
 // CommitGeneration and before the outbox acknowledgment, appended messages,
 // and source loss.
 func TestEmbeddedIngestionRecovery(t *testing.T) {
-	if strings.TrimSpace(os.Getenv(liveEmbeddingAPIKeyEnv)) == "" {
-		t.Fatalf("environment variable %s is required for the embedding endpoint", liveEmbeddingAPIKeyEnv)
-	}
+	requireLiveLocalEmbeddingModel(t)
 	t.Logf("embedding window start %s", time.Now().UTC().Format(time.RFC3339))
 	t.Cleanup(func() {
 		t.Logf("embedding window end %s", time.Now().UTC().Format(time.RFC3339))
@@ -139,8 +140,9 @@ func TestEmbeddedIngestionRecovery(t *testing.T) {
 	}
 	refreshLiveIndex(t, index)
 	reconciled := newLiveScenario(t, database, storeRoot, "uninterrupted", index)
+	reconciled.worker.freshness = newConversationSemanticFreshness()
 	afterOutboxLoss := reconciled.runPass(t)
-	assertLiveOutboxLossReconciled(t, reconciled, afterAppend, afterOutboxLoss, true, 1)
+	assertLiveOutboxLossPending(t, reconciled, afterAppend, afterOutboxLoss)
 
 	if err := os.Rename(archivedPath, rolloutPath); err != nil {
 		t.Fatalf("unarchive rollout: %v", err)
@@ -149,9 +151,9 @@ func TestEmbeddedIngestionRecovery(t *testing.T) {
 	afterUnarchive := reconciled.runPass(t)
 	assertLiveSnapshotsEqual(t, "unarchive reprojection", afterOutboxLoss, afterUnarchive)
 	unarchivedRows := countLiveEffectiveScalars(t, reconciled.semantic.CatalogPath, embeddedScalarArchived, false)
-	if unarchivedRows != len(afterAppend.rows) || afterUnarchive.appliedProjections != 2 {
-		t.Fatalf("unarchive reprojection unarchived rows/applied projections = %d/%d, want %d/2",
-			unarchivedRows, afterUnarchive.appliedProjections, len(afterAppend.rows))
+	if unarchivedRows != 0 || afterUnarchive.appliedProjections != 0 {
+		t.Fatalf("unarchive reprojection unarchived rows/applied projections = %d/%d, want 0/0",
+			unarchivedRows, afterUnarchive.appliedProjections)
 	}
 
 	if err := os.Remove(rolloutPath); err != nil {
@@ -178,49 +180,27 @@ func removeLiveOutbox(t *testing.T, poolID string) {
 	}
 }
 
-// assertLiveOutboxLossReconciled requires the pass after outbox loss and a
-// metadata change to keep every published row and vector, send no generation,
-// record every published field under the unknown-digest marker, block no
-// owner, and apply the archived value to every row at projectionOrder.
-func assertLiveOutboxLossReconciled(
-	t *testing.T,
-	scenario *liveScenario,
-	before liveSnapshot,
-	after liveSnapshot,
-	archived bool,
-	projectionOrder uint64,
-) {
+// Lost outbox provenance cannot authorize metadata updates or reconstructed digests.
+func assertLiveOutboxLossPending(t *testing.T, scenario *liveScenario, before liveSnapshot, after liveSnapshot) {
 	t.Helper()
-	store := scenario.worker.embedded.store
-	blocked, err := store.outbox.blockedOwners(t.Context(), store.namespace.ID)
-	if err != nil || len(blocked) != 0 {
-		t.Fatalf("outbox loss blocked owners = %q, %v, want none", blocked, err)
-	}
 	if after.owner != before.owner || !maps.Equal(after.rows, before.rows) {
-		t.Fatalf("outbox loss owner/rows = %+v/%d, want %+v/%d unchanged", after.owner, len(after.rows), before.owner, len(before.rows))
+		t.Fatalf("outbox loss changed committed owner or rows: %+v/%d", after.owner, len(after.rows))
 	}
 	if after.vectors != before.vectors || after.vectorWriteGeneration != before.vectorWriteGeneration || after.milvusVectors != before.milvusVectors {
-		t.Fatalf("outbox loss wrote vectors: vectors %d to %d, write generation %d to %d, milvus %d to %d",
-			before.vectors, after.vectors, before.vectorWriteGeneration, after.vectorWriteGeneration, before.milvusVectors, after.milvusVectors)
+		t.Fatal("outbox loss changed stored vectors or vector write generation")
 	}
-	if after.deliveredBatches != 0 || after.pendingBatches != 0 || after.appliedProjections != 1 {
-		t.Fatalf("outbox loss delivered/pending batches/applied projections = %d/%d/%d, want 0/0/1",
-			after.deliveredBatches, after.pendingBatches, after.appliedProjections)
+	if after.deliveredBatches != 0 || after.pendingBatches != 0 || after.appliedProjections != 0 || len(after.committedFields) != 0 {
+		t.Fatalf("outbox loss reconstructed unproven state: delivered=%d pending=%d projections=%d fields=%d", after.deliveredBatches, after.pendingBatches, after.appliedProjections, len(after.committedFields))
 	}
-	if len(after.committedFields) != len(before.committedFields) {
-		t.Fatalf("outbox loss committed fields = %d, want %d", len(after.committedFields), len(before.committedFields))
-	}
-	for fieldKey, digest := range after.committedFields {
-		if digest != embeddedUnknownFieldDigest {
-			t.Fatalf("reconciled field %s digest = %q, want %q", fieldKey, digest, embeddedUnknownFieldDigest)
-		}
-	}
+	store := scenario.worker.embedded.store
 	listed, err := store.library.ListOwnerOccurrences(t.Context(), store.namespace.ID, liveOwnerID)
-	if err != nil || listed.ProjectionOrder != projectionOrder {
-		t.Fatalf("outbox loss library projection order = %d, %v, want %d", listed.ProjectionOrder, err, projectionOrder)
+	if err != nil || listed.ProjectionOrder != 0 {
+		t.Fatalf("outbox loss changed library projection order: %d, %v", listed.ProjectionOrder, err)
 	}
-	if rows := countLiveEffectiveScalars(t, scenario.semantic.CatalogPath, embeddedScalarArchived, archived); rows != len(after.rows) {
-		t.Fatalf("outbox loss rows with archived %t = %d, want %d", archived, rows, len(after.rows))
+	server := &controlServer{freshness: scenario.worker.freshness.snapshot}
+	status, err := server.GetSemanticSearchFreshness(t.Context(), &clydev1.GetSemanticSearchFreshnessRequest{})
+	if err != nil || status.GetSemanticFreshness().GetPending() != 1 {
+		t.Fatalf("outbox loss freshness = %+v, %v, want one pending owner", status, err)
 	}
 }
 
@@ -230,7 +210,8 @@ func countLiveEffectiveScalars(t *testing.T, catalogPath string, column string, 
 	t.Helper()
 	catalog := openLiveReadOnly(t, catalogPath)
 	var count int
-	if err := catalog.QueryRowContext(t.Context(),
+	if err := catalog.QueryRowContext(
+		t.Context(),
 		`SELECT COUNT(*) FROM effective_scalars WHERE column_name = ? AND bool_value = ?`, column, value,
 	).Scan(&count); err != nil {
 		t.Fatalf("count effective %s scalars: %v", column, err)
@@ -248,9 +229,10 @@ type liveScenario struct {
 func newLiveScenario(t *testing.T, database string, storeRoot string, name string, index *conversation.Index) *liveScenario {
 	t.Helper()
 	semantic := config.ConversationSemanticConfig{
-		IngestionEnabled: true,
-		CollectionID:     liveCollectionID,
-		Backend:          config.ConversationSemanticBackendEmbedded,
+		IngestionEnabled:  true,
+		ProjectionProfile: config.ConversationProjectionProfileSourceSpan,
+		CollectionID:      liveCollectionID,
+		Backend:           config.ConversationSemanticBackendEmbedded,
 		// The pass after outbox loss and archiving admits the archived
 		// conversation and reads its transcript. Without reconciliation it
 		// resends every committed row with archived true.
@@ -262,7 +244,7 @@ func newLiveScenario(t *testing.T, database string, storeRoot string, name strin
 		MilvusDatabase:          database,
 		MilvusCollection:        "vectors_" + strings.ReplaceAll(name, "-", "_"),
 		EmbeddingBaseURL:        liveEmbeddingBaseURL,
-		EmbeddingAPIKeyEnv:      liveEmbeddingAPIKeyEnv,
+		EmbeddingAPIKeyEnv:      "",
 		EmbeddingModel:          liveEmbeddingModel,
 		EmbeddingRevision:       "live-test",
 		VectorDimension:         liveEmbeddingDimension,
@@ -272,6 +254,38 @@ func newLiveScenario(t *testing.T, database string, storeRoot string, name strin
 	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), newEmbeddedSemanticStatus(), index)
 	return &liveScenario{semantic: semantic, worker: worker}
+}
+
+func requireLiveLocalEmbeddingModel(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, liveEmbeddingBaseURL+"/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("local embedding model prerequisite: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("local models endpoint returned %s", response.Status)
+	}
+	var models struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&models); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range models.Data {
+		if model.ID == liveEmbeddingModel {
+			return
+		}
+	}
+	t.Fatalf("local endpoint does not advertise %s", liveEmbeddingModel)
 }
 
 func (scenario *liveScenario) runPass(t *testing.T) liveSnapshot {
@@ -302,7 +316,7 @@ func (scenario *liveScenario) stageWithoutAcknowledgment(t *testing.T, commit bo
 	if len(candidates) != 1 || candidates[0].record.ID != liveOwnerID {
 		t.Fatalf("candidates = %d, want only %s", len(candidates), liveOwnerID)
 	}
-	generation, _, err := scenario.worker.buildEmbeddedGeneration(ctx, store, candidates[0], &stats)
+	generation, err := scenario.worker.buildEmbeddedGeneration(ctx, store, candidates[0], &stats)
 	if err != nil || generation == nil {
 		t.Fatalf("build generation = %v, %v, want a generation", generation, err)
 	}
@@ -463,6 +477,7 @@ func createLiveMilvusDatabase(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("connect to Milvus at %s: %v", liveMilvusAddress, err)
 	}
+	t.Cleanup(func() { closeLiveMilvusAdmin(t, admin) })
 	existing, err := admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
 	if err != nil {
 		t.Fatalf("list Milvus databases: %v", err)
@@ -470,19 +485,30 @@ func createLiveMilvusDatabase(t *testing.T) string {
 	if slices.Contains(existing, name) {
 		t.Fatalf("Milvus database %s already exists", name)
 	}
+	registerLiveMilvusDatabase(t, name, liveMilvusAddress)
+	t.Cleanup(func() {
+		dropLiveMilvusDatabase(t, admin, name)
+	})
 	if err := admin.CreateDatabase(ctx, milvusclient.NewCreateDatabaseOption(name)); err != nil {
 		t.Fatalf("create Milvus database %s: %v", name, err)
 	}
 	t.Logf("created Milvus database %s at %s", name, time.Now().UTC().Format(time.RFC3339))
-	t.Cleanup(func() {
-		dropLiveMilvusDatabase(t, admin, name)
-	})
 	return name
 }
 
 func dropLiveMilvusDatabase(t *testing.T, admin *milvusclient.Client, name string) {
 	t.Helper()
-	ctx := context.WithoutCancel(t.Context())
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+	defer cancel()
+	existing, err := admin.ListDatabase(ctx, milvusclient.NewListDatabaseOption())
+	if err != nil {
+		t.Errorf("read exact database before cleanup: %v", err)
+		return
+	}
+	if !slices.Contains(existing, name) {
+		t.Logf("verified absent isolated database %s", name)
+		return
+	}
 	scoped, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: liveMilvusAddress, DBName: name})
 	if err != nil {
 		t.Errorf("connect to Milvus database %s for cleanup: %v", name, err)
@@ -508,6 +534,12 @@ func dropLiveMilvusDatabase(t *testing.T, admin *milvusclient.Client, name strin
 		t.Errorf("Milvus database %s remains after drop: %v", name, err)
 	}
 	t.Logf("dropped Milvus database %s with collections %v at %s", name, collections, time.Now().UTC().Format(time.RFC3339))
+}
+
+func closeLiveMilvusAdmin(t *testing.T, admin *milvusclient.Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+	defer cancel()
 	if err := admin.Close(ctx); err != nil {
 		t.Errorf("close Milvus admin client: %v", err)
 	}

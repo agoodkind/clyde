@@ -107,7 +107,8 @@ func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.List
 	})
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
-		slog.WarnContext(ctx, "daemon.list_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(
+			ctx, "daemon.list_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"err", err,
 		)
@@ -134,7 +135,8 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 	client, _ := peer.FromContext(ctx)
 	record, err := s.index.Resolve(ctx, req.GetConversationId())
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.get_conversation_info.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(
+			ctx, "daemon.get_conversation_info.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"conversation_id", req.GetConversationId(),
 			"err", err,
@@ -143,7 +145,8 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 	}
 	info, err := s.index.ConversationInfo(record)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.get_conversation_info.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(
+			ctx, "daemon.get_conversation_info.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"conversation_id", record.ID,
 			"err", err,
@@ -153,12 +156,9 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 	return protoConversationInfo(ctx, s.index, info), nil
 }
 
-// SearchConversations returns a relevance-ranked list of conversation hits.
-// Each hit carries the matched passage as a byte-bounded excerpt (set in
-// engineSearchMatches), so the list is self-sufficient for triage and small
-// enough for any transport. The full surrounding window is a separate windowed
-// read; search never inlines it. The freshness snapshot lets a thin result be
-// distinguished from a cold index.
+// SearchConversations returns ranked matches from the configured source.
+// Matches include stored excerpts and the source's explicit context state.
+// The freshness snapshot reports the ingestion state at query time.
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
 	// Establish correlation before any blocking search work so the operation is
 	// traceable, including a source failure.
@@ -179,7 +179,8 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 		}
 		var sourceFailure conversationSearchSourceError
 		if errors.As(err, &sourceFailure) {
-			slog.WarnContext(ctx, "daemon.search_conversations.source_failed",
+			slog.WarnContext(
+				ctx, "daemon.search_conversations.source_failed",
 				"concern", "process.daemon.lifecycle",
 				"component", "daemon",
 				"peer", peerString(client),
@@ -188,7 +189,8 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 			)
 			return nil, status.Error(sourceFailure.grpcCode(), sourceFailure.Error())
 		}
-		slog.WarnContext(ctx, "daemon.search_conversations.failed",
+		slog.WarnContext(
+			ctx, "daemon.search_conversations.failed",
 			"concern", "process.daemon.lifecycle",
 			"component", "daemon",
 			"peer", peerString(client),
@@ -215,6 +217,8 @@ func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest
 		MinScore:             req.GetMinScore(),
 		PerConversationLimit: int(req.GetPerConversationLimit()),
 		ConversationID:       req.GetConversationId(),
+		ConversationIDs:      conversationSelectionFromProto(req.GetConversationSelection()),
+		IncludeSubagents:     req.GetIncludeSubagents(),
 		ContextWindow:        int(req.GetContextWindow()),
 		Cursor:               req.GetCursor(),
 	}
@@ -305,15 +309,16 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 	matches := make([]*clydev1.ConversationSearchMatch, 0, len(result.Matches))
 	for _, match := range result.Matches {
 		matches = append(matches, &clydev1.ConversationSearchMatch{
-			Conversation:  protoConversationRecord(ctx, idx, match.Record),
-			MessageIndex:  int64(match.MessageIndex),
-			Role:          match.Role,
-			TimestampUnix: match.Timestamp.Unix(),
-			Snippet:       match.Snippet,
-			Score:         match.Score,
-			ContextWindow: match.ContextWindow,
-			LoadRules:     match.LoadRules,
-			ContextState:  protoSearchContextState(match.ContextState),
+			Conversation:   protoConversationRecord(ctx, idx, match.Record),
+			MessageIndex:   int64(match.MessageIndex),
+			Role:           match.Role,
+			TimestampUnix:  match.Timestamp.Unix(),
+			Snippet:        match.Snippet,
+			Score:          match.Score,
+			ContextWindow:  match.ContextWindow,
+			LoadRules:      match.LoadRules,
+			ContextState:   protoSearchContextState(match.ContextState),
+			SourceIdentity: protoSearchSourceIdentity(match.SourceIdentity),
 		})
 	}
 	return &clydev1.SearchConversationsResponse{
@@ -469,7 +474,8 @@ func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptur
 	output, err := s.showCapture(ctx, req.GetId())
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
-		slog.WarnContext(ctx, "daemon.show_capture.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(
+			ctx, "daemon.show_capture.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"err", err,
 		)
@@ -484,7 +490,8 @@ func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBasel
 	result, err := mitm.SeedBaseline(ctx, s.captureStore, req.GetUpstream(), req.GetIncludeUa(), req.GetExcludeUa())
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
-		slog.WarnContext(ctx, "daemon.seed_baseline.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(
+			ctx, "daemon.seed_baseline.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"upstream", req.GetUpstream(),
 			"err", err,
@@ -510,7 +517,8 @@ func (s *controlServer) LogsInventory(ctx context.Context, req *clydev1.LogsInve
 	)
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
-		slog.WarnContext(ctx, "daemon.logs_inventory.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(
+			ctx, "daemon.logs_inventory.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"err", err,
 		)
@@ -541,7 +549,8 @@ func (s *controlServer) SubscribeProviderStats(_ *clydev1.SubscribeProviderStats
 				EmittedAtUnix: emittedAtUnix,
 			}
 			if err := stream.Send(event); err != nil {
-				slog.WarnContext(stream.Context(), "daemon.provider_stats.stream_send_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+				slog.WarnContext(
+					stream.Context(), "daemon.provider_stats.stream_send_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 					"err", err,
 				)
 				return fmt.Errorf("send provider stats event: %w", err)
@@ -549,7 +558,8 @@ func (s *controlServer) SubscribeProviderStats(_ *clydev1.SubscribeProviderStats
 		}
 		select {
 		case <-stream.Context().Done():
-			slog.WarnContext(stream.Context(), "daemon.provider_stats.stream_context_done", "concern", "process.daemon.lifecycle", "component", "daemon",
+			slog.WarnContext(
+				stream.Context(), "daemon.provider_stats.stream_context_done", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"err", stream.Context().Err(),
 			)
 			return fmt.Errorf("provider stats stream context: %w", stream.Context().Err())

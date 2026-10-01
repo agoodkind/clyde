@@ -292,9 +292,10 @@ func resolveEngineHits(
 			// The excerpt is the matched passage the engine already returned,
 			// byte-bounded so the ranked list stays small. The full surrounding
 			// window is a separate windowed read; search never inlines it.
-			ContextWindow: conversation.Excerpt(hit.Content),
-			LoadRules:     hit.LoadRules,
-			ContextState:  conversation.SearchContextStateExcerptOnly,
+			ContextWindow:  conversation.Excerpt(hit.Content),
+			LoadRules:      hit.LoadRules,
+			ContextState:   conversation.SearchContextStateExcerptOnly,
+			SourceIdentity: nil,
 		})
 		seenMatches++
 		if limit > 0 && len(matches) >= limit {
