@@ -17,7 +17,7 @@ import (
 
 // errEmbeddedReconcileUnavailable reports a reconcile request to a daemon
 // without a running embedded ingestion worker.
-var errEmbeddedReconcileUnavailable = errors.New("the daemon runs no embedded conversation ingestion worker; conversation.semantic.backend must be \"embedded\" with ingestion enabled")
+var errEmbeddedReconcileUnavailable = errors.New("the daemon runs no embedded conversation ingestion worker; conversation.semantic.ingestion_enabled must be true")
 
 // embeddedReconcileGate gives the daemon control socket access to the running
 // embedded ingestion worker. The worker attaches its state when it starts and
