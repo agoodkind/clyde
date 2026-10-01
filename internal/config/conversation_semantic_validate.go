@@ -24,12 +24,9 @@ const maxConversationSemanticQueryBlockSize = 16384
 
 // normalizeAndValidateConversationSemantic trims the embedded search settings,
 // expands the catalog and lock paths, and rejects values the embedded library
-// cannot accept. The range checks run for every backend.
+// cannot accept.
 func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConfig) error {
 	normalizeConversationSemanticStrings(semantic)
-	if err := validateConversationSemanticBackend(semantic.Backend); err != nil {
-		return err
-	}
 	if semantic.EmbeddingAPIKeyEnv != "" && semantic.EmbeddingAPIKeyFile != "" {
 		return invalidConversationSemanticSetting("embedding_api_key_env", "and "+conversationSemanticKey+"embedding_api_key_file are mutually exclusive")
 	}
@@ -41,9 +38,6 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 	}
 	if err := validateConversationSemanticRanking(semantic); err != nil {
 		return err
-	}
-	if semantic.Backend != ConversationSemanticBackendEmbedded {
-		return nil
 	}
 	if semantic.UsesEngine() {
 		if semantic.ProjectionProfile != ConversationProjectionProfileLegacy && semantic.ProjectionProfile != ConversationProjectionProfileOriginal && semantic.ProjectionProfile != ConversationProjectionProfileSourceSpan {
@@ -74,7 +68,6 @@ func invalidConversationSemanticSetting(key string, problem string) error {
 }
 
 func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) {
-	semantic.Backend = ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend)))
 	semantic.ProjectionProfile = ConversationProjectionProfile(strings.TrimSpace(string(semantic.ProjectionProfile)))
 	semantic.IndexedProviders = trimmedNonEmpty(semantic.IndexedProviders)
 	semantic.IndexedRoles = trimmedNonEmpty(semantic.IndexedRoles)
@@ -101,15 +94,6 @@ func trimmedNonEmpty(values []string) []string {
 		}
 	}
 	return trimmed
-}
-
-func validateConversationSemanticBackend(backend ConversationSemanticBackend) error {
-	switch backend {
-	case "", ConversationSemanticBackendLMS, ConversationSemanticBackendEmbedded:
-		return nil
-	default:
-		return invalidConversationSemanticSetting("backend", fmt.Sprintf("must be %q or %q, got %q", ConversationSemanticBackendLMS, ConversationSemanticBackendEmbedded, backend))
-	}
 }
 
 // conversationSemanticSetting pairs a config key with its value for the
@@ -191,7 +175,10 @@ type conversationSemanticText struct {
 // configuration that lacks a store, Milvus, or embedding setting the library
 // needs to open.
 func validateEmbeddedConversationSemanticRequired(semantic *ConversationSemanticConfig) error {
-	whenEmbedded := fmt.Sprintf("when %sbackend = %q", conversationSemanticKey, ConversationSemanticBackendEmbedded)
+	if !semantic.UsesEngine() {
+		return nil
+	}
+	whenEmbedded := "when ingestion or search is enabled"
 	required := []conversationSemanticText{
 		{key: "pool_id", value: semantic.PoolID},
 		{key: "milvus_address", value: semantic.MilvusAddress},

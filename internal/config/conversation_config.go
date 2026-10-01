@@ -35,18 +35,12 @@ func (cursor CursorConversationConfig) RawIndexingEnabled() bool {
 	return cursor.Enabled == nil || *cursor.Enabled
 }
 
-// ConversationSemanticConfig configures conversation semantic search: offering
-// conversations to the search engine, and reading them back.
-//
-// The two are separate settings because they carry different costs. Offering
-// conversations embeds text, which occupies the GPU and grows the store, so an
-// operator has real reasons to stop it. Reading queries a corpus that already
-// exists and costs nothing, so stopping the writes does not put the stored
-// conversations out of reach.
+// ConversationSemanticConfig configures direct library ingestion and search.
+// Ingestion embeds selected document content and writes occurrences. Search
+// embeds query text and reads committed occurrences independently of ingestion.
 type ConversationSemanticConfig struct {
 	IngestionEnabled bool   `json:"ingestionEnabled,omitempty" toml:"ingestion_enabled,omitempty"`
 	SearchEnabled    bool   `json:"searchEnabled,omitempty" toml:"search_enabled,omitempty"`
-	SocketPath       string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
 	CollectionID     string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
 	// ProjectionProfile explicitly selects source identity rules. p1 is
 	// readable without raw context verification; new ingestion requires p3.
@@ -57,22 +51,13 @@ type ConversationSemanticConfig struct {
 	// this package cannot import without a cycle, so the values are carried as
 	// written and resolved where they are used.
 	//
-	// It selects parts of a message, which is a different level from
-	// [ConversationConfig.IncludeSubagentConversations]. The conversation is still
-	// delivered, so the engine reconciles the message rows it stops receiving
-	// rather than retaining them.
+	// It selects message parts independently of whole conversation visibility.
+	// Previously committed occurrences remain stored after selector changes.
 	//
 	// An absent or empty list means the indexing default. Naming no kinds is not
 	// how an operator turns indexing off, because that would quietly stop
 	// embedding everything; `ingestion_enabled = false` is.
 	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
-
-	// Backend selects the implementation behind ingestion and search. An empty
-	// value selects the lm-semantic-search daemon at SocketPath. The embedded
-	// value selects the in-process library configured by the keys below. This
-	// build ingests into the embedded library and has no embedded search, so
-	// the loader rejects the embedded value when SearchEnabled is true.
-	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
 
 	// IndexedProviders and IndexedRoles limit embedded ingestion and search to
 	// the listed providers and message roles. Empty lists select every one.
@@ -151,10 +136,6 @@ type ConversationSemanticConfig struct {
 	RRFK   int      `json:"rrfK,omitempty" toml:"rrf_k,omitempty"`
 }
 
-// ConversationSemanticBackend is the implementation behind conversation
-// semantic ingestion and search.
-type ConversationSemanticBackend string
-
 // ConversationProjectionProfile selects immutable occurrence identity rules.
 type ConversationProjectionProfile string
 
@@ -165,15 +146,6 @@ const (
 	ConversationProjectionProfileOriginal ConversationProjectionProfile = "p2"
 	// ConversationProjectionProfileSourceSpan records original prepared spans.
 	ConversationProjectionProfileSourceSpan ConversationProjectionProfile = "p3"
-)
-
-const (
-	// ConversationSemanticBackendLMS selects the lm-semantic-search daemon. The
-	// empty value selects it too.
-	ConversationSemanticBackendLMS ConversationSemanticBackend = "lms"
-	// ConversationSemanticBackendEmbedded selects the in-process shared search
-	// library.
-	ConversationSemanticBackendEmbedded ConversationSemanticBackend = "embedded"
 )
 
 // FeedsEngine reports whether the daemon offers conversations to the search
@@ -188,8 +160,7 @@ func (semantic ConversationSemanticConfig) AnswersSearch() bool {
 	return semantic.SearchEnabled
 }
 
-// UsesEngine reports whether either direction needs a connection to the engine,
-// which is what decides whether the daemon builds one.
+// UsesEngine reports whether ingestion or search requires the library.
 func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
@@ -198,7 +169,6 @@ func applyConversationDefaults(conversation *ConversationConfig) error {
 	if conversation == nil {
 		return nil
 	}
-	conversation.Semantic.SocketPath = strings.TrimSpace(conversation.Semantic.SocketPath)
 	conversation.Semantic.CollectionID = strings.TrimSpace(conversation.Semantic.CollectionID)
 	if conversation.Semantic.CollectionID == "" {
 		conversation.Semantic.CollectionID = defaultConversationSemanticCollectionID

@@ -13,7 +13,7 @@ func (gate *embeddedReconcileGate) search(ctx context.Context, semantic config.C
 	embedded, log := gate.embedded, gate.log
 	gate.mu.Unlock()
 	if embedded == nil {
-		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
+		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError()
 	}
 	if err := embedded.lockStore(ctx); err != nil {
 		return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, err)

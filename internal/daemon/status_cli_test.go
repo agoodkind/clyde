@@ -18,7 +18,6 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
-	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/transcript"
 	"google.golang.org/grpc"
@@ -103,21 +102,6 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 				runtime.pprofListener = profiling
 				profilingText = "profiling: address=" + profiling.Addr().String()
 			}
-			var attempts atomic.Int64
-			if enabled {
-				connector := semsearchConnector(filepath.Join(t.TempDir(), "missing.sock"), "status-test")
-				semantic, group := newTestSemanticRuntime(t, func(ctx context.Context) (semanticConnection, error) {
-					attempts.Add(1)
-					return connector(ctx)
-				})
-				semantic.retryDelay = func(uint32) time.Duration { return time.Hour }
-				if err := semantic.attemptRegister(t.Context()); err == nil {
-					t.Fatal("missing engine registered")
-				}
-				semantic.startRetryWorker(t.Context(), group)
-				runtime.semantic = semantic
-				t.Cleanup(func() { group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: time.Second}) })
-			}
 			grpcServer := grpc.NewServer()
 			server := newControlServer(cfg, semanticTestLogger(), nil, index, nil, grpcServer, runtime, exportTokenConfig{})
 			clydev1.RegisterClydeServiceServer(grpcServer, server)
@@ -129,7 +113,10 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Deliberately disagree with the daemon's effective configuration.
-			body := fmt.Sprintf("[daemon]\ngrpc_address = %q\n[conversation.semantic]\ningestion_enabled = %t\nsearch_enabled = %t\n", "unix://"+socket, !directions.ingestion, !directions.search)
+			body := fmt.Sprintf("[daemon]\ngrpc_address = %q\n[conversation.semantic]\ningestion_enabled = %t\nsearch_enabled = %t\n", "unix://"+socket, !directions.ingestion, !directions.search) +
+				"projection_profile = \"p3\"\ncatalog_path = \"/tmp/status-catalog.sqlite\"\nlock_path = \"/tmp/status-catalog.lock\"\n" +
+				"pool_id = \"status\"\nmilvus_address = \"localhost:1\"\nmilvus_database = \"status\"\nmilvus_collection = \"vectors\"\n" +
+				"embedding_base_url = \"http://localhost:1/v1\"\nembedding_model = \"test-model\"\nembedding_revision = \"r1\"\nvector_dimension = 2\nnormalization = \"l2\"\n"
 			if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -142,7 +129,7 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 				}
 				state := "disabled"
 				if enabled {
-					state = "unavailable"
+					state = "embedded"
 				}
 				for _, want := range []string{fmt.Sprintf("ingestion_enabled=%t search_enabled=%t", directions.ingestion, directions.search), "connection=" + state, profilingText, "address=" + socket} {
 					if !strings.Contains(string(output), want) {
@@ -198,32 +185,18 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = conn.Close() })
 			client := clydev1.NewClydeServiceClient(conn)
-			var nextRetry int64
 			for i := 0; i < 10; i++ {
 				response, err := client.GetDaemonStatus(t.Context(), &emptypb.Empty{})
 				if err != nil {
 					t.Fatal(err)
 				}
 				semantic := response.GetSemantic()
-				if i == 0 {
-					nextRetry = semantic.GetNextRetryUnix()
-				}
-				if semantic.GetNextRetryUnix() != nextRetry || semantic.GetAttempts() != uint64(attempts.Load()) {
-					t.Fatalf("control status changed retry state: %v", semantic)
-				}
-				if enabled && nextRetry <= time.Now().Unix() {
-					t.Fatalf("missing engine has no future retry: %v", semantic)
-				}
-				if !enabled && nextRetry != 0 {
-					t.Fatalf("disabled engine has a retry: %v", semantic)
+				if semantic.GetNextRetryUnix() != 0 || semantic.GetAttempts() != 0 {
+					t.Fatalf("direct library status reports an LMS retry: %v", semantic)
 				}
 			}
-			wantAttempts := int64(0)
-			if enabled {
-				wantAttempts = 1
-			}
-			if attempts.Load() != wantAttempts || parser.discoveries.Load() != beforeDiscovery || parser.loads.Load() != 1 {
-				t.Fatalf("status caused work: attempts=%d discovery=%d loads=%d", attempts.Load(), parser.discoveries.Load(), parser.loads.Load())
+			if parser.discoveries.Load() != beforeDiscovery || parser.loads.Load() != 1 {
+				t.Fatalf("status caused work: discovery=%d loads=%d", parser.discoveries.Load(), parser.loads.Load())
 			}
 		})
 	}

@@ -59,7 +59,7 @@ func TestDaemonStatusCommandReportsEmbeddedBackend(t *testing.T) {
 	status.publishStore(ctx, store)
 
 	cfg := config.NewConfig()
-	cfg.Conversation.Semantic.Backend = config.ConversationSemanticBackendEmbedded
+
 	cfg.Conversation.Semantic.IngestionEnabled = true
 	socket := conversationSearchSocketPath(t)
 	listener, err := net.Listen("unix", socket)

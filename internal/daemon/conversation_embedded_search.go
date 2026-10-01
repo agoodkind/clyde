@@ -32,7 +32,7 @@ func (source *embeddedConversationSearchSource) SearchConversations(ctx context.
 		return conversation.SearchConversationsResult{}, disabledConversationSearchSourceError(nil)
 	}
 	if source == nil {
-		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
+		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError()
 	}
 	if options.ConversationIDs != nil && len(options.ConversationIDs) == 0 {
 		return embeddedSearchResult(nil, normalizedSearchLimit(options.Limit), normalizedPagingOffset(options.Offset), library.SearchPage{}), nil
@@ -41,7 +41,7 @@ func (source *embeddedConversationSearchSource) SearchConversations(ctx context.
 		return source.gate.search(ctx, source.semantic, options, source.index)
 	}
 	if source.library == nil {
-		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
+		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError()
 	}
 	ctx = embeddedQueryObservationContext(ctx)
 	filter, err := embeddedConversationFilter(source.semantic, options)

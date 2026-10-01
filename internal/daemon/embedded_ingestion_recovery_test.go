@@ -232,7 +232,7 @@ func newLiveScenario(t *testing.T, database string, storeRoot string, name strin
 		IngestionEnabled:  true,
 		ProjectionProfile: config.ConversationProjectionProfileSourceSpan,
 		CollectionID:      liveCollectionID,
-		Backend:           config.ConversationSemanticBackendEmbedded,
+
 		// The pass after outbox loss and archiving admits the archived
 		// conversation and reads its transcript. Without reconciliation it
 		// resends every committed row with archived true.
@@ -251,7 +251,7 @@ func newLiveScenario(t *testing.T, database string, storeRoot string, name strin
 		Normalization:           "l2",
 		EmbeddingRequestTimeout: config.Duration(2 * time.Minute),
 	}
-	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
+	worker := newConversationSemanticSyncWorker(index, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 	worker.embedded = newEmbeddedConversationSync(semantic, conversationSemanticOutboxPath(semantic.PoolID), newEmbeddedSemanticStatus(), index)
 	return &liveScenario{semantic: semantic, worker: worker}
 }

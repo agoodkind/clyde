@@ -32,7 +32,7 @@ func TestEmbeddedChangedCommittedSourceRemainsPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	freshness := newConversationSemanticFreshness()
-	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
+	worker := newConversationSemanticSyncWorker(index, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 	worker.freshness = freshness
 	worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
 	worker.embedded.store = store

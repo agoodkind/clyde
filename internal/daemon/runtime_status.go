@@ -5,8 +5,6 @@ import (
 	"sort"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/config"
-	"google.golang.org/grpc/connectivity"
 )
 
 func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
@@ -16,14 +14,9 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 		SearchEnabled:    cfg.Conversation.Semantic.AnswersSearch(),
 		Connection:       clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_DISABLED,
 	}
-	if cfg.Conversation.Semantic.UsesEngine() && cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
+	if cfg.Conversation.Semantic.UsesEngine() {
 		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_EMBEDDED
 		semantic.Embedded = r.embeddedStatus.proto()
-	} else if cfg.Conversation.Semantic.UsesEngine() {
-		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_UNAVAILABLE
-		if r.semantic != nil {
-			r.semantic.readStatus(semantic)
-		}
 	}
 	listeners := make([]*clydev1.BoundListenerStatus, 0)
 	for name, listener := range map[string]net.Listener{
@@ -64,32 +57,4 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 
 func boundListenerStatus(name string, addr net.Addr) *clydev1.BoundListenerStatus {
 	return &clydev1.BoundListenerStatus{Name: name, Network: addr.Network(), Address: addr.String()}
-}
-
-func (r *conversationSemanticRuntime) readStatus(snapshot *clydev1.SemanticStatus) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	snapshot.Attempts = r.attempts
-	if !r.nextRetry.IsZero() {
-		snapshot.NextRetryUnix = r.nextRetry.Unix()
-	}
-	if r.connecting {
-		snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_CONNECTING
-	} else if r.registered {
-		snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_READY
-		if r.connectionState != nil {
-			switch r.connectionState.GetState() {
-			case connectivity.Idle:
-				snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_IDLE
-			case connectivity.Connecting:
-				snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_CONNECTING
-			case connectivity.Ready:
-				snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_READY
-			case connectivity.TransientFailure:
-				snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_UNAVAILABLE
-			case connectivity.Shutdown:
-				snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_SHUTDOWN
-			}
-		}
-	}
 }

@@ -58,11 +58,11 @@ func disabledConversationSearchSourceError(cause error) conversationSearchSource
 	}
 }
 
-func unavailableConversationSearchSourceError(cause error) conversationSearchSourceError {
+func unavailableConversationSearchSourceError() conversationSearchSourceError {
 	return conversationSearchSourceError{
 		code:    conversationSearchSourceUnavailable,
 		rpcCode: codes.FailedPrecondition,
-		cause:   cause,
+		cause:   nil,
 	}
 }
 
@@ -99,9 +99,4 @@ func sourceRPCCode(err error) codes.Code {
 		return codes.Unknown
 	}
 	return statusErr.GRPCStatus().Code()
-}
-
-func isConversationSearchSourceUnavailable(err error) bool {
-	code := sourceRPCCode(err)
-	return code == codes.Unavailable || code == codes.DeadlineExceeded
 }

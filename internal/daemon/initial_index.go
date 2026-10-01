@@ -11,22 +11,11 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
-	"goodkind.io/clyde/internal/conversation/semsearch"
 )
 
 type initialIndexProgress func(completed int, total int)
 
 const initialIndexHeartbeatInterval = 5 * time.Second
-
-type initialSemanticClient interface {
-	conversationSemanticClient
-	Register(context.Context, string) error
-	Close() error
-}
-
-var dialInitialSemantic = func(ctx context.Context, socketPath string) (initialSemanticClient, error) {
-	return semsearch.Dial(ctx, socketPath)
-}
 
 // RunInitialConversationIndex builds the first raw conversation cache during
 // native daemon installation. It reports the decision and the result on output so an
@@ -88,11 +77,7 @@ func RunInitialConversationIndex(ctx context.Context, output io.Writer, progress
 		}
 	}
 	if cfg.Conversation.Semantic.FeedsEngine() {
-		var err error
-		_, err = runInitialSemanticIndex(ctx, cfg, index, output)
-		if err != nil {
-			return err
-		}
+		_, _ = fmt.Fprintln(output, "Initial indexing: semantic ingestion starts in the daemon sync worker from the written conversation index")
 	}
 	_, _ = fmt.Fprintf(output, "Initial indexing: complete with %d conversations\n", len(records))
 	return nil
@@ -143,46 +128,4 @@ func writeInitialIndexHeartbeats(
 			return
 		}
 	}
-}
-
-func runInitialSemanticIndex(
-	ctx context.Context,
-	cfg *config.Config,
-	index conversationSemanticIndex,
-	output io.Writer,
-) (bool, error) {
-	contentKinds, err := SemanticContentKinds(cfg.Conversation.Semantic)
-	if err != nil {
-		return false, err
-	}
-	// The embedded backend has no lm-semantic-search socket. The daemon sync
-	// worker lists the records of the conversation index cache that this run
-	// wrote and loads each admitted transcript once for its first delivery.
-	if cfg.Conversation.Semantic.Backend == config.ConversationSemanticBackendEmbedded {
-		_, _ = fmt.Fprintln(output, "Initial indexing: embedded semantic ingestion starts in the daemon sync worker from the written conversation index")
-		return false, nil
-	}
-	client, err := dialInitialSemantic(ctx, cfg.Conversation.Semantic.SocketPath)
-	if err != nil {
-		_, _ = fmt.Fprintf(output, "Initial indexing: semantic indexing skipped because semantic service is unavailable: %v\n", err)
-		return false, nil
-	}
-	defer func() { _ = client.Close() }()
-	if err := client.Register(ctx, cfg.Conversation.Semantic.CollectionID); err != nil {
-		_, _ = fmt.Fprintf(output, "Initial indexing: semantic indexing skipped because semantic service is unavailable: %v\n", err)
-		return false, nil
-	}
-	worker := newConversationSemanticSyncWorker(
-		index,
-		func() conversationSemanticClient { return client },
-		cfg.Conversation.Semantic.CollectionID,
-		slog.Default(),
-		contentKinds,
-	)
-	if err := worker.runPass(ctx); err != nil {
-		_, _ = fmt.Fprintf(output, "Initial indexing: semantic indexing failed: %v\n", err)
-		slog.WarnContext(ctx, "daemon.initial_index.semantic_pass_failed", "concern", "conversation.index", "component", "daemon", "err", err)
-		return false, fmt.Errorf("run initial semantic indexing pass: %w", err)
-	}
-	return true, nil
 }

@@ -127,9 +127,9 @@ func openUnmanagedBlockedTestStore(t *testing.T) (*embeddedConversationStore, *s
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
 	semantic := config.ConversationSemanticConfig{
-		IngestionEnabled:  true,
-		CollectionID:      "clyde-conversations",
-		Backend:           config.ConversationSemanticBackendEmbedded,
+		IngestionEnabled: true,
+		CollectionID:     "clyde-conversations",
+
 		CatalogPath:       filepath.Join(root, "catalog", "catalog.sqlite"),
 		LockPath:          filepath.Join(root, "catalog", "catalog.lock"),
 		PoolID:            "blocked-test",

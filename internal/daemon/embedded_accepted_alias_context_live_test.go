@@ -27,7 +27,7 @@ func TestEmbeddedContextUsesAcceptedAlias(t *testing.T) {
 	if err := store.outbox.releaseLock(); err != nil {
 		t.Fatal(err)
 	}
-	worker := newConversationSemanticSyncWorker(index, nil, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
+	worker := newConversationSemanticSyncWorker(index, semantic.CollectionID, slog.Default(), defaultSemanticContentKinds())
 	worker.embedded = newEmbeddedConversationSync(semantic, store.outbox.path, newEmbeddedSemanticStatus(), index)
 	worker.embedded.store = store
 	if err := worker.runPass(t.Context()); err != nil {

@@ -305,7 +305,7 @@ func runFrozenCorpusIngestion(t *testing.T, request frozenCorpusRequest, verifyU
 		return proof, err
 	}
 	createWorker := func() *conversationSemanticSyncWorker {
-		worker := newConversationSemanticSyncWorker(index, nil, request.Semantic.CollectionID, logger, kinds)
+		worker := newConversationSemanticSyncWorker(index, request.Semantic.CollectionID, logger, kinds)
 		worker.embedded = newEmbeddedConversationSync(request.Semantic, conversationSemanticOutboxPath(request.Semantic.PoolID), newEmbeddedSemanticStatus(), index)
 		return worker
 	}

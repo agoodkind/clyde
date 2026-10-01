@@ -317,26 +317,18 @@ func TestPolicySkipsAreCountedApartFromFailures(t *testing.T) {
 		messagesByID: map[string][]transcript.Message{conversationID: policyTestMessages()},
 		loadOptions:  nil,
 	}
-	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
 	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), kinds)
-	freshness := newConversationSemanticFreshness()
-	worker.freshness = freshness
+	worker := newConversationSemanticSyncWorker(index, "collection-test", semanticTestLogger(), kinds)
 
-	if err := worker.runPass(context.Background()); err != nil {
-		t.Fatalf("runPass returned error: %v", err)
+	built, err := worker.loadDocs(context.Background(), policyCountsRecord(conversationID))
+	if err != nil {
+		t.Fatalf("loadDocs returned error: %v", err)
 	}
-	if len(client.upsertCalls) != 1 {
-		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
-	}
-	if len(client.upsertCalls[0].Docs) != 3 {
-		t.Fatalf("delivered documents = %d, want 3 with the reasoning-only turn withheld", len(client.upsertCalls[0].Docs))
-	}
-	if snapshot := freshness.snapshot(); snapshot.Manifest != 1 {
-		t.Fatalf("freshness manifest = %d, want 1", snapshot.Manifest)
+	if len(built.Docs) != 3 || built.PolicySkipped != 1 {
+		t.Fatalf("projection = %+v, want three documents and one policy skip", built)
 	}
 }
 

@@ -339,7 +339,10 @@ func TestHardResetCommandUsesNativeInstallerAndPreservesProtectedFiles(t *testin
 	semanticDir := filepath.Join(config.DefaultStateDir(), "conversation-semantic")
 	semanticCatalog := filepath.Join(semanticDir, "catalog.sqlite")
 	semanticLock := filepath.Join(semanticDir, "catalog.lock")
-	configBody := []byte("# Preserve these exact bytes.\n[logging.cleanup]\nenabled = false\n[conversation.semantic]\ningestion_enabled = true\ncatalog_path = " + strconv.Quote(semanticCatalog) + "\nlock_path = " + strconv.Quote(semanticLock) + "\n[mitm.capture_store]\ndb_path = " + strconv.Quote(filepath.Join(config.DefaultStateDir(), "custom", "capture.db")) + "\n")
+	configBody := []byte("# Preserve these exact bytes.\n[logging.cleanup]\nenabled = false\n[conversation.semantic]\ningestion_enabled = true\ncatalog_path = " + strconv.Quote(semanticCatalog) + "\nlock_path = " + strconv.Quote(semanticLock) + "\n" +
+		"projection_profile = \"p3\"\npool_id = \"reset-test\"\nmilvus_address = \"localhost:1\"\nmilvus_database = \"reset_test\"\nmilvus_collection = \"vectors\"\n" +
+		"embedding_base_url = \"http://localhost:1/v1\"\nembedding_model = \"test-model\"\nembedding_revision = \"r1\"\nvector_dimension = 2\nnormalization = \"l2\"\n" +
+		"[mitm.capture_store]\ndb_path = " + strconv.Quote(filepath.Join(config.DefaultStateDir(), "custom", "capture.db")) + "\n")
 	writeResetFixture(t, config.GlobalConfigPath(), configBody)
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {

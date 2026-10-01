@@ -31,7 +31,7 @@ func testEmbeddedConversationLibraryProfile(t *testing.T, profile config.Convers
 		IngestionEnabled:  profile == config.ConversationProjectionProfileSourceSpan,
 		SearchEnabled:     true,
 		CollectionID:      "clyde-conversations",
-		Backend:           config.ConversationSemanticBackendEmbedded,
+
 		CatalogPath:       filepath.Join(root, "catalog", "catalog.sqlite"),
 		LockPath:          filepath.Join(root, "catalog", "catalog.lock"),
 		PoolID:            "open-test",
