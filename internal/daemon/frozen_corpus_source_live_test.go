@@ -49,6 +49,7 @@ type frozenCorpusRequest struct {
 	Semantic                 config.ConversationSemanticConfig `json:"semantic"`
 	Model                    frozenCorpusModel                 `json:"model"`
 	RetainOnSuccess          bool                              `json:"retain_on_success"`
+	Resume                   bool                              `json:"resume"`
 }
 
 type frozenCorpusCache struct {
