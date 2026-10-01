@@ -727,8 +727,8 @@ func validateFrozenRuntime(request frozenCorpusRequest) error {
 	if err != nil {
 		return err
 	}
-	if semantic.EmbeddingBaseURL != liveEmbeddingBaseURL && semantic.EmbeddingBaseURL != "http://[::1]:5400/v1" {
-		return errors.New("frozen embedding URL must be http://localhost:5400/v1 or http://[::1]:5400/v1")
+	if semantic.EmbeddingBaseURL != liveEmbeddingBaseURL && semantic.EmbeddingBaseURL != "http://[::1]:5400/v1" && semantic.EmbeddingBaseURL != "http://127.0.0.1:5400/v1" {
+		return errors.New("frozen embedding URL must be http://localhost:5400/v1, http://[::1]:5400/v1, or http://127.0.0.1:5400/v1")
 	}
 	if semantic.MilvusAddress != address || !strings.HasPrefix(semantic.MilvusDatabase, "clyde_frozen_") || semantic.MilvusCollection == "" || semantic.CollectionID == "" || semantic.PoolID == "" {
 		return errors.New("driver requires explicit fresh clyde_frozen_ database and approved isolated Mac endpoints")

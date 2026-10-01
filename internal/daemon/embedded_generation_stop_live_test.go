@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"goodkind.io/clyde/internal/config"
 )
 
