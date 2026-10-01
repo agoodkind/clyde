@@ -82,13 +82,13 @@ func newEmbeddedLifecycleHarness(t *testing.T) (*harness, config.Config) {
 		t.Fatal(err)
 	}
 	configuration.Conversation.Semantic = config.ConversationSemanticConfig{
-		Backend: config.ConversationSemanticBackendEmbedded, IngestionEnabled: true,
+		IngestionEnabled: true,
 		ProjectionProfile: config.ConversationProjectionProfileSourceSpan,
 		CollectionID:      "lifecycle", PoolID: "lifecycle",
 		CatalogPath:   filepath.Join(harness.stateRoot, "catalog.sqlite"),
 		LockPath:      filepath.Join(harness.stateRoot, "catalog.lock"),
 		MilvusAddress: "localhost:39530", MilvusDatabase: database, MilvusCollection: "vectors",
-		EmbeddingBaseURL: "http://localhost:5400/v1", EmbeddingModel: "nvidia/NV-EmbedCode-7b-v1",
+		EmbeddingBaseURL: "http://[::1]:5400/v1", EmbeddingModel: "nvidia/NV-EmbedCode-7b-v1",
 		EmbeddingRevision: "lifecycle", VectorDimension: 4096, Normalization: "l2",
 	}
 	return harness, configuration
@@ -124,7 +124,7 @@ func testEmbeddedPendingReplacementStop(t *testing.T, stop string) {
 		t.Fatal(err)
 	}
 	configuration.Conversation.Semantic = config.ConversationSemanticConfig{
-		Backend: config.ConversationSemanticBackendEmbedded, IngestionEnabled: true,
+		IngestionEnabled: true,
 		ProjectionProfile: config.ConversationProjectionProfileSourceSpan,
 		CollectionID:      "pending-stop", PoolID: "pending-stop",
 		CatalogPath: filepath.Join(harness.stateRoot, "catalog.sqlite"), LockPath: filepath.Join(harness.stateRoot, "catalog.lock"),

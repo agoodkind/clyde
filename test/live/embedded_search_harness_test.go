@@ -110,7 +110,6 @@ func newEmbeddedPublicHarness(t *testing.T, home string) (*harness, config.Confi
 		t.Fatal(err)
 	}
 	semantic := &configuration.Conversation.Semantic
-	semantic.Backend = config.ConversationSemanticBackendEmbedded
 	semantic.ProjectionProfile = config.ConversationProjectionProfileSourceSpan
 	semantic.IngestionEnabled = true
 	semantic.SearchEnabled = false
@@ -121,7 +120,7 @@ func newEmbeddedPublicHarness(t *testing.T, home string) (*harness, config.Confi
 	semantic.MilvusAddress = "localhost:39530"
 	semantic.MilvusDatabase = createEmbeddedLifecycleDatabase(t)
 	semantic.MilvusCollection = "vectors"
-	semantic.EmbeddingBaseURL = "http://localhost:5400/v1"
+	semantic.EmbeddingBaseURL = "http://[::1]:5400/v1"
 	semantic.EmbeddingModel = "nvidia/NV-EmbedCode-7b-v1"
 	semantic.EmbeddingRevision = "public"
 	semantic.VectorDimension = 4096

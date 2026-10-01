@@ -84,7 +84,6 @@ func TestLiveEmbeddedVirtualCursorContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	semantic := &configuration.Conversation.Semantic
-	semantic.Backend = config.ConversationSemanticBackendEmbedded
 	semantic.ProjectionProfile = config.ConversationProjectionProfileSourceSpan
 	semantic.IndexedContent = []string{"chat", "tool_calls"}
 	semantic.IndexedProviders = []string{"cursor"}
