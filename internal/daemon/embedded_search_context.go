@@ -35,13 +35,13 @@ func missingEmbeddedContextField(fields []searchbackend.Field, identities map[st
 	return false
 }
 
-func unavailableEmbeddedContext(ctx context.Context, match conversation.SearchMatch, cause error) (conversation.SearchMatch, error) {
+func unavailableEmbeddedContext(ctx context.Context, match conversation.SearchMatch, cause error) error {
 	if ctx.Err() != nil {
 		slog.WarnContext(ctx, "daemon.conversation_embedded_search.context_cancelled", "component", "daemon", "concern", "conversation.semantic", "conversation_id", match.Record.ID, "err", ctx.Err())
-		return conversation.SearchMatch{}, fmt.Errorf("verify embedded context: %w", ctx.Err())
+		return fmt.Errorf("verify embedded context: %w", ctx.Err())
 	}
 	slog.DebugContext(ctx, "daemon.conversation_embedded_search.context_unavailable", "component", "daemon", "concern", "conversation.semantic", "conversation_id", match.Record.ID, "err", cause)
-	return match, nil
+	return nil
 }
 
 func verifiedEmbeddedContextFields(ctx context.Context, owner embeddedConversationOwner, fields []searchbackend.Field, identities map[string]embeddedCommittedFieldIdentity, hit library.SearchHit, match conversation.SearchMatch) (string, bool, error) {

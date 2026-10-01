@@ -60,8 +60,7 @@ func (source *embeddedConversationSearchSource) verifyPageContextGroup(ctx conte
 		return stats, verificationErr
 	}
 	if err != nil {
-		_, unavailableErr := unavailableEmbeddedContext(ctx, first, err)
-		return stats, unavailableErr
+		return stats, unavailableEmbeddedContext(ctx, first, err)
 	}
 	for position, index := range group.indices {
 		output[index] = pending[position]

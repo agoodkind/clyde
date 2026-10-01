@@ -30,7 +30,7 @@ func (idx *Index) ReadVerifiedMessageWindow(ctx context.Context, record Record, 
 
 // VisitContextWindow retains only the requested positions from a fresh stream.
 func VisitContextWindow(ctx context.Context, stream iter.Seq2[transcript.Message, error], start, end int, visit func([]transcript.Message) error) error {
-	if visit == nil {
+	if start < 0 || end < start || visit == nil {
 		return errors.New("invalid provider context window")
 	}
 	_, err := VisitContextWindows(ctx, stream, []ContextMessageWindow{{Start: start, End: end}}, func(windows [][]transcript.Message) error {

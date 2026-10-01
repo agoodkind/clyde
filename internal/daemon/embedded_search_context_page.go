@@ -93,12 +93,12 @@ func (source *embeddedConversationSearchSource) readPageContextSources(ctx conte
 		records:    make(map[embeddedContextSource]embeddedContextRecord),
 		groups:     nil, positions: make(map[embeddedContextGroupKey]int),
 	}
+	if len(matches) == 0 {
+		return prepared, nil
+	}
 	stamped, err := source.index.ListAllWithStamps(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
-			return prepared, &conversation.ContextReadError{Operation: "prepare embedded page context", Cause: ctx.Err()}
-		}
-		return prepared, nil
+		return prepared, unavailableEmbeddedContext(ctx, matches[0], err)
 	}
 	for _, entry := range stamped {
 		key := embeddedContextSource{owner: entry.Record.ID, provider: entry.Record.Provider.String(), path: entry.Record.ArtifactPath}

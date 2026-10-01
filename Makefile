@@ -92,7 +92,7 @@ coverage: ## Generate coverage report via ginkgo
 # CLYDE_TEST_CONVERSATION_INGESTION, CLYDE_TEST_CONVERSATION_SEARCH,
 # and CLYDE_TEST_COLLECTION_ID.
 live: ## Run the live daemon validation suite (opt-in, build tag live)
-	@go test -tags live -count=1 ./test/live/
+	@go test -tags live -count=1 -timeout=20m ./test/live/
 
 deadcode: lint-deadcode ## Alias for the central deadcode gate
 

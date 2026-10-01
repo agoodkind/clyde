@@ -30,7 +30,7 @@ func observeEmbeddedPageContext(ctx context.Context, started time.Time, hits, gr
 		"outcome", status, "duration_ns", clock.Since(started).Nanoseconds(),
 		"page_hits", hits, "source_groups", groups, "source_reads", stats.SourceReads,
 		"messages_visited", stats.MessagesVisited, "messages_retained", stats.MessagesRetained,
-		"windows", stats.Windows, "err", err,
+		"windows", stats.Windows,
 	)
 }
 
