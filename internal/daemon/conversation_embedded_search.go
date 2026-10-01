@@ -119,7 +119,9 @@ func embeddedSearchCallError(ctx context.Context, err error) conversationSearchS
 	switch {
 	case errors.Is(err, library.ErrInvalidRequest), errors.Is(err, library.ErrCursorMismatch):
 		failure.code, failure.rpcCode = conversationSearchSourceRefused, codes.InvalidArgument
-	case errors.Is(err, library.ErrCursorExpired), errors.Is(err, library.ErrStoreMismatch):
+	case errors.Is(err, library.ErrCursorExpired):
+		failure.code, failure.rpcCode = conversationSearchCursorExpired, codes.FailedPrecondition
+	case errors.Is(err, library.ErrStoreMismatch):
 		failure.code, failure.rpcCode = conversationSearchSourceRefused, codes.FailedPrecondition
 	case errors.Is(err, library.ErrResourceLimit):
 		failure.code, failure.rpcCode = conversationSearchSourceRefused, codes.ResourceExhausted
