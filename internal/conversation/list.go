@@ -16,7 +16,7 @@ const (
 	// DefaultSearchLimit keeps cross-conversation discovery results compact.
 	DefaultSearchLimit = 20
 	// MaxSearchLimit bounds transcript discovery output.
-	MaxSearchLimit = 50
+	MaxSearchLimit = 100
 
 	searchSnippetRunes = 240
 )
