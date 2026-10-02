@@ -15,18 +15,186 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/clock"
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/sandbox"
 )
 
-type publicHit struct {
-	SourceIdentity *SourceIdentity `json:"source_identity"`
+// PublicSearchHit retains the public fields compared across CLI and MCP.
+type PublicSearchHit struct {
+	SourceIdentity *SourceIdentity                 `json:"source_identity"`
+	Conversation   conversation.Record             `json:"conversation"`
+	MessageIndex   int                             `json:"message_index"`
+	Role           string                          `json:"role"`
+	Timestamp      time.Time                       `json:"timestamp"`
+	Snippet        string                          `json:"snippet"`
+	LoadRules      string                          `json:"load_rules"`
+	Score          float64                         `json:"score"`
+	ContextWindow  string                          `json:"context_window"`
+	ContextState   conversation.SearchContextState `json:"context_state"`
+	WireFields     PublicWirePresence              `json:"-"`
 }
 
-type publicPage struct {
-	Matches       []publicHit `json:"matches"`
-	ReturnedCount int         `json:"returned_count"`
-	HasMore       bool        `json:"has_more"`
-	NextCursor    string      `json:"next_cursor"`
+// PublicSearchFacetCount decodes the shared CLI/MCP facet value and count.
+type PublicSearchFacetCount struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// PublicSearchFacets decodes the shared CLI/MCP facet groups.
+type PublicSearchFacets struct {
+	Workspaces []PublicSearchFacetCount `json:"workspaces,omitempty"`
+	Providers  []PublicSearchFacetCount `json:"providers,omitempty"`
+	Models     []PublicSearchFacetCount `json:"models,omitempty"`
+}
+
+// PublicSearchFreshness decodes the shared CLI/MCP semantic sync counters.
+type PublicSearchFreshness struct {
+	Manifest     int   `json:"manifest"`
+	Needed       int   `json:"needed"`
+	Embedded     int   `json:"embedded"`
+	Pending      int   `json:"pending"`
+	LastSyncUnix int64 `json:"last_sync_unix"`
+}
+
+// PublicSearchFilterStage decodes one shared CLI/MCP filter counter.
+type PublicSearchFilterStage struct {
+	Name      string `json:"name"`
+	Remaining int    `json:"remaining"`
+}
+
+// PublicWireState distinguishes an omitted JSON field from null and a value.
+type PublicWireState uint8
+
+const (
+	// PublicWireAbsent is returned for a JSON pointer absent from WireFields.
+	PublicWireAbsent PublicWireState = iota
+	// PublicWireNull identifies an explicit JSON null.
+	PublicWireNull
+	// PublicWireValue identifies a value, including false, zero and empty text.
+	PublicWireValue
+)
+
+// PublicWirePresence records JSON pointer states without retaining payloads.
+// WireFields is decoder metadata and is excluded from the public wire shape.
+type PublicWirePresence map[string]PublicWireState
+
+// PublicSearchPage preserves typed hit values before report hashing.
+type PublicSearchPage struct {
+	Matches              []PublicSearchHit         `json:"matches"`
+	ReturnedCount        int                       `json:"returned_count"`
+	Limit                int                       `json:"limit"`
+	Offset               int                       `json:"offset"`
+	NextOffset           int                       `json:"next_offset"`
+	ConversationsScanned int                       `json:"conversations_scanned"`
+	HasMore              bool                      `json:"has_more"`
+	NextCursor           string                    `json:"next_cursor"`
+	Source               string                    `json:"source"`
+	Facets               PublicSearchFacets        `json:"facets"`
+	SemanticFreshness    PublicSearchFreshness     `json:"semantic_freshness"`
+	FilterAccounting     []PublicSearchFilterStage `json:"filter_accounting,omitempty"`
+	WireFields           PublicWirePresence        `json:"-"`
+}
+
+// UnmarshalJSON retains presence separately from existing typed hit values.
+func (hit *PublicSearchHit) UnmarshalJSON(data []byte) error {
+	type decodedHit PublicSearchHit
+	var decoded decodedHit
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return fmt.Errorf("decode public search hit: %w", err)
+	}
+	presence, err := publicWirePresence(data)
+	if err != nil {
+		return fmt.Errorf("decode public search hit field presence: %w", err)
+	}
+	decoded.WireFields = presence
+	*hit = PublicSearchHit(decoded)
+	return nil
+}
+
+// UnmarshalJSON retains nested JSON presence separately from page values.
+func (page *PublicSearchPage) UnmarshalJSON(data []byte) error {
+	type decodedPage PublicSearchPage
+	var decoded decodedPage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return fmt.Errorf("decode public search result: %w", err)
+	}
+	presence, err := publicWirePresence(data)
+	if err != nil {
+		return fmt.Errorf("decode public search result field presence: %w", err)
+	}
+	decoded.WireFields = presence
+	*page = PublicSearchPage(decoded)
+	return nil
+}
+
+func publicWirePresence(data []byte) (PublicWirePresence, error) {
+	presence := make(PublicWirePresence)
+	if err := appendPublicWirePresence(data, "", presence); err != nil {
+		return nil, err
+	}
+	return presence, nil
+}
+
+// The clispec search output permits omitted context, cursor, facet and record
+// fields. RawMessage is limited to inspecting JSON presence at this wire edge;
+// the decoded result uses the concrete public types above.
+func appendPublicWirePresence(data []byte, pointer string, presence PublicWirePresence) error {
+	data = bytes.TrimSpace(data)
+	if bytes.Equal(data, []byte("null")) {
+		presence[pointer] = PublicWireNull
+		return nil
+	}
+	presence[pointer] = PublicWireValue
+	if len(data) == 0 {
+		return errors.New("public JSON field has no value")
+	}
+	switch data[0] {
+	case '{':
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			slog.Warn("search.acceptance.object_presence_decode_failed", "component", "searchacceptance", "concern", "query", "err", err)
+			return fmt.Errorf("decode object field presence at %q: %w", pointer, err)
+		}
+		for field, value := range fields {
+			field = strings.ReplaceAll(strings.ReplaceAll(field, "~", "~0"), "/", "~1")
+			if err := appendPublicWirePresence(value, pointer+"/"+field, presence); err != nil {
+				return err
+			}
+		}
+	case '[':
+		var values []json.RawMessage
+		if err := json.Unmarshal(data, &values); err != nil {
+			slog.Warn("search.acceptance.array_presence_decode_failed", "component", "searchacceptance", "concern", "query", "err", err)
+			return fmt.Errorf("decode array field presence at %q: %w", pointer, err)
+		}
+		for index, value := range values {
+			if err := appendPublicWirePresence(value, pointer+"/"+strconv.Itoa(index), presence); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+type publicPage = PublicSearchPage
+
+// ReadCLISearchPage executes one actual public command with bounded lifetime.
+func ReadCLISearchPage(ctx context.Context, binary string, roots sandbox.Roots, home string, query Query, cursor string, timeoutMS int64) (PublicSearchPage, float64, error) {
+	if err := validateCLIPaths(binary, roots, home); err != nil {
+		return PublicSearchPage{}, 0, err
+	}
+	if query.PageSize <= 0 || timeoutMS <= 0 {
+		return PublicSearchPage{}, 0, errors.New("positive public page size and deadline required")
+	}
+	args := queryArguments(query)
+	if cursor != "" {
+		args = append(args, "--cursor", cursor)
+	}
+	environment := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
+	for _, variable := range sandbox.Env(roots) {
+		environment = append(environment, variable.Name+"="+variable.Value)
+	}
+	return readCLIPage(ctx, binary, environment, args, timeoutMS)
 }
 
 // ReadCLITraversal measures every public cursor page in an isolated daemon.
@@ -55,8 +223,9 @@ func ReadCLITraversal(ctx context.Context, binary string, roots sandbox.Roots, h
 	}
 	cursor := ""
 	seenCursors := make(map[string]bool)
-	maximumPages := query.ExpectedTotal/query.PageSize + 2
-	for range maximumPages {
+	effectiveQuery := query
+	maximumPages := 1
+	for pageIndex := 0; pageIndex < maximumPages; pageIndex++ {
 		pageArgs := append([]string(nil), args...)
 		if cursor != "" {
 			pageArgs = append(pageArgs, "--cursor", cursor)
@@ -65,6 +234,15 @@ func ReadCLITraversal(ctx context.Context, binary string, roots sandbox.Roots, h
 		if err != nil {
 			return traversal, err
 		}
+		if pageIndex == 0 {
+			if page.Limit <= 0 || page.Limit > query.PageSize {
+				return traversal, errors.New("public search returned an invalid effective page limit")
+			}
+			effectiveQuery.PageSize = page.Limit
+			maximumPages = query.ExpectedTotal/page.Limit + 2
+		} else if page.Limit != effectiveQuery.PageSize {
+			return traversal, errors.New("public search changed its effective page limit during traversal")
+		}
 		recorded, err := recordPublicPage(page, duration)
 		if err != nil {
 			return traversal, err
@@ -72,7 +250,7 @@ func ReadCLITraversal(ctx context.Context, binary string, roots sandbox.Roots, h
 		traversal.Pages = append(traversal.Pages, recorded)
 		traversal.Total += len(recorded.OccurrenceIDs)
 		if !page.HasMore {
-			return traversal, ValidateTraversal(query, traversal, timeoutMS)
+			return traversal, ValidateTraversal(effectiveQuery, traversal, timeoutMS)
 		}
 		if page.NextCursor == "" || seenCursors[page.NextCursor] {
 			return traversal, errors.New("public search returned an empty or repeated continuation cursor")
@@ -160,7 +338,8 @@ func readCLIPage(ctx context.Context, binary string, environment, args []string,
 }
 
 func recordPublicPage(page publicPage, duration float64) (Page, error) {
-	result := Page{OccurrenceIDs: nil, ElapsedMS: duration, HasMore: page.HasMore}
+	limit := page.Limit
+	result := Page{OccurrenceIDs: nil, ElapsedMS: duration, HasMore: page.HasMore, Limit: &limit}
 	if page.ReturnedCount != len(page.Matches) || !page.HasMore && page.NextCursor != "" {
 		return result, errors.New("public search page has inconsistent count or terminal cursor")
 	}

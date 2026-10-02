@@ -31,10 +31,24 @@ func ValidateTraversal(query Query, traversal Traversal, timeoutMS int64) error 
 	if len(traversal.Pages) == 0 {
 		return fmt.Errorf("query %s has no terminal page", query.ID)
 	}
+	effectiveQuery := query
+	firstLimit := traversal.Pages[0].Limit
+	if firstLimit != nil {
+		if *firstLimit <= 0 || *firstLimit > query.PageSize {
+			return fmt.Errorf("query %s has an invalid effective page limit", query.ID)
+		}
+		effectiveQuery.PageSize = *firstLimit
+	}
+	if len(traversal.Pages) > query.ExpectedTotal/effectiveQuery.PageSize+2 {
+		return fmt.Errorf("query %s exceeds its expected traversal page bound", query.ID)
+	}
 	seen := make(map[string]bool, query.ExpectedTotal)
 	for index, page := range traversal.Pages {
+		if err := validatePageLimit(query.ID, firstLimit, page.Limit); err != nil {
+			return err
+		}
 		last := index == len(traversal.Pages)-1
-		if err := validatePage(query, page, index, last, len(traversal.Pages), timeoutMS); err != nil {
+		if err := validatePage(effectiveQuery, page, index, last, len(traversal.Pages), timeoutMS); err != nil {
 			return err
 		}
 		for _, identity := range page.OccurrenceIDs {
@@ -46,6 +60,16 @@ func ValidateTraversal(query Query, traversal Traversal, timeoutMS int64) error 
 	}
 	if len(seen) != len(expected) {
 		return fmt.Errorf("query %s returns %d of %d expected occurrences", query.ID, len(seen), len(expected))
+	}
+	return nil
+}
+
+func validatePageLimit(queryID string, firstLimit, pageLimit *int) error {
+	if firstLimit == nil && pageLimit != nil {
+		return fmt.Errorf("query %s changes recorded page limit presence", queryID)
+	}
+	if firstLimit != nil && (pageLimit == nil || *pageLimit != *firstLimit) {
+		return fmt.Errorf("query %s changes its effective page limit", queryID)
 	}
 	return nil
 }
