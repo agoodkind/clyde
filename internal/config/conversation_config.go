@@ -79,6 +79,11 @@ type ConversationSemanticConfig struct {
 	MilvusAddress    string `json:"milvusAddress,omitempty" toml:"milvus_address,omitempty"`
 	MilvusDatabase   string `json:"milvusDatabase,omitempty" toml:"milvus_database,omitempty"`
 	MilvusCollection string `json:"milvusCollection,omitempty" toml:"milvus_collection,omitempty"`
+	// MilvusQueryMode selects normal or large_topk. Empty uses normal.
+	// Large mode requires a positive score window; zero verification rows uses 4096.
+	MilvusQueryMode          string `json:"milvusQueryMode,omitempty" toml:"milvus_query_mode,omitempty"`
+	MilvusMaxScoreWindow     int    `json:"milvusMaxScoreWindow,omitempty" toml:"milvus_max_score_window,omitempty"`
+	MilvusMaxVerifyBatchRows int    `json:"milvusMaxVerifyBatchRows,omitempty" toml:"milvus_max_verify_batch_rows,omitempty"`
 
 	// EmbeddingBaseURL is the OpenAI-compatible embedding endpoint. The loader
 	// accepts at most one of EmbeddingAPIKeyEnv and EmbeddingAPIKeyFile, and a

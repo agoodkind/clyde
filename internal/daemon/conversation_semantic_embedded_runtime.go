@@ -108,7 +108,14 @@ func openEmbeddedConversationStoreWithClient(
 	embedder library.Embedder,
 	log *slog.Logger,
 ) (*embeddedConversationStore, error) {
-	vectors, err := milvus.New(client, milvus.Config{Observer: embeddedOperationObserver{log: log}, Database: semantic.MilvusDatabase, Collection: semantic.MilvusCollection})
+	vectors, err := milvus.New(client, milvus.Config{
+		Observer:           embeddedOperationObserver{log: log},
+		Database:           semantic.MilvusDatabase,
+		Collection:         semantic.MilvusCollection,
+		QueryMode:          semantic.MilvusQueryMode,
+		MaxScoreWindow:     semantic.MilvusMaxScoreWindow,
+		MaxVerifyBatchRows: semantic.MilvusMaxVerifyBatchRows,
+	})
 	if err != nil {
 		log.WarnContext(
 			ctx, "daemon.conversation_semantic_embedded.vector_adapter_failed",

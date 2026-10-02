@@ -18,9 +18,11 @@ const conversationSemanticKey = "conversation.semantic."
 // rejects a nonzero value that converts to a float32 zero.
 const maxConversationSemanticBM25K1 = 1e6
 
-// maxConversationSemanticQueryBlockSize is the largest query_block_size the
-// shared search library accepts at Open, the Milvus single-search limit.
+// Normal mode uses the Milvus single-search limit.
 const maxConversationSemanticQueryBlockSize = 16384
+
+const maxConversationSemanticScoreWindow = 1000000
+const maxConversationSemanticVerifyBatchRows = 4096
 
 // normalizeAndValidateConversationSemantic trims the embedded search settings,
 // expands the catalog and lock paths, and rejects values the embedded library
@@ -77,6 +79,7 @@ func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) 
 	semantic.MilvusAddress = strings.TrimSpace(semantic.MilvusAddress)
 	semantic.MilvusDatabase = strings.TrimSpace(semantic.MilvusDatabase)
 	semantic.MilvusCollection = strings.TrimSpace(semantic.MilvusCollection)
+	semantic.MilvusQueryMode = strings.TrimSpace(semantic.MilvusQueryMode)
 	semantic.EmbeddingBaseURL = strings.TrimSpace(semantic.EmbeddingBaseURL)
 	semantic.EmbeddingAPIKeyEnv = strings.TrimSpace(semantic.EmbeddingAPIKeyEnv)
 	semantic.EmbeddingAPIKeyFile = cleanExpandedPath(strings.TrimSpace(semantic.EmbeddingAPIKeyFile))
@@ -135,8 +138,29 @@ func validateConversationSemanticCounts(semantic *ConversationSemanticConfig) er
 	if err := rejectNegativeConversationSemanticSettings(settings); err != nil {
 		return err
 	}
-	if semantic.QueryBlockSize > maxConversationSemanticQueryBlockSize {
-		return invalidConversationSemanticSetting("query_block_size", fmt.Sprintf("must be at most %d, got %d", maxConversationSemanticQueryBlockSize, semantic.QueryBlockSize))
+	return validateConversationSemanticMilvusBounds(semantic)
+}
+
+func validateConversationSemanticMilvusBounds(semantic *ConversationSemanticConfig) error {
+	limit := maxConversationSemanticQueryBlockSize
+	switch semantic.MilvusQueryMode {
+	case "", "normal":
+		if semantic.MilvusMaxScoreWindow != 0 {
+			return invalidConversationSemanticSetting("milvus_max_score_window", "must be zero in normal mode")
+		}
+	case "large_topk":
+		if semantic.MilvusMaxScoreWindow < 1 || semantic.MilvusMaxScoreWindow > maxConversationSemanticScoreWindow {
+			return invalidConversationSemanticSetting("milvus_max_score_window", fmt.Sprintf("must be between 1 and %d in large_topk mode", maxConversationSemanticScoreWindow))
+		}
+		limit = semantic.MilvusMaxScoreWindow
+	default:
+		return invalidConversationSemanticSetting("milvus_query_mode", "must be normal or large_topk")
+	}
+	if semantic.MilvusMaxVerifyBatchRows < 0 || semantic.MilvusMaxVerifyBatchRows > maxConversationSemanticVerifyBatchRows {
+		return invalidConversationSemanticSetting("milvus_max_verify_batch_rows", fmt.Sprintf("must be zero for the default or between 1 and %d", maxConversationSemanticVerifyBatchRows))
+	}
+	if semantic.QueryBlockSize > limit {
+		return invalidConversationSemanticSetting("query_block_size", fmt.Sprintf("must be at most %d, got %d", limit, semantic.QueryBlockSize))
 	}
 	return nil
 }
