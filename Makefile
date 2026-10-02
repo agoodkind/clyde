@@ -53,6 +53,15 @@ include bootstrap.mk
 
 .DEFAULT_GOAL := check
 
+.PHONY: shared-search-baseline shared-search-acceptance
+export ACCEPTANCE_BINARY EXECUTION_PLAN EXECUTION_PLAN_SHA256 CORPUS_SNAPSHOT QUERY_BATTERY ORACLE_REPORT BASELINE_BINARY CANDIDATE_BINARY BASELINE_REPORT REPORT_PATH
+
+shared-search-baseline: ## Validate bound baseline evidence; fail while full acceptance is incomplete
+	bash scripts/shared-search-baseline.sh
+
+shared-search-acceptance: ## Validate bound candidate evidence; fail while full acceptance is incomplete
+	bash scripts/shared-search-acceptance.sh
+
 # ---------------------------------------------------------------------------
 # Project-local
 # ---------------------------------------------------------------------------
