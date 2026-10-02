@@ -22,6 +22,9 @@ func main() {
 }
 
 func run() (err error) {
+	if len(os.Args) > 1 && os.Args[1] == "inspect-battery" {
+		return runBatteryInspection(os.Args[2:])
+	}
 	if len(os.Args) > 1 && os.Args[1] == "verify-snapshot" {
 		return runSnapshot(os.Args[2:])
 	}
