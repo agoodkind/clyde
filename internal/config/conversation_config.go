@@ -145,8 +145,11 @@ type ConversationSemanticConfig struct {
 type ConversationSemanticMilvusQueryMode string
 
 const (
-	ConversationSemanticMilvusQueryModeDefault   ConversationSemanticMilvusQueryMode = ""
-	ConversationSemanticMilvusQueryModeNormal    ConversationSemanticMilvusQueryMode = "normal"
+	// ConversationSemanticMilvusQueryModeDefault uses the adapter's normal mode.
+	ConversationSemanticMilvusQueryModeDefault ConversationSemanticMilvusQueryMode = ""
+	// ConversationSemanticMilvusQueryModeNormal limits score requests to 16384 IDs.
+	ConversationSemanticMilvusQueryModeNormal ConversationSemanticMilvusQueryMode = "normal"
+	// ConversationSemanticMilvusQueryModeLargeTopK requires an explicit score window.
 	ConversationSemanticMilvusQueryModeLargeTopK ConversationSemanticMilvusQueryMode = "large_topk"
 )
 
