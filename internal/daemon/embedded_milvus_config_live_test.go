@@ -66,7 +66,7 @@ func TestEmbeddedMilvusConfig(t *testing.T) {
 				SearchEnabled:     true, CollectionID: "clyde-config",
 				CatalogPath: filepath.Join(root, "catalog.sqlite"), LockPath: filepath.Join(root, "catalog.lock"), PoolID: "config-live",
 				MilvusAddress: address, MilvusDatabase: database, MilvusCollection: "config_vectors",
-				MilvusQueryMode: mode, MilvusMaxVerifyBatchRows: 512,
+				MilvusQueryMode: config.ConversationSemanticMilvusQueryMode(mode), MilvusMaxVerifyBatchRows: 512,
 				EmbeddingBaseURL: endpoint, EmbeddingModel: "config-live", EmbeddingRevision: "config-live",
 				EmbeddingMaxAttempts: &attempts, VectorDimension: 4, Normalization: "l2",
 				QueryTimeout: config.Duration(30 * time.Second), QueryBlockSize: 16384,
@@ -80,10 +80,10 @@ func TestEmbeddedMilvusConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := config.GlobalConfigPath()
-			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(path, data, 0600); err != nil {
+			if err := os.WriteFile(path, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			loaded, err := config.LoadGlobalOrDefault()

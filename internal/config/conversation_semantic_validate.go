@@ -21,8 +21,10 @@ const maxConversationSemanticBM25K1 = 1e6
 // Normal mode uses the Milvus single-search limit.
 const maxConversationSemanticQueryBlockSize = 16384
 
-const maxConversationSemanticScoreWindow = 1000000
-const maxConversationSemanticVerifyBatchRows = 4096
+const (
+	maxConversationSemanticScoreWindow     = 1000000
+	maxConversationSemanticVerifyBatchRows = 4096
+)
 
 // normalizeAndValidateConversationSemantic trims the embedded search settings,
 // expands the catalog and lock paths, and rejects values the embedded library
@@ -79,7 +81,7 @@ func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) 
 	semantic.MilvusAddress = strings.TrimSpace(semantic.MilvusAddress)
 	semantic.MilvusDatabase = strings.TrimSpace(semantic.MilvusDatabase)
 	semantic.MilvusCollection = strings.TrimSpace(semantic.MilvusCollection)
-	semantic.MilvusQueryMode = strings.TrimSpace(semantic.MilvusQueryMode)
+	semantic.MilvusQueryMode = ConversationSemanticMilvusQueryMode(strings.TrimSpace(string(semantic.MilvusQueryMode)))
 	semantic.EmbeddingBaseURL = strings.TrimSpace(semantic.EmbeddingBaseURL)
 	semantic.EmbeddingAPIKeyEnv = strings.TrimSpace(semantic.EmbeddingAPIKeyEnv)
 	semantic.EmbeddingAPIKeyFile = cleanExpandedPath(strings.TrimSpace(semantic.EmbeddingAPIKeyFile))
@@ -144,11 +146,11 @@ func validateConversationSemanticCounts(semantic *ConversationSemanticConfig) er
 func validateConversationSemanticMilvusBounds(semantic *ConversationSemanticConfig) error {
 	limit := maxConversationSemanticQueryBlockSize
 	switch semantic.MilvusQueryMode {
-	case "", "normal":
+	case ConversationSemanticMilvusQueryModeDefault, ConversationSemanticMilvusQueryModeNormal:
 		if semantic.MilvusMaxScoreWindow != 0 {
 			return invalidConversationSemanticSetting("milvus_max_score_window", "must be zero in normal mode")
 		}
-	case "large_topk":
+	case ConversationSemanticMilvusQueryModeLargeTopK:
 		if semantic.MilvusMaxScoreWindow < 1 || semantic.MilvusMaxScoreWindow > maxConversationSemanticScoreWindow {
 			return invalidConversationSemanticSetting("milvus_max_score_window", fmt.Sprintf("must be between 1 and %d in large_topk mode", maxConversationSemanticScoreWindow))
 		}

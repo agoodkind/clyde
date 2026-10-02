@@ -112,7 +112,7 @@ func openEmbeddedConversationStoreWithClient(
 		Observer:           embeddedOperationObserver{log: log},
 		Database:           semantic.MilvusDatabase,
 		Collection:         semantic.MilvusCollection,
-		QueryMode:          semantic.MilvusQueryMode,
+		QueryMode:          string(semantic.MilvusQueryMode),
 		MaxScoreWindow:     semantic.MilvusMaxScoreWindow,
 		MaxVerifyBatchRows: semantic.MilvusMaxVerifyBatchRows,
 	})
