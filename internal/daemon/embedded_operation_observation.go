@@ -63,6 +63,8 @@ func (observer embeddedOperationObserver) Observe(event observation.Event) {
 		"vector_requested", event.Data.Vector.Requested,
 		"vector_acknowledged", event.Data.Vector.Acknowledged,
 		"vector_verified", event.Data.Vector.Verified,
+		"vector_client_search_duration_ns", event.Data.Vector.ClientSearchDuration.Nanoseconds(),
+		"vector_local_verification_duration_ns", event.Data.Vector.LocalVerificationDuration.Nanoseconds(),
 	)
 }
 
