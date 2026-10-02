@@ -7,7 +7,7 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 )
 
-// search serializes source access with publication and storage closure.
+// search admits concurrent publication and prevents storage closure until it returns.
 func (gate *embeddedReconcileGate) search(ctx context.Context, semantic config.ConversationSemanticConfig, options conversation.SearchConversationsOptions, index *conversation.Index) (conversation.SearchConversationsResult, error) {
 	gate.mu.Lock()
 	embedded, log := gate.embedded, gate.log
@@ -15,14 +15,11 @@ func (gate *embeddedReconcileGate) search(ctx context.Context, semantic config.C
 	if embedded == nil {
 		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError()
 	}
-	if err := embedded.lockStore(ctx); err != nil {
-		return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, err)
-	}
-	defer embedded.mu.Unlock()
-	store, err := embedded.ensureStore(ctx, log)
+	store, err := embedded.readStore(ctx, log)
 	if err != nil {
 		return conversation.SearchConversationsResult{}, embeddedSearchCallError(ctx, err)
 	}
+	defer embedded.mu.RUnlock()
 	source := embeddedConversationSearchSource{library: store.library, semantic: semantic, gate: nil, index: index, outbox: store.outbox}
 	return source.SearchConversations(ctx, options)
 }

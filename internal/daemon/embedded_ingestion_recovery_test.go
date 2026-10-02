@@ -303,10 +303,11 @@ func (scenario *liveScenario) runPass(t *testing.T) liveSnapshot {
 func (scenario *liveScenario) stageWithoutAcknowledgment(t *testing.T, commit bool) string {
 	t.Helper()
 	ctx := t.Context()
-	store, err := scenario.worker.embedded.ensureStore(ctx, scenario.worker.log)
+	store, err := scenario.worker.embedded.readStore(ctx, scenario.worker.log)
 	if err != nil {
 		t.Fatalf("open store for %s: %v", scenario.semantic.PoolID, err)
 	}
+	defer scenario.worker.embedded.mu.RUnlock()
 	stamped, err := scenario.worker.index.ListWithStamps(ctx)
 	if err != nil {
 		t.Fatalf("list records: %v", err)
