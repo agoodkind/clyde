@@ -64,9 +64,10 @@ type embeddedConversationSync struct {
 	// rows. A later pass reads the library for these owners again only after
 	// the worker restarts.
 	libraryAbsent map[string]bool
-	// mu serializes every use of store: the sync passes, the store close, and
-	// the reconciliations that the daemon control socket requests.
-	mu sync.Mutex
+	// mu prevents storage closure while a query, pass, or reconciliation uses it.
+	mu sync.RWMutex
+	// mutationMu serializes outbox mutation and alias-cache updates.
+	mutationMu sync.Mutex
 	// closed reports that closeStore ran. ensureStore opens no store after
 	// close. closeStore sets it under mu.
 	closed     bool
@@ -115,7 +116,8 @@ func newEmbeddedConversationSync(
 		status:             status,
 		records:            records,
 		libraryAbsent:      make(map[string]bool),
-		mu:                 sync.Mutex{},
+		mu:                 sync.RWMutex{},
+		mutationMu:         sync.Mutex{},
 		closed:             false,
 		closing:            atomic.Bool{},
 		closeOnce:          sync.Once{},
@@ -131,12 +133,12 @@ func newEmbeddedConversationSync(
 // ensureStore opens the store when no open store exists. After closeStore it
 // returns errEmbeddedReconcileUnavailable and opens nothing. The caller locks
 // mu.
-func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *slog.Logger) (*embeddedConversationStore, error) {
+func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *slog.Logger) error {
 	if embedded.closed || embedded.closing.Load() {
-		return nil, errEmbeddedReconcileUnavailable
+		return errEmbeddedReconcileUnavailable
 	}
 	if embedded.store != nil {
-		return embedded.store, nil
+		return nil
 	}
 	openCtx, cancel := context.WithTimeout(ctx, embeddedStoreOpenTimeout)
 	defer cancel()
@@ -145,7 +147,7 @@ func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *
 	// registers no namespace.
 	lock, err := lockConversationSemanticOutbox(openCtx, embedded.outboxPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	store, err := embedded.open(openCtx, lock, log)
 	if err != nil {
@@ -157,13 +159,13 @@ func (embedded *embeddedConversationSync) ensureStore(ctx context.Context, log *
 				"err", closeErr,
 			)
 		}
-		return nil, err
+		return err
 	}
 	if err := store.outbox.releaseLock(); err != nil {
-		return nil, errors.Join(err, store.close(context.WithoutCancel(ctx)))
+		return errors.Join(err, store.close(context.WithoutCancel(ctx)))
 	}
 	embedded.store = store
-	return store, nil
+	return nil
 }
 
 // closeStore closes the open store after the worker stops and marks the
@@ -318,7 +320,7 @@ func (embedded *embeddedConversationSync) openForStartup(ctx context.Context, lo
 	for {
 		attemptCtx, attemptCancel := context.WithTimeout(startupCtx, embeddedStoreOpenTimeout)
 		embedded.mu.Lock()
-		_, err := embedded.ensureStore(attemptCtx, log)
+		err := embedded.ensureStore(attemptCtx, log)
 		embedded.mu.Unlock()
 		attemptCancel()
 		if err == nil {
@@ -345,7 +347,7 @@ func (embedded *embeddedConversationSync) retryStoreOpen(ctx context.Context, lo
 	for {
 		attemptCtx, cancel := context.WithTimeout(ctx, embeddedStoreOpenTimeout)
 		embedded.mu.Lock()
-		_, err := embedded.ensureStore(attemptCtx, log)
+		err := embedded.ensureStore(attemptCtx, log)
 		embedded.mu.Unlock()
 		cancel()
 		if err == nil || errors.Is(err, library.ErrStoreMismatch) || errors.Is(err, library.ErrInvalidRequest) {
@@ -360,6 +362,36 @@ func (embedded *embeddedConversationSync) retryStoreOpen(ctx context.Context, lo
 }
 
 func (embedded *embeddedConversationSync) lockStore(ctx context.Context) error {
+	return lockEmbeddedStore(ctx, embedded.mu.TryLock)
+}
+
+// readStore admits an operation until its caller releases mu.RUnlock.
+// Only an absent store requires exclusive admission for opening.
+func (embedded *embeddedConversationSync) readStore(ctx context.Context, log *slog.Logger) (*embeddedConversationStore, error) {
+	for {
+		if err := lockEmbeddedStore(ctx, embedded.mu.TryRLock); err != nil {
+			return nil, err
+		}
+		if embedded.closed || embedded.closing.Load() {
+			embedded.mu.RUnlock()
+			return nil, errEmbeddedReconcileUnavailable
+		}
+		if embedded.store != nil {
+			return embedded.store, nil
+		}
+		embedded.mu.RUnlock()
+		if err := embedded.lockStore(ctx); err != nil {
+			return nil, err
+		}
+		err := embedded.ensureStore(ctx, log)
+		embedded.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+func lockEmbeddedStore(ctx context.Context, tryLock func() bool) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -367,7 +399,7 @@ func (embedded *embeddedConversationSync) lockStore(ctx context.Context) error {
 			slog.WarnContext(ctx, "daemon.conversation_semantic_embedded.admission_canceled", "concern", "conversation.semantic", "err", err)
 			return fmt.Errorf("wait for embedded store access: %w", err)
 		}
-		if embedded.mu.TryLock() {
+		if tryLock() {
 			return nil
 		}
 		select {
@@ -440,17 +472,20 @@ type embeddedSyncStats struct {
 // runEmbeddedPass resolves each owner after replay and uses one accepted
 // decision for reconciliation, metadata publication and missing-field delivery.
 func (w *conversationSemanticSyncWorker) runEmbeddedPass(ctx context.Context) (resultErr error) {
-	w.embedded.mu.Lock()
-	defer w.embedded.mu.Unlock()
+	if err := lockEmbeddedStore(ctx, w.embedded.mutationMu.TryLock); err != nil {
+		return err
+	}
+	defer w.embedded.mutationMu.Unlock()
 	scope := observation.ScopeFromContext(ctx)
 	scope.RunID = fmt.Sprintf("ingestion-%d-%d", os.Getpid(), nextEmbeddedPassID.Add(1))
 	scope.Purpose = observation.Ingestion
 	ctx = observation.WithScope(ctx, scope)
 	w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_started", "concern", "conversation.semantic", "run_id", scope.RunID, "pid", os.Getpid())
-	store, err := w.embedded.ensureStore(ctx, w.log)
+	store, err := w.embedded.readStore(ctx, w.log)
 	if err != nil {
 		return err
 	}
+	defer w.embedded.mu.RUnlock()
 	lock, err := lockConversationSemanticOutbox(ctx, w.embedded.outboxPath)
 	if err != nil {
 		return err

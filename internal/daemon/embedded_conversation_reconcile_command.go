@@ -55,9 +55,7 @@ func (gate *embeddedReconcileGate) detach(embedded *embeddedConversationSync) {
 	}
 }
 
-// reconcile reconciles one conversation in the running worker. It locks the
-// worker store after the current sync pass ends and unlocks it after the
-// reconciliation.
+// reconcile waits for the current sync pass before mutating the outbox.
 func (gate *embeddedReconcileGate) reconcile(ctx context.Context, conversationID string) (result embeddedReconcileResult, resultErr error) {
 	var embedded *embeddedConversationSync
 	log := slog.Default()
@@ -70,12 +68,15 @@ func (gate *embeddedReconcileGate) reconcile(ctx context.Context, conversationID
 	if embedded == nil || !embedded.semantic.FeedsEngine() {
 		return embeddedReconcileResult{}, errEmbeddedReconcileUnavailable
 	}
-	embedded.mu.Lock()
-	defer embedded.mu.Unlock()
-	store, err := embedded.ensureStore(ctx, log)
+	if err := lockEmbeddedStore(ctx, embedded.mutationMu.TryLock); err != nil {
+		return embeddedReconcileResult{}, err
+	}
+	defer embedded.mutationMu.Unlock()
+	store, err := embedded.readStore(ctx, log)
 	if err != nil {
 		return embeddedReconcileResult{}, err
 	}
+	defer embedded.mu.RUnlock()
 	lock, err := lockConversationSemanticOutbox(ctx, embedded.outboxPath)
 	if err != nil {
 		return embeddedReconcileResult{}, err
