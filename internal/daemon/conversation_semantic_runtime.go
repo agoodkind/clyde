@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -189,10 +191,45 @@ func (c *semanticConnectionCloser) GetState() connectivity.State {
 	return c.feeder.Conn().GetState()
 }
 
+// localEmbeddingAPIKey authenticates to a local embedding endpoint that needs
+// no key. The OpenAI client refuses an empty key.
+const localEmbeddingAPIKey = "local"
+
+// conversationEmbeddingAPIKey reads the embedding API key from the named
+// environment variable or key file. It returns localEmbeddingAPIKey when the
+// config sets neither.
+func conversationEmbeddingAPIKey(envName string, filePath string) (string, error) {
+	if envName != "" {
+		value := strings.TrimSpace(os.Getenv(envName))
+		if value == "" {
+			return "", fmt.Errorf("embedding API key environment variable %q is empty", envName)
+		}
+		return value, nil
+	}
+	if filePath != "" {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			slog.Warn("daemon.conversation_semantic.embedding_key_read_failed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"path", filePath,
+				"err", err,
+			)
+			return "", fmt.Errorf("read embedding API key file %q: %w", filePath, err)
+		}
+		value := strings.TrimSpace(string(content))
+		if value == "" {
+			return "", fmt.Errorf("embedding API key file %q is empty", filePath)
+		}
+		return value, nil
+	}
+	return localEmbeddingAPIKey, nil
+}
+
 // openConversationSearchClient builds the in-process search client from the
 // semantic config.
 func openConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
-	apiKey, err := vectorsearch.APIKey(semanticCfg.EmbeddingAPIKeyEnv, semanticCfg.EmbeddingAPIKeyFile)
+	apiKey, err := conversationEmbeddingAPIKey(semanticCfg.EmbeddingAPIKeyEnv, semanticCfg.EmbeddingAPIKeyFile)
 	if err != nil {
 		return nil, semanticConnectorError{cause: err}
 	}

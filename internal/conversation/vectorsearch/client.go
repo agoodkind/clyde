@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -26,9 +25,6 @@ const (
 	// nvEmbedCodeQueryPrefix is the instruction the NV-EmbedCode models expect in
 	// front of a query. Stored rows embed without it.
 	nvEmbedCodeQueryPrefix = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
-	// localAPIKey authenticates to a local embedding endpoint that needs no key.
-	// The OpenAI client refuses an empty key.
-	localAPIKey = "local"
 	// milvusCloseTimeout bounds closing the Milvus connection.
 	milvusCloseTimeout = 5 * time.Second
 )
@@ -107,30 +103,6 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 	}, nil
 }
 
-// APIKey returns the embedding API key from the named environment variable or
-// key file, or a placeholder for a local endpoint that sets neither.
-func APIKey(envName string, filePath string) (string, error) {
-	if envName != "" {
-		value := strings.TrimSpace(os.Getenv(envName))
-		if value == "" {
-			return "", fmt.Errorf("embedding API key environment variable %q is empty", envName)
-		}
-		return value, nil
-	}
-	if filePath != "" {
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			return "", operationError{operation: fmt.Sprintf("read embedding API key file %q", filePath), cause: err}
-		}
-		value := strings.TrimSpace(string(content))
-		if value == "" {
-			return "", fmt.Errorf("embedding API key file %q is empty", filePath)
-		}
-		return value, nil
-	}
-	return localAPIKey, nil
-}
-
 // Close closes the Milvus connection.
 func (c *Client) Close(ctx context.Context) error {
 	if c == nil || c.milvus == nil {
@@ -190,7 +162,7 @@ func (c *Client) SearchConversations(
 	if err != nil {
 		return nil, err
 	}
-	return semHits(hits), nil
+	return semHits(hits)
 }
 
 // SearchWithinConversation ranks one conversation's rows for query. The

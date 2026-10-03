@@ -34,23 +34,39 @@ func emptyRowMetadata() rowMetadata {
 	}
 }
 
-func decodeRowMetadata(metadata string) rowMetadata {
+// decodeRowMetadata parses a row's metadata JSON. An empty string decodes to
+// empty metadata. Malformed JSON returns an error.
+func decodeRowMetadata(metadata string) (rowMetadata, error) {
 	if metadata == "" {
-		return emptyRowMetadata()
+		return emptyRowMetadata(), nil
 	}
 	var parsed rowMetadata
 	if err := json.Unmarshal([]byte(metadata), &parsed); err != nil {
-		return emptyRowMetadata()
+		slog.Warn("conversation.vectorsearch.metadata_decode_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"err", err,
+		)
+		return emptyRowMetadata(), fmt.Errorf("decode conversation row metadata: %w", err)
 	}
-	return parsed
+	return parsed, nil
 }
 
 // semHit converts one ranked row to a conversation hit. The identity, message
 // index, role, and timestamp come from the row metadata JSON, which every row
 // stores. The loadRules value comes from the declared column and reads empty
 // when the row lacks it.
-func semHit(hit collection.Hit) semsearch.SemHit {
-	metadata := decodeRowMetadata(hit.Metadata)
+func semHit(hit collection.Hit) (semsearch.SemHit, error) {
+	metadata, err := decodeRowMetadata(hit.Metadata)
+	if err != nil {
+		slog.Warn("conversation.vectorsearch.hit_convert_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"row_id", hit.ID,
+			"err", err,
+		)
+		return semsearch.SemHit{}, fmt.Errorf("convert row %s: %w", hit.ID, err)
+	}
 	var messageIndex int32
 	if metadata.MessageIndex != nil {
 		messageIndex = *metadata.MessageIndex
@@ -68,15 +84,19 @@ func semHit(hit collection.Hit) semsearch.SemHit {
 		Content:              hit.Content,
 		Score:                hit.Score,
 		LoadRules:            scalarString(hit, loadRulesColumn),
-	}
+	}, nil
 }
 
-func semHits(hits []collection.Hit) []semsearch.SemHit {
+func semHits(hits []collection.Hit) ([]semsearch.SemHit, error) {
 	converted := make([]semsearch.SemHit, 0, len(hits))
 	for _, hit := range hits {
-		converted = append(converted, semHit(hit))
+		semanticHit, err := semHit(hit)
+		if err != nil {
+			return nil, err
+		}
+		converted = append(converted, semanticHit)
 	}
-	return converted
+	return converted, nil
 }
 
 // scalarString returns the string value of a hit's scalar cell, or empty when
@@ -136,7 +156,11 @@ func resolveLegacyGroups(
 		if metadataErr != nil {
 			return nil, fmt.Errorf("read legacy metadata %d from %s: %w", i, collectionName, metadataErr)
 		}
-		legacyIDs[primaryKey] = decodeRowMetadata(metadata).ConversationID
+		decoded, decodeErr := decodeRowMetadata(metadata)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("read legacy row %s from %s: %w", primaryKey, collectionName, decodeErr)
+		}
+		legacyIDs[primaryKey] = decoded.ConversationID
 	}
 	return applyLegacyGroups(candidates, legacyIDs), nil
 }
