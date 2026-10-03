@@ -4,12 +4,7 @@
 // conversion of ranked rows to conversation hits.
 package vectorsearch
 
-import (
-	"encoding/hex"
-	"strings"
-
-	"goodkind.io/lm-semantic-search/collection"
-)
+import "goodkind.io/lm-semantic-search/collection"
 
 // Column names of the conversation collection. Rows written by the
 // lm-semantic-search daemon use these names, so they cannot change.
@@ -32,13 +27,6 @@ const (
 	providerMaxLength       = 32
 	workspaceRootMaxLength  = 1024
 	loadRulesMaxLength      = 256
-)
-
-const (
-	collectionNamePrefix = "conv_chunks_"
-	// collectionNameHashChars is how many leading hex characters of the collection
-	// ID digest follow the prefix.
-	collectionNameHashChars = 8
 )
 
 // Declaration returns the scalar declaration of the conversation collection.
@@ -71,9 +59,7 @@ func nullableStringColumn(name string, maxLength int32) collection.ScalarColumn 
 }
 
 // CollectionName returns the Milvus collection that stores the conversations of
-// collectionID: the conv_chunks_ prefix plus the first 8 hex characters of the
-// MD5 digest of the trimmed ID.
+// collectionID.
 func CollectionName(collectionID string) string {
-	digest := md5Sum([]byte(strings.TrimSpace(collectionID)))
-	return collectionNamePrefix + hex.EncodeToString(digest[:])[:collectionNameHashChars]
+	return collection.DocumentName(collectionID)
 }
