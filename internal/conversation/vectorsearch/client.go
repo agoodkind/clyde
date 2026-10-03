@@ -26,6 +26,8 @@ const (
 	// nvEmbedCodeQueryPrefix is the instruction the NV-EmbedCode models expect in
 	// front of a query. Stored rows embed without it.
 	nvEmbedCodeQueryPrefix = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
+	// milvusConnectTimeout bounds opening the Milvus connection.
+	milvusConnectTimeout = 2 * time.Second
 	// milvusCloseTimeout bounds closing the Milvus connection.
 	milvusCloseTimeout = 5 * time.Second
 )
@@ -121,7 +123,12 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 	if err != nil {
 		return nil, operationError{operation: fmt.Sprintf("build conversation embedding provider for model %q", options.EmbeddingModel), cause: err}
 	}
-	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
+	// The Milvus client retries an unreachable address until its context ends.
+	// The daemon opens this connection during startup, and a local Milvus
+	// answers in milliseconds.
+	connectCtx, cancelConnect := context.WithTimeout(ctx, milvusConnectTimeout)
+	defer cancelConnect()
+	client, err := milvusclient.New(connectCtx, &milvusclient.ClientConfig{
 		Address: options.MilvusAddress,
 		DBName:  options.MilvusDatabase,
 	})
