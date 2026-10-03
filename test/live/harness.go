@@ -132,6 +132,11 @@ func (semantic fakeConversationSemanticConfig) tomlSettings() string {
 	if semantic.SearchEnabled {
 		settings.WriteString("search_enabled = true\n")
 	}
+	if semantic.IngestionEnabled || semantic.SearchEnabled {
+		// The default Milvus address is the operator's live server. An unreachable
+		// loopback port keeps a test daemon away from it.
+		settings.WriteString("milvus_address = \"[::1]:1\"\n")
+	}
 	return settings.String()
 }
 

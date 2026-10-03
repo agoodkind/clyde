@@ -23,7 +23,7 @@ func TestLiveHarnessKeepsInheritedConversationCacheUntouched(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", inheritedRoot)
 	home := writeLoadRulesFixtureHome(t)
 	harness := newHarness(t)
-	harness.writeConversationOnlyConfig(t, nil, "")
+	harness.writeConversationOnlyConfig(t, nil)
 	harness.extraEnv = []string{
 		"HOME=" + home,
 		"CODEX_HOME=" + filepath.Join(home, ".codex"),
