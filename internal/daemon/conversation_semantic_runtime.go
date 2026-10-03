@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,13 @@ import (
 // semanticDialRegisterTimeout bounds each dial-and-register attempt so a slow
 // or wedged engine cannot stall boot or a retry tick indefinitely.
 const semanticDialRegisterTimeout = 10 * time.Second
+
+// The ingest fingerprint records live under
+// <state dir>/conversation-semantic/checkpoints/<collection>/.
+const (
+	conversationSemanticStateDirName = "conversation-semantic"
+	conversationCheckpointDirName    = "checkpoints"
+)
 
 func semanticRetryDelay(failures uint32, jitter time.Duration) time.Duration {
 	delay := 30 * time.Second
@@ -237,6 +245,7 @@ func openConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 		EmbeddingAPIKey:        apiKey,
 		EmbeddingTimeout:       semanticCfg.EmbeddingRequestTimeout.AsDuration(),
 		QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
+		CheckpointDir:          filepath.Join(config.DefaultStateDir(), conversationSemanticStateDirName, conversationCheckpointDirName),
 	})
 	if err != nil {
 		return nil, semanticConnectorError{cause: err}
