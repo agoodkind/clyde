@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
@@ -25,6 +26,8 @@ const (
 	// nvEmbedCodeQueryPrefix is the instruction the NV-EmbedCode models expect in
 	// front of a query. Stored rows embed without it.
 	nvEmbedCodeQueryPrefix = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
+	// milvusConnectTimeout bounds opening the Milvus connection.
+	milvusConnectTimeout = 2 * time.Second
 	// milvusCloseTimeout bounds closing the Milvus connection.
 	milvusCloseTimeout = 5 * time.Second
 )
@@ -54,6 +57,9 @@ type Options struct {
 	EmbeddingAPIKey        string
 	EmbeddingTimeout       time.Duration
 	QueryInstructionPrefix string
+	// CheckpointDir is the directory of the per-conversation fingerprint
+	// records the ingest persists. Empty keeps them in memory only.
+	CheckpointDir string
 }
 
 // Client searches the Milvus conversation collection in process. It embeds the
@@ -67,6 +73,41 @@ type Client struct {
 	dimension   int
 	queryPrefix string
 	declaration collection.Declaration
+
+	// embeddingModel is written to each row and selects the stored vectors the
+	// ingest reuses. byteBudget is the largest embedding input in bytes.
+	embeddingModel string
+	byteBudget     int
+
+	// checkpoint records the manifest fingerprint of each conversation after its
+	// rows are written.
+	checkpoint *checkpointStore
+
+	// ingestMu guards the collections ensured in this process and the job count.
+	ingestMu sync.Mutex
+	ensured  map[string]bool
+	jobCount int
+}
+
+// loadCollectionIfPresent reports whether the collection exists and loads it
+// into memory, because Milvus serves a stored-row query on a loaded collection
+// only.
+func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName string) (bool, error) {
+	exists, err := c.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	if err != nil {
+		return false, failRead("check Milvus collection "+collectionName, err)
+	}
+	if !exists {
+		return false, nil
+	}
+	task, err := c.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
+	if err != nil {
+		return false, failRead("load Milvus collection "+collectionName, err)
+	}
+	if err := task.Await(ctx); err != nil {
+		return false, failRead("await load of Milvus collection "+collectionName, err)
+	}
+	return true, nil
 }
 
 // Open connects to Milvus and builds the embedding provider. It fails when the
@@ -82,7 +123,12 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 	if err != nil {
 		return nil, operationError{operation: fmt.Sprintf("build conversation embedding provider for model %q", options.EmbeddingModel), cause: err}
 	}
-	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
+	// The Milvus client retries an unreachable address until its context ends.
+	// The daemon opens this connection during startup, and a local Milvus
+	// answers in milliseconds.
+	connectCtx, cancelConnect := context.WithTimeout(ctx, milvusConnectTimeout)
+	defer cancelConnect()
+	client, err := milvusclient.New(connectCtx, &milvusclient.ClientConfig{
 		Address: options.MilvusAddress,
 		DBName:  options.MilvusDatabase,
 	})
@@ -100,6 +146,13 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 		dimension:   options.EmbeddingDimension,
 		queryPrefix: queryPrefix,
 		declaration: Declaration(),
+
+		embeddingModel: options.EmbeddingModel,
+		byteBudget:     embedByteBudget(options.EmbeddingModel),
+		checkpoint:     newCheckpointStore(options.CheckpointDir),
+		ingestMu:       sync.Mutex{},
+		ensured:        make(map[string]bool),
+		jobCount:       0,
 	}, nil
 }
 
