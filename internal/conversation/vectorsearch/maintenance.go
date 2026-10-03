@@ -116,6 +116,47 @@ func declaredColumns(declaration collection.Declaration, names ...string) []coll
 	return columns
 }
 
+// CountConversationRows returns the number of stored rows that DeleteConversation
+// would delete for the conversation. It runs one read-only query that selects
+// rows the same way, reads no vector, and changes no row. A missing collection
+// returns 0.
+func (c *Client) CountConversationRows(ctx context.Context, collectionID string, conversationID string) (int64, error) {
+	if c == nil {
+		return 0, errors.New("count semantic conversation rows: client is nil")
+	}
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+	if trimmedCollectionID == "" {
+		return 0, errors.New("count semantic conversation rows: collection id is empty")
+	}
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedConversationID == "" {
+		return 0, errors.New("count semantic conversation rows: conversation id is empty")
+	}
+	collectionName := CollectionName(trimmedCollectionID)
+	exists, err := c.loadCollectionIfPresent(ctx, collectionName)
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+	rows, err := c.store.QueryRows(ctx, collection.RowsRequest{
+		Collection:  collectionName,
+		Declaration: c.declaration,
+		ItemIDs:     []string{trimmedConversationID},
+		PathPrefixes: []string{
+			conversationRelativePathPrefix(trimmedConversationID),
+			conversationToolRelativePathPrefix(trimmedConversationID),
+			conversationThinkingRelativePathPrefix(trimmedConversationID),
+		},
+		IncludeVector: false,
+	})
+	if err != nil {
+		return 0, failRead("count conversation "+trimmedConversationID+" rows in "+collectionName, err)
+	}
+	return int64(len(rows)), nil
+}
+
 // DeleteConversation removes the stored rows of one conversation and returns
 // the deleted row count. A row belongs to the conversation when its
 // conversationId column equals the id, or when its relativePath starts with
