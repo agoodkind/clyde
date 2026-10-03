@@ -11,7 +11,7 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
-	"goodkind.io/clyde/internal/conversation/semsearch"
+	"goodkind.io/clyde/internal/conversation/vectorsearch"
 )
 
 type initialIndexProgress func(completed int, total int)
@@ -20,12 +20,30 @@ const initialIndexHeartbeatInterval = 5 * time.Second
 
 type initialSemanticClient interface {
 	conversationSemanticClient
-	Register(context.Context, string) error
 	Close() error
 }
 
-var dialInitialSemantic = func(ctx context.Context, socketPath string) (initialSemanticClient, error) {
-	return semsearch.Dial(ctx, socketPath)
+// initialSemanticConnection adapts the in-process client to the Close method
+// the initial index calls.
+type initialSemanticConnection struct {
+	*vectorsearch.Client
+}
+
+// Close closes the Milvus connection.
+func (connection initialSemanticConnection) Close() error {
+	if err := connection.Client.Close(context.Background()); err != nil {
+		slog.Warn("daemon.initial_index.semantic_close_failed", "concern", "conversation.index", "component", "daemon", "err", err)
+		return fmt.Errorf("close initial semantic client: %w", err)
+	}
+	return nil
+}
+
+var dialInitialSemantic = func(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (initialSemanticClient, error) {
+	client, err := openConversationSearchClient(ctx, semanticCfg)
+	if err != nil {
+		return nil, err
+	}
+	return initialSemanticConnection{Client: client}, nil
 }
 
 // RunInitialConversationIndex builds the first raw conversation cache during
@@ -155,16 +173,12 @@ func runInitialSemanticIndex(
 	if err != nil {
 		return false, err
 	}
-	client, err := dialInitialSemantic(ctx, cfg.Conversation.Semantic.SocketPath)
+	client, err := dialInitialSemantic(ctx, cfg.Conversation.Semantic)
 	if err != nil {
 		_, _ = fmt.Fprintf(output, "Initial indexing: semantic indexing skipped because semantic service is unavailable: %v\n", err)
 		return false, nil
 	}
 	defer func() { _ = client.Close() }()
-	if err := client.Register(ctx, cfg.Conversation.Semantic.CollectionID); err != nil {
-		_, _ = fmt.Fprintf(output, "Initial indexing: semantic indexing skipped because semantic service is unavailable: %v\n", err)
-		return false, nil
-	}
 	worker := newConversationSemanticSyncWorker(
 		index,
 		func() conversationSemanticClient { return client },

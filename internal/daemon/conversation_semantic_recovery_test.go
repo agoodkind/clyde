@@ -133,7 +133,6 @@ func newTestSemanticRuntime(t *testing.T, connector semanticConnector) (*convers
 	})
 	runtime := newConversationSemanticRuntime(log, connector, registry, conversationSemanticConnectionMeta{
 		CollectionID: "conversations",
-		SocketPath:   "/tmp/semantic-search-test.sock",
 	})
 	runtime.retryDelay = func(uint32) time.Duration { return time.Millisecond }
 	return runtime, group

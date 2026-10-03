@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 )
 
@@ -19,7 +20,7 @@ func TestRunInitialConversationIndexBuildsRawIndexWhenIngestionIsDisabled(t *tes
 
 	previousDial := dialInitialSemantic
 	calls := 0
-	dialInitialSemantic = func(context.Context, string) (initialSemanticClient, error) {
+	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (initialSemanticClient, error) {
 		calls++
 		return nil, fmt.Errorf("should not call semantic when disabled")
 	}
@@ -53,7 +54,7 @@ func TestRunInitialConversationIndexBuildsRawIndexWhenIngestionIsDisabled(t *tes
 func TestRunInitialConversationIndexReportsProgress(t *testing.T) {
 	configureInitialIndexTest(t, true)
 	previousDial := dialInitialSemantic
-	dialInitialSemantic = func(context.Context, string) (initialSemanticClient, error) {
+	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (initialSemanticClient, error) {
 		return &fakeInitialSemanticClient{
 			fakeConversationSemanticClient: &fakeConversationSemanticClient{},
 		}, nil
@@ -143,10 +144,6 @@ type fakeInitialSemanticClient struct {
 	*fakeConversationSemanticClient
 }
 
-func (*fakeInitialSemanticClient) Register(context.Context, string) error {
-	return nil
-}
-
 func (*fakeInitialSemanticClient) Close() error {
 	return nil
 }
@@ -155,7 +152,7 @@ func TestRunInitialConversationIndexTriesSemanticOnce(t *testing.T) {
 	configureInitialIndexTest(t, true)
 	var attempts int
 	previousDial := dialInitialSemantic
-	dialInitialSemantic = func(context.Context, string) (initialSemanticClient, error) {
+	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (initialSemanticClient, error) {
 		attempts++
 		return nil, fmt.Errorf("semantic engine unavailable")
 	}
