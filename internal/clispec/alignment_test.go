@@ -126,7 +126,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	if conversationParent == nil {
 		t.Fatal("conversation parent missing")
 	}
-	wantConversationChildren := []string{"export", "info", "resolve-request", "search"}
+	wantConversationChildren := []string{"delete", "export", "info", "resolve-request", "search"}
 	var gotChildren []string
 	for _, child := range conversationParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())

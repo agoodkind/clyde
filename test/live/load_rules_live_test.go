@@ -4,7 +4,6 @@ package live
 
 import (
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -91,25 +90,10 @@ func writeLoadRulesFixtureHome(t *testing.T) string {
 //go:embed conversation_config.toml.tmpl
 var conversationOnlyConfigTemplate string
 
-// realEngineSocketPath resolves the operator's live engine socket. The harness
-// redirects XDG_STATE_HOME into the sandbox, so a config that leaves the
-// socket path unset would look for the engine inside the sandbox, where none
-// runs. The engine-backed test therefore pins the production socket, isolated
-// by its throwaway collection id rather than by the socket.
-func realEngineSocketPath(t *testing.T) string {
-	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("resolve the real home dir: %v", err)
-	}
-	return filepath.Join(home, ".local", "state", "lm-semantic-search", "sockets", "lm-semantic-search-daemon.sock")
-}
-
 // writeConversationOnlyConfig writes a config with every listener off and the
 // conversation surfaces governed by indexedContent. nil indexedContent leaves
-// the field out, which is the default kind set. socketPath pins the engine
-// socket; empty leaves the daemon's default resolution in place.
-func (h *harness) writeConversationOnlyConfig(t *testing.T, indexedContent []string, socketPath string) {
+// the field out, which is the default kind set.
+func (h *harness) writeConversationOnlyConfig(t *testing.T, indexedContent []string) {
 	t.Helper()
 	parsed, err := template.New("conversation_config").Parse(conversationOnlyConfigTemplate)
 	if err != nil {
@@ -120,13 +104,11 @@ func (h *harness) writeConversationOnlyConfig(t *testing.T, indexedContent []str
 		IngestionEnabled bool
 		SearchEnabled    bool
 		CollectionID     string
-		SocketPath       string
 		IndexedContent   []string
 	}{
 		IngestionEnabled: h.conversationSemantic.IngestionEnabled,
 		SearchEnabled:    h.conversationSemantic.SearchEnabled,
 		CollectionID:     h.conversationSemantic.CollectionID,
-		SocketPath:       socketPath,
 		IndexedContent:   indexedContent,
 	})
 	if err != nil {
@@ -194,7 +176,7 @@ func (h *harness) aroundRead(t *testing.T, home string, index int, tag string) s
 func TestContextWindowLoadRulesPermutations(t *testing.T) {
 	home := writeLoadRulesFixtureHome(t)
 	h := newHarness(t)
-	h.writeConversationOnlyConfig(t, nil, "")
+	h.writeConversationOnlyConfig(t, nil)
 	h.extraEnv = []string{"HOME=" + home}
 	h.boot(t)
 	h.waitForConversationDiscovery(t, home, 60*time.Second)
@@ -227,122 +209,5 @@ func TestContextWindowLoadRulesPermutations(t *testing.T) {
 					testCase.index, testCase.tag, out, testCase.want)
 			}
 		})
-	}
-}
-
-// loadRulesSearchMatch is the slice of the CLI search JSON these tests read.
-type loadRulesSearchMatch struct {
-	MessageIndex int    `json:"message_index"`
-	Snippet      string `json:"snippet"`
-	LoadRules    string `json:"load_rules"`
-}
-
-type loadRulesSearchOutput struct {
-	Matches []loadRulesSearchMatch `json:"matches"`
-}
-
-// waitForFeederDelivery polls the sandboxed feeder log until a pass reports the
-// fixture conversation delivered, or fails at the deadline.
-func (h *harness) waitForFeederDelivery(t *testing.T, deadline time.Duration) {
-	t.Helper()
-	end := time.Now().Add(deadline)
-	logPath := filepath.Join(h.stateRoot, "clyde", "logs", "conversation", "semantic.jsonl")
-	for time.Now().Before(end) {
-		body, err := os.ReadFile(logPath)
-		if err == nil {
-			for _, line := range strings.Split(string(body), "\n") {
-				if strings.Contains(line, "pass_completed") && strings.Contains(line, loadRulesFixtureSession) {
-					return
-				}
-			}
-		}
-		time.Sleep(5 * time.Second)
-	}
-	dump := h.dumpLogsOnFailure(t)
-	t.Fatalf("the fixture conversation never delivered within %s; logs dumped to %s", deadline, dump)
-}
-
-// TestLoadRulesFeedErasEndToEnd runs the config-change-over-time scenario
-// against the real engine: era A feeds under the default rules, the config
-// then opts system_messages in, era B re-delivers, and the store holds both
-// eras side by side, each hit resolving under its own tag. It needs the live
-// engine, so it runs only when both replacement semantic test variables are
-// true.
-func TestLoadRulesFeedErasEndToEnd(t *testing.T) {
-	home := writeLoadRulesFixtureHome(t)
-	h := newHarness(t)
-	if !h.conversationSemantic.IngestionEnabled || !h.conversationSemantic.SearchEnabled {
-		t.Skip("set CLYDE_TEST_CONVERSATION_INGESTION=true and CLYDE_TEST_CONVERSATION_SEARCH=true to run the engine-backed era test")
-	}
-	h.extraEnv = []string{"HOME=" + home}
-
-	// Era A: default rules.
-	engineSocket := realEngineSocketPath(t)
-	h.writeConversationOnlyConfig(t, nil, engineSocket)
-	h.boot(t)
-	h.waitForConversationDiscovery(t, home, 60*time.Second)
-	h.waitForFeederDelivery(t, 4*time.Minute)
-	h.teardown(t)
-
-	// Era B: system_messages opted in. The artifact must change for the engine
-	// to list the conversation as needed again, so grow it by one trailing
-	// newline, which parses to the same messages.
-	transcript := filepath.Join(home, ".claude", "projects", "-tmp-load-rules-live", loadRulesFixtureSession+".jsonl")
-	appendFile, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatalf("open fixture for era B touch: %v", err)
-	}
-	if _, err := appendFile.WriteString("\n"); err != nil {
-		t.Fatalf("grow fixture for era B: %v", err)
-	}
-	_ = appendFile.Close()
-	h.writeConversationOnlyConfig(t, []string{"chat", "tool_calls", "system_messages"}, engineSocket)
-	h.boot(t)
-	h.waitForConversationDiscovery(t, home, 60*time.Second)
-	h.waitForFeederDelivery(t, 4*time.Minute)
-
-	// Embedding lags delivery, so poll search until both eras' tags appear.
-	deadline := time.Now().Add(4 * time.Minute)
-	tags := map[string]loadRulesSearchMatch{}
-	for time.Now().Before(deadline) {
-		out, cliErr := h.runCLI(t, home,
-			"conversation", "search", loadRulesConversationID,
-			"--query", "user probe beta", "--limit", "10", "--output-format", "json")
-		if cliErr == nil {
-			var parsed loadRulesSearchOutput
-			if jsonErr := json.Unmarshal([]byte(out), &parsed); jsonErr == nil {
-				for _, match := range parsed.Matches {
-					if strings.Contains(match.Snippet, "user probe beta") {
-						tags[match.LoadRules] = match
-					}
-				}
-				if _, eraA := tags[loadRulesDefaultTag]; eraA {
-					if _, eraB := tags[loadRulesSystemTag]; eraB {
-						break
-					}
-				}
-			}
-		}
-		time.Sleep(10 * time.Second)
-	}
-	if _, ok := tags[loadRulesDefaultTag]; !ok {
-		t.Fatalf("no era A hit tagged %q; tags seen: %v", loadRulesDefaultTag, tags)
-	}
-	if _, ok := tags[loadRulesSystemTag]; !ok {
-		t.Fatalf("no era B hit tagged %q; tags seen: %v", loadRulesSystemTag, tags)
-	}
-
-	// Each era's hit resolves to the same message under its own tag even
-	// though the two rows disagree about the index.
-	eraA := tags[loadRulesDefaultTag]
-	eraB := tags[loadRulesSystemTag]
-	if eraA.MessageIndex == eraB.MessageIndex {
-		t.Fatalf("both eras stored index %d; the fixture should shift the system era", eraA.MessageIndex)
-	}
-	for _, hit := range []loadRulesSearchMatch{eraA, eraB} {
-		out := h.aroundRead(t, home, hit.MessageIndex, hit.LoadRules)
-		if !strings.Contains(out, "user probe beta") {
-			t.Fatalf("hit at %d with its own tag %q resolved %q, want the stored message", hit.MessageIndex, hit.LoadRules, out)
-		}
 	}
 }

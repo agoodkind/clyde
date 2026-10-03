@@ -133,7 +133,7 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Deliberately disagree with the daemon's effective configuration.
-			body := fmt.Sprintf("[daemon]\ngrpc_address = %q\n[conversation.semantic]\ningestion_enabled = %t\nsearch_enabled = %t\n", "unix://"+socket, !directions.ingestion, !directions.search)
+			body := fmt.Sprintf("[daemon]\ngrpc_address = %q\n[conversation.semantic]\nmilvus_address = \"[::1]:1\"\ningestion_enabled = %t\nsearch_enabled = %t\n", "unix://"+socket, !directions.ingestion, !directions.search)
 			if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}

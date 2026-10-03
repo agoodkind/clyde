@@ -229,9 +229,10 @@ func conversationEmbeddingAPIKey(envName string, filePath string) (string, error
 	return localEmbeddingAPIKey, nil
 }
 
-// openConversationSearchClient builds the in-process search client from the
-// semantic config.
-func openConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
+// OpenConversationSearchClient builds the in-process Milvus client from the
+// semantic config. The daemon runtime and the `clyde daemon` maintenance
+// commands both open it here.
+func OpenConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
 	apiKey, err := conversationEmbeddingAPIKey(semanticCfg.EmbeddingAPIKeyEnv, semanticCfg.EmbeddingAPIKeyFile)
 	if err != nil {
 		return nil, semanticConnectorError{cause: err}
@@ -261,7 +262,7 @@ func openConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 func semanticConnectorFor(semanticCfg config.ConversationSemanticConfig) semanticConnector {
 	return func(ctx context.Context) (semanticConnection, error) {
 		failed := semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}
-		client, err := openConversationSearchClient(ctx, semanticCfg)
+		client, err := OpenConversationSearchClient(ctx, semanticCfg)
 		if err != nil {
 			return failed, err
 		}
