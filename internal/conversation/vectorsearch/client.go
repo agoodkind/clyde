@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
@@ -67,6 +68,21 @@ type Client struct {
 	dimension   int
 	queryPrefix string
 	declaration collection.Declaration
+
+	// embeddingModel is written to each row and selects the stored vectors the
+	// ingest reuses. byteBudget is the largest embedding input in bytes.
+	embeddingModel string
+	byteBudget     int
+
+	// ingestMu guards the ingest state below. checkpoints maps a collection ID
+	// to the fingerprint of each conversation after its last completed upsert.
+	// The checkpoints live in memory. A restarted daemon offers every
+	// conversation again, and the stored-row comparison writes nothing for the
+	// unchanged ones.
+	ingestMu    sync.Mutex
+	checkpoints map[string]map[string]string
+	ensured     map[string]bool
+	jobCount    int
 }
 
 // Open connects to Milvus and builds the embedding provider. It fails when the
@@ -100,6 +116,13 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 		dimension:   options.EmbeddingDimension,
 		queryPrefix: queryPrefix,
 		declaration: Declaration(),
+
+		embeddingModel: options.EmbeddingModel,
+		byteBudget:     embedByteBudget(options.EmbeddingModel),
+		ingestMu:       sync.Mutex{},
+		checkpoints:    make(map[string]map[string]string),
+		ensured:        make(map[string]bool),
+		jobCount:       0,
 	}, nil
 }
 
