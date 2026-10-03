@@ -1,33 +1,25 @@
 package vectorsearch
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
+
+	"goodkind.io/lm-semantic-search/collection"
 )
 
-// storedRow is one row read from the live conversation collection.
-type storedRow struct {
-	ID                string
-	RelativePath      string
-	Content           string
-	Role              string
-	EmbeddingModel    string
-	SplitPart         int32
-	SplitPartRecorded bool
-	Vector            []float32
-}
+// conversationFilterIDBatchSize bounds the conversation IDs in one stored-row
+// request.
+const conversationFilterIDBatchSize = 256
 
-// conversationState is the stored rows of one conversation grouped by family
-// key.
+// conversationState is the set of family keys that have a stored row with
+// storable content.
 type conversationState struct {
-	families map[string][]storedRow
-}
-
-func newConversationState() *conversationState {
-	return &conversationState{families: make(map[string][]storedRow)}
+	families map[string]struct{}
 }
 
 // present reports whether the family has a stored row with storable content. A
@@ -36,107 +28,8 @@ func (state *conversationState) present(familyKey string) bool {
 	if state == nil {
 		return false
 	}
-	for _, row := range state.families[familyKey] {
-		if conversationTextIsStorable(row.Content) {
-			return true
-		}
-	}
-	return false
-}
-
-// rows returns the stored rows of one family.
-func (state *conversationState) rows(familyKey string) []storedRow {
-	if state == nil {
-		return nil
-	}
-	return state.families[familyKey]
-}
-
-// storedTextOf rebuilds the text of a message family by concatenating its rows
-// in part order. It also returns the role of the first row that has one.
-func storedTextOf(conversationID string, rows []storedRow) (string, string) {
-	parts := slices.Clone(rows)
-	slices.SortStableFunc(parts, func(left storedRow, right storedRow) int {
-		return compareStoredParts(conversationID, left, right)
-	})
-	var text strings.Builder
-	role := ""
-	for _, row := range parts {
-		text.WriteString(row.Content)
-		if role == "" {
-			role = row.Role
-		}
-	}
-	return text.String(), role
-}
-
-// compareStoredParts is a total order over the rows of one message family: the
-// part index in the path, then a recorded split position before an unrecorded
-// one, then the split position, then the content.
-func compareStoredParts(conversationID string, left storedRow, right storedRow) int {
-	leftIndex := pathPartIndex(conversationID, left.RelativePath)
-	rightIndex := pathPartIndex(conversationID, right.RelativePath)
-	if leftIndex != rightIndex {
-		return leftIndex - rightIndex
-	}
-	if left.SplitPartRecorded != right.SplitPartRecorded {
-		if left.SplitPartRecorded {
-			return -1
-		}
-		return 1
-	}
-	if left.SplitPartRecorded && left.SplitPart != right.SplitPart {
-		if left.SplitPart < right.SplitPart {
-			return -1
-		}
-		return 1
-	}
-	return strings.Compare(left.Content, right.Content)
-}
-
-// pathPartIndex returns the part number after the message index in a message
-// text path, or 0 for a single-part path.
-func pathPartIndex(conversationID string, relativePath string) int {
-	remainder, found := strings.CutPrefix(relativePath, conversationRelativePathPrefix(conversationID))
-	if !found {
-		return 0
-	}
-	parts := strings.Split(remainder, "/")
-	if len(parts) < 2 {
-		return 0
-	}
-	partIndex, err := strconv.Atoi(parts[1])
-	if err != nil || partIndex < 0 {
-		return 0
-	}
-	return partIndex
-}
-
-// assignConversationID returns the requested conversation a stored row belongs
-// to. A row with a conversationId column value in the request belongs to that
-// conversation. A row without one belongs to the requested conversation with the
-// longest matching family path prefix, which covers rows written before the
-// column existed.
-func assignConversationID(storedID string, relativePath string, requested []string) string {
-	if storedID != "" && slices.Contains(requested, storedID) {
-		return storedID
-	}
-	matchedID := ""
-	matchedLength := 0
-	for _, requestedID := range requested {
-		prefixes := []string{
-			conversationRelativePathPrefix(requestedID),
-			conversationToolRelativePathPrefix(requestedID),
-			conversationThinkingRelativePathPrefix(requestedID),
-		}
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(relativePath, prefix) && len(prefix) > matchedLength {
-				matchedID = requestedID
-				matchedLength = len(prefix)
-			}
-		}
-	}
-	return matchedID
+	_, found := state.families[familyKey]
+	return found
 }
 
 // contentKey is the reuse key of a row: the hex SHA-256 of its content.
@@ -167,24 +60,118 @@ func newStoredBatch() *storedBatch {
 
 // add records one stored row under its conversation and adds its vector to the
 // reuse map when the row's model matches currentModel.
-func (batch *storedBatch) add(conversationID string, row storedRow, currentModel string) {
+func (batch *storedBatch) add(conversationID string, row collection.StoredRow, currentModel string) {
 	if len(row.Vector) > 0 && embeddingModelsCompatible(row.EmbeddingModel, currentModel) {
 		batch.reuse[contentKey(row.Content)] = row.Vector
 	}
-	if conversationID == "" {
+	if conversationID == "" || !conversationTextIsStorable(row.Content) {
 		return
 	}
 	state, found := batch.conversations[conversationID]
 	if !found {
-		state = newConversationState()
+		state = &conversationState{families: make(map[string]struct{})}
 		batch.conversations[conversationID] = state
 	}
-	key := chunkFamilyKey(conversationID, row.RelativePath)
-	state.families[key] = append(state.families[key], row)
+	state.families[chunkFamilyKey(conversationID, row.RelativePath)] = struct{}{}
 }
 
 func (batch *storedBatch) state(conversationID string) *conversationState {
 	return batch.conversations[conversationID]
+}
+
+// assignConversationID returns the requested conversation a stored row belongs
+// to. A row with a conversationId cell in the request belongs to that
+// conversation. A row without one belongs to the requested conversation with the
+// longest matching family path prefix, which covers rows written before the
+// column existed.
+func assignConversationID(row collection.StoredRow, requested []string) string {
+	if cell, found := row.Scalars[conversationIDColumn]; found && cell.State == collection.ScalarCellValue {
+		if cell.Value.String != "" && slices.Contains(requested, cell.Value.String) {
+			return cell.Value.String
+		}
+	}
+	matchedID := ""
+	matchedLength := 0
+	for _, requestedID := range requested {
+		prefixes := []string{
+			conversationRelativePathPrefix(requestedID),
+			conversationToolRelativePathPrefix(requestedID),
+			conversationThinkingRelativePathPrefix(requestedID),
+		}
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(row.RelativePath, prefix) && len(prefix) > matchedLength {
+				matchedID = requestedID
+				matchedLength = len(prefix)
+			}
+		}
+	}
+	return matchedID
+}
+
+// storedRowsDeclaration is the declaration of a stored-row request: the
+// conversation ID column that selects rows and reads back.
+func storedRowsDeclaration() collection.Declaration {
+	return collection.Declaration{
+		ItemIDColumn: conversationIDColumn,
+		Scalars:      []collection.ScalarColumn{nullableStringColumn(conversationIDColumn, conversationIDMaxLength)},
+	}
+}
+
+// loadStoredBatch reads every stored row of the requested conversations through
+// the collection store. A row is selected by its conversationId value or by a
+// conversation path prefix, so rows written before the column existed stay
+// visible. A missing collection returns an empty batch.
+func (c *Client) loadStoredBatch(ctx context.Context, collectionName string, conversationIDs []string) (*storedBatch, error) {
+	batch := newStoredBatch()
+	requested := dedupeIDs(conversationIDs)
+	if len(requested) == 0 {
+		return batch, nil
+	}
+	exists, err := c.loadCollectionIfPresent(ctx, collectionName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return batch, nil
+	}
+	for start := 0; start < len(requested); start += conversationFilterIDBatchSize {
+		end := min(start+conversationFilterIDBatchSize, len(requested))
+		group := requested[start:end]
+		prefixes := make([]string, 0, len(group)*3)
+		for _, id := range group {
+			prefixes = append(prefixes,
+				conversationRelativePathPrefix(id),
+				conversationToolRelativePathPrefix(id),
+				conversationThinkingRelativePathPrefix(id),
+			)
+		}
+		rows, queryErr := c.store.QueryRows(ctx, collection.RowsRequest{
+			Collection:    collectionName,
+			Declaration:   storedRowsDeclaration(),
+			ItemIDs:       group,
+			PathPrefixes:  prefixes,
+			IncludeVector: true,
+		})
+		if queryErr != nil {
+			return nil, failRead("load stored conversation rows from "+collectionName, queryErr)
+		}
+		for _, row := range rows {
+			batch.add(assignConversationID(row, group), row, c.embeddingModel)
+		}
+	}
+	return batch, nil
+}
+
+// failRead logs one failed request and returns the error with the operation
+// that failed.
+func failRead(operation string, err error) error {
+	slog.Warn("conversation.vectorsearch.request_failed",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"operation", operation,
+		"err", err,
+	)
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func dedupeIDs(ids []string) []string {

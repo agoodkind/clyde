@@ -55,6 +55,9 @@ type Options struct {
 	EmbeddingAPIKey        string
 	EmbeddingTimeout       time.Duration
 	QueryInstructionPrefix string
+	// CheckpointDir is the directory of the per-conversation fingerprint
+	// records the ingest persists. Empty keeps them in memory only.
+	CheckpointDir string
 }
 
 // Client searches the Milvus conversation collection in process. It embeds the
@@ -74,15 +77,35 @@ type Client struct {
 	embeddingModel string
 	byteBudget     int
 
-	// ingestMu guards the ingest state below. checkpoints maps a collection ID
-	// to the fingerprint of each conversation after its last completed upsert.
-	// The checkpoints live in memory. A restarted daemon offers every
-	// conversation again, and the stored-row comparison writes nothing for the
-	// unchanged ones.
-	ingestMu    sync.Mutex
-	checkpoints map[string]map[string]string
-	ensured     map[string]bool
-	jobCount    int
+	// checkpoint records the manifest fingerprint of each conversation after its
+	// rows are written.
+	checkpoint *checkpointStore
+
+	// ingestMu guards the collections ensured in this process and the job count.
+	ingestMu sync.Mutex
+	ensured  map[string]bool
+	jobCount int
+}
+
+// loadCollectionIfPresent reports whether the collection exists and loads it
+// into memory, because Milvus serves a stored-row query on a loaded collection
+// only.
+func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName string) (bool, error) {
+	exists, err := c.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
+	if err != nil {
+		return false, failRead("check Milvus collection "+collectionName, err)
+	}
+	if !exists {
+		return false, nil
+	}
+	task, err := c.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
+	if err != nil {
+		return false, failRead("load Milvus collection "+collectionName, err)
+	}
+	if err := task.Await(ctx); err != nil {
+		return false, failRead("await load of Milvus collection "+collectionName, err)
+	}
+	return true, nil
 }
 
 // Open connects to Milvus and builds the embedding provider. It fails when the
@@ -119,8 +142,8 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 
 		embeddingModel: options.EmbeddingModel,
 		byteBudget:     embedByteBudget(options.EmbeddingModel),
+		checkpoint:     newCheckpointStore(options.CheckpointDir),
 		ingestMu:       sync.Mutex{},
-		checkpoints:    make(map[string]map[string]string),
 		ensured:        make(map[string]bool),
 		jobCount:       0,
 	}, nil
