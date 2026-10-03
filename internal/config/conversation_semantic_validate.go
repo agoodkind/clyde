@@ -119,6 +119,7 @@ func validateConversationSemanticCounts(semantic *ConversationSemanticConfig) er
 	}
 	settings := []conversationSemanticSetting{
 		{key: "vector_dimension", value: int64(semantic.VectorDimension)},
+		{key: "embedding_dimension", value: int64(semantic.EmbeddingDimension)},
 		{key: "max_batch_rows", value: int64(semantic.MaxBatchRows)},
 		{key: "max_batch_bytes", value: semantic.MaxBatchBytes},
 		{key: "raw_batch_target_bytes", value: semantic.RawBatchTargetBytes},

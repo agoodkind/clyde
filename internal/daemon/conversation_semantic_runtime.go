@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation/semsearch"
+	"goodkind.io/clyde/internal/conversation/vectorsearch"
 	"goodkind.io/clyde/internal/livetrack"
 )
 
@@ -154,28 +157,132 @@ func (c *conversationSemanticConnectionCloser) Close(reason string) error {
 	return nil
 }
 
-// semsearchConnector builds the production connector: it dials the
-// lm-semantic-search daemon and registers the conversation collection, and on
-// success returns the concrete client as both the search and feeder surface.
-// The runtime owns unavailable and recovered logging across repeated attempts.
-func semsearchConnector(socketPath, collectionID string) semanticConnector {
-	return func(ctx context.Context) (semanticConnection, error) {
-		client, err := semsearch.Dial(ctx, socketPath)
+// semanticConnectionCloser closes the connections one semantic connection owns:
+// the in-process Milvus search client when search is enabled, and the
+// lm-semantic-search grpc connection when ingestion is enabled. It reports the
+// grpc connection state, and Ready when no grpc connection exists.
+type semanticConnectionCloser struct {
+	search *vectorsearch.Client
+	feeder *semsearch.Client
+}
+
+// Close closes every connection the semantic connection owns.
+func (c *semanticConnectionCloser) Close() error {
+	return c.closeWithContext(context.Background())
+}
+
+func (c *semanticConnectionCloser) closeWithContext(ctx context.Context) error {
+	var closeErr error
+	if c.search != nil {
+		closeErr = errors.Join(closeErr, c.search.Close(ctx))
+	}
+	if c.feeder != nil {
+		closeErr = errors.Join(closeErr, c.feeder.Close())
+	}
+	return closeErr
+}
+
+// GetState reports the ingestion grpc connection state. A search-only
+// connection has no grpc connection to report.
+func (c *semanticConnectionCloser) GetState() connectivity.State {
+	if c.feeder == nil {
+		return connectivity.Ready
+	}
+	return c.feeder.Conn().GetState()
+}
+
+// localEmbeddingAPIKey authenticates to a local embedding endpoint that needs
+// no key. The OpenAI client refuses an empty key.
+const localEmbeddingAPIKey = "local"
+
+// conversationEmbeddingAPIKey reads the embedding API key from the named
+// environment variable or key file. It returns localEmbeddingAPIKey when the
+// config sets neither.
+func conversationEmbeddingAPIKey(envName string, filePath string) (string, error) {
+	if envName != "" {
+		value := strings.TrimSpace(os.Getenv(envName))
+		if value == "" {
+			return "", fmt.Errorf("embedding API key environment variable %q is empty", envName)
+		}
+		return value, nil
+	}
+	if filePath != "" {
+		content, err := os.ReadFile(filePath)
 		if err != nil {
-			return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, semanticConnectorError{cause: err}
+			slog.Warn("daemon.conversation_semantic.embedding_key_read_failed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"path", filePath,
+				"err", err,
+			)
+			return "", fmt.Errorf("read embedding API key file %q: %w", filePath, err)
 		}
-		if registerErr := client.Register(ctx, collectionID); registerErr != nil {
-			if closeErr := client.Close(); closeErr != nil {
-				registerErr = errors.Join(registerErr, closeErr)
+		value := strings.TrimSpace(string(content))
+		if value == "" {
+			return "", fmt.Errorf("embedding API key file %q is empty", filePath)
+		}
+		return value, nil
+	}
+	return localEmbeddingAPIKey, nil
+}
+
+// openConversationSearchClient builds the in-process search client from the
+// semantic config.
+func openConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
+	apiKey, err := conversationEmbeddingAPIKey(semanticCfg.EmbeddingAPIKeyEnv, semanticCfg.EmbeddingAPIKeyFile)
+	if err != nil {
+		return nil, semanticConnectorError{cause: err}
+	}
+	client, err := vectorsearch.Open(ctx, vectorsearch.Options{
+		MilvusAddress:          semanticCfg.MilvusAddress,
+		MilvusDatabase:         semanticCfg.MilvusDatabase,
+		EmbeddingBaseURL:       semanticCfg.EmbeddingBaseURL,
+		EmbeddingModel:         semanticCfg.EmbeddingModel,
+		EmbeddingDimension:     semanticCfg.EmbeddingDimension,
+		EmbeddingAPIKey:        apiKey,
+		EmbeddingTimeout:       semanticCfg.EmbeddingRequestTimeout.AsDuration(),
+		QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
+	})
+	if err != nil {
+		return nil, semanticConnectorError{cause: err}
+	}
+	return client, nil
+}
+
+// semanticConnectorFor builds the production connector. When search is enabled
+// it opens the in-process Milvus search client. When ingestion is enabled it
+// dials the lm-semantic-search daemon and registers the conversation collection
+// for the sync worker. A failure closes whatever the attempt already opened. The
+// runtime owns unavailable and recovered logging across repeated attempts.
+func semanticConnectorFor(semanticCfg config.ConversationSemanticConfig) semanticConnector {
+	return func(ctx context.Context) (semanticConnection, error) {
+		failed := semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}
+		closer := &semanticConnectionCloser{search: nil, feeder: nil}
+		connection := semanticConnection{search: nil, feeder: nil, connCloser: closer, close: closer.Close}
+		if semanticCfg.FeedsEngine() {
+			client, err := semsearch.Dial(ctx, semanticCfg.SocketPath)
+			if err != nil {
+				return failed, semanticConnectorError{cause: err}
 			}
-			return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, semanticConnectorError{cause: registerErr}
+			closer.feeder = client
+			registerErr := client.Register(ctx, semanticCfg.CollectionID)
+			if registerErr != nil {
+				return failed, semanticConnectorError{cause: errors.Join(registerErr, closer.closeWithContext(ctx))}
+			}
+			connection.feeder = client
 		}
-		return semanticConnection{
-			search:     client,
-			feeder:     client,
-			connCloser: client.Conn(),
-			close:      client.Close,
-		}, nil
+		if semanticCfg.AnswersSearch() {
+			searchClient, err := openConversationSearchClient(ctx, semanticCfg)
+			if err != nil {
+				if closeErr := closer.closeWithContext(ctx); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				}
+				return failed, err
+			}
+			closer.search = searchClient
+			connection.search = searchClient
+		}
+		return connection, nil
 	}
 }
 
@@ -213,7 +320,7 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 		SocketPath:   semanticCfg.SocketPath,
 	}
 	meta.IsLivetrackMeta()
-	runtime := newConversationSemanticRuntime(log, semsearchConnector(semanticCfg.SocketPath, semanticCfg.CollectionID), registry, meta)
+	runtime := newConversationSemanticRuntime(log, semanticConnectorFor(semanticCfg), registry, meta)
 	if err := runtime.attemptRegister(ctx); err != nil {
 		// A boot-time failure is transient (the engine is often briefly down
 		// during a co-restart), so keep the runtime alive and retry in the

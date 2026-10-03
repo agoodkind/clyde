@@ -105,7 +105,11 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 			}
 			var attempts atomic.Int64
 			if enabled {
-				connector := semsearchConnector(filepath.Join(t.TempDir(), "missing.sock"), "status-test")
+				unreachable := cfg.Conversation.Semantic
+				unreachable.SocketPath = filepath.Join(t.TempDir(), "missing.sock")
+				unreachable.MilvusAddress = "[::1]:1"
+				unreachable.CollectionID = "status-test"
+				connector := semanticConnectorFor(unreachable)
 				semantic, group := newTestSemanticRuntime(t, func(ctx context.Context) (semanticConnection, error) {
 					attempts.Add(1)
 					return connector(ctx)
