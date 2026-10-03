@@ -2,7 +2,15 @@ package config
 
 import "strings"
 
-const defaultConversationSemanticCollectionID = "clyde-conversations"
+const (
+	defaultConversationSemanticCollectionID = "clyde-conversations"
+	// The search defaults match the installed Milvus and embedding services.
+	defaultConversationSemanticMilvusAddress      = "localhost:19530"
+	defaultConversationSemanticMilvusDatabase     = "default"
+	defaultConversationSemanticEmbeddingBaseURL   = "http://localhost:5400/v1"
+	defaultConversationSemanticEmbeddingModel     = "nvidia/NV-EmbedCode-7b-v1"
+	defaultConversationSemanticEmbeddingDimension = 4096
+)
 
 // ConversationConfig configures raw conversation indexing integrations.
 type ConversationConfig struct {
@@ -108,6 +116,7 @@ type ConversationSemanticConfig struct {
 	// an empty value selects the library's standard analyzer.
 	// The query embedding input begins with QueryInstructionPrefix.
 	EmbeddingModel         string `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
+	EmbeddingDimension     int    `json:"embeddingDimension,omitempty" toml:"embedding_dimension,omitempty"`
 	EmbeddingRevision      string `json:"embeddingRevision,omitempty" toml:"embedding_revision,omitempty"`
 	VectorDimension        int    `json:"vectorDimension,omitempty" toml:"vector_dimension,omitempty"`
 	Normalization          string `json:"normalization,omitempty" toml:"normalization,omitempty"`
@@ -176,6 +185,26 @@ func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
+// applyConversationSemanticSearchDefaults fills each unset Milvus and embedding
+// search setting with the default that matches the installed services.
+func applyConversationSemanticSearchDefaults(semantic *ConversationSemanticConfig) {
+	if strings.TrimSpace(semantic.MilvusAddress) == "" {
+		semantic.MilvusAddress = defaultConversationSemanticMilvusAddress
+	}
+	if strings.TrimSpace(semantic.MilvusDatabase) == "" {
+		semantic.MilvusDatabase = defaultConversationSemanticMilvusDatabase
+	}
+	if strings.TrimSpace(semantic.EmbeddingBaseURL) == "" {
+		semantic.EmbeddingBaseURL = defaultConversationSemanticEmbeddingBaseURL
+	}
+	if strings.TrimSpace(semantic.EmbeddingModel) == "" {
+		semantic.EmbeddingModel = defaultConversationSemanticEmbeddingModel
+	}
+	if semantic.EmbeddingDimension == 0 {
+		semantic.EmbeddingDimension = defaultConversationSemanticEmbeddingDimension
+	}
+}
+
 func applyConversationDefaults(conversation *ConversationConfig) error {
 	if conversation == nil {
 		return nil
@@ -185,6 +214,7 @@ func applyConversationDefaults(conversation *ConversationConfig) error {
 	if conversation.Semantic.CollectionID == "" {
 		conversation.Semantic.CollectionID = defaultConversationSemanticCollectionID
 	}
+	applyConversationSemanticSearchDefaults(&conversation.Semantic)
 	trimmed := make([]string, 0, len(conversation.Semantic.IndexedContent))
 	for _, value := range conversation.Semantic.IndexedContent {
 		if selector := strings.TrimSpace(value); selector != "" {
