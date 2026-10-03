@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
@@ -17,17 +18,17 @@ import (
 )
 
 // newBackfillConversationScalarsCmd builds the one-shot scalar-backfill command.
-// It reads every conversation clyde knows from the on-disk index and sends each
-// conversation's workspace root and archived status to the lm-semantic-search
-// engine, which writes them onto the rows whose workspace_root is empty,
-// preserving each row's dense vector so nothing is re-embedded. It is read-only
-// by default and writes only when --execute is set.
+// It reads every conversation clyde knows from the on-disk index and writes each
+// conversation's workspace root and archived status onto the rows with an empty
+// workspace_root in the Milvus conversation collection. Each row keeps its dense
+// vector, and nothing is re-embedded. It is read-only by default and writes only
+// when --execute is set.
 func newBackfillConversationScalarsCmd(f *cli.Factory) *cobra.Command {
 	execute := false
 	cmd := &cobra.Command{
 		Use:     "backfill-conversation-scalars",
 		Short:   "Backfill workspace_root and archived onto existing conversation rows",
-		Long:    "Send each conversation's workspace root and archived status to the lm-semantic-search engine, which writes them onto the rows whose workspace_root is empty, preserving each row's dense vector so nothing is re-embedded. Runs as a read-only dry-run by default, counting the would-change and orphan rows without writing; pass --execute to perform the write.",
+		Long:    "Write each conversation's workspace root and archived status onto the rows with an empty workspace_root in the Milvus conversation collection. Each row keeps its dense vector, and nothing is re-embedded. Runs as a read-only dry-run by default, counting the would-change and orphan rows without writing; pass --execute to perform the write.",
 		Example: "clyde daemon backfill-conversation-scalars\nclyde daemon backfill-conversation-scalars --execute",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -54,11 +55,11 @@ type conversationDocumentBackfillIndex interface {
 
 type conversationDocumentBackfillClient interface {
 	SyncConversationManifest(context.Context, string, []semsearch.Fingerprint) ([]string, error)
-	ReexamineConversationDocuments(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
-	Close() error
+	UpsertConversationDocuments(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
+	Close(context.Context) error
 }
 
-type conversationDocumentBackfillDialer func(context.Context, string) (conversationDocumentBackfillClient, error)
+type conversationDocumentBackfillDialer func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error)
 
 func newBackfillConversationDocumentsCmd(f *cli.Factory) *cobra.Command {
 	execute := false
@@ -69,7 +70,7 @@ func newBackfillConversationDocumentsCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "backfill-conversation-documents",
 		Short:   "Force selected conversation documents back into semantic search",
-		Long:    "Build semantic conversation documents from the current Clyde conversation index and optionally force those selected documents back into lm-semantic-search. Runs as a read-only dry-run by default; pass --execute to upsert documents. A bare --execute with no --conversation and no --limit reexamines the entire corpus and is refused unless --all is passed. Pass --after <id> (alias --cursor) to resume a bounded --limit run after a conversation id; the result prints the next cursor to chain runs.",
+		Long:    "Build semantic conversation documents from the current Clyde conversation index and write the rows that the Milvus conversation collection lacks for the selected conversations. Runs as a read-only dry-run by default; pass --execute to upsert documents. A bare --execute with no --conversation and no --limit reexamines the entire corpus and is refused unless --all is passed. Pass --after <id> (alias --cursor) to resume a bounded --limit run after a conversation id; the result prints the next cursor to chain runs.",
 		Example: "clyde daemon backfill-conversation-documents --limit 10\nclyde daemon backfill-conversation-documents --limit 10 --after claude:abc --execute\nclyde daemon backfill-conversation-documents --conversation codex:abc --execute\nclyde daemon backfill-conversation-documents --execute --all",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -108,12 +109,12 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 		return fmt.Errorf("list conversations: %w", err)
 	}
 	entries := buildBackfillEntries(records)
-	client, err := semsearch.Dial(ctx, cfg.Conversation.Semantic.SocketPath)
+	client, err := daemonsvc.OpenConversationSearchClient(ctx, cfg.Conversation.Semantic)
 	if err != nil {
-		slog.ErrorContext(ctx, "cli.daemon.backfill.dial_failed", "concern", "cli.daemon", "component", "cli", "err", err)
-		return fmt.Errorf("dial semantic engine: %w", err)
+		slog.ErrorContext(ctx, "cli.daemon.backfill.open_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return fmt.Errorf("open conversation semantic client: %w", err)
 	}
-	defer func() { _ = client.Close() }()
+	defer func() { _ = client.Close(context.WithoutCancel(ctx)) }()
 	changed, orphan, err := client.BackfillConversationScalars(ctx, cfg.Conversation.Semantic.CollectionID, entries, dryRun)
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.backfill.failed", "concern", "cli.daemon", "component", "cli", "dry_run", dryRun, "err", err)
@@ -135,8 +136,8 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 
 func runBackfillConversationDocuments(ctx context.Context, f *cli.Factory, options backfillConversationDocumentsOptions) error {
 	index := daemonsvc.NewConversationIndex()
-	return runBackfillConversationDocumentsWithDeps(ctx, f, options, index, func(dialCtx context.Context, socketPath string) (conversationDocumentBackfillClient, error) {
-		return semsearch.Dial(dialCtx, socketPath)
+	return runBackfillConversationDocumentsWithDeps(ctx, f, options, index, func(openCtx context.Context, semanticCfg config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
+		return daemonsvc.OpenConversationSearchClient(openCtx, semanticCfg)
 	})
 }
 
@@ -206,22 +207,22 @@ func runBackfillConversationDocumentsWithDeps(
 	}
 	if len(docs) == 0 {
 		// Nothing to upsert: either no conversation was selected, or every selected
-		// conversation failed to load/build (all skipped). Skip the engine round
-		// trip and report the skips instead of queuing an empty upsert job.
+		// conversation failed to load/build (all skipped). Skip opening the Milvus
+		// connection and report the skips.
 		return writeBackfillConversationDocumentsResult(ctx, f, "Sent", len(selectedRecords), 0, skipped, "", 0, nextCursor)
 	}
-	client, err := dial(ctx, cfg.Conversation.Semantic.SocketPath)
+	client, err := dial(ctx, cfg.Conversation.Semantic)
 	if err != nil {
-		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.dial_failed", "concern", "cli.daemon", "component", "cli", "err", err)
-		return fmt.Errorf("dial semantic engine: %w", err)
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.open_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return fmt.Errorf("open conversation semantic client: %w", err)
 	}
-	defer func() { _ = client.Close() }()
+	defer func() { _ = client.Close(context.WithoutCancel(ctx)) }()
 	needed, err := client.SyncConversationManifest(ctx, cfg.Conversation.Semantic.CollectionID, manifest)
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.sync_failed", "concern", "cli.daemon", "component", "cli", "err", err)
 		return fmt.Errorf("sync selected conversation manifest: %w", err)
 	}
-	jobID, err := client.ReexamineConversationDocuments(ctx, cfg.Conversation.Semantic.CollectionID, docs, manifest)
+	jobID, err := client.UpsertConversationDocuments(ctx, cfg.Conversation.Semantic.CollectionID, docs, manifest)
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.upsert_failed", "concern", "cli.daemon", "component", "cli", "documents", len(docs), "err", err)
 		return fmt.Errorf("upsert selected conversation documents: %w", err)

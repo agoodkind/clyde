@@ -42,7 +42,7 @@ var dialInitialSemantic = func(ctx context.Context, semanticCfg config.Conversat
 	// The Milvus client retries an unreachable address until its context ends.
 	openCtx, cancel := context.WithTimeout(ctx, semanticDialRegisterTimeout)
 	defer cancel()
-	client, err := openConversationSearchClient(openCtx, semanticCfg)
+	client, err := OpenConversationSearchClient(openCtx, semanticCfg)
 	if err != nil {
 		return nil, err
 	}

@@ -374,7 +374,7 @@ func TestBackfillConversationDocumentsDryRunSelectsLimit(t *testing.T) {
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: true, Limit: 2, ConversationID: ""},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			dialCalled = true
 			return nil, errors.New("unexpected dial")
 		},
@@ -424,7 +424,7 @@ func TestBackfillConversationDocumentsDryRunReportsSkippedConversations(t *testi
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: true, Limit: 0, ConversationID: ""},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			return nil, errors.New("unexpected dial")
 		},
 	)
@@ -458,7 +458,7 @@ func TestBackfillConversationDocumentsDryRunSelectsConversation(t *testing.T) {
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: true, Limit: 0, ConversationID: "codex:target"},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			return nil, errors.New("unexpected dial")
 		},
 	)
@@ -486,13 +486,13 @@ func (c *fakeReexamineBackfillClient) SyncConversationManifest(_ context.Context
 	return nil, nil
 }
 
-func (c *fakeReexamineBackfillClient) ReexamineConversationDocuments(_ context.Context, _ string, docs []semsearch.SemDoc, _ []semsearch.Fingerprint) (string, error) {
+func (c *fakeReexamineBackfillClient) UpsertConversationDocuments(_ context.Context, _ string, docs []semsearch.SemDoc, _ []semsearch.Fingerprint) (string, error) {
 	c.reexamineCalls++
 	c.deliveredDocs = len(docs)
 	return "job-test", nil
 }
 
-func (c *fakeReexamineBackfillClient) Close() error {
+func (c *fakeReexamineBackfillClient) Close(context.Context) error {
 	c.closed = true
 	return nil
 }
@@ -518,7 +518,7 @@ func TestBackfillConversationDocumentsExecuteReexamines(t *testing.T) {
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: false, Limit: 0, ConversationID: "claude:one"},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			return client, nil
 		},
 	)
@@ -561,7 +561,7 @@ func TestBackfillConversationDocumentsUncappedExecuteRefusedWithoutFlag(t *testi
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: false, Limit: 0, ConversationID: "", Cursor: "", AllowFullReexamine: false},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			dialCalled = true
 			return nil, errors.New("unexpected dial")
 		},
@@ -603,7 +603,7 @@ func TestBackfillConversationDocumentsUncappedExecuteAllowedWithFlag(t *testing.
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: false, Limit: 0, ConversationID: "", Cursor: "", AllowFullReexamine: true},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			return client, nil
 		},
 	)
@@ -646,7 +646,7 @@ func TestBackfillConversationDocumentsCursorRunPrintsNextCursor(t *testing.T) {
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: true, Limit: 2, ConversationID: "", Cursor: "claude:one"},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			return nil, errors.New("unexpected dial")
 		},
 	)
@@ -686,7 +686,7 @@ func TestBackfillConversationDocumentsCursorWithoutLimitRefused(t *testing.T) {
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: false, Limit: 0, ConversationID: "", Cursor: "claude:one", AllowFullReexamine: false},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			dialCalled = true
 			return nil, errors.New("unexpected dial")
 		},
@@ -732,7 +732,7 @@ func TestBackfillConversationDocumentsCursorSuppressedWhenSkipped(t *testing.T) 
 		testDocumentBackfillFactory(output),
 		backfillConversationDocumentsOptions{DryRun: true, Limit: 2, ConversationID: "", Cursor: "claude:one"},
 		&index,
-		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+		func(context.Context, config.ConversationSemanticConfig) (conversationDocumentBackfillClient, error) {
 			return nil, errors.New("unexpected dial")
 		},
 	)
