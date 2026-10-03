@@ -39,7 +39,10 @@ func (connection initialSemanticConnection) Close() error {
 }
 
 var dialInitialSemantic = func(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (initialSemanticClient, error) {
-	client, err := openConversationSearchClient(ctx, semanticCfg)
+	// The Milvus client retries an unreachable address until its context ends.
+	openCtx, cancel := context.WithTimeout(ctx, semanticDialRegisterTimeout)
+	defer cancel()
+	client, err := openConversationSearchClient(openCtx, semanticCfg)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,6 @@
 package vectorsearch
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -119,25 +118,19 @@ func (store *checkpointStore) needed(collectionName string, ids []string, finger
 }
 
 // record stores one conversation's fingerprint. It writes the file before it
-// updates the memory copy. A failed write is logged and returned, and the
-// conversation stays needed after a restart.
-func (store *checkpointStore) record(ctx context.Context, collectionName string, conversationID string, fingerprint string) error {
+// updates the memory copy. writeCheckpointFile logs a failed write. After a
+// failed write the memory copy is not updated, and the conversation stays
+// needed after a restart.
+func (store *checkpointStore) record(collectionName string, conversationID string, fingerprint string) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	recorded := store.records(collectionName)
 	if store.root != "" {
 		if err := writeCheckpointFile(filepath.Join(store.root, collectionName), conversationID, fingerprint); err != nil {
-			slog.WarnContext(ctx, "conversation.vectorsearch.checkpoint_write_failed",
-				"concern", "conversation.semantic",
-				"component", "conversation",
-				"conversation_id", conversationID,
-				"err", err,
-			)
-			return fmt.Errorf("write checkpoint of %s: %w", conversationID, err)
+			return
 		}
 	}
 	recorded[conversationID] = fingerprint
-	return nil
 }
 
 // writeCheckpointFile writes one record atomically. The content is written to a
@@ -145,10 +138,11 @@ func (store *checkpointStore) record(ctx context.Context, collectionName string,
 func writeCheckpointFile(directory string, conversationID string, fingerprint string) (failure error) {
 	defer func() {
 		if failure != nil {
-			slog.Warn("conversation.vectorsearch.checkpoint_file_write_failed",
+			slog.Warn("conversation.vectorsearch.checkpoint_write_failed",
 				"concern", "conversation.semantic",
 				"component", "conversation",
 				"directory", directory,
+				"conversation_id", conversationID,
 				"err", failure,
 			)
 			return

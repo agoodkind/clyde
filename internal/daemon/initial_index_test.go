@@ -188,7 +188,7 @@ func configureInitialIndexTest(t *testing.T, ingestionEnabled bool) {
 	}
 	body := "[conversation.semantic]\ningestion_enabled = false\nsearch_enabled = false\n"
 	if ingestionEnabled {
-		body = "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\n"
+		body = "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\nmilvus_address = \"[::1]:1\"\n"
 	}
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)

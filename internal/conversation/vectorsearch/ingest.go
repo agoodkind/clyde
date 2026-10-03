@@ -129,14 +129,7 @@ func (c *Client) UpsertConversationDocuments(
 		if !found {
 			continue
 		}
-		if err := c.checkpoint.record(ctx, collectionName, conversationID, fingerprint); err != nil {
-			slog.WarnContext(ctx, "conversation.vectorsearch.checkpoint_unrecorded",
-				"concern", "conversation.semantic",
-				"component", "conversation",
-				"conversation_id", conversationID,
-				"err", err,
-			)
-		}
+		c.checkpoint.record(collectionName, conversationID, fingerprint)
 	}
 	slog.InfoContext(ctx, "conversation.vectorsearch.upsert_completed",
 		"concern", "conversation.semantic",
