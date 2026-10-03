@@ -16,7 +16,7 @@ const (
 	// DefaultSearchLimit keeps cross-conversation discovery results compact.
 	DefaultSearchLimit = 20
 	// MaxSearchLimit bounds transcript discovery output.
-	MaxSearchLimit = 100
+	MaxSearchLimit = 50
 
 	searchSnippetRunes = 240
 )
@@ -45,15 +45,12 @@ type ListResult struct {
 
 // SearchConversationsOptions filters a bounded transcript discovery pass.
 type SearchConversationsOptions struct {
-	Query            string
-	Limit            int
-	Offset           int
-	Provider         Provider
-	WorkspaceRoot    string
-	IncludeArchived  bool
-	IncludeSubagents bool
-	// ConversationIDs distinguishes an absent membership filter from an explicit empty set.
-	ConversationIDs []string
+	Query           string
+	Limit           int
+	Offset          int
+	Provider        Provider
+	WorkspaceRoot   string
+	IncludeArchived bool
 	// Roles, FromUnix, UntilUnix, and MinScore narrow retrieval by row
 	// attributes. PerConversationLimit caps hits per conversation.
 	Roles                []string
@@ -68,8 +65,8 @@ type SearchConversationsOptions struct {
 	// inline on the match. Zero means the daemon's default small window.
 	ContextWindow int
 	// Cursor is the NextCursor of a previous page with the same query and
-	// filters. Empty starts a new search. A source without cursor support
-	// refuses a nonempty cursor.
+	// filters. Empty starts a new search. The current search source refuses a
+	// nonempty cursor.
 	Cursor string
 }
 
@@ -96,12 +93,11 @@ const (
 // SearchMatch is one matching message returned during cross-conversation
 // discovery.
 type SearchMatch struct {
-	SourceIdentity *SearchSourceIdentity
-	Record         Record
-	MessageIndex   int
-	Role           string
-	Timestamp      time.Time
-	Snippet        string
+	Record       Record
+	MessageIndex int
+	Role         string
+	Timestamp    time.Time
+	Snippet      string
 	// Score is the source's retrieval relevance.
 	Score float64
 	// ContextWindow is the rendered messages surrounding this hit.
@@ -113,17 +109,6 @@ type SearchMatch struct {
 	// ContextState states whether the source verified ContextWindow against the
 	// source transcript. The SearchContextState constants define each value.
 	ContextState SearchContextState
-}
-
-// SearchSourceIdentity identifies an original selected field span independently
-// of the search engine's storage key.
-type SearchSourceIdentity struct {
-	ConversationID  string `json:"conversation_id"`
-	MessageIndex    int    `json:"message_index"`
-	ContentKind     string `json:"content_kind"`
-	ToolIndex       int    `json:"tool_index"`
-	SourceByteStart int64  `json:"source_byte_start"`
-	SourceByteEnd   int64  `json:"source_byte_end"`
 }
 
 // SearchConversationsResult is a bounded set of candidate conversations.

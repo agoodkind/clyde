@@ -21,24 +21,21 @@ import (
 // optional conversation id positional selects one conversation; the remaining
 // flags decide whether the operation searches, reads, windows, or browses.
 type searchInput struct {
-	Query                string
-	ConversationID       string
-	Provider             string
-	WorkspaceRoot        string
-	Roles                string
-	After                string
-	Until                string
-	Limit                int
-	Offset               int
-	Around               int
-	Window               int
-	LoadRules            string
-	Cursor               string
-	MinScore             float64
-	IncludeArchived      bool
-	IncludeSubagents     bool
-	ConversationIDs      []string
-	PerConversationLimit int
+	Query           string
+	ConversationID  string
+	Provider        string
+	WorkspaceRoot   string
+	Roles           string
+	After           string
+	Until           string
+	Limit           int
+	Offset          int
+	Around          int
+	Window          int
+	LoadRules       string
+	Cursor          string
+	MinScore        float64
+	IncludeArchived bool
 }
 
 func (searchInput) isClispecInput() {}
@@ -181,8 +178,6 @@ func searchParams() []Param[searchInput] {
 	return []Param[searchInput]{
 		StringParam("query", "Text or semantic query to find in transcript messages.", "", false,
 			func(in *searchInput, v string) { in.Query = v }),
-		StringSliceParam("conversation_ids", "Restrict search to these conversation IDs; an explicit empty list matches nothing.", nil,
-			func(in *searchInput, v []string) { in.ConversationIDs = v }),
 		StringParam("provider", "Provider filter: "+formatConversationProviderList(false)+".", "", false,
 			func(in *searchInput, v string) { in.Provider = v }),
 		StringParam("workspace", "Workspace root filter.", "", false,
@@ -203,14 +198,10 @@ func searchParams() []Param[searchInput] {
 			func(in *searchInput, v int) { in.Window = v }),
 		StringParam("load_rules", "Loading-rules tag from the search hit being read around, so the window counts over the same message sequence its message index refers to. Leave empty for hits without one.", "", false,
 			func(in *searchInput, v string) { in.LoadRules = v }),
-		StringParam("cursor", "Continuation cursor from a previous search result's next_cursor, with the same query and filters. Requires query.", "", false,
+		StringParam("cursor", "Continuation cursor from a previous search result's next_cursor, with the same query and filters. Requires query. The current search source returns no next_cursor and refuses a cursor; page with offset.", "", false,
 			func(in *searchInput, v string) { in.Cursor = v }),
 		FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
 			func(in *searchInput, v float64) { in.MinScore = v }),
-		IntParam("per_conversation_limit", "Maximum matches per conversation; zero is uncapped.", 0,
-			func(in *searchInput, v int) { in.PerConversationLimit = v }),
-		BoolParam("include_subagents", "Include stored subagent conversations.", false,
-			func(in *searchInput, v bool) { in.IncludeSubagents = v }),
 		BoolParam("include_archived", "Include archived conversations.", false,
 			func(in *searchInput, v bool) { in.IncludeArchived = v }),
 	}
@@ -218,24 +209,21 @@ func searchParams() []Param[searchInput] {
 
 func newSearchInput() searchInput {
 	return searchInput{
-		Query:                "",
-		ConversationID:       "",
-		Provider:             "",
-		WorkspaceRoot:        "",
-		Roles:                "",
-		After:                "",
-		Until:                "",
-		Limit:                conv.DefaultSearchLimit,
-		Offset:               0,
-		Around:               -1,
-		Window:               5,
-		LoadRules:            "",
-		Cursor:               "",
-		MinScore:             0,
-		IncludeArchived:      false,
-		IncludeSubagents:     false,
-		ConversationIDs:      nil,
-		PerConversationLimit: 0,
+		Query:           "",
+		ConversationID:  "",
+		Provider:        "",
+		WorkspaceRoot:   "",
+		Roles:           "",
+		After:           "",
+		Until:           "",
+		Limit:           conv.DefaultSearchLimit,
+		Offset:          0,
+		Around:          -1,
+		Window:          5,
+		LoadRules:       "",
+		Cursor:          "",
+		MinScore:        0,
+		IncludeArchived: false,
 	}
 }
 
@@ -308,7 +296,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         mode,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, IncludeSubagents: false, ConversationIDs: nil, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     conv.ListOptions{Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", Query: "", IncludeArchived: false, All: false},
 			Conversation: conversation,
 			Around:       in.Around,
@@ -322,7 +310,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         searchModeBrowse,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, IncludeSubagents: false, ConversationIDs: nil, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     opts,
 			Conversation: "",
 			Around:       in.Around,
@@ -426,9 +414,7 @@ func searchConversationsOptionsFromInput(in searchInput) (conv.SearchConversatio
 		FromUnix:             fromUnix,
 		UntilUnix:            untilUnix,
 		MinScore:             in.MinScore,
-		PerConversationLimit: in.PerConversationLimit,
-		IncludeSubagents:     in.IncludeSubagents,
-		ConversationIDs:      in.ConversationIDs,
+		PerConversationLimit: 0,
 		ConversationID:       strings.TrimSpace(in.ConversationID),
 		ContextWindow:        in.Window,
 		Cursor:               strings.TrimSpace(in.Cursor),

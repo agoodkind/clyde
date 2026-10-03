@@ -16,10 +16,8 @@ type ConversationConfig struct {
 	//
 	// It selects whole conversations, which is a different level from
 	// [ConversationSemanticConfig.IndexedContent]. A conversation this hides is
-	// absent from every clyde listing and search surface, and the engine retains
-	// whatever a short manifest omits, so hiding one removes nothing already
-	// stored. Embedded semantic ingestion ignores this setting and admits
-	// subagent conversations by [ConversationSemanticConfig.IncludeSubagents].
+	// absent from every clyde surface, and the engine retains whatever a short
+	// manifest omits, so hiding one removes nothing already stored.
 	IncludeSubagentConversations bool                       `json:"includeSubagentConversations,omitempty" toml:"include_subagent_conversations,omitempty"`
 	Cursor                       CursorConversationConfig   `json:"cursor,omitzero" toml:"cursor,omitempty"`
 	Semantic                     ConversationSemanticConfig `json:"semantic,omitzero" toml:"semantic,omitempty"`
@@ -35,29 +33,40 @@ func (cursor CursorConversationConfig) RawIndexingEnabled() bool {
 	return cursor.Enabled == nil || *cursor.Enabled
 }
 
-// ConversationSemanticConfig configures direct library ingestion and search.
-// Ingestion embeds selected document content and writes occurrences. Search
-// embeds query text and reads committed occurrences independently of ingestion.
+// ConversationSemanticConfig configures conversation semantic search: offering
+// conversations to the search engine, and reading them back.
+//
+// The two are separate settings because they carry different costs. Offering
+// conversations embeds text, which occupies the GPU and grows the store, so an
+// operator has real reasons to stop it. Reading queries a corpus that already
+// exists and costs nothing, so stopping the writes does not put the stored
+// conversations out of reach.
 type ConversationSemanticConfig struct {
 	IngestionEnabled bool   `json:"ingestionEnabled,omitempty" toml:"ingestion_enabled,omitempty"`
 	SearchEnabled    bool   `json:"searchEnabled,omitempty" toml:"search_enabled,omitempty"`
+	SocketPath       string `json:"socketPath,omitempty" toml:"socket_path,omitempty"`
 	CollectionID     string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
-	// ProjectionProfile explicitly selects source identity rules. p1 is
-	// readable without raw context verification; new ingestion requires p3.
-	ProjectionProfile ConversationProjectionProfile `json:"projectionProfile,omitempty" toml:"projection_profile,omitempty"`
 	// IndexedContent names the content kinds offered to the search engine, using
 	// the same selector vocabulary the export surface accepts. The names and their
 	// validation belong to the conversation package's content-kind taxonomy, which
 	// this package cannot import without a cycle, so the values are carried as
 	// written and resolved where they are used.
 	//
-	// It selects message parts independently of whole conversation visibility.
-	// Previously committed occurrences remain stored after selector changes.
+	// It selects parts of a message, which is a different level from
+	// [ConversationConfig.IncludeSubagentConversations]. The conversation is still
+	// delivered, so the engine reconciles the message rows it stops receiving
+	// rather than retaining them.
 	//
 	// An absent or empty list means the indexing default. Naming no kinds is not
 	// how an operator turns indexing off, because that would quietly stop
 	// embedding everything; `ingestion_enabled = false` is.
 	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
+
+	// Backend selects the implementation behind ingestion and search. An empty
+	// value selects the lm-semantic-search daemon at SocketPath. The embedded
+	// value selects the in-process library configured by the keys below, and
+	// the loader rejects it until this build contains that runtime.
+	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
 
 	// IndexedProviders and IndexedRoles limit embedded ingestion and search to
 	// the listed providers and message roles. Empty lists select every one.
@@ -79,11 +88,6 @@ type ConversationSemanticConfig struct {
 	MilvusAddress    string `json:"milvusAddress,omitempty" toml:"milvus_address,omitempty"`
 	MilvusDatabase   string `json:"milvusDatabase,omitempty" toml:"milvus_database,omitempty"`
 	MilvusCollection string `json:"milvusCollection,omitempty" toml:"milvus_collection,omitempty"`
-	// MilvusQueryMode selects normal or large_topk. Empty uses normal.
-	// Large mode requires a positive score window; zero verification rows uses 4096.
-	MilvusQueryMode          ConversationSemanticMilvusQueryMode `json:"milvusQueryMode,omitempty" toml:"milvus_query_mode,omitempty"`
-	MilvusMaxScoreWindow     int                                 `json:"milvusMaxScoreWindow,omitempty" toml:"milvus_max_score_window,omitempty"`
-	MilvusMaxVerifyBatchRows int                                 `json:"milvusMaxVerifyBatchRows,omitempty" toml:"milvus_max_verify_batch_rows,omitempty"`
 
 	// EmbeddingBaseURL is the OpenAI-compatible embedding endpoint. The loader
 	// accepts at most one of EmbeddingAPIKeyEnv and EmbeddingAPIKeyFile, and a
@@ -141,28 +145,17 @@ type ConversationSemanticConfig struct {
 	RRFK   int      `json:"rrfK,omitempty" toml:"rrf_k,omitempty"`
 }
 
-// ConversationSemanticMilvusQueryMode selects the Milvus score request mode.
-type ConversationSemanticMilvusQueryMode string
+// ConversationSemanticBackend is the implementation behind conversation
+// semantic ingestion and search.
+type ConversationSemanticBackend string
 
 const (
-	// ConversationSemanticMilvusQueryModeDefault uses the adapter's normal mode.
-	ConversationSemanticMilvusQueryModeDefault ConversationSemanticMilvusQueryMode = ""
-	// ConversationSemanticMilvusQueryModeNormal limits score requests to 16384 IDs.
-	ConversationSemanticMilvusQueryModeNormal ConversationSemanticMilvusQueryMode = "normal"
-	// ConversationSemanticMilvusQueryModeLargeTopK requires an explicit score window.
-	ConversationSemanticMilvusQueryModeLargeTopK ConversationSemanticMilvusQueryMode = "large_topk"
-)
-
-// ConversationProjectionProfile selects immutable occurrence identity rules.
-type ConversationProjectionProfile string
-
-const (
-	// ConversationProjectionProfileLegacy reads normalized legacy excerpts.
-	ConversationProjectionProfileLegacy ConversationProjectionProfile = "p1"
-	// ConversationProjectionProfileOriginal preserves selected source text.
-	ConversationProjectionProfileOriginal ConversationProjectionProfile = "p2"
-	// ConversationProjectionProfileSourceSpan records original prepared spans.
-	ConversationProjectionProfileSourceSpan ConversationProjectionProfile = "p3"
+	// ConversationSemanticBackendLMS selects the lm-semantic-search daemon. The
+	// empty value selects it too.
+	ConversationSemanticBackendLMS ConversationSemanticBackend = "lms"
+	// ConversationSemanticBackendEmbedded selects the in-process shared search
+	// library.
+	ConversationSemanticBackendEmbedded ConversationSemanticBackend = "embedded"
 )
 
 // FeedsEngine reports whether the daemon offers conversations to the search
@@ -177,7 +170,8 @@ func (semantic ConversationSemanticConfig) AnswersSearch() bool {
 	return semantic.SearchEnabled
 }
 
-// UsesEngine reports whether ingestion or search requires the library.
+// UsesEngine reports whether either direction needs a connection to the engine,
+// which is what decides whether the daemon builds one.
 func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
@@ -186,6 +180,7 @@ func applyConversationDefaults(conversation *ConversationConfig) error {
 	if conversation == nil {
 		return nil
 	}
+	conversation.Semantic.SocketPath = strings.TrimSpace(conversation.Semantic.SocketPath)
 	conversation.Semantic.CollectionID = strings.TrimSpace(conversation.Semantic.CollectionID)
 	if conversation.Semantic.CollectionID == "" {
 		conversation.Semantic.CollectionID = defaultConversationSemanticCollectionID

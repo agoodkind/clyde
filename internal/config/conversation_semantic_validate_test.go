@@ -19,7 +19,6 @@ func loadConversationSemanticTestConfig(t *testing.T, contents string) (*Config,
 // embeddedSemanticSettings is a complete embedded backend section body without
 // the backend key.
 const embeddedSemanticSettings = `catalog_path = "/tmp/clyde-test/catalog.sqlite"
-projection_profile = "p3"
 lock_path = "/tmp/clyde-test/catalog.lock"
 pool_id = "conversations-v1"
 milvus_address = "localhost:19530"
@@ -32,11 +31,37 @@ vector_dimension = 4096
 normalization = "l2"
 `
 
-// TestConversationSemanticEmbeddedSettingsParse checks typed library settings.
+// TestConversationSemanticProductionConfigStillLoads loads the key set that
+// production uses today and confirms that the loader accepts it and selects
+// the lm-semantic-search daemon.
+func TestConversationSemanticProductionConfigStillLoads(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadConversationSemanticTestConfig(t, `[conversation.semantic]
+ingestion_enabled = true
+search_enabled = true
+socket_path = "/tmp/lms.sock"
+collection_id = "clyde-conversations"
+`)
+	if err != nil {
+		t.Fatalf("load production-shaped config: %v", err)
+	}
+	semantic := cfg.Conversation.Semantic
+	if semantic.Backend != "" {
+		t.Fatalf("backend = %q, want empty for the lm-semantic-search daemon", semantic.Backend)
+	}
+	if !semantic.FeedsEngine() || !semantic.AnswersSearch() {
+		t.Fatalf("semantic directions = feeds %v answers %v, want both true", semantic.FeedsEngine(), semantic.AnswersSearch())
+	}
+}
+
+// TestConversationSemanticEmbeddedSettingsParse loads every embedded key under
+// the lms backend and checks the typed values, including an explicit bm25_b
+// of zero.
 func TestConversationSemanticEmbeddedSettingsParse(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\n"+embeddedSemanticSettings+`indexed_providers = [" claude ", ""]
+	cfg, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"lms\"\n"+embeddedSemanticSettings+`indexed_providers = [" claude ", ""]
 indexed_roles = ["user"]
 include_archived = true
 include_subagents = true
@@ -63,9 +88,12 @@ bm25_b = 0.0
 rrf_k = 40
 `)
 	if err != nil {
-		t.Fatalf("load embedded settings: %v", err)
+		t.Fatalf("load embedded settings under the lms backend: %v", err)
 	}
 	semantic := cfg.Conversation.Semantic
+	if semantic.Backend != ConversationSemanticBackendLMS {
+		t.Fatalf("backend = %q, want lms", semantic.Backend)
+	}
 	if len(semantic.IndexedProviders) != 1 || semantic.IndexedProviders[0] != "claude" {
 		t.Fatalf("indexed providers = %q, want [claude]", semantic.IndexedProviders)
 	}
@@ -93,6 +121,7 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 		body    string
 		wantKey string
 	}{
+		{name: "unknown backend", body: "backend = \"remote\"\n", wantKey: "conversation.semantic.backend"},
 		{name: "negative timeout", body: "query_timeout = \"-1s\"\n", wantKey: "conversation.semantic.query_timeout"},
 		{name: "negative budget", body: "max_snapshot_bytes = -1\n", wantKey: "conversation.semantic.max_snapshot_bytes"},
 		{name: "zero attempts", body: "embedding_max_attempts = 0\n", wantKey: "conversation.semantic.embedding_max_attempts"},
@@ -115,37 +144,28 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 }
 
 // TestConversationSemanticEmbeddedBackendChecksRequiredSettings selects the
-// embedded backend four times. The first load omits pool_id and fails on that
+// embedded backend three times. The first load omits pool_id and fails on that
 // key. The second load sets a relative catalog_path and fails on the absolute
-// path requirement. The third load sets a complete ingestion-only section and
-// succeeds. The fourth load enables embedded search and ingestion together.
+// path requirement. The third load sets a complete section and fails because
+// this build has no embedded runtime.
 func TestConversationSemanticEmbeddedBackendChecksRequiredSettings(t *testing.T) {
 	t.Parallel()
 
 	withoutPool := strings.Replace(embeddedSemanticSettings, "pool_id = \"conversations-v1\"\n", "", 1)
-	_, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\ningestion_enabled = true\n"+withoutPool)
+	_, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\n"+withoutPool)
 	if err == nil || !strings.Contains(err.Error(), "conversation.semantic.pool_id is required") {
 		t.Fatalf("missing pool_id error = %v, want the pool_id requirement", err)
 	}
 
 	relativeCatalog := strings.Replace(embeddedSemanticSettings, "/tmp/clyde-test/catalog.sqlite", "catalog.sqlite", 1)
-	_, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\ningestion_enabled = true\n"+relativeCatalog)
+	_, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\n"+relativeCatalog)
 	if err == nil || !strings.Contains(err.Error(), "conversation.semantic.catalog_path must be an absolute path") {
 		t.Fatalf("relative catalog_path error = %v, want the absolute path requirement", err)
 	}
 
-	cfg, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\ningestion_enabled = true\n"+embeddedSemanticSettings)
-	if err != nil {
-		t.Fatalf("load complete ingestion-only embedded section: %v", err)
-	}
-	semantic := cfg.Conversation.Semantic
-	if !semantic.FeedsEngine() || semantic.AnswersSearch() {
-		t.Fatalf("feeds/answers = %v/%v, want true/false", semantic.FeedsEngine(), semantic.AnswersSearch())
-	}
-
-	cfg, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\nsearch_enabled = true\ningestion_enabled = true\n"+embeddedSemanticSettings)
-	if err != nil || !cfg.Conversation.Semantic.AnswersSearch() {
-		t.Fatalf("embedded section with search enabled error = %v, want enabled search", err)
+	_, err = loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \"embedded\"\n"+embeddedSemanticSettings)
+	if err == nil || !strings.Contains(err.Error(), "is not available in this Clyde build") {
+		t.Fatalf("complete embedded section error = %v, want the unavailable runtime error", err)
 	}
 }
 
@@ -159,19 +179,5 @@ func TestConversationSemanticSettingChangeRoutesToReload(t *testing.T) {
 	newCfg.Conversation.Semantic.QueryWorkers = 4
 	if route := ClassifyConfigChange(oldCfg, newCfg); route != RouteReload {
 		t.Fatalf("route = %s, want reload", route)
-	}
-}
-
-func TestEmbeddedIngestionRequiresSourceSpanProjectionProfile(t *testing.T) {
-	t.Parallel()
-	for _, profile := range []string{"", "p1", "p2", "unknown"} {
-		t.Run(profile, func(t *testing.T) {
-			t.Parallel()
-			settings := strings.Replace(embeddedSemanticSettings, "projection_profile = \"p3\"", "projection_profile = \""+profile+"\"", 1)
-			_, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\ningestion_enabled = true\n"+settings)
-			if err == nil || !strings.Contains(err.Error(), "conversation.semantic.projection_profile") {
-				t.Fatalf("profile %q ingestion = %v, want explicit p3 requirement", profile, err)
-			}
-		})
 	}
 }

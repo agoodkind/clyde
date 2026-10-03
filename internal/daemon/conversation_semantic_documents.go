@@ -9,45 +9,9 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/transcript"
 )
-
-// SemanticDocument contains selected conversation fields before occurrence preparation.
-type SemanticDocument struct {
-	ConversationID string
-	// ParentConversationID is the derived conversation id of this conversation's
-	// lineage parent, or "" when the conversation has no resolvable parent. It is
-	// the same for every message of one conversation so forks group with parents
-	// in the index.
-	ParentConversationID string
-	MessageIndex         int32
-	Role                 string
-	TimestampUnix        int64
-	Text                 string
-	Tools                []SemanticToolCall
-	Thinking             string
-	// WorkspaceRoot is the conversation's workspace, sent so the engine stores it
-	// as a filterable scalar column. The same for every message of one
-	// conversation; empty when unknown.
-	WorkspaceRoot string
-	// Archived is the conversation's archived status, sent so the engine stores
-	// it as a filterable scalar column. The same for every message of one
-	// conversation.
-	Archived bool
-	// LoadRules is the opaque loading-rules tag naming the rules that produced
-	// MessageIndex, stored per row so a reader can rebuild the same message
-	// sequence. The same for every document of one delivery.
-	LoadRules string
-}
-
-// SemanticToolCall contains provider-rendered tool fields selected for indexing.
-type SemanticToolCall struct {
-	Name     string
-	Display  string
-	LangHint string
-	Output   string
-	IsError  bool
-}
 
 // SemanticProjectionHash hashes one conversation's projected documents: every
 // byte the engine would store, in delivery order. Two projections hash equal
@@ -55,7 +19,7 @@ type SemanticToolCall struct {
 // tell a real content change from an artifact whose stamp moved with unchanged
 // bytes. Field and document boundaries are length-prefixed so concatenation
 // ambiguity cannot collide two different projections.
-func SemanticProjectionHash(docs []SemanticDocument) string {
+func SemanticProjectionHash(docs []semsearch.SemDoc) string {
 	hasher := sha256.New()
 	writeField := func(value string) {
 		var length [8]byte
@@ -108,7 +72,7 @@ func SemanticConversationLoadOptions(kinds conversation.ContentKindSet) conversa
 // that fails to load is content lost, and a counter that mixed them would hide
 // real loss behind routine policy.
 type SemanticConversationDocuments struct {
-	Docs          []SemanticDocument
+	Docs          []semsearch.SemDoc
 	PolicySkipped int
 	// InjectedStripped and SystemStripped total what the provider parsers
 	// removed or withheld while loading this conversation, taken from the load
@@ -144,7 +108,7 @@ func BuildSemanticConversationDocuments(
 	}
 	loadRules := conversation.LoadRulesTag(kinds)
 	built := SemanticConversationDocuments{
-		Docs:             make([]SemanticDocument, 0, len(messages)),
+		Docs:             make([]semsearch.SemDoc, 0, len(messages)),
 		PolicySkipped:    0,
 		InjectedStripped: 0,
 		SystemStripped:   0,
@@ -200,7 +164,7 @@ func BuildSemanticConversationDocuments(
 			built.PolicySkipped++
 			continue
 		}
-		built.Docs = append(built.Docs, SemanticDocument{
+		built.Docs = append(built.Docs, semsearch.SemDoc{
 			ConversationID:       record.ID,
 			ParentConversationID: parentConversationID,
 			MessageIndex:         int32(i),
@@ -226,16 +190,16 @@ func BuildSemanticConversationDocuments(
 // no tool kind drops the calls entirely.
 //
 // The projection stays structured so the engine can store each call separately.
-func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKindSet) []SemanticToolCall {
+func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKindSet) []semsearch.SemToolCall {
 	summariesOnly := kinds.Has(conversation.ContentKindToolSummaries)
 	withArguments := kinds.Has(conversation.ContentKindToolCalls)
 	withOutput := kinds.Has(conversation.ContentKindToolOutputs)
 	if !summariesOnly && !withArguments && !withOutput {
 		return nil
 	}
-	out := make([]SemanticToolCall, 0, len(tools))
+	out := make([]semsearch.SemToolCall, 0, len(tools))
 	for _, tool := range tools {
-		projected := SemanticToolCall{
+		projected := semsearch.SemToolCall{
 			Name:     tool.Name,
 			Display:  "",
 			LangHint: "",

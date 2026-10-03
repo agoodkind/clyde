@@ -18,6 +18,7 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/loginventory"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
@@ -53,9 +54,6 @@ type controlServer struct {
 	exportTokens       exportTokenConfig
 	providerStatsNow   func() time.Time
 	providerStatsTicks <-chan time.Time
-	// embeddedReconcile reconciles one conversation in the running embedded
-	// ingestion worker. Nil reports that no such worker runs.
-	embeddedReconcile *embeddedReconcileGate
 }
 
 // GetDaemonStatus reads only daemon-owned flags, connections, and listener handles.
@@ -64,6 +62,14 @@ func (s *controlServer) GetDaemonStatus(context.Context, *emptypb.Empty) (*clyde
 		return nil, status.Error(codes.Unavailable, "daemon runtime status is unavailable")
 	}
 	return s.runtimeStatus(), nil
+}
+
+// conversationSemanticSearchClient is the vector engine client adapted by
+// semanticConversationSearchSource. The semsearch client satisfies it and tests
+// supply a fake.
+type conversationSemanticSearchClient interface {
+	SearchConversations(ctx context.Context, collectionID, query string, limit int32, filter semsearch.SearchFilter, perConversationLimit int32) ([]semsearch.SemHit, error)
+	SearchWithinConversation(ctx context.Context, collectionID, conversationID, query string, limit int32, filter semsearch.SearchFilter) ([]semsearch.SemHit, string, error)
 }
 
 func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
@@ -98,8 +104,7 @@ func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.List
 	})
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
-		slog.WarnContext(
-			ctx, "daemon.list_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.list_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"err", err,
 		)
@@ -126,8 +131,7 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 	client, _ := peer.FromContext(ctx)
 	record, err := s.index.Resolve(ctx, req.GetConversationId())
 	if err != nil {
-		slog.WarnContext(
-			ctx, "daemon.get_conversation_info.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.get_conversation_info.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"conversation_id", req.GetConversationId(),
 			"err", err,
@@ -136,8 +140,7 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 	}
 	info, err := s.index.ConversationInfo(record)
 	if err != nil {
-		slog.WarnContext(
-			ctx, "daemon.get_conversation_info.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.get_conversation_info.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"conversation_id", record.ID,
 			"err", err,
@@ -147,9 +150,12 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 	return protoConversationInfo(ctx, s.index, info), nil
 }
 
-// SearchConversations returns ranked matches from the configured source.
-// Matches include stored excerpts and the source's explicit context state.
-// The freshness snapshot reports the ingestion state at query time.
+// SearchConversations returns a relevance-ranked list of conversation hits.
+// Each hit carries the matched passage as a byte-bounded excerpt (set in
+// engineSearchMatches), so the list is self-sufficient for triage and small
+// enough for any transport. The full surrounding window is a separate windowed
+// read; search never inlines it. The freshness snapshot lets a thin result be
+// distinguished from a cold index.
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
 	// Establish correlation before any blocking search work so the operation is
 	// traceable, including a source failure.
@@ -159,7 +165,7 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
 	if s.searchSource == nil {
-		failure := unavailableConversationSearchSourceError()
+		failure := unavailableConversationSearchSourceError(nil)
 		return nil, status.Error(failure.grpcCode(), failure.Error())
 	}
 	result, err := s.searchSource.SearchConversations(ctx, searchConversationsOptionsFromProto(req))
@@ -170,8 +176,7 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 		}
 		var sourceFailure conversationSearchSourceError
 		if errors.As(err, &sourceFailure) {
-			slog.WarnContext(
-				ctx, "daemon.search_conversations.source_failed",
+			slog.WarnContext(ctx, "daemon.search_conversations.source_failed",
 				"concern", "process.daemon.lifecycle",
 				"component", "daemon",
 				"peer", peerString(client),
@@ -180,8 +185,7 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 			)
 			return nil, status.Error(sourceFailure.grpcCode(), sourceFailure.Error())
 		}
-		slog.WarnContext(
-			ctx, "daemon.search_conversations.failed",
+		slog.WarnContext(ctx, "daemon.search_conversations.failed",
 			"concern", "process.daemon.lifecycle",
 			"component", "daemon",
 			"peer", peerString(client),
@@ -208,8 +212,6 @@ func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest
 		MinScore:             req.GetMinScore(),
 		PerConversationLimit: int(req.GetPerConversationLimit()),
 		ConversationID:       req.GetConversationId(),
-		ConversationIDs:      conversationSelectionFromProto(req.GetConversationSelection()),
-		IncludeSubagents:     req.GetIncludeSubagents(),
 		ContextWindow:        int(req.GetContextWindow()),
 		Cursor:               req.GetCursor(),
 	}
@@ -252,7 +254,41 @@ func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
 	return s.freshness()
 }
 
+// searchFacetTopN bounds each facet dimension to its top values by count.
 const searchFacetTopN = 5
+
+// filterAccounting builds the ordered candidate-count funnel from the index:
+// the indexed baseline first, then one stage per active filter, computed by
+// reusing ConversationIDsMatching. A stage whose count cannot be resolved is
+// omitted rather than fabricated; the indexed baseline and the caller-appended
+// returned stage keep the funnel honest.
+func filterAccounting(ctx context.Context, idx conversationSearchIndex, options conversation.SearchConversationsOptions) []conversation.FilterStage {
+	var anyProvider conversation.Provider
+	stages := make([]conversation.FilterStage, 0, 5)
+	if all, err := idx.ConversationIDsMatching(ctx, anyProvider, "", true); err == nil {
+		stages = append(stages, conversation.FilterStage{Name: "indexed", Remaining: len(all)})
+	}
+	provider := options.Provider
+	if provider.Valid() {
+		if matched, err := idx.ConversationIDsMatching(ctx, provider, "", true); err == nil {
+			stages = append(stages, conversation.FilterStage{Name: "provider", Remaining: len(matched)})
+		}
+	}
+	if options.WorkspaceRoot != "" {
+		if matched, err := idx.ConversationIDsMatching(ctx, provider, options.WorkspaceRoot, true); err == nil {
+			stages = append(stages, conversation.FilterStage{Name: "workspace", Remaining: len(matched)})
+		}
+	}
+	if !options.IncludeArchived {
+		if matched, err := idx.ConversationIDsMatching(ctx, provider, options.WorkspaceRoot, false); err == nil {
+			stages = append(stages, conversation.FilterStage{Name: "archived_excluded", Remaining: len(matched)})
+		}
+	}
+	if options.ConversationID != "" {
+		stages = append(stages, conversation.FilterStage{Name: "conversation", Remaining: 1})
+	}
+	return stages
+}
 
 // appendReturnedStage closes the funnel with the count actually returned.
 func appendReturnedStage(stages []conversation.FilterStage, returned int) []conversation.FilterStage {
@@ -266,16 +302,15 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 	matches := make([]*clydev1.ConversationSearchMatch, 0, len(result.Matches))
 	for _, match := range result.Matches {
 		matches = append(matches, &clydev1.ConversationSearchMatch{
-			Conversation:   protoConversationRecord(ctx, idx, match.Record),
-			MessageIndex:   int64(match.MessageIndex),
-			Role:           match.Role,
-			TimestampUnix:  match.Timestamp.Unix(),
-			Snippet:        match.Snippet,
-			Score:          match.Score,
-			ContextWindow:  match.ContextWindow,
-			LoadRules:      match.LoadRules,
-			ContextState:   protoSearchContextState(match.ContextState),
-			SourceIdentity: protoSearchSourceIdentity(match.SourceIdentity),
+			Conversation:  protoConversationRecord(ctx, idx, match.Record),
+			MessageIndex:  int64(match.MessageIndex),
+			Role:          match.Role,
+			TimestampUnix: match.Timestamp.Unix(),
+			Snippet:       match.Snippet,
+			Score:         match.Score,
+			ContextWindow: match.ContextWindow,
+			LoadRules:     match.LoadRules,
+			ContextState:  protoSearchContextState(match.ContextState),
 		})
 	}
 	return &clydev1.SearchConversationsResponse{
@@ -431,8 +466,7 @@ func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptur
 	output, err := s.showCapture(ctx, req.GetId())
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
-		slog.WarnContext(
-			ctx, "daemon.show_capture.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.show_capture.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"err", err,
 		)
@@ -447,8 +481,7 @@ func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBasel
 	result, err := mitm.SeedBaseline(ctx, s.captureStore, req.GetUpstream(), req.GetIncludeUa(), req.GetExcludeUa())
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
-		slog.WarnContext(
-			ctx, "daemon.seed_baseline.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.seed_baseline.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"upstream", req.GetUpstream(),
 			"err", err,
@@ -474,8 +507,7 @@ func (s *controlServer) LogsInventory(ctx context.Context, req *clydev1.LogsInve
 	)
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
-		slog.WarnContext(
-			ctx, "daemon.logs_inventory.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.logs_inventory.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"err", err,
 		)
@@ -506,8 +538,7 @@ func (s *controlServer) SubscribeProviderStats(_ *clydev1.SubscribeProviderStats
 				EmittedAtUnix: emittedAtUnix,
 			}
 			if err := stream.Send(event); err != nil {
-				slog.WarnContext(
-					stream.Context(), "daemon.provider_stats.stream_send_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+				slog.WarnContext(stream.Context(), "daemon.provider_stats.stream_send_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 					"err", err,
 				)
 				return fmt.Errorf("send provider stats event: %w", err)
@@ -515,8 +546,7 @@ func (s *controlServer) SubscribeProviderStats(_ *clydev1.SubscribeProviderStats
 		}
 		select {
 		case <-stream.Context().Done():
-			slog.WarnContext(
-				stream.Context(), "daemon.provider_stats.stream_context_done", "concern", "process.daemon.lifecycle", "component", "daemon",
+			slog.WarnContext(stream.Context(), "daemon.provider_stats.stream_context_done", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"err", stream.Context().Err(),
 			)
 			return fmt.Errorf("provider stats stream context: %w", stream.Context().Err())

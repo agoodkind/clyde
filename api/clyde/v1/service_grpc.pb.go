@@ -20,25 +20,24 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ClydeService_GetDaemonStatus_FullMethodName               = "/clyde.v1.ClydeService/GetDaemonStatus"
-	ClydeService_ReloadDaemon_FullMethodName                  = "/clyde.v1.ClydeService/ReloadDaemon"
-	ClydeService_RebindDaemon_FullMethodName                  = "/clyde.v1.ClydeService/RebindDaemon"
-	ClydeService_GetProviderStats_FullMethodName              = "/clyde.v1.ClydeService/GetProviderStats"
-	ClydeService_SubscribeProviderStats_FullMethodName        = "/clyde.v1.ClydeService/SubscribeProviderStats"
-	ClydeService_ListConversations_FullMethodName             = "/clyde.v1.ClydeService/ListConversations"
-	ClydeService_GetConversationInfo_FullMethodName           = "/clyde.v1.ClydeService/GetConversationInfo"
-	ClydeService_SearchConversations_FullMethodName           = "/clyde.v1.ClydeService/SearchConversations"
-	ClydeService_ResolveConversationRequest_FullMethodName    = "/clyde.v1.ClydeService/ResolveConversationRequest"
-	ClydeService_ReorientConversation_FullMethodName          = "/clyde.v1.ClydeService/ReorientConversation"
-	ClydeService_StreamConversation_FullMethodName            = "/clyde.v1.ClydeService/StreamConversation"
-	ClydeService_StreamConversationContext_FullMethodName     = "/clyde.v1.ClydeService/StreamConversationContext"
-	ClydeService_StreamExportTranscript_FullMethodName        = "/clyde.v1.ClydeService/StreamExportTranscript"
-	ClydeService_GetMITMStatus_FullMethodName                 = "/clyde.v1.ClydeService/GetMITMStatus"
-	ClydeService_ShowCapture_FullMethodName                   = "/clyde.v1.ClydeService/ShowCapture"
-	ClydeService_SeedBaseline_FullMethodName                  = "/clyde.v1.ClydeService/SeedBaseline"
-	ClydeService_LogsInventory_FullMethodName                 = "/clyde.v1.ClydeService/LogsInventory"
-	ClydeService_GetSemanticSearchFreshness_FullMethodName    = "/clyde.v1.ClydeService/GetSemanticSearchFreshness"
-	ClydeService_ReconcileEmbeddedConversation_FullMethodName = "/clyde.v1.ClydeService/ReconcileEmbeddedConversation"
+	ClydeService_GetDaemonStatus_FullMethodName            = "/clyde.v1.ClydeService/GetDaemonStatus"
+	ClydeService_ReloadDaemon_FullMethodName               = "/clyde.v1.ClydeService/ReloadDaemon"
+	ClydeService_RebindDaemon_FullMethodName               = "/clyde.v1.ClydeService/RebindDaemon"
+	ClydeService_GetProviderStats_FullMethodName           = "/clyde.v1.ClydeService/GetProviderStats"
+	ClydeService_SubscribeProviderStats_FullMethodName     = "/clyde.v1.ClydeService/SubscribeProviderStats"
+	ClydeService_ListConversations_FullMethodName          = "/clyde.v1.ClydeService/ListConversations"
+	ClydeService_GetConversationInfo_FullMethodName        = "/clyde.v1.ClydeService/GetConversationInfo"
+	ClydeService_SearchConversations_FullMethodName        = "/clyde.v1.ClydeService/SearchConversations"
+	ClydeService_ResolveConversationRequest_FullMethodName = "/clyde.v1.ClydeService/ResolveConversationRequest"
+	ClydeService_ReorientConversation_FullMethodName       = "/clyde.v1.ClydeService/ReorientConversation"
+	ClydeService_StreamConversation_FullMethodName         = "/clyde.v1.ClydeService/StreamConversation"
+	ClydeService_StreamConversationContext_FullMethodName  = "/clyde.v1.ClydeService/StreamConversationContext"
+	ClydeService_StreamExportTranscript_FullMethodName     = "/clyde.v1.ClydeService/StreamExportTranscript"
+	ClydeService_GetMITMStatus_FullMethodName              = "/clyde.v1.ClydeService/GetMITMStatus"
+	ClydeService_ShowCapture_FullMethodName                = "/clyde.v1.ClydeService/ShowCapture"
+	ClydeService_SeedBaseline_FullMethodName               = "/clyde.v1.ClydeService/SeedBaseline"
+	ClydeService_LogsInventory_FullMethodName              = "/clyde.v1.ClydeService/LogsInventory"
+	ClydeService_GetSemanticSearchFreshness_FullMethodName = "/clyde.v1.ClydeService/GetSemanticSearchFreshness"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -82,10 +81,6 @@ type ClydeServiceClient interface {
 	// the same freshness that rides each search response, so a status view can
 	// read it without running a search.
 	GetSemanticSearchFreshness(ctx context.Context, in *GetSemanticSearchFreshnessRequest, opts ...grpc.CallOption) (*GetSemanticSearchFreshnessResponse, error)
-	// ReconcileEmbeddedConversation rebuilds the embedded ingestion outbox state
-	// of one conversation from the embedded search library inside the running
-	// daemon, between two sync passes.
-	ReconcileEmbeddedConversation(ctx context.Context, in *ReconcileEmbeddedConversationRequest, opts ...grpc.CallOption) (*ReconcileEmbeddedConversationResponse, error)
 }
 
 type clydeServiceClient struct {
@@ -312,16 +307,6 @@ func (c *clydeServiceClient) GetSemanticSearchFreshness(ctx context.Context, in 
 	return out, nil
 }
 
-func (c *clydeServiceClient) ReconcileEmbeddedConversation(ctx context.Context, in *ReconcileEmbeddedConversationRequest, opts ...grpc.CallOption) (*ReconcileEmbeddedConversationResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReconcileEmbeddedConversationResponse)
-	err := c.cc.Invoke(ctx, ClydeService_ReconcileEmbeddedConversation_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // ClydeServiceServer is the server API for ClydeService service.
 // All implementations should embed UnimplementedClydeServiceServer
 // for forward compatibility.
@@ -363,10 +348,6 @@ type ClydeServiceServer interface {
 	// the same freshness that rides each search response, so a status view can
 	// read it without running a search.
 	GetSemanticSearchFreshness(context.Context, *GetSemanticSearchFreshnessRequest) (*GetSemanticSearchFreshnessResponse, error)
-	// ReconcileEmbeddedConversation rebuilds the embedded ingestion outbox state
-	// of one conversation from the embedded search library inside the running
-	// daemon, between two sync passes.
-	ReconcileEmbeddedConversation(context.Context, *ReconcileEmbeddedConversationRequest) (*ReconcileEmbeddedConversationResponse, error)
 }
 
 // UnimplementedClydeServiceServer should be embedded to have
@@ -429,9 +410,6 @@ func (UnimplementedClydeServiceServer) LogsInventory(context.Context, *LogsInven
 }
 func (UnimplementedClydeServiceServer) GetSemanticSearchFreshness(context.Context, *GetSemanticSearchFreshnessRequest) (*GetSemanticSearchFreshnessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSemanticSearchFreshness not implemented")
-}
-func (UnimplementedClydeServiceServer) ReconcileEmbeddedConversation(context.Context, *ReconcileEmbeddedConversationRequest) (*ReconcileEmbeddedConversationResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReconcileEmbeddedConversation not implemented")
 }
 func (UnimplementedClydeServiceServer) testEmbeddedByValue() {}
 
@@ -749,24 +727,6 @@ func _ClydeService_GetSemanticSearchFreshness_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ClydeService_ReconcileEmbeddedConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReconcileEmbeddedConversationRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ClydeServiceServer).ReconcileEmbeddedConversation(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ClydeService_ReconcileEmbeddedConversation_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClydeServiceServer).ReconcileEmbeddedConversation(ctx, req.(*ReconcileEmbeddedConversationRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // ClydeService_ServiceDesc is the grpc.ServiceDesc for ClydeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -829,10 +789,6 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSemanticSearchFreshness",
 			Handler:    _ClydeService_GetSemanticSearchFreshness_Handler,
-		},
-		{
-			MethodName: "ReconcileEmbeddedConversation",
-			Handler:    _ClydeService_ReconcileEmbeddedConversation_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

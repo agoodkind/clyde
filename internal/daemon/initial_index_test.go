@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,9 +17,20 @@ import (
 func TestRunInitialConversationIndexBuildsRawIndexWhenIngestionIsDisabled(t *testing.T) {
 	configureInitialIndexTest(t, false)
 
+	previousDial := dialInitialSemantic
+	calls := 0
+	dialInitialSemantic = func(context.Context, string) (initialSemanticClient, error) {
+		calls++
+		return nil, fmt.Errorf("should not call semantic when disabled")
+	}
+	t.Cleanup(func() { dialInitialSemantic = previousDial })
+
 	var output bytes.Buffer
 	if err := RunInitialConversationIndex(context.Background(), &output, nil); err != nil {
 		t.Fatalf("RunInitialConversationIndex: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("semantic dial calls = %d, want 0", calls)
 	}
 	got := output.String()
 	if !strings.Contains(got, "Initial indexing: complete with 0 conversations") {
@@ -42,6 +52,13 @@ func TestRunInitialConversationIndexBuildsRawIndexWhenIngestionIsDisabled(t *tes
 
 func TestRunInitialConversationIndexReportsProgress(t *testing.T) {
 	configureInitialIndexTest(t, true)
+	previousDial := dialInitialSemantic
+	dialInitialSemantic = func(context.Context, string) (initialSemanticClient, error) {
+		return &fakeInitialSemanticClient{
+			fakeConversationSemanticClient: &fakeConversationSemanticClient{},
+		}, nil
+	}
+	t.Cleanup(func() { dialInitialSemantic = previousDial })
 
 	var output bytes.Buffer
 	if err := RunInitialConversationIndex(context.Background(), &output, func(completed int, total int) {
@@ -122,42 +139,37 @@ func (output initialIndexHeartbeatOutput) Write(payload []byte) (int, error) {
 	return len(payload), nil
 }
 
-// TestRunInitialConversationIndexLeavesEmbeddedIngestionToDaemon loads an
-// embedded ingestion configuration and runs the initial index with the
-// production dial function. The run must build the raw index, dial no
-// lm-semantic-search socket, and state that the daemon worker ingests.
-func TestRunInitialConversationIndexLeavesEmbeddedIngestionToDaemon(t *testing.T) {
+type fakeInitialSemanticClient struct {
+	*fakeConversationSemanticClient
+}
+
+func (*fakeInitialSemanticClient) Register(context.Context, string) error {
+	return nil
+}
+
+func (*fakeInitialSemanticClient) Close() error {
+	return nil
+}
+
+func TestRunInitialConversationIndexTriesSemanticOnce(t *testing.T) {
 	configureInitialIndexTest(t, true)
-	state := os.Getenv("XDG_STATE_HOME")
-	body := "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\nprojection_profile = \"p3\"\n" +
-		"catalog_path = " + strconv.Quote(filepath.Join(state, "catalog.sqlite")) + "\n" +
-		"lock_path = " + strconv.Quote(filepath.Join(state, "catalog.lock")) + "\n" +
-		"pool_id = \"initial-index\"\nmilvus_address = \"localhost:1\"\nmilvus_database = \"clyde_initial_index\"\n" +
-		"milvus_collection = \"vectors\"\nembedding_base_url = \"http://localhost:1/v1\"\n" +
-		"embedding_model = \"nvidia/NV-EmbedCode-7b-v1\"\nembedding_revision = \"initial-index\"\n" +
-		"vector_dimension = 4096\nnormalization = \"l2\"\n"
-	if err := os.WriteFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "clyde", "config.toml"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
+	var attempts int
+	previousDial := dialInitialSemantic
+	dialInitialSemantic = func(context.Context, string) (initialSemanticClient, error) {
+		attempts++
+		return nil, fmt.Errorf("semantic engine unavailable")
 	}
+	t.Cleanup(func() { dialInitialSemantic = previousDial })
 
 	var output bytes.Buffer
 	if err := RunInitialConversationIndex(context.Background(), &output, nil); err != nil {
 		t.Fatalf("RunInitialConversationIndex: %v", err)
 	}
-	got := output.String()
-	if strings.Contains(got, "semantic service is unavailable") {
-		t.Fatalf("embedded initial index dialed the lm-semantic-search socket: %q", got)
+	if attempts != 1 {
+		t.Fatalf("semantic dial attempts = %d, want 1", attempts)
 	}
-	for _, want := range []string{
-		"Initial indexing: semantic ingestion starts in the daemon sync worker",
-		"Initial indexing: complete with 0 conversations",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("output = %q, missing %q", got, want)
-		}
-	}
-	if _, err := os.Stat(conversation.CachePath()); err != nil {
-		t.Fatalf("conversation cache not created: %v", err)
+	if got := strings.Count(output.String(), "semantic service is unavailable"); got != 1 {
+		t.Fatalf("semantic unavailable messages = %d, want 1: %q", got, output.String())
 	}
 }
 
@@ -179,11 +191,7 @@ func configureInitialIndexTest(t *testing.T, ingestionEnabled bool) {
 	}
 	body := "[conversation.semantic]\ningestion_enabled = false\nsearch_enabled = false\n"
 	if ingestionEnabled {
-		body = "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\nprojection_profile = \"p3\"\n" +
-			"catalog_path = \"/tmp/initial-index-catalog.sqlite\"\nlock_path = \"/tmp/initial-index-catalog.lock\"\n" +
-			"pool_id = \"initial-index\"\nmilvus_address = \"localhost:1\"\nmilvus_database = \"initial_index\"\n" +
-			"milvus_collection = \"vectors\"\nembedding_base_url = \"http://localhost:1/v1\"\n" +
-			"embedding_model = \"test-model\"\nembedding_revision = \"r1\"\nvector_dimension = 2\nnormalization = \"l2\"\n"
+		body = "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\n"
 	}
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)

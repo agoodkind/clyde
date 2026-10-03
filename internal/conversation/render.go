@@ -1,7 +1,6 @@
 package conversation
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -94,12 +93,28 @@ func (idx *Index) contextWindowByIndex(record Record, messageIndex, before, afte
 			"load_rules", loadRules,
 		)
 	}
+	stream, err := idx.resolveStream(record, options)
+	if err != nil {
+		return "", err
+	}
 	start := max(messageIndex-before, 0)
 	end := messageIndex + after + 1
-	window, seen, err := idx.readMessageWindow(context.Background(), record, start, end, options)
-	if err != nil {
-		slog.Warn("conversation.render.context_stream_failed", "concern", "conversation.render", "component", "conversation", "provider", record.Provider.String(), "conversation_id", record.ID, "err", err)
-		return "", fmt.Errorf("read %s conversation: %w", record.Provider.String(), err)
+	var window []transcript.Message
+	seen := 0
+	for message, streamErr := range stream {
+		if streamErr != nil {
+			slog.Warn("conversation.render.context_stream_failed", "concern", "conversation.render", "component", "conversation", "provider", record.Provider.String(), "conversation_id", record.ID, "err", streamErr)
+			return "", fmt.Errorf("read %s conversation: %w", record.Provider.String(), streamErr)
+		}
+		if seen >= start && seen < end {
+			window = append(window, message)
+		}
+		seen++
+		if seen >= end {
+			// The window is complete; stop pulling so the rest of the artifact is
+			// never parsed.
+			break
+		}
 	}
 	if seen == 0 {
 		return "No conversation messages found.", nil

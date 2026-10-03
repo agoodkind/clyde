@@ -366,6 +366,46 @@ func TestClaudeSubagentTranscriptFollowsTheSetting(t *testing.T) {
 	}
 }
 
+// TestHiddenSubagentConversationIsOmittedFromTheEngineManifest proves the only
+// effect the setting has on the vector store: the feeder stops offering a hidden
+// conversation. It sends a shorter manifest under the retain reconcile mode that
+// clyde hardcodes, so whatever the engine already stores is left alone. Nothing in
+// clyde issues a delete for a conversation, a chunk, or a store row.
+func TestHiddenSubagentConversationIsOmittedFromTheEngineManifest(t *testing.T) {
+	writeOriginFixtures(t)
+
+	index := conversation.NewIndex(claudeOnlyRegistry(), config.ConversationConfig{
+		IncludeSubagentConversations: false,
+		Semantic:                     config.ConversationSemanticConfig{},
+	})
+	ctx := context.Background()
+	if err := index.Refresh(ctx); err != nil {
+		t.Fatalf("refresh conversation index: %v", err)
+	}
+
+	client := &fakeConversationSemanticClient{needed: nil}
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	if err := worker.runPass(ctx); err != nil {
+		t.Fatalf("runPass returned error: %v", err)
+	}
+
+	if len(client.syncCalls) != 1 {
+		t.Fatalf("manifest syncs = %d, want 1", len(client.syncCalls))
+	}
+	manifest := client.syncCalls[0].Manifest
+	manifestIDs := make([]string, 0, len(manifest))
+	for _, fingerprint := range manifest {
+		manifestIDs = append(manifestIDs, fingerprint.ConversationID)
+	}
+	if len(manifest) != 1 {
+		t.Fatalf("manifest ids = %v, want only the user conversation offered", manifestIDs)
+	}
+	userConversationID := conversation.DerivedID(conversation.ProviderClaude, originTestUserSessionID, "")
+	if manifestIDs[0] != userConversationID {
+		t.Fatalf("manifest ids = %v, want %q", manifestIDs, userConversationID)
+	}
+}
+
 // TestSkippedSubagentConversationStaysInTheCache pins the behavior that makes the
 // setting reversible: an index that hides subagent conversations still caches
 // them with their origin, so turning the setting on later needs no cache deletion

@@ -68,14 +68,6 @@ func ContentFingerprint(record Record, stamp FileStamp) string {
 	return stamp.Fingerprint()
 }
 
-// TrailingMessageMayGrow reports whether an artifact kind can extend its last
-// message in place when the artifact grows. Cursor's agent transcript groups
-// consecutive same-role lines into one turn, and a later line extends the
-// trailing turn.
-func TrailingMessageMayGrow(record Record) bool {
-	return ArtifactKind(record.ArtifactKind) == ArtifactKindCursorAgentTranscript
-}
-
 // ScanCandidate is one artifact a provider's [Parser.Discover] surfaced for the
 // incremental scan. Stamp lets the scan driver skip files whose size and mtime
 // are unchanged, reusing the prior record without re-reading the file.
@@ -150,12 +142,6 @@ type Parser interface {
 	// implementation holds at most one message in flight; only [CollectMessages]
 	// builds a slice. A caller may stop the range early to read a window.
 	Stream(path string, opts LoadOptions) iter.Seq2[transcript.Message, error]
-}
-
-// FreshContextParser reads selected source content without cached transcripts.
-// The callback runs between actual backing-source stability checks.
-type FreshContextParser interface {
-	ReadContextWindow(ctx context.Context, path, selector string, start, end int, options LoadOptions, visit func([]transcript.Message) error) error
 }
 
 // CachedDiscoveryParser can reuse provider input stamps persisted by the scan

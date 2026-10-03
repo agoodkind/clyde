@@ -26,8 +26,8 @@ func defaultSemanticContentKinds() conversation.ContentKindSet {
 	)
 }
 
-// startConfiguredConversationSemanticSync starts direct library ingestion with
-// the configured content kinds.
+// startConfiguredConversationSemanticSync resolves the configured content kinds
+// and starts the feeder under them.
 //
 // It is called before the control server serves, because the feeder's stop is
 // installed on the lifecycle group inside the start call ahead of the goroutine
@@ -37,10 +37,9 @@ func startConfiguredConversationSemanticSync(
 	ctx context.Context,
 	log *slog.Logger,
 	cfg *config.Config,
-	index embeddedRecordIndex,
+	index conversationSemanticIndex,
+	resolveClient conversationSemanticClientResolver,
 	freshness *conversationSemanticFreshness,
-	embeddedStatus *embeddedSemanticStatus,
-	embeddedReconcile *embeddedReconcileGate,
 	group *livetrack.Group,
 ) error {
 	kinds, err := SemanticContentKinds(cfg.Conversation.Semantic)
@@ -50,7 +49,8 @@ func startConfiguredConversationSemanticSync(
 		// per failure rather than two saying the same thing.
 		return err
 	}
-	return startEmbeddedConversationSemanticSync(ctx, log, cfg.Conversation.Semantic, index, freshness, embeddedStatus, embeddedReconcile, group, kinds)
+	startConversationSemanticSync(ctx, log, index, resolveClient, cfg.Conversation.Semantic.CollectionID, freshness, group, kinds)
+	return nil
 }
 
 // SemanticContentKinds resolves the configured selector values into the content
