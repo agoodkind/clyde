@@ -170,6 +170,9 @@ type conversationSemanticSyncWorker struct {
 	// activeJobID is the engine job started by the last accepted upsert. The
 	// worker runs in a single goroutine, so the field needs no lock.
 	activeJobID string
+	// lastNeeded is the count of conversations the engine reported as needed
+	// in the latest pass. A pass that ends before the manifest sync sets zero.
+	lastNeeded int
 	// deliveryCursor is the last conversation id delivered; each batch resumes
 	// after it instead of restarting at the lexicographically smallest id.
 	deliveryCursor string
@@ -386,6 +389,7 @@ func newConversationSemanticSyncWorker(
 		log:                log,
 		interval:           conversationSemanticSyncInterval,
 		activeJobID:        "",
+		lastNeeded:         0,
 		deliveryCursor:     "",
 		emptyDelivered:     make(map[string]string),
 		failedLoad:         make(map[string]failedLoadRecord),
@@ -398,7 +402,7 @@ func newConversationSemanticSyncWorker(
 }
 
 func (w *conversationSemanticSyncWorker) run(ctx context.Context) {
-	w.runPassAndLog(ctx)
+	w.runBacklog(ctx)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
@@ -406,7 +410,7 @@ func (w *conversationSemanticSyncWorker) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.runPassAndLog(ctx)
+			w.runBacklog(ctx)
 		}
 	}
 }
@@ -519,6 +523,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return fmt.Errorf("sync conversation manifest: %w", err)
 	}
 	stats.needed = len(needed)
+	w.lastNeeded = len(needed)
 	if len(needed) == 0 {
 		w.logPass(ctx, stats)
 		return nil
