@@ -31,7 +31,8 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newReconcileEmbeddedConversationCmd(f))
+	cmd.AddCommand(newBackfillConversationScalarsCmd(f))
+	cmd.AddCommand(newBackfillConversationDocumentsCmd(f))
 	cmd.AddCommand(newSandboxCmd(f))
 	return cmd
 }
@@ -112,14 +113,6 @@ func WriteRuntimeStatusReport(out io.Writer, snapshot *daemonsvc.RuntimeStatus) 
 		nextRetry = time.Unix(semantic.NextRetryUnix, 0).Format(time.RFC3339)
 	}
 	_, _ = fmt.Fprintf(out, "semantic: ingestion_enabled=%t search_enabled=%t connection=%s attempts=%d next_retry=%s\n", semantic.IngestionEnabled, semantic.SearchEnabled, semantic.Connection, semantic.Attempts, nextRetry)
-	if embedded := semantic.Embedded; embedded != nil {
-		blockedIDs := "none"
-		if len(embedded.BlockedConversationIDs) > 0 {
-			blockedIDs = strings.Join(embedded.BlockedConversationIDs, ",")
-		}
-		_, _ = fmt.Fprintf(out, "semantic_embedded: library_open=%t pending_batches=%d pending_projections=%d blocked_owners=%d blocked_conversation_ids=%s\n",
-			embedded.LibraryOpen, embedded.PendingBatches, embedded.PendingProjections, embedded.BlockedOwners, blockedIDs)
-	}
 	if snapshot.CursorRawIndexingEnabled == nil {
 		_, _ = fmt.Fprintln(out, "cursor_raw_indexing: unknown")
 	} else {

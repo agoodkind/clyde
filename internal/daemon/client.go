@@ -63,8 +63,7 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 	defer rpcCancel()
 	resp, err := client.rpc.ReloadDaemon(rpcCtx, &clydev1.ReloadDaemonRequest{})
 	if err != nil {
-		slog.WarnContext(
-			rpcCtx, "daemon.client.reload.rpc_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(rpcCtx, "daemon.client.reload.rpc_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
 		return nil, fmt.Errorf("daemon reload rpc: %w", err)
@@ -95,8 +94,7 @@ func RebindDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 	defer rpcCancel()
 	resp, err := client.rpc.RebindDaemon(rpcCtx, &clydev1.ReloadDaemonRequest{})
 	if err != nil {
-		slog.WarnContext(
-			rpcCtx, "daemon.client.rebind.rpc_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(rpcCtx, "daemon.client.rebind.rpc_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
 		return nil, fmt.Errorf("daemon rebind rpc: %w", err)
@@ -228,7 +226,22 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 
 	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.SearchConversations(rpcCtx, protoSearchConversationsRequest(options))
+	resp, err := client.rpc.SearchConversations(rpcCtx, &clydev1.SearchConversationsRequest{
+		Query:                options.Query,
+		Limit:                int64(options.Limit),
+		Offset:               int64(options.Offset),
+		Provider:             protoProvider(options.Provider),
+		Workspace:            options.WorkspaceRoot,
+		IncludeArchived:      options.IncludeArchived,
+		Roles:                options.Roles,
+		FromUnix:             options.FromUnix,
+		UntilUnix:            options.UntilUnix,
+		MinScore:             options.MinScore,
+		PerConversationLimit: int64(options.PerConversationLimit),
+		ConversationId:       options.ConversationID,
+		ContextWindow:        int64(options.ContextWindow),
+		Cursor:               options.Cursor,
+	})
 	if err != nil {
 		return conversation.SearchConversationsResult{}, daemonRPCError(rpcCtx, "search conversations", err)
 	}
@@ -236,16 +249,15 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	for _, wire := range resp.GetMatches() {
 		record := conversationRecordFromProto(wire.GetConversation())
 		matches = append(matches, conversation.SearchMatch{
-			Record:         record,
-			MessageIndex:   int(wire.GetMessageIndex()),
-			Role:           wire.GetRole(),
-			Timestamp:      time.Unix(wire.GetTimestampUnix(), 0),
-			Snippet:        wire.GetSnippet(),
-			Score:          wire.GetScore(),
-			ContextWindow:  wire.GetContextWindow(),
-			LoadRules:      wire.GetLoadRules(),
-			ContextState:   searchContextStateFromProto(wire.GetContextState()),
-			SourceIdentity: searchSourceIdentityFromProto(wire.GetSourceIdentity()),
+			Record:        record,
+			MessageIndex:  int(wire.GetMessageIndex()),
+			Role:          wire.GetRole(),
+			Timestamp:     time.Unix(wire.GetTimestampUnix(), 0),
+			Snippet:       wire.GetSnippet(),
+			Score:         wire.GetScore(),
+			ContextWindow: wire.GetContextWindow(),
+			LoadRules:     wire.GetLoadRules(),
+			ContextState:  searchContextStateFromProto(wire.GetContextState()),
 		})
 	}
 	return conversation.SearchConversationsResult{
@@ -730,8 +742,7 @@ func reassembleConversationChunks(ctx context.Context, stream grpc.ServerStreami
 			return string(body), nil
 		}
 		if err != nil {
-			slog.WarnContext(
-				ctx, "daemon.client.conversation_chunk.recv_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			slog.WarnContext(ctx, "daemon.client.conversation_chunk.recv_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"err", err,
 			)
 			return "", fmt.Errorf("receive conversation chunk: %w", err)
@@ -750,8 +761,7 @@ func reassembleExportChunks(ctx context.Context, stream grpc.ServerStreamingClie
 			return body, nil
 		}
 		if err != nil {
-			slog.WarnContext(
-				ctx, "daemon.client.export_chunk.recv_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			slog.WarnContext(ctx, "daemon.client.export_chunk.recv_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"err", err,
 			)
 			return nil, fmt.Errorf("receive export chunk: %w", err)
@@ -893,16 +903,14 @@ func LogsInventory(ctx context.Context, stateRoot string, largestFileLimit int, 
 func daemonRPCError(ctx context.Context, operation string, err error) error {
 	target := daemonGRPCAddress()
 	if status.Code(err) == codes.Unavailable {
-		slog.WarnContext(
-			ctx, "daemon.client.rpc.unavailable", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.client.rpc.unavailable", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"operation", operation,
 			"grpc_address", target,
 			"err", err,
 		)
 		return fmt.Errorf("clyde daemon is not running at %s; check `clyde daemon status` (launchd starts the daemon): %w", target, err)
 	}
-	slog.WarnContext(
-		ctx, "daemon.client.rpc.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+	slog.WarnContext(ctx, "daemon.client.rpc.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"operation", operation,
 		"err", err,
 	)
@@ -911,8 +919,7 @@ func daemonRPCError(ctx context.Context, operation string, err error) error {
 
 func connectDaemon(ctx context.Context) (*daemonClient, error) {
 	target := daemonGRPCAddress()
-	conn, err := grpc.NewClient(
-		target,
+	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(controlMaxMessageBytes),
@@ -920,8 +927,7 @@ func connectDaemon(ctx context.Context) (*daemonClient, error) {
 		),
 	)
 	if err != nil {
-		slog.WarnContext(
-			ctx, "daemon.client.connect.new_client_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.client.connect.new_client_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"grpc_address", target,
 			"err", err,
 		)
@@ -953,8 +959,7 @@ func lockDaemonReload(ctx context.Context) (func(), error) {
 	lockPath := daemonReloadLockPath()
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		slog.WarnContext(
-			ctx, "daemon.client.reload_lock.open_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.client.reload_lock.open_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"lock_path", lockPath,
 			"err", err,
 		)
@@ -976,8 +981,7 @@ func lockDaemonReload(ctx context.Context) (func(), error) {
 	case err := <-done:
 		if err != nil {
 			_ = lockFile.Close()
-			slog.WarnContext(
-				ctx, "daemon.client.reload_lock.lock_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			slog.WarnContext(ctx, "daemon.client.reload_lock.lock_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"lock_path", lockPath,
 				"err", err,
 			)

@@ -12,7 +12,6 @@ type conversationSearchFailureCode string
 const (
 	conversationSearchDisabled          conversationSearchFailureCode = "conversation_search_disabled"
 	conversationSearchSourceUnavailable conversationSearchFailureCode = "conversation_search_source_unavailable"
-	conversationSearchCursorExpired     conversationSearchFailureCode = "conversation_search_cursor_expired"
 	conversationSearchSourceRefused     conversationSearchFailureCode = "conversation_search_source_refused"
 	conversationSearchSourceFailed      conversationSearchFailureCode = "conversation_search_source_failed"
 )
@@ -31,8 +30,6 @@ func (e conversationSearchSourceError) Error() string {
 		return string(e.code) + ": conversation search is disabled"
 	case conversationSearchSourceUnavailable:
 		return string(e.code) + ": conversation search is unavailable"
-	case conversationSearchCursorExpired:
-		return string(e.code) + ": conversation search cursor expired. Restart paging"
 	case conversationSearchSourceRefused:
 		return string(e.code) + ": conversation search source refused the query"
 	case conversationSearchSourceFailed:
@@ -61,11 +58,11 @@ func disabledConversationSearchSourceError(cause error) conversationSearchSource
 	}
 }
 
-func unavailableConversationSearchSourceError() conversationSearchSourceError {
+func unavailableConversationSearchSourceError(cause error) conversationSearchSourceError {
 	return conversationSearchSourceError{
 		code:    conversationSearchSourceUnavailable,
 		rpcCode: codes.FailedPrecondition,
-		cause:   nil,
+		cause:   cause,
 	}
 }
 
@@ -102,4 +99,9 @@ func sourceRPCCode(err error) codes.Code {
 		return codes.Unknown
 	}
 	return statusErr.GRPCStatus().Code()
+}
+
+func isConversationSearchSourceUnavailable(err error) bool {
+	code := sourceRPCCode(err)
+	return code == codes.Unavailable || code == codes.DeadlineExceeded
 }

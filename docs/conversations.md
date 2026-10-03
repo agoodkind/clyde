@@ -72,10 +72,6 @@ Use `clyde conversation search --query QUERY` to search the indexed corpus. Add
 browse conversation metadata. Search returns excerpts and result ids; export is
 the portable transcript path.
 
-[Search terms](https://github.com/agoodkind/lm-semantic-search/blob/main/docs/search.md)
-explains source occurrences, shared vectors, backend scoring batches, and result
-pagination for semantic search.
-
 ## Compaction Segments
 
 A compaction segment is an exportable span in a conversation. When a segment has

@@ -45,12 +45,7 @@ type runtimeServices struct {
 	mitmListeners   map[string][]net.Listener
 	mitmPacketConns map[string][]net.PacketConn
 	captureStore    *capture.Store
-	// embeddedStatus receives the embedded ingestion state for the daemon
-	// status RPC. The embedded sync worker publishes it.
-	embeddedStatus *embeddedSemanticStatus
-	// embeddedReconcile gives the control socket access to the running
-	// embedded ingestion worker for operator reconciliation.
-	embeddedReconcile *embeddedReconcileGate
+	semantic        *conversationSemanticRuntime
 	// pprofListener is the optional loopback pprof socket. It is nil when pprof
 	// is off. When set, it is inherited across reload like the adapter and MITM
 	// listeners so the debug surface survives a hot reload with no bind gap.
@@ -101,8 +96,7 @@ func startRuntime(
 		mitmListeners:         map[string][]net.Listener{},
 		mitmPacketConns:       map[string][]net.PacketConn{},
 		captureStore:          nil,
-		embeddedStatus:        newEmbeddedSemanticStatus(),
-		embeddedReconcile:     newEmbeddedReconcileGate(log),
+		semantic:              nil,
 		pprofListener:         nil,
 		errors:                make(chan error, 3),
 		reloadMu:              sync.Mutex{},
@@ -153,6 +147,7 @@ func startRuntime(
 		runtime.shutdown(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("pprof listener inherited but pprof is disabled; full daemon restart required")
 	}
+	runtime.semantic = startConversationSemanticRuntime(ctx, cfg, log, runtime.group)
 	return runtime, nil
 }
 

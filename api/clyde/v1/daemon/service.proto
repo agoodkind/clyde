@@ -45,20 +45,6 @@ service ClydeService {
   // the same freshness that rides each search response, so a status view can
   // read it without running a search.
   rpc GetSemanticSearchFreshness(GetSemanticSearchFreshnessRequest) returns (GetSemanticSearchFreshnessResponse);
-  // ReconcileEmbeddedConversation rebuilds the embedded ingestion outbox state
-  // of one conversation from the embedded search library inside the running
-  // daemon, between two sync passes.
-  rpc ReconcileEmbeddedConversation(ReconcileEmbeddedConversationRequest) returns (ReconcileEmbeddedConversationResponse);
-}
-
-message ReconcileEmbeddedConversationRequest {
-  string conversation_id = 1;
-}
-
-message ReconcileEmbeddedConversationResponse {
-  int64 published_rows = 1;
-  uint64 projection_order = 2;
-  int64 aborted_tokens = 3;
 }
 
 message GetSemanticSearchFreshnessRequest {
@@ -261,10 +247,6 @@ message GetConversationContextRequest {
   string load_rules = 6;
 }
 
-message ConversationSelection {
-  repeated string ids = 1;
-}
-
 message SearchConversationsRequest {
   string query = 1;
   int64 limit = 2;
@@ -290,8 +272,6 @@ message SearchConversationsRequest {
   // same query and filters. Empty starts a new search. A search source without
   // cursor paging refuses a non-empty cursor.
   string cursor = 14;
-  ConversationSelection conversation_selection = 15;
-  bool include_subagents = 16;
 }
 
 // SearchContextState states whether the source verified a match's
@@ -336,17 +316,6 @@ message ConversationSearchMatch {
   // before tagging existed.
   string load_rules = 8;
   SearchContextState context_state = 9;
-  SearchSourceIdentity source_identity = 10;
-}
-
-// SearchSourceIdentity identifies an original selected field span.
-message SearchSourceIdentity {
-  string conversation_id = 1;
-  int64 message_index = 2;
-  string content_kind = 3;
-  int64 tool_index = 4;
-  int64 source_byte_start = 5;
-  int64 source_byte_end = 6;
 }
 
 // SearchFacetCount is one facet value and how many matched conversations carry
@@ -614,9 +583,6 @@ enum SemanticConnectionState {
   SEMANTIC_CONNECTION_STATE_READY = 4;
   SEMANTIC_CONNECTION_STATE_IDLE = 5;
   SEMANTIC_CONNECTION_STATE_SHUTDOWN = 6;
-  // The daemon uses the in-process embedded library and opens no
-  // lm-semantic-search connection. SemanticStatus.embedded reports its state.
-  SEMANTIC_CONNECTION_STATE_EMBEDDED = 7;
 }
 
 message SemanticStatus {
@@ -625,19 +591,6 @@ message SemanticStatus {
   SemanticConnectionState connection = 3;
   int64 next_retry_unix = 4;
   uint64 attempts = 5;
-  // Absent unless the daemon uses the embedded backend.
-  EmbeddedSemanticStatus embedded = 6;
-}
-
-// EmbeddedSemanticStatus reports the embedded ingestion store after the last
-// sync pass.
-message EmbeddedSemanticStatus {
-  bool library_open = 1;
-  uint64 pending_batches = 2;
-  uint64 pending_projections = 3;
-  uint64 blocked_owners = 4;
-  // Up to 10 blocked conversation IDs in sorted order.
-  repeated string blocked_conversation_ids = 5;
 }
 
 message BoundListenerStatus {

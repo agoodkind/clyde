@@ -18,9 +18,9 @@ func TestConversationSemanticDirectionsFromConfig(t *testing.T) {
 	}{
 		{name: "omitted section", contents: "", wantFeeds: false, wantAnswers: false, wantUses: false},
 		{name: "explicit false", contents: "[conversation.semantic]\ningestion_enabled = false\nsearch_enabled = false\n", wantFeeds: false, wantAnswers: false, wantUses: false},
-		{name: "ingestion only", contents: "[conversation.semantic]\ningestion_enabled = true\n" + embeddedSemanticSettings, wantFeeds: true, wantAnswers: false, wantUses: true},
-		{name: "search only", contents: "[conversation.semantic]\nsearch_enabled = true\n" + embeddedSemanticSettings, wantFeeds: false, wantAnswers: true, wantUses: true},
-		{name: "both true", contents: "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = true\n" + embeddedSemanticSettings, wantFeeds: true, wantAnswers: true, wantUses: true},
+		{name: "ingestion only", contents: "[conversation.semantic]\ningestion_enabled = true\n", wantFeeds: true, wantAnswers: false, wantUses: true},
+		{name: "search only", contents: "[conversation.semantic]\nsearch_enabled = true\n", wantFeeds: false, wantAnswers: true, wantUses: true},
+		{name: "both true", contents: "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = true\n", wantFeeds: true, wantAnswers: true, wantUses: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()

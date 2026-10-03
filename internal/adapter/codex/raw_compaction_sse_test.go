@@ -237,8 +237,8 @@ func TestRawResponsesCompactionCandidateBufferFailsOpenAtCap(t *testing.T) {
 		}
 	case err := <-readErr:
 		t.Fatalf("read cap fail-open: %v", err)
-	case <-time.After(15 * time.Second):
-		t.Fatal("cap fail-open did not stream before upstream EOF")
+	case <-time.After(3 * time.Second):
+		t.Fatal("cap fail-open waited for upstream EOF")
 	}
 	releaseOnce.Do(func() { close(release) })
 	if err := <-writeDone; err != nil {
@@ -293,8 +293,8 @@ func TestRawResponsesCompactionOversizedUnterminatedFrameStreamsBeforeEOF(t *tes
 				}
 			case err := <-readErr:
 				t.Fatalf("read oversized unterminated frame: %v", err)
-			case <-time.After(15 * time.Second):
-				t.Fatal("oversized unterminated frame did not stream before upstream EOF")
+			case <-time.After(3 * time.Second):
+				t.Fatal("oversized unterminated frame waited for upstream EOF")
 			}
 			releaseOnce.Do(func() { close(release) })
 			if err := <-writeDone; err != nil {

@@ -13,24 +13,16 @@ import (
 // validation error.
 const conversationSemanticKey = "conversation.semantic."
 
-// maxConversationSemanticBM25K1 is the largest bm25_k1 the shared search
-// library accepts at Open. The library computes BM25 in float32 and also
-// rejects a nonzero value that converts to a float32 zero.
-const maxConversationSemanticBM25K1 = 1e6
-
-// Normal mode uses the Milvus single-search limit.
-const maxConversationSemanticQueryBlockSize = 16384
-
-const (
-	maxConversationSemanticScoreWindow     = 1000000
-	maxConversationSemanticVerifyBatchRows = 4096
-)
-
 // normalizeAndValidateConversationSemantic trims the embedded search settings,
 // expands the catalog and lock paths, and rejects values the embedded library
-// cannot accept.
+// cannot accept. The range checks run for every backend. After the embedded
+// backend settings pass their required checks, the function rejects
+// `backend = "embedded"`, because this build has no embedded runtime.
 func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConfig) error {
 	normalizeConversationSemanticStrings(semantic)
+	if err := validateConversationSemanticBackend(semantic.Backend); err != nil {
+		return err
+	}
 	if semantic.EmbeddingAPIKeyEnv != "" && semantic.EmbeddingAPIKeyFile != "" {
 		return invalidConversationSemanticSetting("embedding_api_key_env", "and "+conversationSemanticKey+"embedding_api_key_file are mutually exclusive")
 	}
@@ -43,18 +35,13 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 	if err := validateConversationSemanticRanking(semantic); err != nil {
 		return err
 	}
-	if semantic.UsesEngine() {
-		if semantic.ProjectionProfile != ConversationProjectionProfileLegacy && semantic.ProjectionProfile != ConversationProjectionProfileOriginal && semantic.ProjectionProfile != ConversationProjectionProfileSourceSpan {
-			return invalidConversationSemanticSetting("projection_profile", "must explicitly select p1, p2 or p3 for an enabled embedded store")
-		}
-		if semantic.IngestionEnabled && semantic.ProjectionProfile != ConversationProjectionProfileSourceSpan {
-			return invalidConversationSemanticSetting("projection_profile", "must select p3 for embedded ingestion; p1 and p2 are read-only")
-		}
+	if semantic.Backend != ConversationSemanticBackendEmbedded {
+		return nil
 	}
 	if err := validateEmbeddedConversationSemanticRequired(semantic); err != nil {
 		return err
 	}
-	return nil
+	return invalidConversationSemanticSetting("backend", fmt.Sprintf("= %q is not available in this Clyde build; remove the key to use the lm-semantic-search daemon", ConversationSemanticBackendEmbedded))
 }
 
 // invalidConversationSemanticSetting logs one rejected setting and returns an
@@ -72,7 +59,7 @@ func invalidConversationSemanticSetting(key string, problem string) error {
 }
 
 func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) {
-	semantic.ProjectionProfile = ConversationProjectionProfile(strings.TrimSpace(string(semantic.ProjectionProfile)))
+	semantic.Backend = ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend)))
 	semantic.IndexedProviders = trimmedNonEmpty(semantic.IndexedProviders)
 	semantic.IndexedRoles = trimmedNonEmpty(semantic.IndexedRoles)
 	semantic.CatalogPath = cleanExpandedPath(strings.TrimSpace(semantic.CatalogPath))
@@ -81,7 +68,6 @@ func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) 
 	semantic.MilvusAddress = strings.TrimSpace(semantic.MilvusAddress)
 	semantic.MilvusDatabase = strings.TrimSpace(semantic.MilvusDatabase)
 	semantic.MilvusCollection = strings.TrimSpace(semantic.MilvusCollection)
-	semantic.MilvusQueryMode = ConversationSemanticMilvusQueryMode(strings.TrimSpace(string(semantic.MilvusQueryMode)))
 	semantic.EmbeddingBaseURL = strings.TrimSpace(semantic.EmbeddingBaseURL)
 	semantic.EmbeddingAPIKeyEnv = strings.TrimSpace(semantic.EmbeddingAPIKeyEnv)
 	semantic.EmbeddingAPIKeyFile = cleanExpandedPath(strings.TrimSpace(semantic.EmbeddingAPIKeyFile))
@@ -99,6 +85,15 @@ func trimmedNonEmpty(values []string) []string {
 		}
 	}
 	return trimmed
+}
+
+func validateConversationSemanticBackend(backend ConversationSemanticBackend) error {
+	switch backend {
+	case "", ConversationSemanticBackendLMS, ConversationSemanticBackendEmbedded:
+		return nil
+	default:
+		return invalidConversationSemanticSetting("backend", fmt.Sprintf("must be %q or %q, got %q", ConversationSemanticBackendLMS, ConversationSemanticBackendEmbedded, backend))
+	}
 }
 
 // conversationSemanticSetting pairs a config key with its value for the
@@ -137,34 +132,7 @@ func validateConversationSemanticCounts(semantic *ConversationSemanticConfig) er
 		{key: "max_filter_values", value: int64(semantic.MaxFilterValues)},
 		{key: "rrf_k", value: int64(semantic.RRFK)},
 	}
-	if err := rejectNegativeConversationSemanticSettings(settings); err != nil {
-		return err
-	}
-	return validateConversationSemanticMilvusBounds(semantic)
-}
-
-func validateConversationSemanticMilvusBounds(semantic *ConversationSemanticConfig) error {
-	limit := maxConversationSemanticQueryBlockSize
-	switch semantic.MilvusQueryMode {
-	case ConversationSemanticMilvusQueryModeDefault, ConversationSemanticMilvusQueryModeNormal:
-		if semantic.MilvusMaxScoreWindow != 0 {
-			return invalidConversationSemanticSetting("milvus_max_score_window", "must be zero in normal mode")
-		}
-	case ConversationSemanticMilvusQueryModeLargeTopK:
-		if semantic.MilvusMaxScoreWindow < 1 || semantic.MilvusMaxScoreWindow > maxConversationSemanticScoreWindow {
-			return invalidConversationSemanticSetting("milvus_max_score_window", fmt.Sprintf("must be between 1 and %d in large_topk mode", maxConversationSemanticScoreWindow))
-		}
-		limit = semantic.MilvusMaxScoreWindow
-	default:
-		return invalidConversationSemanticSetting("milvus_query_mode", "must be normal or large_topk")
-	}
-	if semantic.MilvusMaxVerifyBatchRows < 0 || semantic.MilvusMaxVerifyBatchRows > maxConversationSemanticVerifyBatchRows {
-		return invalidConversationSemanticSetting("milvus_max_verify_batch_rows", fmt.Sprintf("must be zero for the default or between 1 and %d", maxConversationSemanticVerifyBatchRows))
-	}
-	if semantic.QueryBlockSize > limit {
-		return invalidConversationSemanticSetting("query_block_size", fmt.Sprintf("must be at most %d, got %d", limit, semantic.QueryBlockSize))
-	}
-	return nil
+	return rejectNegativeConversationSemanticSettings(settings)
 }
 
 func rejectNegativeConversationSemanticSettings(settings []conversationSemanticSetting) error {
@@ -177,9 +145,8 @@ func rejectNegativeConversationSemanticSettings(settings []conversationSemanticS
 }
 
 func validateConversationSemanticRanking(semantic *ConversationSemanticConfig) error {
-	k1 := semantic.BM25K1
-	if math.IsNaN(k1) || k1 < 0 || k1 > maxConversationSemanticBM25K1 || (k1 != 0 && float32(k1) == 0) {
-		return invalidConversationSemanticSetting("bm25_k1", fmt.Sprintf("must be 0 or positive as a float32 and at most %v, got %v", maxConversationSemanticBM25K1, k1))
+	if math.IsNaN(semantic.BM25K1) || math.IsInf(semantic.BM25K1, 0) || semantic.BM25K1 < 0 {
+		return invalidConversationSemanticSetting("bm25_k1", fmt.Sprintf("must be a finite number at least 0, got %v", semantic.BM25K1))
 	}
 	if semantic.BM25B != nil {
 		value := *semantic.BM25B
@@ -201,10 +168,7 @@ type conversationSemanticText struct {
 // configuration that lacks a store, Milvus, or embedding setting the library
 // needs to open.
 func validateEmbeddedConversationSemanticRequired(semantic *ConversationSemanticConfig) error {
-	if !semantic.UsesEngine() {
-		return nil
-	}
-	whenEmbedded := "when ingestion or search is enabled"
+	whenEmbedded := fmt.Sprintf("when %sbackend = %q", conversationSemanticKey, ConversationSemanticBackendEmbedded)
 	required := []conversationSemanticText{
 		{key: "pool_id", value: semantic.PoolID},
 		{key: "milvus_address", value: semantic.MilvusAddress},
