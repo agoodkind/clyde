@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"goodkind.io/clyde/internal/conversation/semsearch"
+	"goodkind.io/gksyntax/shelldecomp"
 	"goodkind.io/lm-semantic-search/collection"
 )
 
@@ -156,17 +157,59 @@ func appendContinuedField(
 	})
 }
 
-// toolContent returns the searchable text of one tool call: its name and its
-// display text, one token per line, skipping an empty or repeated token. The
-// lm-semantic-search daemon also decomposed a bash command into program names
-// and file targets with a parser that Clyde does not depend on. A bash command
-// here contributes its display text only, the same text the daemon wrote for a
-// command its parser could not decompose.
+// bashLangHint is the language hint of a tool call with a shell command.
+const bashLangHint = "bash"
+
+// toolContent returns the searchable text of one tool call: its name, the shell
+// tokens of a bash command, and its display text, one token per line, skipping
+// an empty or repeated token.
 func toolContent(tool semsearch.SemToolCall) string {
-	tokens := make([]string, 0, 2)
+	tokens := make([]string, 0)
 	tokens = appendToken(tokens, tool.Name)
+	display := strings.TrimSpace(tool.Display)
+	if display != "" && tool.LangHint == bashLangHint {
+		tokens = appendShellTokens(tokens, display)
+	}
 	tokens = appendToken(tokens, tool.Display)
 	return strings.Join(tokens, "\n")
+}
+
+// appendShellTokens parses a shell command with shelldecomp. It appends each
+// program name and each file target the command reads or writes. A command the
+// parser cannot decompose adds the raw command text. A parse with no tokens also
+// adds the raw command text.
+func appendShellTokens(tokens []string, command string) []string {
+	decomposition := shelldecomp.Parse(command, "/", "")
+	if decomposition == nil || decomposition.IsOpaque() {
+		return appendToken(tokens, command)
+	}
+	tokenCount := len(tokens)
+	for _, shellCommand := range decomposition.Commands() {
+		tokens = appendToken(tokens, shellCommand.Argv0)
+	}
+	for _, readTarget := range decomposition.ReadTargets() {
+		tokens = appendShellTarget(tokens, readTarget.Resolvable, readTarget.Path, readTarget.Raw)
+	}
+	for _, writeTarget := range decomposition.WriteTargets() {
+		tokens = appendShellTarget(tokens, writeTarget.Resolvable, writeTarget.Path, writeTarget.Raw)
+	}
+	if len(tokens) == tokenCount {
+		return appendToken(tokens, command)
+	}
+	return tokens
+}
+
+// appendShellTarget appends the resolved absolute path and the raw token when
+// they differ. The parser decomposes commands from the working directory "/".
+func appendShellTarget(tokens []string, resolvable bool, path string, raw string) []string {
+	if resolvable {
+		tokens = appendToken(tokens, path)
+		if strings.TrimSpace(raw) != "" && strings.TrimSpace(raw) != strings.TrimSpace(path) {
+			tokens = appendToken(tokens, raw)
+		}
+		return tokens
+	}
+	return appendToken(tokens, raw)
 }
 
 func appendToken(tokens []string, value string) []string {
