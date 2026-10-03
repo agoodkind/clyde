@@ -109,6 +109,9 @@ func (c *Client) UpsertConversationDocuments(
 		return "", err
 	}
 	stats := ingestStats{conversations: len(order), rowsWritten: 0, reused: 0, embedded: 0, split: 0, dropped: 0}
+	// writtenConversations lists each conversation that received rows, as
+	// "<conversation id>=<row count>", for the completion log record.
+	writtenConversations := make([]string, 0)
 	for _, conversationID := range order {
 		chunks, planErr := c.planConversation(conversationID, byConversation[conversationID], batch.state(conversationID))
 		if planErr != nil {
@@ -119,6 +122,9 @@ func (c *Client) UpsertConversationDocuments(
 			return "", err
 		}
 		stats.rowsWritten += writer.written
+		if writer.written > 0 {
+			writtenConversations = append(writtenConversations, fmt.Sprintf("%s=%d", conversationID, writer.written))
+		}
 		fingerprint, found := fingerprints[conversationID]
 		if !found {
 			continue
@@ -138,6 +144,7 @@ func (c *Client) UpsertConversationDocuments(
 		"collection", collectionName,
 		"conversations", stats.conversations,
 		"rows_written", stats.rowsWritten,
+		"written_conversations", writtenConversations,
 		"vectors_reused", stats.reused,
 		"vectors_embedded", stats.embedded,
 		"inputs_split", stats.split,
