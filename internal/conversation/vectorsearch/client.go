@@ -209,7 +209,7 @@ func (c *Client) SearchConversations(
 	if err != nil {
 		return nil, err
 	}
-	timing := searchTiming{embed: clock.Now().Sub(started), vectorReused: reused, rank: 0, load: 0, candidates: 0}
+	embedDuration := clock.Now().Sub(started)
 	request := collection.SearchRequest{
 		Collection:    CollectionName(trimmedCollectionID),
 		Query:         query,
@@ -225,7 +225,7 @@ func (c *Client) SearchConversations(
 		request.GroupBy = c.declaration.ItemIDColumn
 		request.PerGroupLimit = perConversationLimit
 	}
-	hits, err := c.search(ctx, request, &timing)
+	hits, timing, err := c.search(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -233,8 +233,8 @@ func (c *Client) SearchConversations(
 		"concern", "conversation.semantic",
 		"component", "conversation",
 		"collection", request.Collection,
-		"embed_ms", timing.embed.Milliseconds(),
-		"vector_reused", timing.vectorReused,
+		"embed_ms", embedDuration.Milliseconds(),
+		"vector_reused", reused,
 		"rank_ms", timing.rank.Milliseconds(),
 		"load_ms", timing.load.Milliseconds(),
 		"total_ms", clock.Now().Sub(started).Milliseconds(),
@@ -244,13 +244,12 @@ func (c *Client) SearchConversations(
 	return semHits(hits)
 }
 
-// searchTiming records how long each stage of one search took.
+// searchTiming is the duration of the rank and load stages of one search and
+// the number of ranked candidates.
 type searchTiming struct {
-	embed        time.Duration
-	vectorReused bool
-	rank         time.Duration
-	load         time.Duration
-	candidates   int
+	rank       time.Duration
+	load       time.Duration
+	candidates int
 }
 
 // queryVector returns the vector of a query and whether it came from the
@@ -323,7 +322,8 @@ func (c *Client) embedQuery(ctx context.Context, query string) ([]float32, error
 
 // search runs the ranking, resolves legacy conversation groups when the search
 // caps hits per conversation, selects the final hits, and loads their rows.
-func (c *Client) search(ctx context.Context, request collection.SearchRequest, timing *searchTiming) ([]collection.Hit, error) {
+func (c *Client) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error) {
+	timing := searchTiming{rank: 0, load: 0, candidates: 0}
 	rankStarted := clock.Now()
 	candidates, err := c.store.Rank(ctx, request)
 	if errors.Is(err, collection.ErrCollectionNotReady) {
@@ -335,12 +335,12 @@ func (c *Client) search(ctx context.Context, request collection.SearchRequest, t
 			"err", err,
 		)
 		if _, loadErr := c.loadCollectionIfPresent(ctx, request.Collection); loadErr != nil {
-			return nil, loadErr
+			return nil, timing, loadErr
 		}
 		candidates, err = c.store.Rank(ctx, request)
 	}
 	if errors.Is(err, collection.ErrCollectionMissing) {
-		return []collection.Hit{}, nil
+		return []collection.Hit{}, timing, nil
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "conversation.vectorsearch.rank_failed",
@@ -349,7 +349,7 @@ func (c *Client) search(ctx context.Context, request collection.SearchRequest, t
 			"collection", request.Collection,
 			"err", err,
 		)
-		return nil, fmt.Errorf("rank %s: %w", request.Collection, err)
+		return nil, timing, fmt.Errorf("rank %s: %w", request.Collection, err)
 	}
 	groupColumn, grouped := milvusstore.GroupColumnFor(request)
 	perGroupLimit := int32(0)
@@ -358,7 +358,7 @@ func (c *Client) search(ctx context.Context, request collection.SearchRequest, t
 		if groupColumn.Name == request.Declaration.ItemIDColumn {
 			candidates, err = resolveLegacyGroups(ctx, c.milvus, request.Collection, candidates)
 			if err != nil {
-				return nil, err
+				return nil, timing, err
 			}
 		}
 	}
@@ -379,7 +379,7 @@ func (c *Client) search(ctx context.Context, request collection.SearchRequest, t
 			"collection", request.Collection,
 			"err", err,
 		)
-		return nil, fmt.Errorf("load %s: %w", request.Collection, err)
+		return nil, timing, fmt.Errorf("load %s: %w", request.Collection, err)
 	}
-	return hits, nil
+	return hits, timing, nil
 }
