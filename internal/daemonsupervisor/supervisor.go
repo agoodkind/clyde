@@ -409,12 +409,12 @@ func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os
 			aborted := current
 			current = superseded[len(superseded)-1]
 			superseded = superseded[:len(superseded)-1]
-			request.done <- nil
 			log.WarnContext(ctx, "daemon.supervisor.replacement_aborted", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"pid", aborted.cmd.Process.Pid,
 				"restored_pid", current.cmd.Process.Pid,
 			)
 			stopWorker(log, aborted.cmd, syscall.SIGTERM, aborted.waitCh)
+			request.done <- nil
 		case err := <-current.waitCh:
 			return workerExitError(err)
 		case err := <-controlErrCh:
