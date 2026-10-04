@@ -201,7 +201,9 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 		"pid", handle.cmd.Process.Pid,
 	)
 
-	replacementCh := make(chan workerHandle, 1)
+	// Unbuffered: the loop records a replacement before the control handler
+	// answers, and a later abort for that replacement finds it current.
+	replacementCh := make(chan workerHandle)
 	abortCh := make(chan abortRequest)
 	controlErrCh := make(chan error, 1)
 	go func() {
