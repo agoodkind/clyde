@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -96,6 +97,7 @@ func reloadDaemonWorker(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 				"pid", pid,
 				"err", abortErr,
 			)
+			return nil, errors.Join(err, fmt.Errorf("stop replacement daemon worker %d: %w", pid, abortErr))
 		}
 		return nil, err
 	}

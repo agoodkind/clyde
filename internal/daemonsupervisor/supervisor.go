@@ -201,8 +201,9 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 		"pid", handle.cmd.Process.Pid,
 	)
 
-	// Unbuffered: the loop records a replacement before the control handler
-	// answers, and a later abort for that replacement finds it current.
+	// replacementCh is unbuffered. runSupervisorLoop stores a replacement
+	// before handleControl answers the replace request, and a later abort
+	// request finds that replacement current.
 	replacementCh := make(chan workerHandle)
 	abortCh := make(chan abortRequest)
 	controlErrCh := make(chan error, 1)
@@ -426,7 +427,6 @@ func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os
 	}
 }
 
-// runningWorkers returns the workers that have not exited.
 func runningWorkers(workers []workerHandle) []workerHandle {
 	running := make([]workerHandle, 0, len(workers))
 	for _, worker := range workers {
