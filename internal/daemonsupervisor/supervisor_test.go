@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestWorkerCommandUsesHiddenWorkerRoleAndReadyFD(t *testing.T) {
@@ -345,6 +348,106 @@ func TestCompiledFingerprintDefaultsWhenEmpty(t *testing.T) {
 		t.Fatalf("compiled fingerprint = %q, want %q", got, buildFingerprintDefault)
 	}
 }
+
+// TestSupervisorStopsAbortedAndSupersededWorkers runs a supervisor with real
+// worker processes and sends the control requests over its socket. An abort
+// stops the replacement and the first worker stays current. A supervisor stop
+// then ends the current worker and the worker it superseded.
+func TestSupervisorStopsAbortedAndSupersededWorkers(t *testing.T) {
+	// A unix socket path under t.TempDir exceeds the macOS path limit.
+	runtimeDir := filepath.Join("/tmp", fmt.Sprintf("clyde-supervisor-abort-%d", os.Getpid()))
+	if err := os.RemoveAll(runtimeDir); err != nil {
+		t.Fatalf("clear stale runtime dir: %v", err)
+	}
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatalf("mkdir runtime dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+
+	// The worker script records its pid, reports ready on fd 3, and sleeps.
+	pidFilePath := filepath.Join(runtimeDir, "worker-pids")
+	workerPath := filepath.Join(runtimeDir, "worker.sh")
+	workerScript := "#!/bin/sh\necho $$ >> \"$CLYDE_TEST_PID_FILE\"\necho ready >&3\nexec 3>&-\nexec sleep 120\n"
+	if err := os.WriteFile(workerPath, []byte(workerScript), 0o700); err != nil {
+		t.Fatalf("write worker script: %v", err)
+	}
+	t.Setenv("CLYDE_TEST_PID_FILE", pidFilePath)
+	previousExecutablePath := supervisorExecutablePath
+	supervisorExecutablePath = func() (string, error) { return workerPath, nil }
+	t.Cleanup(func() { supervisorExecutablePath = previousExecutablePath })
+	alive := func(pid int) bool { return syscall.Kill(pid, 0) == nil }
+	waitFor := func(condition func() bool, failure string) {
+		t.Helper()
+		for range supervisorTestPollAttempts {
+			if condition() {
+				return
+			}
+			time.Sleep(supervisorTestPollInterval)
+		}
+		t.Fatal(failure)
+	}
+	requestReplacement := func(ctx context.Context) int {
+		t.Helper()
+		readyRead, readyWrite, pipeErr := os.Pipe()
+		if pipeErr != nil {
+			t.Fatalf("create readiness pipe: %v", pipeErr)
+		}
+		defer readyRead.Close()
+		defer readyWrite.Close()
+		pid, requestErr := RequestReplacement(ctx, SocketPath(runtimeDir), workerPath, nil, 3, os.Environ(), []*os.File{readyWrite})
+		if requestErr != nil {
+			t.Fatalf("request replacement: %v", requestErr)
+		}
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+		return pid
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	supervisorDone := make(chan error, 1)
+	go func() {
+		supervisorDone <- SuperviseContext(ctx, slog.Default(), runtimeDir)
+	}()
+	waitFor(func() bool {
+		_, statusErr := RequestStatus(ctx, SocketPath(runtimeDir))
+		return statusErr == nil
+	}, "supervisor did not answer a status request")
+	pidFile, err := os.ReadFile(pidFilePath)
+	if err != nil {
+		t.Fatalf("read worker pid file: %v", err)
+	}
+	firstPID, err := strconv.Atoi(strings.Fields(string(pidFile))[0])
+	if err != nil {
+		t.Fatalf("parse first worker pid: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(firstPID, syscall.SIGKILL) })
+
+	abortedPID := requestReplacement(ctx)
+	if err := RequestAbort(ctx, SocketPath(runtimeDir), abortedPID); err != nil {
+		t.Fatalf("request abort: %v", err)
+	}
+	waitFor(func() bool { return !alive(abortedPID) }, "aborted replacement worker is still alive")
+	if !alive(firstPID) {
+		t.Fatal("first worker stopped after its replacement was aborted")
+	}
+
+	secondPID := requestReplacement(ctx)
+	cancel()
+	if err := <-supervisorDone; err != nil {
+		t.Fatalf("supervisor: %v", err)
+	}
+	if alive(secondPID) {
+		t.Fatal("current worker is still alive after the supervisor stopped")
+	}
+	if alive(firstPID) {
+		t.Fatal("superseded worker is still alive after the supervisor stopped")
+	}
+}
+
+const (
+	supervisorTestPollAttempts = 400
+	supervisorTestPollInterval = 25 * time.Millisecond
+)
 
 func envContains(env []string, want string) bool {
 	for _, entry := range env {
