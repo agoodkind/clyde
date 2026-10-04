@@ -1,7 +1,7 @@
 // Package status owns the top-level clyde status command: one raw snapshot of
 // the daemon, feeder, provider, and MITM state, auto-refreshed on a terminal
-// and printed once everywhere else. The terminal view follows the
-// lm-semantic-search status command.
+// and printed once everywhere else. The lm-semantic-search status package
+// renders both forms.
 package status
 
 import (
@@ -10,11 +10,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	lmstatus "goodkind.io/lm-semantic-search/status"
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/output"
@@ -74,15 +74,21 @@ func run(ctx context.Context, f *cli.Factory, cmd *cobra.Command, once bool, int
 	stdout, isFile := f.IOStreams.Out.(*os.File)
 	live := !once && isFile && term.IsTerminal(int(stdout.Fd()))
 	if !live {
-		snapshot := gatherSnapshot(ctx)
-		body := strings.Join(renderPlainLines(buildMetrics(snapshot)), "\n") + "\n"
+		body := lmstatus.Dump(buildSnapshot(gatherSnapshot(ctx), f.Build.Version)) + "\n"
 		if err := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, body); err != nil {
 			slog.ErrorContext(ctx, "cli.status.write_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 			return fmt.Errorf("write status snapshot: %w", err)
 		}
 		return nil
 	}
-	return runLive(ctx, f, f.Build.Version, interval)
+	source := func() (lmstatus.Snapshot, error) {
+		return buildSnapshot(gatherSnapshot(ctx), f.Build.Version), nil
+	}
+	if err := lmstatus.Run(source, lmstatus.Options{Interval: interval, Once: false, Now: clock.Now}); err != nil {
+		slog.ErrorContext(ctx, "cli.status.view_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
+		return fmt.Errorf("run the status view: %w", err)
+	}
+	return nil
 }
 
 // resolveFormat reads the persistent output format flag; an unset or invalid
