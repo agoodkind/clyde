@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -343,6 +345,63 @@ func TestCompiledFingerprintDefaultsWhenEmpty(t *testing.T) {
 	})
 	if got := CompiledFingerprint(); got != buildFingerprintDefault {
 		t.Fatalf("compiled fingerprint = %q, want %q", got, buildFingerprintDefault)
+	}
+}
+
+// TestSupervisorLoopStopsAbortedAndSupersededWorkers runs the loop with real
+// child processes. An abort stops the replacement and the first worker stays
+// current. A supervisor stop then ends the current worker and the worker it
+// superseded.
+func TestSupervisorLoopStopsAbortedAndSupersededWorkers(t *testing.T) {
+	startSleeper := func() workerHandle {
+		handle, err := startWorker(exec.Command("sleep", "120"))
+		if err != nil {
+			t.Fatalf("start worker process: %v", err)
+		}
+		t.Cleanup(func() { _ = handle.cmd.Process.Kill() })
+		return handle
+	}
+	running := func(handle workerHandle) bool {
+		return handle.cmd.Process.Signal(syscall.Signal(0)) == nil
+	}
+	first := startSleeper()
+	lateReplacement := startSleeper()
+	secondReplacement := startSleeper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	replacementCh := make(chan workerHandle)
+	abortCh := make(chan abortRequest)
+	loopDone := make(chan error, 1)
+	go func() {
+		loopDone <- runSupervisorLoop(ctx, slog.Default(), make(chan os.Signal), first, replacementCh, abortCh, make(chan error))
+	}()
+
+	replacementCh <- lateReplacement
+	abort := abortRequest{pid: lateReplacement.cmd.Process.Pid, done: make(chan error, 1)}
+	abortCh <- abort
+	if err := <-abort.done; err != nil {
+		t.Fatalf("abort replacement: %v", err)
+	}
+
+	// The loop handles the next request only after it stopped the aborted worker.
+	replacementCh <- secondReplacement
+	if running(lateReplacement) {
+		t.Fatal("aborted replacement worker is still running")
+	}
+	if !running(first) {
+		t.Fatal("first worker stopped after its replacement was aborted")
+	}
+
+	cancel()
+	if err := <-loopDone; err != nil {
+		t.Fatalf("supervisor loop: %v", err)
+	}
+	if running(secondReplacement) {
+		t.Fatal("current worker is still running after the supervisor stopped")
+	}
+	if running(first) {
+		t.Fatal("superseded worker is still running after the supervisor stopped")
 	}
 }
 

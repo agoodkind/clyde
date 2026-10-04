@@ -42,9 +42,12 @@ const (
 	// listener file descriptors to inherit (only the daemon control socket) and
 	// which to leave for a fresh bind.
 	controlOperationRebind = "rebind"
-	requestTimeout         = 5 * time.Second
-	workerReadyTimeout     = 5 * time.Second
-	workerStopTimeout      = 5 * time.Second
+	// controlOperationAbort stops a replacement worker that did not become
+	// ready and makes the worker it replaced current again.
+	controlOperationAbort = "abort_replacement"
+	requestTimeout        = 5 * time.Second
+	workerReadyTimeout    = 5 * time.Second
+	workerStopTimeout     = 5 * time.Second
 	// controlLengthPrefixBytes is the fixed big-endian length header written
 	// before a control request body so the receiver knows the exact body size.
 	controlLengthPrefixBytes = 4
@@ -82,6 +85,15 @@ type controlRequest struct {
 	Environment    []string       `json:"environment,omitempty"`
 	Listeners      []ListenerSpec `json:"listeners,omitempty"`
 	ReadyFD        int            `json:"ready_fd,omitempty"`
+	// PID is the replacement worker an abort request stops.
+	PID int `json:"pid,omitempty"`
+}
+
+// abortRequest asks the supervisor loop to stop the replacement worker with
+// the given pid. The loop sends the outcome on done.
+type abortRequest struct {
+	pid  int
+	done chan error
 }
 
 type controlResponse struct {
@@ -190,6 +202,7 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 	)
 
 	replacementCh := make(chan workerHandle, 1)
+	abortCh := make(chan abortRequest)
 	controlErrCh := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -197,10 +210,25 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 				logSupervisorPanic(log, "daemon.supervisor.reload_control", fmt.Sprint(recovered))
 			}
 		}()
-		serveControl(log, controlListener, replacementCh, controlErrCh)
+		serveControl(log, controlListener, replacementCh, abortCh, controlErrCh)
 	}()
 
-	return runSupervisorLoop(ctx, log, signalCh, handle, replacementCh, controlErrCh)
+	return runSupervisorLoop(ctx, log, signalCh, handle, replacementCh, abortCh, controlErrCh)
+}
+
+// RequestAbort asks the running supervisor to stop the replacement worker with
+// the given pid and to make the worker it replaced current again.
+func RequestAbort(ctx context.Context, socketPath string, pid int) error {
+	_, err := sendControlRequest(ctx, strings.TrimSpace(socketPath), controlRequest{
+		Operation:      controlOperationAbort,
+		ExecutablePath: "",
+		Arguments:      nil,
+		Environment:    nil,
+		Listeners:      nil,
+		ReadyFD:        0,
+		PID:            pid,
+	}, nil)
+	return err
 }
 
 // RequestReplacement asks the running supervisor to replace its worker process.
@@ -236,6 +264,7 @@ func RequestReplacement(
 		),
 		Listeners: listeners,
 		ReadyFD:   readyFD,
+		PID:       0,
 	}
 	resp, err := sendControlRequest(ctx, socketPath, req, files)
 	if err != nil {
@@ -285,6 +314,7 @@ func RequestRebind(
 		),
 		Listeners: listeners,
 		ReadyFD:   readyFD,
+		PID:       0,
 	}
 	resp, err := sendControlRequest(ctx, socketPath, req, files)
 	if err != nil {
@@ -305,6 +335,7 @@ func RequestStatus(ctx context.Context, socketPath string) (Status, error) {
 		Environment:    nil,
 		Listeners:      nil,
 		ReadyFD:        0,
+		PID:            0,
 	}, nil)
 	if err != nil {
 		return Status{}, err
@@ -341,8 +372,17 @@ func EnvWithOverrides(base []string, overrides ...string) []string {
 	return out
 }
 
-func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os.Signal, handle workerHandle, replacementCh <-chan workerHandle, controlErrCh <-chan error) error {
+func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os.Signal, handle workerHandle, replacementCh <-chan workerHandle, abortCh <-chan abortRequest, controlErrCh <-chan error) error {
 	current := handle
+	// superseded lists the workers that a replacement took over from. A
+	// superseded worker exits after its drain, or stays in service when its
+	// replacement never became ready.
+	var superseded []workerHandle
+	defer func() {
+		for _, worker := range superseded {
+			stopWorker(log, worker.cmd, syscall.SIGTERM, worker.waitCh)
+		}
+	}()
 	for {
 		select {
 		case sig := <-signalCh:
@@ -353,10 +393,26 @@ func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os
 			stopWorker(log, current.cmd, sig, current.waitCh)
 			return nil
 		case replacement := <-replacementCh:
+			superseded = append(runningWorkers(superseded), current)
 			current = replacement
 			log.DebugContext(ctx, "daemon.supervisor.worker_replaced", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"pid", current.cmd.Process.Pid,
 			)
+		case request := <-abortCh:
+			superseded = runningWorkers(superseded)
+			if current.cmd.Process.Pid != request.pid || len(superseded) == 0 {
+				request.done <- fmt.Errorf("worker %d is not a replacement with a running predecessor", request.pid)
+				continue
+			}
+			aborted := current
+			current = superseded[len(superseded)-1]
+			superseded = superseded[:len(superseded)-1]
+			request.done <- nil
+			log.WarnContext(ctx, "daemon.supervisor.replacement_aborted", "concern", "process.daemon.lifecycle", "component", "daemon",
+				"pid", aborted.cmd.Process.Pid,
+				"restored_pid", current.cmd.Process.Pid,
+			)
+			stopWorker(log, aborted.cmd, syscall.SIGTERM, aborted.waitCh)
 		case err := <-current.waitCh:
 			return workerExitError(err)
 		case err := <-controlErrCh:
@@ -366,6 +422,19 @@ func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os
 			return nil
 		}
 	}
+}
+
+// runningWorkers returns the workers that have not exited.
+func runningWorkers(workers []workerHandle) []workerHandle {
+	running := make([]workerHandle, 0, len(workers))
+	for _, worker := range workers {
+		select {
+		case <-worker.waitCh:
+		default:
+			running = append(running, worker)
+		}
+	}
+	return running
 }
 
 func workerCommand(executablePath string, readyWrite *os.File, readyFD int, supervisorSocketPath string) *exec.Cmd {
@@ -472,7 +541,7 @@ func workerExitError(err error) error {
 	return fmt.Errorf("daemon worker exited: %w", err)
 }
 
-func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh chan<- workerHandle, errCh chan<- error) {
+func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh chan<- workerHandle, abortCh chan<- abortRequest, errCh chan<- error) {
 	supervisorSocketPath := listener.Addr().String()
 	for {
 		conn, err := listener.AcceptUnix()
@@ -489,12 +558,12 @@ func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh ch
 					logSupervisorPanic(log, "daemon.supervisor.reload_request", fmt.Sprint(recovered))
 				}
 			}()
-			handleControl(log, conn, replacementCh, supervisorSocketPath)
+			handleControl(log, conn, replacementCh, abortCh, supervisorSocketPath)
 		}()
 	}
 }
 
-func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- workerHandle, supervisorSocketPath string) {
+func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- workerHandle, abortCh chan<- abortRequest, supervisorSocketPath string) {
 	defer func() { _ = conn.Close() }()
 	req, files, err := readControlRequest(conn)
 	if err != nil {
@@ -512,6 +581,21 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 		}
 		if err := json.NewEncoder(conn).Encode(resp); err != nil {
 			log.Warn("daemon.supervisor.status_response_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+				"err", err,
+			)
+		}
+		return
+	case controlOperationAbort:
+		request := abortRequest{pid: req.PID, done: make(chan error, 1)}
+		abortCh <- request
+		if err := <-request.done; err != nil {
+			writeControlError(conn, err)
+			return
+		}
+		resp := controlResponse{PID: req.PID, Fingerprint: "", Error: ""}
+		if err := json.NewEncoder(conn).Encode(resp); err != nil {
+			log.Warn("daemon.supervisor.abort_response_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+				"pid", req.PID,
 				"err", err,
 			)
 		}

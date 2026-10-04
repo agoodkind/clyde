@@ -84,6 +84,19 @@ func reloadDaemonWorker(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	}
 	_ = readyWrite.Close()
 	if err := waitForReplacementDaemon(ctx, readyRead); err != nil {
+		// This worker stays in service. Without the abort the replacement
+		// keeps running and shares the inherited listener sockets.
+		abortErr := daemonsupervisor.RequestAbort(
+			context.WithoutCancel(ctx),
+			daemonsupervisor.SocketPath(config.RuntimeDir()),
+			pid,
+		)
+		if abortErr != nil {
+			log.WarnContext(ctx, "daemon.reload.abort_replacement_failed", "concern", "daemon.workers.reload", "component", "daemon",
+				"pid", pid,
+				"err", abortErr,
+			)
+		}
 		return nil, err
 	}
 	// The replacement generation is ready and runs its own config watcher.
