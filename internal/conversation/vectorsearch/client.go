@@ -264,6 +264,19 @@ func (c *Client) embedQuery(ctx context.Context, query string) ([]float32, error
 // caps hits per conversation, selects the final hits, and loads their rows.
 func (c *Client) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, error) {
 	candidates, err := c.store.Rank(ctx, request)
+	if errors.Is(err, collection.ErrCollectionNotReady) {
+		// Another Milvus client can release the collection.
+		slog.WarnContext(ctx, "conversation.vectorsearch.collection_reloaded",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection", request.Collection,
+			"err", err,
+		)
+		if _, loadErr := c.loadCollectionIfPresent(ctx, request.Collection); loadErr != nil {
+			return nil, loadErr
+		}
+		candidates, err = c.store.Rank(ctx, request)
+	}
 	if errors.Is(err, collection.ErrCollectionMissing) {
 		return []collection.Hit{}, nil
 	}
