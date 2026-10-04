@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/lm-semantic-search/collection"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
@@ -30,6 +31,8 @@ const (
 	milvusConnectTimeout = 2 * time.Second
 	// milvusCloseTimeout bounds closing the Milvus connection.
 	milvusCloseTimeout = 5 * time.Second
+	// queryVectorCacheSize is the number of query vectors the client caches.
+	queryVectorCacheSize = 64
 )
 
 // operationError pairs a failed operation with its cause. The constructors
@@ -87,6 +90,12 @@ type Client struct {
 	ingestMu sync.Mutex
 	ensured  map[string]bool
 	jobCount int
+
+	// vectorMu guards the query vector cache. vectorOrder lists the cached
+	// queries, oldest first.
+	vectorMu    sync.Mutex
+	vectors     map[string][]float32
+	vectorOrder []string
 }
 
 // loadCollectionIfPresent reports whether the collection exists and loads it
@@ -153,6 +162,9 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 		ingestMu:       sync.Mutex{},
 		ensured:        make(map[string]bool),
 		jobCount:       0,
+		vectorMu:       sync.Mutex{},
+		vectors:        make(map[string][]float32, queryVectorCacheSize),
+		vectorOrder:    nil,
 	}, nil
 }
 
@@ -192,10 +204,12 @@ func (c *Client) SearchConversations(
 	if trimmedCollectionID == "" {
 		return nil, errors.New("search semantic conversations: collection id is empty")
 	}
-	vector, err := c.embedQuery(ctx, query)
+	started := clock.Now()
+	vector, reused, err := c.queryVector(ctx, query)
 	if err != nil {
 		return nil, err
 	}
+	timing := searchTiming{embed: clock.Now().Sub(started), vectorReused: reused, rank: 0, load: 0, candidates: 0}
 	request := collection.SearchRequest{
 		Collection:    CollectionName(trimmedCollectionID),
 		Query:         query,
@@ -211,11 +225,58 @@ func (c *Client) SearchConversations(
 		request.GroupBy = c.declaration.ItemIDColumn
 		request.PerGroupLimit = perConversationLimit
 	}
-	hits, err := c.search(ctx, request)
+	hits, err := c.search(ctx, request, &timing)
 	if err != nil {
 		return nil, err
 	}
+	slog.InfoContext(ctx, "conversation.vectorsearch.search_completed",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"collection", request.Collection,
+		"embed_ms", timing.embed.Milliseconds(),
+		"vector_reused", timing.vectorReused,
+		"rank_ms", timing.rank.Milliseconds(),
+		"load_ms", timing.load.Milliseconds(),
+		"total_ms", clock.Now().Sub(started).Milliseconds(),
+		"candidates", timing.candidates,
+		"hits", len(hits),
+	)
 	return semHits(hits)
+}
+
+// searchTiming records how long each stage of one search took.
+type searchTiming struct {
+	embed        time.Duration
+	vectorReused bool
+	rank         time.Duration
+	load         time.Duration
+	candidates   int
+}
+
+// queryVector returns the vector of a query and whether it came from the
+// cache. A paged search sends the same query once per page.
+func (c *Client) queryVector(ctx context.Context, query string) ([]float32, bool, error) {
+	c.vectorMu.Lock()
+	cached, found := c.vectors[query]
+	c.vectorMu.Unlock()
+	if found {
+		return cached, true, nil
+	}
+	vector, err := c.embedQuery(ctx, query)
+	if err != nil {
+		return nil, false, err
+	}
+	c.vectorMu.Lock()
+	defer c.vectorMu.Unlock()
+	if _, present := c.vectors[query]; !present {
+		if len(c.vectorOrder) >= queryVectorCacheSize {
+			delete(c.vectors, c.vectorOrder[0])
+			c.vectorOrder = c.vectorOrder[1:]
+		}
+		c.vectors[query] = vector
+		c.vectorOrder = append(c.vectorOrder, query)
+	}
+	return vector, false, nil
 }
 
 // SearchWithinConversation ranks one conversation's rows for query. The
@@ -262,7 +323,8 @@ func (c *Client) embedQuery(ctx context.Context, query string) ([]float32, error
 
 // search runs the ranking, resolves legacy conversation groups when the search
 // caps hits per conversation, selects the final hits, and loads their rows.
-func (c *Client) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, error) {
+func (c *Client) search(ctx context.Context, request collection.SearchRequest, timing *searchTiming) ([]collection.Hit, error) {
+	rankStarted := clock.Now()
 	candidates, err := c.store.Rank(ctx, request)
 	if errors.Is(err, collection.ErrCollectionNotReady) {
 		// Another Milvus client can release the collection.
@@ -305,7 +367,11 @@ func (c *Client) search(ctx context.Context, request collection.SearchRequest) (
 		limit = defaultSearchLimit
 	}
 	selected := milvusstore.SelectCandidates(candidates, perGroupLimit, request.MinScore, limit)
+	loadStarted := clock.Now()
+	timing.rank = loadStarted.Sub(rankStarted)
+	timing.candidates = len(candidates)
 	hits, err := c.store.Load(ctx, request.Collection, selected, request.Declaration.Scalars)
+	timing.load = clock.Now().Sub(loadStarted)
 	if err != nil {
 		slog.WarnContext(ctx, "conversation.vectorsearch.load_failed",
 			"concern", "conversation.semantic",
