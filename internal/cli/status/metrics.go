@@ -4,135 +4,117 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	lmstatus "goodkind.io/lm-semantic-search/status"
 )
 
-// statusMetric is one displayed fact: a dotted name, its display value, an
-// optional unit, and the integer form when the value is a counter, which is
-// what the terminal view diffs between refreshes.
-type statusMetric struct {
-	group    string
-	name     string
-	value    string
-	unit     string
-	intValue int64
-	isInt    bool
+func textField(group, name, value string) lmstatus.Field {
+	return lmstatus.Field{Group: group, Name: name, Unit: "", Value: lmstatus.Text(value), NoDelta: false}
 }
 
-func textMetric(group, name, value string) statusMetric {
-	return statusMetric{group: group, name: name, value: value, unit: "", intValue: 0, isInt: false}
+func intField(group, name string, value int64, unit string) lmstatus.Field {
+	return lmstatus.Field{Group: group, Name: name, Unit: unit, Value: lmstatus.Int(value), NoDelta: false}
 }
 
-func intMetric(group, name string, value int64, unit string) statusMetric {
-	return statusMetric{group: group, name: name, value: strconv.FormatInt(value, 10), unit: unit, intValue: value, isInt: true}
+func boolField(group, name string, value bool) lmstatus.Field {
+	return lmstatus.Field{Group: group, Name: name, Unit: "", Value: lmstatus.Bool(value), NoDelta: false}
 }
 
-func boolMetric(group, name string, value bool) statusMetric {
-	return textMetric(group, name, strconv.FormatBool(value))
+// buildSnapshot converts one gathered snapshot to the shared display form.
+func buildSnapshot(snapshot statusSnapshot, build string) lmstatus.Snapshot {
+	runID := ""
+	if snapshot.report.SupervisorPID > 0 {
+		runID = strconv.Itoa(snapshot.report.SupervisorPID)
+	}
+	return lmstatus.Snapshot{
+		Title:    "clyde  version=" + build,
+		Details:  nil,
+		Notices:  nil,
+		Identity: nil,
+		RunID:    runID,
+		Counters: buildFields(snapshot),
+		Activity: nil,
+	}
 }
 
-// quotedError renders an error string the way the engine renders strings that
-// could hold escapes: quoted, so a message cannot move the cursor.
-func quotedError(group, name string, err error) statusMetric {
-	return textMetric(group, name, strconv.Quote(err.Error()))
-}
-
-// buildMetrics flattens one snapshot into display order. Each section carries
-// its own error metric so a dead surface stays visible beside the sections
-// that answered.
-func buildMetrics(snapshot statusSnapshot) []statusMetric {
-	metrics := []statusMetric{
-		boolMetric("daemon", "daemon.responding", snapshot.report.DaemonResponding),
-		textMetric("daemon", "daemon.socket", snapshot.report.DaemonSocketPath),
-		boolMetric("daemon", "daemon.socket_exists", snapshot.report.DaemonSocketExists),
+// buildFields lists every fact in display order. A failed section becomes one
+// error field, and the other sections stay.
+func buildFields(snapshot statusSnapshot) []lmstatus.Field {
+	fields := []lmstatus.Field{
+		boolField("daemon", "daemon.responding", snapshot.report.DaemonResponding),
+		textField("daemon", "daemon.socket", snapshot.report.DaemonSocketPath),
+		boolField("daemon", "daemon.socket_exists", snapshot.report.DaemonSocketExists),
 	}
 	if snapshot.report.DaemonError != "" {
-		metrics = append(metrics, textMetric("daemon", "daemon.error", strconv.Quote(snapshot.report.DaemonError)))
+		fields = append(fields, textField("daemon", "daemon.error", snapshot.report.DaemonError))
 	}
-	metrics = append(metrics,
-		boolMetric("daemon", "supervisor.responding", snapshot.report.SupervisorResponding),
-		intMetric("daemon", "supervisor.pid", int64(snapshot.report.SupervisorPID), ""),
-		textMetric("daemon", "supervisor.fingerprint", snapshot.report.SupervisorFingerprint),
+	supervisorPID := intField("daemon", "supervisor.pid", int64(snapshot.report.SupervisorPID), "")
+	supervisorPID.NoDelta = true
+	fields = append(fields,
+		boolField("daemon", "supervisor.responding", snapshot.report.SupervisorResponding),
+		supervisorPID,
+		textField("daemon", "supervisor.fingerprint", snapshot.report.SupervisorFingerprint),
 	)
 	if snapshot.report.SupervisorError != "" {
-		metrics = append(metrics, textMetric("daemon", "supervisor.error", strconv.Quote(snapshot.report.SupervisorError)))
+		fields = append(fields, textField("daemon", "supervisor.error", snapshot.report.SupervisorError))
 	}
 	workerPids := make([]string, 0, len(snapshot.report.WorkerPIDs))
 	for _, pid := range snapshot.report.WorkerPIDs {
 		workerPids = append(workerPids, strconv.Itoa(pid))
 	}
-	metrics = append(metrics, textMetric("daemon", "worker.pids", strings.Join(workerPids, ",")))
+	fields = append(fields, textField("daemon", "worker.pids", strings.Join(workerPids, ",")))
 	if snapshot.report.WorkerError != "" {
-		metrics = append(metrics, textMetric("daemon", "worker.error", strconv.Quote(snapshot.report.WorkerError)))
+		fields = append(fields, textField("daemon", "worker.error", snapshot.report.WorkerError))
 	}
 	if snapshot.report.LaunchdTarget != "" {
-		metrics = append(metrics, textMetric("daemon", "launchd.target", snapshot.report.LaunchdTarget))
+		fields = append(fields, textField("daemon", "launchd.target", snapshot.report.LaunchdTarget))
 	}
 
 	if snapshot.freshnessErr != nil {
-		metrics = append(metrics, quotedError("semantic_freshness", "semantic_freshness.error", snapshot.freshnessErr))
+		fields = append(fields, textField("semantic_freshness", "semantic_freshness.error", snapshot.freshnessErr.Error()))
 	} else {
-		lastSync := "null"
+		lastSync := lmstatus.Field{Group: "semantic_freshness", Name: "semantic_freshness.last_sync", Unit: "", Value: lmstatus.Value{}, NoDelta: false}
 		if snapshot.freshness.LastSyncUnix > 0 {
-			lastSync = time.Unix(snapshot.freshness.LastSyncUnix, 0).Format(time.RFC3339)
+			lastSync.Value = lmstatus.Text(time.Unix(snapshot.freshness.LastSyncUnix, 0).Format(time.RFC3339))
 		}
-		metrics = append(metrics,
-			intMetric("semantic_freshness", "semantic_freshness.manifest", int64(snapshot.freshness.Manifest), "conversations"),
-			intMetric("semantic_freshness", "semantic_freshness.needed", int64(snapshot.freshness.Needed), "conversations"),
-			intMetric("semantic_freshness", "semantic_freshness.embedded", int64(snapshot.freshness.Embedded), "conversations"),
-			intMetric("semantic_freshness", "semantic_freshness.pending", int64(snapshot.freshness.Pending), "conversations"),
-			textMetric("semantic_freshness", "semantic_freshness.last_sync", lastSync),
+		fields = append(fields,
+			intField("semantic_freshness", "semantic_freshness.manifest", int64(snapshot.freshness.Manifest), "conversations"),
+			intField("semantic_freshness", "semantic_freshness.needed", int64(snapshot.freshness.Needed), "conversations"),
+			intField("semantic_freshness", "semantic_freshness.embedded", int64(snapshot.freshness.Embedded), "conversations"),
+			intField("semantic_freshness", "semantic_freshness.pending", int64(snapshot.freshness.Pending), "conversations"),
+			lastSync,
 		)
 	}
 
 	if snapshot.providersErr != nil {
-		metrics = append(metrics, quotedError("providers", "providers.error", snapshot.providersErr))
+		fields = append(fields, textField("providers", "providers.error", snapshot.providersErr.Error()))
 	} else {
 		for _, provider := range snapshot.providers.Providers {
 			prefix := "provider." + provider.Provider.String() + "."
-			metrics = append(metrics,
-				intMetric("providers", prefix+"requests", int64(provider.Requests), "requests"),
-				intMetric("providers", prefix+"inflight", int64(provider.Inflight), "requests"),
-				intMetric("providers", prefix+"streaming", int64(provider.Streaming), "streams"),
-				intMetric("providers", prefix+"input_tokens", provider.InputTokens, "tokens"),
-				intMetric("providers", prefix+"output_tokens", provider.OutputTokens, "tokens"),
-				intMetric("providers", prefix+"cache_read_tokens", provider.CacheReadTokens, "tokens"),
+			fields = append(fields,
+				intField("providers", prefix+"requests", int64(provider.Requests), "requests"),
+				intField("providers", prefix+"inflight", int64(provider.Inflight), "requests"),
+				intField("providers", prefix+"streaming", int64(provider.Streaming), "streams"),
+				intField("providers", prefix+"input_tokens", provider.InputTokens, "tokens"),
+				intField("providers", prefix+"output_tokens", provider.OutputTokens, "tokens"),
+				intField("providers", prefix+"cache_read_tokens", provider.CacheReadTokens, "tokens"),
 			)
 			if provider.Error != "" {
-				metrics = append(metrics, textMetric("providers", prefix+"error", strconv.Quote(provider.Error)))
+				fields = append(fields, textField("providers", prefix+"error", provider.Error))
 			}
 		}
 	}
 
 	if snapshot.mitmErr != nil {
-		metrics = append(metrics, quotedError("mitm", "mitm.error", snapshot.mitmErr))
+		fields = append(fields, textField("mitm", "mitm.error", snapshot.mitmErr.Error()))
 	} else {
 		for _, listener := range snapshot.mitm.Listeners {
 			prefix := "mitm." + listener.ID + "."
-			metrics = append(metrics,
-				textMetric("mitm", prefix+"address", listener.Address),
-				boolMetric("mitm", prefix+"up", listener.Up),
+			fields = append(fields,
+				textField("mitm", prefix+"address", listener.Address),
+				boolField("mitm", prefix+"up", listener.Up),
 			)
 		}
 	}
-	return metrics
-}
-
-// renderPlainLines renders metrics as raw name value unit lines with a blank
-// line between groups: the non-terminal output, and the values the terminal
-// view aligns into columns.
-func renderPlainLines(metrics []statusMetric) []string {
-	lines := make([]string, 0, len(metrics)+4)
-	previousGroup := ""
-	for _, metric := range metrics {
-		if previousGroup != "" && metric.group != previousGroup {
-			lines = append(lines, "")
-		}
-		previousGroup = metric.group
-		line := metric.name + " " + metric.value
-		if metric.unit != "" {
-			line += " " + metric.unit
-		}
-		lines = append(lines, line)
-	}
-	return lines
+	return fields
 }

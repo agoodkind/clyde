@@ -9,6 +9,7 @@ import (
 
 	"goodkind.io/clyde/internal/conversation"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
+	lmstatus "goodkind.io/lm-semantic-search/status"
 )
 
 func testSnapshot() statusSnapshot {
@@ -60,8 +61,7 @@ func testSnapshot() statusSnapshot {
 func TestRenderLinesEmitsOneRawFactPerLine(t *testing.T) {
 	t.Parallel()
 
-	lines := renderPlainLines(buildMetrics(testSnapshot()))
-	body := strings.Join(lines, "\n")
+	body := lmstatus.Dump(buildSnapshot(testSnapshot(), "test"))
 	for _, want := range []string{
 		"daemon.responding true",
 		"supervisor.pid 321",
@@ -86,9 +86,8 @@ func TestRenderLinesShowsSectionErrorsWithoutHidingOthers(t *testing.T) {
 
 	snapshot := testSnapshot()
 	snapshot.freshnessErr = errors.New("engine unavailable")
-	lines := renderPlainLines(buildMetrics(snapshot))
-	body := strings.Join(lines, "\n")
-	if !strings.Contains(body, `semantic_freshness.error "engine unavailable"`) {
+	body := lmstatus.Dump(buildSnapshot(snapshot, "test"))
+	if !strings.Contains(body, "semantic_freshness.error engine unavailable") {
 		t.Fatalf("rendered status lacks the freshness error line:\n%s", body)
 	}
 	if !strings.Contains(body, "daemon.responding true") {
