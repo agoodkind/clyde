@@ -62,6 +62,7 @@ var (
 	supervisorExecutablePath   = os.Executable
 	supervisorCommand          = exec.Command
 	errWorkerExitedBeforeReady = errors.New("daemon worker exited before readiness")
+	errSupervisorStopped       = errors.New("daemon supervisor stopped")
 )
 
 // ListenerSpec describes one inherited listener passed to a replacement worker.
@@ -206,6 +207,7 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 	// request finds that replacement current.
 	replacementCh := make(chan workerHandle)
 	abortCh := make(chan abortRequest)
+	loopDone := make(chan struct{})
 	controlErrCh := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -213,9 +215,12 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 				logSupervisorPanic(log, "daemon.supervisor.reload_control", fmt.Sprint(recovered))
 			}
 		}()
-		serveControl(log, controlListener, replacementCh, abortCh, controlErrCh)
+		serveControl(log, controlListener, replacementCh, abortCh, loopDone, controlErrCh)
 	}()
 
+	// A control handler that starts a worker after the loop returned stops
+	// that worker itself.
+	defer close(loopDone)
 	return runSupervisorLoop(ctx, log, signalCh, handle, replacementCh, abortCh, controlErrCh)
 }
 
@@ -543,7 +548,7 @@ func workerExitError(err error) error {
 	return fmt.Errorf("daemon worker exited: %w", err)
 }
 
-func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh chan<- workerHandle, abortCh chan<- abortRequest, errCh chan<- error) {
+func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh chan<- workerHandle, abortCh chan<- abortRequest, loopDone <-chan struct{}, errCh chan<- error) {
 	supervisorSocketPath := listener.Addr().String()
 	for {
 		conn, err := listener.AcceptUnix()
@@ -560,12 +565,12 @@ func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh ch
 					logSupervisorPanic(log, "daemon.supervisor.reload_request", fmt.Sprint(recovered))
 				}
 			}()
-			handleControl(log, conn, replacementCh, abortCh, supervisorSocketPath)
+			handleControl(log, conn, replacementCh, abortCh, loopDone, supervisorSocketPath)
 		}()
 	}
 }
 
-func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- workerHandle, abortCh chan<- abortRequest, supervisorSocketPath string) {
+func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- workerHandle, abortCh chan<- abortRequest, loopDone <-chan struct{}, supervisorSocketPath string) {
 	defer func() { _ = conn.Close() }()
 	req, files, err := readControlRequest(conn)
 	if err != nil {
@@ -589,7 +594,12 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 		return
 	case controlOperationAbort:
 		request := abortRequest{pid: req.PID, done: make(chan error, 1)}
-		abortCh <- request
+		select {
+		case abortCh <- request:
+		case <-loopDone:
+			writeControlError(conn, errSupervisorStopped)
+			return
+		}
 		if err := <-request.done; err != nil {
 			writeControlError(conn, err)
 			return
@@ -629,7 +639,13 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 		writeControlError(conn, fmt.Errorf("start replacement daemon worker: %w", err))
 		return
 	}
-	replacementCh <- handle
+	select {
+	case replacementCh <- handle:
+	case <-loopDone:
+		stopWorker(log, handle.cmd, syscall.SIGTERM, handle.waitCh)
+		writeControlError(conn, errSupervisorStopped)
+		return
+	}
 	log.Info("daemon.supervisor.reload_replacement_started", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"pid", handle.cmd.Process.Pid,
 	)
