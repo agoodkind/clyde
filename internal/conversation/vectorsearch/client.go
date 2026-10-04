@@ -27,12 +27,9 @@ const (
 	// nvEmbedCodeQueryPrefix is the instruction the NV-EmbedCode models expect in
 	// front of a query. Stored rows embed without it.
 	nvEmbedCodeQueryPrefix = "Instruct: Retrieve code or text relevant to the query.\nQuery: "
-	// milvusConnectTimeout bounds opening the Milvus connection.
-	milvusConnectTimeout = 2 * time.Second
-	// milvusCloseTimeout bounds closing the Milvus connection.
-	milvusCloseTimeout = 5 * time.Second
-	// queryVectorCacheSize is the number of query vectors the client caches.
-	queryVectorCacheSize = 64
+	milvusConnectTimeout   = 2 * time.Second
+	milvusCloseTimeout     = 5 * time.Second
+	queryVectorCacheSize   = 64
 )
 
 // operationError pairs a failed operation with its cause. The constructors
@@ -65,10 +62,8 @@ type Options struct {
 	CheckpointDir string
 }
 
-// Client searches the Milvus conversation collection in process. It embeds the
-// query, runs the hybrid dense and BM25 ranking through the collection library,
-// and converts each ranked row to a conversation hit. It satisfies the daemon's
-// conversation search client interface.
+// Client searches and ingests the Milvus conversation collection in process
+// through the collection library.
 type Client struct {
 	milvus      *milvusclient.Client
 	store       *milvusstore.Store
@@ -82,8 +77,6 @@ type Client struct {
 	embeddingModel string
 	byteBudget     int
 
-	// checkpoint records the manifest fingerprint of each conversation after its
-	// rows are written.
 	checkpoint *checkpointStore
 
 	// ingestMu guards the collections ensured in this process and the job count.
@@ -320,8 +313,8 @@ func (c *Client) embedQuery(ctx context.Context, query string) ([]float32, error
 	return vector, nil
 }
 
-// search runs the ranking, resolves legacy conversation groups when the search
-// caps hits per conversation, selects the final hits, and loads their rows.
+// search resolves legacy conversation groups when the search limits hits per
+// conversation.
 func (c *Client) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error) {
 	timing := searchTiming{rank: 0, load: 0, candidates: 0}
 	rankStarted := clock.Now()

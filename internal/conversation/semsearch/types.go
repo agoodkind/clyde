@@ -3,26 +3,20 @@
 // vectorsearch client share. It has no network code.
 package semsearch
 
-// Job state strings that vectorsearch reports for an ingest. An in-process
-// upsert finishes before its call returns, so vectorsearch reports only the
-// completed state. The failed and cancelled states stay for callers that
-// compare against every terminal state.
+// Job states of an ingest. vectorsearch reports only JobStateCompleted, because
+// an in-process upsert finishes before its call returns. Callers compare
+// against all three terminal states.
 const (
-	// JobStateCompleted is the terminal success state.
 	JobStateCompleted = "completed"
-	// JobStateFailed is the terminal failure state.
-	JobStateFailed = "failed"
-	// JobStateCancelled is the terminal cancellation state.
+	JobStateFailed    = "failed"
 	JobStateCancelled = "cancelled"
 )
 
 // SemDoc is the conversation-message projection that vectorsearch writes as rows.
 type SemDoc struct {
 	ConversationID string
-	// ParentConversationID is the derived conversation id of this conversation's
-	// lineage parent, or "" when the conversation has no resolvable parent. It is
-	// the same for every message of one conversation so forks group with parents
-	// in the index.
+	// ParentConversationID is the derived conversation id of the lineage
+	// parent, or empty. Every message of one conversation has the same value.
 	ParentConversationID string
 	MessageIndex         int32
 	Role                 string
@@ -30,15 +24,12 @@ type SemDoc struct {
 	Text                 string
 	Tools                []SemToolCall
 	Thinking             string
-	// WorkspaceRoot is the conversation's workspace, stored as a filterable scalar
-	// column. The same for every message of one conversation; empty when unknown.
+	// WorkspaceRoot is the workspace of the conversation, or empty when
+	// unknown.
 	WorkspaceRoot string
-	// Archived is the conversation's archived status, stored as a filterable
-	// scalar column. The same for every message of one conversation.
-	Archived bool
-	// LoadRules is the opaque loading-rules tag naming the rules that produced
-	// MessageIndex, stored per row so a reader can rebuild the same message
-	// sequence. The same for every document of one delivery.
+	Archived      bool
+	// LoadRules is the tag of the loading rules that produced MessageIndex. A
+	// reader with the same rules rebuilds the same message sequence.
 	LoadRules string
 }
 
@@ -51,19 +42,15 @@ type SemToolCall struct {
 	IsError  bool
 }
 
-// Fingerprint pairs a conversation id with a content fingerprint that changes
-// whenever the conversation's messages change. The sync pass states the full set
-// each time, and vectorsearch compares it with the recorded fingerprints to find
-// the conversations that need documents.
+// Fingerprint pairs a conversation id with a value that changes when the
+// messages of the conversation change.
 type Fingerprint struct {
 	ConversationID string
 	Value          string
 }
 
-// BackfillScalarEntry is the enrichment for one conversation in the scalar
-// backfill: the workspace root and archived status clyde observed, keyed by
-// conversation id. The backfill writes these onto rows with an empty
-// workspaceRoot and keeps each row's vector.
+// BackfillScalarEntry is the workspace root and archived status of one
+// conversation for the scalar backfill.
 type BackfillScalarEntry struct {
 	ConversationID string
 	WorkspaceRoot  string
@@ -74,29 +61,23 @@ type BackfillScalarEntry struct {
 // search.
 type SemHit struct {
 	ConversationID string
-	// ParentConversationID is the derived conversation id of the matched
-	// conversation's lineage parent, or "" when it has no resolvable parent.
+	// ParentConversationID is the derived conversation id of the lineage
+	// parent, or empty.
 	ParentConversationID string
 	MessageIndex         int32
 	Role                 string
 	TimestampUnix        int64
 	Content              string
-	// Score is the retrieval relevance.
-	Score float64
-	// LoadRules is the loading-rules tag stored with the matched row. Empty on
-	// rows written before tagging existed, which readers treat as the default
-	// rules.
+	Score                float64
+	// LoadRules is the loading rules tag of the matched row. An empty value
+	// means the default rules.
 	LoadRules string
 }
 
-// SearchFilter narrows conversation retrieval by row attributes. Every field
-// is optional; the zero value matches everything. Providers filter natively on
-// the provider column. WorkspaceRoots maps to the workspace column but is unused
-// for the workspace filter today: workspace_root is null on rows indexed before
-// that column existed, so clyde instead resolves a workspace prefix to the
-// matching ConversationIDs, and every row has a conversation id. ConversationIDs
-// scopes to explicit conversations (a positional conversation id or a
-// within-search) and to that resolved workspace set.
+// SearchFilter narrows conversation retrieval by row attributes. The zero value
+// matches every row. The workspace filter uses ConversationIDs, not
+// WorkspaceRoots: the workspaceRoot column is null on older rows, and every row
+// has a conversation id.
 type SearchFilter struct {
 	Providers            []string
 	WorkspaceRoots       []string

@@ -34,7 +34,6 @@ const (
 	emptyContentReason          = "empty_content"
 )
 
-// activeTokenLimit returns the hard per-input token limit of a model.
 func activeTokenLimit(embeddingModel string) int {
 	if strings.ToLower(strings.TrimSpace(embeddingModel)) == nvEmbedCodeModelName {
 		return nvEmbedCodeInputTokenLimit
@@ -50,8 +49,6 @@ func embedByteBudget(embeddingModel string) int {
 	return tokenCap * bytesPerTokenNumerator / bytesPerTokenDenominator
 }
 
-// expandOverBudget splits every chunk longer than byteBudget into UTF-8 aligned
-// children.
 func expandOverBudget(chunks []storedChunk, byteBudget int) []storedChunk {
 	if byteBudget <= 0 {
 		return chunks
@@ -68,10 +65,9 @@ func expandOverBudget(chunks []storedChunk, byteBudget int) []storedChunk {
 }
 
 // splitChunkAtBudget splits a chunk into children of at most budget bytes, each
-// ending on a UTF-8 boundary. Each child records the byte offset within the
-// original content plus one as its split position, so identical pieces never
-// share a primary key. A child of an already split chunk adds the offset of its
-// parent, so nested splits stay unique.
+// ending on a UTF-8 boundary. The split position of a child is its byte offset
+// in the original content plus one. A child of a split chunk adds the offset of
+// its parent. Identical pieces then have different primary keys.
 func splitChunkAtBudget(chunk storedChunk, budget int) []storedChunk {
 	baseOffset := 0
 	if chunk.SplitPart > 0 {
@@ -90,8 +86,6 @@ func splitChunkAtBudget(chunk storedChunk, budget int) []storedChunk {
 	return children
 }
 
-// splitChunkInHalf splits a chunk the endpoint rejected into two strictly
-// smaller children.
 func splitChunkInHalf(chunk storedChunk) []storedChunk {
 	return splitChunkAtBudget(chunk, max(len(chunk.Content)/2, 1))
 }
@@ -139,7 +133,6 @@ func packChunks(chunks []storedChunk, reuse map[string][]float32) [][]storedChun
 	return groups
 }
 
-// ingestStats counts the outcome of one upsert.
 type ingestStats struct {
 	conversations int
 	rowsWritten   int
@@ -197,14 +190,12 @@ func (writer *rowWriter) flush(ctx context.Context) error {
 	return nil
 }
 
-// skipInfo is the endpoint's report for one skipped input of a batch.
 type skipInfo struct {
 	reason      string
 	maxTokens   int
 	maxReported bool
 }
 
-// rejection is one input the endpoint refused as individually un-embeddable.
 type rejection struct {
 	chunk       storedChunk
 	reason      string
@@ -379,8 +370,6 @@ func (c *Client) dropKind(refusal rejection) string {
 	return "unknown"
 }
 
-// logDropped logs an input that is skipped because it still fails at the
-// smallest size.
 func (c *Client) logDropped(ctx context.Context, refusal rejection, round int) {
 	byteFloor, _ := c.splitByteFloor(refusal)
 	slog.WarnContext(ctx, "conversation.vectorsearch.embed_input_dropped",

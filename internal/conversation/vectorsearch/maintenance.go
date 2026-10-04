@@ -54,8 +54,8 @@ func (c *Client) BackfillConversationScalars(
 		return 0, 0, fmt.Errorf("backfill conversation scalars in %s: %w", collectionName, ErrCollectionAbsent)
 	}
 	if !dryRun {
-		// Adds a declared scalar column that an older collection lacks. The
-		// collection exists, and the dimension applies only to a created collection.
+		// ensureCollection adds a declared scalar column that an older
+		// collection lacks. The dimension applies only to a created collection.
 		if ensureErr := c.ensureCollection(ctx, collectionName, c.dimension); ensureErr != nil {
 			return 0, 0, ensureErr
 		}

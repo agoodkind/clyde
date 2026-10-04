@@ -7,9 +7,7 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-// filterDimensionCount is the number of filter dimensions the mapping converts:
-// providers, workspace roots, roles, conversation IDs, parent, both timestamp
-// bounds, both message index bounds, and archived.
+// filterDimensionCount is the capacity of the filter child list.
 const filterDimensionCount = 10
 
 // searchFilter converts a conversation search filter to the typed filter tree

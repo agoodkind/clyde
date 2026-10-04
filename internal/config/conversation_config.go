@@ -3,8 +3,7 @@ package config
 import "strings"
 
 const (
-	defaultConversationSemanticCollectionID = "clyde-conversations"
-	// The search defaults match the installed Milvus and embedding services.
+	defaultConversationSemanticCollectionID       = "clyde-conversations"
 	defaultConversationSemanticMilvusAddress      = "localhost:19530"
 	defaultConversationSemanticMilvusDatabase     = "default"
 	defaultConversationSemanticEmbeddingBaseURL   = "http://localhost:5400/v1"
@@ -185,8 +184,6 @@ func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
-// applyConversationSemanticSearchDefaults fills each unset Milvus and embedding
-// search setting with the default that matches the installed services.
 func applyConversationSemanticSearchDefaults(semantic *ConversationSemanticConfig) {
 	if strings.TrimSpace(semantic.MilvusAddress) == "" {
 		semantic.MilvusAddress = defaultConversationSemanticMilvusAddress

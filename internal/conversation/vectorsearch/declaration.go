@@ -6,8 +6,8 @@ package vectorsearch
 
 import "goodkind.io/lm-semantic-search/collection"
 
-// Column names of the conversation collection. Rows written by the
-// lm-semantic-search daemon use these names, so they cannot change.
+// Column names of the conversation collection. Stored rows use these names. Do
+// not change them.
 const (
 	conversationIDColumn       = "conversationId"
 	parentConversationIDColumn = "parentConversationId"

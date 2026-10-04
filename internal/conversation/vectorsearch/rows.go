@@ -19,10 +19,9 @@ import (
 // into several rows before the embedding token cap applies.
 const conversationChunkMaxBytes = 60000
 
-// storedChunk is one conversation row before embedding. The lm-semantic-search
-// daemon wrote the existing rows, and each derivation below matches its row
-// construction. The struct omits startLine, endLine, and fileExtension, which
-// are always 0, 0, and empty.
+// storedChunk is one conversation row before embedding. Its fields produce the
+// same row keys and metadata as the stored rows. startLine and endLine are
+// always 0 and fileExtension is always empty, and the struct omits them.
 type storedChunk struct {
 	Content              string
 	RelativePath         string
@@ -45,7 +44,6 @@ type chunkFamily struct {
 	Chunks []storedChunk
 }
 
-// conversationRelativePath returns the relativePath of a message text row.
 func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {
 	basePath := fmt.Sprintf("conv/%s/%d", conversationID, messageIndex)
 	if !multipart {
@@ -157,7 +155,6 @@ func appendContinuedField(
 	})
 }
 
-// bashLangHint is the language hint of a tool call with a shell command.
 const bashLangHint = "bash"
 
 // toolContent returns the searchable text of one tool call: its name, the shell
@@ -308,7 +305,6 @@ func chunkFamilyKey(conversationID string, relativePath string) string {
 	return relativePath
 }
 
-// groupFamilies groups one conversation's rows by family in row order.
 func groupFamilies(conversationID string, chunks []storedChunk) []chunkFamily {
 	families := make([]chunkFamily, 0)
 	positions := make(map[string]int)
@@ -347,9 +343,8 @@ type chunkMetadataJSON struct {
 	TimestampUnix        *int64 `json:"timestamp_unix,omitempty"`
 }
 
-// encodeChunkMetadata returns the metadata JSON of a row. Every conversation
-// row has a conversation ID, so message_index and timestamp_unix are always
-// present.
+// encodeChunkMetadata returns the metadata JSON of a row. message_index and
+// timestamp_unix are always present.
 func encodeChunkMetadata(chunk storedChunk) string {
 	messageIndex := chunk.MessageIndex
 	timestampUnix := chunk.TimestampUnix

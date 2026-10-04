@@ -12,8 +12,6 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-// conversationFilterIDBatchSize bounds the conversation IDs in one stored-row
-// request.
 const conversationFilterIDBatchSize = 256
 
 // conversationState is the set of family keys that have a stored row with
@@ -117,10 +115,10 @@ func storedRowsDeclaration() collection.Declaration {
 	}
 }
 
-// loadStoredBatch reads every stored row of the requested conversations through
-// the collection store. A row is selected by its conversationId value or by a
-// conversation path prefix, so rows written before the column existed stay
-// visible. A missing collection returns an empty batch.
+// loadStoredBatch reads every stored row of the requested conversations. It
+// selects a row by its conversationId value or by a conversation path prefix;
+// the prefix matches rows written before the column existed. A missing
+// collection returns an empty batch.
 func (c *Client) loadStoredBatch(ctx context.Context, collectionName string, conversationIDs []string) (*storedBatch, error) {
 	batch := newStoredBatch()
 	requested := dedupeIDs(conversationIDs)
