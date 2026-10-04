@@ -20,7 +20,6 @@ func boolField(group, name string, value bool) lmstatus.Field {
 	return lmstatus.Field{Group: group, Name: name, Unit: "", Value: lmstatus.Bool(value), NoDelta: false}
 }
 
-// buildSnapshot converts one gathered snapshot to the shared display form.
 func buildSnapshot(snapshot statusSnapshot, build string) lmstatus.Snapshot {
 	runID := ""
 	if snapshot.report.SupervisorPID > 0 {
@@ -37,8 +36,7 @@ func buildSnapshot(snapshot statusSnapshot, build string) lmstatus.Snapshot {
 	}
 }
 
-// buildFields lists every fact in display order. A failed section becomes one
-// error field, and the other sections stay.
+// A failed section becomes one error field, and the other sections stay.
 func buildFields(snapshot statusSnapshot) []lmstatus.Field {
 	fields := []lmstatus.Field{
 		boolField("daemon", "daemon.responding", snapshot.report.DaemonResponding),

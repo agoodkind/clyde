@@ -22,7 +22,6 @@ const (
 	checkpointNameLength = 32
 )
 
-// checkpointRecord is the file content of one conversation's fingerprint record.
 type checkpointRecord struct {
 	ConversationID string `json:"conversation_id"`
 	Fingerprint    string `json:"fingerprint"`
@@ -42,8 +41,8 @@ func newCheckpointStore(root string) *checkpointStore {
 	return &checkpointStore{root: root, mu: sync.Mutex{}, loaded: make(map[string]map[string]string)}
 }
 
-// records returns the fingerprints of a collection and loads its record files on
-// first use. The caller must hold the lock. A file that cannot be read or
+// records returns the fingerprints of a collection and loads its record files
+// on first use. The caller must hold the lock. A file that cannot be read or
 // decoded is skipped, and its conversation reads as unrecorded.
 func (store *checkpointStore) records(collectionName string) map[string]string {
 	if fingerprints, found := store.loaded[collectionName]; found {
@@ -117,10 +116,9 @@ func (store *checkpointStore) needed(collectionName string, ids []string, finger
 	return slices.Compact(needed)
 }
 
-// record stores one conversation's fingerprint. It writes the file before it
-// updates the memory copy. writeCheckpointFile logs a failed write. After a
-// failed write the memory copy is not updated, and the conversation stays
-// needed after a restart.
+// record writes the file before it updates the memory copy. After a failed
+// write the memory copy is unchanged, and the conversation stays needed after a
+// restart.
 func (store *checkpointStore) record(collectionName string, conversationID string, fingerprint string) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

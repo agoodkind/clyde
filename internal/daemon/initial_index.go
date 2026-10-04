@@ -29,7 +29,6 @@ type initialSemanticConnection struct {
 	*vectorsearch.Client
 }
 
-// Close closes the Milvus connection.
 func (connection initialSemanticConnection) Close() error {
 	if err := connection.Client.Close(context.Background()); err != nil {
 		slog.Warn("daemon.initial_index.semantic_close_failed", "concern", "conversation.index", "component", "daemon", "err", err)

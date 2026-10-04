@@ -153,8 +153,6 @@ func (c *Client) nextJobID() string {
 	return fmt.Sprintf("%s%d", jobIDPrefix, c.jobCount)
 }
 
-// groupDocuments groups documents by trimmed conversation ID and returns the
-// conversation IDs in sorted order.
 func groupDocuments(docs []semsearch.SemDoc) (map[string][]semsearch.SemDoc, []string, error) {
 	byConversation := make(map[string][]semsearch.SemDoc)
 	for _, doc := range docs {

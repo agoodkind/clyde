@@ -26,8 +26,8 @@ import (
 // or wedged engine cannot stall boot or a retry tick indefinitely.
 const semanticDialRegisterTimeout = 10 * time.Second
 
-// The ingest fingerprint records live under
-// <state dir>/conversation-semantic/checkpoints/<collection>/.
+// The ingest writes fingerprint records to <state
+// dir>/conversation-semantic/checkpoints/<collection>/.
 const (
 	conversationSemanticStateDirName = "conversation-semantic"
 	conversationCheckpointDirName    = "checkpoints"
@@ -168,7 +168,6 @@ type semanticConnectionCloser struct {
 	client *vectorsearch.Client
 }
 
-// Close closes the Milvus connection.
 func (c *semanticConnectionCloser) Close() error {
 	return c.closeWithContext(context.Background())
 }

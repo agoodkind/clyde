@@ -17,12 +17,6 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// newBackfillConversationScalarsCmd builds the one-shot scalar-backfill command.
-// It reads every conversation clyde knows from the on-disk index and writes each
-// conversation's workspace root and archived status onto the rows with an empty
-// workspace_root in the Milvus conversation collection. Each row keeps its dense
-// vector, and nothing is re-embedded. It is read-only by default and writes only
-// when --execute is set.
 func newBackfillConversationScalarsCmd(f *cli.Factory) *cobra.Command {
 	execute := false
 	cmd := &cobra.Command{
@@ -206,9 +200,8 @@ func runBackfillConversationDocumentsWithDeps(
 		return writeBackfillConversationDocumentsResult(ctx, f, "Would send", len(selectedRecords), len(docs), skipped, "", 0, nextCursor)
 	}
 	if len(docs) == 0 {
-		// Nothing to upsert: either no conversation was selected, or every selected
-		// conversation failed to load/build (all skipped). Skip opening the Milvus
-		// connection and report the skips.
+		// No conversation produced documents, and the command opens no Milvus
+		// connection.
 		return writeBackfillConversationDocumentsResult(ctx, f, "Sent", len(selectedRecords), 0, skipped, "", 0, nextCursor)
 	}
 	client, err := dial(ctx, cfg.Conversation.Semantic)

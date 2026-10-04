@@ -34,9 +34,8 @@ type conversationDeleteOutput struct {
 func (conversationDeleteOutput) isClispecStructuredPayload() {}
 
 // conversationDeleteOp declares `clyde conversation delete`. The MCP surface is
-// off, and no MCP tool deletes stored rows. The work function opens the Milvus
-// client in process, as the daemon backfill commands do, and does not call the
-// daemon.
+// off: no MCP tool deletes stored rows. The work function opens the Milvus
+// client in process and does not call the daemon.
 func conversationDeleteOp() Operation[conversationDeleteInput, conversationDeletePayload] {
 	return Operation[conversationDeleteInput, conversationDeletePayload]{
 		Name:       Name{Canonical: "conversation_delete", CLIOverride: "delete"},

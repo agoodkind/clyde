@@ -13,9 +13,9 @@ import (
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 )
 
-// rowMetadata is the metadata JSON the lm-semantic-search daemon wrote on every
-// conversation row. Rows written before the scalar columns existed store the
-// conversation identity only here, so hit conversion reads these fields.
+// rowMetadata is the metadata JSON of a conversation row. A row written before
+// the scalar columns existed stores the conversation identity only in this
+// JSON.
 type rowMetadata struct {
 	ConversationID       string `json:"conversation_id,omitempty"`
 	ParentConversationID string `json:"parent_conversation_id,omitempty"`
