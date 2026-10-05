@@ -73,6 +73,8 @@ type Client struct {
 	queryPrefix string
 	declaration collection.Declaration
 
+	denseSearchParams map[string]string
+
 	// embeddingModel is written to each row and selects the stored vectors the
 	// ingest reuses. byteBudget is the largest embedding input in bytes.
 	embeddingModel string
@@ -149,6 +151,8 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 		dimension:   options.EmbeddingDimension,
 		queryPrefix: queryPrefix,
 		declaration: Declaration(),
+
+		denseSearchParams: options.DenseSearchParams,
 
 		embeddingModel: options.EmbeddingModel,
 		byteBudget:     embedByteBudget(options.EmbeddingModel),
