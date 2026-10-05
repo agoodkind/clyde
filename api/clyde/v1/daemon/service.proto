@@ -297,6 +297,9 @@ enum SearchSource {
   // SEARCH_SOURCE_SEMANTIC means the vector engine produced the matches.
   SEARCH_SOURCE_SEMANTIC = 1;
   reserved 2, 3;
+  // SEARCH_SOURCE_RAW_TEXT means a scan of transcript text produced the matches
+  // after the semantic source failed or was disabled. Each score is zero.
+  SEARCH_SOURCE_RAW_TEXT = 4;
 }
 
 message ConversationSearchMatch {

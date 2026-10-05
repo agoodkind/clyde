@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"goodkind.io/clyde/internal/conversation"
 )
@@ -33,6 +34,54 @@ type semanticConversationSearchSource struct {
 	searchEnabled func() bool
 	searchClient  func() conversationSemanticSearchClient
 	collectionID  string
+}
+
+// rawTextFallbackSearchSource answers from primary. It answers from a raw text
+// scan when primary is disabled, unavailable, or failed. A refused query
+// returns the primary error.
+type rawTextFallbackSearchSource struct {
+	primary conversationSearchSource
+	index   *conversation.Index
+}
+
+func (s *rawTextFallbackSearchSource) SearchConversations(
+	ctx context.Context,
+	options conversation.SearchConversationsOptions,
+) (conversation.SearchConversationsResult, error) {
+	result, err := s.primary.SearchConversations(ctx, options)
+	if err == nil {
+		return result, nil
+	}
+	var sourceFailure conversationSearchSourceError
+	if !errors.As(err, &sourceFailure) {
+		return conversation.SearchConversationsResult{}, failedConversationSearchSourceError(err)
+	}
+	switch sourceFailure.code {
+	case conversationSearchDisabled, conversationSearchSourceUnavailable, conversationSearchSourceFailed:
+	case conversationSearchSourceRefused:
+		return conversation.SearchConversationsResult{}, sourceFailure
+	default:
+		return conversation.SearchConversationsResult{}, sourceFailure
+	}
+	if options.Cursor != "" {
+		return conversation.SearchConversationsResult{}, sourceFailure
+	}
+	slog.WarnContext(ctx, "daemon.search_conversations.raw_text_fallback",
+		"concern", "conversation.search",
+		"component", "daemon",
+		"failure_code", string(sourceFailure.code),
+		"err", sourceFailure.cause,
+	)
+	rawResult, rawErr := s.index.SearchRawText(ctx, options)
+	if rawErr != nil {
+		slog.WarnContext(ctx, "daemon.search_conversations.raw_text_failed",
+			"concern", "conversation.search",
+			"component", "daemon",
+			"err", rawErr,
+		)
+		return conversation.SearchConversationsResult{}, failedConversationSearchSourceError(rawErr)
+	}
+	return rawResult, nil
 }
 
 func (s *semanticConversationSearchSource) SearchConversations(
