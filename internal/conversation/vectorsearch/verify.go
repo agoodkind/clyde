@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/milvus-io/milvus/client/v2/column"
@@ -44,6 +45,11 @@ func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample in
 		return check, err
 	}
 	if !exists {
+		slog.WarnContext(ctx, "conversation.vectorsearch.verify_collection_absent",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection", collectionName,
+		)
 		return check, fmt.Errorf("verify conversation index in %s: %w", collectionName, ErrCollectionAbsent)
 	}
 	seen := make(map[string]bool, sample)
