@@ -57,6 +57,7 @@ type Options struct {
 	EmbeddingAPIKey        string
 	EmbeddingTimeout       time.Duration
 	QueryInstructionPrefix string
+	DenseSearchParams      map[string]string
 	// CheckpointDir is the directory of the per-conversation fingerprint
 	// records the ingest persists. Empty keeps them in memory only.
 	CheckpointDir string
@@ -143,7 +144,7 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 	}
 	return &Client{
 		milvus:      client,
-		store:       milvusstore.New(client, milvusstore.Options{Hybrid: true, EmbeddingModel: options.EmbeddingModel}),
+		store:       milvusstore.New(client, milvusstore.Options{Hybrid: true, EmbeddingModel: options.EmbeddingModel, DenseSearchParams: options.DenseSearchParams}),
 		embedder:    embedder,
 		dimension:   options.EmbeddingDimension,
 		queryPrefix: queryPrefix,
