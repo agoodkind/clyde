@@ -128,11 +128,15 @@ func TestSearchFallsBackToRawTextWhenSemanticSearchIsDisabled(t *testing.T) {
 
 	searchUntilMatches(t, options, 2)
 
+	// A read of a directory fails for every user, including root. A file with
+	// mode 000 stays readable for root.
 	unreadable := filepath.Join(projectDir, rawTextUnreadableSession+".jsonl")
-	if err := os.Chmod(unreadable, 0o000); err != nil {
-		t.Fatalf("make transcript unreadable: %v", err)
+	if err := os.Remove(unreadable); err != nil {
+		t.Fatalf("remove transcript: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+	if err := os.Mkdir(unreadable, 0o700); err != nil {
+		t.Fatalf("replace transcript with a directory: %v", err)
+	}
 
 	result := searchUntilMatches(t, options, 1)
 	if result.Source != conversation.SearchSourceRawText {
