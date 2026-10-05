@@ -19,15 +19,15 @@ func newVerifySearchIndexCmd(f *cli.Factory) *cobra.Command {
 	sample := defaultVerifySample
 	cmd := &cobra.Command{
 		Use:     "verify-search-index",
-		Short:   "Check that the conversation vector index returns stored rows",
-		Long:    "Search the dense index of the Milvus conversation collection with the stored vectors of rows spread over the primary key space. A row passes when the first result scores at least 0.999. The command does not modify the collection and exits with an error when a row fails.",
+		Short:   "Check dense-index similarity with stored-vector samples",
+		Long:    "Check dense-index similarity with stored-vector samples. A sample passes when the first result's cosine score is at least 0.999. The command does not write collection data and reports failing samples.",
 		Example: "clyde daemon verify-search-index\nclyde daemon verify-search-index --sample 1000",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runVerifySearchIndex(cmd.Context(), f, sample)
 		},
 	}
-	cmd.Flags().IntVar(&sample, "sample", defaultVerifySample, "Number of rows to check.")
+	cmd.Flags().IntVar(&sample, "sample", defaultVerifySample, "Number of stored-vector samples to check.")
 	return cmd
 }
 
@@ -52,16 +52,16 @@ func runVerifySearchIndex(ctx context.Context, f *cli.Factory, sample int) error
 		"checked", check.Checked,
 		"found", check.Found,
 	)
-	summary := fmt.Sprintf("Checked %d rows: %d returned themselves as the first match.\n", check.Checked, check.Found)
+	summary := fmt.Sprintf("Checked %d samples: %d met the first-result score threshold.\n", check.Checked, check.Found)
 	if len(check.Misses) > 0 {
-		summary += "Rows that failed: " + strings.Join(check.Misses, ", ") + "\n"
+		summary += "Source primary keys of failing samples: " + strings.Join(check.Misses, ", ") + "\n"
 	}
 	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, summary); writeErr != nil {
 		slog.ErrorContext(ctx, "cli.daemon.verify_index.write_failed", "concern", "cli.daemon", "component", "cli", "err", writeErr)
 		return fmt.Errorf("write verify result: %w", writeErr)
 	}
 	if check.Found < check.Checked {
-		return fmt.Errorf("verify conversation index: %d of %d rows did not return themselves", check.Checked-check.Found, check.Checked)
+		return fmt.Errorf("verify conversation index: %d of %d samples did not meet the first-result score threshold", check.Checked-check.Found, check.Checked)
 	}
 	return nil
 }

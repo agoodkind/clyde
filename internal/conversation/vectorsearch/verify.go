@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	// selfMatchScore is the lowest cosine score that counts as a row finding
-	// itself. The exact score of a row against its own vector is 1.
+	// selfMatchScore is the minimum first-result cosine score accepted by VerifyIndex.
 	selfMatchScore   = 0.999
 	primaryKeySpace  = 65536
 	reportedMissMax  = 10
@@ -25,15 +24,12 @@ const (
 type IndexCheck struct {
 	Checked int
 	Found   int
-	// Misses lists up to ten primary keys that the index did not return as
-	// their own first match.
+	// Misses contains source primary keys for samples below the accepted score threshold.
 	Misses []string
 }
 
-// VerifyIndex searches the dense index with the stored vectors of up to sample
-// rows spread over the primary key space. A row is found when the first result
-// scores at least 0.999. The method does not modify the collection. A missing
-// collection returns ErrCollectionAbsent.
+// VerifyIndex searches with stored-vector samples and checks the first returned score.
+// A missing collection returns ErrCollectionAbsent.
 func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample int) (IndexCheck, error) {
 	check := IndexCheck{Checked: 0, Found: 0, Misses: nil}
 	if c == nil {
