@@ -108,9 +108,8 @@ func startRawTextDaemon(t *testing.T) string {
 	return projectDir
 }
 
-// waitForFirstMatches retries while the daemon socket is not listening and while
-// the first index refresh has not listed both transcripts. Any other error
-// fails the test at once.
+// waitForFirstMatches retries until the daemon accepts the search and the search
+// returns want matches. An error other than Unavailable fails the test at once.
 func waitForFirstMatches(t *testing.T, options conversation.SearchConversationsOptions, want int) {
 	t.Helper()
 	deadline := time.Now().Add(rawTextSearchTimeout)
