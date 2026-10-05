@@ -35,9 +35,8 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 	return cmd
 }
 
-// NewConversationIndexCmd returns a `conversation` parent without help text.
-// Its one subcommand is `index`. The registry adds `index` to the rendered
-// `clyde conversation` group.
+// NewConversationIndexCmd returns the `index` command group of the search index
+// check and backfills.
 func NewConversationIndexCmd(f *cli.Factory) *cobra.Command {
 	index := &cobra.Command{
 		Use:     "index",
@@ -52,9 +51,7 @@ func NewConversationIndexCmd(f *cli.Factory) *cobra.Command {
 	index.AddCommand(newVerifySearchIndexCmd(f))
 	index.AddCommand(newBackfillConversationScalarsCmd(f))
 	index.AddCommand(newBackfillConversationDocumentsCmd(f))
-	parent := &cobra.Command{Use: cli.ConversationGroupName}
-	parent.AddCommand(index)
-	return parent
+	return index
 }
 
 // ReloadCommandError normalizes reload command errors into user-facing wording.

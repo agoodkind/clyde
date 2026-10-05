@@ -10,9 +10,10 @@ import (
 // RenderCobra builds every terminal command in the registry. An operation
 // with a nil Group attaches at the root. Operations sharing the same *Group
 // land as subcommands of one rendered parent, which itself sits at the root
-// in the position of its first child. Hand-written commands follow at the
-// root. The caller attaches the results to the root command, which already
-// carries the global --verbose and --output-format flags.
+// in the position of its first child. A hand-written command with a Parent
+// becomes a subcommand of the root command with that name. Other hand-written
+// commands follow at the root. The caller attaches the results to the root
+// command, which already defines the global --verbose and --output-format flags.
 func RenderCobra(reg *Registry, f *cli.Factory) []*cobra.Command {
 	commands := make([]*cobra.Command, 0, len(reg.ops)+len(reg.handwritten))
 	parents := map[*Group]*cobra.Command{}
@@ -30,23 +31,31 @@ func RenderCobra(reg *Registry, f *cli.Factory) []*cobra.Command {
 		parent.AddCommand(child)
 	}
 	for _, hand := range reg.handwritten {
+		if hand.Parent != "" {
+			addUnderRoot(&commands, hand.Parent, hand.Build(f))
+			continue
+		}
 		mergeOrAppendRoot(&commands, hand.Build(f))
 	}
 	return commands
+}
+
+// addUnderRoot adds child to the root command named parent. A parent name that
+// matches no root command adds child at the root.
+func addUnderRoot(roots *[]*cobra.Command, parent string, child *cobra.Command) {
+	for _, existing := range *roots {
+		if existing.Name() == parent {
+			existing.AddCommand(child)
+			return
+		}
+	}
+	*roots = append(*roots, child)
 }
 
 func mergeOrAppendRoot(roots *[]*cobra.Command, candidate *cobra.Command) {
 	for index, existing := range *roots {
 		if existing.Name() != candidate.Name() {
 			continue
-		}
-		// A hand-written parent without help text only adds subcommands to the
-		// rendered group and keeps the group's help.
-		if candidate.Short == "" {
-			for _, child := range candidate.Commands() {
-				existing.AddCommand(child)
-			}
-			return
 		}
 		for _, child := range existing.Commands() {
 			candidate.AddCommand(child)
