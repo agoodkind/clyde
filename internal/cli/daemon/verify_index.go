@@ -18,10 +18,10 @@ const defaultVerifySample = 300
 func newVerifySearchIndexCmd(f *cli.Factory) *cobra.Command {
 	sample := defaultVerifySample
 	cmd := &cobra.Command{
-		Use:     "verify-search-index",
+		Use:     "verify",
 		Short:   "Check dense-index similarity with stored-vector samples",
 		Long:    "Check dense-index similarity with stored-vector samples. A sample passes when the first result's cosine score is at least 0.999. The command does not write collection data and reports failing samples.",
-		Example: "clyde daemon verify-search-index\nclyde daemon verify-search-index --sample 1000",
+		Example: "clyde conversation index verify\nclyde conversation index verify --sample 1000",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runVerifySearchIndex(cmd.Context(), f, sample)

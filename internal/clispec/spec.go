@@ -225,6 +225,9 @@ type Registry struct {
 // only; they render no MCP tool.
 type HandwrittenCommand struct {
 	Build func(f *cli.Factory) *cobra.Command
+	// Parent is a group. RenderCobra adds the built command to the rendered
+	// command of that group. Nil places the built command at the root.
+	Parent *Group
 }
 
 // Register adds one operation to the registry. It is a free function rather

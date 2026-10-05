@@ -20,10 +20,10 @@ import (
 func newBackfillConversationScalarsCmd(f *cli.Factory) *cobra.Command {
 	execute := false
 	cmd := &cobra.Command{
-		Use:     "backfill-conversation-scalars",
+		Use:     "backfill-scalars",
 		Short:   "Backfill workspace_root and archived onto existing conversation rows",
 		Long:    "Write each conversation's workspace root and archived status onto the rows with an empty workspace_root in the Milvus conversation collection. Each row keeps its dense vector, and nothing is re-embedded. Runs as a read-only dry-run by default, counting the would-change and orphan rows without writing; pass --execute to perform the write.",
-		Example: "clyde daemon backfill-conversation-scalars\nclyde daemon backfill-conversation-scalars --execute",
+		Example: "clyde conversation index backfill-scalars\nclyde conversation index backfill-scalars --execute",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runBackfillConversationScalars(cmd.Context(), f, !execute)
@@ -62,10 +62,10 @@ func newBackfillConversationDocumentsCmd(f *cli.Factory) *cobra.Command {
 	cursor := ""
 	allowFullReexamine := false
 	cmd := &cobra.Command{
-		Use:     "backfill-conversation-documents",
+		Use:     "backfill-documents",
 		Short:   "Force selected conversation documents back into semantic search",
 		Long:    "Build semantic conversation documents from the current Clyde conversation index and write the rows that the Milvus conversation collection lacks for the selected conversations. Runs as a read-only dry-run by default; pass --execute to upsert documents. A bare --execute with no --conversation and no --limit reexamines the entire corpus and is refused unless --all is passed. Pass --after <id> (alias --cursor) to resume a bounded --limit run after a conversation id; the result prints the next cursor to chain runs.",
-		Example: "clyde daemon backfill-conversation-documents --limit 10\nclyde daemon backfill-conversation-documents --limit 10 --after claude:abc --execute\nclyde daemon backfill-conversation-documents --conversation codex:abc --execute\nclyde daemon backfill-conversation-documents --execute --all",
+		Example: "clyde conversation index backfill-documents --limit 10\nclyde conversation index backfill-documents --limit 10 --after claude:abc --execute\nclyde conversation index backfill-documents --conversation codex:abc --execute\nclyde conversation index backfill-documents --execute --all",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runBackfillConversationDocuments(cmd.Context(), f, backfillConversationDocumentsOptions{

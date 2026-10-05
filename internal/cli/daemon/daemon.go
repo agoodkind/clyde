@@ -31,11 +31,27 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newBackfillConversationScalarsCmd(f))
-	cmd.AddCommand(newBackfillConversationDocumentsCmd(f))
 	cmd.AddCommand(newSandboxCmd(f))
-	cmd.AddCommand(newVerifySearchIndexCmd(f))
 	return cmd
+}
+
+// NewConversationIndexCmd returns the `index` command group of the search index
+// check and backfills.
+func NewConversationIndexCmd(f *cli.Factory) *cobra.Command {
+	index := &cobra.Command{
+		Use:     "index",
+		Short:   "Check and repair the conversation search index",
+		Long:    "Check the conversation search index and write missing labels or documents into it.",
+		Example: "clyde conversation index verify\nclyde conversation index backfill-scalars",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	index.AddCommand(newVerifySearchIndexCmd(f))
+	index.AddCommand(newBackfillConversationScalarsCmd(f))
+	index.AddCommand(newBackfillConversationDocumentsCmd(f))
+	return index
 }
 
 // ReloadCommandError normalizes reload command errors into user-facing wording.

@@ -103,10 +103,11 @@ func newRoot(f *cli.Factory) *cobra.Command {
 	output.PersistentFlag(root)
 
 	reg := clispec.NewConversationRegistry()
-	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewCmd})
-	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliHooks.NewCmd})
-	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliMITM.NewCmd})
-	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliStatus.NewCmd})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewCmd, Parent: nil})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewConversationIndexCmd, Parent: clispec.ConversationGroup()})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliHooks.NewCmd, Parent: nil})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliMITM.NewCmd, Parent: nil})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliStatus.NewCmd, Parent: nil})
 	for _, command := range clispec.RenderCobra(reg, f) {
 		root.AddCommand(command)
 	}
