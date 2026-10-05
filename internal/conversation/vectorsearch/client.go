@@ -12,7 +12,6 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/lm-semantic-search/collection"
-	"goodkind.io/lm-semantic-search/embedding"
 )
 
 const (
@@ -57,11 +56,9 @@ type Options struct {
 	EmbeddingTimeout       time.Duration
 	QueryInstructionPrefix string
 	DenseSearchParams      map[string]string
-	// LocalRoot and ModelCacheRoot are the store directory and the ONNX model
-	// cache of BackendLocal. BackendLocal reads EmbeddingModel as a local model
-	// name.
-	LocalRoot      string
-	ModelCacheRoot string
+	// LocalRoot is the store directory of BackendLocal. BackendLocal ignores the
+	// Milvus and embedding endpoint options.
+	LocalRoot string
 	// CheckpointDir is the directory of the per-conversation fingerprint
 	// records the ingest persists. Empty keeps them in memory only.
 	CheckpointDir string
@@ -71,7 +68,7 @@ type Options struct {
 // through the collection library.
 type Client struct {
 	store       backend
-	embedder    embedding.Provider
+	embedder    textEmbedder
 	dimension   int
 	queryPrefix string
 	declaration collection.Declaration
@@ -118,7 +115,7 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 		denseSearchParams: options.DenseSearchParams,
 
 		embeddingModel: opened.embeddingModel,
-		byteBudget:     embedByteBudget(opened.embeddingModel),
+		byteBudget:     opened.byteBudget,
 		checkpoint:     newCheckpointStore(options.CheckpointDir),
 		ingestMu:       sync.Mutex{},
 		ensured:        make(map[string]bool),

@@ -14,7 +14,8 @@ type Backend string
 const (
 	// BackendMilvus stores rows in a Milvus server. An empty Backend selects it.
 	BackendMilvus Backend = "milvus"
-	// BackendLocal stores rows in files under a local directory.
+	// BackendLocal stores sign codes in files under a local directory and embeds
+	// with the static model compiled into the binary.
 	BackendLocal Backend = "local"
 )
 
@@ -27,14 +28,22 @@ type backend interface {
 	close(ctx context.Context) error
 }
 
-// openedBackend pairs a store with the embedding provider that produced its
-// vectors. A query vector must come from the same provider.
+// textEmbedder is the part of an embedding provider the client calls.
+type textEmbedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+	EmbedBatch(ctx context.Context, texts []string) (embedding.BatchResult, error)
+}
+
+// openedBackend pairs a store with the embedder that produced its vectors. A
+// query vector must come from the same embedder. byteBudget is the largest
+// embedding input in bytes.
 type openedBackend struct {
 	store          backend
-	embedder       embedding.Provider
+	embedder       textEmbedder
 	embeddingModel string
 	dimension      int
 	queryPrefix    string
+	byteBudget     int
 }
 
 type backendOpener func(ctx context.Context, options Options) (openedBackend, error)
@@ -51,7 +60,8 @@ func openBackend(ctx context.Context, options Options) (openedBackend, error) {
 	}
 	opener, found := backendOpeners[name]
 	if !found {
-		return openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: ""}, operationError{operation: "open conversation vector store", cause: fmt.Errorf("backend %q is not registered", name)}
+		failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0}
+		return failed, operationError{operation: "open conversation vector store", cause: fmt.Errorf("backend %q is not registered", name)}
 	}
 	return opener(ctx, options)
 }

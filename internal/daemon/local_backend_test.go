@@ -2,7 +2,6 @@ package daemon_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +20,6 @@ const (
 ingestion_enabled = true
 search_enabled = true
 backend = "local"
-embedding_model = "bge-small"
-model_cache_root = %q
 
 [adapter]
 enabled = false
@@ -32,19 +29,8 @@ enabled_default = false
 `
 )
 
-// The lm-semantic-search ONNX provider tests download the pinned model files
-// into this cache once per machine.
-func localBackendModelCache(t *testing.T) string {
-	t.Helper()
-	root := filepath.Join(os.TempDir(), "lm-semantic-search-offline-model-test-cache")
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		t.Fatalf("create model cache %s: %v", root, err)
-	}
-	return root
-}
-
 func TestLocalBackendIngestsAndSearchesWithoutMilvus(t *testing.T) {
-	startRawTextDaemon(t, fmt.Sprintf(localBackendDaemonConfig, localBackendModelCache(t)))
+	startRawTextDaemon(t, localBackendDaemonConfig)
 	options := conversation.SearchConversationsOptions{
 		Query: "why does the daemon bind its listener again after a configuration edit",
 		Limit: 5,

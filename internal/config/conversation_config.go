@@ -78,14 +78,13 @@ type ConversationSemanticConfig struct {
 
 	// Backend selects the vector store behind ingestion and search. An empty
 	// value, "milvus", and "lms" select Milvus at MilvusAddress. "local" selects
-	// files under LocalRoot and the in-process ONNX model named by
-	// EmbeddingModel, and the loader rejects it together with milvus_address.
-	// The loader rejects "embedded" because this build has no embedded runtime.
+	// files under LocalRoot and the static model compiled into the binary, and
+	// the loader rejects it together with milvus_address. The loader rejects
+	// "embedded" because this build has no embedded runtime.
 	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
-	// LocalRoot and ModelCacheRoot apply to the local backend only. An empty
-	// value selects a directory under the Clyde state or cache directory.
-	LocalRoot      string `json:"localRoot,omitempty" toml:"local_root,omitempty"`
-	ModelCacheRoot string `json:"modelCacheRoot,omitempty" toml:"model_cache_root,omitempty"`
+	// LocalRoot applies to the local backend only. An empty value selects a
+	// directory under the Clyde state directory.
+	LocalRoot string `json:"localRoot,omitempty" toml:"local_root,omitempty"`
 
 	// IndexedProviders and IndexedRoles limit embedded ingestion and search to
 	// the listed providers and message roles. Empty lists select every one.
@@ -177,8 +176,8 @@ const (
 	ConversationSemanticBackendLMS ConversationSemanticBackend = "lms"
 	// ConversationSemanticBackendMilvus selects Milvus.
 	ConversationSemanticBackendMilvus ConversationSemanticBackend = "milvus"
-	// ConversationSemanticBackendLocal selects the local file store and the
-	// in-process ONNX model.
+	// ConversationSemanticBackendLocal selects the local code store and the
+	// static model compiled into the binary.
 	ConversationSemanticBackendLocal ConversationSemanticBackend = "local"
 	// ConversationSemanticBackendEmbedded selects the in-process shared search
 	// library.
@@ -237,9 +236,6 @@ func applyConversationSemanticBackendDefaults(semantic *ConversationSemanticConf
 	}
 	if strings.TrimSpace(semantic.LocalRoot) == "" {
 		semantic.LocalRoot = filepath.Join(DefaultStateDir(), defaultConversationLocalStoreDirName)
-	}
-	if strings.TrimSpace(semantic.ModelCacheRoot) == "" {
-		semantic.ModelCacheRoot = GlobalCacheDir()
 	}
 	return nil
 }

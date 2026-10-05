@@ -7,50 +7,60 @@ import (
 	"log/slog"
 
 	"goodkind.io/clyde/internal/clock"
+	"goodkind.io/clyde/internal/conversation/codestore"
+	"goodkind.io/clyde/internal/conversation/staticembed"
 	"goodkind.io/lm-semantic-search/collection"
-	localstore "goodkind.io/lm-semantic-search/collection/local"
-	localembedding "goodkind.io/lm-semantic-search/embedding/local"
+	"goodkind.io/lm-semantic-search/embedding"
 )
 
 type localBackend struct {
-	*localstore.Store
+	*codestore.Store
 }
 
-func openLocalBackend(ctx context.Context, options Options) (openedBackend, error) {
-	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: ""}
-	model, err := localembedding.Describe(options.EmbeddingModel)
-	if err != nil {
-		return failed, operationError{operation: fmt.Sprintf("describe local embedding model %q", options.EmbeddingModel), cause: err}
+// staticEmbedder embeds text with the model compiled into the binary.
+type staticEmbedder struct {
+	model *staticembed.Model
+}
+
+func (embedder staticEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	return embedder.model.Vector(text), nil
+}
+
+func (embedder staticEmbedder) EmbedBatch(_ context.Context, texts []string) (embedding.BatchResult, error) {
+	vectors := make([][]float32, 0, len(texts))
+	for _, text := range texts {
+		vectors = append(vectors, embedder.model.Vector(text))
 	}
-	embedder, err := localembedding.New(ctx, localembedding.Options{Model: model.Name, CacheRoot: options.ModelCacheRoot})
+	return embedding.BatchResult{Vectors: vectors, Skipped: nil}, nil
+}
+
+func openLocalBackend(_ context.Context, options Options) (openedBackend, error) {
+	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0}
+	model, err := staticembed.Load()
 	if err != nil {
-		return failed, operationError{operation: fmt.Sprintf("load local embedding model %q", model.Name), cause: err}
+		return failed, operationError{operation: "load the static embedding model " + staticembed.ModelName, cause: err}
 	}
-	store, err := localstore.Open(localstore.Options{Root: options.LocalRoot, EmbeddingModel: model.Name})
+	store, err := codestore.Open(options.LocalRoot, staticembed.ModelName)
 	if err != nil {
 		return failed, operationError{operation: fmt.Sprintf("open local conversation store at %q", options.LocalRoot), cause: err}
 	}
 	return openedBackend{
 		store:          &localBackend{Store: store},
-		embedder:       embedder,
-		embeddingModel: model.Name,
-		dimension:      model.Dimension,
-		queryPrefix:    model.QueryPrefix,
+		embedder:       staticEmbedder{model: model},
+		embeddingModel: staticembed.ModelName,
+		dimension:      staticembed.Dimensions,
+		queryPrefix:    "",
+		byteBudget:     staticembed.PassageBytes,
 	}, nil
 }
 
-func (b *localBackend) collectionPresent(ctx context.Context, collectionName string) (bool, error) {
-	_, err := b.Query(ctx, collection.QueryRequest{
-		Collection:  collectionName,
-		Filter:      nil,
-		Limit:       1,
-		Declaration: storedRowsDeclaration(),
-	})
+func (b *localBackend) collectionPresent(_ context.Context, collectionName string) (bool, error) {
+	_, err := b.Load(collectionName)
 	if errors.Is(err, collection.ErrCollectionMissing) {
 		return false, nil
 	}
 	if err != nil {
-		return false, failRead("check local collection "+collectionName, err)
+		return false, failRead("load local collection "+collectionName, err)
 	}
 	return true, nil
 }

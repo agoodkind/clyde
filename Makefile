@@ -34,26 +34,6 @@ export GOVULNCHECK_INSTALL := golang.org/x/vuln/cmd/govulncheck@v1.7.0
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
-# The local conversation store embeds text with the lm-semantic-search ONNX
-# provider. The commands from the lm-semantic-search module that go.mod requires
-# stage ONNX Runtime and the tokenizers library under .make/cgo.
-GO_MK_CGO_DEPS := onnxruntime tokenizers
-GO_MK_CGO_CACHE_VERSIONS := onnxruntime=1.27.0 tokenizers=1.27.0
-GO_MK_CGO_CACHE_INPUTS := go.mod
-export CGO_LDFLAGS_ALLOW := -Wl,-rpath,@loader_path
-# The binary loads libonnxruntime from its own directory at run time.
-ifeq ($(shell uname),Darwin)
-ONNXRUNTIME_LIBRARIES := libonnxruntime.1.27.0.dylib libonnxruntime.1.dylib libonnxruntime.dylib
-else
-ONNXRUNTIME_LIBRARIES := libonnxruntime.so.1.27.0 libonnxruntime.so.1 libonnxruntime.so
-endif
-GO_MK_INSTALL_POST_CMD = \
-	if [ -w "$(INSTALL_DIR)" ]; then \
-		cp -P $(addprefix "$(GO_MK_CGO_PREFIX)/lib/,$(addsuffix ",$(ONNXRUNTIME_LIBRARIES))) "$(INSTALL_DIR)/"; \
-	else \
-		sudo cp -P $(addprefix "$(GO_MK_CGO_PREFIX)/lib/,$(addsuffix ",$(ONNXRUNTIME_LIBRARIES))) "$(INSTALL_DIR)/"; \
-	fi
-
 # go.mk runs these as order-only prerequisites of every build, lint, vet, test,
 # and govulncheck target. GO_MK_GENERATE generates the Swift tree-sitter parser
 # in the pinned gksyntax submodule. GO_MK_WORKSPACE_USE materializes a
@@ -161,14 +141,6 @@ gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its 
 # native-prereqs runs the go.mk order-only prerequisites that `make test` runs
 # before it compiles packages. CI jobs that call `go test` directly run it first.
 native-prereqs: | $(GO_MK_PREREQS) ## Prepare the gksyntax grammars, go.work, and cgo dependencies
-
-LMS_DEP_COMMANDS := CGO_ENABLED=0 go run goodkind.io/lm-semantic-search/cmd
-
-go-mk-cgo-dep-onnxruntime:
-	$(LMS_DEP_COMMANDS)/onnxruntime-dep
-
-go-mk-cgo-dep-tokenizers:
-	$(LMS_DEP_COMMANDS)/tokenizers-dep
 
 # EMBEDDED_SEARCH_PACKAGES lists the external packages that the embedded
 # conversation search path imports.

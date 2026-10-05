@@ -20,7 +20,7 @@ type milvusBackend struct {
 }
 
 func openMilvusBackend(ctx context.Context, options Options) (openedBackend, error) {
-	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: ""}
+	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0}
 	embedder, err := embedding.NewOpenAICompatible(embedding.OpenAIOptions{
 		APIKey:         options.EmbeddingAPIKey,
 		BaseURL:        options.EmbeddingBaseURL,
@@ -51,7 +51,14 @@ func openMilvusBackend(ctx context.Context, options Options) (openedBackend, err
 		Store:  milvusstore.New(client, milvusstore.Options{Hybrid: true, EmbeddingModel: options.EmbeddingModel, DenseSearchParams: options.DenseSearchParams}),
 		client: client,
 	}
-	return openedBackend{store: store, embedder: embedder, embeddingModel: options.EmbeddingModel, dimension: options.EmbeddingDimension, queryPrefix: queryPrefix}, nil
+	return openedBackend{
+		store:          store,
+		embedder:       embedder,
+		embeddingModel: options.EmbeddingModel,
+		dimension:      options.EmbeddingDimension,
+		queryPrefix:    queryPrefix,
+		byteBudget:     embedByteBudget(options.EmbeddingModel),
+	}, nil
 }
 
 // collectionPresent loads an existing collection into memory, because Milvus
