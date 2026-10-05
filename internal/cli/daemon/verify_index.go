@@ -39,7 +39,8 @@ func runVerifySearchIndex(ctx context.Context, f *cli.Factory, sample int) error
 	}
 	client, err := daemonsvc.OpenConversationSearchClient(ctx, cfg.Conversation.Semantic)
 	if err != nil {
-		slog.ErrorContext(ctx, "cli.daemon.verify_index.open_failed", "concern", "cli.daemon", "component", "cli")
+		// The open error can include embedding API key settings. The log omits it.
+		slog.WarnContext(ctx, "cli.daemon.verify_index.open_failed", "concern", "cli.daemon", "component", "cli")
 		return fmt.Errorf("open conversation semantic client: %w", err)
 	}
 	defer func() { _ = client.Close(context.WithoutCancel(ctx)) }()
