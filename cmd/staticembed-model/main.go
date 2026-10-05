@@ -1,10 +1,11 @@
-// Command staticembed-model places the pinned static embedding model files in
+// Command staticembed-model verifies the pinned static embedding model files in
 // internal/conversation/staticembed/model before the package compiles. It runs
 // as the staticembed-model target of GO_MK_GENERATE.
 //
-// A file already present with the pinned SHA-256 is kept. Any other file is
-// downloaded from the pinned revision into a temporary file, checked against
-// the same SHA-256, and renamed into place. A hash mismatch fails the run.
+// The command reuses a file with the pinned SHA-256. It downloads a missing or
+// mismatched file from the pinned revision into a temporary file, checks the
+// same SHA-256, and renames the file into place. A downloaded file with another
+// hash fails the run.
 package main
 
 import (

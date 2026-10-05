@@ -19,8 +19,8 @@ type deliveryBatchSizer interface {
 	DeliveryBatchBytes() int64
 }
 
-// deliveryBatchBytesFor returns the client's batch size, or
-// conversationSemanticBatchBytes when the client sets none.
+// deliveryBatchBytesFor returns the client's positive per-pass byte budget, or
+// conversationSemanticBatchBytes when the client reports no positive budget.
 func deliveryBatchBytesFor(client conversationSemanticClient) int64 {
 	if sizer, ok := client.(deliveryBatchSizer); ok {
 		if size := sizer.DeliveryBatchBytes(); size > 0 {
