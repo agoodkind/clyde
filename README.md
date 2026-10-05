@@ -123,6 +123,11 @@ make lint
 Use `make deploy` when the local daemon install and reload path needs to be
 validated.
 
+The first build needs network access. It downloads the static embedding model
+that the local search backend compiles into `clyde`. Later builds reuse the
+downloaded files after checking their pinned SHA-256. The running daemon never
+downloads the model.
+
 ## Original Credit
 
 Clyde is forked from Fabio Rehm's original

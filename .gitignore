@@ -50,6 +50,11 @@ CODEX.local.md
 CURSOR.local.md
 
 
+# Static embedding model files fetched by make staticembed-model
+/internal/conversation/staticembed/model/model.safetensors
+/internal/conversation/staticembed/model/tokenizer.json
+/internal/conversation/staticembed/model/.*.download-*
+
 # Reverse-engineering and decompile artifacts (large, regenerable)
 /research
 tmp

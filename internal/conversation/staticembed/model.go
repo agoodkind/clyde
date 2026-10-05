@@ -31,6 +31,11 @@ var safetensorsFile []byte
 //go:embed model/tokenizer.json
 var tokenizerJSONFile []byte
 
+// ModelLicense is the provenance and license text of the embedded model files.
+//
+//go:embed model/LICENSE
+var ModelLicense string
+
 // Code keeps one sign bit per dimension of a vector minus the token table mean.
 // The table mean depends only on the model, so codes from different builds
 // compare directly.
