@@ -364,17 +364,12 @@ func TestSupervisorStopsAbortedAndSupersededWorkers(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
 
-	// The worker script records its pid, reports ready on fd 3, and sleeps.
 	pidFilePath := filepath.Join(runtimeDir, "worker-pids")
-	workerPath := filepath.Join(runtimeDir, "worker.sh")
-	workerScript := "#!/bin/sh\necho $$ >> \"$CLYDE_TEST_PID_FILE\"\necho ready >&3\nexec 3>&-\nexec sleep 120\n"
-	if err := os.WriteFile(workerPath, []byte(workerScript), 0o700); err != nil {
-		t.Fatalf("write worker script: %v", err)
+	t.Setenv(testWorkerPIDFileEnv, pidFilePath)
+	workerPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
 	}
-	t.Setenv("CLYDE_TEST_PID_FILE", pidFilePath)
-	previousExecutablePath := supervisorExecutablePath
-	supervisorExecutablePath = func() (string, error) { return workerPath, nil }
-	t.Cleanup(func() { supervisorExecutablePath = previousExecutablePath })
 	alive := func(pid int) bool { return syscall.Kill(pid, 0) == nil }
 	waitFor := func(condition func() bool, failure string) {
 		t.Helper()
@@ -447,7 +442,38 @@ func TestSupervisorStopsAbortedAndSupersededWorkers(t *testing.T) {
 const (
 	supervisorTestPollAttempts = 400
 	supervisorTestPollInterval = 25 * time.Millisecond
+	testWorkerPIDFileEnv       = "CLYDE_TEST_WORKER_PID_FILE"
+	testWorkerLifetime         = 2 * time.Minute
 )
+
+// TestMain runs the test binary as a daemon worker when the supervisor starts
+// it with the worker arguments. The worker appends its pid to the file named by
+// testWorkerPIDFileEnv, writes the ready line to its ready descriptor, and
+// sleeps until the supervisor stops it.
+func TestMain(m *testing.M) {
+	if len(os.Args) >= 3 && os.Args[1] == "daemon" && os.Args[2] == "worker" {
+		runTestWorker()
+		return
+	}
+	os.Exit(m.Run())
+}
+
+func runTestWorker() {
+	pidFile, err := os.OpenFile(os.Getenv(testWorkerPIDFileEnv), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		os.Exit(1)
+	}
+	_, _ = fmt.Fprintln(pidFile, os.Getpid())
+	_ = pidFile.Close()
+	readyFD, err := strconv.Atoi(os.Getenv(EnvReadyFD))
+	if err != nil {
+		os.Exit(1)
+	}
+	ready := os.NewFile(uintptr(readyFD), "ready")
+	_, _ = ready.WriteString("ready\n")
+	_ = ready.Close()
+	time.Sleep(testWorkerLifetime)
+}
 
 func envContains(env []string, want string) bool {
 	for _, entry := range env {
