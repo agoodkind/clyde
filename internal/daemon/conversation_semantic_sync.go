@@ -233,6 +233,9 @@ type conversationSemanticSyncWorker struct {
 	// daemon startup from the export surface's selector vocabulary, so a change
 	// takes effect on the next daemon generation.
 	contentKinds conversation.ContentKindSet
+	// batchBytes is the raw transcript size one pass loads. runPass sets it from
+	// the resolved client.
+	batchBytes int64
 }
 
 type conversationSemanticSyncStats struct {
@@ -269,21 +272,6 @@ type conversationSemanticSyncStats struct {
 	// not, so nothing was delivered and the manifest pins the checkpointed
 	// fingerprint from the next pass on.
 	unchangedPinned int
-}
-
-// maxLoggedConversationIDs bounds the id list on the pass log line. A backlog
-// pass delivers hundreds of conversations, and naming them all would make the
-// line unreadable; the first few plus the existing sent_conversations count
-// carry the attribution.
-const maxLoggedConversationIDs = 10
-
-// boundedConversationIDs returns at most maxLoggedConversationIDs ids for the
-// pass log line, keeping delivery order so the ids match the batch head.
-func boundedConversationIDs(ids []string) []string {
-	if len(ids) <= maxLoggedConversationIDs {
-		return ids
-	}
-	return ids[:maxLoggedConversationIDs]
 }
 
 // installConversationSemanticSyncStop creates the feeder's worker context and
@@ -398,6 +386,7 @@ func newConversationSemanticSyncWorker(
 		now:                time.Now,
 		freshness:          nil,
 		contentKinds:       contentKinds,
+		batchBytes:         conversationSemanticBatchBytes,
 	}
 }
 
@@ -471,6 +460,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		)
 		return nil
 	}
+	w.batchBytes = deliveryBatchBytesFor(client)
 	if w.engineBusyWithLastJob(ctx, client) {
 		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_skipped_engine_busy",
 			"concern", "conversation.semantic",
@@ -720,6 +710,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	sort.Strings(ordered)
 	ordered = rotateAfter(ordered, w.deliveryCursor)
 
+	prefetched := w.prefetchNeededDocuments(ctx, ordered, recordsByID, stampsByID)
 	docs := make([]semsearch.SemDoc, 0)
 	sent := make([]deliveredConversation, 0)
 	var artifactBytes int64
@@ -739,10 +730,10 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			continue
 		}
 		artifactSize := stampsByID[conversationID].Size
-		if len(docs) > 0 && artifactBytes+artifactSize > conversationSemanticBatchBytes {
+		if len(docs) > 0 && artifactBytes+artifactSize > w.batchBytes {
 			break
 		}
-		built, loadErr := w.loadDocs(ctx, record)
+		built, loadErr := w.prefetchedOrLoad(ctx, prefetched, record)
 		if loadErr != nil {
 			stats.failed++
 			// The conversation delivers no document, so the engine will keep
@@ -812,7 +803,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			projectionHash: projectionHash,
 		})
 		w.deliveryCursor = conversationID
-		if artifactBytes >= conversationSemanticBatchBytes {
+		if artifactBytes >= w.batchBytes {
 			break
 		}
 	}
@@ -834,28 +825,6 @@ func (w *conversationSemanticSyncWorker) recordLoadFailure(conversationID, finge
 // right now. It settles after one quiet interval and is delivered then.
 func (w *conversationSemanticSyncWorker) isActivelyGrowing(stamp conversation.FileStamp) bool {
 	return w.now().Sub(stamp.Mtime) < w.interval
-}
-
-// rotateAfter returns ids rotated so iteration starts at the first id greater
-// than cursor, wrapping around to the start. An empty cursor, or one at or
-// past every id, keeps the original order. Each batch then resumes after the
-// previous batch's last delivery instead of restarting at the smallest id, so
-// late-sorting conversations are not starved by early-sorting ones.
-func rotateAfter(ids []string, cursor string) []string {
-	if cursor == "" || len(ids) == 0 {
-		return ids
-	}
-	start := sort.SearchStrings(ids, cursor)
-	if start < len(ids) && ids[start] == cursor {
-		start++
-	}
-	if start <= 0 || start >= len(ids) {
-		return ids
-	}
-	rotated := make([]string, 0, len(ids))
-	rotated = append(rotated, ids[start:]...)
-	rotated = append(rotated, ids[:start]...)
-	return rotated
 }
 
 // sendDocuments fires one upsert for the collected documents and the full

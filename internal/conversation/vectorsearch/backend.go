@@ -36,14 +36,16 @@ type textEmbedder interface {
 
 // openedBackend pairs a store with the embedder that produced its vectors. A
 // query vector must come from the same embedder. byteBudget is the largest
-// embedding input in bytes.
+// embedding input in bytes. deliveryBatchBytes is the raw transcript size the
+// sync worker loads per pass, and zero keeps the worker default.
 type openedBackend struct {
-	store          backend
-	embedder       textEmbedder
-	embeddingModel string
-	dimension      int
-	queryPrefix    string
-	byteBudget     int
+	store              backend
+	embedder           textEmbedder
+	embeddingModel     string
+	dimension          int
+	queryPrefix        string
+	byteBudget         int
+	deliveryBatchBytes int64
 }
 
 type backendOpener func(ctx context.Context, options Options) (openedBackend, error)
@@ -60,7 +62,7 @@ func openBackend(ctx context.Context, options Options) (openedBackend, error) {
 	}
 	opener, found := backendOpeners[name]
 	if !found {
-		failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0}
+		failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0, deliveryBatchBytes: 0}
 		return failed, operationError{operation: "open conversation vector store", cause: fmt.Errorf("backend %q is not registered", name)}
 	}
 	return opener(ctx, options)

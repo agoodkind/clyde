@@ -80,6 +80,10 @@ type Client struct {
 	embeddingModel string
 	byteBudget     int
 
+	// deliveryBatchBytes is the raw transcript size the sync worker loads per
+	// pass. Zero keeps the worker default.
+	deliveryBatchBytes int64
+
 	checkpoint *checkpointStore
 
 	// ingestMu guards the collections ensured in this process and the job count.
@@ -116,14 +120,26 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 
 		embeddingModel: opened.embeddingModel,
 		byteBudget:     opened.byteBudget,
-		checkpoint:     newCheckpointStore(options.CheckpointDir),
-		ingestMu:       sync.Mutex{},
-		ensured:        make(map[string]bool),
-		jobCount:       0,
-		vectorMu:       sync.Mutex{},
-		vectors:        make(map[string][]float32, queryVectorCacheSize),
-		vectorOrder:    nil,
+
+		deliveryBatchBytes: opened.deliveryBatchBytes,
+
+		checkpoint:  newCheckpointStore(options.CheckpointDir),
+		ingestMu:    sync.Mutex{},
+		ensured:     make(map[string]bool),
+		jobCount:    0,
+		vectorMu:    sync.Mutex{},
+		vectors:     make(map[string][]float32, queryVectorCacheSize),
+		vectorOrder: nil,
 	}, nil
+}
+
+// DeliveryBatchBytes returns the raw transcript size the sync worker loads per
+// pass for this backend. Zero keeps the worker default.
+func (c *Client) DeliveryBatchBytes() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.deliveryBatchBytes
 }
 
 // Close closes the vector store.

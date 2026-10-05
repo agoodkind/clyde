@@ -20,7 +20,7 @@ type milvusBackend struct {
 }
 
 func openMilvusBackend(ctx context.Context, options Options) (openedBackend, error) {
-	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0}
+	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0, deliveryBatchBytes: 0}
 	embedder, err := embedding.NewOpenAICompatible(embedding.OpenAIOptions{
 		APIKey:         options.EmbeddingAPIKey,
 		BaseURL:        options.EmbeddingBaseURL,
@@ -58,6 +58,8 @@ func openMilvusBackend(ctx context.Context, options Options) (openedBackend, err
 		dimension:      options.EmbeddingDimension,
 		queryPrefix:    queryPrefix,
 		byteBudget:     embedByteBudget(options.EmbeddingModel),
+
+		deliveryBatchBytes: 0,
 	}, nil
 }
 

@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/conversation/codestore"
@@ -12,6 +15,11 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/embedding"
 )
+
+// localDeliveryBatchBytes lets one sync pass load enough conversations to keep
+// the parallel loader and embedder busy. Each pass is a separate load, embed,
+// and write cycle.
+const localDeliveryBatchBytes = 64 << 20
 
 type localBackend struct {
 	*codestore.Store
@@ -26,16 +34,42 @@ func (embedder staticEmbedder) Embed(_ context.Context, text string) ([]float32,
 	return embedder.model.Vector(text), nil
 }
 
-func (embedder staticEmbedder) EmbedBatch(_ context.Context, texts []string) (embedding.BatchResult, error) {
-	vectors := make([][]float32, 0, len(texts))
-	for _, text := range texts {
-		vectors = append(vectors, embedder.model.Vector(text))
+// EmbedBatch embeds texts on up to GOMAXPROCS goroutines.
+func (embedder staticEmbedder) EmbedBatch(ctx context.Context, texts []string) (embedding.BatchResult, error) {
+	vectors := make([][]float32, len(texts))
+	var next atomic.Int64
+	var group sync.WaitGroup
+	for range min(len(texts), runtime.GOMAXPROCS(0)) {
+		group.Go(func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.ErrorContext(ctx, "conversation.vectorsearch.embed_worker_panic",
+						"concern", "conversation.semantic",
+						"component", "conversation",
+						"err", fmt.Errorf("panic: %v", recovered),
+					)
+				}
+			}()
+			for {
+				position := int(next.Add(1) - 1)
+				if position >= len(texts) {
+					return
+				}
+				vectors[position] = embedder.model.Vector(texts[position])
+			}
+		})
+	}
+	group.Wait()
+	for position, vector := range vectors {
+		if vector == nil {
+			return embedding.BatchResult{Vectors: nil, Skipped: nil}, fmt.Errorf("embed batch: input %d produced no vector", position)
+		}
 	}
 	return embedding.BatchResult{Vectors: vectors, Skipped: nil}, nil
 }
 
 func openLocalBackend(_ context.Context, options Options) (openedBackend, error) {
-	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0}
+	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0, deliveryBatchBytes: 0}
 	model, err := staticembed.Load()
 	if err != nil {
 		return failed, operationError{operation: "load the static embedding model " + staticembed.ModelName, cause: err}
@@ -51,6 +85,8 @@ func openLocalBackend(_ context.Context, options Options) (openedBackend, error)
 		dimension:      staticembed.Dimensions,
 		queryPrefix:    "",
 		byteBudget:     staticembed.PassageBytes,
+
+		deliveryBatchBytes: localDeliveryBatchBytes,
 	}, nil
 }
 
