@@ -104,6 +104,7 @@ func newRoot(f *cli.Factory) *cobra.Command {
 
 	reg := clispec.NewConversationRegistry()
 	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewCmd})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewConversationIndexCmd})
 	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliHooks.NewCmd})
 	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliMITM.NewCmd})
 	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliStatus.NewCmd})

@@ -66,6 +66,10 @@ func TestRootRegistersOperationalPackages(t *testing.T) {
 		{"daemon", "fingerprint"},
 		{"mcp", "serve"},
 		{"mitm", "baseline", "seed"},
+		{"conversation", "search"},
+		{"conversation", "index", "verify"},
+		{"conversation", "index", "backfill-scalars"},
+		{"conversation", "index", "backfill-documents"},
 	}
 	for _, path := range expected {
 		if _, _, err := root.Find(path); err != nil {

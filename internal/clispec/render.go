@@ -40,6 +40,14 @@ func mergeOrAppendRoot(roots *[]*cobra.Command, candidate *cobra.Command) {
 		if existing.Name() != candidate.Name() {
 			continue
 		}
+		// A hand-written parent without help text only adds subcommands to the
+		// rendered group and keeps the group's help.
+		if candidate.Short == "" {
+			for _, child := range candidate.Commands() {
+				existing.AddCommand(child)
+			}
+			return
+		}
 		for _, child := range existing.Commands() {
 			candidate.AddCommand(child)
 		}
