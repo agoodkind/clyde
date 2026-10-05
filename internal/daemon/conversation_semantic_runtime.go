@@ -236,8 +236,14 @@ func OpenConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 	if err != nil {
 		return nil, semanticConnectorError{cause: err}
 	}
+	backend := vectorsearch.BackendMilvus
+	if semanticCfg.Backend == config.ConversationSemanticBackendLocal {
+		backend = vectorsearch.BackendLocal
+	}
 	client, err := vectorsearch.Open(ctx, vectorsearch.Options{
-		Backend:                vectorsearch.BackendMilvus,
+		Backend:                backend,
+		LocalRoot:              semanticCfg.LocalRoot,
+		ModelCacheRoot:         semanticCfg.ModelCacheRoot,
 		MilvusAddress:          semanticCfg.MilvusAddress,
 		MilvusDatabase:         semanticCfg.MilvusDatabase,
 		EmbeddingBaseURL:       semanticCfg.EmbeddingBaseURL,

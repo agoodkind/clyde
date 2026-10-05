@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/lm-semantic-search/collection"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+	"goodkind.io/lm-semantic-search/embedding"
 )
 
 type milvusBackend struct {
@@ -17,7 +19,22 @@ type milvusBackend struct {
 	client *milvusclient.Client
 }
 
-func openMilvusBackend(ctx context.Context, options Options) (backend, error) {
+func openMilvusBackend(ctx context.Context, options Options) (openedBackend, error) {
+	failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: ""}
+	embedder, err := embedding.NewOpenAICompatible(embedding.OpenAIOptions{
+		APIKey:         options.EmbeddingAPIKey,
+		BaseURL:        options.EmbeddingBaseURL,
+		Model:          options.EmbeddingModel,
+		Dimensions:     0,
+		RequestTimeout: options.EmbeddingTimeout,
+	})
+	if err != nil {
+		return failed, operationError{operation: fmt.Sprintf("build conversation embedding provider for model %q", options.EmbeddingModel), cause: err}
+	}
+	queryPrefix := options.QueryInstructionPrefix
+	if queryPrefix == "" && strings.Contains(options.EmbeddingModel, nvEmbedCodeModelMarker) {
+		queryPrefix = nvEmbedCodeQueryPrefix
+	}
 	// The Milvus client retries an unreachable address until its context ends.
 	// The daemon opens this connection during startup, and a local Milvus
 	// answers in milliseconds.
@@ -28,12 +45,13 @@ func openMilvusBackend(ctx context.Context, options Options) (backend, error) {
 		DBName:  options.MilvusDatabase,
 	})
 	if err != nil {
-		return nil, operationError{operation: fmt.Sprintf("connect to Milvus at %q database %q", options.MilvusAddress, options.MilvusDatabase), cause: err}
+		return failed, operationError{operation: fmt.Sprintf("connect to Milvus at %q database %q", options.MilvusAddress, options.MilvusDatabase), cause: err}
 	}
-	return &milvusBackend{
+	store := &milvusBackend{
 		Store:  milvusstore.New(client, milvusstore.Options{Hybrid: true, EmbeddingModel: options.EmbeddingModel, DenseSearchParams: options.DenseSearchParams}),
 		client: client,
-	}, nil
+	}
+	return openedBackend{store: store, embedder: embedder, embeddingModel: options.EmbeddingModel, dimension: options.EmbeddingDimension, queryPrefix: queryPrefix}, nil
 }
 
 // collectionPresent loads an existing collection into memory, because Milvus

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"goodkind.io/lm-semantic-search/collection"
+	"goodkind.io/lm-semantic-search/embedding"
 )
 
 // Backend selects the vector store that a [Client] opens.
@@ -26,20 +27,31 @@ type backend interface {
 	close(ctx context.Context) error
 }
 
-type backendOpener func(ctx context.Context, options Options) (backend, error)
+// openedBackend pairs a store with the embedding provider that produced its
+// vectors. A query vector must come from the same provider.
+type openedBackend struct {
+	store          backend
+	embedder       embedding.Provider
+	embeddingModel string
+	dimension      int
+	queryPrefix    string
+}
+
+type backendOpener func(ctx context.Context, options Options) (openedBackend, error)
 
 var backendOpeners = map[Backend]backendOpener{
 	BackendMilvus: openMilvusBackend,
+	BackendLocal:  openLocalBackend,
 }
 
-func openBackend(ctx context.Context, options Options) (backend, error) {
+func openBackend(ctx context.Context, options Options) (openedBackend, error) {
 	name := options.Backend
 	if name == "" {
 		name = BackendMilvus
 	}
 	opener, found := backendOpeners[name]
 	if !found {
-		return nil, operationError{operation: "open conversation vector store", cause: fmt.Errorf("backend %q is not registered", name)}
+		return openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: ""}, operationError{operation: "open conversation vector store", cause: fmt.Errorf("backend %q is not registered", name)}
 	}
 	return opener(ctx, options)
 }

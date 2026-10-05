@@ -57,6 +57,11 @@ type Options struct {
 	EmbeddingTimeout       time.Duration
 	QueryInstructionPrefix string
 	DenseSearchParams      map[string]string
+	// LocalRoot and ModelCacheRoot are the store directory and the ONNX model
+	// cache of BackendLocal. BackendLocal reads EmbeddingModel as a local model
+	// name.
+	LocalRoot      string
+	ModelCacheRoot string
 	// CheckpointDir is the directory of the per-conversation fingerprint
 	// records the ingest persists. Empty keeps them in memory only.
 	CheckpointDir string
@@ -99,35 +104,21 @@ func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName str
 // Open builds the embedding provider and opens the vector store that
 // options.Backend selects.
 func Open(ctx context.Context, options Options) (*Client, error) {
-	embedder, err := embedding.NewOpenAICompatible(embedding.OpenAIOptions{
-		APIKey:         options.EmbeddingAPIKey,
-		BaseURL:        options.EmbeddingBaseURL,
-		Model:          options.EmbeddingModel,
-		Dimensions:     0,
-		RequestTimeout: options.EmbeddingTimeout,
-	})
-	if err != nil {
-		return nil, operationError{operation: fmt.Sprintf("build conversation embedding provider for model %q", options.EmbeddingModel), cause: err}
-	}
-	store, err := openBackend(ctx, options)
+	opened, err := openBackend(ctx, options)
 	if err != nil {
 		return nil, err
 	}
-	queryPrefix := options.QueryInstructionPrefix
-	if queryPrefix == "" && strings.Contains(options.EmbeddingModel, nvEmbedCodeModelMarker) {
-		queryPrefix = nvEmbedCodeQueryPrefix
-	}
 	return &Client{
-		store:       store,
-		embedder:    embedder,
-		dimension:   options.EmbeddingDimension,
-		queryPrefix: queryPrefix,
+		store:       opened.store,
+		embedder:    opened.embedder,
+		dimension:   opened.dimension,
+		queryPrefix: opened.queryPrefix,
 		declaration: Declaration(),
 
 		denseSearchParams: options.DenseSearchParams,
 
-		embeddingModel: options.EmbeddingModel,
-		byteBudget:     embedByteBudget(options.EmbeddingModel),
+		embeddingModel: opened.embeddingModel,
+		byteBudget:     embedByteBudget(opened.embeddingModel),
 		checkpoint:     newCheckpointStore(options.CheckpointDir),
 		ingestMu:       sync.Mutex{},
 		ensured:        make(map[string]bool),

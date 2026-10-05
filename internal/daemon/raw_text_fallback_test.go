@@ -56,7 +56,7 @@ func writeRawTextTranscript(t *testing.T, path string, session string, minute in
 // startRawTextDaemon runs the daemon in this process with every Clyde path and
 // every provider store under temporary directories. It returns the Claude
 // project directory.
-func startRawTextDaemon(t *testing.T) string {
+func startRawTextDaemon(t *testing.T, daemonConfig string) string {
 	t.Helper()
 	roots, err := sandbox.NewRoots()
 	if err != nil {
@@ -85,7 +85,7 @@ func startRawTextDaemon(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatalf("create config dir: %v", err)
 	}
-	if err := os.WriteFile(configPath, []byte(rawTextDaemonConfig), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(daemonConfig), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func waitForFirstMatches(t *testing.T, options conversation.SearchConversationsO
 }
 
 func TestSearchFallsBackToRawTextWhenSemanticSearchIsDisabled(t *testing.T) {
-	projectDir := startRawTextDaemon(t)
+	projectDir := startRawTextDaemon(t, rawTextDaemonConfig)
 	options := conversation.SearchConversationsOptions{Query: "watcher config", Limit: 5}
 
 	waitForFirstMatches(t, options, 2)
