@@ -146,6 +146,11 @@ gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its 
 staticembed-model: ## Fetch and verify the pinned static embedding model files
 	GOWORK=off CGO_ENABLED=0 go run ./cmd/staticembed-model
 
+# The formatters load packages, and go:embed fails to load staticembed without
+# the model files. go.mk runs GO_MK_GENERATE before build, lint, vet, and test,
+# but not before these two targets.
+lint-format fmt: | staticembed-model
+
 # native-prereqs runs the go.mk order-only prerequisites that `make test` runs
 # before it compiles packages. CI jobs that call `go test` directly run it first.
 native-prereqs: | $(GO_MK_PREREQS) ## Prepare the gksyntax grammars, go.work, and cgo dependencies

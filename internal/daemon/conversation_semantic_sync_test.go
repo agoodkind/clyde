@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,6 +77,9 @@ func staticSemanticSyncClient(client conversationSemanticClient) conversationSem
 }
 
 type fakeConversationSemanticIndex struct {
+	// loadMu guards loadOptions. The sync worker loads conversations from
+	// several goroutines.
+	loadMu       sync.Mutex
 	records      []conversation.StampedRecord
 	messagesByID map[string][]transcript.Message
 	loadOptions  []conversation.LoadOptions
@@ -89,7 +93,9 @@ func (idx *fakeConversationSemanticIndex) ListWithStamps(_ context.Context) ([]c
 }
 
 func (idx *fakeConversationSemanticIndex) LoadMessagesWithOptions(record conversation.Record, opts conversation.LoadOptions) ([]transcript.Message, error) {
+	idx.loadMu.Lock()
 	idx.loadOptions = append(idx.loadOptions, opts)
+	idx.loadMu.Unlock()
 	if opts.HarnessTally != nil {
 		opts.HarnessTally.Injected += idx.tally.Injected
 		opts.HarnessTally.System += idx.tally.System
