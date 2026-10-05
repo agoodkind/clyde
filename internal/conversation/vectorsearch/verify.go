@@ -110,7 +110,7 @@ func (c *Client) firstDenseScore(ctx context.Context, collectionName string, vec
 		return 0, failRead("search "+collectionName+" with a stored vector", err)
 	}
 	if len(resultSets) == 0 || len(resultSets[0].Scores) == 0 {
-		return 0, nil
+		return 0, failRead("search "+collectionName+" with a stored vector", errors.New("search returned no result"))
 	}
 	return resultSets[0].Scores[0], nil
 }
