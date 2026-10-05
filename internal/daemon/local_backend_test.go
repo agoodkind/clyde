@@ -16,10 +16,13 @@ import (
 
 const (
 	localBackendSearchTimeout = 3 * time.Minute
-	localBackendDaemonConfig  = `[conversation.semantic]
+	// The embedding API key file does not exist. The local backend calls no
+	// embedding endpoint and must start without it.
+	localBackendDaemonConfig = `[conversation.semantic]
 ingestion_enabled = true
 search_enabled = true
 backend = "local"
+embedding_api_key_file = "/nonexistent/clyde-local-backend-test-key"
 
 [adapter]
 enabled = false

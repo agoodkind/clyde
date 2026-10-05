@@ -140,9 +140,9 @@ gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its 
 		echo "gksyntax-grammars: Swift parser already generated"; \
 	fi
 
-# staticembed-model places the model files that internal/conversation/staticembed
-# compiles into the binary. model/manifest.json pins the revision and SHA-256 of
-# each file. A file with the pinned hash stays; any other file downloads again.
+# staticembed-model fetches the model files that internal/conversation/staticembed
+# embeds. model/manifest.json pins the revision and SHA-256 of each file. The
+# target reuses a file with the pinned hash and downloads any other file.
 staticembed-model: ## Fetch and verify the pinned static embedding model files
 	GOWORK=off CGO_ENABLED=0 go run ./cmd/staticembed-model
 
