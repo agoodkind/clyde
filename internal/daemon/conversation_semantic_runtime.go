@@ -245,6 +245,7 @@ func OpenConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 		EmbeddingAPIKey:        apiKey,
 		EmbeddingTimeout:       semanticCfg.EmbeddingRequestTimeout.AsDuration(),
 		QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
+		DenseSearchParams:      semanticCfg.DenseSearchParams(),
 		CheckpointDir:          filepath.Join(config.DefaultStateDir(), conversationSemanticStateDirName, conversationCheckpointDirName),
 	})
 	if err != nil {

@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 const (
 	defaultConversationSemanticCollectionID       = "clyde-conversations"
@@ -9,6 +12,7 @@ const (
 	defaultConversationSemanticEmbeddingBaseURL   = "http://localhost:5400/v1"
 	defaultConversationSemanticEmbeddingModel     = "nvidia/NV-EmbedCode-7b-v1"
 	defaultConversationSemanticEmbeddingDimension = 4096
+	defaultConversationSearchNProbe               = 64
 )
 
 // ConversationConfig configures raw conversation indexing integrations.
@@ -121,6 +125,9 @@ type ConversationSemanticConfig struct {
 	Normalization          string `json:"normalization,omitempty" toml:"normalization,omitempty"`
 	AnalyzerIdentity       string `json:"analyzerIdentity,omitempty" toml:"analyzer_identity,omitempty"`
 	QueryInstructionPrefix string `json:"queryInstructionPrefix,omitempty" toml:"query_instruction_prefix,omitempty"`
+	// SearchNProbe is the IVF nprobe of a dense conversation search. Unset uses
+	// 64, and 0 uses the Milvus index default.
+	SearchNProbe *int `json:"searchNprobe,omitempty" toml:"search_nprobe,omitempty"`
 
 	// MaxBatchRows and MaxBatchBytes bound one library write batch.
 	// RawBatchTargetBytes bounds the transcript bytes Clyde loads per batch.
@@ -200,6 +207,19 @@ func applyConversationSemanticSearchDefaults(semantic *ConversationSemanticConfi
 	if semantic.EmbeddingDimension == 0 {
 		semantic.EmbeddingDimension = defaultConversationSemanticEmbeddingDimension
 	}
+	if semantic.SearchNProbe == nil {
+		nprobe := defaultConversationSearchNProbe
+		semantic.SearchNProbe = &nprobe
+	}
+}
+
+// DenseSearchParams returns the index search parameters of a dense
+// conversation search.
+func (semantic ConversationSemanticConfig) DenseSearchParams() map[string]string {
+	if semantic.SearchNProbe == nil || *semantic.SearchNProbe <= 0 {
+		return nil
+	}
+	return map[string]string{"nprobe": strconv.Itoa(*semantic.SearchNProbe)}
 }
 
 func applyConversationDefaults(conversation *ConversationConfig) error {
