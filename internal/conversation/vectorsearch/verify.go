@@ -21,7 +21,7 @@ const (
 	sampleKeyPattern = "chunk_%04x"
 )
 
-// IndexCheck is the result of [Client.VerifyIndex].
+// IndexCheck reports checked and passing sample counts for the cosine score threshold.
 type IndexCheck struct {
 	Checked int
 	Found   int
