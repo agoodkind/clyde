@@ -97,7 +97,6 @@ type sandboxLocalOptions struct {
 	root    string
 }
 
-// configLines returns the backend keys of the sandbox config.
 func (local sandboxLocalOptions) configLines() (string, error) {
 	if !local.enabled {
 		if local.root != "" {

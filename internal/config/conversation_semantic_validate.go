@@ -93,7 +93,7 @@ func validateConversationSemanticBackend(backend ConversationSemanticBackend) er
 	case "", ConversationSemanticBackendLMS, ConversationSemanticBackendMilvus, ConversationSemanticBackendLocal, ConversationSemanticBackendEmbedded:
 		return nil
 	default:
-		return invalidConversationSemanticSetting("backend", fmt.Sprintf("must be %q or %q, got %q", ConversationSemanticBackendMilvus, ConversationSemanticBackendLocal, backend))
+		return invalidConversationSemanticSetting("backend", fmt.Sprintf("must be empty, %q, %q, or %q, got %q", ConversationSemanticBackendLMS, ConversationSemanticBackendMilvus, ConversationSemanticBackendLocal, backend))
 	}
 }
 

@@ -12,9 +12,9 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 )
 
-// deliveryBatchSizer is a feeder client that sets the raw transcript size one
-// sync pass loads. The in-process local backend sends no wire request and sets
-// a larger size than the default.
+// deliveryBatchSizer is a feeder client that sets the per-pass raw transcript
+// byte budget. The in-process local backend sends no wire request and returns a
+// larger budget than the default.
 type deliveryBatchSizer interface {
 	DeliveryBatchBytes() int64
 }

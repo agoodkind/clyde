@@ -110,7 +110,7 @@ func parseModel(weights []byte, tokenizerJSON []byte) (*Model, error) {
 		return nil, parseFailed("parse the embeddings tensor header", err)
 	}
 	if tensor.DataType != "F32" || len(tensor.Shape) != 2 || tensor.Shape[1] != Dimensions {
-		shapeErr := fmt.Errorf("embeddings tensor is %s %v, want F32 [rows %d]", tensor.DataType, tensor.Shape, Dimensions)
+		shapeErr := fmt.Errorf("embeddings tensor is %s %v, want F32 [rows, %d]", tensor.DataType, tensor.Shape, Dimensions)
 		slog.Error("conversation.staticembed.parse_failed",
 			"concern", "conversation.semantic",
 			"component", "conversation",
