@@ -237,6 +237,7 @@ func OpenConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 		return nil, semanticConnectorError{cause: err}
 	}
 	client, err := vectorsearch.Open(ctx, vectorsearch.Options{
+		Backend:                vectorsearch.BackendMilvus,
 		MilvusAddress:          semanticCfg.MilvusAddress,
 		MilvusDatabase:         semanticCfg.MilvusDatabase,
 		EmbeddingBaseURL:       semanticCfg.EmbeddingBaseURL,
