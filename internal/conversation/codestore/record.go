@@ -30,8 +30,8 @@ type storedCell struct {
 	value  collection.ScalarValue
 }
 
-// rowRecord is one upsert or delete in the row log. An upsert names the
-// content and metadata blob in the data file by offset and length.
+// rowRecord is one upsert or delete in the row log. An upsert stores the offset
+// and length of its content and metadata blob in the data file.
 type rowRecord struct {
 	kind          byte
 	id            string

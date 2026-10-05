@@ -80,7 +80,7 @@ type Client struct {
 	embeddingModel string
 	byteBudget     int
 
-	// deliveryBatchBytes is the raw transcript size the sync worker loads per
+	// deliveryBatchBytes is the raw transcript byte budget for each sync worker
 	// pass. Zero keeps the worker default.
 	deliveryBatchBytes int64
 
@@ -133,8 +133,8 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 	}, nil
 }
 
-// DeliveryBatchBytes returns the raw transcript size the sync worker loads per
-// pass for this backend. Zero keeps the worker default.
+// DeliveryBatchBytes returns the per-pass raw transcript byte budget for this
+// backend. Zero keeps the worker default.
 func (c *Client) DeliveryBatchBytes() int64 {
 	if c == nil {
 		return 0
