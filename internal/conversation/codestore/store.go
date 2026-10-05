@@ -490,7 +490,10 @@ func (store *Store) Search(ctx context.Context, request collection.SearchRequest
 	if err != nil {
 		return nil, err
 	}
-	ranked := stored.rank(staticembed.CodeOf(request.Vector), matches)
+	ranked, err := stored.rank(staticembed.CodeOf(request.Vector), matches)
+	if err != nil {
+		return nil, err
+	}
 	groupColumn, grouped := -1, false
 	if request.GroupBy != "" && request.PerGroupLimit > 0 {
 		groupColumn, grouped = stored.columnIndex[request.GroupBy]

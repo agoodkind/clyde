@@ -109,7 +109,7 @@ func TestReopenedStoreRanksSavedRowsAndDropsAnInterruptedWrite(t *testing.T) {
 	}
 	reopened.Close()
 
-	// An interrupted write leaves a partial record at the end of the row log.
+	// An interrupted write appends a partial record at the end of the row log.
 	rowLog, err := os.OpenFile(filepath.Join(root, testCollection, "rows.log"), os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("open row log: %v", err)

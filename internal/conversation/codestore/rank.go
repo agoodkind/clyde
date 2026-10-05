@@ -1,11 +1,13 @@
 package codestore
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"goodkind.io/clyde/internal/conversation/staticembed"
 	"goodkind.io/lm-semantic-search/collection"
@@ -76,16 +78,19 @@ func (ranking *boundedRanking) siftDown(index int) {
 }
 
 // rank scans every selected row in parallel and returns the closest
-// collection.RankingDepth rows, ordered by distance and then row ID.
-func (stored *codeCollection) rank(query staticembed.Code, matches predicate) []candidate {
+// collection.RankingDepth rows, ordered by distance and then row ID. A worker
+// that panics fails the whole ranking, because its rows are missing.
+func (stored *codeCollection) rank(query staticembed.Code, matches predicate) ([]candidate, error) {
 	workers := max(min(runtime.GOMAXPROCS(0), len(stored.rows)/rankingWorkerRows), 1)
 	chunk := (len(stored.rows) + workers - 1) / workers
 	partials := make([]*boundedRanking, workers)
+	var panicked atomic.Bool
 	var group sync.WaitGroup
 	for worker := range workers {
 		group.Go(func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
+					panicked.Store(true)
 					slog.Error("conversation.codestore.rank_worker_panic",
 						"concern", "conversation.semantic",
 						"component", "conversation",
@@ -106,11 +111,12 @@ func (stored *codeCollection) rank(query staticembed.Code, matches predicate) []
 		})
 	}
 	group.Wait()
+	if panicked.Load() {
+		return nil, failed("rank "+stored.dir, errors.New("a ranking worker panicked"))
+	}
 	merged := &boundedRanking{items: make([]candidate, 0), rows: stored.rows, capacity: collection.RankingDepth}
 	for _, partial := range partials {
-		if partial != nil {
-			merged.items = append(merged.items, partial.items...)
-		}
+		merged.items = append(merged.items, partial.items...)
 	}
 	slices.SortFunc(merged.items, func(left, right candidate) int {
 		if merged.worse(right, left) {
@@ -124,5 +130,5 @@ func (stored *codeCollection) rank(query staticembed.Code, matches predicate) []
 	if len(merged.items) > collection.RankingDepth {
 		merged.items = merged.items[:collection.RankingDepth]
 	}
-	return merged.items
+	return merged.items, nil
 }
