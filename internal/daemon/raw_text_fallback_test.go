@@ -14,6 +14,8 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/sandbox"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -106,27 +108,30 @@ func startRawTextDaemon(t *testing.T) string {
 	return projectDir
 }
 
-func searchUntilMatches(t *testing.T, options conversation.SearchConversationsOptions, want int) conversation.SearchConversationsResult {
+// waitForFirstMatches retries while the daemon socket is not listening and while
+// the first index refresh has not listed both transcripts. Any other error
+// fails the test at once.
+func waitForFirstMatches(t *testing.T, options conversation.SearchConversationsOptions, want int) {
 	t.Helper()
-	var result conversation.SearchConversationsResult
-	var searchErr error
 	deadline := time.Now().Add(rawTextSearchTimeout)
 	for time.Now().Before(deadline) {
-		result, searchErr = daemon.SearchConversations(context.Background(), options)
-		if searchErr == nil && len(result.Matches) == want {
-			return result
+		result, err := daemon.SearchConversations(context.Background(), options)
+		if err != nil && status.Code(err) != codes.Unavailable {
+			t.Fatalf("SearchConversations: %v", err)
+		}
+		if err == nil && len(result.Matches) == want {
+			return
 		}
 		time.Sleep(rawTextPollInterval)
 	}
-	t.Fatalf("SearchConversations returned %d matches and error %v, want %d matches", len(result.Matches), searchErr, want)
-	return result
+	t.Fatalf("SearchConversations did not return %d matches within %s", want, rawTextSearchTimeout)
 }
 
 func TestSearchFallsBackToRawTextWhenSemanticSearchIsDisabled(t *testing.T) {
 	projectDir := startRawTextDaemon(t)
 	options := conversation.SearchConversationsOptions{Query: "watcher config", Limit: 5}
 
-	searchUntilMatches(t, options, 2)
+	waitForFirstMatches(t, options, 2)
 
 	// A read of a directory fails for every user, including root. A file with
 	// mode 000 stays readable for root.
@@ -138,7 +143,13 @@ func TestSearchFallsBackToRawTextWhenSemanticSearchIsDisabled(t *testing.T) {
 		t.Fatalf("replace transcript with a directory: %v", err)
 	}
 
-	result := searchUntilMatches(t, options, 1)
+	result, err := daemon.SearchConversations(context.Background(), options)
+	if err != nil {
+		t.Fatalf("SearchConversations with an unreadable transcript: %v", err)
+	}
+	if len(result.Matches) != 1 {
+		t.Fatalf("matches = %d, want 1", len(result.Matches))
+	}
 	if result.Source != conversation.SearchSourceRawText {
 		t.Fatalf("source = %v, want raw_text", result.Source)
 	}

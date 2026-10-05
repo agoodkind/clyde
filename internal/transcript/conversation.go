@@ -125,10 +125,10 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 	return out
 }
 
-// RenderMessageIndexText joins the normalized text, thinking, and tool detail of
-// one message for raw text search.
+// RenderMessageIndexText joins the normalized text, thinking, tool detail, and
+// attachment details of one message for raw text search.
 func RenderMessageIndexText(msg Message) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if text := normalizeConversationText(msg.Text, 0, false); text != "" {
 		parts = append(parts, text)
 	}
@@ -139,6 +139,9 @@ func RenderMessageIndexText(msg Message) string {
 		if tools := strings.TrimSpace(toolFullDetailText(msg.Tools)); tools != "" {
 			parts = append(parts, tools)
 		}
+	}
+	if attachments := strings.TrimSpace(attachmentPlaceholders(msg.Attachments)); attachments != "" {
+		parts = append(parts, attachments)
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
