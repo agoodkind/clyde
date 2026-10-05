@@ -15,6 +15,8 @@ const (
 	SearchSourceUnspecified SearchSource = iota
 	// SearchSourceSemantic means the vector engine produced the matches.
 	SearchSourceSemantic
+	// SearchSourceRawText means a scan of transcript text produced the matches.
+	SearchSourceRawText
 )
 
 // String renders the source as a stable lowercase label for text output.
@@ -22,6 +24,8 @@ func (s SearchSource) String() string {
 	switch s {
 	case SearchSourceSemantic:
 		return "semantic"
+	case SearchSourceRawText:
+		return "raw_text"
 	case SearchSourceUnspecified:
 		return "unspecified"
 	default:

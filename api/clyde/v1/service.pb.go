@@ -91,6 +91,9 @@ const (
 	SearchSource_SEARCH_SOURCE_UNSPECIFIED SearchSource = 0
 	// SEARCH_SOURCE_SEMANTIC means the vector engine produced the matches.
 	SearchSource_SEARCH_SOURCE_SEMANTIC SearchSource = 1
+	// SEARCH_SOURCE_RAW_TEXT means a scan of transcript text produced the matches
+	// after the semantic source failed or was disabled. Each score is zero.
+	SearchSource_SEARCH_SOURCE_RAW_TEXT SearchSource = 4
 )
 
 // Enum value maps for SearchSource.
@@ -98,10 +101,12 @@ var (
 	SearchSource_name = map[int32]string{
 		0: "SEARCH_SOURCE_UNSPECIFIED",
 		1: "SEARCH_SOURCE_SEMANTIC",
+		4: "SEARCH_SOURCE_RAW_TEXT",
 	}
 	SearchSource_value = map[string]int32{
 		"SEARCH_SOURCE_UNSPECIFIED": 0,
 		"SEARCH_SOURCE_SEMANTIC":    1,
+		"SEARCH_SOURCE_RAW_TEXT":    4,
 	}
 )
 
@@ -4676,10 +4681,11 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	" SEARCH_CONTEXT_STATE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!SEARCH_CONTEXT_STATE_EXCERPT_ONLY\x10\x01\x12\"\n" +
 	"\x1eSEARCH_CONTEXT_STATE_AVAILABLE\x10\x02\x12$\n" +
-	" SEARCH_CONTEXT_STATE_UNAVAILABLE\x10\x03*U\n" +
+	" SEARCH_CONTEXT_STATE_UNAVAILABLE\x10\x03*q\n" +
 	"\fSearchSource\x12\x1d\n" +
 	"\x19SEARCH_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
-	"\x16SEARCH_SOURCE_SEMANTIC\x10\x01\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x03*\xb6\x01\n" +
+	"\x16SEARCH_SOURCE_SEMANTIC\x10\x01\x12\x1a\n" +
+	"\x16SEARCH_SOURCE_RAW_TEXT\x10\x04\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x03*\xb6\x01\n" +
 	"\x17RequestResolutionOrigin\x12)\n" +
 	"%REQUEST_RESOLUTION_ORIGIN_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fREQUEST_RESOLUTION_ORIGIN_INDEX\x10\x01\x12\"\n" +
