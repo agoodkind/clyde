@@ -16,7 +16,8 @@ var ErrQueryRequired = errors.New("query is required")
 
 // SearchRawText scans transcript text in conversation list order and returns
 // the first message in each conversation that contains every query term. The
-// match is case-insensitive. Each match has a zero score.
+// match is case-insensitive. Each match has a zero score. A conversation with a
+// transcript that cannot be read is logged and skipped.
 func (idx *Index) SearchRawText(ctx context.Context, options SearchConversationsOptions) (SearchConversationsResult, error) {
 	options = normalizeRawTextOptions(options)
 	terms := queryTerms(options.Query)
@@ -65,7 +66,7 @@ func (idx *Index) SearchRawText(ctx context.Context, options SearchConversations
 				"conversation_id", record.ID,
 				"err", matchErr,
 			)
-			return SearchConversationsResult{}, fmt.Errorf("search raw text of conversation %s: %w", record.ID, matchErr)
+			continue
 		}
 		if !found {
 			continue

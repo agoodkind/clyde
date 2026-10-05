@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	rawTextFixtureSession = "raw-text-fallback-session"
-	rawTextSearchTimeout  = 30 * time.Second
-	rawTextPollInterval   = 200 * time.Millisecond
-	rawTextDaemonConfig   = `[conversation.semantic]
+	rawTextReadableSession   = "raw-text-readable-session"
+	rawTextUnreadableSession = "raw-text-unreadable-session"
+	rawTextSearchTimeout     = 30 * time.Second
+	rawTextPollInterval      = 200 * time.Millisecond
+	rawTextDaemonConfig      = `[conversation.semantic]
 ingestion_enabled = false
 search_enabled = false
 
@@ -32,14 +33,10 @@ enabled_default = false
 `
 )
 
-func writeRawTextFixture(t *testing.T, home string) {
+func writeRawTextTranscript(t *testing.T, path string, session string, minute int) {
 	t.Helper()
-	projectDir := filepath.Join(home, ".claude", "projects", "-repo")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatalf("create project dir: %v", err)
-	}
 	record := func(index int, role string, body string) string {
-		head := fmt.Sprintf(`"sessionId":%q,"cwd":"/repo","uuid":"%08d-0000-4000-8000-000000000000","timestamp":"2026-07-01T12:00:%02dZ"`, rawTextFixtureSession, index, index)
+		head := fmt.Sprintf(`"sessionId":%q,"cwd":"/repo","uuid":"%02d%06d-0000-4000-8000-000000000000","timestamp":"2026-07-01T12:%02d:%02dZ"`, session, minute, index, minute, index)
 		if role == "user" {
 			return fmt.Sprintf(`{"type":"user","message":{"role":"user","content":%q},%s}`, body, head)
 		}
@@ -49,15 +46,15 @@ func writeRawTextFixture(t *testing.T, home string) {
 		record(0, "user", "why does the listener rebind on reload"),
 		record(1, "assistant", "The Watcher classifies the CONFIG change before the daemon rebinds."),
 	}
-	path := filepath.Join(projectDir, rawTextFixtureSession+".jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
 }
 
 // startRawTextDaemon runs the daemon in this process with every Clyde path and
-// every provider store under temporary directories.
-func startRawTextDaemon(t *testing.T) {
+// every provider store under temporary directories. It returns the Claude
+// project directory.
+func startRawTextDaemon(t *testing.T) string {
 	t.Helper()
 	roots, err := sandbox.NewRoots()
 	if err != nil {
@@ -68,7 +65,12 @@ func startRawTextDaemon(t *testing.T) {
 		t.Setenv(variable.Name, variable.Value)
 	}
 	home := filepath.Join(roots.Base, "home")
-	writeRawTextFixture(t, home)
+	projectDir := filepath.Join(home, ".claude", "projects", "-repo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("create project dir: %v", err)
+	}
+	writeRawTextTranscript(t, filepath.Join(projectDir, rawTextReadableSession+".jsonl"), rawTextReadableSession, 0)
+	writeRawTextTranscript(t, filepath.Join(projectDir, rawTextUnreadableSession+".jsonl"), rawTextUnreadableSession, 1)
 	t.Setenv("HOME", home)
 	for _, name := range []string{"CODEX_HOME", "CODEX_SQLITE_HOME", "CLYDE_CURSOR_PROJECTS_DIRS", "CLYDE_CURSOR_DATA_DIRS", "CLYDE_ZED_DATA_DIRS", "COPILOT_HOME"} {
 		directory := filepath.Join(roots.Base, "providers", name)
@@ -101,32 +103,45 @@ func startRawTextDaemon(t *testing.T) {
 			t.Error("daemon did not stop")
 		}
 	})
+	return projectDir
 }
 
-func TestSearchFallsBackToRawTextWhenSemanticSearchIsDisabled(t *testing.T) {
-	startRawTextDaemon(t)
-
-	options := conversation.SearchConversationsOptions{Query: "watcher config", Limit: 5}
+func searchUntilMatches(t *testing.T, options conversation.SearchConversationsOptions, want int) conversation.SearchConversationsResult {
+	t.Helper()
 	var result conversation.SearchConversationsResult
 	var searchErr error
 	deadline := time.Now().Add(rawTextSearchTimeout)
 	for time.Now().Before(deadline) {
 		result, searchErr = daemon.SearchConversations(context.Background(), options)
-		if searchErr == nil && len(result.Matches) > 0 {
-			break
+		if searchErr == nil && len(result.Matches) == want {
+			return result
 		}
 		time.Sleep(rawTextPollInterval)
 	}
-	if searchErr != nil {
-		t.Fatalf("SearchConversations: %v", searchErr)
+	t.Fatalf("SearchConversations returned %d matches and error %v, want %d matches", len(result.Matches), searchErr, want)
+	return result
+}
+
+func TestSearchFallsBackToRawTextWhenSemanticSearchIsDisabled(t *testing.T) {
+	projectDir := startRawTextDaemon(t)
+	options := conversation.SearchConversationsOptions{Query: "watcher config", Limit: 5}
+
+	searchUntilMatches(t, options, 2)
+
+	unreadable := filepath.Join(projectDir, rawTextUnreadableSession+".jsonl")
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("make transcript unreadable: %v", err)
 	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+
+	result := searchUntilMatches(t, options, 1)
 	if result.Source != conversation.SearchSourceRawText {
 		t.Fatalf("source = %v, want raw_text", result.Source)
 	}
-	if len(result.Matches) != 1 {
-		t.Fatalf("matches = %d, want 1", len(result.Matches))
-	}
 	match := result.Matches[0]
+	if match.Record.NativeID != rawTextReadableSession {
+		t.Fatalf("match conversation = %q, want %q", match.Record.NativeID, rawTextReadableSession)
+	}
 	if match.MessageIndex != 1 || match.Role != "assistant" {
 		t.Fatalf("match = index %d role %q, want index 1 role assistant", match.MessageIndex, match.Role)
 	}
