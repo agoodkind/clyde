@@ -11,7 +11,7 @@ import (
 // with a nil Group attaches at the root. Operations sharing the same *Group
 // land as subcommands of one rendered parent, which itself sits at the root
 // in the position of its first child. A hand-written command with a Parent
-// becomes a subcommand of the root command with that name. Other hand-written
+// group becomes a subcommand of that group's rendered parent. Other hand-written
 // commands follow at the root. The caller attaches the results to the root
 // command, which already defines the global --verbose and --output-format flags.
 func RenderCobra(reg *Registry, f *cli.Factory) []*cobra.Command {
@@ -31,25 +31,13 @@ func RenderCobra(reg *Registry, f *cli.Factory) []*cobra.Command {
 		parent.AddCommand(child)
 	}
 	for _, hand := range reg.handwritten {
-		if hand.Parent != "" {
-			addUnderRoot(&commands, hand.Parent, hand.Build(f))
+		if hand.Parent != nil {
+			ensureGroup(hand.Parent, parents, &commands).AddCommand(hand.Build(f))
 			continue
 		}
 		mergeOrAppendRoot(&commands, hand.Build(f))
 	}
 	return commands
-}
-
-// addUnderRoot adds child to the root command named parent. A parent name that
-// matches no root command adds child at the root.
-func addUnderRoot(roots *[]*cobra.Command, parent string, child *cobra.Command) {
-	for _, existing := range *roots {
-		if existing.Name() == parent {
-			existing.AddCommand(child)
-			return
-		}
-	}
-	*roots = append(*roots, child)
 }
 
 func mergeOrAppendRoot(roots *[]*cobra.Command, candidate *cobra.Command) {

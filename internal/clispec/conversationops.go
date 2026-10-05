@@ -121,6 +121,11 @@ func formatEnglishList(values []string) string {
 	}
 }
 
+// ConversationGroup returns the terminal parent for conversation operations.
+func ConversationGroup() *Group {
+	return conversationGroup
+}
+
 // conversationGroup is the terminal parent for conversation operations.
 var conversationGroup = &Group{
 	Use:     cli.ConversationGroupName,
