@@ -147,7 +147,9 @@ func (store *Store) EnsureCollection(ctx context.Context, request collection.Ens
 }
 
 // Upsert writes rows. A row replaces the stored row with the same ID. Each row
-// vector becomes a sign code.
+// vector becomes a sign code. Upsert validates scalar columns against the
+// declaration that EnsureCollection recorded and ignores the declaration
+// argument.
 func (store *Store) Upsert(ctx context.Context, name string, _ collection.Declaration, rows []collection.Row) error {
 	if err := ctx.Err(); err != nil {
 		return failed("upsert "+name, err)

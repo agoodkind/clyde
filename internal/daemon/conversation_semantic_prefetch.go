@@ -84,9 +84,9 @@ func (w *conversationSemanticSyncWorker) prefetchedOrLoad(
 }
 
 // prefetchNeededDocuments loads in parallel the conversations that
-// collectNeededDocuments admits when every load returns documents: the same
-// order, deferral, and byte budget. collectNeededDocuments loads any
-// conversation missing from the result itself.
+// collectNeededDocuments would admit if every load returned documents. It uses
+// the same order, deferral rules, and byte budget. collectNeededDocuments loads
+// any conversation missing from the prefetch results.
 func (w *conversationSemanticSyncWorker) prefetchNeededDocuments(
 	ctx context.Context,
 	ordered []string,

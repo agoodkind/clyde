@@ -90,8 +90,8 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 	return cmd
 }
 
-// sandboxLocalOptions selects the local backend. An empty root keeps the index
-// inside the sandbox state directory.
+// sandboxLocalOptions selects the local backend. When root is empty, the
+// backend stores the index in the sandbox state directory.
 type sandboxLocalOptions struct {
 	enabled bool
 	root    string

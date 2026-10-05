@@ -36,9 +36,9 @@ GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
 # go.mk runs these as order-only prerequisites of every build, lint, vet, test,
 # and govulncheck target. GO_MK_GENERATE generates the Swift tree-sitter parser
-# in the pinned gksyntax submodule and places the pinned static embedding model
-# files. GO_MK_WORKSPACE_USE materializes a gitignored go.work that routes that
-# submodule into the build. The pinned gksyntax module zip omits the dart and
+# in the pinned gksyntax submodule and fetches the pinned static embedding model
+# files. GO_MK_WORKSPACE_USE materializes a gitignored go.work that includes the
+# submodule in the workspace. The pinned gksyntax module zip omits the dart and
 # swift grammar C sources, and gomoddirectives rejects a go.mod replace.
 GO_MK_GENERATE := gksyntax-grammars staticembed-model
 GO_MK_GENERATE_INPUTS := third_party/gksyntax internal/conversation/staticembed/model
