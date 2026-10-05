@@ -77,8 +77,9 @@ func (ranking *boundedRanking) siftDown(index int) {
 	}
 }
 
-// rank scans every selected row in parallel and returns the closest
-// collection.RankingDepth rows, ordered by distance and then row ID. A worker
+// rank scans every selected row on one worker per rankingWorkerRows rows, up to
+// GOMAXPROCS, and returns the closest collection.RankingDepth rows, ordered by
+// distance and then row ID. A worker
 // that panics fails the whole ranking, because its rows are missing.
 func (stored *codeCollection) rank(query staticembed.Code, matches predicate) ([]candidate, error) {
 	workers := max(min(runtime.GOMAXPROCS(0), len(stored.rows)/rankingWorkerRows), 1)

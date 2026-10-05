@@ -81,7 +81,7 @@ type Client struct {
 	byteBudget     int
 
 	// deliveryBatchBytes is the raw transcript byte budget for each sync worker
-	// pass. Zero keeps the worker default.
+	// pass. Zero selects the worker default.
 	deliveryBatchBytes int64
 
 	checkpoint *checkpointStore
@@ -134,7 +134,7 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 }
 
 // DeliveryBatchBytes returns the per-pass raw transcript byte budget for this
-// backend. Zero keeps the worker default.
+// backend. Zero selects the worker default.
 func (c *Client) DeliveryBatchBytes() int64 {
 	if c == nil {
 		return 0

@@ -37,7 +37,7 @@ type textEmbedder interface {
 // openedBackend pairs a store with the embedder that produced its vectors. A
 // query vector must come from the same embedder. byteBudget is the largest
 // embedding input in bytes. deliveryBatchBytes is the per-pass raw transcript
-// byte budget of the sync worker. Zero keeps the worker default.
+// byte budget of the sync worker. Zero selects the worker default.
 type openedBackend struct {
 	store              backend
 	embedder           textEmbedder
