@@ -1,30 +1,39 @@
 //go:build linux
 
-package truststore
+package truststore_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/cli/mitm/truststore"
 )
 
-// recordedCallLinux mirrors recordedCall in the darwin tests but
-// lives here so the linux file builds alone under the linux build
-// tag. Keeping the name distinct avoids collisions when both files
-// happen to be built under a future cross-tag run.
-type recordedCallLinux struct {
+const (
+	sudoPath                 = "/usr/bin/sudo"
+	updateCACertificatesPath = "/usr/sbin/update-ca-certificates"
+)
+
+type recordedLinuxCall struct {
 	binary string
 	args   []string
 }
 
-type fakeLinuxRunner struct {
+type recordingLinuxRunner struct {
 	mu        sync.Mutex
-	calls     []recordedCallLinux
+	calls     []recordedLinuxCall
 	responses map[string][]linuxResponse
 }
 
@@ -33,22 +42,41 @@ type linuxResponse struct {
 	err    error
 }
 
-func (f *fakeLinuxRunner) run(_ context.Context, name string, args ...string) ([]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, recordedCallLinux{binary: name, args: append([]string(nil), args...)})
-	queue, ok := f.responses[name]
+func (r *recordingLinuxRunner) run(_ context.Context, name string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedLinuxCall{binary: name, args: append([]string(nil), args...)})
+	queue, ok := r.responses[name]
 	if !ok || len(queue) == 0 {
 		return nil, errors.New("no programmed response for binary " + name)
 	}
-	resp := queue[0]
-	f.responses[name] = queue[1:]
-	return resp.output, resp.err
+	response := queue[0]
+	r.responses[name] = queue[1:]
+	return response.output, response.err
 }
 
-// TestLinuxStatusInstalledMatchingFingerprintReportsClean writes the
-// same PEM at both certPath and the configured installPath and
-// confirms Status reports installed=true with matching fingerprints.
+func writeLinuxFixtureCert(t *testing.T, path string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: truststore.CACommonName},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IsCA:         true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatalf("write fixture cert: %v", err)
+	}
+}
+
 func TestLinuxStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "ca.crt")
@@ -56,7 +84,7 @@ func TestLinuxStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	writeFixtureCert(t, certPath)
+	writeLinuxFixtureCert(t, certPath)
 	body, err := os.ReadFile(certPath)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -65,16 +93,8 @@ func TestLinuxStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	runner := &fakeLinuxRunner{responses: map[string][]linuxResponse{}}
-	reg := linuxRegistry{
-		runner:         runner.run,
-		installPath:    installPath,
-		updateBinary:   updateCACertificatesPath,
-		commonName:     CACommonName,
-		commandTimeout: time.Second,
-	}
-
-	status, err := reg.Status(certPath)
+	registry := truststore.NewLinuxRegistry(truststore.LinuxRegistryOptions{Runner: nil, InstallPath: installPath, CommandTimeout: time.Second})
+	status, err := registry.Status(certPath)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -85,27 +105,19 @@ func TestLinuxStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 		t.Fatalf("expected FingerprintsMatch=true: on_disk=%q installed=%q",
 			status.OnDiskFingerprint, status.InstalledFingerprint)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("Status must not shell out on Linux; got %d calls", len(runner.calls))
-	}
 }
 
-// TestLinuxStatusReportsAbsentWhenInstallPathMissing covers the
-// not-installed branch.
 func TestLinuxStatusReportsAbsentWhenInstallPathMissing(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "ca.crt")
-	writeFixtureCert(t, certPath)
+	writeLinuxFixtureCert(t, certPath)
 
-	reg := linuxRegistry{
-		runner:         (&fakeLinuxRunner{responses: map[string][]linuxResponse{}}).run,
-		installPath:    filepath.Join(dir, "missing", "clyde-mitm-ca.crt"),
-		updateBinary:   updateCACertificatesPath,
-		commonName:     CACommonName,
-		commandTimeout: time.Second,
-	}
-
-	status, err := reg.Status(certPath)
+	registry := truststore.NewLinuxRegistry(truststore.LinuxRegistryOptions{
+		Runner:         nil,
+		InstallPath:    filepath.Join(dir, "missing", "clyde-mitm-ca.crt"),
+		CommandTimeout: time.Second,
+	})
+	status, err := registry.Status(certPath)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -120,33 +132,29 @@ func TestLinuxStatusReportsAbsentWhenInstallPathMissing(t *testing.T) {
 	}
 }
 
-// TestLinuxInstallRunsInstallAndUpdateCACertificates covers the
-// happy path: copy via `sudo install -m 0644` followed by `sudo
-// update-ca-certificates`. Both calls must use /usr/bin/sudo as the
-// elevation entry point.
 func TestLinuxInstallRunsInstallAndUpdateCACertificates(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "ca.crt")
 	installPath := filepath.Join(dir, "trust", "clyde-mitm-ca.crt")
-	writeFixtureCert(t, certPath)
+	writeLinuxFixtureCert(t, certPath)
 
-	runner := &fakeLinuxRunner{
+	runner := &recordingLinuxRunner{
+		mu:    sync.Mutex{},
+		calls: nil,
 		responses: map[string][]linuxResponse{
-			sudoLinuxPath: {
-				{output: []byte(""), err: nil}, // sudo install
+			sudoPath: {
+				{output: []byte(""), err: nil},
 				{output: []byte("Updates of trust store..."), err: nil},
 			},
 		},
 	}
-	reg := linuxRegistry{
-		runner:         runner.run,
-		installPath:    installPath,
-		updateBinary:   updateCACertificatesPath,
-		commonName:     CACommonName,
-		commandTimeout: time.Second,
-	}
-
-	if err := reg.Install(certPath); err != nil {
+	registry := truststore.NewLinuxRegistry(truststore.LinuxRegistryOptions{
+		//testseam:external sudo and update-ca-certificates write the host system trust store
+		Runner:         runner.run,
+		InstallPath:    installPath,
+		CommandTimeout: time.Second,
+	})
+	if err := registry.Install(certPath); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -154,44 +162,32 @@ func TestLinuxInstallRunsInstallAndUpdateCACertificates(t *testing.T) {
 		t.Fatalf("expected 2 calls; got %d", len(runner.calls))
 	}
 	for index, call := range runner.calls {
-		if call.binary != sudoLinuxPath {
+		if call.binary != sudoPath {
 			t.Fatalf("call %d binary = %q; want sudo", index, call.binary)
 		}
 	}
 	firstArgs := strings.Join(runner.calls[0].args, " ")
-	if !strings.Contains(firstArgs, "/usr/bin/install") {
-		t.Fatalf("first call must invoke /usr/bin/install: %s", firstArgs)
+	if !strings.Contains(firstArgs, "/usr/bin/install") || !strings.Contains(firstArgs, installPath) {
+		t.Fatalf("first call must run /usr/bin/install into installPath: %s", firstArgs)
 	}
-	if !strings.Contains(firstArgs, installPath) {
-		t.Fatalf("first call must target installPath: %s", firstArgs)
-	}
-	secondArgs := strings.Join(runner.calls[1].args, " ")
-	if !strings.Contains(secondArgs, updateCACertificatesPath) {
-		t.Fatalf("second call must invoke update-ca-certificates: %s", secondArgs)
+	if secondArgs := strings.Join(runner.calls[1].args, " "); !strings.Contains(secondArgs, updateCACertificatesPath) {
+		t.Fatalf("second call must run update-ca-certificates: %s", secondArgs)
 	}
 }
 
-// TestLinuxInstallRefusesWhenCAFileMissing surfaces a typed
-// ErrCAAbsent so the caller renders a setup error instead of a sudo
-// error.
 func TestLinuxInstallRefusesWhenCAFileMissing(t *testing.T) {
-	runner := &fakeLinuxRunner{responses: map[string][]linuxResponse{}}
-	reg := linuxRegistry{
-		runner:         runner.run,
-		installPath:    "/tmp/clyde-mitm-ca-fake.crt",
-		updateBinary:   updateCACertificatesPath,
-		commonName:     CACommonName,
-		commandTimeout: time.Second,
-	}
-	err := reg.Install("/tmp/clyde-trust-missing.crt")
-	if !errors.Is(err, ErrCAAbsent) {
+	dir := t.TempDir()
+	registry := truststore.NewLinuxRegistry(truststore.LinuxRegistryOptions{
+		Runner:         nil,
+		InstallPath:    filepath.Join(dir, "clyde-mitm-ca.crt"),
+		CommandTimeout: time.Second,
+	})
+	err := registry.Install(filepath.Join(dir, "missing.crt"))
+	if !errors.Is(err, truststore.ErrCAAbsent) {
 		t.Fatalf("expected ErrCAAbsent; got %v", err)
 	}
 }
 
-// TestLinuxUninstallRemovesFileAndRefreshesBundle covers the happy
-// path: `sudo rm -f` followed by `sudo update-ca-certificates
-// --fresh`.
 func TestLinuxUninstallRemovesFileAndRefreshesBundle(t *testing.T) {
 	dir := t.TempDir()
 	installPath := filepath.Join(dir, "trust", "clyde-mitm-ca.crt")
@@ -202,57 +198,45 @@ func TestLinuxUninstallRemovesFileAndRefreshesBundle(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	runner := &fakeLinuxRunner{
+	runner := &recordingLinuxRunner{
+		mu:    sync.Mutex{},
+		calls: nil,
 		responses: map[string][]linuxResponse{
-			sudoLinuxPath: {
+			sudoPath: {
 				{output: []byte(""), err: nil},
 				{output: []byte(""), err: nil},
 			},
 		},
 	}
-	reg := linuxRegistry{
-		runner:         runner.run,
-		installPath:    installPath,
-		updateBinary:   updateCACertificatesPath,
-		commonName:     CACommonName,
-		commandTimeout: time.Second,
-	}
-
-	if err := reg.Uninstall(); err != nil {
+	registry := truststore.NewLinuxRegistry(truststore.LinuxRegistryOptions{
+		//testseam:external sudo and update-ca-certificates write the host system trust store
+		Runner:         runner.run,
+		InstallPath:    installPath,
+		CommandTimeout: time.Second,
+	})
+	if err := registry.Uninstall(); err != nil {
 		t.Fatalf("Uninstall: %v", err)
 	}
 	if len(runner.calls) != 2 {
 		t.Fatalf("expected 2 calls; got %d", len(runner.calls))
 	}
 	rmArgs := strings.Join(runner.calls[0].args, " ")
-	if !strings.Contains(rmArgs, "/bin/rm") {
-		t.Fatalf("first call must invoke /bin/rm: %s", rmArgs)
+	if !strings.Contains(rmArgs, "/bin/rm") || !strings.Contains(rmArgs, installPath) {
+		t.Fatalf("first call must run /bin/rm on installPath: %s", rmArgs)
 	}
-	if !strings.Contains(rmArgs, installPath) {
-		t.Fatalf("first call must target installPath: %s", rmArgs)
-	}
-	updateArgs := strings.Join(runner.calls[1].args, " ")
-	if !strings.Contains(updateArgs, "--fresh") {
+	if updateArgs := strings.Join(runner.calls[1].args, " "); !strings.Contains(updateArgs, "--fresh") {
 		t.Fatalf("update-ca-certificates must run with --fresh: %s", updateArgs)
 	}
 }
 
-// TestLinuxUninstallNoOpWhenInstallPathAbsent covers the idempotent
-// branch where nothing is installed.
 func TestLinuxUninstallNoOpWhenInstallPathAbsent(t *testing.T) {
 	dir := t.TempDir()
-	runner := &fakeLinuxRunner{responses: map[string][]linuxResponse{}}
-	reg := linuxRegistry{
-		runner:         runner.run,
-		installPath:    filepath.Join(dir, "missing", "clyde-mitm-ca.crt"),
-		updateBinary:   updateCACertificatesPath,
-		commonName:     CACommonName,
-		commandTimeout: time.Second,
-	}
-	if err := reg.Uninstall(); err != nil {
+	registry := truststore.NewLinuxRegistry(truststore.LinuxRegistryOptions{
+		Runner:         nil,
+		InstallPath:    filepath.Join(dir, "missing", "clyde-mitm-ca.crt"),
+		CommandTimeout: time.Second,
+	})
+	if err := registry.Uninstall(); err != nil {
 		t.Fatalf("Uninstall on missing file should be a no-op; got %v", err)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("expected 0 calls when nothing is installed; got %d", len(runner.calls))
 	}
 }
