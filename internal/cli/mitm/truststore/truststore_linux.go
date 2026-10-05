@@ -60,13 +60,37 @@ const updateCACertificatesPath = "/usr/sbin/update-ca-certificates"
 const defaultLinuxCommandTimeout = 2 * time.Minute
 
 func newPlatformRegistry() Registry {
-	return linuxRegistry{
+	return NewLinuxRegistry(LinuxRegistryOptions{Runner: nil, InstallPath: "", CommandTimeout: 0})
+}
+
+// LinuxRegistryOptions sets the dependencies of [NewLinuxRegistry]. A zero
+// field uses the production value.
+type LinuxRegistryOptions struct {
+	// Runner runs an external command and returns its combined output.
+	Runner         func(ctx context.Context, name string, args ...string) ([]byte, error)
+	InstallPath    string
+	CommandTimeout time.Duration
+}
+
+// NewLinuxRegistry returns the update-ca-certificates registry.
+func NewLinuxRegistry(options LinuxRegistryOptions) Registry {
+	registry := linuxRegistry{
 		runner:         linuxExecRun,
 		installPath:    linuxInstallPath,
 		updateBinary:   updateCACertificatesPath,
 		commonName:     CACommonName,
 		commandTimeout: defaultLinuxCommandTimeout,
 	}
+	if options.Runner != nil {
+		registry.runner = options.Runner
+	}
+	if options.InstallPath != "" {
+		registry.installPath = options.InstallPath
+	}
+	if options.CommandTimeout > 0 {
+		registry.commandTimeout = options.CommandTimeout
+	}
+	return registry
 }
 
 // linuxExecRun is the production runner. It captures combined output
