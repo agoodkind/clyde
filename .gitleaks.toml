@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Go module checksums in go.sum and go.work.sum match the generic-api-key rule."
+paths = [
+  '''(^|/)go\.sum$''',
+  '''(^|/)go\.work\.sum$''',
+]
