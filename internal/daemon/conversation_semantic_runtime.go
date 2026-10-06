@@ -228,10 +228,8 @@ func conversationEmbeddingAPIKey(envName string, filePath string) (string, error
 	return localEmbeddingAPIKey, nil
 }
 
-// OpenConversationSearchClient builds the in-process search client from the
-// semantic config. The daemon runtime and the `clyde daemon` maintenance
-// commands both open it here. Only the Milvus backend resolves the embedding
-// API key; the local backend calls no embedding endpoint.
+// OpenConversationSearchClient opens the configured local or Milvus backend.
+// Only the Milvus backend resolves the embedding API key.
 func OpenConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
 	backend := vectorsearch.BackendMilvus
 	if semanticCfg.Backend == config.ConversationSemanticBackendLocal {

@@ -1,5 +1,5 @@
-// Package staticembed embeds text with the potion-base-8M static model. The
-// model averages one vector per token and needs no inference runtime.
+// Package staticembed converts text to vectors with the embedded
+// potion-base-8M token table.
 package staticembed
 
 import (
@@ -18,10 +18,9 @@ const (
 	// Dimensions is the width of every model vector and the bit count of a Code.
 	Dimensions = 256
 	codeWords  = Dimensions / 64
-	// ModelName records which model produced stored codes.
+	// ModelName is the model identifier written to collection headers.
 	ModelName = "potion-base-8M"
-	// PassageBytes is the largest embedding input in bytes. The model has no
-	// token limit; the cap keeps one passage on one topic.
+	// PassageBytes is the byte limit used to split text before embedding.
 	PassageBytes = 2000
 )
 
@@ -36,9 +35,7 @@ var tokenizerJSONFile []byte
 //go:embed model/LICENSE
 var ModelLicense string
 
-// Code keeps one sign bit per dimension of a vector minus the token table mean.
-// The table mean depends only on the model, so codes from different builds
-// compare directly.
+// Code stores the sign bits of a vector centered on the token table mean.
 type Code [codeWords]uint64
 
 // Distance counts the bits that differ between two codes.
@@ -77,7 +74,6 @@ type safetensorsTensor struct {
 	DataOffsets [2]int `json:"data_offsets"`
 }
 
-// parseFailed logs one model parse failure and returns the wrapped error.
 func parseFailed(operation string, err error) error {
 	slog.Error("conversation.staticembed.parse_failed",
 		"concern", "conversation.semantic",
@@ -140,8 +136,8 @@ func parseModel(weights []byte, tokenizerJSON []byte) (*Model, error) {
 	return model, nil
 }
 
-// Vector returns the mean token vector of text minus the token table mean.
-// Text with no known token returns the zero vector.
+// Vector returns the average token vector minus the token table mean.
+// It returns a zero vector when the tokenizer finds no known tokens.
 func (model *Model) Vector(text string) []float32 {
 	vector := make([]float32, Dimensions)
 	ids := model.tokenizer.appendIDs(make([]int32, 0, len(text)/4+1), text)
@@ -161,13 +157,12 @@ func (model *Model) Vector(text string) []float32 {
 	return vector
 }
 
-// Code returns the sign code of Vector(text).
+// Code returns the sign bits of the centered vector from [Model.Vector].
 func (model *Model) Code(text string) Code {
 	return CodeOf(model.Vector(text))
 }
 
-// CodeOf sets one bit for each positive component of vector. Components past
-// Dimensions are ignored.
+// CodeOf encodes positive components as set bits, up to [Dimensions].
 func CodeOf(vector []float32) Code {
 	var code Code
 	for dimension := range min(len(vector), Dimensions) {

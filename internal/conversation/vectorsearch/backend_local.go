@@ -16,16 +16,14 @@ import (
 	"goodkind.io/lm-semantic-search/embedding"
 )
 
-// localDeliveryBatchBytes lets one sync pass load enough conversations to keep
-// the parallel loader and embedder busy. Each pass is a separate load, embed,
-// and write cycle.
+// Local delivery uses a larger transcript budget than Milvus to admit more
+// conversations into each parallel load and embed pass.
 const localDeliveryBatchBytes = 64 << 20
 
 type localBackend struct {
 	*codestore.Store
 }
 
-// staticEmbedder embeds text with the model compiled into the binary.
 type staticEmbedder struct {
 	model *staticembed.Model
 }
@@ -34,7 +32,7 @@ func (embedder staticEmbedder) Embed(_ context.Context, text string) ([]float32,
 	return embedder.model.Vector(text), nil
 }
 
-// EmbedBatch embeds texts on up to GOMAXPROCS goroutines.
+// EmbedBatch returns vectors in input order and fails if any input lacks a vector.
 func (embedder staticEmbedder) EmbedBatch(ctx context.Context, texts []string) (embedding.BatchResult, error) {
 	vectors := make([][]float32, len(texts))
 	var next atomic.Int64

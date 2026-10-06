@@ -20,8 +20,9 @@ import (
 
 const (
 	headerFileName = "collection.json"
-	rowsFileName   = "rows.log"
-	dataFileName   = "data.log"
+	rowsFilePrefix = "rows"
+	dataFilePrefix = "data"
+	logFileSuffix  = ".log"
 	directoryMode  = 0o700
 	fileMode       = 0o600
 	// compactMinimumDead keeps small collections from rewriting their files on
@@ -46,6 +47,22 @@ type collectionHeader struct {
 	Declaration collection.Declaration `json:"declaration"`
 	Dimension   int                    `json:"dimension"`
 	Model       string                 `json:"model"`
+	Generation  int64                  `json:"generation,omitempty"`
+}
+
+func generationFileName(prefix string, generation int64) string {
+	if generation == 0 {
+		return prefix + logFileSuffix
+	}
+	return fmt.Sprintf("%s.%d%s", prefix, generation, logFileSuffix)
+}
+
+func (stored *codeCollection) rowsPath(generation int64) string {
+	return filepath.Join(stored.dir, generationFileName(rowsFilePrefix, generation))
+}
+
+func (stored *codeCollection) dataPath(generation int64) string {
+	return filepath.Join(stored.dir, generationFileName(dataFilePrefix, generation))
 }
 
 // dictionary interns the values of one column. ID 0 marks a row without the
@@ -112,15 +129,29 @@ func (stored *codeCollection) setDeclaration(declaration collection.Declaration)
 }
 
 func writeHeader(dir string, header collectionHeader) error {
+	if err := replaceHeader(dir, header); err != nil {
+		return err
+	}
+	return syncDirectory(dir)
+}
+
+func replaceHeader(dir string, header collectionHeader) error {
 	encoded, err := json.MarshalIndent(header, "", "  ")
 	if err != nil {
 		return failed("encode collection header", err)
 	}
 	temporary := filepath.Join(dir, headerFileName+".tmp")
-	if err := os.WriteFile(temporary, encoded, fileMode); err != nil {
+	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
+	if err != nil {
+		return failed("create collection header in "+dir, err)
+	}
+	_, writeErr := file.Write(encoded)
+	if err := errors.Join(writeErr, file.Sync(), file.Close()); err != nil {
+		_ = os.Remove(temporary)
 		return failed("write collection header in "+dir, err)
 	}
 	if err := os.Rename(temporary, filepath.Join(dir, headerFileName)); err != nil {
+		_ = os.Remove(temporary)
 		return failed("replace collection header in "+dir, err)
 	}
 	slog.Info("conversation.codestore.header_written",
@@ -128,7 +159,19 @@ func writeHeader(dir string, header collectionHeader) error {
 		"component", "conversation",
 		"dir", dir,
 		"columns", len(header.Declaration.Scalars),
+		"generation", header.Generation,
 	)
+	return nil
+}
+
+func syncDirectory(dir string) error {
+	directory, err := os.Open(dir)
+	if err != nil {
+		return failed("open directory "+dir, err)
+	}
+	if err := errors.Join(directory.Sync(), directory.Close()); err != nil {
+		return failed("sync directory "+dir, err)
+	}
 	return nil
 }
 
@@ -168,15 +211,42 @@ func openCollection(dir string) (*codeCollection, error) {
 		stored.closeFiles()
 		return nil, err
 	}
+	stored.removeOtherGenerations()
 	return stored, nil
 }
 
+func (stored *codeCollection) removeOtherGenerations() {
+	current := map[string]bool{
+		stored.rowsPath(stored.header.Generation): true,
+		stored.dataPath(stored.header.Generation): true,
+	}
+	for _, prefix := range []string{rowsFilePrefix, dataFilePrefix} {
+		matches, err := filepath.Glob(filepath.Join(stored.dir, prefix+"*"+logFileSuffix))
+		if err != nil {
+			continue
+		}
+		for _, path := range matches {
+			if current[path] {
+				continue
+			}
+			if err := os.Remove(path); err != nil {
+				slog.Warn("conversation.codestore.remove_generation_failed",
+					"concern", "conversation.semantic",
+					"component", "conversation",
+					"path", path,
+					"err", err,
+				)
+			}
+		}
+	}
+}
+
 func (stored *codeCollection) openFiles() error {
-	rowsFile, err := os.OpenFile(filepath.Join(stored.dir, rowsFileName), os.O_RDWR|os.O_CREATE, fileMode)
+	rowsFile, err := os.OpenFile(stored.rowsPath(stored.header.Generation), os.O_RDWR|os.O_CREATE, fileMode)
 	if err != nil {
 		return failed("open row log in "+stored.dir, err)
 	}
-	dataFile, err := os.OpenFile(filepath.Join(stored.dir, dataFileName), os.O_RDWR|os.O_CREATE, fileMode)
+	dataFile, err := os.OpenFile(stored.dataPath(stored.header.Generation), os.O_RDWR|os.O_CREATE, fileMode)
 	if err != nil {
 		_ = rowsFile.Close()
 		return failed("open data file in "+stored.dir, err)
@@ -204,10 +274,12 @@ func (stored *codeCollection) closeFiles() {
 	}
 }
 
-// replay applies every complete record of the row log. An interrupted write
-// leaves a partial last record or a record that names data past the end of the
-// data file; replay truncates the log before that record.
 func (stored *codeCollection) replay() error {
+	info, err := stored.rowsFile.Stat()
+	if err != nil {
+		return failed("inspect row log in "+stored.dir, err)
+	}
+	logSize := info.Size()
 	if _, err := stored.rowsFile.Seek(0, io.SeekStart); err != nil {
 		return failed("seek row log in "+stored.dir, err)
 	}
@@ -221,25 +293,37 @@ func (stored *codeCollection) replay() error {
 			}
 			return stored.truncateRows(offset, err)
 		}
-		length := binary.LittleEndian.Uint32(header[:4])
+		length := int64(binary.LittleEndian.Uint32(header[:4]))
+		end := offset + int64(frameHeaderBytes) + length
+		if end > logSize {
+			return stored.truncateRows(offset, io.ErrUnexpectedEOF)
+		}
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(reader, payload); err != nil {
-			return stored.truncateRows(offset, err)
+			return failed(fmt.Sprintf("read row log in %s at offset %d", stored.dir, offset), err)
 		}
+		finalRecord := end == logSize
 		if crc32.ChecksumIEEE(payload) != binary.LittleEndian.Uint32(header[4:]) {
-			return stored.truncateRows(offset, errMalformedRecord)
+			if finalRecord {
+				return stored.truncateRows(offset, errMalformedRecord)
+			}
+			return failed(fmt.Sprintf("check row log in %s at offset %d", stored.dir, offset), errMalformedRecord)
 		}
 		record, err := decodeRecord(payload, stored.header.Declaration.Scalars)
 		if err != nil {
-			return stored.truncateRows(offset, err)
+			return failed(fmt.Sprintf("decode row log in %s at offset %d", stored.dir, offset), err)
 		}
 		if record.kind == recordUpsert && record.dataOffset+record.dataLength > stored.dataSize {
-			return stored.truncateRows(offset, errors.New("row names data past the end of the data file"))
+			pastEnd := errors.New("row names data past the end of the data file")
+			if finalRecord {
+				return stored.truncateRows(offset, pastEnd)
+			}
+			return failed(fmt.Sprintf("check row log in %s at offset %d", stored.dir, offset), pastEnd)
 		}
 		if err := stored.apply(record); err != nil {
 			return err
 		}
-		offset += int64(frameHeaderBytes) + int64(length)
+		offset = end
 	}
 }
 
@@ -342,14 +426,17 @@ func (stored *codeCollection) write(records []rowRecord, blobs [][]byte) error {
 		}
 		stored.dataSize += int64(len(dataBuffer))
 	}
-	if _, err := stored.rowsFile.Seek(0, io.SeekEnd); err != nil {
+	logEnd, err := stored.rowsFile.Seek(0, io.SeekEnd)
+	if err != nil {
 		return failed("seek row log in "+stored.dir, err)
 	}
-	if _, err := stored.rowsFile.Write(rowBuffer); err != nil {
-		return failed("write row log in "+stored.dir, err)
+	_, writeErr := stored.rowsFile.Write(rowBuffer)
+	if writeErr == nil {
+		writeErr = stored.rowsFile.Sync()
 	}
-	if err := stored.rowsFile.Sync(); err != nil {
-		return failed("sync row log in "+stored.dir, err)
+	if writeErr != nil {
+		truncateErr := stored.rowsFile.Truncate(logEnd)
+		return failed("append row log in "+stored.dir, errors.Join(writeErr, truncateErr))
 	}
 	for _, record := range records {
 		if err := stored.apply(record); err != nil {
@@ -357,7 +444,7 @@ func (stored *codeCollection) write(records []rowRecord, blobs [][]byte) error {
 		}
 	}
 	if stored.dead > compactMinimumDead && stored.dead > len(stored.rows) {
-		return stored.compact()
+		_ = stored.compact()
 	}
 	return nil
 }
@@ -381,86 +468,6 @@ func (stored *codeCollection) recordOf(position int) rowRecord {
 		record.cells = append(record.cells, storedCell{column: column, value: stored.dictionaries[column].values[id]})
 	}
 	return record
-}
-
-// compact rewrites both files with only the live rows, then replaces them.
-func (stored *codeCollection) compact() error {
-	rowsTemporary := filepath.Join(stored.dir, rowsFileName+".compact")
-	dataTemporary := filepath.Join(stored.dir, dataFileName+".compact")
-	rowsOut, err := os.OpenFile(rowsTemporary, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
-	if err != nil {
-		return failed("create compacted row log in "+stored.dir, err)
-	}
-	dataOut, err := os.OpenFile(dataTemporary, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
-	if err != nil {
-		_ = rowsOut.Close()
-		return failed("create compacted data file in "+stored.dir, err)
-	}
-	offsets, err := stored.writeCompacted(rowsOut, dataOut)
-	closeErr := errors.Join(rowsOut.Close(), dataOut.Close())
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return failed("close compacted files in "+stored.dir, closeErr)
-	}
-	stored.closeFiles()
-	if err := os.Rename(dataTemporary, filepath.Join(stored.dir, dataFileName)); err != nil {
-		return failed("replace data file in "+stored.dir, err)
-	}
-	if err := os.Rename(rowsTemporary, filepath.Join(stored.dir, rowsFileName)); err != nil {
-		return failed("replace row log in "+stored.dir, err)
-	}
-	for position, offset := range offsets {
-		stored.rows[position].dataOffset = offset
-	}
-	slog.Info("conversation.codestore.compacted",
-		"concern", "conversation.semantic",
-		"component", "conversation",
-		"dir", stored.dir,
-		"rows", len(stored.rows),
-		"dead_records", stored.dead,
-	)
-	stored.dead = 0
-	return stored.openFiles()
-}
-
-// writeCompacted writes every live row to the new files and returns each row's
-// new data offset.
-func (stored *codeCollection) writeCompacted(rowsOut *os.File, dataOut *os.File) ([]int64, error) {
-	rowsWriter := bufio.NewWriterSize(rowsOut, bufferBytes)
-	dataWriter := bufio.NewWriterSize(dataOut, bufferBytes)
-	offsets := make([]int64, len(stored.rows))
-	var dataOffset int64
-	frame := make([]byte, 0, 512)
-	for position := range stored.rows {
-		record := stored.recordOf(position)
-		blob := make([]byte, record.dataLength)
-		if _, err := stored.dataFile.ReadAt(blob, record.dataOffset); err != nil {
-			return nil, failed("read data for compaction in "+stored.dir, err)
-		}
-		if _, err := dataWriter.Write(blob); err != nil {
-			return nil, failed("write compacted data in "+stored.dir, err)
-		}
-		record.dataOffset = dataOffset
-		offsets[position] = dataOffset
-		dataOffset += record.dataLength
-		payload, err := encodeRecord(record, stored.header.Declaration.Scalars)
-		if err != nil {
-			return nil, failed("encode compacted row record", err)
-		}
-		frame, err = appendFrame(frame[:0], payload)
-		if err != nil {
-			return nil, failed("frame compacted row record", err)
-		}
-		if _, err := rowsWriter.Write(frame); err != nil {
-			return nil, failed("write compacted row log in "+stored.dir, err)
-		}
-	}
-	if err := errors.Join(dataWriter.Flush(), dataOut.Sync(), rowsWriter.Flush(), rowsOut.Sync()); err != nil {
-		return nil, failed("flush compacted files in "+stored.dir, err)
-	}
-	return offsets, nil
 }
 
 func (stored *codeCollection) readBlob(position int) (string, string, error) {

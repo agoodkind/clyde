@@ -233,8 +233,8 @@ type conversationSemanticSyncWorker struct {
 	// daemon startup from the export surface's selector vocabulary, so a change
 	// takes effect on the next daemon generation.
 	contentKinds conversation.ContentKindSet
-	// batchBytes is the per-pass raw transcript byte budget. One artifact larger
-	// than the budget still loads alone. runPass sets it from the resolved client.
+	// batchBytes limits raw transcript bytes per pass. A larger artifact loads
+	// alone. runPass obtains the budget from the selected backend.
 	batchBytes int64
 }
 

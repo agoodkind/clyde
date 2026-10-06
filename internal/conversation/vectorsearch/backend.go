@@ -19,7 +19,6 @@ const (
 	BackendLocal Backend = "local"
 )
 
-// Each vector store implements backend and adds its opener to backendOpeners.
 type backend interface {
 	collection.Store
 	// collectionPresent prepares an existing collection for row queries.
@@ -48,22 +47,14 @@ type openedBackend struct {
 	deliveryBatchBytes int64
 }
 
-type backendOpener func(ctx context.Context, options Options) (openedBackend, error)
-
-var backendOpeners = map[Backend]backendOpener{
-	BackendMilvus: openMilvusBackend,
-	BackendLocal:  openLocalBackend,
-}
-
 func openBackend(ctx context.Context, options Options) (openedBackend, error) {
-	name := options.Backend
-	if name == "" {
-		name = BackendMilvus
-	}
-	opener, found := backendOpeners[name]
-	if !found {
+	switch options.Backend {
+	case "", BackendMilvus:
+		return openMilvusBackend(ctx, options)
+	case BackendLocal:
+		return openLocalBackend(ctx, options)
+	default:
 		failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0, deliveryBatchBytes: 0}
-		return failed, operationError{operation: "open conversation vector store", cause: fmt.Errorf("backend %q is not registered", name)}
+		return failed, operationError{operation: "open conversation vector store", cause: fmt.Errorf("backend %q is not registered", options.Backend)}
 	}
-	return opener(ctx, options)
 }

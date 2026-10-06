@@ -18,20 +18,19 @@ const (
 	cellNull  byte = 0
 	cellValue byte = 1
 
-	// frameHeaderBytes is the payload length and the CRC-32 of the payload.
+	// Each frame header stores a 32-bit payload length and a CRC-32 checksum.
 	frameHeaderBytes = 8
 )
 
 var errMalformedRecord = errors.New("malformed row record")
 
-// storedCell is one declared column value of a row record.
 type storedCell struct {
 	column int
 	value  collection.ScalarValue
 }
 
-// rowRecord is one upsert or delete in the row log. An upsert stores the offset
-// and length of its content and metadata blob in the data file.
+// Upsert records reference content and metadata by offset and length in the
+// data file. Delete records contain only the operation and row ID.
 type rowRecord struct {
 	kind          byte
 	id            string
@@ -146,7 +145,6 @@ func (reader *decoder) varint() int64 {
 	return value
 }
 
-// count reads a varint that must lie in [0, limit].
 func (reader *decoder) count(limit int64) int {
 	value := reader.varint()
 	if value < 0 || value > limit {
@@ -224,8 +222,6 @@ func decodeRecord(payload []byte, columns []collection.ScalarColumn) (rowRecord,
 	return record, reader.err
 }
 
-// encodeBlob writes the content and metadata of one row as stored in the data
-// file.
 func encodeBlob(content string, metadata string) []byte {
 	blob := make([]byte, 0, len(content)+len(metadata)+8)
 	blob = appendString(blob, content)

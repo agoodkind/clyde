@@ -35,9 +35,7 @@ func openMilvusBackend(ctx context.Context, options Options) (openedBackend, err
 	if queryPrefix == "" && strings.Contains(options.EmbeddingModel, nvEmbedCodeModelMarker) {
 		queryPrefix = nvEmbedCodeQueryPrefix
 	}
-	// The Milvus client retries an unreachable address until its context ends.
-	// The daemon opens this connection during startup, and a local Milvus
-	// answers in milliseconds.
+	// Bound connection retries during daemon startup.
 	connectCtx, cancelConnect := context.WithTimeout(ctx, milvusConnectTimeout)
 	defer cancelConnect()
 	client, err := milvusclient.New(connectCtx, &milvusclient.ClientConfig{
@@ -63,8 +61,7 @@ func openMilvusBackend(ctx context.Context, options Options) (openedBackend, err
 	}, nil
 }
 
-// collectionPresent loads an existing collection into memory, because Milvus
-// serves a stored-row query on a loaded collection only.
+// Milvus requires the collection to be loaded before stored-row queries.
 func (b *milvusBackend) collectionPresent(ctx context.Context, collectionName string) (bool, error) {
 	exists, err := b.client.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
@@ -97,8 +94,6 @@ func (b *milvusBackend) close(ctx context.Context) error {
 	return nil
 }
 
-// search resolves legacy conversation groups when the search limits hits per
-// conversation.
 func (b *milvusBackend) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error) {
 	timing := searchTiming{rank: 0, load: 0, candidates: 0}
 	rankStarted := clock.Now()

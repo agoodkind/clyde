@@ -64,8 +64,7 @@ type Options struct {
 	CheckpointDir string
 }
 
-// Client searches and ingests the Milvus conversation collection in process
-// through the collection library.
+// Client searches and ingests conversations through the selected backend.
 type Client struct {
 	store       backend
 	embedder    textEmbedder
@@ -242,9 +241,8 @@ func (c *Client) queryVector(ctx context.Context, query string) ([]float32, bool
 	return vector, false, nil
 }
 
-// SearchWithinConversation ranks one conversation's rows for query. The
-// in-process search stores no checkpoint of delivered content and always
-// returns an empty fingerprint.
+// SearchWithinConversation ranks one conversation's rows for query.
+// Its fingerprint result is always empty.
 func (c *Client) SearchWithinConversation(
 	ctx context.Context,
 	collectionID string,

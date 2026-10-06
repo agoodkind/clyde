@@ -123,10 +123,9 @@ make lint
 Use `make deploy` when the local daemon install and reload path needs to be
 validated.
 
-The first build needs network access. It downloads the static embedding model
-that the local search backend compiles into `clyde`. Later builds reuse the
-downloaded files after checking their pinned SHA-256. The running daemon never
-downloads the model.
+An uncached build needs network access to download the pinned local-search model
+and tokenizer. Later builds verify their SHA-256 hashes and replace missing or
+mismatched files. The binary embeds the verified files for local search.
 
 ## Original Credit
 

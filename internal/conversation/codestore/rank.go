@@ -13,7 +13,6 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-// rankingWorkerRows is the smallest row count that gets its own scan worker.
 const rankingWorkerRows = 4096
 
 type candidate struct {
@@ -21,15 +20,13 @@ type candidate struct {
 	distance int
 }
 
-// boundedRanking keeps the closest rows seen so far, up to capacity, as a heap
-// with the worst kept row at index 0.
+// The heap root is the worst retained candidate, ready for replacement.
 type boundedRanking struct {
 	items    []candidate
 	rows     []row
 	capacity int
 }
 
-// worse orders by larger distance, then by larger row ID.
 func (ranking *boundedRanking) worse(left, right candidate) bool {
 	if left.distance != right.distance {
 		return left.distance > right.distance
@@ -77,10 +74,7 @@ func (ranking *boundedRanking) siftDown(index int) {
 	}
 }
 
-// rank scans every selected row on one worker per rankingWorkerRows rows, up to
-// GOMAXPROCS, and returns the closest collection.RankingDepth rows, ordered by
-// distance and then row ID. A worker
-// that panics fails the whole ranking, because its rows are missing.
+// A worker panic invalidates the ranking from every worker.
 func (stored *codeCollection) rank(query staticembed.Code, matches predicate) ([]candidate, error) {
 	workers := max(min(runtime.GOMAXPROCS(0), len(stored.rows)/rankingWorkerRows), 1)
 	chunk := (len(stored.rows) + workers - 1) / workers

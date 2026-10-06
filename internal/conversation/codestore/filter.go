@@ -14,8 +14,8 @@ const (
 	truthUnknown
 )
 
-// predicate evaluates a filter against the row at position. A comparison on a
-// null or absent value is unknown, and only a true result selects the row.
+// Comparisons with null or absent values are unknown, except for the explicit
+// presence predicates. Only a true result selects a row.
 type predicate func(position int) truth
 
 func (stored *codeCollection) compileFilter(filter *collection.Filter) (predicate, error) {

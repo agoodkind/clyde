@@ -10,9 +10,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// wordPiece reproduces the Hugging Face tokenizer pipeline that the model
-// ships: BertNormalizer with lowercasing and accent stripping, BertPreTokenizer,
-// and WordPiece.
+// wordPiece applies the pinned model's BERT normalization and WordPiece
+// tokenization settings.
 type wordPiece struct {
 	vocab        map[string]int32
 	prefix       string
@@ -43,8 +42,7 @@ func parseWordPiece(raw []byte) (*wordPiece, error) {
 	}, nil
 }
 
-// appendIDs appends the token IDs of text to ids and omits unknown tokens, as
-// model2vec does before it averages token vectors.
+// The model averages known-token vectors and omits unknown words.
 func (tokenizer *wordPiece) appendIDs(ids []int32, text string) []int32 {
 	normalized := normalize(text)
 	word := make([]rune, 0, 32)
@@ -99,9 +97,8 @@ func (tokenizer *wordPiece) appendWord(ids []int32, word []rune) []int32 {
 	return ids
 }
 
-// normalize applies BertNormalizer with clean_text, handle_chinese_chars,
-// lowercase, and accent stripping, which strip_accents=null selects when
-// lowercase is on.
+// The pinned tokenizer enables clean_text, handle_chinese_chars and lowercase.
+// Its strip_accents=null setting also enables accent stripping.
 func normalize(text string) string {
 	var cleaned strings.Builder
 	cleaned.Grow(len(text))

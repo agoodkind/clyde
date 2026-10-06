@@ -76,11 +76,9 @@ type ConversationSemanticConfig struct {
 	// embedding everything; `ingestion_enabled = false` is.
 	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
 
-	// Backend selects the vector store behind ingestion and search. An empty
-	// value, "milvus", and "lms" select Milvus at MilvusAddress. "local" selects
-	// files under LocalRoot and the static model compiled into the binary, and
-	// the loader rejects it together with milvus_address. The loader rejects
-	// "embedded" because this build has no embedded runtime.
+	// Backend selects the store for ingestion and search. Empty, "milvus" and
+	// "lms" select Milvus. "local" selects LocalRoot and the bundled model.
+	// The loader rejects "local" with a Milvus address and rejects "embedded".
 	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
 	// LocalRoot applies to the local backend only. An empty value selects a
 	// directory under the Clyde state directory.
@@ -224,8 +222,7 @@ func applyConversationSemanticSearchDefaults(semantic *ConversationSemanticConfi
 	}
 }
 
-// applyConversationSemanticBackendDefaults checks milvus_address before the
-// Milvus defaults set it.
+// Check for an explicit Milvus address before defaults populate it.
 func applyConversationSemanticBackendDefaults(semantic *ConversationSemanticConfig) error {
 	if ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend))) != ConversationSemanticBackendLocal {
 		applyConversationSemanticSearchDefaults(semantic)

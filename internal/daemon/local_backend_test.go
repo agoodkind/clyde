@@ -16,8 +16,7 @@ import (
 
 const (
 	localBackendSearchTimeout = 3 * time.Minute
-	// The embedding API key file does not exist. The local backend calls no
-	// embedding endpoint and must start without it.
+	// A missing key file must not prevent the local backend from starting.
 	localBackendDaemonConfig = `[conversation.semantic]
 ingestion_enabled = true
 search_enabled = true
@@ -55,7 +54,6 @@ func TestLocalBackendIngestsAndSearchesWithoutMilvus(t *testing.T) {
 	if len(result.Matches) == 0 {
 		t.Fatalf("SearchConversations did not return a semantic match within %s", localBackendSearchTimeout)
 	}
-	// Both fixture messages are about the listener rebind.
 	if !strings.Contains(strings.ToLower(result.Matches[0].Snippet), "rebind") {
 		t.Fatalf("top match snippet = %q, want a fixture message about the listener rebind", result.Matches[0].Snippet)
 	}

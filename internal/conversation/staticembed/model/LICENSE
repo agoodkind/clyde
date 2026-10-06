@@ -1,11 +1,10 @@
-The model.safetensors and tokenizer.json files embedded in the clyde binary
-come from the Hugging Face model repository minishlab/potion-base-8M at
-revision bf8b056651a2c21b8d2565580b8569da283cab23:
+Clyde embeds model.safetensors and tokenizer.json from minishlab/potion-base-8M
+at revision bf8b056651a2c21b8d2565580b8569da283cab23:
 https://huggingface.co/minishlab/potion-base-8M/tree/bf8b056651a2c21b8d2565580b8569da283cab23
 
-The model card at that revision declares the MIT license. The model was
-produced with Model2Vec (https://github.com/MinishLab/model2vec), which
-publishes the following license:
+The model card specifies the MIT license. Model2Vec produced the model and
+publishes the license below:
+https://github.com/MinishLab/model2vec
 
 MIT License
 

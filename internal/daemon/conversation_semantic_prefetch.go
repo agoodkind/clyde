@@ -12,15 +12,10 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 )
 
-// deliveryBatchSizer is a feeder client that sets the per-pass raw transcript
-// byte budget. The in-process local backend sends no wire request and returns a
-// larger budget than the default.
 type deliveryBatchSizer interface {
 	DeliveryBatchBytes() int64
 }
 
-// deliveryBatchBytesFor returns the client's positive per-pass byte budget, or
-// conversationSemanticBatchBytes when the client reports no positive budget.
 func deliveryBatchBytesFor(client conversationSemanticClient) int64 {
 	if sizer, ok := client.(deliveryBatchSizer); ok {
 		if size := sizer.DeliveryBatchBytes(); size > 0 {
@@ -30,13 +25,8 @@ func deliveryBatchBytesFor(client conversationSemanticClient) int64 {
 	return conversationSemanticBatchBytes
 }
 
-// maxLoggedConversationIDs bounds the id list on the pass log line. A backlog
-// pass delivers hundreds of conversations. The line lists the first few beside
-// the sent_conversations count.
 const maxLoggedConversationIDs = 10
 
-// boundedConversationIDs returns the first maxLoggedConversationIDs ids in
-// delivery order.
 func boundedConversationIDs(ids []string) []string {
 	if len(ids) <= maxLoggedConversationIDs {
 		return ids
@@ -44,10 +34,7 @@ func boundedConversationIDs(ids []string) []string {
 	return ids[:maxLoggedConversationIDs]
 }
 
-// rotateAfter returns ids rotated to start at the first id greater than cursor,
-// wrapping around to the start. An empty cursor, or one at or past every id,
-// keeps the original order. Each batch resumes after the previous batch's last
-// delivery instead of restarting at the smallest id.
+// Resume after the last delivered ID to give later IDs a turn in the next pass.
 func rotateAfter(ids []string, cursor string) []string {
 	if cursor == "" || len(ids) == 0 {
 		return ids
@@ -65,7 +52,6 @@ func rotateAfter(ids []string, cursor string) []string {
 	return rotated
 }
 
-// loadedConversation is the result of one loadDocs call.
 type loadedConversation struct {
 	built  SemanticConversationDocuments
 	err    error
@@ -83,10 +69,9 @@ func (w *conversationSemanticSyncWorker) prefetchedOrLoad(
 	return w.loadDocs(ctx, record)
 }
 
-// prefetchNeededDocuments loads in parallel the conversations that
-// collectNeededDocuments would admit if every load returned documents. It uses
-// the same order, deferral rules, and byte budget. collectNeededDocuments loads
-// any conversation missing from the prefetch results.
+// Prefetch uses the admission order, deferral rules and transcript budget of
+// collectNeededDocuments. That method loads additional candidates when a
+// prefetched conversation produces no documents.
 func (w *conversationSemanticSyncWorker) prefetchNeededDocuments(
 	ctx context.Context,
 	ordered []string,

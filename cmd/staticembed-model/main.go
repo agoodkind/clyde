@@ -1,11 +1,7 @@
-// Command staticembed-model verifies the pinned static embedding model files in
-// internal/conversation/staticembed/model before the package compiles. It runs
-// as the staticembed-model target of GO_MK_GENERATE.
-//
-// The command reuses a file with the pinned SHA-256. It downloads a missing or
-// mismatched file from the pinned revision into a temporary file, checks the
-// same SHA-256, and renames the file into place. A downloaded file with another
-// hash fails the run.
+// Command staticembed-model prepares the model files for compilation.
+// It verifies cached files against the manifest and downloads replacements
+// from the pinned revision. A replacement must pass SHA-256 verification
+// before the command renames it into place.
 package main
 
 import (
@@ -86,7 +82,6 @@ func run(ctx context.Context) error {
 	return nil
 }
 
-// ensureFile keeps a present file with the pinned hash and replaces any other.
 func ensureFile(ctx context.Context, client *http.Client, pinned manifest, file pinnedFile) error {
 	path := filepath.Join(modelDirectory, file.Name)
 	sum, err := fileSHA256(path)
@@ -124,7 +119,6 @@ func ensureFile(ctx context.Context, client *http.Client, pinned manifest, file 
 	return nil
 }
 
-// download writes the response body to a temporary file beside path.
 func download(ctx context.Context, client *http.Client, url string, path string) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -155,8 +149,7 @@ func download(ctx context.Context, client *http.Client, url string, path string)
 	return output.Name(), nil
 }
 
-// fileSHA256 returns an error that wraps [os.ErrNotExist] for a missing file and
-// logs every other failure.
+// A missing file triggers a download rather than a warning.
 func fileSHA256(path string) (string, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {

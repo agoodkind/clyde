@@ -34,12 +34,9 @@ export GOVULNCHECK_INSTALL := golang.org/x/vuln/cmd/govulncheck@v1.7.0
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
-# go.mk runs these as order-only prerequisites of every build, lint, vet, test,
-# and govulncheck target. GO_MK_GENERATE generates the Swift tree-sitter parser
-# in the pinned gksyntax submodule and fetches the pinned static embedding model
-# files. GO_MK_WORKSPACE_USE materializes a gitignored go.work that includes the
-# submodule in the workspace. The pinned gksyntax module zip omits the dart and
-# swift grammar C sources, and gomoddirectives rejects a go.mod replace.
+# Package loading requires the generated Swift parser and embedded model files.
+# The workspace includes the gksyntax submodule because its module archive omits
+# grammar sources.
 GO_MK_GENERATE := gksyntax-grammars staticembed-model
 GO_MK_GENERATE_INPUTS := third_party/gksyntax internal/conversation/staticembed/model
 GO_MK_GENERATE_OUTPUTS := \
@@ -140,15 +137,11 @@ gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its 
 		echo "gksyntax-grammars: Swift parser already generated"; \
 	fi
 
-# staticembed-model fetches the model files that internal/conversation/staticembed
-# embeds. model/manifest.json pins the revision and SHA-256 of each file. The
-# target reuses a file with the pinned hash and downloads any other file.
 staticembed-model: ## Fetch and verify the pinned static embedding model files
 	GOWORK=off CGO_ENABLED=0 go run ./cmd/staticembed-model
 
-# The formatters load packages, and go:embed fails to load staticembed without
-# the model files. go.mk runs GO_MK_GENERATE before build, lint, vet, and test,
-# but not before these two targets.
+# Formatters load packages and require the go:embed inputs. These targets need
+# an explicit model prerequisite.
 lint-format fmt: | staticembed-model
 
 # native-prereqs runs the go.mk order-only prerequisites that `make test` runs

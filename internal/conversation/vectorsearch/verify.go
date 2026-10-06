@@ -29,8 +29,8 @@ type IndexCheck struct {
 	Misses []string
 }
 
-// VerifyIndex searches with stored-vector samples and checks the first returned score.
-// A missing collection returns ErrCollectionAbsent.
+// VerifyIndex checks the first-result cosine score for stored Milvus vectors.
+// It rejects other backends and returns [ErrCollectionAbsent] for a missing collection.
 func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample int) (IndexCheck, error) {
 	check := IndexCheck{Checked: 0, Found: 0, Misses: nil}
 	if c == nil {

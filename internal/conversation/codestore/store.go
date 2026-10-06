@@ -1,6 +1,5 @@
-// Package codestore stores collection rows as 256-bit sign codes and ranks them
-// with an exact Hamming scan in memory. Content and metadata stay on disk and
-// load only for returned rows.
+// Package codestore ranks persisted rows by Hamming distance between 256-bit
+// codes. Searches read content and metadata from disk for selected rows.
 package codestore
 
 import (
@@ -22,7 +21,7 @@ import (
 
 const defaultSearchLimit = 10
 
-// Store is safe for concurrent use.
+// Store loads collection indexes on demand and protects each with a read/write lock.
 type Store struct {
 	root        string
 	model       string
@@ -32,8 +31,8 @@ type Store struct {
 
 var _ collection.Store = (*Store)(nil)
 
-// Open returns a store rooted at root. Each collection is a directory under
-// root and loads into memory on first use.
+// Open creates the root directory and returns a store.
+// The store loads each collection on first use.
 func Open(root string, model string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("code store root is required")
@@ -44,7 +43,7 @@ func Open(root string, model string) (*Store, error) {
 	return &Store{root: root, model: model, mutex: sync.Mutex{}, collections: make(map[string]*codeCollection)}, nil
 }
 
-// Close closes every loaded collection.
+// Close closes every loaded collection and removes it from the store's cache.
 func (store *Store) Close() {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
@@ -64,7 +63,6 @@ func (store *Store) directory(name string) (string, error) {
 	return filepath.Join(store.root, trimmed), nil
 }
 
-// collection returns the loaded collection, or collection.ErrCollectionMissing.
 func (store *Store) collection(name string) (*codeCollection, error) {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
@@ -83,8 +81,8 @@ func (store *Store) collection(name string) (*codeCollection, error) {
 	return stored, nil
 }
 
-// Load reads a collection into memory and returns its row count. A missing
-// collection returns collection.ErrCollectionMissing.
+// Load reads a collection into memory and returns its row count.
+// It returns [collection.ErrCollectionMissing] if the header file is absent.
 func (store *Store) Load(name string) (int, error) {
 	stored, err := store.collection(name)
 	if err != nil {
@@ -95,8 +93,8 @@ func (store *Store) Load(name string) (int, error) {
 	return len(stored.rows), nil
 }
 
-// EnsureCollection creates the collection when it is absent and adds any
-// declared column it lacks. A dimension other than the code width fails.
+// EnsureCollection creates a missing collection or adds undeclared scalar columns.
+// It rejects dimensions that differ from [staticembed.Dimensions].
 func (store *Store) EnsureCollection(ctx context.Context, request collection.EnsureRequest) error {
 	if request.Dimension != staticembed.Dimensions {
 		return fmt.Errorf("ensure %s: dimension %d, the code store needs %d", request.Collection, request.Dimension, staticembed.Dimensions)
@@ -110,7 +108,7 @@ func (store *Store) EnsureCollection(ctx context.Context, request collection.Ens
 		if err := os.MkdirAll(dir, directoryMode); err != nil {
 			return failed("create collection "+request.Collection, err)
 		}
-		header := collectionHeader{Declaration: request.Declaration, Dimension: request.Dimension, Model: store.model}
+		header := collectionHeader{Declaration: request.Declaration, Dimension: request.Dimension, Model: store.model, Generation: 0}
 		if err := writeHeader(dir, header); err != nil {
 			return err
 		}
@@ -146,10 +144,9 @@ func (store *Store) EnsureCollection(ctx context.Context, request collection.Ens
 	return nil
 }
 
-// Upsert writes rows. A row replaces the stored row with the same ID. Each row
-// vector becomes a sign code. Upsert validates scalar columns against the
-// declaration that EnsureCollection recorded and ignores the declaration
-// argument.
+// Upsert replaces rows by ID and stores their vector sign bits.
+// It checks scalar column names against the saved collection declaration.
+// The declaration argument does not change that schema.
 func (store *Store) Upsert(ctx context.Context, name string, _ collection.Declaration, rows []collection.Row) error {
 	if err := ctx.Err(); err != nil {
 		return failed("upsert "+name, err)
@@ -320,9 +317,8 @@ func (stored *codeCollection) itemSelector(itemColumn string, itemIDs []string, 
 	}
 }
 
-// QueryRows returns the stored rows of the requested items in ascending ID
-// order. Every returned row has a nil Vector, because the store keeps only the
-// sign code of each row.
+// QueryRows returns matching items in ascending row ID order.
+// The store persists sign codes and returns nil Vector fields.
 func (store *Store) QueryRows(ctx context.Context, request collection.RowsRequest) ([]collection.StoredRow, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, failed("query rows of "+request.Collection, err)
@@ -357,8 +353,7 @@ func (store *Store) QueryRows(ctx context.Context, request collection.RowsReques
 	return rows, nil
 }
 
-// DeleteItems removes the rows of the requested items. An empty prefix selects
-// nothing.
+// DeleteItems removes rows selected by item IDs or nonempty path prefixes.
 func (store *Store) DeleteItems(ctx context.Context, request collection.DeleteItemsRequest) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, failed("delete items from "+request.Collection, err)
@@ -372,9 +367,8 @@ func (store *Store) DeleteItems(ctx context.Context, request collection.DeleteIt
 	return stored.deleteWhere(stored.itemSelector(request.Declaration.ItemIDColumn, request.ItemIDs, request.PathPrefixes))
 }
 
-// BackfillScalars fills the null or empty backfill columns of the streamed
-// items. It returns the changed rows and the rows that need a backfill but
-// belong to no streamed item.
+// BackfillScalars applies the supplied backfill rules to stored rows.
+// It returns counts of changed rows and unmatched rows that need a backfill.
 func (store *Store) BackfillScalars(ctx context.Context, name string, backfill collection.ScalarBackfill) (int, int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, 0, failed("backfill "+name, err)
@@ -465,16 +459,14 @@ func (stored *codeCollection) backfillRow(position int, backfill collection.Scal
 	return record, backfillChanged
 }
 
-// Score maps a Hamming distance to [-1, 1]: one minus twice the fraction of
-// differing bits.
+// Score returns one minus twice the fraction of differing bits.
 func Score(distance int) float64 {
 	return 1 - 2*float64(distance)/float64(staticembed.Dimensions)
 }
 
-// Search ranks every row the filter selects by Hamming distance to the query
-// code, keeps the closest collection.RankingDepth rows ordered by distance and
-// then row ID, and walks that ranking once to apply the minimum score, the
-// per-group cap, and the limit.
+// Search filters rows before ranking their sign codes by Hamming distance.
+// It applies score, group and result limits to the best [collection.RankingDepth]
+// candidates. Equal distances are ordered by row ID.
 func (store *Store) Search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, failed("search "+request.Collection, err)
