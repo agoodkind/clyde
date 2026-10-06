@@ -29,8 +29,8 @@ type IndexCheck struct {
 	Misses []string
 }
 
-// VerifyIndex searches with stored-vector samples and checks the first returned score.
-// A missing collection returns ErrCollectionAbsent.
+// VerifyIndex checks the first-result cosine score for stored Milvus vectors.
+// It rejects other backends and returns [ErrCollectionAbsent] for a missing collection.
 func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample int) (IndexCheck, error) {
 	check := IndexCheck{Checked: 0, Found: 0, Misses: nil}
 	if c == nil {
@@ -38,6 +38,10 @@ func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample in
 	}
 	if sample <= 0 {
 		return check, errors.New("verify conversation index: sample must be positive")
+	}
+	milvus, isMilvus := c.store.(*milvusBackend)
+	if !isMilvus {
+		return check, errors.New("verify conversation index: the configured backend is not Milvus")
 	}
 	collectionName := CollectionName(strings.TrimSpace(collectionID))
 	exists, err := c.loadCollectionIfPresent(ctx, collectionName)
@@ -54,7 +58,7 @@ func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample in
 	}
 	seen := make(map[string]bool, sample)
 	for i := range sample {
-		key, vector, ok, readErr := c.firstRowAfter(ctx, collectionName, fmt.Sprintf(sampleKeyPattern, i*primaryKeySpace/sample))
+		key, vector, ok, readErr := firstRowAfter(ctx, milvus.client, collectionName, fmt.Sprintf(sampleKeyPattern, i*primaryKeySpace/sample))
 		if readErr != nil {
 			return check, readErr
 		}
@@ -62,7 +66,7 @@ func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample in
 			continue
 		}
 		seen[key] = true
-		score, searchErr := c.firstDenseScore(ctx, collectionName, vector)
+		score, searchErr := firstDenseScore(ctx, milvus.client, collectionName, vector, c.denseSearchParams)
 		if searchErr != nil {
 			return check, searchErr
 		}
@@ -78,12 +82,12 @@ func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample in
 	return check, nil
 }
 
-func (c *Client) firstRowAfter(ctx context.Context, collectionName string, after string) (string, []float32, bool, error) {
+func firstRowAfter(ctx context.Context, client *milvusclient.Client, collectionName string, after string) (string, []float32, bool, error) {
 	option := milvusclient.NewQueryOption(collectionName).
 		WithFilter(fmt.Sprintf("%s > %q", milvusstore.IDField, after)).
 		WithOutputFields(milvusstore.IDField, milvusstore.DenseVectorField).
 		WithLimit(1)
-	result, err := c.milvus.Query(ctx, option)
+	result, err := client.Query(ctx, option)
 	if err != nil {
 		return "", nil, false, failRead("read a sample row of "+collectionName, err)
 	}
@@ -101,13 +105,13 @@ func (c *Client) firstRowAfter(ctx context.Context, collectionName string, after
 	return key, vectors.Data()[0], true, nil
 }
 
-func (c *Client) firstDenseScore(ctx context.Context, collectionName string, vector []float32) (float32, error) {
+func firstDenseScore(ctx context.Context, client *milvusclient.Client, collectionName string, vector []float32, searchParams map[string]string) (float32, error) {
 	option := milvusclient.NewSearchOption(collectionName, 1, []entity.Vector{entity.FloatVector(vector)}).
 		WithANNSField(milvusstore.DenseVectorField)
-	for key, value := range c.denseSearchParams {
+	for key, value := range searchParams {
 		option = option.WithSearchParam(key, value)
 	}
-	resultSets, err := c.milvus.Search(ctx, option)
+	resultSets, err := client.Search(ctx, option)
 	if err != nil {
 		return 0, failRead("search "+collectionName+" with a stored vector", err)
 	}

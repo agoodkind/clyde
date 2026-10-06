@@ -995,10 +995,8 @@ goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996 h1:e+gojRXDzLC7aI6k2EGPo
 goodkind.io/gksyntax v0.0.0-20260608044551-dcae2f033996/go.mod h1:3JLFnrp91eEKlJy10WzsUECoOnypuhhv9uJxKcmvE24=
 goodkind.io/go-makefile v0.0.0-20260929122444-d9d1d0827cd2 h1:KapgxSnHiWlmtMGCWX8VV7vcXg0xYsku/aW0weH+zYY=
 goodkind.io/go-makefile v0.0.0-20260929122444-d9d1d0827cd2/go.mod h1:n3rZSoH1Ru/7LVDq534mSbsOMnKY/ndvusw1haJP8Cs=
-goodkind.io/lm-semantic-search v0.0.0-20261004013034-21848b8e0fe9 h1:3YMxbZlCdpL2PUOKb8HhFM6kB/SMdhnfqINedHZHY9Q=
-goodkind.io/lm-semantic-search v0.0.0-20261004013034-21848b8e0fe9/go.mod h1:HXYbJ9tMq257ZWOT89fijIFX2O42tsE0R8USIsNepwI=
-goodkind.io/lm-semantic-search v0.0.0-20261005022427-5f6240b5b0f0 h1:ChHUhaItS3FvwjBf7N72EsF3zG7vYQyyTNpUK3rFhU0=
-goodkind.io/lm-semantic-search v0.0.0-20261005022427-5f6240b5b0f0/go.mod h1:HXYbJ9tMq257ZWOT89fijIFX2O42tsE0R8USIsNepwI=
+goodkind.io/lm-semantic-search v0.0.0-20261005041433-dc14af8a8b67 h1:+Dt2bZ88E34UBzXr29xrK+TVPF9mb/V3vHKPdZ2DY9M=
+goodkind.io/lm-semantic-search v0.0.0-20261005041433-dc14af8a8b67/go.mod h1:t0oJkD1+DVQG2O5zSQh+E7pqz/7pEYWyOkwQ87DyKuk=
 google.golang.org/api v0.283.0 h1:0lkp8u0MPwJVHqRL+nJlMAoZVVzbmiXmFHXMOTmSPik=
 google.golang.org/api v0.283.0/go.mod h1:6Wssta4c5n9qHq5CBhmlai5h/PUa1djdDAIhYEHyvcM=
 google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9YwlJXL52JkM=

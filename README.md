@@ -123,6 +123,10 @@ make lint
 Use `make deploy` when the local daemon install and reload path needs to be
 validated.
 
+An uncached build needs network access to download the pinned local-search model
+and tokenizer. Later builds verify their SHA-256 hashes and replace missing or
+mismatched files. The binary embeds the verified files for local search.
+
 ## Original Credit
 
 Clyde is forked from Fabio Rehm's original

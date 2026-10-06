@@ -52,7 +52,7 @@ func TestSandboxConfigDirectionsAreIndependent(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			body := fmt.Sprintf(sandboxConfigTemplate, testCase.ingestionEnabled, testCase.searchEnabled, sandboxCollectionID)
+			body := fmt.Sprintf(sandboxConfigTemplate, testCase.ingestionEnabled, testCase.searchEnabled, sandboxCollectionID, "")
 			var cfg config.Config
 			if err := toml.Unmarshal([]byte(body), &cfg); err != nil {
 				t.Fatalf("parse sandbox config: %v", err)

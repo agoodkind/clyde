@@ -62,6 +62,7 @@ func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) 
 	semantic.Backend = ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend)))
 	semantic.IndexedProviders = trimmedNonEmpty(semantic.IndexedProviders)
 	semantic.IndexedRoles = trimmedNonEmpty(semantic.IndexedRoles)
+	semantic.LocalRoot = cleanExpandedPath(strings.TrimSpace(semantic.LocalRoot))
 	semantic.CatalogPath = cleanExpandedPath(strings.TrimSpace(semantic.CatalogPath))
 	semantic.LockPath = cleanExpandedPath(strings.TrimSpace(semantic.LockPath))
 	semantic.PoolID = strings.TrimSpace(semantic.PoolID)
@@ -89,10 +90,10 @@ func trimmedNonEmpty(values []string) []string {
 
 func validateConversationSemanticBackend(backend ConversationSemanticBackend) error {
 	switch backend {
-	case "", ConversationSemanticBackendLMS, ConversationSemanticBackendEmbedded:
+	case "", ConversationSemanticBackendLMS, ConversationSemanticBackendMilvus, ConversationSemanticBackendLocal, ConversationSemanticBackendEmbedded:
 		return nil
 	default:
-		return invalidConversationSemanticSetting("backend", fmt.Sprintf("must be %q or %q, got %q", ConversationSemanticBackendLMS, ConversationSemanticBackendEmbedded, backend))
+		return invalidConversationSemanticSetting("backend", fmt.Sprintf("must be empty, %q, %q, or %q, got %q", ConversationSemanticBackendLMS, ConversationSemanticBackendMilvus, ConversationSemanticBackendLocal, backend))
 	}
 }
 

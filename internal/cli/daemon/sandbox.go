@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -43,7 +44,7 @@ level = "debug"
 ingestion_enabled = %t
 search_enabled = %t
 collection_id = %q
-
+%s
 [adapter]
 enabled = false
 
@@ -67,6 +68,7 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 	var keep bool
 	var ingestionEnabled bool
 	var searchEnabled bool
+	var local sandboxLocalOptions
 	cmd := &cobra.Command{
 		Use:   "sandbox",
 		Short: "Run a throwaway second daemon for hands-on validation",
@@ -77,13 +79,43 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 		Example: "clyde daemon sandbox",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSandbox(cmd.Context(), f, keep, ingestionEnabled, searchEnabled)
+			return runSandbox(cmd.Context(), f, keep, ingestionEnabled, searchEnabled, local)
 		},
 	}
 	cmd.Flags().BoolVar(&keep, "keep", false, "keep the sandbox directories after exit instead of removing them")
 	cmd.Flags().BoolVar(&ingestionEnabled, "ingestion-enabled", false, "offer conversations to the semantic search engine")
 	cmd.Flags().BoolVar(&searchEnabled, "search-enabled", false, "answer conversation searches from the semantic search engine")
+	cmd.Flags().BoolVar(&local.enabled, "local", false, "use the local backend instead of Milvus")
+	cmd.Flags().StringVar(&local.root, "local-root", "", "store the local index in this temp directory, which a later sandbox run can reuse")
 	return cmd
+}
+
+// An empty root uses the sandbox state directory for the local index.
+type sandboxLocalOptions struct {
+	enabled bool
+	root    string
+}
+
+func (local sandboxLocalOptions) configLines() (string, error) {
+	if !local.enabled {
+		if local.root != "" {
+			return "", errors.New("--local-root needs --local")
+		}
+		return "", nil
+	}
+	lines := "backend = \"local\"\n"
+	if local.root == "" {
+		return lines, nil
+	}
+	root, err := filepath.Abs(local.root)
+	if err != nil {
+		slog.Error("cli.daemon.sandbox.local_root_failed", "concern", "cmd.dispatch", "component", "cli", "path", local.root, "err", err)
+		return "", fmt.Errorf("resolve --local-root %s: %w", local.root, err)
+	}
+	if !sandbox.UnderTempRoot(root) {
+		return "", fmt.Errorf("--local-root %s is not a temp directory", root)
+	}
+	return lines + fmt.Sprintf("local_root = %q\n", root), nil
 }
 
 // runSandbox prepares the throwaway roots, writes the listener-free config, and
@@ -94,7 +126,12 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 // here: a sandbox never reloads or rebinds, and a supervisor's replacement
 // worker escapes the process group, so a wrapper killed without a signal leaves
 // a daemon serving with nothing left to stop it. One process cannot.
-func runSandbox(ctx context.Context, f *cli.Factory, keep bool, ingestionEnabled bool, searchEnabled bool) error {
+func runSandbox(ctx context.Context, f *cli.Factory, keep bool, ingestionEnabled bool, searchEnabled bool, local sandboxLocalOptions) error {
+	backendLines, err := local.configLines()
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.local_options_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
+		return err
+	}
 	roots, err := sandbox.NewRoots()
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.root_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
@@ -115,7 +152,7 @@ func runSandbox(ctx context.Context, f *cli.Factory, keep bool, ingestionEnabled
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_dir_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
 		return fmt.Errorf("create the sandbox config directory %s: %w", filepath.Dir(configPath), err)
 	}
-	sandboxConfig := fmt.Sprintf(sandboxConfigTemplate, ingestionEnabled, searchEnabled, sandboxCollectionID)
+	sandboxConfig := fmt.Sprintf(sandboxConfigTemplate, ingestionEnabled, searchEnabled, sandboxCollectionID, backendLines)
 	if err := os.WriteFile(configPath, []byte(sandboxConfig), 0o600); err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_write_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
 		return fmt.Errorf("write the sandbox config %s: %w", configPath, err)

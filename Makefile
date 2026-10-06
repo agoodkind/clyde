@@ -34,15 +34,14 @@ export GOVULNCHECK_INSTALL := golang.org/x/vuln/cmd/govulncheck@v1.7.0
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
-# go.mk runs these as order-only prerequisites of every build, lint, vet, test,
-# and govulncheck target. GO_MK_GENERATE generates the Swift tree-sitter parser
-# in the pinned gksyntax submodule. GO_MK_WORKSPACE_USE materializes a
-# gitignored go.work that routes that submodule into the build. The pinned
-# gksyntax module zip omits the dart and swift grammar C sources, and
-# gomoddirectives rejects a go.mod replace.
-GO_MK_GENERATE := gksyntax-grammars
-GO_MK_GENERATE_INPUTS := third_party/gksyntax
+# Package loading requires the generated Swift parser and embedded model files.
+# The workspace includes the gksyntax submodule because its module archive omits
+# grammar sources.
+GO_MK_GENERATE := gksyntax-grammars staticembed-model
+GO_MK_GENERATE_INPUTS := third_party/gksyntax internal/conversation/staticembed/model
 GO_MK_GENERATE_OUTPUTS := \
+	internal/conversation/staticembed/model/model.safetensors \
+	internal/conversation/staticembed/model/tokenizer.json \
 	third_party/gksyntax/treesitter/grammars/swift/upstream/src/parser.c \
 	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/parser.h \
 	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/array.h \
@@ -61,7 +60,7 @@ BUNDLE_ID         ?= io.goodkind.clyde
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
 .PHONY: test-ginkgo test-watch coverage live setup-hooks install-hooks \
-        deploy daemon-reload deadcode proto gksyntax-grammars \
+        deploy daemon-reload deadcode proto gksyntax-grammars staticembed-model \
         native-prereqs embedded-search-bootstrap
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
@@ -137,6 +136,13 @@ gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its 
 	else \
 		echo "gksyntax-grammars: Swift parser already generated"; \
 	fi
+
+staticembed-model: ## Fetch and verify the pinned static embedding model files
+	GOWORK=off CGO_ENABLED=0 go run ./cmd/staticembed-model
+
+# Formatters load packages and require the go:embed inputs. These targets need
+# an explicit model prerequisite.
+lint-format fmt: | staticembed-model
 
 # native-prereqs runs the go.mk order-only prerequisites that `make test` runs
 # before it compiles packages. CI jobs that call `go test` directly run it first.

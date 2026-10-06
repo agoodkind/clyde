@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -13,6 +15,7 @@ const (
 	defaultConversationSemanticEmbeddingModel     = "nvidia/NV-EmbedCode-7b-v1"
 	defaultConversationSemanticEmbeddingDimension = 4096
 	defaultConversationSearchNProbe               = 64
+	defaultConversationLocalStoreDirName          = "conversation-local"
 )
 
 // ConversationConfig configures raw conversation indexing integrations.
@@ -73,11 +76,13 @@ type ConversationSemanticConfig struct {
 	// embedding everything; `ingestion_enabled = false` is.
 	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
 
-	// Backend selects the implementation behind ingestion and search. An empty
-	// value selects the lm-semantic-search daemon at SocketPath. The embedded
-	// value selects the in-process library configured by the keys below, and
-	// the loader rejects it until this build contains that runtime.
+	// Backend selects the store for ingestion and search. Empty, "milvus" and
+	// "lms" select Milvus. "local" selects LocalRoot and the bundled model.
+	// The loader rejects "local" with a Milvus address and rejects "embedded".
 	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
+	// LocalRoot applies to the local backend only. An empty value selects a
+	// directory under the Clyde state directory.
+	LocalRoot string `json:"localRoot,omitempty" toml:"local_root,omitempty"`
 
 	// IndexedProviders and IndexedRoles limit embedded ingestion and search to
 	// the listed providers and message roles. Empty lists select every one.
@@ -165,9 +170,13 @@ type ConversationSemanticConfig struct {
 type ConversationSemanticBackend string
 
 const (
-	// ConversationSemanticBackendLMS selects the lm-semantic-search daemon. The
-	// empty value selects it too.
+	// ConversationSemanticBackendLMS selects Milvus, like the empty value.
 	ConversationSemanticBackendLMS ConversationSemanticBackend = "lms"
+	// ConversationSemanticBackendMilvus selects Milvus.
+	ConversationSemanticBackendMilvus ConversationSemanticBackend = "milvus"
+	// ConversationSemanticBackendLocal selects the local code store and the
+	// static model compiled into the binary.
+	ConversationSemanticBackendLocal ConversationSemanticBackend = "local"
 	// ConversationSemanticBackendEmbedded selects the in-process shared search
 	// library.
 	ConversationSemanticBackendEmbedded ConversationSemanticBackend = "embedded"
@@ -213,6 +222,21 @@ func applyConversationSemanticSearchDefaults(semantic *ConversationSemanticConfi
 	}
 }
 
+// Check for an explicit Milvus address before defaults populate it.
+func applyConversationSemanticBackendDefaults(semantic *ConversationSemanticConfig) error {
+	if ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend))) != ConversationSemanticBackendLocal {
+		applyConversationSemanticSearchDefaults(semantic)
+		return nil
+	}
+	if strings.TrimSpace(semantic.MilvusAddress) != "" {
+		return invalidConversationSemanticSetting("milvus_address", fmt.Sprintf("must be unset when %sbackend = %q", conversationSemanticKey, ConversationSemanticBackendLocal))
+	}
+	if strings.TrimSpace(semantic.LocalRoot) == "" {
+		semantic.LocalRoot = filepath.Join(DefaultStateDir(), defaultConversationLocalStoreDirName)
+	}
+	return nil
+}
+
 // DenseSearchParams returns the index search parameters of a dense
 // conversation search.
 func (semantic ConversationSemanticConfig) DenseSearchParams() map[string]string {
@@ -231,7 +255,9 @@ func applyConversationDefaults(conversation *ConversationConfig) error {
 	if conversation.Semantic.CollectionID == "" {
 		conversation.Semantic.CollectionID = defaultConversationSemanticCollectionID
 	}
-	applyConversationSemanticSearchDefaults(&conversation.Semantic)
+	if err := applyConversationSemanticBackendDefaults(&conversation.Semantic); err != nil {
+		return err
+	}
 	trimmed := make([]string, 0, len(conversation.Semantic.IndexedContent))
 	for _, value := range conversation.Semantic.IndexedContent {
 		if selector := strings.TrimSpace(value); selector != "" {

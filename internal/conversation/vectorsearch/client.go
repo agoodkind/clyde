@@ -9,12 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/lm-semantic-search/collection"
-	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
-	"goodkind.io/lm-semantic-search/embedding"
 )
 
 const (
@@ -49,6 +46,7 @@ func (e operationError) Unwrap() error {
 
 // Options configures a [Client].
 type Options struct {
+	Backend                Backend
 	MilvusAddress          string
 	MilvusDatabase         string
 	EmbeddingBaseURL       string
@@ -58,17 +56,18 @@ type Options struct {
 	EmbeddingTimeout       time.Duration
 	QueryInstructionPrefix string
 	DenseSearchParams      map[string]string
+	// LocalRoot is the store directory of BackendLocal. BackendLocal ignores the
+	// Milvus and embedding endpoint options.
+	LocalRoot string
 	// CheckpointDir is the directory of the per-conversation fingerprint
 	// records the ingest persists. Empty keeps them in memory only.
 	CheckpointDir string
 }
 
-// Client searches and ingests the Milvus conversation collection in process
-// through the collection library.
+// Client searches and ingests conversations through the selected backend.
 type Client struct {
-	milvus      *milvusclient.Client
-	store       *milvusstore.Store
-	embedder    embedding.Provider
+	store       backend
+	embedder    textEmbedder
 	dimension   int
 	queryPrefix string
 	declaration collection.Declaration
@@ -79,6 +78,10 @@ type Client struct {
 	// ingest reuses. byteBudget is the largest embedding input in bytes.
 	embeddingModel string
 	byteBudget     int
+
+	// deliveryBatchBytes is the raw transcript byte budget for each sync worker
+	// pass. Zero selects the worker default.
+	deliveryBatchBytes int64
 
 	checkpoint *checkpointStore
 
@@ -94,94 +97,56 @@ type Client struct {
 	vectorOrder []string
 }
 
-// loadCollectionIfPresent reports whether the collection exists and loads it
-// into memory, because Milvus serves a stored-row query on a loaded collection
-// only.
 func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName string) (bool, error) {
-	exists, err := c.milvus.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
-	if err != nil {
-		return false, failRead("check Milvus collection "+collectionName, err)
-	}
-	if !exists {
-		return false, nil
-	}
-	task, err := c.milvus.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
-	if err != nil {
-		return false, failRead("load Milvus collection "+collectionName, err)
-	}
-	if err := task.Await(ctx); err != nil {
-		return false, failRead("await load of Milvus collection "+collectionName, err)
-	}
-	return true, nil
+	return c.store.collectionPresent(ctx, collectionName)
 }
 
-// Open connects to Milvus and builds the embedding provider. It fails when the
-// Milvus connection cannot open.
+// Open builds the embedding provider and opens the vector store that
+// options.Backend selects.
 func Open(ctx context.Context, options Options) (*Client, error) {
-	embedder, err := embedding.NewOpenAICompatible(embedding.OpenAIOptions{
-		APIKey:         options.EmbeddingAPIKey,
-		BaseURL:        options.EmbeddingBaseURL,
-		Model:          options.EmbeddingModel,
-		Dimensions:     0,
-		RequestTimeout: options.EmbeddingTimeout,
-	})
+	opened, err := openBackend(ctx, options)
 	if err != nil {
-		return nil, operationError{operation: fmt.Sprintf("build conversation embedding provider for model %q", options.EmbeddingModel), cause: err}
-	}
-	// The Milvus client retries an unreachable address until its context ends.
-	// The daemon opens this connection during startup, and a local Milvus
-	// answers in milliseconds.
-	connectCtx, cancelConnect := context.WithTimeout(ctx, milvusConnectTimeout)
-	defer cancelConnect()
-	client, err := milvusclient.New(connectCtx, &milvusclient.ClientConfig{
-		Address: options.MilvusAddress,
-		DBName:  options.MilvusDatabase,
-	})
-	if err != nil {
-		return nil, operationError{operation: fmt.Sprintf("connect to Milvus at %q database %q", options.MilvusAddress, options.MilvusDatabase), cause: err}
-	}
-	queryPrefix := options.QueryInstructionPrefix
-	if queryPrefix == "" && strings.Contains(options.EmbeddingModel, nvEmbedCodeModelMarker) {
-		queryPrefix = nvEmbedCodeQueryPrefix
+		return nil, err
 	}
 	return &Client{
-		milvus:      client,
-		store:       milvusstore.New(client, milvusstore.Options{Hybrid: true, EmbeddingModel: options.EmbeddingModel, DenseSearchParams: options.DenseSearchParams}),
-		embedder:    embedder,
-		dimension:   options.EmbeddingDimension,
-		queryPrefix: queryPrefix,
+		store:       opened.store,
+		embedder:    opened.embedder,
+		dimension:   opened.dimension,
+		queryPrefix: opened.queryPrefix,
 		declaration: Declaration(),
 
 		denseSearchParams: options.DenseSearchParams,
 
-		embeddingModel: options.EmbeddingModel,
-		byteBudget:     embedByteBudget(options.EmbeddingModel),
-		checkpoint:     newCheckpointStore(options.CheckpointDir),
-		ingestMu:       sync.Mutex{},
-		ensured:        make(map[string]bool),
-		jobCount:       0,
-		vectorMu:       sync.Mutex{},
-		vectors:        make(map[string][]float32, queryVectorCacheSize),
-		vectorOrder:    nil,
+		embeddingModel: opened.embeddingModel,
+		byteBudget:     opened.byteBudget,
+
+		deliveryBatchBytes: opened.deliveryBatchBytes,
+
+		checkpoint:  newCheckpointStore(options.CheckpointDir),
+		ingestMu:    sync.Mutex{},
+		ensured:     make(map[string]bool),
+		jobCount:    0,
+		vectorMu:    sync.Mutex{},
+		vectors:     make(map[string][]float32, queryVectorCacheSize),
+		vectorOrder: nil,
 	}, nil
 }
 
-// Close closes the Milvus connection.
+// DeliveryBatchBytes returns the per-pass raw transcript byte budget for this
+// backend. Zero selects the worker default.
+func (c *Client) DeliveryBatchBytes() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.deliveryBatchBytes
+}
+
+// Close closes the vector store.
 func (c *Client) Close(ctx context.Context) error {
-	if c == nil || c.milvus == nil {
+	if c == nil || c.store == nil {
 		return nil
 	}
-	closeCtx, cancel := context.WithTimeout(ctx, milvusCloseTimeout)
-	defer cancel()
-	if err := c.milvus.Close(closeCtx); err != nil {
-		slog.Warn("conversation.vectorsearch.milvus_close_failed",
-			"concern", "conversation.semantic",
-			"component", "conversation",
-			"err", err,
-		)
-		return fmt.Errorf("close Milvus connection: %w", err)
-	}
-	return nil
+	return c.store.close(ctx)
 }
 
 // SearchConversations ranks the conversation collection for query and returns
@@ -276,9 +241,8 @@ func (c *Client) queryVector(ctx context.Context, query string) ([]float32, bool
 	return vector, false, nil
 }
 
-// SearchWithinConversation ranks one conversation's rows for query. The
-// in-process search stores no checkpoint of delivered content and always
-// returns an empty fingerprint.
+// SearchWithinConversation ranks one conversation's rows for query.
+// Its fingerprint result is always empty.
 func (c *Client) SearchWithinConversation(
 	ctx context.Context,
 	collectionID string,
@@ -318,66 +282,6 @@ func (c *Client) embedQuery(ctx context.Context, query string) ([]float32, error
 	return vector, nil
 }
 
-// search resolves legacy conversation groups when the search limits hits per
-// conversation.
 func (c *Client) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error) {
-	timing := searchTiming{rank: 0, load: 0, candidates: 0}
-	rankStarted := clock.Now()
-	candidates, err := c.store.Rank(ctx, request)
-	if errors.Is(err, collection.ErrCollectionNotReady) {
-		// Another Milvus client can release the collection.
-		slog.WarnContext(ctx, "conversation.vectorsearch.collection_reloaded",
-			"concern", "conversation.semantic",
-			"component", "conversation",
-			"collection", request.Collection,
-			"err", err,
-		)
-		if _, loadErr := c.loadCollectionIfPresent(ctx, request.Collection); loadErr != nil {
-			return nil, timing, loadErr
-		}
-		candidates, err = c.store.Rank(ctx, request)
-	}
-	if errors.Is(err, collection.ErrCollectionMissing) {
-		return []collection.Hit{}, timing, nil
-	}
-	if err != nil {
-		slog.WarnContext(ctx, "conversation.vectorsearch.rank_failed",
-			"concern", "conversation.semantic",
-			"component", "conversation",
-			"collection", request.Collection,
-			"err", err,
-		)
-		return nil, timing, fmt.Errorf("rank %s: %w", request.Collection, err)
-	}
-	groupColumn, grouped := milvusstore.GroupColumnFor(request)
-	perGroupLimit := int32(0)
-	if grouped {
-		perGroupLimit = request.PerGroupLimit
-		if groupColumn.Name == request.Declaration.ItemIDColumn {
-			candidates, err = resolveLegacyGroups(ctx, c.milvus, request.Collection, candidates)
-			if err != nil {
-				return nil, timing, err
-			}
-		}
-	}
-	limit := request.Limit
-	if limit <= 0 {
-		limit = defaultSearchLimit
-	}
-	selected := milvusstore.SelectCandidates(candidates, perGroupLimit, request.MinScore, limit)
-	loadStarted := clock.Now()
-	timing.rank = loadStarted.Sub(rankStarted)
-	timing.candidates = len(candidates)
-	hits, err := c.store.Load(ctx, request.Collection, selected, request.Declaration.Scalars)
-	timing.load = clock.Now().Sub(loadStarted)
-	if err != nil {
-		slog.WarnContext(ctx, "conversation.vectorsearch.load_failed",
-			"concern", "conversation.semantic",
-			"component", "conversation",
-			"collection", request.Collection,
-			"err", err,
-		)
-		return nil, timing, fmt.Errorf("load %s: %w", request.Collection, err)
-	}
-	return hits, timing, nil
+	return c.store.search(ctx, request)
 }
