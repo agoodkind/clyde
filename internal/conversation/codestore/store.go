@@ -108,7 +108,7 @@ func (store *Store) EnsureCollection(ctx context.Context, request collection.Ens
 		if err := os.MkdirAll(dir, directoryMode); err != nil {
 			return failed("create collection "+request.Collection, err)
 		}
-		header := collectionHeader{Declaration: request.Declaration, Dimension: request.Dimension, Model: store.model, Generation: 0}
+		header := collectionHeader{Declaration: request.Declaration, Dimension: request.Dimension, Model: store.model, Generation: 0, FrameFormat: frameFormatLengthCRC}
 		if err := writeHeader(dir, header); err != nil {
 			return err
 		}

@@ -32,10 +32,11 @@ func (stored *codeCollection) compact() error {
 		abandon()
 		return err
 	}
-	// Reopening uses the header generation to select both logs.
+	// The generation and frame format must change in the same header replacement.
 	// Sync both new logs before replacing the header.
 	header := stored.header
 	header.Generation = next
+	header.FrameFormat = frameFormatLengthCRC
 	if err := replaceHeader(stored.dir, header); err != nil {
 		abandon()
 		return err
@@ -93,7 +94,7 @@ func (stored *codeCollection) writeCompacted(rowsOut *os.File, dataOut *os.File)
 		if err != nil {
 			return nil, 0, failed("encode compacted row record", err)
 		}
-		frame, err = appendFrame(frame[:0], payload)
+		frame, err = appendFrame(frame[:0], payload, frameFormatLengthCRC)
 		if err != nil {
 			return nil, 0, failed("frame compacted row record", err)
 		}
