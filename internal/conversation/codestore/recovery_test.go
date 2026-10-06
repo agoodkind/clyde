@@ -119,6 +119,7 @@ func TestStoreRefusesRowLogEndingWithUndecodableRecord(t *testing.T) {
 
 	payload := []byte{0xFF}
 	frame := binary.LittleEndian.AppendUint32(nil, uint32(len(payload)))
+	frame = binary.LittleEndian.AppendUint32(frame, crc32.ChecksumIEEE(frame))
 	frame = binary.LittleEndian.AppendUint32(frame, crc32.ChecksumIEEE(payload))
 	frame = append(frame, payload...)
 	path := rowLogPath(root)

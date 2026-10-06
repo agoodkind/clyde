@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"goodkind.io/clyde/internal/conversation/staticembed"
@@ -45,6 +46,7 @@ type collectionHeader struct {
 	Dimension   int                    `json:"dimension"`
 	Model       string                 `json:"model"`
 	Generation  int64                  `json:"generation,omitempty"`
+	FrameFormat int                    `json:"frame_format,omitempty"`
 }
 
 func generationFileName(prefix string, generation int64) string {
@@ -183,6 +185,9 @@ func openCollection(dir string) (*codeCollection, error) {
 	if err := json.Unmarshal(raw, &header); err != nil {
 		return nil, failed("parse collection header in "+dir, err)
 	}
+	if header.FrameFormat != frameFormatPayloadCRC && header.FrameFormat != frameFormatLengthCRC {
+		return nil, failed("parse collection header in "+dir, fmt.Errorf("unsupported frame format %d", header.FrameFormat))
+	}
 	stored := &codeCollection{
 		mutex:        sync.RWMutex{},
 		dir:          dir,
@@ -279,7 +284,8 @@ func (stored *codeCollection) replay() error {
 	}
 	reader := bufio.NewReaderSize(stored.rowsFile, bufferBytes)
 	var offset int64
-	header := make([]byte, frameHeaderBytes)
+	headerBytes := frameHeaderSize(stored.header.FrameFormat)
+	header := make([]byte, headerBytes)
 	for {
 		if _, err := io.ReadFull(reader, header); err != nil {
 			if errors.Is(err, io.EOF) {
@@ -287,8 +293,12 @@ func (stored *codeCollection) replay() error {
 			}
 			return stored.truncateRows(offset, err)
 		}
-		length := int64(binary.LittleEndian.Uint32(header[:4]))
-		end := offset + int64(frameHeaderBytes) + length
+		length, payloadChecksum, lengthValid := stored.parseFrameHeader(header)
+		// A corrupt length can make the end-of-log check truncate later valid records.
+		if !lengthValid {
+			return stored.rejectRecord(offset, logSize, "check row log length", errMalformedRecord)
+		}
+		end := offset + int64(headerBytes) + length
 		if end > logSize {
 			return stored.truncateRows(offset, io.ErrUnexpectedEOF)
 		}
@@ -296,29 +306,75 @@ func (stored *codeCollection) replay() error {
 		if _, err := io.ReadFull(reader, payload); err != nil {
 			return failed(fmt.Sprintf("read row log in %s at offset %d", stored.dir, offset), err)
 		}
-		finalRecord := end == logSize
-		if crc32.ChecksumIEEE(payload) != binary.LittleEndian.Uint32(header[4:]) {
-			if finalRecord {
-				return stored.truncateRows(offset, errMalformedRecord)
-			}
-			return failed(fmt.Sprintf("check row log in %s at offset %d", stored.dir, offset), errMalformedRecord)
-		}
-		record, err := decodeRecord(payload, stored.header.Declaration.Scalars)
-		if err != nil {
-			return failed(fmt.Sprintf("decode row log in %s at offset %d", stored.dir, offset), err)
-		}
-		if record.kind == recordUpsert && record.dataOffset+record.dataLength > stored.dataSize {
-			pastEnd := errors.New("row names data past the end of the data file")
-			if finalRecord {
-				return stored.truncateRows(offset, pastEnd)
-			}
-			return failed(fmt.Sprintf("check row log in %s at offset %d", stored.dir, offset), pastEnd)
+		record, stop, err := stored.checkRecord(offset, end, logSize, payload, payloadChecksum)
+		if stop {
+			return err
 		}
 		if err := stored.apply(record); err != nil {
 			return err
 		}
 		offset = end
 	}
+}
+
+func (stored *codeCollection) parseFrameHeader(header []byte) (int64, uint32, bool) {
+	lengthBytes := header[:frameFieldBytes]
+	length := int64(binary.LittleEndian.Uint32(lengthBytes))
+	payloadChecksum := binary.LittleEndian.Uint32(header[len(header)-frameFieldBytes:])
+	if stored.header.FrameFormat != frameFormatLengthCRC {
+		return length, payloadChecksum, true
+	}
+	lengthChecksum := binary.LittleEndian.Uint32(header[frameFieldBytes : 2*frameFieldBytes])
+	return length, payloadChecksum, crc32.ChecksumIEEE(lengthBytes) == lengthChecksum
+}
+
+func (stored *codeCollection) checkRecord(offset int64, end int64, logSize int64, payload []byte, payloadChecksum uint32) (rowRecord, bool, error) {
+	finalRecord := end == logSize
+	if crc32.ChecksumIEEE(payload) != payloadChecksum {
+		if finalRecord {
+			return emptyRecord(0, ""), true, stored.truncateRows(offset, errMalformedRecord)
+		}
+		return emptyRecord(0, ""), true, stored.rejectRecord(offset, logSize, "check row log", errMalformedRecord)
+	}
+	record, err := decodeRecord(payload, stored.header.Declaration.Scalars)
+	if err != nil {
+		return record, true, stored.rejectRecord(offset, logSize, "decode row log", err)
+	}
+	if record.kind == recordUpsert && record.dataOffset+record.dataLength > stored.dataSize {
+		pastEnd := errors.New("row names data past the end of the data file")
+		if finalRecord {
+			return record, true, stored.truncateRows(offset, pastEnd)
+		}
+		return record, true, stored.rejectRecord(offset, logSize, "check row log", pastEnd)
+	}
+	return record, false, nil
+}
+
+func (stored *codeCollection) rejectRecord(offset int64, logSize int64, operation string, cause error) error {
+	zeroTail, err := stored.zeroFrom(offset, logSize)
+	if err != nil {
+		return err
+	}
+	// A crash can leave a zero-filled suffix after the last complete record.
+	if zeroTail {
+		return stored.truncateRows(offset, cause)
+	}
+	return failed(fmt.Sprintf("%s in %s at offset %d", operation, stored.dir, offset), cause)
+}
+
+func (stored *codeCollection) zeroFrom(offset int64, logSize int64) (bool, error) {
+	chunk := make([]byte, min(int64(bufferBytes), logSize-offset))
+	for position := offset; position < logSize; {
+		count := min(int64(len(chunk)), logSize-position)
+		if _, err := stored.rowsFile.ReadAt(chunk[:count], position); err != nil {
+			return false, failed(fmt.Sprintf("read row log tail in %s at offset %d", stored.dir, position), err)
+		}
+		if slices.ContainsFunc(chunk[:count], func(value byte) bool { return value != 0 }) {
+			return false, nil
+		}
+		position += count
+	}
+	return true, nil
 }
 
 func (stored *codeCollection) truncateRows(offset int64, cause error) error {
@@ -404,7 +460,7 @@ func (stored *codeCollection) write(records []rowRecord, blobs [][]byte) error {
 		if err != nil {
 			return failed("encode row record", err)
 		}
-		rowBuffer, err = appendFrame(rowBuffer, payload)
+		rowBuffer, err = appendFrame(rowBuffer, payload, stored.header.FrameFormat)
 		if err != nil {
 			return failed("frame row record", err)
 		}

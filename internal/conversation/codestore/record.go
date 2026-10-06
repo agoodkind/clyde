@@ -18,8 +18,16 @@ const (
 	cellNull  byte = 0
 	cellValue byte = 1
 
-	// Each frame header stores a 32-bit payload length and a CRC-32 checksum.
+	// Format 0 stores the payload length and payload CRC-32 IEEE.
+	// Format 1 inserts the CRC-32 IEEE of the four length bytes between them.
+	// Every header field uses a little-endian uint32.
 	frameHeaderBytes = 8
+
+	// An omitted frame_format selects format 0 for existing collections.
+	frameFormatPayloadCRC         = 0
+	frameFormatLengthCRC          = 1
+	lengthCheckedFrameHeaderBytes = 12
+	frameFieldBytes               = 4
 )
 
 var errMalformedRecord = errors.New("malformed row record")
@@ -62,12 +70,23 @@ func appendString(buffer []byte, value string) []byte {
 	return append(buffer, value...)
 }
 
-func appendFrame(buffer []byte, payload []byte) ([]byte, error) {
+func frameHeaderSize(format int) int {
+	if format == frameFormatLengthCRC {
+		return lengthCheckedFrameHeaderBytes
+	}
+	return frameHeaderBytes
+}
+
+func appendFrame(buffer []byte, payload []byte, format int) ([]byte, error) {
 	length := len(payload)
 	if length > math.MaxUint32 {
 		return nil, fmt.Errorf("row record of %d bytes exceeds the frame limit", length)
 	}
+	lengthStart := len(buffer)
 	buffer = binary.LittleEndian.AppendUint32(buffer, uint32(length))
+	if format == frameFormatLengthCRC {
+		buffer = binary.LittleEndian.AppendUint32(buffer, crc32.ChecksumIEEE(buffer[lengthStart:]))
+	}
 	buffer = binary.LittleEndian.AppendUint32(buffer, crc32.ChecksumIEEE(payload))
 	return append(buffer, payload...), nil
 }
