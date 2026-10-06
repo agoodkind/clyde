@@ -67,18 +67,19 @@ func fileSize(t *testing.T, path string) int64 {
 func TestStoreRefusesRowLogWithCorruptMiddleRecord(t *testing.T) {
 	root := t.TempDir()
 	store, model := openCollection(t, root)
+	path := rowLogPath(root)
 	upsert(t, store, testRow(t, model, "a", "claude:a", "first message"))
+	corruptAt := fileSize(t, path) / 2
 	upsert(t, store, testRow(t, model, "b", "claude:b", "second message"))
 	upsert(t, store, testRow(t, model, "c", "claude:c", "third message"))
 	store.Close()
 
-	path := rowLogPath(root)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read row log: %v", err)
 	}
-	original := raw[9]
-	raw[9] ^= 0xFF
+	original := raw[corruptAt]
+	raw[corruptAt] ^= 0xFF
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatalf("corrupt row log: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestStoreRefusesRowLogWithCorruptMiddleRecord(t *testing.T) {
 		t.Fatalf("row log size = %d after the failed open, want %d", got, sizeBefore)
 	}
 
-	raw[9] = original
+	raw[corruptAt] = original
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatalf("restore row log: %v", err)
 	}
