@@ -14,8 +14,7 @@ type Backend string
 const (
 	// BackendMilvus stores rows in a Milvus server. An empty Backend selects it.
 	BackendMilvus Backend = "milvus"
-	// BackendLocal stores sign codes in files under a local directory and embeds
-	// with the static model compiled into the binary.
+	// BackendLocal uses the bundled model and stores sign codes in local files.
 	BackendLocal Backend = "local"
 )
 
@@ -27,16 +26,15 @@ type backend interface {
 	close(ctx context.Context) error
 }
 
-// textEmbedder is the part of an embedding provider the client calls.
 type textEmbedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 	EmbedBatch(ctx context.Context, texts []string) (embedding.BatchResult, error)
 }
 
-// openedBackend pairs a store with the embedder that produced its vectors. A
-// query vector must come from the same embedder. byteBudget is the largest
-// embedding input in bytes. deliveryBatchBytes is the per-pass raw transcript
-// byte budget of the sync worker. Zero selects the worker default.
+// The query and stored vectors must use the same embedder.
+// byteBudget limits each embedding input in bytes.
+// deliveryBatchBytes limits raw transcript bytes per sync pass.
+// A zero deliveryBatchBytes selects the worker default.
 type openedBackend struct {
 	store              backend
 	embedder           textEmbedder

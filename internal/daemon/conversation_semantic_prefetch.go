@@ -70,8 +70,8 @@ func (w *conversationSemanticSyncWorker) prefetchedOrLoad(
 }
 
 // Prefetch uses the admission order, deferral rules and transcript budget of
-// collectNeededDocuments. That method loads additional candidates when a
-// prefetched conversation produces no documents.
+// collectNeededDocuments. collectNeededDocuments loads additional candidates
+// after a prefetched conversation returns an empty document set.
 func (w *conversationSemanticSyncWorker) prefetchNeededDocuments(
 	ctx context.Context,
 	ordered []string,

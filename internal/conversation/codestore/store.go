@@ -466,7 +466,7 @@ func Score(distance int) float64 {
 
 // Search filters rows before ranking their sign codes by Hamming distance.
 // It applies score, group and result limits to the best [collection.RankingDepth]
-// candidates. Equal distances are ordered by row ID.
+// candidates. Row IDs break ties between equal distances.
 func (store *Store) Search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, failed("search "+request.Collection, err)

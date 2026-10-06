@@ -18,9 +18,9 @@ const (
 	// Dimensions is the width of every model vector and the bit count of a Code.
 	Dimensions = 256
 	codeWords  = Dimensions / 64
-	// ModelName is the model identifier written to collection headers.
+	// ModelName identifies the model in collection headers.
 	ModelName = "potion-base-8M"
-	// PassageBytes is the byte limit used to split text before embedding.
+	// PassageBytes limits the byte length of each embedding passage.
 	PassageBytes = 2000
 )
 
@@ -137,7 +137,7 @@ func parseModel(weights []byte, tokenizerJSON []byte) (*Model, error) {
 }
 
 // Vector returns the average token vector minus the token table mean.
-// It returns a zero vector when the tokenizer finds no known tokens.
+// Vector returns a zero vector when tokenization produces an empty token list.
 func (model *Model) Vector(text string) []float32 {
 	vector := make([]float32, Dimensions)
 	ids := model.tokenizer.appendIDs(make([]int32, 0, len(text)/4+1), text)

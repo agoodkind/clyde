@@ -25,14 +25,11 @@ const (
 	logFileSuffix  = ".log"
 	directoryMode  = 0o700
 	fileMode       = 0o600
-	// compactMinimumDead keeps small collections from rewriting their files on
-	// every delete.
+
 	compactMinimumDead = 10000
 	bufferBytes        = 1 << 20
 )
 
-// failed logs one failed store operation and returns the error with the
-// operation that failed.
 func failed(operation string, err error) error {
 	slog.Warn("conversation.codestore.operation_failed",
 		"concern", "conversation.semantic",
@@ -65,8 +62,7 @@ func (stored *codeCollection) dataPath(generation int64) string {
 	return filepath.Join(stored.dir, generationFileName(dataFilePrefix, generation))
 }
 
-// dictionary interns the values of one column. ID 0 marks a row without the
-// column.
+// Dictionary ID 0 represents an absent column value.
 type dictionary struct {
 	values []collection.ScalarValue
 	ids    map[collection.ScalarValue]uint32
@@ -100,8 +96,8 @@ type row struct {
 	cells         []uint32
 }
 
-// codeCollection is one collection directory. Lock mutex before reading or
-// changing any field except dir.
+// Lock mutex before reading or changing collection state. The directory path
+// is immutable after construction.
 type codeCollection struct {
 	mutex        sync.RWMutex
 	dir          string
@@ -175,8 +171,6 @@ func syncDirectory(dir string) error {
 	return nil
 }
 
-// openCollection reads a collection directory. It returns
-// collection.ErrCollectionMissing when the directory has no header.
 func openCollection(dir string) (*codeCollection, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, headerFileName))
 	if errors.Is(err, os.ErrNotExist) {
@@ -376,7 +370,6 @@ func (stored *codeCollection) apply(record rowRecord) error {
 	return nil
 }
 
-// remove swaps the last row into the removed position.
 func (stored *codeCollection) remove(id string) {
 	position, found := stored.byID[id]
 	if !found {
@@ -393,9 +386,8 @@ func (stored *codeCollection) remove(id string) {
 	delete(stored.byID, id)
 }
 
-// write appends data blobs and row records, syncs the data file before the
-// row log, and applies the records in memory. A nil blob keeps the record's
-// data offset and length.
+// write syncs new data before appending its offsets to the row log.
+// Nil blobs reuse the existing data offsets and lengths.
 func (stored *codeCollection) write(records []rowRecord, blobs [][]byte) error {
 	dataBuffer := make([]byte, 0)
 	for position := range records {
@@ -444,13 +436,12 @@ func (stored *codeCollection) write(records []rowRecord, blobs [][]byte) error {
 		}
 	}
 	if stored.dead > compactMinimumDead && stored.dead > len(stored.rows) {
+		// write has already synced and applied the records.
 		_ = stored.compact()
 	}
 	return nil
 }
 
-// recordOf returns the upsert record of the row at position. The record keeps
-// the row's data blob in place.
 func (stored *codeCollection) recordOf(position int) rowRecord {
 	current := stored.rows[position]
 	record := emptyRecord(recordUpsert, current.id)
@@ -483,7 +474,6 @@ func (stored *codeCollection) readBlob(position int) (string, string, error) {
 	return content, metadata, nil
 }
 
-// cell returns the declared column cell of the row at position.
 func (stored *codeCollection) cell(position int, column collection.ScalarColumn) collection.ScalarCell {
 	index, declared := stored.columnIndex[column.Name]
 	if !declared {

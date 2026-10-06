@@ -32,6 +32,8 @@ func (stored *codeCollection) compact() error {
 		abandon()
 		return err
 	}
+	// Reopening uses the header generation to select both logs.
+	// Sync both new logs before replacing the header.
 	header := stored.header
 	header.Generation = next
 	if err := replaceHeader(stored.dir, header); err != nil {
