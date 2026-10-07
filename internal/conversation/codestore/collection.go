@@ -12,7 +12,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 
 	"goodkind.io/clyde/internal/conversation/staticembed"
@@ -296,11 +295,11 @@ func (stored *codeCollection) replay() error {
 		length, payloadChecksum, lengthValid := stored.parseFrameHeader(header)
 		// A corrupt length can make the end-of-log check truncate later valid records.
 		if !lengthValid {
-			return stored.rejectRecord(offset, logSize, "check row log length", errMalformedRecord)
+			return stored.rejectRecord(offset, offset+1, logSize, "check row log length", errMalformedRecord)
 		}
 		end := offset + int64(headerBytes) + length
 		if end > logSize {
-			return stored.truncateRows(offset, io.ErrUnexpectedEOF)
+			return stored.rejectRecord(offset, stored.searchStart(offset, end), logSize, "check row log end", io.ErrUnexpectedEOF)
 		}
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(reader, payload); err != nil {
@@ -329,52 +328,101 @@ func (stored *codeCollection) parseFrameHeader(header []byte) (int64, uint32, bo
 }
 
 func (stored *codeCollection) checkRecord(offset int64, end int64, logSize int64, payload []byte, payloadChecksum uint32) (rowRecord, bool, error) {
-	finalRecord := end == logSize
-	if crc32.ChecksumIEEE(payload) != payloadChecksum {
-		if finalRecord {
-			return emptyRecord(0, ""), true, stored.truncateRows(offset, errMalformedRecord)
-		}
-		return emptyRecord(0, ""), true, stored.rejectRecord(offset, logSize, "check row log", errMalformedRecord)
+	if len(payload) == 0 || crc32.ChecksumIEEE(payload) != payloadChecksum {
+		return emptyRecord(0, ""), true, stored.rejectRecord(offset, stored.searchStart(offset, end), logSize, "check row log", errMalformedRecord)
 	}
 	record, err := decodeRecord(payload, stored.header.Declaration.Scalars)
 	if err != nil {
-		return record, true, stored.rejectRecord(offset, logSize, "decode row log", err)
+		// An undecodable record that passed its checksums cannot come from a torn append.
+		return record, true, failed(fmt.Sprintf("decode row log in %s at offset %d", stored.dir, offset), err)
 	}
 	if record.kind == recordUpsert && record.dataOffset+record.dataLength > stored.dataSize {
 		pastEnd := errors.New("row names data past the end of the data file")
-		if finalRecord {
-			return record, true, stored.truncateRows(offset, pastEnd)
-		}
-		return record, true, stored.rejectRecord(offset, logSize, "check row log", pastEnd)
+		return record, true, stored.rejectRecord(offset, end, logSize, "check row log", pastEnd)
 	}
 	return record, false, nil
 }
 
-func (stored *codeCollection) rejectRecord(offset int64, logSize int64, operation string, cause error) error {
-	zeroTail, err := stored.zeroFrom(offset, logSize)
+func (stored *codeCollection) searchStart(offset int64, end int64) int64 {
+	// Format 1 can trust the declared end because the length checksum passed.
+	// Format 0 cannot trust the declared end because its length has no checksum.
+	if stored.header.FrameFormat == frameFormatLengthCRC {
+		return end
+	}
+	return offset + 1
+}
+
+func (stored *codeCollection) rejectRecord(offset int64, searchStart int64, logSize int64, operation string, cause error) error {
+	contentEnd, err := stored.contentEnd(offset, logSize)
 	if err != nil {
 		return err
 	}
-	// A crash can leave a zero-filled suffix after the last complete record.
-	if zeroTail {
+	frameFound, err := stored.validFrameBetween(searchStart, contentEnd, logSize)
+	if err != nil {
+		return err
+	}
+	// A torn append can damage only bytes after the last complete record.
+	// A later complete valid frame proves corruption in the middle of the log.
+	if !frameFound {
 		return stored.truncateRows(offset, cause)
 	}
 	return failed(fmt.Sprintf("%s in %s at offset %d", operation, stored.dir, offset), cause)
 }
 
-func (stored *codeCollection) zeroFrom(offset int64, logSize int64) (bool, error) {
+func (stored *codeCollection) contentEnd(offset int64, logSize int64) (int64, error) {
 	chunk := make([]byte, min(int64(bufferBytes), logSize-offset))
-	for position := offset; position < logSize; {
-		count := min(int64(len(chunk)), logSize-position)
-		if _, err := stored.rowsFile.ReadAt(chunk[:count], position); err != nil {
-			return false, failed(fmt.Sprintf("read row log tail in %s at offset %d", stored.dir, position), err)
+	for chunkEnd := logSize; chunkEnd > offset; {
+		chunkStart := max(offset, chunkEnd-int64(len(chunk)))
+		count := chunkEnd - chunkStart
+		if _, err := stored.rowsFile.ReadAt(chunk[:count], chunkStart); err != nil {
+			return 0, failed(fmt.Sprintf("read row log tail in %s at offset %d", stored.dir, chunkStart), err)
 		}
-		if slices.ContainsFunc(chunk[:count], func(value byte) bool { return value != 0 }) {
-			return false, nil
+		for position := count - 1; position >= 0; position-- {
+			if chunk[position] != 0 {
+				return chunkStart + position + 1, nil
+			}
 		}
-		position += count
+		chunkEnd = chunkStart
 	}
-	return true, nil
+	return offset, nil
+}
+
+func (stored *codeCollection) validFrameBetween(searchStart int64, contentEnd int64, logSize int64) (bool, error) {
+	headerBytes := int64(frameHeaderSize(stored.header.FrameFormat))
+	window := make([]byte, int64(bufferBytes)+headerBytes)
+	for windowStart := searchStart; windowStart < contentEnd; windowStart += int64(bufferBytes) {
+		windowEnd := min(windowStart+int64(len(window)), logSize)
+		if _, err := stored.rowsFile.ReadAt(window[:windowEnd-windowStart], windowStart); err != nil {
+			return false, failed(fmt.Sprintf("read row log tail in %s at offset %d", stored.dir, windowStart), err)
+		}
+		lastStart := min(windowStart+int64(bufferBytes), contentEnd)
+		for frameStart := windowStart; frameStart < lastStart; frameStart++ {
+			payloadStart := frameStart + headerBytes
+			if payloadStart > logSize {
+				return false, nil
+			}
+			length, payloadChecksum, lengthValid := stored.parseFrameHeader(window[frameStart-windowStart : payloadStart-windowStart])
+			if !lengthValid || length == 0 || payloadStart+length > logSize {
+				continue
+			}
+			checksumMatches, err := stored.payloadMatches(payloadStart, length, payloadChecksum)
+			if err != nil {
+				return false, err
+			}
+			if checksumMatches {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (stored *codeCollection) payloadMatches(payloadStart int64, length int64, payloadChecksum uint32) (bool, error) {
+	checksum := crc32.NewIEEE()
+	if _, err := io.Copy(checksum, io.NewSectionReader(stored.rowsFile, payloadStart, length)); err != nil {
+		return false, failed(fmt.Sprintf("read row log payload in %s at offset %d", stored.dir, payloadStart), err)
+	}
+	return checksum.Sum32() == payloadChecksum, nil
 }
 
 func (stored *codeCollection) truncateRows(offset int64, cause error) error {
