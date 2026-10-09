@@ -148,7 +148,7 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 				if enabled {
 					state = "unavailable"
 				}
-				for _, want := range []string{fmt.Sprintf("ingestion_enabled=%t search_enabled=%t", directions.ingestion, directions.search), "connection=" + state, profilingText, "address=" + socket} {
+				for _, want := range []string{fmt.Sprintf("ingestion_enabled=%t search_enabled=%t", directions.ingestion, directions.search), "backend=milvus", "connection=" + state, profilingText, "address=" + socket} {
 					if !strings.Contains(string(output), want) {
 						t.Errorf("status missing %q:\n%s", want, output)
 					}

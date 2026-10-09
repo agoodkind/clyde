@@ -323,6 +323,7 @@ func newControlServer(
 			},
 			searchClient: semanticSearch,
 			collectionID: cfg.Conversation.Semantic.CollectionID,
+			backend:      cfg.Conversation.Semantic.Backend,
 		},
 		index: index,
 	}

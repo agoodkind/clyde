@@ -49,6 +49,7 @@ func semanticSearchResult(
 	index conversationSearchIndex,
 	semantic conversationSemanticSearchClient,
 	collectionID string,
+	source conversation.SearchSource,
 	options conversation.SearchConversationsOptions,
 ) (conversation.SearchConversationsResult, error) {
 	accounting := filterAccounting(ctx, index, options)
@@ -72,7 +73,7 @@ func semanticSearchResult(
 		// HasMore because ranked hits remain after the over-fetch budget ran out.
 		HasMore:          len(matches) > 0 && (len(matches) >= normalizedLimit || page.short),
 		NextCursor:       "",
-		Source:           conversation.SearchSourceSemantic,
+		Source:           source,
 		Facets:           conversation.ComputeFacets(matches, searchFacetTopN),
 		Freshness:        conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
 		FilterAccounting: appendReturnedStage(appendWithheldStages(accounting, page), len(matches)),

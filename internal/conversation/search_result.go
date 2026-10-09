@@ -17,6 +17,8 @@ const (
 	SearchSourceSemantic
 	// SearchSourceRawText means a scan of transcript text produced the matches.
 	SearchSourceRawText
+	// SearchSourceLocal means the local backend produced the matches.
+	SearchSourceLocal
 )
 
 // String renders the source as a stable lowercase label for text output.
@@ -26,6 +28,8 @@ func (s SearchSource) String() string {
 		return "semantic"
 	case SearchSourceRawText:
 		return "raw_text"
+	case SearchSourceLocal:
+		return "local"
 	case SearchSourceUnspecified:
 		return "unspecified"
 	default:

@@ -300,6 +300,8 @@ enum SearchSource {
   // SEARCH_SOURCE_RAW_TEXT means a scan of transcript text produced the matches
   // after the semantic source failed or was disabled. Each score is zero.
   SEARCH_SOURCE_RAW_TEXT = 4;
+  // SEARCH_SOURCE_LOCAL means the local backend produced the matches.
+  SEARCH_SOURCE_LOCAL = 5;
 }
 
 message ConversationSearchMatch {
@@ -588,12 +590,23 @@ enum SemanticConnectionState {
   SEMANTIC_CONNECTION_STATE_SHUTDOWN = 6;
 }
 
+enum SemanticBackend {
+  SEMANTIC_BACKEND_UNSPECIFIED = 0;
+  // SEMANTIC_BACKEND_MILVUS means the daemon selected a Milvus server for
+  // conversation ingestion and search.
+  SEMANTIC_BACKEND_MILVUS = 1;
+  // SEMANTIC_BACKEND_LOCAL means the daemon selected the built-in embedding
+  // model and local sign-code files for conversation ingestion and search.
+  SEMANTIC_BACKEND_LOCAL = 2;
+}
+
 message SemanticStatus {
   bool ingestion_enabled = 1;
   bool search_enabled = 2;
   SemanticConnectionState connection = 3;
   int64 next_retry_unix = 4;
   uint64 attempts = 5;
+  SemanticBackend backend = 6;
 }
 
 message BoundListenerStatus {
