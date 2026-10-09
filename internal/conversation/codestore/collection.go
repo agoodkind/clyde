@@ -333,7 +333,7 @@ func (stored *codeCollection) checkRecord(offset int64, end int64, logSize int64
 	}
 	record, err := decodeRecord(payload, stored.header.Declaration.Scalars)
 	if err != nil {
-		// An undecodable record that passed its checksums cannot come from a torn append.
+		// Replay returns decode failures without truncating the row log. A checksum match does not prove that the payload is decodable.
 		return record, true, failed(fmt.Sprintf("decode row log in %s at offset %d", stored.dir, offset), err)
 	}
 	if record.kind == recordUpsert && record.dataOffset+record.dataLength > stored.dataSize {
