@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -16,6 +17,8 @@ const (
 	defaultConversationSemanticEmbeddingDimension = 4096
 	defaultConversationSearchNProbe               = 64
 	defaultConversationLocalStoreDirName          = "conversation-local"
+	defaultConversationWorkerInterval             = time.Minute
+	minimumConversationWorkerInterval             = time.Second
 )
 
 // ConversationConfig configures raw conversation indexing integrations.
@@ -163,6 +166,29 @@ type ConversationSemanticConfig struct {
 	BM25K1 float64  `json:"bm25K1,omitempty" toml:"bm25_k1,omitempty"`
 	BM25B  *float64 `json:"bm25B,omitempty" toml:"bm25_b,omitempty"`
 	RRFK   int      `json:"rrfK,omitempty" toml:"rrf_k,omitempty"`
+
+	// Unset or zero intervals select one minute. Positive intervals must be at
+	// least one second.
+	SyncInterval         Duration `json:"syncInterval,omitempty" toml:"sync_interval,omitempty"`
+	IndexRefreshInterval Duration `json:"indexRefreshInterval,omitempty" toml:"index_refresh_interval,omitempty"`
+}
+
+// SyncPassInterval permits shorter sync cadences without shortening the
+// transcript growth window.
+func (semantic ConversationSemanticConfig) SyncPassInterval() time.Duration {
+	if semantic.SyncInterval <= 0 {
+		return defaultConversationWorkerInterval
+	}
+	return time.Duration(semantic.SyncInterval)
+}
+
+// IndexRefreshPeriod supplies the raw index cadence independently of semantic
+// sync passes.
+func (semantic ConversationSemanticConfig) IndexRefreshPeriod() time.Duration {
+	if semantic.IndexRefreshInterval <= 0 {
+		return defaultConversationWorkerInterval
+	}
+	return time.Duration(semantic.IndexRefreshInterval)
 }
 
 // ConversationSemanticBackend is the implementation behind conversation

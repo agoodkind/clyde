@@ -14,10 +14,122 @@ import (
 
 const conversationFilterIDBatchSize = 256
 
-// conversationState is the set of family keys that have a stored row with
-// storable content.
+// storedFamilyRow supplies content and split metadata needed to compare a
+// message that occupies several stored rows.
+type storedFamilyRow struct {
+	id                string
+	relativePath      string
+	content           string
+	splitPart         int32
+	splitPartRecorded bool
+}
+
+func (row storedFamilyRow) hasCurrentKey() bool {
+	if !row.splitPartRecorded {
+		return false
+	}
+	return row.id == chunkID(storedChunk{
+		Content:              row.content,
+		RelativePath:         row.relativePath,
+		ConversationID:       "",
+		ParentConversationID: "",
+		MessageIndex:         0,
+		Role:                 "",
+		TimestampUnix:        0,
+		WorkspaceRoot:        "",
+		Archived:             false,
+		SplitPart:            row.splitPart,
+		LoadRules:            "",
+	})
+}
+
+type contentComparison int
+
+const (
+	contentMatches contentComparison = iota
+	contentUnknown
+	contentDiffers
+)
+
+// conversationState treats all split rows for one message path in one
+// conversation as a message family.
 type conversationState struct {
-	families map[string]struct{}
+	families map[string][]storedFamilyRow
+}
+
+func (state *conversationState) hasRow(familyKey string, id string) bool {
+	if state == nil {
+		return false
+	}
+	for _, row := range state.families[familyKey] {
+		if row.id == id {
+			return true
+		}
+	}
+	return false
+}
+
+// differs skips families with missing split parts or inconsistent row IDs
+// because earlier Clyde revisions wrote those rows.
+func (state *conversationState) differs(familyKey string, generated []storedChunk) bool {
+	if state == nil {
+		return false
+	}
+	rows := state.families[familyKey]
+	for _, row := range rows {
+		if !row.hasCurrentKey() {
+			return false
+		}
+	}
+	for _, chunk := range generated {
+		pathRows := make([]storedFamilyRow, 0, len(rows))
+		for _, row := range rows {
+			if row.relativePath == chunk.RelativePath {
+				pathRows = append(pathRows, row)
+			}
+		}
+		if len(pathRows) == 0 || compareStoredContent(pathRows, chunk.Content, 0) == contentDiffers {
+			return true
+		}
+	}
+	return false
+}
+
+// compareStoredContent treats a missing piece after offset 0 as unknown because
+// the available pieces cannot establish whether the text differs.
+func compareStoredContent(rows []storedFamilyRow, content string, offset int) contentComparison {
+	if offset == len(content) {
+		return contentMatches
+	}
+	candidates := 0
+	unknown := false
+	for _, row := range rows {
+		whole := offset == 0 && row.splitPart == 0
+		if !whole && int(row.splitPart) != offset+1 {
+			continue
+		}
+		candidates++
+		if whole {
+			if row.content == content {
+				return contentMatches
+			}
+			continue
+		}
+		if row.content == "" || !strings.HasPrefix(content[offset:], row.content) {
+			continue
+		}
+		switch compareStoredContent(rows, content, offset+len(row.content)) {
+		case contentMatches:
+			return contentMatches
+		case contentUnknown:
+			unknown = true
+		case contentDiffers:
+		}
+	}
+	if unknown || (candidates == 0 && offset > 0) {
+		return contentUnknown
+	}
+	return contentDiffers
 }
 
 // present reports whether the family has a stored row with storable content. A
@@ -67,10 +179,17 @@ func (batch *storedBatch) add(conversationID string, row collection.StoredRow, c
 	}
 	state, found := batch.conversations[conversationID]
 	if !found {
-		state = &conversationState{families: make(map[string]struct{})}
+		state = &conversationState{families: make(map[string][]storedFamilyRow)}
 		batch.conversations[conversationID] = state
 	}
-	state.families[chunkFamilyKey(conversationID, row.RelativePath)] = struct{}{}
+	familyKey := chunkFamilyKey(conversationID, row.RelativePath)
+	state.families[familyKey] = append(state.families[familyKey], storedFamilyRow{
+		id:                row.ID,
+		relativePath:      row.RelativePath,
+		content:           row.Content,
+		splitPart:         row.SplitPart,
+		splitPartRecorded: row.SplitPartRecorded,
+	})
 }
 
 func (batch *storedBatch) state(conversationID string) *conversationState {

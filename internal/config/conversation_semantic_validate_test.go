@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func loadConversationSemanticTestConfig(t *testing.T, contents string) (*Config, error) {
@@ -128,6 +129,10 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 		{name: "two credential references", body: "embedding_api_key_env = \"OPENAI_API_KEY\"\nembedding_api_key_file = \"/tmp/key\"\n", wantKey: "conversation.semantic.embedding_api_key_env"},
 		{name: "bm25_b above one", body: "bm25_b = 1.5\n", wantKey: "conversation.semantic.bm25_b"},
 		{name: "negative bm25_k1", body: "bm25_k1 = -0.1\n", wantKey: "conversation.semantic.bm25_k1"},
+		{name: "sync_interval_below_minimum", body: "sync_interval = \"500ms\"\n", wantKey: "conversation.semantic.sync_interval"},
+		{name: "sync_interval_negative", body: "sync_interval = \"-1s\"\n", wantKey: "conversation.semantic.sync_interval"},
+		{name: "index_refresh_interval_below_minimum", body: "index_refresh_interval = \"999ms\"\n", wantKey: "conversation.semantic.index_refresh_interval"},
+		{name: "index_refresh_interval_negative", body: "index_refresh_interval = \"-1s\"\n", wantKey: "conversation.semantic.index_refresh_interval"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -138,6 +143,37 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), testCase.wantKey) {
 				t.Fatalf("error = %q, want it to contain %s", err.Error(), testCase.wantKey)
+			}
+		})
+	}
+}
+
+func TestConversationSemanticWorkerIntervals(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name             string
+		body             string
+		wantSync         time.Duration
+		wantIndexRefresh time.Duration
+	}{
+		{name: "unset", body: "", wantSync: time.Minute, wantIndexRefresh: time.Minute},
+		{name: "explicit", body: "sync_interval = \"2s\"\nindex_refresh_interval = \"5s\"\n", wantSync: 2 * time.Second, wantIndexRefresh: 5 * time.Second},
+		{name: "minimum", body: "sync_interval = \"1s\"\nindex_refresh_interval = \"1s\"\n", wantSync: time.Second, wantIndexRefresh: time.Second},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\n"+testCase.body)
+			if err != nil {
+				t.Fatalf("operation=load_config err=%v", err)
+			}
+			semantic := cfg.Conversation.Semantic
+			if got := semantic.SyncPassInterval(); got != testCase.wantSync {
+				t.Fatalf("key=sync_interval got=%s want=%s", got, testCase.wantSync)
+			}
+			if got := semantic.IndexRefreshPeriod(); got != testCase.wantIndexRefresh {
+				t.Fatalf("key=index_refresh_interval got=%s want=%s", got, testCase.wantIndexRefresh)
 			}
 		})
 	}
