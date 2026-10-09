@@ -7,7 +7,7 @@ package clispec
 // here because RenderMCP skips them when building the tool surface.
 func NewConversationRegistry() *Registry {
 	reg := &Registry{ops: nil, handwritten: nil}
-	Register(reg, searchOp())
+	reg.ops = append(reg.ops, searchCommand{searchOp()})
 	Register(reg, conversationInfoOp())
 	Register(reg, resolveRequestOp())
 	Register(reg, exportTranscriptOp())

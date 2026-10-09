@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/clock"
 	conv "goodkind.io/clyde/internal/conversation"
@@ -262,6 +264,33 @@ func searchOp() Operation[searchInput, searchPayload] {
 		Run:            nil,
 		runResult:      runSearchResult,
 	}
+}
+
+type searchCommand struct {
+	Operation[searchInput, searchPayload]
+}
+
+func (op searchCommand) cobraCommand(f *cli.Factory) *cobra.Command {
+	cmd := op.Operation.cobraCommand(f)
+	prepare := cmd.PreRunE
+	run := cmd.RunE
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if searchCommandHasNoInput(cmd, args) {
+			return nil
+		}
+		return prepare(cmd, args)
+	}
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if searchCommandHasNoInput(cmd, args) {
+			return cmd.Help()
+		}
+		return run(cmd, args)
+	}
+	return cmd
+}
+
+func searchCommandHasNoInput(cmd *cobra.Command, args []string) bool {
+	return len(args) == 0 && cmd.Flags().NFlag() == 0
 }
 
 // prepareSearch parses and validates the raw input into the single payload,

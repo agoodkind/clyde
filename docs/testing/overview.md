@@ -44,7 +44,7 @@ launched it dies without signalling it. Pass `--keep` to leave the directories i
 place afterwards. Pass `--ingestion-enabled` to offer conversations to the
 semantic engine. Pass `--search-enabled` to answer searches from it.
 
-Run the printed prefix followed by `clyde conversation search` to browse the
+Run the printed prefix followed by `clyde conversation search --limit 20` to browse the
 sandbox conversation metadata.
 
 It differs from the suite in one way that matters. The suite boots `clyde daemon
