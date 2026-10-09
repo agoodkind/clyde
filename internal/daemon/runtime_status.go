@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 	"google.golang.org/grpc/connectivity"
 )
 
@@ -14,6 +15,7 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 		IngestionEnabled: cfg.Conversation.Semantic.FeedsEngine(),
 		SearchEnabled:    cfg.Conversation.Semantic.AnswersSearch(),
 		Connection:       clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_DISABLED,
+		Backend:          protoSemanticBackend(cfg.Conversation.Semantic.Backend),
 	}
 	if cfg.Conversation.Semantic.UsesEngine() {
 		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_UNAVAILABLE
@@ -56,6 +58,13 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 	}
 	cursorRawIndexingEnabled := cfg.Conversation.Cursor.RawIndexingEnabled()
 	return &clydev1.GetDaemonStatusResponse{Semantic: semantic, Listeners: listeners, Profiling: profiling, CursorRawIndexingEnabled: &cursorRawIndexingEnabled}
+}
+
+func protoSemanticBackend(backend config.ConversationSemanticBackend) clydev1.SemanticBackend {
+	if backend == config.ConversationSemanticBackendLocal {
+		return clydev1.SemanticBackend_SEMANTIC_BACKEND_LOCAL
+	}
+	return clydev1.SemanticBackend_SEMANTIC_BACKEND_MILVUS
 }
 
 func boundListenerStatus(name string, addr net.Addr) *clydev1.BoundListenerStatus {

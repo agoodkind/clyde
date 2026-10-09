@@ -20,6 +20,7 @@ type RuntimeStatus struct {
 type SemanticStatus struct {
 	IngestionEnabled bool                    `json:"ingestion_enabled"`
 	SearchEnabled    bool                    `json:"search_enabled"`
+	Backend          SemanticBackend         `json:"backend"`
 	Connection       SemanticConnectionState `json:"connection"`
 	NextRetryUnix    int64                   `json:"next_retry_unix"`
 	Attempts         uint64                  `json:"attempts"`
@@ -27,6 +28,9 @@ type SemanticStatus struct {
 
 // SemanticConnectionState is the wire enum's lowercase connection-state name.
 type SemanticConnectionState string
+
+// SemanticBackend is the wire enum's lowercase backend name.
+type SemanticBackend string
 
 // BoundListenerStatus identifies an address the daemon already bound.
 type BoundListenerStatus struct {
@@ -51,6 +55,7 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 	result := &RuntimeStatus{
 		Semantic: SemanticStatus{
 			IngestionEnabled: semantic.GetIngestionEnabled(), SearchEnabled: semantic.GetSearchEnabled(),
+			Backend:       SemanticBackend(strings.ToLower(strings.TrimPrefix(semantic.GetBackend().String(), "SEMANTIC_BACKEND_"))),
 			Connection:    SemanticConnectionState(strings.ToLower(strings.TrimPrefix(semantic.GetConnection().String(), "SEMANTIC_CONNECTION_STATE_"))),
 			NextRetryUnix: semantic.GetNextRetryUnix(), Attempts: semantic.GetAttempts(),
 		},

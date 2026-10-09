@@ -353,6 +353,8 @@ func protoSearchSource(source conversation.SearchSource) clydev1.SearchSource {
 		return clydev1.SearchSource_SEARCH_SOURCE_SEMANTIC
 	case conversation.SearchSourceRawText:
 		return clydev1.SearchSource_SEARCH_SOURCE_RAW_TEXT
+	case conversation.SearchSourceLocal:
+		return clydev1.SearchSource_SEARCH_SOURCE_LOCAL
 	case conversation.SearchSourceUnspecified:
 		return clydev1.SearchSource_SEARCH_SOURCE_UNSPECIFIED
 	default:

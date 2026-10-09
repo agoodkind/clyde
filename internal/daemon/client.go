@@ -317,6 +317,8 @@ func searchSourceFromProto(source clydev1.SearchSource) conversation.SearchSourc
 		return conversation.SearchSourceSemantic
 	case clydev1.SearchSource_SEARCH_SOURCE_RAW_TEXT:
 		return conversation.SearchSourceRawText
+	case clydev1.SearchSource_SEARCH_SOURCE_LOCAL:
+		return conversation.SearchSourceLocal
 	case clydev1.SearchSource_SEARCH_SOURCE_UNSPECIFIED:
 		return conversation.SearchSourceUnspecified
 	default:

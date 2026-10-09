@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 )
 
@@ -34,6 +35,14 @@ type semanticConversationSearchSource struct {
 	searchEnabled func() bool
 	searchClient  func() conversationSemanticSearchClient
 	collectionID  string
+	backend       config.ConversationSemanticBackend
+}
+
+func searchSourceForBackend(backend config.ConversationSemanticBackend) conversation.SearchSource {
+	if backend == config.ConversationSemanticBackendLocal {
+		return conversation.SearchSourceLocal
+	}
+	return conversation.SearchSourceSemantic
 }
 
 // rawTextFallbackSearchSource answers from primary. It answers from a raw text
@@ -103,5 +112,5 @@ func (s *semanticConversationSearchSource) SearchConversations(
 	if client == nil {
 		return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
 	}
-	return semanticSearchResult(ctx, s.index, client, s.collectionID, options)
+	return semanticSearchResult(ctx, s.index, client, s.collectionID, searchSourceForBackend(s.backend), options)
 }
