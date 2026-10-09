@@ -29,7 +29,7 @@ func buildSnapshot(snapshot statusSnapshot, build string) lmstatus.Snapshot {
 		Title:    "clyde  version=" + build,
 		Details:  nil,
 		Notices:  nil,
-		Identity: nil,
+		Identity: []lmstatus.Field{textField("status", "status.read_at", snapshot.readAt.UTC().Format(time.RFC3339))},
 		RunID:    runID,
 		Counters: buildFields(snapshot),
 		Activity: nil,
@@ -67,6 +67,7 @@ func buildFields(snapshot statusSnapshot) []lmstatus.Field {
 	if snapshot.report.LaunchdTarget != "" {
 		fields = append(fields, textField("daemon", "launchd.target", snapshot.report.LaunchdTarget))
 	}
+	fields = append(fields, semanticFields(snapshot.report.Runtime)...)
 
 	if snapshot.freshnessErr != nil {
 		fields = append(fields, textField("semantic_freshness", "semantic_freshness.error", snapshot.freshnessErr.Error()))

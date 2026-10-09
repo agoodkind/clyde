@@ -90,6 +90,9 @@ type Client struct {
 	ensured  map[string]bool
 	jobCount int
 
+	lastUpsert      UpsertStats
+	lastUpsertKnown bool
+
 	// vectorMu guards the query vector cache. vectorOrder lists the cached
 	// queries, oldest first.
 	vectorMu    sync.Mutex
@@ -122,10 +125,14 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 
 		deliveryBatchBytes: opened.deliveryBatchBytes,
 
-		checkpoint:  newCheckpointStore(options.CheckpointDir),
-		ingestMu:    sync.Mutex{},
-		ensured:     make(map[string]bool),
-		jobCount:    0,
+		checkpoint: newCheckpointStore(options.CheckpointDir),
+		ingestMu:   sync.Mutex{},
+		ensured:    make(map[string]bool),
+		jobCount:   0,
+
+		lastUpsert:      UpsertStats{JobID: "", RowsWritten: 0, VectorsReused: 0, VectorsEmbedded: 0},
+		lastUpsertKnown: false,
+
 		vectorMu:    sync.Mutex{},
 		vectors:     make(map[string][]float32, queryVectorCacheSize),
 		vectorOrder: nil,

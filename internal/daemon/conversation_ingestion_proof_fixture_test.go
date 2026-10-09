@@ -122,6 +122,11 @@ func (proof ingestionProofDaemon) install(
 
 func startIngestionProofDaemon(t *testing.T) ingestionProofDaemon {
 	t.Helper()
+	return startIngestionProofDaemonWithConfig(t, ingestionProofDaemonConfig)
+}
+
+func startIngestionProofDaemonWithConfig(t *testing.T, daemonConfig string) ingestionProofDaemon {
+	t.Helper()
 	roots, err := sandbox.NewRoots()
 	if err != nil {
 		t.Fatalf("operation=create_sandbox_roots err=%v", err)
@@ -149,7 +154,7 @@ func startIngestionProofDaemon(t *testing.T) ingestionProofDaemon {
 			t.Fatalf("operation=create_directory path=%s err=%v", directory, err)
 		}
 	}
-	if err := os.WriteFile(configPath, []byte(ingestionProofDaemonConfig), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(daemonConfig), 0o600); err != nil {
 		t.Fatalf("operation=write_config path=%s err=%v", configPath, err)
 	}
 	proof.install(t, ingestionProofMainSession, ingestionProofMainNumber, []ingestionProofMessage{

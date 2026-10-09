@@ -23,12 +23,14 @@ import (
 type conversationSemanticFreshness struct {
 	mu        sync.Mutex
 	freshness conversation.SearchFreshness
+	status    conversationSemanticSyncStatus
 }
 
 // newConversationSemanticFreshness constructs an empty freshness holder.
 func newConversationSemanticFreshness() *conversationSemanticFreshness {
 	return &conversationSemanticFreshness{
-		mu: sync.Mutex{},
+		mu:     sync.Mutex{},
+		status: newConversationSemanticSyncStatus(clock.Now()),
 		freshness: conversation.SearchFreshness{
 			Manifest:     0,
 			Needed:       0,
@@ -71,6 +73,7 @@ func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncSt
 	embedded := max(stats.manifest-stats.needed, 0)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.status.recordPass(stats)
 	f.freshness = conversation.SearchFreshness{
 		Manifest:     stats.manifest + stats.failedSuppressed,
 		Needed:       stats.needed,
@@ -237,7 +240,8 @@ type conversationSemanticSyncWorker struct {
 	contentKinds conversation.ContentKindSet
 	// batchBytes limits raw transcript bytes per pass. A larger artifact loads
 	// alone. runPass obtains the budget from the selected backend.
-	batchBytes int64
+	batchBytes  int64
+	passBlocked bool
 }
 
 type conversationSemanticSyncStats struct {
@@ -348,6 +352,7 @@ func startConversationSemanticSync(
 	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log, contentKinds)
 	worker.freshness = freshness
 	worker.interval = interval
+	freshness.workerStarted()
 	go func() {
 		defer close(done)
 		defer func() {
@@ -391,6 +396,7 @@ func newConversationSemanticSyncWorker(
 		freshness:          nil,
 		contentKinds:       contentKinds,
 		batchBytes:         conversationSemanticBatchBytes,
+		passBlocked:        false,
 	}
 }
 
@@ -424,11 +430,15 @@ func (w *conversationSemanticSyncWorker) run(ctx context.Context) {
 // something panicked outside a reader, such as the index scan, the manifest
 // build, the document projection, or the upsert.
 func (w *conversationSemanticSyncWorker) runPassAndLog(ctx context.Context) {
+	passStarted := w.beginPassStatus()
+	var passErr error
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
+			w.finishPassStatus(passStarted, passErr)
 			return
 		}
+		w.finishPassStatus(passStarted, fmt.Errorf("panic: %v", recovered))
 		w.log.ErrorContext(ctx, "daemon.conversation_semantic_sync.pass_panic",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -437,6 +447,7 @@ func (w *conversationSemanticSyncWorker) runPassAndLog(ctx context.Context) {
 		)
 	}()
 	if err := w.runPass(ctx); err != nil && ctx.Err() == nil {
+		passErr = err
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.pass_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -462,10 +473,12 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 			"component", "daemon",
 			"collection_id", w.collectionID,
 		)
+		w.passBlocked = true
 		return nil
 	}
 	w.batchBytes = deliveryBatchBytesFor(client)
 	if w.engineBusyWithLastJob(ctx, client) {
+		w.passBlocked = true
 		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_skipped_engine_busy",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -740,6 +753,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 		built, loadErr := w.prefetchedOrLoad(ctx, prefetched, record)
 		if loadErr != nil {
 			stats.failed++
+			w.freshness.recordSyncError(loadErr)
 			// The conversation delivers no document, so the engine will keep
 			// listing it as needed and every later pass would read and fail it
 			// again. Count the failure against the fingerprint that failed; the
@@ -842,9 +856,11 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 	sent []deliveredConversation,
 	stats *conversationSemanticSyncStats,
 ) {
+	upsertStarted := clock.Now()
 	jobID, upsertErr := client.UpsertConversationDocuments(ctx, w.collectionID, docs, manifest)
 	if upsertErr != nil {
 		if isConflictingActiveJob(upsertErr) {
+			w.passBlocked = true
 			w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.engine_busy",
 				"concern", "conversation.semantic",
 				"component", "daemon",
@@ -854,6 +870,7 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 			return
 		}
 		stats.failed += len(sent)
+		w.freshness.recordSyncError(upsertErr)
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
@@ -878,6 +895,7 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 	stats.sentConversationIDs = sentIDs
 	stats.documents = len(docs)
 	w.activeJobID = jobID
+	w.freshness.recordUpsert(client, w.collectionID, jobID, upsertStarted, clock.Now())
 	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_started",
 		"concern", "conversation.semantic",
 		"component", "daemon",
