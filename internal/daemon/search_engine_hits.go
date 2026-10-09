@@ -94,6 +94,9 @@ func engineSearchMatches(
 	collectionID string,
 	options conversation.SearchConversationsOptions,
 ) (engineSearchPage, error) {
+	if snapshots, exact := localSearchDispatch(idx, semantic); exact {
+		return localSearchMatches(ctx, snapshots, semantic, collectionID, options)
+	}
 	limit, offset, searchLimit, err := semanticSearchPageBounds(options)
 	if err != nil {
 		return emptyEngineSearchPage(), err
