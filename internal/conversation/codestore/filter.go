@@ -6,7 +6,7 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-type truth int
+type truth uint8
 
 const (
 	truthFalse truth = iota
@@ -99,33 +99,40 @@ func (stored *codeCollection) compileLeaf(filter *collection.Filter) (predicate,
 	if !declared {
 		return nil, fmt.Errorf("filter column %q is not declared", filter.Column)
 	}
-	values := stored.dictionaries[column]
-	present := func(position int) (collection.ScalarValue, bool) {
-		id := stored.rows[position].cells[column]
-		if id == 0 || values.values[id].Null {
-			return collection.EmptyScalar(), false
-		}
-		return values.values[id], true
+	decide, err := leafDecision(filter)
+	if err != nil {
+		return nil, err
 	}
+	values := stored.dictionaries[column].values
+	decisions := make([]truth, len(values))
+	decisions[0] = decide(collection.EmptyScalar(), false)
+	for id := 1; id < len(values); id++ {
+		decisions[id] = decide(values[id], !values[id].Null)
+	}
+	return func(position int) truth {
+		return decisions[stored.rows[position].cells[column]]
+	}, nil
+}
+
+func leafDecision(filter *collection.Filter) (func(value collection.ScalarValue, present bool) truth, error) {
 	switch filter.Kind {
 	case collection.FilterIsNull:
-		return func(position int) truth {
-			if _, found := present(position); found {
+		return func(_ collection.ScalarValue, present bool) truth {
+			if present {
 				return truthFalse
 			}
 			return truthTrue
 		}, nil
 	case collection.FilterIsPresent:
-		return func(position int) truth {
-			if _, found := present(position); found {
+		return func(_ collection.ScalarValue, present bool) truth {
+			if present {
 				return truthTrue
 			}
 			return truthFalse
 		}, nil
 	case collection.FilterRange:
-		return func(position int) truth {
-			value, found := present(position)
-			if !found {
+		return func(value collection.ScalarValue, present bool) truth {
+			if !present {
 				return truthUnknown
 			}
 			if (filter.Lower != nil && value.Int64 < *filter.Lower) || (filter.Upper != nil && value.Int64 >= *filter.Upper) {
@@ -140,9 +147,8 @@ func (stored *codeCollection) compileLeaf(filter *collection.Filter) (predicate,
 		for _, value := range filter.Values {
 			wanted[value] = struct{}{}
 		}
-		return func(position int) truth {
-			value, found := present(position)
-			if !found {
+		return func(value collection.ScalarValue, present bool) truth {
+			if !present {
 				return truthUnknown
 			}
 			if _, match := wanted[value]; match {

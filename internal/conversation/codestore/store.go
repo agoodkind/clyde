@@ -465,8 +465,7 @@ func Score(distance int) float64 {
 }
 
 // Search filters rows before ranking their sign codes by Hamming distance.
-// It applies score, group and result limits to the best [collection.RankingDepth]
-// candidates. Row IDs break ties between equal distances.
+// Row IDs break ties between equal distances.
 func (store *Store) Search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, failed("search "+request.Collection, err)
@@ -484,10 +483,6 @@ func (store *Store) Search(ctx context.Context, request collection.SearchRequest
 	if err != nil {
 		return nil, err
 	}
-	ranked, err := stored.rank(staticembed.CodeOf(request.Vector), matches)
-	if err != nil {
-		return nil, err
-	}
 	groupColumn, grouped := -1, false
 	if request.GroupBy != "" && request.PerGroupLimit > 0 {
 		groupColumn, grouped = stored.columnIndex[request.GroupBy]
@@ -496,31 +491,24 @@ func (store *Store) Search(ctx context.Context, request collection.SearchRequest
 	if limit <= 0 {
 		limit = defaultSearchLimit
 	}
-	perGroup := make(map[uint32]int32)
-	hits := make([]collection.Hit, 0, limit)
+	walk := rankingWalk{
+		window:      limit,
+		maxDistance: maxDistanceFor(request.MinScore),
+		grouped:     grouped,
+		groupColumn: groupColumn,
+		perGroup:    request.PerGroupLimit,
+	}
+	ranked, err := stored.rank(staticembed.CodeOf(request.Vector), matches, walk)
+	if err != nil {
+		return nil, err
+	}
+	hits := make([]collection.Hit, 0, len(ranked))
 	for _, ranking := range ranked {
-		score := Score(ranking.distance)
-		if score < request.MinScore {
-			break
-		}
-		if grouped {
-			key := stored.rows[ranking.position].cells[groupColumn]
-			if key != 0 && stored.dictionaries[groupColumn].values[key].Null {
-				key = 0
-			}
-			if perGroup[key] >= request.PerGroupLimit {
-				continue
-			}
-			perGroup[key]++
-		}
-		hit, err := stored.hit(ranking.position, score, request.Declaration.Scalars)
+		hit, err := stored.hit(ranking.position, Score(ranking.distance), request.Declaration.Scalars)
 		if err != nil {
 			return nil, err
 		}
 		hits = append(hits, hit)
-		if len(hits) == limit {
-			break
-		}
 	}
 	return hits, nil
 }
