@@ -509,7 +509,7 @@ func TestConversationSemanticSyncFeederRecoversAfterFailedInitialRegister(t *tes
 	// the deterministic passes below, without draining the engine connection this
 	// test still needs.
 	feederGroup := newLifecycleGroup(semanticTestLogger())
-	if !startConversationSemanticSync(ctx, semanticTestLogger(), index, runtime.syncClient, "collection-test", nil, feederGroup, semanticTestContentKinds()) {
+	if !startConversationSemanticSync(ctx, semanticTestLogger(), index, runtime.syncClient, "collection-test", nil, feederGroup, semanticTestContentKinds(), conversationSemanticSyncInterval) {
 		t.Fatal("the sync worker must start while the engine is unavailable so it can recover")
 	}
 	feederGroup.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
@@ -607,7 +607,7 @@ func TestConversationSemanticSyncFeederIsGroupOwnedFromTheMomentItStarts(t *test
 
 	started := make(chan bool, 1)
 	group.AddHookBefore(livetrack.PhaseIngress, "test.start_feeder_mid_drain", func(hookCtx context.Context) error {
-		started <- startConversationSemanticSync(ctx, log, index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, group, semanticTestContentKinds())
+		started <- startConversationSemanticSync(ctx, log, index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, group, semanticTestContentKinds(), conversationSemanticSyncInterval)
 		select {
 		case <-index.listing:
 			return nil
@@ -635,7 +635,7 @@ func TestConversationSemanticSyncRefusesToStartWithoutALifecycleOwner(t *testing
 	index := newBlockingConversationSemanticIndex()
 	engineFeeder := &fakeConversationSemanticClient{needed: nil}
 
-	if startConversationSemanticSync(context.Background(), semanticTestLogger(), index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, nil, semanticTestContentKinds()) {
+	if startConversationSemanticSync(context.Background(), semanticTestLogger(), index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, nil, semanticTestContentKinds(), conversationSemanticSyncInterval) {
 		t.Fatal("the feeder must not start without a lifecycle group to own its stop")
 	}
 	select {

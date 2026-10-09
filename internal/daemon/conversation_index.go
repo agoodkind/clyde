@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"time"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
@@ -21,9 +20,18 @@ import (
 
 // startConversationIndex installs lifecycle ownership before launching the raw
 // provider refresh worker. Semantic configuration does not control this cache.
+// The raw index refresh period defaults to one minute if global config loading
+// fails.
 func startConversationIndex(ctx context.Context, log *slog.Logger, index *conversation.Index, group *livetrack.Group) {
+	interval := config.NewConfigWithDefaults().Conversation.Semantic.IndexRefreshPeriod()
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		log.WarnContext(ctx, "daemon.conversation_index.interval_config_load_failed", "concern", "conversation.index", "component", "daemon", "path", config.GlobalConfigPath(), "err", err)
+	} else {
+		interval = cfg.Conversation.Semantic.IndexRefreshPeriod()
+	}
 	startConversationIndexWorker(ctx, log, group, func(workerCtx context.Context) {
-		index.Start(workerCtx, time.Minute)
+		index.Start(workerCtx, interval)
 	})
 }
 

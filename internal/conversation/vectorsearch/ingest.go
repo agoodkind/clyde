@@ -72,8 +72,8 @@ func (c *Client) JobState(_ context.Context, jobID string) (string, error) {
 
 // UpsertConversationDocuments writes the rows that the collection lacks for the
 // delivered conversations. It loads the stored rows of the delivered
-// conversations once. For each conversation it writes every row group that has
-// no stored row and skips every group that has one. The call changes and deletes
+// conversations once. The call includes edited text only when the stored family
+// has split metadata and content-derived row IDs. The call changes and deletes
 // no stored row. A stored vector with the same content and embedding model is
 // reused, and only content without a stored vector is embedded. After a
 // conversation's rows are written, its manifest fingerprint is recorded on disk.
@@ -170,9 +170,8 @@ func groupDocuments(docs []semsearch.SemDoc) (map[string][]semsearch.SemDoc, []s
 	return byConversation, order, nil
 }
 
-// planConversation returns the chunks to write for one conversation: every row
-// of each family that has no stored row. A family with a stored row is skipped
-// whole and never replaced.
+// planConversation includes edited text because a stored row does not prove
+// that the current message text has been ingested.
 func (c *Client) planConversation(conversationID string, docs []semsearch.SemDoc, state *conversationState) ([]storedChunk, error) {
 	generated := make([]storedChunk, 0)
 	for _, doc := range docs {
@@ -185,12 +184,15 @@ func (c *Client) planConversation(conversationID string, docs []semsearch.SemDoc
 	chunks := make([]storedChunk, 0, len(generated))
 	seen := make(map[string]struct{})
 	for _, family := range groupFamilies(conversationID, generated) {
-		if state.present(family.Key) {
+		if state.present(family.Key) && !state.differs(family.Key, family.Chunks) {
 			continue
 		}
 		for _, chunk := range expandOverBudget(family.Chunks, c.byteBudget) {
 			id := chunkID(chunk)
 			if _, duplicate := seen[id]; duplicate {
+				continue
+			}
+			if state.hasRow(family.Key, id) {
 				continue
 			}
 			seen[id] = struct{}{}

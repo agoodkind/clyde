@@ -78,7 +78,7 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		lastRefresh:      time.Time{},
 		cachePresent:     false,
 		cachePath:        CachePath(),
-		debounce:         refreshDebounce,
+		debounce:         refreshDebounceFor(conversationConfig.Semantic.IndexRefreshPeriod(), refreshDebounce),
 		scanProvider: func(ctx context.Context, registry *Registry, prior scanCache) (scanResult, error) {
 			if !conversationConfig.Cursor.RawIndexingEnabled() {
 				prior.skipProviders = map[providerid.Provider]bool{providerid.ProviderCursor: true}

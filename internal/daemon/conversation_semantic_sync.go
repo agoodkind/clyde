@@ -82,6 +82,8 @@ func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncSt
 
 const (
 	conversationSemanticSyncInterval = time.Minute
+	// conversationSemanticGrowthWindow is one minute regardless of sync_interval.
+	conversationSemanticGrowthWindow = time.Minute
 	maxSemanticMessageIndex          = int32(1<<31 - 1)
 	// Admit artifacts before loading them, so preparing the next batch never
 	// retains the previous batch. A larger artifact is streamed alone.
@@ -326,6 +328,7 @@ func startConversationSemanticSync(
 	freshness *conversationSemanticFreshness,
 	group *livetrack.Group,
 	contentKinds conversation.ContentKindSet,
+	interval time.Duration,
 ) bool {
 	if resolveClient == nil {
 		return false
@@ -344,6 +347,7 @@ func startConversationSemanticSync(
 	}
 	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log, contentKinds)
 	worker.freshness = freshness
+	worker.interval = interval
 	go func() {
 		defer close(done)
 		defer func() {
@@ -820,11 +824,10 @@ func (w *conversationSemanticSyncWorker) recordLoadFailure(conversationID, finge
 	w.failedLoad[conversationID] = failureRecord
 }
 
-// isActivelyGrowing reports whether a conversation's transcript changed within
-// the last sync interval, which marks the session the user is typing into
-// right now. It settles after one quiet interval and is delivered then.
+// isActivelyGrowing identifies transcripts deferred until the first pass after
+// one minute has elapsed since modification.
 func (w *conversationSemanticSyncWorker) isActivelyGrowing(stamp conversation.FileStamp) bool {
-	return w.now().Sub(stamp.Mtime) < w.interval
+	return w.now().Sub(stamp.Mtime) < conversationSemanticGrowthWindow
 }
 
 // sendDocuments fires one upsert for the collected documents and the full

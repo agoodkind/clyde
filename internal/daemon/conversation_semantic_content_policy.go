@@ -49,7 +49,8 @@ func startConfiguredConversationSemanticSync(
 		// per failure rather than two saying the same thing.
 		return err
 	}
-	startConversationSemanticSync(ctx, log, index, resolveClient, cfg.Conversation.Semantic.CollectionID, freshness, group, kinds)
+	startConversationSemanticSync(ctx, log, index, resolveClient, cfg.Conversation.Semantic.CollectionID, freshness, group, kinds,
+		cfg.Conversation.Semantic.SyncPassInterval())
 	return nil
 }
 

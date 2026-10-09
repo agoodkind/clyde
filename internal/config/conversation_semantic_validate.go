@@ -7,6 +7,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // conversationSemanticKey prefixes every [conversation.semantic] key in a
@@ -111,7 +112,19 @@ func validateConversationSemanticDurations(semantic *ConversationSemanticConfig)
 		{key: "snapshot_ttl", value: int64(semantic.SnapshotTTL)},
 		{key: "query_timeout", value: int64(semantic.QueryTimeout)},
 	}
-	return rejectNegativeConversationSemanticSettings(settings)
+	intervals := []conversationSemanticSetting{
+		{key: "sync_interval", value: int64(semantic.SyncInterval)},
+		{key: "index_refresh_interval", value: int64(semantic.IndexRefreshInterval)},
+	}
+	if err := rejectNegativeConversationSemanticSettings(append(settings, intervals...)); err != nil {
+		return err
+	}
+	for _, interval := range intervals {
+		if interval.value > 0 && interval.value < int64(minimumConversationWorkerInterval) {
+			return invalidConversationSemanticSetting(interval.key, fmt.Sprintf("must not be less than %s (got %s)", minimumConversationWorkerInterval, time.Duration(interval.value)))
+		}
+	}
+	return nil
 }
 
 func validateConversationSemanticCounts(semantic *ConversationSemanticConfig) error {
