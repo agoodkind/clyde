@@ -86,7 +86,7 @@ func newRoot(f *cli.Factory) *cobra.Command {
 		Use:     "clyde",
 		Short:   "Search, inspect, and export " + conversationProviders + " transcripts",
 		Long:    "Clyde reads raw " + conversationProviders + " conversation artifacts and exposes them through terminal commands and an MCP server, alongside the background daemon, the MITM capture proxy, log inspection, and transcript export.",
-		Example: cli.ConversationBrowseCommand() + "\nclyde conversation export zed:1a2b3c",
+		Example: cli.ConversationBrowseCommand() + " --limit 20\nclyde conversation export zed:1a2b3c",
 		Version: version.Version,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

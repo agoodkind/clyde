@@ -28,7 +28,7 @@ func TestWriteSandboxBannerUsesConversationBrowseCommand(t *testing.T) {
 
 	writeSandboxBanner(factory, roots, "/tmp/clyde-sandbox-test/config/clyde/config.toml", false, false)
 
-	want := sandbox.ExportLine(roots) + " clyde conversation search"
+	want := sandbox.ExportLine(roots) + " clyde conversation search --limit 20"
 	if !strings.Contains(output.String(), want) {
 		t.Fatalf("sandbox banner missing browse command %q:\n%s", want, output.String())
 	}
