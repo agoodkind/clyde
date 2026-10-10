@@ -68,8 +68,8 @@ func TestRenderLinesEmitsOneRawFactPerLine(t *testing.T) {
 		"semantic_freshness.manifest 2900 conversations",
 		"semantic_freshness.needed 3 conversations",
 		"semantic_freshness.pending 3 conversations",
-		"mitm.claude-code.address [::1]:48723",
-		"mitm.claude-code.up true",
+		"mitm.claude-code.ipv6.address [::1]:48723",
+		"mitm.claude-code.ipv6.up true",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("rendered status lacks %q:\n%s", want, body)
