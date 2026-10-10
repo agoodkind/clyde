@@ -1,11 +1,17 @@
 package status
 
 import (
+	"net"
 	"strconv"
 	"strings"
 	"time"
 
 	lmstatus "goodkind.io/lm-semantic-search/status"
+)
+
+const (
+	familyIPv6 = "ipv6"
+	familyIPv4 = "ipv4"
 )
 
 func textField(group, name, value string) lmstatus.Field {
@@ -18,6 +24,17 @@ func intField(group, name string, value int64, unit string) lmstatus.Field {
 
 func boolField(group, name string, value bool) lmstatus.Field {
 	return lmstatus.Field{Group: group, Name: name, Unit: "", Value: lmstatus.Bool(value), NoDelta: false}
+}
+
+func addressFamily(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	if strings.Contains(host, ":") {
+		return familyIPv6
+	}
+	return familyIPv4
 }
 
 func buildSnapshot(snapshot statusSnapshot, build string) lmstatus.Snapshot {
@@ -108,7 +125,7 @@ func buildFields(snapshot statusSnapshot) []lmstatus.Field {
 		fields = append(fields, textField("mitm", "mitm.error", snapshot.mitmErr.Error()))
 	} else {
 		for _, listener := range snapshot.mitm.Listeners {
-			prefix := "mitm." + listener.ID + "."
+			prefix := "mitm." + listener.ID + "." + addressFamily(listener.Address) + "."
 			fields = append(fields,
 				textField("mitm", prefix+"address", listener.Address),
 				boolField("mitm", prefix+"up", listener.Up),
