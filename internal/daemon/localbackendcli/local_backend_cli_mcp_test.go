@@ -1,4 +1,4 @@
-package daemon_test
+package localbackendcli_test
 
 import (
 	"bytes"
@@ -17,6 +17,7 @@ import (
 	"goodkind.io/clyde/internal/clispec"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/daemon/localtest"
 )
 
 const (
@@ -241,7 +242,7 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 
 	t.Run("search enabled with unreachable Milvus never reports local", func(t *testing.T) {
 		closedAddress := localProofClosedAddress(t)
-		startRawTextDaemon(t, fmt.Sprintf(localProofUnreachableMilvusConfig, closedAddress, closedAddress))
+		localtest.StartRawTextDaemon(t, fmt.Sprintf(localProofUnreachableMilvusConfig, closedAddress, closedAddress))
 		query := "watcher config"
 		waitForFirstMatches(t, conversation.SearchConversationsOptions{Query: query, Limit: localProofMaxLimit}, localProofRawTextSessions)
 
@@ -262,7 +263,7 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 
 		registry := clispec.NewConversationRegistry()
 		var cliResult localProofSearchOutput
-		cliOutput := localBackendSearchCLIOutput(t, registry, query)
+		cliOutput := localtest.LocalBackendSearchCLIOutput(t, registry, query)
 		if err := json.Unmarshal([]byte(cliOutput), &cliResult); err != nil {
 			t.Fatalf("decode conversation search output: %v\n%s", err, cliOutput)
 		}
@@ -271,11 +272,11 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 		}
 
 		var mcpResponse localProofRPCResponse
-		mcpOutput := localBackendSearchMCPOutput(t, registry, query)
+		mcpOutput := localtest.LocalBackendSearchMCPOutput(t, registry, query)
 		if err := json.Unmarshal([]byte(mcpOutput), &mcpResponse); err != nil {
 			t.Fatalf("decode clyde_search response: %v\n%s", err, mcpOutput)
 		}
-		if strings.Contains(mcpOutput, localBackendSourceJSON) {
+		if strings.Contains(mcpOutput, localtest.LocalBackendSourceJSON) {
 			t.Errorf("clyde_search reports the local source with backend unset:\n%s", mcpOutput)
 		}
 		if mcpResponse.Result == nil || mcpResponse.Result.IsError || mcpResponse.Result.StructuredContent == nil {

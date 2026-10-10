@@ -1,4 +1,4 @@
-package daemon_test
+package localbackendcli_test
 
 import (
 	"crypto/sha256"

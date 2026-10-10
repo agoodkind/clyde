@@ -107,6 +107,8 @@ func (s *Server) dispatchResolvedChat(
 		s.dispatchAnthropicProvider(w, r, effort, reqID, resolvedReq)
 	case adapterresolver.ProviderCodex:
 		s.dispatchCodexProvider(w, r, req, reqID, ingressCtx, resolvedReq)
+	case BackendClaude, BackendPassthroughOverride:
+		fallthrough
 	default:
 		s.respondAdapterError(w, r, unsupportedBackendError(&resolvedReq, req.Model))
 	}
@@ -172,6 +174,7 @@ func upstreamUnavailableForProvider(id adapterresolver.ProviderID, resolved *ada
 	case adapterresolver.ProviderCodex:
 		message = "codex backend is not enabled in [adapter.codex]"
 		provider = "codex"
+	case BackendClaude, BackendPassthroughOverride:
 	}
 	err := newAdapterError(adapterErrorUpstreamUnavailable, message)
 	err.Provider = provider

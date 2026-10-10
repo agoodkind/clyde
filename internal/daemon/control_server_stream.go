@@ -17,6 +17,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/tokencount"
 	"goodkind.io/clyde/internal/util"
 )
@@ -326,6 +327,16 @@ func tokenFamilyForProvider(provider conversation.Provider) tokencount.Family {
 		return tokencount.FamilyClaude
 	case conversation.ProviderCodex:
 		return tokencount.FamilyGPT
+	case providerid.ProviderUnspecified,
+		providerid.ProviderAnthropic,
+		providerid.ProviderOpenAICompat,
+		providerid.ProviderMITM,
+		providerid.ProviderArtifact,
+		providerid.ProviderCursor,
+		providerid.ProviderConductor,
+		providerid.ProviderZed,
+		providerid.ProviderCopilot:
+		fallthrough
 	default:
 		return tokencount.FamilyUnknown
 	}

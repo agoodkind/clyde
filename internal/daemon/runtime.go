@@ -536,6 +536,8 @@ func getAuth(cfg *config.Config, log *slog.Logger) func(adapterresolver.Provider
 				Now:        nil,
 				RefreshURL: "",
 			})
+		case adapter.BackendClaude, adapter.BackendPassthroughOverride:
+			fallthrough
 		default:
 			return nil
 		}
