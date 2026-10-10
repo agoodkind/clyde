@@ -1,4 +1,4 @@
-package daemon_test
+package statusproof_test
 
 import (
 	"context"
