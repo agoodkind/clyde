@@ -36,8 +36,7 @@ const (
 	LocalBackendSourceJSON = `"source":"local"`
 )
 
-// WriteRawTextTranscript writes a Claude transcript with one user message and one assistant message.
-// The minute parameter sets the minute of both timestamps.
+// WriteRawTextTranscript sets both timestamps to the specified minute.
 func WriteRawTextTranscript(t *testing.T, path string, session string, minute int) {
 	t.Helper()
 	record := func(index int, role string, body string) string {
