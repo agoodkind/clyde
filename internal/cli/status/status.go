@@ -6,7 +6,6 @@ package status
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -59,13 +58,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 func run(ctx context.Context, f *cli.Factory, cmd *cobra.Command, once bool, interval time.Duration) error {
 	format := resolveFormat(cmd)
 	if format == output.FormatJSON {
-		snapshot := gatherSnapshot(ctx)
-		payload, err := json.Marshal(snapshotOutput(snapshot))
-		if err != nil {
-			slog.ErrorContext(ctx, "cli.status.encode_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
-			return fmt.Errorf("encode status snapshot: %w", err)
-		}
-		if err := response.WriteJSON(ctx, f.IOStreams.Out, payload, response.JSONCompact); err != nil {
+		if err := lmstatus.WriteJSON(f.IOStreams.Out, buildSnapshot(gatherSnapshot(ctx), f.Build.Version)); err != nil {
 			slog.ErrorContext(ctx, "cli.status.write_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 			return fmt.Errorf("write status snapshot: %w", err)
 		}

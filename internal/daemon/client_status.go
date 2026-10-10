@@ -14,6 +14,7 @@ type RuntimeStatus struct {
 	Listeners                []BoundListenerStatus `json:"listeners"`
 	Profiling                *BoundListenerStatus  `json:"profiling"`
 	CursorRawIndexingEnabled *bool                 `json:"cursor_raw_indexing_enabled,omitempty"`
+	Process                  []StatusMetric        `json:"process,omitempty"`
 }
 
 // SemanticStatus reports effective flags and the existing engine connection.
@@ -22,8 +23,9 @@ type SemanticStatus struct {
 	SearchEnabled    bool                    `json:"search_enabled"`
 	Backend          SemanticBackend         `json:"backend"`
 	Connection       SemanticConnectionState `json:"connection"`
-	NextRetryUnix    int64                   `json:"next_retry_unix"`
+	NextRetryUnix    *int64                  `json:"next_retry_unix"`
 	Attempts         uint64                  `json:"attempts"`
+	Detail           []StatusMetric          `json:"detail,omitempty"`
 }
 
 // SemanticConnectionState is the wire enum's lowercase connection-state name.
@@ -55,13 +57,15 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 	result := &RuntimeStatus{
 		Semantic: SemanticStatus{
 			IngestionEnabled: semantic.GetIngestionEnabled(), SearchEnabled: semantic.GetSearchEnabled(),
-			Backend:       SemanticBackend(strings.ToLower(strings.TrimPrefix(semantic.GetBackend().String(), "SEMANTIC_BACKEND_"))),
+			Backend:       SemanticBackend(semanticBackendName(semantic.GetBackend())),
 			Connection:    SemanticConnectionState(strings.ToLower(strings.TrimPrefix(semantic.GetConnection().String(), "SEMANTIC_CONNECTION_STATE_"))),
-			NextRetryUnix: semantic.GetNextRetryUnix(), Attempts: semantic.GetAttempts(),
+			NextRetryUnix: semantic.NextRetryUnix, Attempts: semantic.GetAttempts(),
+			Detail: statusMetricsFromProto(semantic.GetDetail()),
 		},
 		Listeners:                make([]BoundListenerStatus, 0, len(response.GetListeners())),
 		Profiling:                nil,
 		CursorRawIndexingEnabled: response.CursorRawIndexingEnabled,
+		Process:                  statusMetricsFromProto(response.GetProcess()),
 	}
 	for _, listener := range response.GetListeners() {
 		result.Listeners = append(result.Listeners, listenerStatusFromProto(listener))

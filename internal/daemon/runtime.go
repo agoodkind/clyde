@@ -46,6 +46,7 @@ type runtimeServices struct {
 	mitmPacketConns map[string][]net.PacketConn
 	captureStore    *capture.Store
 	semantic        *conversationSemanticRuntime
+	semanticSync    *conversationSemanticFreshness
 	// pprofListener is the optional loopback pprof socket. It is nil when pprof
 	// is off. When set, it is inherited across reload like the adapter and MITM
 	// listeners so the debug surface survives a hot reload with no bind gap.
@@ -97,6 +98,7 @@ func startRuntime(
 		mitmPacketConns:       map[string][]net.PacketConn{},
 		captureStore:          nil,
 		semantic:              nil,
+		semanticSync:          nil,
 		pprofListener:         nil,
 		errors:                make(chan error, 3),
 		reloadMu:              sync.Mutex{},

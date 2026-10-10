@@ -3,11 +3,14 @@ package daemon
 import (
 	"net"
 	"sort"
+	"strings"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"google.golang.org/grpc/connectivity"
 )
+
+const semanticBackendEnumPrefix = "SEMANTIC_BACKEND_"
 
 func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 	cfg := r.currentConfig.Load()
@@ -17,6 +20,8 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 		Connection:       clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_DISABLED,
 		Backend:          protoSemanticBackend(cfg.Conversation.Semantic.Backend),
 	}
+	syncStatus := r.semanticSync.syncStatus()
+	semantic.Detail = statusMetricsProto(semanticDetailMetrics(cfg.Conversation.Semantic, syncStatus))
 	if cfg.Conversation.Semantic.UsesEngine() {
 		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_UNAVAILABLE
 		if r.semantic != nil {
@@ -57,7 +62,13 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 		profiling = boundListenerStatus(listenerNamePProf, r.pprofListener.Addr())
 	}
 	cursorRawIndexingEnabled := cfg.Conversation.Cursor.RawIndexingEnabled()
-	return &clydev1.GetDaemonStatusResponse{Semantic: semantic, Listeners: listeners, Profiling: profiling, CursorRawIndexingEnabled: &cursorRawIndexingEnabled}
+	return &clydev1.GetDaemonStatusResponse{
+		Semantic:                 semantic,
+		Listeners:                listeners,
+		Profiling:                profiling,
+		CursorRawIndexingEnabled: &cursorRawIndexingEnabled,
+		Process:                  statusMetricsProto(daemonProcessMetrics(syncStatus)),
+	}
 }
 
 func protoSemanticBackend(backend config.ConversationSemanticBackend) clydev1.SemanticBackend {
@@ -65,6 +76,10 @@ func protoSemanticBackend(backend config.ConversationSemanticBackend) clydev1.Se
 		return clydev1.SemanticBackend_SEMANTIC_BACKEND_LOCAL
 	}
 	return clydev1.SemanticBackend_SEMANTIC_BACKEND_MILVUS
+}
+
+func semanticBackendName(backend clydev1.SemanticBackend) string {
+	return strings.ToLower(strings.TrimPrefix(backend.String(), semanticBackendEnumPrefix))
 }
 
 func boundListenerStatus(name string, addr net.Addr) *clydev1.BoundListenerStatus {
@@ -76,7 +91,8 @@ func (r *conversationSemanticRuntime) readStatus(snapshot *clydev1.SemanticStatu
 	defer r.mu.Unlock()
 	snapshot.Attempts = r.attempts
 	if !r.nextRetry.IsZero() {
-		snapshot.NextRetryUnix = r.nextRetry.Unix()
+		nextRetry := r.nextRetry.Unix()
+		snapshot.NextRetryUnix = &nextRetry
 	}
 	if r.connecting {
 		snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_CONNECTING

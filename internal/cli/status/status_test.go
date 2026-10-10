@@ -1,7 +1,6 @@
 package status
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -92,31 +91,5 @@ func TestRenderLinesShowsSectionErrorsWithoutHidingOthers(t *testing.T) {
 	}
 	if !strings.Contains(body, "daemon.responding true") {
 		t.Fatalf("a freshness error hid the daemon section:\n%s", body)
-	}
-}
-
-// TestSnapshotOutputCarriesSectionErrors pins the JSON form: an errored
-// section is a string under errors and its data section is absent.
-func TestSnapshotOutputCarriesSectionErrors(t *testing.T) {
-	t.Parallel()
-
-	snapshot := testSnapshot()
-	snapshot.providersErr = errors.New("daemon rpc: unavailable")
-	out := snapshotOutput(snapshot)
-	if out.Errors.Providers != "daemon rpc: unavailable" {
-		t.Fatalf("Errors.Providers = %q, want the rpc error", out.Errors.Providers)
-	}
-	if out.Providers != nil {
-		t.Fatalf("Providers = %v, want absent when the section errored", out.Providers)
-	}
-	if out.Freshness == nil || out.Freshness.Manifest != 2900 {
-		t.Fatalf("Freshness = %+v, want the gathered snapshot", out.Freshness)
-	}
-	body, err := json.Marshal(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(body), `"semantic_freshness":`) || strings.Contains(string(body), `"freshness":`) {
-		t.Fatalf("JSON freshness label is not semantic: %s", body)
 	}
 }

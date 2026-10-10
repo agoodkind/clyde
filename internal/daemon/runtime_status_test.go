@@ -67,7 +67,7 @@ func TestDaemonStatusReadsExistingConnectionAndBoundListeners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Semantic.Connection != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_READY || response.Semantic.Attempts != 1 || response.Semantic.NextRetryUnix != 0 {
+	if response.Semantic.Connection != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_READY || response.Semantic.Attempts != 1 || response.Semantic.NextRetryUnix != nil {
 		t.Fatalf("connected status: %v", response.Semantic)
 	}
 	expected := map[string]string{

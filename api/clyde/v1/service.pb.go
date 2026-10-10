@@ -4159,9 +4159,10 @@ type SemanticStatus struct {
 	IngestionEnabled bool                    `protobuf:"varint,1,opt,name=ingestion_enabled,json=ingestionEnabled,proto3" json:"ingestion_enabled,omitempty"`
 	SearchEnabled    bool                    `protobuf:"varint,2,opt,name=search_enabled,json=searchEnabled,proto3" json:"search_enabled,omitempty"`
 	Connection       SemanticConnectionState `protobuf:"varint,3,opt,name=connection,proto3,enum=clyde.v1.SemanticConnectionState" json:"connection,omitempty"`
-	NextRetryUnix    int64                   `protobuf:"varint,4,opt,name=next_retry_unix,json=nextRetryUnix,proto3" json:"next_retry_unix,omitempty"`
+	NextRetryUnix    *int64                  `protobuf:"varint,4,opt,name=next_retry_unix,json=nextRetryUnix,proto3,oneof" json:"next_retry_unix,omitempty"`
 	Attempts         uint64                  `protobuf:"varint,5,opt,name=attempts,proto3" json:"attempts,omitempty"`
 	Backend          SemanticBackend         `protobuf:"varint,6,opt,name=backend,proto3,enum=clyde.v1.SemanticBackend" json:"backend,omitempty"`
+	Detail           []*StatusMetric         `protobuf:"bytes,7,rep,name=detail,proto3" json:"detail,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -4218,8 +4219,8 @@ func (x *SemanticStatus) GetConnection() SemanticConnectionState {
 }
 
 func (x *SemanticStatus) GetNextRetryUnix() int64 {
-	if x != nil {
-		return x.NextRetryUnix
+	if x != nil && x.NextRetryUnix != nil {
+		return *x.NextRetryUnix
 	}
 	return 0
 }
@@ -4236,6 +4237,13 @@ func (x *SemanticStatus) GetBackend() SemanticBackend {
 		return x.Backend
 	}
 	return SemanticBackend_SEMANTIC_BACKEND_UNSPECIFIED
+}
+
+func (x *SemanticStatus) GetDetail() []*StatusMetric {
+	if x != nil {
+		return x.Detail
+	}
+	return nil
 }
 
 type BoundListenerStatus struct {
@@ -4305,6 +4313,7 @@ type GetDaemonStatusResponse struct {
 	// Absent when the daemon did not start a profiling listener.
 	Profiling                *BoundListenerStatus `protobuf:"bytes,3,opt,name=profiling,proto3" json:"profiling,omitempty"`
 	CursorRawIndexingEnabled *bool                `protobuf:"varint,4,opt,name=cursor_raw_indexing_enabled,json=cursorRawIndexingEnabled,proto3,oneof" json:"cursor_raw_indexing_enabled,omitempty"`
+	Process                  []*StatusMetric      `protobuf:"bytes,5,rep,name=process,proto3" json:"process,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -4366,6 +4375,145 @@ func (x *GetDaemonStatusResponse) GetCursorRawIndexingEnabled() bool {
 	}
 	return false
 }
+
+func (x *GetDaemonStatusResponse) GetProcess() []*StatusMetric {
+	if x != nil {
+		return x.Process
+	}
+	return nil
+}
+
+// An unset value means the daemon does not know the value.
+// The unit is empty for a value without a unit.
+type StatusMetric struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Unit  string                 `protobuf:"bytes,2,opt,name=unit,proto3" json:"unit,omitempty"`
+	// Types that are valid to be assigned to Value:
+	//
+	//	*StatusMetric_IntValue
+	//	*StatusMetric_FloatValue
+	//	*StatusMetric_BoolValue
+	//	*StatusMetric_TextValue
+	Value         isStatusMetric_Value `protobuf_oneof:"value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StatusMetric) Reset() {
+	*x = StatusMetric{}
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StatusMetric) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StatusMetric) ProtoMessage() {}
+
+func (x *StatusMetric) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StatusMetric.ProtoReflect.Descriptor instead.
+func (*StatusMetric) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *StatusMetric) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *StatusMetric) GetUnit() string {
+	if x != nil {
+		return x.Unit
+	}
+	return ""
+}
+
+func (x *StatusMetric) GetValue() isStatusMetric_Value {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *StatusMetric) GetIntValue() int64 {
+	if x != nil {
+		if x, ok := x.Value.(*StatusMetric_IntValue); ok {
+			return x.IntValue
+		}
+	}
+	return 0
+}
+
+func (x *StatusMetric) GetFloatValue() float64 {
+	if x != nil {
+		if x, ok := x.Value.(*StatusMetric_FloatValue); ok {
+			return x.FloatValue
+		}
+	}
+	return 0
+}
+
+func (x *StatusMetric) GetBoolValue() bool {
+	if x != nil {
+		if x, ok := x.Value.(*StatusMetric_BoolValue); ok {
+			return x.BoolValue
+		}
+	}
+	return false
+}
+
+func (x *StatusMetric) GetTextValue() string {
+	if x != nil {
+		if x, ok := x.Value.(*StatusMetric_TextValue); ok {
+			return x.TextValue
+		}
+	}
+	return ""
+}
+
+type isStatusMetric_Value interface {
+	isStatusMetric_Value()
+}
+
+type StatusMetric_IntValue struct {
+	IntValue int64 `protobuf:"varint,3,opt,name=int_value,json=intValue,proto3,oneof"`
+}
+
+type StatusMetric_FloatValue struct {
+	FloatValue float64 `protobuf:"fixed64,4,opt,name=float_value,json=floatValue,proto3,oneof"`
+}
+
+type StatusMetric_BoolValue struct {
+	BoolValue bool `protobuf:"varint,5,opt,name=bool_value,json=boolValue,proto3,oneof"`
+}
+
+type StatusMetric_TextValue struct {
+	TextValue string `protobuf:"bytes,6,opt,name=text_value,json=textValue,proto3,oneof"`
+}
+
+func (*StatusMetric_IntValue) isStatusMetric_Value() {}
+
+func (*StatusMetric_FloatValue) isStatusMetric_Value() {}
+
+func (*StatusMetric_BoolValue) isStatusMetric_Value() {}
+
+func (*StatusMetric_TextValue) isStatusMetric_Value() {}
 
 var File_clyde_v1_daemon_service_proto protoreflect.FileDescriptor
 
@@ -4723,26 +4871,40 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x05limit\x18\x05 \x01(\x03R\x05limit\x12\x1f\n" +
 	"\vnext_offset\x18\x06 \x01(\x03R\n" +
 	"nextOffset\x12\x19\n" +
-	"\bhas_more\x18\a \x01(\bR\ahasMore\"\xa0\x02\n" +
+	"\bhas_more\x18\a \x01(\bR\ahasMore\"\xe9\x02\n" +
 	"\x0eSemanticStatus\x12+\n" +
 	"\x11ingestion_enabled\x18\x01 \x01(\bR\x10ingestionEnabled\x12%\n" +
 	"\x0esearch_enabled\x18\x02 \x01(\bR\rsearchEnabled\x12A\n" +
 	"\n" +
 	"connection\x18\x03 \x01(\x0e2!.clyde.v1.SemanticConnectionStateR\n" +
-	"connection\x12&\n" +
-	"\x0fnext_retry_unix\x18\x04 \x01(\x03R\rnextRetryUnix\x12\x1a\n" +
+	"connection\x12+\n" +
+	"\x0fnext_retry_unix\x18\x04 \x01(\x03H\x00R\rnextRetryUnix\x88\x01\x01\x12\x1a\n" +
 	"\battempts\x18\x05 \x01(\x04R\battempts\x123\n" +
-	"\abackend\x18\x06 \x01(\x0e2\x19.clyde.v1.SemanticBackendR\abackend\"]\n" +
+	"\abackend\x18\x06 \x01(\x0e2\x19.clyde.v1.SemanticBackendR\abackend\x12.\n" +
+	"\x06detail\x18\a \x03(\v2\x16.clyde.v1.StatusMetricR\x06detailB\x12\n" +
+	"\x10_next_retry_unix\"]\n" +
 	"\x13BoundListenerStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\anetwork\x18\x02 \x01(\tR\anetwork\x12\x18\n" +
-	"\aaddress\x18\x03 \x01(\tR\aaddress\"\xad\x02\n" +
+	"\aaddress\x18\x03 \x01(\tR\aaddress\"\xdf\x02\n" +
 	"\x17GetDaemonStatusResponse\x124\n" +
 	"\bsemantic\x18\x01 \x01(\v2\x18.clyde.v1.SemanticStatusR\bsemantic\x12;\n" +
 	"\tlisteners\x18\x02 \x03(\v2\x1d.clyde.v1.BoundListenerStatusR\tlisteners\x12;\n" +
 	"\tprofiling\x18\x03 \x01(\v2\x1d.clyde.v1.BoundListenerStatusR\tprofiling\x12B\n" +
-	"\x1bcursor_raw_indexing_enabled\x18\x04 \x01(\bH\x00R\x18cursorRawIndexingEnabled\x88\x01\x01B\x1e\n" +
-	"\x1c_cursor_raw_indexing_enabled*\xab\x01\n" +
+	"\x1bcursor_raw_indexing_enabled\x18\x04 \x01(\bH\x00R\x18cursorRawIndexingEnabled\x88\x01\x01\x120\n" +
+	"\aprocess\x18\x05 \x03(\v2\x16.clyde.v1.StatusMetricR\aprocessB\x1e\n" +
+	"\x1c_cursor_raw_indexing_enabled\"\xc3\x01\n" +
+	"\fStatusMetric\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04unit\x18\x02 \x01(\tR\x04unit\x12\x1d\n" +
+	"\tint_value\x18\x03 \x01(\x03H\x00R\bintValue\x12!\n" +
+	"\vfloat_value\x18\x04 \x01(\x01H\x00R\n" +
+	"floatValue\x12\x1f\n" +
+	"\n" +
+	"bool_value\x18\x05 \x01(\bH\x00R\tboolValue\x12\x1f\n" +
+	"\n" +
+	"text_value\x18\x06 \x01(\tH\x00R\ttextValueB\a\n" +
+	"\x05value*\xab\x01\n" +
 	"\x12SearchContextState\x12$\n" +
 	" SEARCH_CONTEXT_STATE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!SEARCH_CONTEXT_STATE_EXCERPT_ONLY\x10\x01\x12\"\n" +
@@ -4811,7 +4973,7 @@ func file_clyde_v1_daemon_service_proto_rawDescGZIP() []byte {
 }
 
 var file_clyde_v1_daemon_service_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_clyde_v1_daemon_service_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
+var file_clyde_v1_daemon_service_proto_msgTypes = make([]protoimpl.MessageInfo, 51)
 var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(SearchContextState)(0),                    // 0: clyde.v1.SearchContextState
 	(SearchSource)(0),                          // 1: clyde.v1.SearchSource
@@ -4869,14 +5031,15 @@ var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(*SemanticStatus)(nil),                     // 53: clyde.v1.SemanticStatus
 	(*BoundListenerStatus)(nil),                // 54: clyde.v1.BoundListenerStatus
 	(*GetDaemonStatusResponse)(nil),            // 55: clyde.v1.GetDaemonStatusResponse
-	(Provider)(0),                              // 56: clyde.v1.Provider
-	(*emptypb.Empty)(nil),                      // 57: google.protobuf.Empty
-	(*ReloadDaemonRequest)(nil),                // 58: clyde.v1.ReloadDaemonRequest
-	(*GetProviderStatsRequest)(nil),            // 59: clyde.v1.GetProviderStatsRequest
-	(*SubscribeProviderStatsRequest)(nil),      // 60: clyde.v1.SubscribeProviderStatsRequest
-	(*ReloadDaemonResponse)(nil),               // 61: clyde.v1.ReloadDaemonResponse
-	(*GetProviderStatsResponse)(nil),           // 62: clyde.v1.GetProviderStatsResponse
-	(*ProviderStatsEvent)(nil),                 // 63: clyde.v1.ProviderStatsEvent
+	(*StatusMetric)(nil),                       // 56: clyde.v1.StatusMetric
+	(Provider)(0),                              // 57: clyde.v1.Provider
+	(*emptypb.Empty)(nil),                      // 58: google.protobuf.Empty
+	(*ReloadDaemonRequest)(nil),                // 59: clyde.v1.ReloadDaemonRequest
+	(*GetProviderStatsRequest)(nil),            // 60: clyde.v1.GetProviderStatsRequest
+	(*SubscribeProviderStatsRequest)(nil),      // 61: clyde.v1.SubscribeProviderStatsRequest
+	(*ReloadDaemonResponse)(nil),               // 62: clyde.v1.ReloadDaemonResponse
+	(*GetProviderStatsResponse)(nil),           // 63: clyde.v1.GetProviderStatsResponse
+	(*ProviderStatsEvent)(nil),                 // 64: clyde.v1.ProviderStatsEvent
 }
 var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	37, // 0: clyde.v1.GetSemanticSearchFreshnessResponse.semantic_freshness:type_name -> clyde.v1.SemanticSearchFreshness
@@ -4892,8 +5055,8 @@ var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	21, // 10: clyde.v1.ShowCaptureResponse.correlation:type_name -> clyde.v1.ShowCaptureCorrelation
 	22, // 11: clyde.v1.ShowCaptureResponse.passes:type_name -> clyde.v1.ShowCapturePass
 	25, // 12: clyde.v1.GetMITMStatusResponse.listeners:type_name -> clyde.v1.MITMListenerStatus
-	56, // 13: clyde.v1.ListConversationsRequest.provider:type_name -> clyde.v1.Provider
-	56, // 14: clyde.v1.SearchConversationsRequest.provider:type_name -> clyde.v1.Provider
+	57, // 13: clyde.v1.ListConversationsRequest.provider:type_name -> clyde.v1.Provider
+	57, // 14: clyde.v1.SearchConversationsRequest.provider:type_name -> clyde.v1.Provider
 	51, // 15: clyde.v1.ConversationSearchMatch.conversation:type_name -> clyde.v1.ConversationRecord
 	0,  // 16: clyde.v1.ConversationSearchMatch.context_state:type_name -> clyde.v1.SearchContextState
 	35, // 17: clyde.v1.SearchFacets.workspaces:type_name -> clyde.v1.SearchFacetCount
@@ -4911,58 +5074,60 @@ var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	2,  // 29: clyde.v1.ResolveConversationRequestResponse.origin:type_name -> clyde.v1.RequestResolutionOrigin
 	3,  // 30: clyde.v1.ResolveConversationRequestResponse.not_found_reason:type_name -> clyde.v1.RequestResolutionNotFoundReason
 	51, // 31: clyde.v1.ResolveConversationRequestResponse.conversation:type_name -> clyde.v1.ConversationRecord
-	56, // 32: clyde.v1.ReorientConversationRef.provider:type_name -> clyde.v1.Provider
+	57, // 32: clyde.v1.ReorientConversationRef.provider:type_name -> clyde.v1.Provider
 	47, // 33: clyde.v1.ReorientConversationResponse.current_conversation:type_name -> clyde.v1.ReorientConversationRef
-	56, // 34: clyde.v1.ConversationLineage.parent_provider:type_name -> clyde.v1.Provider
-	56, // 35: clyde.v1.ConversationRecord.provider:type_name -> clyde.v1.Provider
+	57, // 34: clyde.v1.ConversationLineage.parent_provider:type_name -> clyde.v1.Provider
+	57, // 35: clyde.v1.ConversationRecord.provider:type_name -> clyde.v1.Provider
 	50, // 36: clyde.v1.ConversationRecord.lineage:type_name -> clyde.v1.ConversationLineage
 	51, // 37: clyde.v1.ListConversationsResponse.conversations:type_name -> clyde.v1.ConversationRecord
 	4,  // 38: clyde.v1.SemanticStatus.connection:type_name -> clyde.v1.SemanticConnectionState
 	5,  // 39: clyde.v1.SemanticStatus.backend:type_name -> clyde.v1.SemanticBackend
-	53, // 40: clyde.v1.GetDaemonStatusResponse.semantic:type_name -> clyde.v1.SemanticStatus
-	54, // 41: clyde.v1.GetDaemonStatusResponse.listeners:type_name -> clyde.v1.BoundListenerStatus
-	54, // 42: clyde.v1.GetDaemonStatusResponse.profiling:type_name -> clyde.v1.BoundListenerStatus
-	57, // 43: clyde.v1.ClydeService.GetDaemonStatus:input_type -> google.protobuf.Empty
-	58, // 44: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
-	58, // 45: clyde.v1.ClydeService.RebindDaemon:input_type -> clyde.v1.ReloadDaemonRequest
-	59, // 46: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
-	60, // 47: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
-	27, // 48: clyde.v1.ClydeService.ListConversations:input_type -> clyde.v1.ListConversationsRequest
-	29, // 49: clyde.v1.ClydeService.GetConversationInfo:input_type -> clyde.v1.GetConversationInfoRequest
-	33, // 50: clyde.v1.ClydeService.SearchConversations:input_type -> clyde.v1.SearchConversationsRequest
-	44, // 51: clyde.v1.ClydeService.ResolveConversationRequest:input_type -> clyde.v1.ResolveConversationRequestRequest
-	46, // 52: clyde.v1.ClydeService.ReorientConversation:input_type -> clyde.v1.ReorientConversationRequest
-	28, // 53: clyde.v1.ClydeService.StreamConversation:input_type -> clyde.v1.GetConversationRequest
-	32, // 54: clyde.v1.ClydeService.StreamConversationContext:input_type -> clyde.v1.GetConversationContextRequest
-	49, // 55: clyde.v1.ClydeService.StreamExportTranscript:input_type -> clyde.v1.ExportTranscriptRequest
-	24, // 56: clyde.v1.ClydeService.GetMITMStatus:input_type -> clyde.v1.GetMITMStatusRequest
-	17, // 57: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
-	15, // 58: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
-	8,  // 59: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
-	6,  // 60: clyde.v1.ClydeService.GetSemanticSearchFreshness:input_type -> clyde.v1.GetSemanticSearchFreshnessRequest
-	55, // 61: clyde.v1.ClydeService.GetDaemonStatus:output_type -> clyde.v1.GetDaemonStatusResponse
-	61, // 62: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	61, // 63: clyde.v1.ClydeService.RebindDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	62, // 64: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
-	63, // 65: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
-	52, // 66: clyde.v1.ClydeService.ListConversations:output_type -> clyde.v1.ListConversationsResponse
-	43, // 67: clyde.v1.ClydeService.GetConversationInfo:output_type -> clyde.v1.GetConversationInfoResponse
-	40, // 68: clyde.v1.ClydeService.SearchConversations:output_type -> clyde.v1.SearchConversationsResponse
-	45, // 69: clyde.v1.ClydeService.ResolveConversationRequest:output_type -> clyde.v1.ResolveConversationRequestResponse
-	48, // 70: clyde.v1.ClydeService.ReorientConversation:output_type -> clyde.v1.ReorientConversationResponse
-	30, // 71: clyde.v1.ClydeService.StreamConversation:output_type -> clyde.v1.ConversationChunk
-	30, // 72: clyde.v1.ClydeService.StreamConversationContext:output_type -> clyde.v1.ConversationChunk
-	31, // 73: clyde.v1.ClydeService.StreamExportTranscript:output_type -> clyde.v1.ExportChunk
-	26, // 74: clyde.v1.ClydeService.GetMITMStatus:output_type -> clyde.v1.GetMITMStatusResponse
-	23, // 75: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
-	16, // 76: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
-	14, // 77: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
-	7,  // 78: clyde.v1.ClydeService.GetSemanticSearchFreshness:output_type -> clyde.v1.GetSemanticSearchFreshnessResponse
-	61, // [61:79] is the sub-list for method output_type
-	43, // [43:61] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	56, // 40: clyde.v1.SemanticStatus.detail:type_name -> clyde.v1.StatusMetric
+	53, // 41: clyde.v1.GetDaemonStatusResponse.semantic:type_name -> clyde.v1.SemanticStatus
+	54, // 42: clyde.v1.GetDaemonStatusResponse.listeners:type_name -> clyde.v1.BoundListenerStatus
+	54, // 43: clyde.v1.GetDaemonStatusResponse.profiling:type_name -> clyde.v1.BoundListenerStatus
+	56, // 44: clyde.v1.GetDaemonStatusResponse.process:type_name -> clyde.v1.StatusMetric
+	58, // 45: clyde.v1.ClydeService.GetDaemonStatus:input_type -> google.protobuf.Empty
+	59, // 46: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
+	59, // 47: clyde.v1.ClydeService.RebindDaemon:input_type -> clyde.v1.ReloadDaemonRequest
+	60, // 48: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
+	61, // 49: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
+	27, // 50: clyde.v1.ClydeService.ListConversations:input_type -> clyde.v1.ListConversationsRequest
+	29, // 51: clyde.v1.ClydeService.GetConversationInfo:input_type -> clyde.v1.GetConversationInfoRequest
+	33, // 52: clyde.v1.ClydeService.SearchConversations:input_type -> clyde.v1.SearchConversationsRequest
+	44, // 53: clyde.v1.ClydeService.ResolveConversationRequest:input_type -> clyde.v1.ResolveConversationRequestRequest
+	46, // 54: clyde.v1.ClydeService.ReorientConversation:input_type -> clyde.v1.ReorientConversationRequest
+	28, // 55: clyde.v1.ClydeService.StreamConversation:input_type -> clyde.v1.GetConversationRequest
+	32, // 56: clyde.v1.ClydeService.StreamConversationContext:input_type -> clyde.v1.GetConversationContextRequest
+	49, // 57: clyde.v1.ClydeService.StreamExportTranscript:input_type -> clyde.v1.ExportTranscriptRequest
+	24, // 58: clyde.v1.ClydeService.GetMITMStatus:input_type -> clyde.v1.GetMITMStatusRequest
+	17, // 59: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
+	15, // 60: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
+	8,  // 61: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
+	6,  // 62: clyde.v1.ClydeService.GetSemanticSearchFreshness:input_type -> clyde.v1.GetSemanticSearchFreshnessRequest
+	55, // 63: clyde.v1.ClydeService.GetDaemonStatus:output_type -> clyde.v1.GetDaemonStatusResponse
+	62, // 64: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	62, // 65: clyde.v1.ClydeService.RebindDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	63, // 66: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
+	64, // 67: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
+	52, // 68: clyde.v1.ClydeService.ListConversations:output_type -> clyde.v1.ListConversationsResponse
+	43, // 69: clyde.v1.ClydeService.GetConversationInfo:output_type -> clyde.v1.GetConversationInfoResponse
+	40, // 70: clyde.v1.ClydeService.SearchConversations:output_type -> clyde.v1.SearchConversationsResponse
+	45, // 71: clyde.v1.ClydeService.ResolveConversationRequest:output_type -> clyde.v1.ResolveConversationRequestResponse
+	48, // 72: clyde.v1.ClydeService.ReorientConversation:output_type -> clyde.v1.ReorientConversationResponse
+	30, // 73: clyde.v1.ClydeService.StreamConversation:output_type -> clyde.v1.ConversationChunk
+	30, // 74: clyde.v1.ClydeService.StreamConversationContext:output_type -> clyde.v1.ConversationChunk
+	31, // 75: clyde.v1.ClydeService.StreamExportTranscript:output_type -> clyde.v1.ExportChunk
+	26, // 76: clyde.v1.ClydeService.GetMITMStatus:output_type -> clyde.v1.GetMITMStatusResponse
+	23, // 77: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
+	16, // 78: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
+	14, // 79: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
+	7,  // 80: clyde.v1.ClydeService.GetSemanticSearchFreshness:output_type -> clyde.v1.GetSemanticSearchFreshnessResponse
+	63, // [63:81] is the sub-list for method output_type
+	45, // [45:63] is the sub-list for method input_type
+	45, // [45:45] is the sub-list for extension type_name
+	45, // [45:45] is the sub-list for extension extendee
+	0,  // [0:45] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_service_proto_init() }
@@ -4974,14 +5139,21 @@ func file_clyde_v1_daemon_service_proto_init() {
 	file_clyde_v1_daemon_service_proto_msgTypes[3].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[4].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[7].OneofWrappers = []any{}
+	file_clyde_v1_daemon_service_proto_msgTypes[47].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[49].OneofWrappers = []any{}
+	file_clyde_v1_daemon_service_proto_msgTypes[50].OneofWrappers = []any{
+		(*StatusMetric_IntValue)(nil),
+		(*StatusMetric_FloatValue)(nil),
+		(*StatusMetric_BoolValue)(nil),
+		(*StatusMetric_TextValue)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_service_proto_rawDesc), len(file_clyde_v1_daemon_service_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   50,
+			NumMessages:   51,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/daemon"
 )
 
 func ingestionProofSettled(conversations int) func(conversation.SearchFreshness) bool {
@@ -22,6 +23,11 @@ func TestConversationIngestionProof(t *testing.T) {
 		afterFirstVersion = waitForIngestionProofFreshness(t, "a", ingestionProofSettleTimeout, ingestionProofSettled(1))
 	})
 
+	var afterFirstStatus *daemon.RuntimeStatus
+	t.Run("a_status_reports_first_ingestion", func(t *testing.T) {
+		afterFirstStatus = runStatusProofFirstIngestionStep(t)
+	})
+
 	t.Run("b_unchanged_input_needs_no_work", func(t *testing.T) {
 		later := waitForIngestionProofFreshness(t, "b", ingestionProofPassTimeout, func(freshness conversation.SearchFreshness) bool {
 			return freshness.LastSyncUnix > afterFirstVersion.LastSyncUnix
@@ -29,6 +35,14 @@ func TestConversationIngestionProof(t *testing.T) {
 		if !ingestionProofSettled(1)(later) {
 			t.Errorf("step=b freshness=%+v want_needed=0 want_pending=0 want_manifest=1 want_embedded=1", later)
 		}
+	})
+
+	t.Run("b_status_keeps_totals_after_unchanged_pass", func(t *testing.T) {
+		runStatusProofUnchangedPassStep(t, afterFirstStatus)
+	})
+
+	t.Run("b_status_command_renders_text_and_json", func(t *testing.T) {
+		runStatusProofCommandStep(t)
 	})
 
 	t.Run("c_appended_message_is_searchable", func(t *testing.T) {

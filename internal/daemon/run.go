@@ -134,6 +134,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	conversationIndex := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
 	startConversationIndex(ctx, log, conversationIndex, runtime.group)
 	semanticFreshness := newConversationSemanticFreshness()
+	runtime.semanticSync = semanticFreshness
 
 	// Resolve the feeder client per pass rather than once here: when the engine
 	// is down at boot the resolver returns nil, and the worker starts anyway and

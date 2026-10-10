@@ -143,6 +143,7 @@ func (c *Client) UpsertConversationDocuments(
 		"inputs_split", stats.split,
 		"inputs_skipped", stats.dropped,
 	)
+	c.recordUpsert(UpsertStats{JobID: jobID, RowsWritten: stats.rowsWritten, VectorsReused: stats.reused, VectorsEmbedded: stats.embedded})
 	return jobID, nil
 }
 

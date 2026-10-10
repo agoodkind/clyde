@@ -126,8 +126,8 @@ func WriteRuntimeStatusReport(out io.Writer, snapshot *daemonsvc.RuntimeStatus) 
 	}
 	semantic := snapshot.Semantic
 	nextRetry := "none"
-	if semantic.NextRetryUnix != 0 {
-		nextRetry = time.Unix(semantic.NextRetryUnix, 0).Format(time.RFC3339)
+	if semantic.NextRetryUnix != nil {
+		nextRetry = time.Unix(*semantic.NextRetryUnix, 0).Format(time.RFC3339)
 	}
 	_, _ = fmt.Fprintf(out, "semantic: ingestion_enabled=%t search_enabled=%t backend=%s connection=%s attempts=%d next_retry=%s\n", semantic.IngestionEnabled, semantic.SearchEnabled, semantic.Backend, semantic.Connection, semantic.Attempts, nextRetry)
 	if snapshot.CursorRawIndexingEnabled == nil {

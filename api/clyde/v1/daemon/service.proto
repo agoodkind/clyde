@@ -604,9 +604,10 @@ message SemanticStatus {
   bool ingestion_enabled = 1;
   bool search_enabled = 2;
   SemanticConnectionState connection = 3;
-  int64 next_retry_unix = 4;
+  optional int64 next_retry_unix = 4;
   uint64 attempts = 5;
   SemanticBackend backend = 6;
+  repeated StatusMetric detail = 7;
 }
 
 message BoundListenerStatus {
@@ -621,4 +622,18 @@ message GetDaemonStatusResponse {
   // Absent when the daemon did not start a profiling listener.
   BoundListenerStatus profiling = 3;
   optional bool cursor_raw_indexing_enabled = 4;
+  repeated StatusMetric process = 5;
+}
+
+// An unset value means the daemon does not know the value.
+// The unit is empty for a value without a unit.
+message StatusMetric {
+  string name = 1;
+  string unit = 2;
+  oneof value {
+    int64 int_value = 3;
+    double float_value = 4;
+    bool bool_value = 5;
+    string text_value = 6;
+  }
 }
