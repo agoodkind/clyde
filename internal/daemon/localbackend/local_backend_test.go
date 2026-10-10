@@ -1,4 +1,4 @@
-package daemon_test
+package localbackend_test
 
 import (
 	"bytes"
