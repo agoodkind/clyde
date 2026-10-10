@@ -3,29 +3,23 @@ package localbackend_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/mark3labs/mcp-go/server"
-	"github.com/spf13/cobra"
-	"goodkind.io/clyde/internal/cli"
 	clidaemon "goodkind.io/clyde/internal/cli/daemon"
-	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/clyde/internal/clispec"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/daemon/localtest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 const (
 	localBackendSearchTimeout = 3 * time.Minute
-	localBackendSourceJSON    = `"source":"local"`
 	// A missing key file must not prevent the local backend from starting.
 	localBackendDaemonConfig = `[conversation.semantic]
 ingestion_enabled = true
@@ -41,40 +35,8 @@ enabled_default = false
 `
 )
 
-func localBackendSearchCLIOutput(t *testing.T, registry *clispec.Registry, query string) string {
-	t.Helper()
-	var stdout bytes.Buffer
-	factory := &cli.Factory{
-		IOStreams: &cli.IOStreams{In: &bytes.Buffer{}, Out: &stdout, Err: &bytes.Buffer{}},
-	}
-	root := &cobra.Command{Use: "clyde"}
-	output.PersistentFlag(root)
-	root.AddCommand(clispec.RenderCobra(registry, factory)...)
-	root.SetArgs([]string{"--output-format", "json", "conversation", "search", "--query", query})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("conversation search: %v\n%s", err, stdout.String())
-	}
-	return stdout.String()
-}
-
-func localBackendSearchMCPOutput(t *testing.T, registry *clispec.Registry, query string) string {
-	t.Helper()
-	mcpServer := server.NewMCPServer("clyde-local-backend-test", "test")
-	clispec.RenderMCP(registry, mcpServer)
-	request := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"clyde_search","arguments":{"query":%q}}}`,
-		query,
-	)
-	response := mcpServer.HandleMessage(context.Background(), json.RawMessage(request))
-	body, err := json.Marshal(response)
-	if err != nil {
-		t.Fatalf("encode clyde_search response: %v", err)
-	}
-	return string(body)
-}
-
 func TestLocalBackendIngestsAndSearchesWithoutMilvus(t *testing.T) {
-	startRawTextDaemon(t, localBackendDaemonConfig)
+	localtest.StartRawTextDaemon(t, localBackendDaemonConfig)
 	options := conversation.SearchConversationsOptions{
 		Query: "why does the daemon bind its listener again after a configuration edit",
 		Limit: 5,
@@ -91,7 +53,7 @@ func TestLocalBackendIngestsAndSearchesWithoutMilvus(t *testing.T) {
 			result = found
 			break
 		}
-		time.Sleep(rawTextPollInterval)
+		time.Sleep(localtest.RawTextPollInterval)
 	}
 	if len(result.Matches) == 0 {
 		t.Fatalf("SearchConversations did not return a local backend match within %s", localBackendSearchTimeout)
@@ -112,13 +74,13 @@ func TestLocalBackendIngestsAndSearchesWithoutMilvus(t *testing.T) {
 		t.Fatalf("status text missing backend=local:\n%s", statusText.String())
 	}
 	registry := clispec.NewConversationRegistry()
-	cliOutput := localBackendSearchCLIOutput(t, registry, options.Query)
-	if !strings.Contains(cliOutput, localBackendSourceJSON) {
-		t.Fatalf("conversation search output missing %s:\n%s", localBackendSourceJSON, cliOutput)
+	cliOutput := localtest.LocalBackendSearchCLIOutput(t, registry, options.Query)
+	if !strings.Contains(cliOutput, localtest.LocalBackendSourceJSON) {
+		t.Fatalf("conversation search output missing %s:\n%s", localtest.LocalBackendSourceJSON, cliOutput)
 	}
-	mcpOutput := localBackendSearchMCPOutput(t, registry, options.Query)
-	if !strings.Contains(mcpOutput, localBackendSourceJSON) {
-		t.Fatalf("clyde_search output missing %s:\n%s", localBackendSourceJSON, mcpOutput)
+	mcpOutput := localtest.LocalBackendSearchMCPOutput(t, registry, options.Query)
+	if !strings.Contains(mcpOutput, localtest.LocalBackendSourceJSON) {
+		t.Fatalf("clyde_search output missing %s:\n%s", localtest.LocalBackendSourceJSON, mcpOutput)
 	}
 	if !strings.Contains(strings.ToLower(result.Matches[0].Snippet), "rebind") {
 		t.Fatalf("top match snippet = %q, want a fixture message about the listener rebind", result.Matches[0].Snippet)

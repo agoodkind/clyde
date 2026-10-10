@@ -11,6 +11,7 @@ import (
 
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/daemon/localtest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -85,7 +86,7 @@ func waitForLocalSearch(
 				return
 			}
 		}
-		time.Sleep(rawTextPollInterval)
+		time.Sleep(localtest.RawTextPollInterval)
 	}
 	t.Fatalf("the local index did not hold %s within %s; the last search returned %d matches", want, localSearchReadyTimeout, returned)
 }
@@ -100,11 +101,11 @@ func searchLocalContract(t *testing.T, options conversation.SearchConversationsO
 }
 
 func TestLocalSearchRanksEveryAllowedPassage(t *testing.T) {
-	projectDir := startRawTextDaemon(t, localBackendDaemonConfig)
-	sessions := []string{rawTextReadableSession, rawTextUnreadableSession}
+	projectDir := localtest.StartRawTextDaemon(t, localBackendDaemonConfig)
+	sessions := []string{localtest.RawTextReadableSession, localtest.RawTextUnreadableSession}
 	for extra := range localSearchExtraSessions {
 		session := fmt.Sprintf("local-search-visible-session-%d", extra)
-		writeRawTextTranscript(t, filepath.Join(projectDir, session+".jsonl"), session, extra+localSearchFirstExtraMinute)
+		localtest.WriteRawTextTranscript(t, filepath.Join(projectDir, session+".jsonl"), session, extra+localSearchFirstExtraMinute)
 		sessions = append(sessions, session)
 	}
 	writeLocalSearchArchivedRollout(t)
