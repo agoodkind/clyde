@@ -62,6 +62,8 @@ func (s *Server) prepareResponsesProvider(
 		return preparedResponsesProvider{
 			provider: adapterresolver.ProviderAnthropic, codex: nil, anthropic: &prepared,
 		}, nil
+	case BackendClaude, BackendPassthroughOverride:
+		fallthrough
 	default:
 		return preparedResponsesProvider{}, fmt.Errorf("prepare Responses request: unsupported provider %q", resolved.Provider)
 	}
@@ -94,6 +96,8 @@ func (p preparedResponsesProvider) Execute(ctx context.Context, w adapterprovide
 			return adapterprovider.Result{}, s.responsesProviderError(ctx, "execute", p.provider, err)
 		}
 		return result, nil
+	case BackendClaude, BackendPassthroughOverride:
+		fallthrough
 	default:
 		return adapterprovider.Result{}, fmt.Errorf("execute prepared Responses request: unsupported provider %q", p.provider)
 	}
