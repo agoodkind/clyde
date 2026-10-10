@@ -65,6 +65,7 @@ func (w *metricsRollupWorker) run(ctx context.Context) {
 	}()
 	w.recordGeneration(ctx)
 	w.state.checkpoint = readMetricsRollupCheckpoint(metricsRollupCheckpointPath())
+	w.state.saved = w.state.checkpoint
 	w.runPassAndLog(ctx)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -127,14 +128,8 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 		)
 		return
 	}
-	w.state.checkpoint.LastPassAt = formatRollupTime(w.now())
-	if err := writeMetricsRollupCheckpoint(metricsRollupCheckpointPath(), w.state.checkpoint); err != nil {
-		w.log.WarnContext(ctx, "daemon.metrics_rollup.checkpoint_write_failed",
-			"concern", "daemon.workers",
-			"component", "daemon",
-			"subcomponent", "metrics_rollup",
-			"err", err.Error(),
-		)
+	if w.state.checkpointChanged() {
+		w.writeCheckpoint(ctx)
 	}
 	w.log.DebugContext(ctx, "daemon.metrics_rollup.pass_completed",
 		"concern", "daemon.workers",
@@ -145,6 +140,20 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 		"bytes_read", result.BytesRead,
 		"duration_ms", w.now().Sub(startedAt).Milliseconds(),
 	)
+}
+
+func (w *metricsRollupWorker) writeCheckpoint(ctx context.Context) {
+	w.state.checkpoint.LastPassAt = formatRollupTime(w.now())
+	if err := writeMetricsRollupCheckpoint(metricsRollupCheckpointPath(), w.state.checkpoint); err != nil {
+		w.log.WarnContext(ctx, "daemon.metrics_rollup.checkpoint_write_failed",
+			"concern", "daemon.workers",
+			"component", "daemon",
+			"subcomponent", "metrics_rollup",
+			"err", err.Error(),
+		)
+		return
+	}
+	w.state.saved = w.state.checkpoint
 }
 
 // installMetricsRollupStop creates the worker context and registers its stop as
@@ -178,9 +187,9 @@ func installMetricsRollupStop(
 	return workerCtx, done, true
 }
 
-// startMetricsRollup starts the distiller. A nil lifecycle group leaves the
+// StartMetricsRollup starts the distiller. A nil lifecycle group leaves the
 // goroutine unowned across a reload, so nothing starts.
-func startMetricsRollup(ctx context.Context, log *slog.Logger, group *livetrack.Group) bool {
+func StartMetricsRollup(ctx context.Context, log *slog.Logger, group *livetrack.Group) bool {
 	if log == nil {
 		log = slog.Default()
 	}

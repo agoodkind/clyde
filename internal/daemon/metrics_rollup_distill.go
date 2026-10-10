@@ -16,6 +16,7 @@ import (
 // metricsRollupState retains the known log tail and unfinished requests between passes.
 type metricsRollupState struct {
 	checkpoint      metricsRollupCheckpoint
+	saved           metricsRollupCheckpoint
 	source          *os.File
 	requests        map[string]*metricsRequest
 	nextExpiry      time.Time
@@ -103,6 +104,12 @@ func distillMetricsRollup(ctx context.Context, input metricsRollupDistillInput) 
 		}
 	}
 	return result, nil
+}
+
+func (s *metricsRollupState) checkpointChanged() bool {
+	current := s.checkpoint
+	current.LastPassAt = s.saved.LastPassAt
+	return current != s.saved
 }
 
 func (s *metricsRollupState) rememberExpiry(at time.Time) {

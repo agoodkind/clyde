@@ -81,7 +81,7 @@ func TestDistillRetainsRequestsAcrossPassesAndRotation(t *testing.T) {
 				t.Fatalf("completed second pass: %+v, %v", second, err)
 			}
 			direct := BuildMetricsHistory(MetricsHistoryInput{Since: input.Now.Add(-2 * time.Hour), Now: input.Now, LogPath: path, Pricing: input.Pricing})
-			reports := metricsWindowsFromRollupPath(input.RollupPath, filepath.Join(t.TempDir(), "checkpoint"), []time.Duration{2 * time.Hour}, input.Now, input.Pricing)
+			reports := metricsWindowsFromRollupPath(input.RollupPath, filepath.Join(t.TempDir(), "checkpoint"), []time.Duration{2 * time.Hour}, input.Now, input.Pricing, metricsRollupSourcePosition{})
 			rolled := reports[0].Report
 			if metricInt(direct.Metrics.Requests.Delta) != 2 {
 				t.Fatalf("direct replay did not find both execution identities: %+v", direct)
@@ -199,7 +199,7 @@ func TestDistillStartsAtEndWithoutCompatibleCheckpoint(t *testing.T) {
 			if err := writeMetricsRollupCheckpoint(checkpointPath, state.checkpoint); err != nil {
 				t.Fatal(err)
 			}
-			reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{3 * time.Hour}, input.Now, input.Pricing)
+			reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{3 * time.Hour}, input.Now, input.Pricing, metricsRollupSourcePosition{})
 			if got := metricInt(reports[0].Report.Metrics.Requests.Delta); got != int64(want+1) {
 				t.Fatalf("existing summary unreadable: requests=%d", got)
 			}
@@ -239,7 +239,7 @@ func TestDistillResumesSavedCompleteOffset(t *testing.T) {
 	if err != nil || second.Written != 1 || second.BytesRead != wantBytes {
 		t.Fatalf("resumed pass: %+v %v; want %d new bytes", second, err, wantBytes)
 	}
-	reports := metricsWindowsFromRollupPath(input.RollupPath, checkpointPath, []time.Duration{2 * time.Hour}, input.Now, input.Pricing)
+	reports := metricsWindowsFromRollupPath(input.RollupPath, checkpointPath, []time.Duration{2 * time.Hour}, input.Now, input.Pricing, metricsRollupSourcePosition{})
 	if metricInt(reports[0].Report.Metrics.Requests.Delta) != 3 {
 		t.Fatal("resumed report lost or duplicated requests")
 	}

@@ -66,7 +66,7 @@ func TestRollupReportMatchesDirectLogReplay(t *testing.T) {
 		Since: now.Add(-2 * time.Hour), Now: now, LogPath: logPath, Pricing: pricing,
 	})
 	checkpointPath := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
-	fromRollup := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, pricing)
+	fromRollup := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, pricing, metricsRollupSourcePosition{})
 	if len(fromRollup) != 1 {
 		t.Fatalf("got %d windows, want 1", len(fromRollup))
 	}
@@ -156,7 +156,7 @@ func TestDistillIsIdempotentAcrossPasses(t *testing.T) {
 	}
 
 	checkpointPath := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
-	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, pricing)
+	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, pricing, metricsRollupSourcePosition{})
 	if got := metricInt(reports[0].Report.Metrics.Requests.Delta); got != 2 {
 		t.Fatalf("requests after two passes = %d, want 2", got)
 	}
@@ -201,7 +201,7 @@ func TestDefaultWindowsReportIndependentTotals(t *testing.T) {
 	})
 
 	checkpointPath := writeRollupCheckpointFixture(t, now)
-	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, defaultMetricsWindows, now, rollupPricingTable())
+	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, defaultMetricsWindows, now, rollupPricingTable(), metricsRollupSourcePosition{})
 	if len(reports) != 3 {
 		t.Fatalf("got %d windows, want 3", len(reports))
 	}
@@ -229,7 +229,7 @@ func TestWindowReportsRestartCount(t *testing.T) {
 	})
 
 	checkpointPath := writeRollupCheckpointFixture(t, now)
-	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, rollupPricingTable())
+	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, []time.Duration{2 * time.Hour}, now, rollupPricingTable(), metricsRollupSourcePosition{})
 	report := reports[0].Report
 	if report.Restarts != 1 {
 		t.Fatalf("restarts = %d, want 1", report.Restarts)
@@ -278,7 +278,7 @@ func TestEmptyRollupReportsNoHistoryRatherThanZero(t *testing.T) {
 	checkpointPath := filepath.Join(t.TempDir(), metricsRollupCheckpointFileName)
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 
-	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, defaultMetricsWindows, now, rollupPricingTable())
+	reports := metricsWindowsFromRollupPath(rollupPath, checkpointPath, defaultMetricsWindows, now, rollupPricingTable(), metricsRollupSourcePosition{})
 	for _, report := range reports {
 		if report.Report.Coverage.Complete {
 			t.Fatalf("window %s claims complete coverage with no store", report.Label)
@@ -308,7 +308,7 @@ func TestWindowClearsCoverageWhenDistillerLagsBehindWindowEnd(t *testing.T) {
 	// everything up to Window.Until.
 	staleCheckpoint := writeRollupCheckpointFixture(t, now.Add(-12*time.Minute))
 
-	reports := metricsWindowsFromRollupPath(rollupPath, staleCheckpoint, []time.Duration{time.Hour}, now, rollupPricingTable())
+	reports := metricsWindowsFromRollupPath(rollupPath, staleCheckpoint, []time.Duration{time.Hour}, now, rollupPricingTable(), metricsRollupSourcePosition{})
 	report := reports[0].Report
 	if report.Coverage.Complete {
 		t.Fatal("coverage claims complete with a distill pass 12 minutes stale")
@@ -330,7 +330,7 @@ func TestWindowReportsCompleteCoverageWhenDistillerIsCurrent(t *testing.T) {
 	})
 	freshCheckpoint := writeRollupCheckpointFixture(t, now.Add(-1*time.Minute))
 
-	reports := metricsWindowsFromRollupPath(rollupPath, freshCheckpoint, []time.Duration{time.Hour}, now, rollupPricingTable())
+	reports := metricsWindowsFromRollupPath(rollupPath, freshCheckpoint, []time.Duration{time.Hour}, now, rollupPricingTable(), metricsRollupSourcePosition{})
 	report := reports[0].Report
 	if !report.Coverage.Complete {
 		t.Fatalf("coverage = incomplete warnings=%v, want complete with a current pass and full history", report.Warnings)

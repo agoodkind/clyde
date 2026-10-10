@@ -73,7 +73,7 @@ func TestDistillDrainsAppendAfterSnapshotBeforeRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	direct := BuildMetricsHistory(MetricsHistoryInput{Since: now.Add(-2 * time.Hour), Now: now, LogPath: path, Pricing: input.Pricing})
-	reports := metricsWindowsFromRollupPath(input.RollupPath, filepath.Join(t.TempDir(), "checkpoint"), []time.Duration{2 * time.Hour}, now, input.Pricing)
+	reports := metricsWindowsFromRollupPath(input.RollupPath, filepath.Join(t.TempDir(), "checkpoint"), []time.Duration{2 * time.Hour}, now, input.Pricing, metricsRollupSourcePosition{})
 	rolled := reports[0].Report
 	t.Logf("direct=%d first_written=%d second_written=%d pending=%d", metricInt(direct.Metrics.Requests.Delta), first.Written, second.Written, len(state.requests))
 	if metricInt(direct.Metrics.Requests.Delta) != 1 {
