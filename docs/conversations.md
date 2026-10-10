@@ -47,7 +47,9 @@ for the next append. Truncation or a detected file replacement rebuilds that
 transcript's derived state. Process startup rebuilds this in-memory continuation
 as needed. Only the current cache format is supported after the upgrade reset.
 
-Semantic ingestion and search are independent opt-ins. Raw listing, reading,
+Semantic ingestion and search are independent opt-ins. Milvus is the default
+store; the [local store how-to guide](conversations/local.md) gives the steps to
+select the optional local store running inside the daemon. Raw listing, reading,
 context, and export remain available with both off. Search can use previously
 indexed conversations while ingestion is off. An unavailable engine leaves raw
 operations available and retries its connection in the background.
@@ -68,9 +70,11 @@ Use `clyde conversation search CONVERSATION_ID` to read a transcript. Add
 `--around MESSAGE_INDEX --window N` to read a context window.
 
 Use `clyde conversation search --query QUERY` to search the indexed corpus. Add
-`CONVERSATION_ID` before `--query` to search one conversation. Omit both to
-browse conversation metadata. Search returns excerpts and result ids; export is
-the portable transcript path.
+`CONVERSATION_ID` before `--query` to search one conversation. The bare
+`clyde conversation search` command prints help. Use a flag such as `--limit 20`
+or `--provider zed` without a query or conversation ID to browse conversation
+metadata. Search returns excerpts and result ids; export is the portable
+transcript path.
 
 ## Compaction Segments
 
