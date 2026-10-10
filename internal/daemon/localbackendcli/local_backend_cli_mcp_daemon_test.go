@@ -1,4 +1,4 @@
-package localbackend_test
+package localbackendcli_test
 
 import (
 	"bufio"

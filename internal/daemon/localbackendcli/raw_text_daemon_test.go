@@ -1,4 +1,4 @@
-package localbackend_test
+package localbackendcli_test
 
 import (
 	"context"
@@ -11,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/sandbox"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -93,4 +96,22 @@ func startRawTextDaemon(t *testing.T, daemonConfig string) string {
 		}
 	})
 	return projectDir
+}
+
+// waitForFirstMatches retries until the daemon accepts the search and the search
+// returns want matches. An error other than Unavailable fails the test at once.
+func waitForFirstMatches(t *testing.T, options conversation.SearchConversationsOptions, want int) {
+	t.Helper()
+	deadline := time.Now().Add(rawTextSearchTimeout)
+	for time.Now().Before(deadline) {
+		result, err := daemon.SearchConversations(context.Background(), options)
+		if err != nil && status.Code(err) != codes.Unavailable {
+			t.Fatalf("SearchConversations: %v", err)
+		}
+		if err == nil && len(result.Matches) == want {
+			return
+		}
+		time.Sleep(rawTextPollInterval)
+	}
+	t.Fatalf("SearchConversations did not return %d matches within %s", want, rawTextSearchTimeout)
 }
