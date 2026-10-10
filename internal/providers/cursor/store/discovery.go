@@ -11,7 +11,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -212,12 +211,13 @@ func (cache *discoveryCache) descriptorEntry(path string) *descriptorCacheEntry 
 // GlobalDiscovery is the reusable discovery projection of one global store.
 // It retains headers and fingerprints, not full bubble payloads.
 type GlobalDiscovery struct {
-	Headers    map[string]ComposerHeader
-	Stocks     map[string]ComposerBubbleStock
-	Background []BackgroundComposer
-	Metadata   ComposerMetadataIndex
-	Err        error
-	selectors  map[string]composerBubbleSelector
+	Headers      map[string]ComposerHeader
+	Stocks       map[string]ComposerBubbleStock
+	Background   []BackgroundComposer
+	Metadata     ComposerMetadataIndex
+	Err          error
+	selectors    map[string]composerBubbleSelector
+	headerStamps map[string]composerHeaderStamp
 }
 
 type globalCacheEntry struct {
@@ -266,7 +266,7 @@ func ReadGlobalDiscovery(ctx context.Context, path string) GlobalDiscovery {
 	var signature globalDiscoverySignature
 	var signatureErr error
 	if stamp.database.absent {
-		data = GlobalDiscovery{Headers: nil, Stocks: nil, Background: nil, Metadata: ComposerMetadataIndex{ByComposerID: nil, Err: nil}, Err: nil, selectors: nil}
+		data = GlobalDiscovery{Headers: nil, Stocks: nil, Background: nil, Metadata: ComposerMetadataIndex{ByComposerID: nil, Err: nil}, Err: nil, selectors: nil, headerStamps: nil}
 	} else {
 		readCtx, attempt := cached.diagnostics.start(ctx, changed)
 		var unchanged bool
@@ -303,9 +303,9 @@ func readChangedGlobalDiscovery(
 		return data, signature, err, false
 	}
 	defer func() { _ = db.Close() }()
-	signature, headers, signatureErr := readGlobalDiscoverySignature(ctx, db, cached.data.Headers)
-	if headers == nil {
-		headers = cached.data.Headers
+	signature, inventory, signatureErr := readGlobalDiscoverySignature(ctx, db, cached.data)
+	if inventory.headers == nil {
+		inventory = composerHeaderInventory{headers: cached.data.Headers, stamps: cached.data.headerStamps}
 	}
 	snapshot, err := beginReadSnapshot(ctx, db)
 	if err != nil {
@@ -366,7 +366,7 @@ func readChangedGlobalDiscovery(
 		}
 	}
 	snapshot.rollback()
-	data := refreshGlobalDatabase(ctx, db, cached.data, headers, stocks, selectors, stockErr)
+	data := refreshGlobalDatabase(ctx, db, cached.data, inventory, stocks, selectors, stockErr)
 	refreshErr := errors.Join(signatureErr, data.Err, data.Metadata.Err)
 	if refreshErr != nil {
 		logger := discoveryReadLogger(ctx)
@@ -518,9 +518,13 @@ func logComposerStockRefresh(
 	)
 }
 
-func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB, prior map[string]ComposerHeader) (globalDiscoverySignature, map[string]ComposerHeader, error) {
+func readGlobalDiscoverySignature(
+	ctx context.Context,
+	db *sql.DB,
+	prior GlobalDiscovery,
+) (globalDiscoverySignature, composerHeaderInventory, error) {
 	var signature globalDiscoverySignature
-	headers, conversationErr := readConversationRangeSignature(ctx, db, prior, &signature)
+	inventory, conversationErr := readComposerHeaderInventory(ctx, db, prior, &signature)
 	backgroundErr := readBackgroundSignature(ctx, db, &signature)
 	metadataErr := readComposerMetadataSignature(ctx, db, &signature)
 	err := errors.Join(conversationErr, backgroundErr, metadataErr)
@@ -531,34 +535,7 @@ func readGlobalDiscoverySignature(ctx context.Context, db *sql.DB, prior map[str
 			"err", err,
 		)
 	}
-	return signature, headers, err
-}
-
-func readConversationRangeSignature(ctx context.Context, db *sql.DB, prior map[string]ComposerHeader, signature *globalDiscoverySignature) (map[string]ComposerHeader, error) {
-	headers := make(map[string]ComposerHeader, len(prior))
-	digest := sha256.New()
-	err := forEachKVRowInKeyRange(ctx, db, KVTableCursorDiskKV, keyRangeForPrefix(composerDataKeyPrefix), "", func(row KVRow) error {
-		id := strings.TrimPrefix(row.Key, composerDataKeyPrefix)
-		writeFingerprintField(digest, strconv.FormatInt(row.RowID, 10))
-		writeFingerprintField(digest, row.Key)
-		writeFingerprintField(digest, strconv.Itoa(len(row.Value)))
-		_, _ = digest.Write(row.Value)
-		header, decodeErr := DecodeComposerHeaderJSON(row.Value)
-		if decodeErr != nil {
-			if previous, found := prior[id]; found {
-				headers[id] = previous
-			}
-			return nil
-		}
-		header.ComposerID = id
-		headers[id] = header
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	copy(signature.composerDigest[:], digest.Sum(nil))
-	return headers, nil
+	return signature, inventory, err
 }
 
 func readBackgroundSignature(ctx context.Context, db *sql.DB, signature *globalDiscoverySignature) error {
@@ -628,14 +605,15 @@ func refreshGlobalDatabase(
 	ctx context.Context,
 	db *sql.DB,
 	data GlobalDiscovery,
-	headers map[string]ComposerHeader,
+	headers composerHeaderInventory,
 	stocks map[string]ComposerBubbleStock,
 	selectors map[string]composerBubbleSelector,
 	stockErr error,
 ) GlobalDiscovery {
 	background, backgroundErr := ListBackgroundComposers(ctx, db)
 	metadata, metadataErr := ReadComposerMetadataIndex(ctx, db)
-	data.Headers = headers
+	data.Headers = headers.headers
+	data.headerStamps = headers.stamps
 	if stockErr == nil {
 		data.Stocks = stocks
 		data.selectors = selectors

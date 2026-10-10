@@ -231,6 +231,31 @@ func TestReadGlobalDiscoveryRefreshesActiveInPlaceChange(t *testing.T) {
 	}
 }
 
+func TestReadGlobalDiscoveryRefreshesChangedComposerHeader(t *testing.T) {
+	root, _, _ := discoveryFixture(t)
+	initial := cursorstore.ReadGlobalDiscovery(t.Context(), root.GlobalDBPath)
+	if initial.Err != nil || len(initial.Headers["composer-a"].FullConversationHeadersOnly) != 2 {
+		t.Fatalf("initial header = %+v, %v", initial.Headers["composer-a"], initial.Err)
+	}
+	execDiscoveryStatements(t, root.GlobalDBPath,
+		`UPDATE cursorDiskKV SET value = json_insert(value, '$.fullConversationHeadersOnly[#]', json('{"bubbleId":"bubble-3","type":1}')) WHERE key = 'composerData:composer-a'`)
+	appended := cursorstore.ReadGlobalDiscovery(t.Context(), root.GlobalDBPath)
+	order := appended.Headers["composer-a"].FullConversationHeadersOnly
+	if appended.Err != nil || len(order) != 3 || order[2].BubbleID != "bubble-3" {
+		t.Fatalf("appended header = %+v, %v", appended.Headers["composer-a"], appended.Err)
+	}
+	execDiscoveryStatements(t, root.GlobalDBPath, `UPDATE cursorDiskKV SET value = '{' WHERE key = 'composerData:composer-a'`)
+	malformed := cursorstore.ReadGlobalDiscovery(t.Context(), root.GlobalDBPath)
+	if !reflect.DeepEqual(malformed.Headers["composer-a"], appended.Headers["composer-a"]) {
+		t.Fatalf("malformed header replaced prior header: %+v", malformed.Headers["composer-a"])
+	}
+	writeComposerData(t, root.GlobalDBPath, "composer-b", addedComposerHeader)
+	updated := cursorstore.ReadGlobalDiscovery(t.Context(), root.GlobalDBPath)
+	if updated.Err != nil || !reflect.DeepEqual(updated.Headers["composer-b"], decodedComposerHeader(t, "composer-b", addedComposerHeader)) {
+		t.Fatalf("The new composer-b header is %+v. The read returned %v.", updated.Headers["composer-b"], updated.Err)
+	}
+}
+
 func TestReadGlobalDiscoveryReconcilesCrossComposerDeleteAndInsert(t *testing.T) {
 	root, _, _ := discoveryFixture(t)
 	var logs bytes.Buffer
