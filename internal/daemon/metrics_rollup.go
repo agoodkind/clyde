@@ -111,7 +111,8 @@ type metricsRollupSourcePosition struct {
 // Pending request aggregates are held only by the running worker.
 type metricsRollupCheckpoint struct {
 	LastRecordAt string `json:"last_record_at"`
-	// LastPassAt is when the most recent successful pass completed.
+	// LastPassAt records the completion time of the last pass that changed
+	// another checkpoint field.
 	LastPassAt string                      `json:"last_pass_at"`
 	Source     metricsRollupSourcePosition `json:"source"`
 	// CoverageSince marks the start of continuous observed summary coverage.

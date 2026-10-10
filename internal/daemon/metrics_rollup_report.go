@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 // defaultMetricsWindows are the windows the status command reports without
@@ -44,7 +46,22 @@ func metricsWindowLabel(window time.Duration) string {
 // without being asked for a window.
 func MetricsWindowsFromRollup(now time.Time) []MetricsWindowReport {
 	return metricsWindowsFromRollupPath(
-		metricsRollupPath(), metricsRollupCheckpointPath(), defaultMetricsWindows, now, loadRollupPricing())
+		metricsRollupPath(), metricsRollupCheckpointPath(), defaultMetricsWindows, now, loadRollupPricing(),
+		currentRollupSourcePosition())
+}
+
+func currentRollupSourcePosition() metricsRollupSourcePosition {
+	var unknown metricsRollupSourcePosition
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return unknown
+	}
+	logPath := slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon)
+	info, err := os.Stat(logPath)
+	if err != nil {
+		return unknown
+	}
+	return rollupSourcePosition(logPath, info)
 }
 
 // loadRollupPricing resolves the pricing table the cost counter needs. A
@@ -70,6 +87,7 @@ func metricsWindowsFromRollupPath(
 	durations []time.Duration,
 	now time.Time,
 	pricing adapterruntime.PricingTable,
+	currentSource metricsRollupSourcePosition,
 ) []MetricsWindowReport {
 	windows := make([]MetricsWindow, 0, len(durations))
 	for _, duration := range durations {
@@ -78,6 +96,9 @@ func metricsWindowsFromRollupPath(
 
 	checkpoint := readMetricsRollupCheckpoint(checkpointPath)
 	lastPassAt, _ := parseRollupTime(checkpoint.LastPassAt)
+	if !lastPassAt.IsZero() && rollupSourceCaughtUp(checkpoint.Source, currentSource) {
+		lastPassAt = now
+	}
 	coverageSince, hasCoverage := parseRollupTime(checkpoint.CoverageSince)
 
 	reports := make([]MetricsWindowReport, 0, len(durations))
@@ -98,6 +119,10 @@ func metricsWindowsFromRollupPath(
 		reports = append(reports, MetricsWindowReport{Label: metricsWindowLabel(duration), Report: report})
 	}
 	return reports
+}
+
+func rollupSourceCaughtUp(saved metricsRollupSourcePosition, current metricsRollupSourcePosition) bool {
+	return saved.Path != "" && saved == current
 }
 
 // newRollupReport builds the empty report one window starts from.
@@ -125,12 +150,9 @@ func newRollupReport(window MetricsWindow) MetricsHistoryReport {
 // is exact, and the restart count is what tells the reader the window spans a
 // discontinuity.
 //
-// lastPassAt is when the distiller last completed a pass, from the writer
-// checkpoint. The distiller runs on metricsRollupInterval, so the store can
-// lag Window.Until by up to that long even when every record it does hold is
-// correct; without checking lastPassAt, a read taken just before the next
-// pass would claim complete coverage while under-reporting the most recent
-// traffic.
+// The report uses the report time when saved source path, device, inode,
+// and offset match the current log file.
+// Stored data can lag the report window end by up to metricsRollupInterval.
 func applyRollupWindow(
 	report *MetricsHistoryReport,
 	loaded metricsRollupWindow,

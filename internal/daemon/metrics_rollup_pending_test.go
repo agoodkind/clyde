@@ -45,7 +45,7 @@ func TestDistillKeepsUnfinishedLifecyclesAmongHealthRecords(t *testing.T) {
 		t.Fatalf("terminal pass: %+v %v; retained %d requests", third, err, len(input.State.requests))
 	}
 	direct := BuildMetricsHistory(MetricsHistoryInput{Since: input.Now.Add(-time.Hour), Now: input.Now, LogPath: path, Pricing: input.Pricing})
-	reports := metricsWindowsFromRollupPath(input.RollupPath, filepath.Join(t.TempDir(), "checkpoint"), []time.Duration{time.Hour}, input.Now, input.Pricing)
+	reports := metricsWindowsFromRollupPath(input.RollupPath, filepath.Join(t.TempDir(), "checkpoint"), []time.Duration{time.Hour}, input.Now, input.Pricing, metricsRollupSourcePosition{})
 	rolled := reports[0].Report
 	if metricInt(rolled.Metrics.Requests.Delta) != 2 || metricInt(rolled.Metrics.BytesOut.Delta) != 26 {
 		t.Fatalf("completed lifecycles changed: requests=%d bytes_out=%d", metricInt(rolled.Metrics.Requests.Delta), metricInt(rolled.Metrics.BytesOut.Delta))
