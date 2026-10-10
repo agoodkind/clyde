@@ -106,7 +106,6 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 			var attempts atomic.Int64
 			if enabled {
 				unreachable := cfg.Conversation.Semantic
-				unreachable.SocketPath = filepath.Join(t.TempDir(), "missing.sock")
 				unreachable.MilvusAddress = "[::1]:1"
 				unreachable.CollectionID = "status-test"
 				connector := semanticConnectorFor(unreachable)

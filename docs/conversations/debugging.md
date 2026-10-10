@@ -37,9 +37,9 @@ Apply these to every reading, on every surface.
 
 ### Config
 
-`[conversation]` and `[conversation.semantic]` in the clyde config own
-`ingestion_enabled`, `search_enabled`, `indexed_content`, `collection_id`,
-`socket_path`, and `include_subagent_conversations`. See
+`[conversation]` and `[conversation.semantic]` in the clyde config define
+`ingestion_enabled`, `search_enabled`, `indexed_content`, `collection_id`, and
+`include_subagent_conversations`. See
 [reload and hot apply](../reload-and-hot-apply.md) for which fields apply in
 process and which need a reload.
 

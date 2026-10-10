@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -223,7 +222,6 @@ func TestConversationSemanticRuntimeWarnsOnceWhileEngineUnavailable(t *testing.T
 	group := newLifecycleGroup(log)
 	cfg := &config.Config{}
 	cfg.Conversation.Semantic.SearchEnabled = true
-	cfg.Conversation.Semantic.SocketPath = filepath.Join(t.TempDir(), "missing-semantic.sock")
 	cfg.Conversation.Semantic.CollectionID = "conversations"
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
