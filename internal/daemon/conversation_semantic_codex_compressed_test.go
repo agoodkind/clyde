@@ -1,18 +1,17 @@
 package daemon_test
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
-	"github.com/klauspost/compress/zstd"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/daemon"
 	codexparser "goodkind.io/clyde/internal/providers/codex/parser"
+	"goodkind.io/clyde/internal/providers/codex/testsupport"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -33,22 +32,6 @@ const (
 	compressedCodexAppendedMessage   = `{"timestamp":"2026-05-02T17:09:08Z","type":"event_msg","payload":{"type":"user_message","message":"appended compressed turn"}}` + "\n"
 	materializedCodexAppendedMessage = `{"timestamp":"2026-05-02T17:09:09Z","type":"event_msg","payload":{"type":"user_message","message":"appended materialized turn"}}` + "\n"
 )
-
-func encodeSemanticCodexFixture(t *testing.T, body string) []byte {
-	t.Helper()
-	var compressed bytes.Buffer
-	encoder, err := zstd.NewWriter(&compressed, zstd.WithEncoderConcurrency(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := encoder.Write([]byte(body)); err != nil {
-		t.Fatal(err)
-	}
-	if err := encoder.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return compressed.Bytes()
-}
 
 func appendSemanticCodexFixture(t *testing.T, path string, data []byte) {
 	t.Helper()
@@ -148,7 +131,7 @@ func TestCodexSemanticDocumentsSurviveCompressionAndMaterializedAppend(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(compressedPath, encodeSemanticCodexFixture(t, compressedCodexRolloutBody), 0o600); err != nil {
+	if err := os.WriteFile(compressedPath, testsupport.CompressRollout(t, compressedCodexRolloutBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	refreshCompressedCodexRecord(t, index, plainPath)
@@ -198,7 +181,7 @@ func TestCodexSemanticDocumentsSurviveCompressionAndMaterializedAppend(t *testin
 	if !reflect.DeepEqual(unchanged, compressed) {
 		t.Fatal("unchanged refresh changed the conversation record or stamp")
 	}
-	appendSemanticCodexFixture(t, compressedPath, encodeSemanticCodexFixture(t, compressedCodexAppendedMessage))
+	appendSemanticCodexFixture(t, compressedPath, testsupport.CompressRollout(t, compressedCodexAppendedMessage))
 	appended := refreshCompressedCodexRecord(t, index, compressedPath)
 	appendedDocs := projectCompressedCodexRecord(t, index, appended.Record, kinds)
 	if len(appendedDocs) != len(baseline)+1 || !reflect.DeepEqual(appendedDocs[:len(baseline)], baseline) {
@@ -231,7 +214,7 @@ func TestCodexSemanticDocumentsSurviveCompressionAndMaterializedAppend(t *testin
 func TestCodexSemanticLoaderRejectsCompressedCorruption(t *testing.T) {
 	index, plainPath := newCompressedCodexIndex(t)
 	compressedPath := plainPath + ".zst"
-	data := encodeSemanticCodexFixture(t, compressedCodexRolloutBody)
+	data := testsupport.CompressRollout(t, compressedCodexRolloutBody)
 	if err := os.WriteFile(compressedPath, data[:len(data)-1], 0o600); err != nil {
 		t.Fatal(err)
 	}

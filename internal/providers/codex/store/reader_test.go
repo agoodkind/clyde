@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sys/unix"
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
+	"goodkind.io/clyde/internal/providers/codex/testsupport"
 )
 
 const (
@@ -20,25 +20,9 @@ const (
 	compressedTestMessage  = `{"timestamp":"2026-05-02T17:09:01Z","type":"event_msg","payload":{"type":"user_message","message":"read compressed history"}}` + "\n"
 )
 
-func compressRolloutFixture(t *testing.T, body string) []byte {
-	t.Helper()
-	var compressed bytes.Buffer
-	encoder, err := zstd.NewWriter(&compressed, zstd.WithEncoderConcurrency(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := encoder.Write([]byte(body)); err != nil {
-		t.Fatal(err)
-	}
-	if err := encoder.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return compressed.Bytes()
-}
-
 func writeCompressedFixture(t *testing.T, path string, body string) {
 	t.Helper()
-	if err := os.WriteFile(path, compressRolloutFixture(t, body), 0o600); err != nil {
+	if err := os.WriteFile(path, testsupport.CompressRollout(t, body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -109,7 +93,7 @@ func TestCompressedRolloutDiscoveryPrefersPlainSibling(t *testing.T) {
 
 func TestCompressedRolloutReadErrors(t *testing.T) {
 	t.Parallel()
-	compressed := compressRolloutFixture(t, compressedTestHeader+compressedTestMessage)
+	compressed := testsupport.CompressRollout(t, compressedTestHeader+compressedTestMessage)
 	corrupt := bytes.Clone(compressed)
 	corrupt[len(corrupt)-1] ^= 0xff
 	for name, data := range map[string][]byte{
@@ -173,7 +157,7 @@ func rolloutOpenDescriptors(t *testing.T, path string) int {
 func TestCompressedRolloutEarlyStopClosesSource(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), compressedTestFilename+".zst")
-	data := compressRolloutFixture(t, compressedTestHeader+strings.Repeat(compressedTestMessage, 1000))
+	data := testsupport.CompressRollout(t, compressedTestHeader+strings.Repeat(compressedTestMessage, 1000))
 	data = append(data, []byte("corrupt trailing frame")...)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
