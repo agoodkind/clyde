@@ -118,6 +118,18 @@ func TestCodexSemanticDocumentsSurviveCompressionAndMaterializedAppend(t *testin
 		t.Fatal(err)
 	}
 	plain := refreshCompressedCodexRecord(t, index, plainPath)
+	searchOptions := conversation.SearchConversationsOptions{Query: "read compressed history", ConversationID: plain.Record.ID}
+	plainSearch, err := index.SearchRawText(t.Context(), searchOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plainSearch.Matches) != 1 {
+		t.Fatalf("plain raw search matches = %+v, want one fixture match", plainSearch.Matches)
+	}
+	plainMatch := plainSearch.Matches[0]
+	if plainMatch.Record.ID != plain.Record.ID || plainMatch.MessageIndex != 0 || plainMatch.Role != "user" || plainMatch.Snippet != "read compressed history" {
+		t.Fatalf("plain raw search match = %+v", plainMatch)
+	}
 	kinds := conversation.NewContentKindSet(conversation.ContentKindChat, conversation.ContentKindThinking, conversation.ContentKindToolOutputs)
 	baseline := projectCompressedCodexRecord(t, index, plain.Record, kinds)
 	if len(baseline) != 4 || len(baseline[2].Tools) != 1 || baseline[2].Tools[0].Output != "/repo" {
@@ -148,6 +160,20 @@ func TestCodexSemanticDocumentsSurviveCompressionAndMaterializedAppend(t *testin
 		t.Fatalf("documents from stale plain path = %+v, want %+v", docs, baseline)
 	}
 	compressed := refreshCompressedCodexRecord(t, index, compressedPath)
+	compressedSearch, err := index.SearchRawText(t.Context(), searchOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compressedSearch.Matches) != 1 {
+		t.Fatalf("compressed raw search matches = %+v, want one fixture match", compressedSearch.Matches)
+	}
+	compressedMatch := compressedSearch.Matches[0]
+	if compressedMatch.Record.ArtifactPath != compressedPath {
+		t.Fatalf("raw search artifact path = %q, want %q", compressedMatch.Record.ArtifactPath, compressedPath)
+	}
+	if compressedMatch.Record.ID != plainMatch.Record.ID || compressedMatch.MessageIndex != plainMatch.MessageIndex || compressedMatch.Role != plainMatch.Role || compressedMatch.Snippet != plainMatch.Snippet {
+		t.Fatalf("compressed raw search match = %+v, want the identity and message from %+v", compressedMatch, plainMatch)
+	}
 	for policyIndex, selectedKinds := range policies {
 		compressedMessages, err := index.LoadMessagesWithOptions(compressed.Record, daemon.SemanticConversationLoadOptions(selectedKinds))
 		if err != nil {
