@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -108,6 +109,76 @@ func TestCIReleaseAndPrereleaseBuildsRemainUpdateable(t *testing.T) {
 	}
 }
 
+func TestNetworkOptionsSendsEnvironmentTokenToReleaseAPI(t *testing.T) {
+	tests := []struct {
+		name        string
+		ghToken     string
+		githubToken string
+		wantToken   string
+	}{
+		{
+			name:      "GH_TOKEN with surrounding whitespace",
+			ghToken:   "  gh-token-value \n",
+			wantToken: "gh-token-value",
+		},
+		{
+			name:        "GITHUB_TOKEN when GH_TOKEN is empty",
+			githubToken: "github-token-value",
+			wantToken:   "github-token-value",
+		},
+		{
+			name:        "GH_TOKEN before GITHUB_TOKEN",
+			ghToken:     "gh-token-value",
+			githubToken: "github-token-value",
+			wantToken:   "gh-token-value",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			restoreBuildVersion := setTestBuildVersion(releaseBuildVersion, "false")
+			t.Cleanup(restoreBuildVersion)
+			t.Setenv("GH_TOKEN", test.ghToken)
+			t.Setenv("GITHUB_TOKEN", test.githubToken)
+
+			var downloadCount atomic.Int32
+			server := newTokenUpdateServer(t, "202608011200-c7-abcdef0", test.wantToken, &downloadCount)
+			t.Cleanup(server.Close)
+
+			result, err := selfupdate.Check(context.Background(), networkTestOptions(t, server))
+			if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			if !result.UpdateAvailable {
+				t.Fatal("Check() UpdateAvailable = false, want true")
+			}
+		})
+	}
+}
+
+func TestNetworkOptionsRejectedTokenErrorOmitsToken(t *testing.T) {
+	restoreBuildVersion := setTestBuildVersion(releaseBuildVersion, "false")
+	t.Cleanup(restoreBuildVersion)
+	rejectedToken := "rejected-token-value"
+	t.Setenv("GH_TOKEN", rejectedToken)
+	t.Setenv("GITHUB_TOKEN", "")
+
+	var downloadCount atomic.Int32
+	server := newTokenUpdateServer(t, "202608011200-c7-abcdef0", "accepted-token-value", &downloadCount)
+	t.Cleanup(server.Close)
+
+	_, err := selfupdate.Check(context.Background(), networkTestOptions(t, server))
+	if err == nil {
+		t.Fatal("Check() error = nil, want HTTP 403 error")
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Fatalf("Check() error = %q, want HTTP 403", err)
+	}
+	if strings.Contains(err.Error(), rejectedToken) {
+		t.Fatalf("Check() error = %q, want error without the token", err)
+	}
+}
+
 func setTestBuildVersion(currentVersion string, dirty string) func() {
 	originalVersion := buildversion.Version
 	originalDirty := buildversion.Dirty
@@ -126,6 +197,20 @@ func updateTestOptions(t *testing.T, server *httptest.Server) selfupdate.Options
 		Client:      server.Client(),
 		InstallPath: filepath.Join(stateDir, "clyde"),
 	})
+	return withTestServerPaths(options, server, stateDir)
+}
+
+func networkTestOptions(t *testing.T, server *httptest.Server) selfupdate.Options {
+	t.Helper()
+	stateDir := t.TempDir()
+	options := NetworkOptions(context.Background(), Overrides{
+		Client:      server.Client(),
+		InstallPath: filepath.Join(stateDir, "clyde"),
+	})
+	return withTestServerPaths(options, server, stateDir)
+}
+
+func withTestServerPaths(options selfupdate.Options, server *httptest.Server, stateDir string) selfupdate.Options {
 	options.Config.APIBaseURL = server.URL
 	options.StatePath = filepath.Join(stateDir, "state.json")
 	options.CacheDir = filepath.Join(stateDir, "cache")
@@ -139,8 +224,33 @@ func newUpdateServer(
 	downloadCount *atomic.Int32,
 ) *httptest.Server {
 	t.Helper()
+	return newReleaseServer(t, latestVersion, prerelease, "", downloadCount)
+}
+
+func newTokenUpdateServer(
+	t *testing.T,
+	latestVersion string,
+	requiredToken string,
+	downloadCount *atomic.Int32,
+) *httptest.Server {
+	t.Helper()
+	return newReleaseServer(t, latestVersion, true, requiredToken, downloadCount)
+}
+
+func newReleaseServer(
+	t *testing.T,
+	latestVersion string,
+	prerelease bool,
+	requiredToken string,
+	downloadCount *atomic.Int32,
+) *httptest.Server {
+	t.Helper()
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if requiredToken != "" && request.Header.Get("Authorization") != "Bearer "+requiredToken {
+			http.Error(writer, `{"message":"API rate limit exceeded"}`, http.StatusForbidden)
+			return
+		}
 		switch request.URL.Path {
 		case "/repos/agoodkind/clyde/releases":
 			response := []testRelease{{
