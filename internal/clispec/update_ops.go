@@ -236,7 +236,12 @@ func (runner updateRunner) runApply(ctx context.Context, payload updateApplyPayl
 }
 
 func (runner updateRunner) runStatus(ctx context.Context, _ updateStatusPayload) (Result, error) {
-	options := baseUpdateOptions(ctx, slog.Default().With("component", "update"), false)
+	options := updateopts.Options(updateopts.Overrides{
+		Client:      nil,
+		InstallPath: "",
+		DryRun:      false,
+		Log:         slog.Default().With("component", "update"),
+	})
 	resolvedOptions := resolveStatusOptions(options)
 	state, err := runner.loadState(resolvedOptions.StatePath)
 	if err != nil {
