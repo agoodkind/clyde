@@ -41,7 +41,7 @@ type RolloutCandidate struct {
 // DiscoverCandidates walks every rollout root and returns one candidate per
 // rollout file without opening or parsing it. The caller stats nothing further
 // for unchanged files and reads only changed files through
-// [ReadThreadByRolloutPath].
+// [ReadHeader].
 func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
 	var out []RolloutCandidate
 	for _, root := range rolloutRoots(s.Paths) {
@@ -54,6 +54,13 @@ func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
 			}
 			if d.IsDir() || !isRolloutFilename(d.Name()) {
 				return nil
+			}
+			if plainPath, compressed := strings.CutSuffix(path, compressedRolloutSuffix); compressed {
+				if _, statErr := os.Stat(plainPath); statErr == nil {
+					return nil
+				} else if !errors.Is(statErr, os.ErrNotExist) {
+					return fmt.Errorf("stat plain codex rollout sibling %s: %w", path, statErr)
+				}
 			}
 			info, infoErr := d.Info()
 			if infoErr != nil {
@@ -79,7 +86,7 @@ func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
 }
 
 func isRolloutFilename(name string) bool {
-	return strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, ".jsonl")
+	return strings.HasPrefix(name, "rollout-") && strings.HasSuffix(strings.TrimSuffix(name, compressedRolloutSuffix), ".jsonl")
 }
 
 // RolloutIdentityFromFilename derives the thread id and created time encoded in
@@ -94,7 +101,7 @@ func rolloutIdentityFromFilename(name string) (string, time.Time, bool) {
 	if !isRolloutFilename(name) {
 		return "", time.Time{}, false
 	}
-	base := strings.TrimSuffix(strings.TrimPrefix(name, "rollout-"), ".jsonl")
+	base := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSuffix(name, compressedRolloutSuffix), "rollout-"), ".jsonl")
 	if len(base) < len("2006-01-02T15-04-05-")+1 {
 		return "", time.Time{}, false
 	}

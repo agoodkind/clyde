@@ -230,10 +230,13 @@ Ground truth is the artifact, and each provider shapes it differently.
   `isCompactSummary`. Hook-injected rule text rides in records typed `user`
   and in `attachment` records, so no system-message knob removes it; the
   injected content kind does.
-- Codex: rollout JSONL under `~/.codex/sessions/<year>/<month>/<day>/`. Harness
-  frames (AGENTS.md instructions, environment context, approval and
-  transcript-delta frames) are written into user-role records and classify by
-  head-anchored match.
+- Codex stores rollouts under `~/.codex/sessions/<year>/<month>/<day>/` in
+  plain JSONL or Zstandard-compressed `.jsonl.zst` files. Clyde decodes compressed
+  files in memory and prefers the plain sibling when both formats exist.
+  Compression preserves the conversation ID and message indexes. Codex writes
+  harness frames (AGENTS.md instructions, environment context, approval requests,
+  and transcript deltas) into user-role records.
+  Clyde classifies these frames by matching the start of the message.
 - Cursor: two stores plus agent transcript files, none complete alone; see
   [Cursor stores](../cursor/stores.md). Subagent transcripts are written
   twice, and the top-level twin carries no marker.
