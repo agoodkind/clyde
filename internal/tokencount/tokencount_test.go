@@ -167,9 +167,17 @@ func TestCapToLastTokens(t *testing.T) {
 	if got, _, _ := CapToLastTokens(body, 12, c); got != "line2\nline3\n" {
 		t.Errorf("budget 12: got %q, want %q", got, "line2\nline3\n")
 	}
-	// When even the last line exceeds budget, the result is empty.
-	if got, _, trunc := CapToLastTokens(body, 5, c); got != "" || !trunc {
-		t.Errorf("budget 5: got %q trunc %v, want empty true", got, trunc)
+	// A budget of 5 keeps "ine3\n", the end of the last line.
+	if got, _, trunc := CapToLastTokens(body, 5, c); got != "ine3\n" || !trunc {
+		t.Errorf("budget 5: got %q trunc %v, want %q true", got, trunc, "ine3\n")
+	}
+	// A budget of 9 keeps the whole last line and the end of the line before it.
+	if got, _, _ := CapToLastTokens(body, 9, c); got != "e2\nline3\n" {
+		t.Errorf("budget 9: got %q, want %q", got, "e2\nline3\n")
+	}
+	// The search must check the emoji start even when its midpoint falls inside the emoji.
+	if got, _, _ := CapToLastTokens("a😀\n", 5, c); got != "😀\n" {
+		t.Errorf("multibyte budget 5: got %q, want %q", got, "😀\n")
 	}
 	// The kept result never exceeds budget and stays valid UTF-8.
 	utf8Body := "héllo\nwörld\ntlast\n"
