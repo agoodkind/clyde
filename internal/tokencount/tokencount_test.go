@@ -175,6 +175,10 @@ func TestCapToLastTokens(t *testing.T) {
 	if got, _, _ := CapToLastTokens(body, 9, c); got != "e2\nline3\n" {
 		t.Errorf("budget 9: got %q, want %q", got, "e2\nline3\n")
 	}
+	// The search must check the emoji start even when its midpoint falls inside the emoji.
+	if got, _, _ := CapToLastTokens("a😀\n", 5, c); got != "😀\n" {
+		t.Errorf("multibyte budget 5: got %q, want %q", got, "😀\n")
+	}
 	// The kept result never exceeds budget and stays valid UTF-8.
 	utf8Body := "héllo\nwörld\ntlast\n"
 	capped, _, _ := CapToLastTokens(utf8Body, 8, c)

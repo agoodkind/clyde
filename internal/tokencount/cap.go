@@ -73,16 +73,16 @@ func lastFittingSuffix(line string, budget int, c Counter) (int, int) {
 	high := len(line)
 	for low < high {
 		middle := low + (high-low)/2
-		for middle < high && !utf8.RuneStart(line[middle]) {
-			middle++
-		}
-		if middle == high {
-			break
+		for middle > low && !utf8.RuneStart(line[middle]) {
+			middle--
 		}
 		if _, ok := fits(middle); ok {
 			high = middle
-		} else {
-			low = middle + 1
+			continue
+		}
+		low = middle + 1
+		for low < high && !utf8.RuneStart(line[low]) {
+			low++
 		}
 	}
 	tokens, ok := fits(high)
