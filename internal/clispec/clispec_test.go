@@ -38,7 +38,7 @@ func TestCLISinkWriteFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.txt")
-	sink := NewCLISink(context.Background(), &bytes.Buffer{}, &bytes.Buffer{})
+	sink := NewCLISink(&bytes.Buffer{})
 	if err := sink.WriteFile(path, []byte("body")); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -48,69 +48,6 @@ func TestCLISinkWriteFile(t *testing.T) {
 	}
 	if string(got) != "body" {
 		t.Errorf("file body: got %q, want %q", got, "body")
-	}
-}
-
-func TestCLISinkRawBytesSkipsMetadata(t *testing.T) {
-	t.Parallel()
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:  correlation.SpanID("2222222222222222"),
-	})
-	sink := NewCLISink(ctx, &out, &errOut)
-	if err := sink.RawBytes([]byte("body")); err != nil {
-		t.Fatalf("RawBytes: %v", err)
-	}
-	if got := out.String(); got != "body" {
-		t.Errorf("raw bytes output: got %q, want %q", got, "body")
-	}
-	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
-	if got := errOut.String(); got != wantHeader {
-		t.Errorf("raw bytes metadata: got %q, want %q", got, wantHeader)
-	}
-}
-
-func TestCLISinkTextWritesMetadataToErrOut(t *testing.T) {
-	t.Parallel()
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:  correlation.SpanID("2222222222222222"),
-	})
-	sink := NewCLISink(ctx, &out, &errOut)
-	if err := sink.Text("body"); err != nil {
-		t.Fatalf("Text: %v", err)
-	}
-	if got := out.String(); got != "body" {
-		t.Errorf("text output: got %q, want %q", got, "body")
-	}
-	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
-	if got := errOut.String(); got != wantHeader {
-		t.Errorf("text metadata: got %q, want %q", got, wantHeader)
-	}
-}
-
-func TestCLISinkBytesWritesMetadataToErrOut(t *testing.T) {
-	t.Parallel()
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:  correlation.SpanID("2222222222222222"),
-	})
-	sink := NewCLISink(ctx, &out, &errOut)
-	if err := sink.Bytes([]byte("body")); err != nil {
-		t.Fatalf("Bytes: %v", err)
-	}
-	if got := out.String(); got != "body" {
-		t.Errorf("byte output: got %q, want %q", got, "body")
-	}
-	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
-	if got := errOut.String(); got != wantHeader {
-		t.Errorf("byte metadata: got %q, want %q", got, wantHeader)
 	}
 }
 
@@ -432,88 +369,6 @@ func TestCopyConfirmationIncludesTokens(t *testing.T) {
 	want := "copied 2 lines, 11 chars, 11 B, 7 tokens (o200k)\n"
 	if got != want {
 		t.Fatalf("copyConfirmation() = %q, want %q", got, want)
-	}
-}
-
-func TestRenderCLIResultTextWritesMetadataToErrOut(t *testing.T) {
-	t.Parallel()
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:  correlation.SpanID("2222222222222222"),
-	})
-	result := valueResult{
-		Payload: probePayload{ID: "trace", Count: 1, On: false, Mode: "alpha"},
-		Text:    "value text",
-	}
-
-	err := renderCLIResult(ctx, &out, &errOut, output.FormatText, resultKindValue, result)
-	if err != nil {
-		t.Fatalf("renderCLIResult: %v", err)
-	}
-
-	if got := out.String(); got != "value text" {
-		t.Fatalf("stdout = %q, want %q", got, "value text")
-	}
-	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
-	if got := errOut.String(); got != wantHeader {
-		t.Fatalf("stderr = %q, want %q", got, wantHeader)
-	}
-}
-
-func TestRenderCLIResultTextRoutesStampedHeaderToErrOut(t *testing.T) {
-	t.Parallel()
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	result := valueResult{
-		Payload: probePayload{ID: "trace", Count: 1, On: false, Mode: "alpha"},
-		Text:    "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\nvalue text",
-	}
-
-	err := renderCLIResult(context.Background(), &out, &errOut, output.FormatText, resultKindValue, result)
-	if err != nil {
-		t.Fatalf("renderCLIResult: %v", err)
-	}
-
-	if got := out.String(); got != "value text" {
-		t.Fatalf("stdout = %q, want %q", got, "value text")
-	}
-	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
-	if got := errOut.String(); got != wantHeader {
-		t.Fatalf("stderr = %q, want %q", got, wantHeader)
-	}
-}
-
-func TestRenderCLIResultPipeWritesMetadataToErrOut(t *testing.T) {
-	t.Parallel()
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	body := []byte("raw body\n")
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:  correlation.SpanID("2222222222222222"),
-	})
-	result := artifactResult{
-		Payload:     artifactProbePayload{Text: "json-text"},
-		Body:        body,
-		DefaultPath: "",
-		Pipe:        true,
-		Text:        "",
-		InlineText:  string(body),
-	}
-
-	err := renderCLIResult(ctx, &out, &errOut, output.FormatText, resultKindArtifact, result)
-	if err != nil {
-		t.Fatalf("renderCLIResult: %v", err)
-	}
-
-	if got := out.String(); got != string(body) {
-		t.Fatalf("stdout = %q, want %q", got, string(body))
-	}
-	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
-	if got := errOut.String(); got != wantHeader {
-		t.Fatalf("stderr = %q, want %q", got, wantHeader)
 	}
 }
 
@@ -1042,7 +897,6 @@ func TestSearchMCPHandlerMarksEngineRefusalAsToolError(t *testing.T) {
 	}
 	text := textOf(t, result)
 	for _, expected := range []string{
-		"🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222",
 		"InvalidArgument",
 		"conversation_search_source_refused",
 		"conversation search source refused the query",
@@ -1080,7 +934,6 @@ func TestMCPHandlerMarksResultRenderingFailureAsToolError(t *testing.T) {
 	}
 	text := textOf(t, result)
 	for _, expected := range []string{
-		"🔎 trace_id=33333333333333333333333333333333 span_id=4444444444444444",
 		"declared artifact output but returned value",
 	} {
 		if !strings.Contains(text, expected) {
@@ -1187,27 +1040,6 @@ func TestRenderMCPArtifactReturnsWriteFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), path) {
 		t.Fatalf("write error = %q, want path %q", err, path)
-	}
-}
-
-func TestMCPHandlerPrependsCorrelationMetadata(t *testing.T) {
-	t.Parallel()
-	_, handler := probeOp().mcpTool()
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:  correlation.SpanID("2222222222222222"),
-	})
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{
-		"the_id": "xyz",
-	}
-	result, err := handler(ctx, req)
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	want := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\nxyz:7:off:alpha"
-	if got := textOf(t, result); got != want {
-		t.Fatalf("mcp output: got %q, want %q", got, want)
 	}
 }
 
@@ -1373,8 +1205,8 @@ func TestWriteCLIExportFileConfirmationIncludesSize(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "out.md")
 	body := []byte("alpha\nbeta\n")
-	var out, errOut bytes.Buffer
-	sink := NewCLISink(context.Background(), &out, &errOut)
+	var out bytes.Buffer
+	sink := NewCLISink(&out)
 	err := writeCLIExportFile(context.Background(), exportPayload{
 		ConversationID: "claude:probe",
 		Options: conv.ExportOptions{
@@ -1408,8 +1240,8 @@ func TestWriteCLIExportFileConfirmationIncludesTokens(t *testing.T) {
 	}
 	t.Cleanup(func() { lookupExportTokenSpec = originalLookup })
 
-	var out, errOut bytes.Buffer
-	sink := NewCLISink(context.Background(), &out, &errOut)
+	var out bytes.Buffer
+	sink := NewCLISink(&out)
 	err := writeCLIExportFile(context.Background(), exportPayload{
 		ConversationID: "claude:probe",
 		Options: conv.ExportOptions{

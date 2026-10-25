@@ -287,6 +287,25 @@ func (d *localProofDaemon) searchCLI(request localProofSearchRequest) (localProo
 
 func (d *localProofDaemon) searchMCP(request localProofSearchRequest) (localProofSearchOutput, error) {
 	var empty localProofSearchOutput
+	response, err := d.callSearchMCP(request)
+	if err != nil {
+		return empty, err
+	}
+	if response.Result.IsError || response.Result.StructuredContent == nil {
+		texts := make([]string, 0, len(response.Result.Content))
+		for _, content := range response.Result.Content {
+			texts = append(texts, content.Text)
+		}
+		return empty, fmt.Errorf("clyde_search returned a tool error: %s", strings.Join(texts, "\n"))
+	}
+	return *response.Result.StructuredContent, nil
+}
+
+// callSearchMCP starts the clyde binary with "mcp serve", sends the initialize
+// request, and makes one clyde_search tool call. It returns the JSON-RPC
+// response for that call, including the text content and structured content.
+func (d *localProofDaemon) callSearchMCP(request localProofSearchRequest) (localProofRPCResponse, error) {
+	var empty localProofRPCResponse
 	call, err := json.Marshal(localProofRPCRequest{
 		JSONRPC: "2.0",
 		ID:      localProofSearchRequestID,
@@ -327,14 +346,7 @@ func (d *localProofDaemon) searchMCP(request localProofSearchRequest) (localProo
 	if response.Result == nil {
 		return empty, errors.New("clyde_search returned no result")
 	}
-	if response.Result.IsError || response.Result.StructuredContent == nil {
-		texts := make([]string, 0, len(response.Result.Content))
-		for _, content := range response.Result.Content {
-			texts = append(texts, content.Text)
-		}
-		return empty, fmt.Errorf("clyde_search returned a tool error: %s", strings.Join(texts, "\n"))
-	}
-	return *response.Result.StructuredContent, nil
+	return response, nil
 }
 
 func readLocalProofSearchResponse(stdout io.Reader) (localProofRPCResponse, error) {

@@ -118,7 +118,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 	if dryRun {
 		mode = "Dry run counted"
 	}
-	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, fmt.Sprintf(
+	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, fmt.Sprintf(
 		"%s conversation scalars from %d conversations: %d rows changed, %d orphan rows.\n",
 		mode, len(entries), changed, orphan,
 	)); writeErr != nil {
@@ -324,7 +324,7 @@ func writeBackfillConversationDocumentsResult(ctx context.Context, f *cli.Factor
 	if strings.TrimSpace(nextCursor) != "" {
 		suffix += fmt.Sprintf(" Next cursor: %s.", nextCursor)
 	}
-	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, fmt.Sprintf(
+	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, fmt.Sprintf(
 		"%s conversation documents from %d %s: %d %s%s\n",
 		action, conversations, backfillConversationNoun(conversations), documents, backfillDocumentNoun(documents), suffix,
 	)); writeErr != nil {

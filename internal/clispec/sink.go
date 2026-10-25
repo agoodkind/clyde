@@ -1,14 +1,11 @@
 package clispec
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
-
-	"goodkind.io/clyde/internal/response"
 )
 
 // ResultSink is where a work function writes its result without knowing which
@@ -32,42 +29,25 @@ type ResultSink interface {
 
 // CLISink writes to the terminal output stream.
 type CLISink struct {
-	metadata      response.Metadata
-	out           io.Writer
-	errOut        io.Writer
-	headerWritten bool
+	out io.Writer
 }
 
-// NewCLISink builds a terminal sink that writes result bodies to out and
-// routes the correlation header to errOut, so the trace-id metadata never
-// mixes into piped stdout data.
-func NewCLISink(ctx context.Context, out io.Writer, errOut io.Writer) *CLISink {
-	return &CLISink{
-		metadata:      response.FromContext(ctx),
-		out:           out,
-		errOut:        errOut,
-		headerWritten: false,
-	}
+// NewCLISink returns a terminal sink that writes result text and bytes to out.
+func NewCLISink(out io.Writer) *CLISink {
+	return &CLISink{out: out}
 }
 
 // Text writes a text response to the terminal stream.
 func (s *CLISink) Text(text string) error {
-	header, body := response.SplitHeader(text)
-	if err := s.writeHeader(header); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(s.out, body); err != nil {
+	if _, err := io.WriteString(s.out, text); err != nil {
 		slog.Warn("clispec.sink.write_text_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
 		return fmt.Errorf("clispec: write text response: %w", err)
 	}
 	return nil
 }
 
-// Bytes writes raw bytes to stdout after routing metadata to stderr.
+// Bytes writes raw bytes to stdout.
 func (s *CLISink) Bytes(body []byte) error {
-	if err := s.writeHeader(""); err != nil {
-		return err
-	}
 	if _, err := s.out.Write(body); err != nil {
 		slog.Warn("clispec.sink.write_byte_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
 		return fmt.Errorf("clispec: write byte response: %w", err)
@@ -75,11 +55,8 @@ func (s *CLISink) Bytes(body []byte) error {
 	return nil
 }
 
-// RawBytes writes exact bytes to stdout after routing metadata to stderr.
+// RawBytes writes exact bytes to stdout.
 func (s *CLISink) RawBytes(body []byte) error {
-	if err := s.writeHeader(""); err != nil {
-		return err
-	}
 	if _, err := s.out.Write(body); err != nil {
 		slog.Warn("clispec.sink.write_raw_byte_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
 		return fmt.Errorf("clispec: write raw byte response: %w", err)
@@ -101,30 +78,6 @@ func (s *CLISink) WriteFile(path string, body []byte) error {
 // Surface reports SurfaceCLI.
 func (s *CLISink) Surface() Surface {
 	return SurfaceCLI
-}
-
-func (s *CLISink) writeHeader(stampedHeader string) error {
-	if s.headerWritten {
-		return nil
-	}
-	header := s.metadata.HeaderLine()
-	if header != "" {
-		if _, err := io.WriteString(s.errOut, header+"\n"); err != nil {
-			slog.Warn("clispec.sink.write_header_failed", "concern", "cli.conversation", "component", "cli", "err", err)
-			return fmt.Errorf("clispec: write response metadata: %w", err)
-		}
-		s.headerWritten = true
-		return nil
-	}
-	if stampedHeader == "" {
-		return nil
-	}
-	if _, err := io.WriteString(s.errOut, stampedHeader+"\n"); err != nil {
-		slog.Warn("clispec.sink.write_stamped_header_failed", "concern", "cli.conversation", "component", "cli", "err", err)
-		return fmt.Errorf("clispec: write stamped response metadata: %w", err)
-	}
-	s.headerWritten = true
-	return nil
 }
 
 // MCPSink collects text in memory for return as one MCP tool result.

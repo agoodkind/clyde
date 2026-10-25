@@ -73,19 +73,7 @@ func renderCLIResult(ctx context.Context, out io.Writer, errOut io.Writer, forma
 	if err := requireResultKind(wantKind, result); err != nil {
 		return err
 	}
-	// The trace-id header is a text-mode concern. JSON output already carries
-	// the metadata inside the document as _meta, so emitting the header on
-	// stderr as well would duplicate it and change JSON behavior. Keep JSON as
-	// is and route the header to stderr only for text output.
-	contextHeaderWritten := false
-	if format != output.FormatJSON {
-		if err := response.WriteHeaderLine(ctx, errOut); err != nil {
-			slog.WarnContext(ctx, "clispec.result.write_header_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
-			return fmt.Errorf("write cli result header: %w", err)
-		}
-		contextHeaderWritten = response.FromContext(ctx).HeaderLine() != ""
-	}
-	if err := renderCLIResultBody(ctx, out, errOut, contextHeaderWritten, format, result); err != nil {
+	if err := renderCLIResultBody(ctx, out, format, result); err != nil {
 		return err
 	}
 	if copyRequested(ctx) {
@@ -101,8 +89,6 @@ func renderCLIResult(ctx context.Context, out io.Writer, errOut io.Writer, forma
 func renderCLIResultBody(
 	ctx context.Context,
 	writer io.Writer,
-	errOut io.Writer,
-	contextHeaderWritten bool,
 	format output.Format,
 	result Result,
 ) error {
@@ -111,12 +97,12 @@ func renderCLIResultBody(
 		if format == output.FormatJSON {
 			return writeStructuredJSON(ctx, writer, typed.Payload)
 		}
-		if err := writeCLITextBody(ctx, writer, errOut, contextHeaderWritten, typed.Text, "clispec.result.write_text_failed", "write value result text"); err != nil {
+		if err := writeCLITextBody(ctx, writer, typed.Text, "clispec.result.write_text_failed", "write value result text"); err != nil {
 			return err
 		}
 		return nil
 	case artifactResult:
-		return renderCLIArtifactResult(ctx, writer, errOut, contextHeaderWritten, format, typed)
+		return renderCLIArtifactResult(ctx, writer, format, typed)
 	default:
 		return fmt.Errorf("clispec: unsupported cli result %T", result)
 	}
@@ -125,8 +111,6 @@ func renderCLIResultBody(
 func renderCLIArtifactResult(
 	ctx context.Context,
 	writer io.Writer,
-	errOut io.Writer,
-	contextHeaderWritten bool,
 	format output.Format,
 	result artifactResult,
 ) error {
@@ -135,7 +119,7 @@ func renderCLIArtifactResult(
 	}
 	path := result.DefaultPath
 	if path == "" {
-		return renderCLIInlineArtifactResult(ctx, writer, errOut, contextHeaderWritten, format, result)
+		return renderCLIInlineArtifactResult(ctx, writer, format, result)
 	}
 	if err := writeFile(path, result.Body); err != nil {
 		return err
@@ -143,7 +127,7 @@ func renderCLIArtifactResult(
 	if format == output.FormatJSON {
 		return writeStructuredJSON(ctx, writer, result.Payload)
 	}
-	if err := writeCLITextBody(ctx, writer, errOut, contextHeaderWritten, result.Text, "clispec.result.write_artifact_text_failed", "write artifact result text"); err != nil {
+	if err := writeCLITextBody(ctx, writer, result.Text, "clispec.result.write_artifact_text_failed", "write artifact result text"); err != nil {
 		return err
 	}
 	return nil
@@ -267,15 +251,13 @@ func tokenEstimate(result Result, body []byte) tokencount.Estimate {
 func renderCLIInlineArtifactResult(
 	ctx context.Context,
 	writer io.Writer,
-	errOut io.Writer,
-	contextHeaderWritten bool,
 	format output.Format,
 	result artifactResult,
 ) error {
 	if format == output.FormatJSON {
 		return writeStructuredJSON(ctx, writer, result.Payload)
 	}
-	if err := writeCLITextBody(ctx, writer, errOut, contextHeaderWritten, result.Text, "clispec.result.write_inline_artifact_text_failed", "write inline artifact text"); err != nil {
+	if err := writeCLITextBody(ctx, writer, result.Text, "clispec.result.write_inline_artifact_text_failed", "write inline artifact text"); err != nil {
 		return err
 	}
 	return nil
@@ -349,7 +331,7 @@ func newMCPStructuredResult(ctx context.Context, payload StructuredPayload, text
 		slog.WarnContext(ctx, "clispec.result.encode_structured_response_failed", "concern", "mcp.server.context", "component", "clispec", "err", err)
 		return nil, fmt.Errorf("encode structured response: %w", err)
 	}
-	return mcp.NewToolResultStructured(json.RawMessage(encoded), response.Text(ctx, text)), nil
+	return mcp.NewToolResultStructured(json.RawMessage(encoded), text), nil
 }
 
 func writeRawBytes(writer io.Writer, body []byte) error {
@@ -363,20 +345,11 @@ func writeRawBytes(writer io.Writer, body []byte) error {
 func writeCLITextBody(
 	ctx context.Context,
 	writer io.Writer,
-	errOut io.Writer,
-	contextHeaderWritten bool,
 	text string,
 	writeFailureEvent string,
 	writeFailureOperation string,
 ) error {
-	header, body := response.SplitHeader(text)
-	if header != "" && !contextHeaderWritten {
-		if _, err := io.WriteString(errOut, header+"\n"); err != nil {
-			slog.WarnContext(ctx, "clispec.result.write_stamped_header_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
-			return fmt.Errorf("write stamped result header: %w", err)
-		}
-	}
-	if _, err := io.WriteString(writer, body); err != nil {
+	if _, err := io.WriteString(writer, text); err != nil {
 		slog.WarnContext(ctx, writeFailureEvent, "concern", "cli.conversation", "component", "clispec", "err", err)
 		return fmt.Errorf("%s: %w", writeFailureOperation, err)
 	}

@@ -105,6 +105,10 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 		}
 	})
 
+	t.Run("public text omits trace annotations", func(t *testing.T) {
+		assertLocalProofPublicText(t, first)
+	})
+
 	t.Run("filters exclude ineligible conversations", func(t *testing.T) {
 		for _, surface := range first.surfaces() {
 			assertLocalProofFilters(t, surface)

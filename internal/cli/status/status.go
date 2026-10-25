@@ -68,7 +68,7 @@ func run(ctx context.Context, f *cli.Factory, cmd *cobra.Command, once bool, int
 	live := !once && isFile && term.IsTerminal(int(stdout.Fd()))
 	if !live {
 		body := lmstatus.Dump(buildSnapshot(gatherSnapshot(ctx), f.Build.Version)) + "\n"
-		if err := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, body); err != nil {
+		if err := response.WriteResult(ctx, f.IOStreams.Out, body); err != nil {
 			slog.ErrorContext(ctx, "cli.status.write_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 			return fmt.Errorf("write status snapshot: %w", err)
 		}
