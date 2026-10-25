@@ -39,7 +39,7 @@ func TestUninstallRequiresApplyAndDefaultsToRegistrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := op.Run(context.Background(), payload, SurfaceCLI, NewCLISink(context.Background(), &bytes.Buffer{}, &bytes.Buffer{})); err != nil {
+	if err := op.Run(context.Background(), payload, SurfaceCLI, NewCLISink(&bytes.Buffer{})); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"daemon", "hooks", "mcp"}; !reflect.DeepEqual(calls, want) {
@@ -66,7 +66,7 @@ func TestUninstallSelectorRestrictsRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := op.Run(context.Background(), payload, SurfaceCLI, NewCLISink(context.Background(), &bytes.Buffer{}, &bytes.Buffer{})); err != nil {
+	if err := op.Run(context.Background(), payload, SurfaceCLI, NewCLISink(&bytes.Buffer{})); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"binary"}; !reflect.DeepEqual(calls, want) {
@@ -123,7 +123,7 @@ func TestUninstallBinaryRemovesSelectedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := uninstallBinaryAt(context.Background(), NewCLISink(context.Background(), &output, &bytes.Buffer{}), path); err != nil {
+	if err := uninstallBinaryAt(context.Background(), NewCLISink(&output), path); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {

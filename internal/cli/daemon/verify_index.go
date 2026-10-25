@@ -57,7 +57,7 @@ func runVerifySearchIndex(ctx context.Context, f *cli.Factory, sample int) error
 	if len(check.Misses) > 0 {
 		summary += "Source primary keys of failing samples: " + strings.Join(check.Misses, ", ") + "\n"
 	}
-	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, summary); writeErr != nil {
+	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, summary); writeErr != nil {
 		slog.ErrorContext(ctx, "cli.daemon.verify_index.write_failed", "concern", "cli.daemon", "component", "cli", "err", writeErr)
 		return fmt.Errorf("write verify result: %w", writeErr)
 	}

@@ -53,17 +53,17 @@ func run() int {
 	}
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
-		_ = response.WriteText(rootCtx, os.Stderr, "config load failed: "+err.Error()+"\n")
+		_ = response.WriteResult(rootCtx, os.Stderr, "config load failed: "+err.Error()+"\n")
 		return 1
 	}
 	setupPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, detectSlogRole(os.Args[1:]))
 	if err != nil {
-		_ = response.WriteText(rootCtx, os.Stderr, "logging policy failed: "+err.Error()+"\n")
+		_ = response.WriteResult(rootCtx, os.Stderr, "logging policy failed: "+err.Error()+"\n")
 		return 1
 	}
 	closer, err := slogger.SetupWithPolicy(setupPolicy)
 	if err != nil {
-		_ = response.WriteText(rootCtx, os.Stderr, "slogger setup failed: "+err.Error()+"\n")
+		_ = response.WriteResult(rootCtx, os.Stderr, "slogger setup failed: "+err.Error()+"\n")
 		return 1
 	}
 	defer func() { _ = closer.Close() }()
@@ -74,7 +74,7 @@ func run() int {
 
 func executeRoot(rootCtx context.Context, root *cobra.Command, f *cli.Factory) int {
 	if err := root.Execute(); err != nil {
-		_ = response.WriteText(rootCtx, f.IOStreams.Err, "Error: "+err.Error()+"\n")
+		_ = response.WriteResult(rootCtx, f.IOStreams.Err, "Error: "+err.Error()+"\n")
 		return 1
 	}
 	return 0

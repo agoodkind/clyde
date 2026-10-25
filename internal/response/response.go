@@ -1,5 +1,6 @@
-// Package response renders user-visible CLI and MCP responses with Clyde's
-// existing gklog correlation metadata.
+// Package response writes user-visible CLI and MCP responses.
+// JSON responses include the gklog correlation metadata in a "_meta" object.
+// Text responses contain only the result text.
 package response
 
 import (
@@ -41,102 +42,11 @@ func (metadata Metadata) Empty() bool {
 		metadata.ParentSpanID == ""
 }
 
-// headerMarker prefixes the metadata header line so callers can detect a body
-// that already carries one and avoid stamping a second header. It is the shared
-// gklog marker, so every producer renders the header the same way.
-const headerMarker = correlation.HeaderMarker
-
-// HeaderLine returns the first line for text responses, rendered through the
-// shared gklog helper so the format stays canonical across producers.
-func (metadata Metadata) HeaderLine() string {
-	return correlation.MarkerLine(
-		"trace_id", metadata.TraceID,
-		"span_id", metadata.SpanID,
-		"parent_span_id", metadata.ParentSpanID,
-		"request_id", metadata.RequestID,
-	)
-}
-
-// Text renders a text response using this metadata value. When body already
-// begins with a metadata header (for example a daemon RPC response that the
-// daemon already stamped with its own trace id), it is returned unchanged so a
-// front end does not stamp a second header and the original id is preserved end
-// to end.
-func (metadata Metadata) Text(body string) string {
-	if strings.HasPrefix(body, headerMarker) {
-		return body
-	}
-	header := metadata.HeaderLine()
-	if header == "" {
-		return body
-	}
-	if body == "" {
-		return header + "\n"
-	}
-	return header + "\n" + body
-}
-
-// Text renders a text response with the metadata line first when metadata exists.
-func Text(ctx context.Context, body string) string {
-	return FromContext(ctx).Text(body)
-}
-
-// WriteText writes a text response to writer.
-func WriteText(ctx context.Context, writer io.Writer, body string) error {
-	if _, err := io.WriteString(writer, Text(ctx, body)); err != nil {
-		slog.WarnContext(ctx, "response.write_text_failed", "concern", "cli.output", "component", "response", "err", err)
-		return fmt.Errorf("response: write text: %w", err)
-	}
-	return nil
-}
-
-// WriteHeaderLine writes the correlation header line to w when the context
-// carries visible metadata. It writes nothing when there is no metadata.
-func WriteHeaderLine(ctx context.Context, w io.Writer) error {
-	header := FromContext(ctx).HeaderLine()
-	if header == "" {
-		return nil
-	}
-	if _, err := io.WriteString(w, header+"\n"); err != nil {
-		slog.WarnContext(ctx, "response.write_header_line_failed", "concern", "cli.output", "component", "response", "err", err)
-		return fmt.Errorf("response: write header line: %w", err)
-	}
-	return nil
-}
-
-// SplitHeader returns the leading correlation header line and the remaining
-// body when body begins with the shared header marker, else "" and body
-// unchanged. It lets a CLI front end route an already-stamped header to
-// stderr instead of leaking it onto stdout.
-func SplitHeader(body string) (header string, rest string) {
-	if !strings.HasPrefix(body, headerMarker) {
-		return "", body
-	}
-	headerLine, rest, found := strings.Cut(body, "\n")
-	if !found {
-		return body, ""
-	}
-	return headerLine, rest
-}
-
-// WriteResult writes the correlation header to errOut and the body to out, so
-// the trace-id metadata never mixes into piped stdout data. It uses the
-// context metadata header when present, otherwise a header the body already
-// carries, and always writes the body to out header-free. This is the shared
-// entry point for hand-written CLI commands that render a text result.
-func WriteResult(ctx context.Context, out io.Writer, errOut io.Writer, body string) error {
-	stampedHeader, rest := SplitHeader(body)
-	if FromContext(ctx).HeaderLine() != "" {
-		if err := WriteHeaderLine(ctx, errOut); err != nil {
-			return err
-		}
-	} else if stampedHeader != "" {
-		if _, err := io.WriteString(errOut, stampedHeader+"\n"); err != nil {
-			slog.WarnContext(ctx, "response.write_stamped_header_failed", "concern", "cli.output", "component", "response", "err", err)
-			return fmt.Errorf("response: write stamped header: %w", err)
-		}
-	}
-	if _, err := io.WriteString(out, rest); err != nil {
+// WriteResult writes body to out. When the write fails, it logs the failure
+// with ctx and returns a wrapped error. Hand-written CLI commands use it to
+// print a text result.
+func WriteResult(ctx context.Context, out io.Writer, body string) error {
+	if _, err := io.WriteString(out, body); err != nil {
 		slog.WarnContext(ctx, "response.write_result_body_failed", "concern", "cli.output", "component", "response", "err", err)
 		return fmt.Errorf("response: write result body: %w", err)
 	}
