@@ -17,6 +17,14 @@ type supervisorLogFile struct {
 	path       string
 	descriptor int
 	appendMode bool
+	size       int64
+	links      uint64
+	identity   supervisorLogIdentity
+}
+
+type supervisorLogIdentity struct {
+	device uint64
+	inode  uint64
 }
 
 func supervisorRetentionPaths(ctx context.Context, policy slogger.CleanupPolicy) (_ slogger.CleanupPolicy, resultError error) {
@@ -44,6 +52,7 @@ func supervisorRetentionPaths(ctx context.Context, policy slogger.CleanupPolicy)
 	updated.Paths = slices.Clone(policy.Paths)
 	updated.KeepInPlacePaths = slices.Clone(policy.KeepInPlacePaths)
 	updated.ProtectedPaths = slices.Clone(policy.ProtectedPaths)
+	retained := make(map[supervisorLogIdentity]int64)
 	for _, file := range files {
 		path, err := supervisorPolicyPath(policy, file.path)
 		if err != nil {
@@ -54,28 +63,53 @@ func supervisorRetentionPaths(ctx context.Context, policy slogger.CleanupPolicy)
 		if !owned && !stdioLog {
 			continue
 		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return policy, fmt.Errorf("stat supervisor log %s; defer retention: %w", path, err)
-		}
-		if !info.Mode().IsRegular() {
+		if file.links == 0 {
+			accountSupervisorUnlinkedFile(&updated, retained, file)
 			continue
 		}
-		if stdioLog && !owned && !slices.Contains(updated.Paths, path) {
-			updated.Paths = append(updated.Paths, path)
-		}
-		if !file.appendMode {
-			if !slices.Contains(updated.ProtectedPaths, path) {
-				updated.ProtectedPaths = append(updated.ProtectedPaths, path)
-			}
-			continue
-		}
-		if !slices.Contains(updated.KeepInPlacePaths, path) {
-			updated.KeepInPlacePaths = append(updated.KeepInPlacePaths, path)
+		if err := includeSupervisorNamedFile(&updated, file, path, stdioLog && !owned); err != nil {
+			return policy, err
 		}
 	}
-	slog.DebugContext(ctx, "daemon.retention.supervisor_logs_inspected", "concern", "daemon.workers", "pid", status.PID, "append_logs", len(updated.KeepInPlacePaths), "protected_logs", len(updated.ProtectedPaths))
+	slog.DebugContext(ctx, "daemon.retention.supervisor_logs_inspected", "concern", "daemon.workers", "pid", status.PID, "append_logs", len(updated.KeepInPlacePaths), "protected_logs", len(updated.ProtectedPaths), "retained_open_bytes", updated.RetainedOpenBytes, "retained_open_files", updated.RetainedOpenFiles)
 	return updated, nil
+}
+
+func accountSupervisorUnlinkedFile(policy *slogger.CleanupPolicy, retained map[supervisorLogIdentity]int64, file supervisorLogFile) {
+	previous, known := retained[file.identity]
+	if !known {
+		policy.RetainedOpenFiles++
+	}
+	if file.size > previous {
+		policy.RetainedOpenBytes += file.size - previous
+		retained[file.identity] = file.size
+	} else if !known {
+		retained[file.identity] = file.size
+	}
+}
+
+func includeSupervisorNamedFile(policy *slogger.CleanupPolicy, file supervisorLogFile, path string, external bool) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		slog.Warn("daemon.retention.supervisor_file_failed", "concern", "daemon.workers", "path", path, "err", err)
+		return fmt.Errorf("stat supervisor log %s; defer retention: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	if external && !slices.Contains(policy.Paths, path) {
+		policy.Paths = append(policy.Paths, path)
+	}
+	if !file.appendMode {
+		if !slices.Contains(policy.ProtectedPaths, path) {
+			policy.ProtectedPaths = append(policy.ProtectedPaths, path)
+		}
+		return nil
+	}
+	if !slices.Contains(policy.KeepInPlacePaths, path) {
+		policy.KeepInPlacePaths = append(policy.KeepInPlacePaths, path)
+	}
+	return nil
 }
 
 // macOS lsof resolves aliases such as /tmp to /private/tmp. Cleanup paths must

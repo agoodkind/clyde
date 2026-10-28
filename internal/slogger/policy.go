@@ -64,9 +64,13 @@ type CleanupPolicy struct {
 	KeepInPlacePaths []string
 	// ProtectedPaths lists files counted in the budget but never changed.
 	ProtectedPaths []string
-	MaxAgeDays     int
-	MaxBackups     int
-	MaxTotalMB     int
+	// RetainedOpenBytes counts unlinked log bytes still retained by open files.
+	RetainedOpenBytes int64
+	// RetainedOpenFiles counts unique unlinked log files still open.
+	RetainedOpenFiles int
+	MaxAgeDays        int
+	MaxBackups        int
+	MaxTotalMB        int
 }
 
 // TranscriptPolicy describes the transcript router inputs that slogger needs.

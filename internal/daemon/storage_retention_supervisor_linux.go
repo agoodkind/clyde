@@ -42,9 +42,16 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) (_ []supervisorLogFile
 		if !info.Mode().IsRegular() {
 			continue
 		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return nil, fmt.Errorf("supervisor descriptor %d does not report inode metadata", descriptor)
+		}
 		path, err := os.Readlink(link)
 		if err != nil {
 			return nil, fmt.Errorf("read supervisor descriptor %d: %w", descriptor, err)
+		}
+		if stat.Nlink == 0 {
+			path = strings.TrimSuffix(path, " (deleted)")
 		}
 		data, err := os.ReadFile(filepath.Join(root, "fdinfo", entry.Name()))
 		if err != nil {
@@ -62,7 +69,7 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) (_ []supervisorLogFile
 			}
 			found = true
 			if flags&syscall.O_ACCMODE != syscall.O_RDONLY {
-				files = append(files, supervisorLogFile{path: path, descriptor: descriptor, appendMode: flags&syscall.O_APPEND != 0})
+				files = append(files, supervisorLogFile{path: path, descriptor: descriptor, appendMode: flags&syscall.O_APPEND != 0, size: info.Size(), links: stat.Nlink, identity: supervisorLogIdentity{device: stat.Dev, inode: stat.Ino}})
 			}
 			break
 		}

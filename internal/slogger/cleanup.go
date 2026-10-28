@@ -40,9 +40,13 @@ func cleanupPolicyNow() time.Time {
 // the configured Clyde log roots. The event slogger.cleanup.completed mirrors
 // these fields one-for-one.
 type CleanupResult struct {
+	// RetainedOpenBytes counts unlinked bytes that this pass cannot reclaim.
+	RetainedOpenBytes int64 `json:"retained_open_bytes"`
+	// RetainedOpenFiles counts unique unlinked log files still open.
+	RetainedOpenFiles int `json:"retained_open_files"`
 	// ProtectedBytes counts files that policy excludes from changes.
 	ProtectedBytes int64 `json:"protected_bytes"`
-	// ExcessBytes counts retained bytes above the combined budget.
+	// ExcessBytes counts named and open unlinked bytes above the combined budget.
 	ExcessBytes int64 `json:"excess_bytes"`
 	// BytesBefore counts discovered log bytes before retention.
 	BytesBefore int64 `json:"bytes_before"`
@@ -99,21 +103,23 @@ func applyCleanupPolicy(policy CleanupPolicy) (CleanupResult, error) {
 
 func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (CleanupResult, error) {
 	emptyResult := CleanupResult{
-		ProtectedBytes: 0,
-		ExcessBytes:    0,
-		BytesBefore:    0,
-		BytesAfter:     0,
-		Trimmed:        0,
-		BytesTrimmed:   0,
-		TrimmedPaths:   []string{},
-		DeletedPaths:   []string{},
-		ScannedRoots:   []string{},
-		Candidates:     0,
-		Deleted:        0,
-		BytesDeleted:   0,
-		Skipped:        []string{},
-		Errors:         []string{},
-		DurationMS:     0,
+		RetainedOpenBytes: 0,
+		RetainedOpenFiles: 0,
+		ProtectedBytes:    0,
+		ExcessBytes:       0,
+		BytesBefore:       0,
+		BytesAfter:        0,
+		Trimmed:           0,
+		BytesTrimmed:      0,
+		TrimmedPaths:      []string{},
+		DeletedPaths:      []string{},
+		ScannedRoots:      []string{},
+		Candidates:        0,
+		Deleted:           0,
+		BytesDeleted:      0,
+		Skipped:           []string{},
+		Errors:            []string{},
+		DurationMS:        0,
 	}
 	if !policy.Enabled {
 		slog.DebugContext(ctx, "slogger.cleanup.skipped", "component", "slogger", "reason", "disabled")
@@ -134,21 +140,23 @@ func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (Clean
 		"scanned_roots", scannedRoots,
 	)
 	result := CleanupResult{
-		ProtectedBytes: 0,
-		ExcessBytes:    0,
-		BytesBefore:    0,
-		BytesAfter:     0,
-		Trimmed:        0,
-		BytesTrimmed:   0,
-		TrimmedPaths:   []string{},
-		DeletedPaths:   []string{},
-		ScannedRoots:   scannedRoots,
-		Candidates:     0,
-		Deleted:        0,
-		BytesDeleted:   0,
-		Skipped:        []string{},
-		Errors:         []string{},
-		DurationMS:     0,
+		RetainedOpenBytes: policy.RetainedOpenBytes,
+		RetainedOpenFiles: policy.RetainedOpenFiles,
+		ProtectedBytes:    0,
+		ExcessBytes:       0,
+		BytesBefore:       0,
+		BytesAfter:        0,
+		Trimmed:           0,
+		BytesTrimmed:      0,
+		TrimmedPaths:      []string{},
+		DeletedPaths:      []string{},
+		ScannedRoots:      scannedRoots,
+		Candidates:        0,
+		Deleted:           0,
+		BytesDeleted:      0,
+		Skipped:           []string{},
+		Errors:            []string{},
+		DurationMS:        0,
 	}
 	files, walkErr := collectPolicyCleanupFiles(policy)
 	if walkErr != nil {
@@ -170,6 +178,8 @@ func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (Clean
 		"bytes_deleted", result.BytesDeleted,
 		"bytes_before", result.BytesBefore,
 		"bytes_after", result.BytesAfter,
+		"retained_open_bytes", result.RetainedOpenBytes,
+		"retained_open_files", result.RetainedOpenFiles,
 		"protected_bytes", result.ProtectedBytes,
 		"excess_bytes", result.ExcessBytes,
 		"trimmed", result.Trimmed,
