@@ -48,11 +48,21 @@ func TestLiveStorageRetentionPreservesResponsesStream(t *testing.T) {
 	}
 	_ = upstream.waitForRequest(t, 10*time.Second)
 
+	excluded := writeLiveRetentionExcludedFiles(t, h)
 	paths := writeLiveRetentionLogs(t, h)
 	logBytes, captureBytes := waitLiveRetentionDuringStream(t, h, stream, oldProbe)
 	t.Logf("retained log bytes = %d, capture database/WAL/SHM bytes = %d", logBytes, captureBytes)
 	for _, path := range paths {
 		assertLiveRetentionJSONL(t, path)
+	}
+	for _, fixture := range excluded {
+		data, err := os.ReadFile(fixture.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(data, fixture.data) {
+			t.Errorf("retention changed an excluded private file: %s", fixture.path)
+		}
 	}
 	upstream.releaseStreams()
 	completed := stream.waitForCompletion(t, 10*time.Second)
@@ -60,6 +70,33 @@ func TestLiveStorageRetentionPreservesResponsesStream(t *testing.T) {
 		t.Fatalf("Responses stream did not complete after retention; response length = %d", len(completed))
 	}
 	h.assertProductionUntouched(t)
+}
+
+type liveRetentionExcludedFile struct {
+	path string
+	data []byte
+}
+
+func writeLiveRetentionExcludedFiles(t *testing.T, h *harness) []liveRetentionExcludedFile {
+	t.Helper()
+	old := time.Now().Add(-14 * 24 * time.Hour)
+	var fixtures []liveRetentionExcludedFile
+	for _, directory := range []string{"desktop-via-clyde-backup", "search"} {
+		root := filepath.Join(h.stateRoot, "clyde", directory)
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(root, "preserved.jsonl")
+		data := []byte(fmt.Sprintf("{\"source\":%q,\"value\":\"preserve\"}\n", directory))
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+		fixtures = append(fixtures, liveRetentionExcludedFile{path: path, data: data})
+	}
+	return fixtures
 }
 
 func configureLiveCaptureRetention(t *testing.T, h *harness) {

@@ -28,7 +28,7 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) (_ []supervisorLogFile
 	var files []supervisorLogFile
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("inspect supervisor log descriptors: %w", err)
 		}
 		descriptor, err := strconv.Atoi(entry.Name())
 		if err != nil {

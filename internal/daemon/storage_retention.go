@@ -120,14 +120,21 @@ func retainDaemonLogs(ctx context.Context, cfg *config.Config, metrics *metricsR
 	if !setup.CleanupPolicy.Enabled {
 		return nil
 	}
+	stateDirectory := config.DefaultStateDir()
+	setup.CleanupPolicy.Root = setup.ConcernRoot
 	setup.CleanupPolicy.Paths = append(setup.CleanupPolicy.Paths,
 		slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleCLI),
 		slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon),
 		anthropic.LogPath(), adaptercodex.LogPath(),
+		filepath.Join(stateDirectory, "audit.jsonl"),
+		filepath.Join(stateDirectory, "daemon.log"),
+		metricsRollupPath(),
 	)
 	setup.CleanupPolicy.Roots = append(setup.CleanupPolicy.Roots,
 		slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleCLI),
-		slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleDaemon),
+		filepath.Join(cfg.MITM.CaptureDir, "raw"),
+		filepath.Join(cfg.MITM.CaptureDir, "drift"),
+		filepath.Join(stateDirectory, "mitm-drift"),
 	)
 	for _, spec := range config.LoggingSinkSpecs() {
 		if override, ok := cfg.Logging.Sinks.Override(spec.Name); ok && override.Path != "" {
