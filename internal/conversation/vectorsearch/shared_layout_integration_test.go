@@ -334,7 +334,7 @@ func TestSharedLayoutCopiesAndSearchesLikeSingleLayout(t *testing.T) {
 	if resumed != 0 {
 		t.Fatalf("resumed copy wrote %d rows after a complete copy, want 0", resumed)
 	}
-	report, err := shared.VerifySharedCopy(ctx, sourceCollectionID, sharedCollectionID)
+	report, err := shared.VerifySharedCopy(ctx, sourceCollectionID, sharedCollectionID, nil)
 	if err != nil {
 		t.Fatalf("verify shared copy: %v", err)
 	}

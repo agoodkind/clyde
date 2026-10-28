@@ -14,6 +14,13 @@ import (
 // source and its shared copy.
 type SharedCopyReport = milvusstore.CopyReport
 
+// SharedCopyProgress reports the rows one copy or verification phase has
+// processed and the rows that phase reads.
+type SharedCopyProgress = milvusstore.CopyProgress
+
+// SharedCopyProgressFunc receives a [SharedCopyProgress] after each page.
+type SharedCopyProgressFunc = milvusstore.ProgressFunc
+
 // sharedCopyPair returns the shared store of the client and the source and
 // target collection names. The source must be a single-collection collection
 // and the target a shared collection.
@@ -75,8 +82,9 @@ func (c *Client) prepareSharedCopy(ctx context.Context, milvus *milvusBackend, s
 // CopyToShared copies the rows of the single-collection source into the shared
 // target without embedding. With resume, it copies only the source rows with
 // a primary key greater than the largest target primary key. progress receives
-// the copied row count after each page. It returns the copied row count.
-func (c *Client) CopyToShared(ctx context.Context, sourceID string, targetID string, resume bool, progress func(int64)) (int64, error) {
+// the rows each copy phase has processed after each page. It returns the
+// copied row count.
+func (c *Client) CopyToShared(ctx context.Context, sourceID string, targetID string, resume bool, progress SharedCopyProgressFunc) (int64, error) {
 	shared, milvus, source, target, err := c.sharedCopyPair(sourceID, targetID)
 	if err != nil {
 		return 0, err
@@ -121,8 +129,9 @@ func (c *Client) CopyToShared(ctx context.Context, sourceID string, targetID str
 }
 
 // VerifySharedCopy compares the shared target with the single-collection
-// source row by row, including the exact vector bytes.
-func (c *Client) VerifySharedCopy(ctx context.Context, sourceID string, targetID string) (SharedCopyReport, error) {
+// source row by row, including the exact vector bytes. progress receives the
+// rows each verification phase has processed after each page.
+func (c *Client) VerifySharedCopy(ctx context.Context, sourceID string, targetID string, progress SharedCopyProgressFunc) (SharedCopyReport, error) {
 	shared, milvus, source, target, err := c.sharedCopyPair(sourceID, targetID)
 	if err != nil {
 		return SharedCopyReport{}, err
@@ -130,7 +139,7 @@ func (c *Client) VerifySharedCopy(ctx context.Context, sourceID string, targetID
 	if err := c.prepareSharedCopy(ctx, milvus, shared, source, target); err != nil {
 		return SharedCopyReport{}, err
 	}
-	report, err := shared.VerifyCopy(ctx, source, target, c.declaration)
+	report, err := shared.VerifyCopy(ctx, source, target, c.declaration, progress)
 	if err != nil {
 		return report, failSharedCopy(ctx, "verify copy of "+source+" in "+target, err)
 	}
