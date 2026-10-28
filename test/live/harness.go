@@ -947,12 +947,12 @@ type responsesUpstreamRequest struct {
 }
 
 type responsesRequestEnvelope struct {
-	Input         string                      `json:"input"`
-	Stream        bool                        `json:"stream"`
-	CompatUnknown responsesCompatibilityProbe `json:"compat_unknown"`
+	Input    string                 `json:"input"`
+	Stream   bool                   `json:"stream"`
+	Metadata responsesMetadataProbe `json:"metadata"`
 }
 
-type responsesCompatibilityProbe struct {
+type responsesMetadataProbe struct {
 	Probe string `json:"probe"`
 }
 
@@ -981,7 +981,7 @@ func startResponsesUpstream(t *testing.T) *responsesUpstream {
 			return
 		}
 		upstream.requests <- responsesUpstreamRequest{path: request.URL.Path, body: string(body)}
-		probeID := envelope.CompatUnknown.Probe
+		probeID := envelope.Metadata.Probe
 		w.Header().Set("X-Upstream-Marker", "responses-live")
 		w.Header().Set("X-Request-Id", "upstream-"+probeID)
 		if !envelope.Stream {

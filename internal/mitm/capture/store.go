@@ -28,6 +28,8 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 	_ "github.com/mattn/go-sqlite3" // database/sql driver "sqlite3"
+
+	"goodkind.io/clyde/internal/clock"
 )
 
 // DefaultMaxBodyBytes is the default per-body storage cap (8 MiB). Callers
@@ -37,8 +39,8 @@ const DefaultMaxBodyBytes = 8 * 1024 * 1024
 
 const (
 	defaultRetentionMaxAge   = 7 * 24 * time.Hour
-	defaultRetentionMaxBytes = int64(2 * 1024 * 1024 * 1024)
-	defaultRetentionInterval = 10 * time.Minute
+	defaultRetentionMaxBytes = int64(5_000_000_000)
+	defaultRetentionInterval = time.Second
 	defaultQueueDepth        = 256
 	dbFileMode               = os.FileMode(0o600)
 	// readPoolMaxConns bounds the read-only handle's connection pool so
@@ -58,9 +60,12 @@ const (
 	BodyResponse BodySide = "response"
 )
 
-// Config controls the SQLite capture store. Zero values fall back to package
-// defaults so callers can pass a near-empty Config with only DBPath set.
+// Config controls the SQLite capture store. Unresolved zero values use defaults.
 type Config struct {
+	// RetentionResolved preserves explicit zero age or size limits after config loading.
+	RetentionResolved bool
+	// InitializeRetention persists the daemon's first cleanup cutoff before writes.
+	InitializeRetention bool
 	// DBPath is the SQLite database file path. Required.
 	DBPath string
 	// MaxBodyBytes caps how many bytes of each body are stored. Bodies past
@@ -70,9 +75,9 @@ type Config struct {
 	// RetentionMaxAge deletes rows older than this. Defaults to 7 days.
 	RetentionMaxAge time.Duration
 	// RetentionMaxBytes deletes the oldest rows once the database exceeds this
-	// on-disk size. Defaults to 2 GiB.
+	// combined database, WAL, and SHM size. Defaults to 5,000,000,000 bytes.
 	RetentionMaxBytes int64
-	// RetentionInterval is the prune cadence. Defaults to 10 minutes.
+	// RetentionInterval is the prune cadence. Defaults to one second.
 	RetentionInterval time.Duration
 	// QueueDepth bounds the in-flight record channel. Defaults to 256.
 	QueueDepth int
@@ -82,13 +87,13 @@ func (c Config) withDefaults() Config {
 	if c.MaxBodyBytes <= 0 {
 		c.MaxBodyBytes = DefaultMaxBodyBytes
 	}
-	if c.RetentionMaxAge <= 0 {
+	if !c.RetentionResolved && c.RetentionMaxAge == 0 {
 		c.RetentionMaxAge = defaultRetentionMaxAge
 	}
-	if c.RetentionMaxBytes <= 0 {
+	if !c.RetentionResolved && c.RetentionMaxBytes == 0 {
 		c.RetentionMaxBytes = defaultRetentionMaxBytes
 	}
-	if c.RetentionInterval <= 0 {
+	if !c.RetentionResolved && c.RetentionInterval == 0 {
 		c.RetentionInterval = defaultRetentionInterval
 	}
 	if c.QueueDepth <= 0 {
@@ -174,26 +179,37 @@ type DecodedBody struct {
 // Store is the SQLite-backed capture sink. Construct it with [Open] and release
 // it with [Close]; it is safe to share across goroutines.
 type Store struct {
-	cfg     Config
-	log     *slog.Logger
-	db      *sql.DB
-	rdb     *sql.DB
-	records chan queuedRecord
-	shapes  chan DriftShape
-	checks  chan DriftCheck
-	done    chan struct{}
-	closed  atomic.Bool
-	wg      sync.WaitGroup
+	cfg                         Config
+	log                         *slog.Logger
+	db                          *sql.DB
+	rdb                         *sql.DB
+	records                     chan queuedRecord
+	shapes                      chan DriftShape
+	checks                      chan DriftCheck
+	done                        chan struct{}
+	closed                      atomic.Bool
+	wg                          sync.WaitGroup
+	openedAt                    time.Time
+	initialRequestID            int64
+	lastRetentionReport         time.Time
+	reclamationDeferredReported bool
 }
 
 // Open creates or opens the capture database at cfg.DBPath, applies the schema,
-// and starts the writer and retention goroutines. ctx is the store-lifetime
+// and starts the writer. RunRetention starts maintenance separately.
+// ctx is the store-lifetime
 // context the background writer and pruner attach their database calls to; the
 // goroutines capture it so it flows as a parameter rather than living on the
 // struct. The log is used verbatim, so the caller should scope it to the
 // desired concern before passing it.
 func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	cfg = cfg.withDefaults()
+	if cfg.RetentionMaxAge < 0 || cfg.RetentionMaxBytes < 0 || cfg.RetentionInterval <= 0 {
+		return nil, fmt.Errorf("capture: retention limits must be non-negative and interval must be positive")
+	}
+	if cfg.RetentionMaxAge == 0 && cfg.RetentionMaxBytes == 0 {
+		return nil, fmt.Errorf("capture: enable at least one retention limit")
+	}
 	if cfg.DBPath == "" {
 		return nil, fmt.Errorf("capture: DBPath is required")
 	}
@@ -241,18 +257,34 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	rdb.SetMaxOpenConns(readPoolMaxConns)
 	rdb.SetMaxIdleConns(readPoolMaxConns)
 	s := &Store{
-		cfg:     cfg,
-		log:     log,
-		db:      db,
-		rdb:     rdb,
-		records: make(chan queuedRecord, cfg.QueueDepth),
-		shapes:  make(chan DriftShape, cfg.QueueDepth),
-		checks:  make(chan DriftCheck, cfg.QueueDepth),
-		done:    make(chan struct{}),
-		closed:  atomic.Bool{},
-		wg:      sync.WaitGroup{},
+		cfg:                         cfg,
+		log:                         log,
+		db:                          db,
+		rdb:                         rdb,
+		records:                     make(chan queuedRecord, cfg.QueueDepth),
+		shapes:                      make(chan DriftShape, cfg.QueueDepth),
+		checks:                      make(chan DriftCheck, cfg.QueueDepth),
+		done:                        make(chan struct{}),
+		openedAt:                    clock.Now(),
+		closed:                      atomic.Bool{},
+		wg:                          sync.WaitGroup{},
+		initialRequestID:            0,
+		lastRetentionReport:         time.Time{},
+		reclamationDeferredReported: false,
 	}
-	s.wg.Add(2)
+	if err := db.QueryRowContext(ctx, retentionInitialCutoffSQL).Scan(&s.initialRequestID); err != nil {
+		_ = rdb.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("capture: read initial retention cutoff: %w", err)
+	}
+	if cfg.InitializeRetention {
+		if err := s.prepareRetention(ctx); err != nil {
+			_ = rdb.Close()
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	s.wg.Add(1)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -260,14 +292,6 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 			}
 		}()
 		s.writeLoop(ctx)
-	}()
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				s.log.ErrorContext(ctx, "mitm.capture.retention_loop_panic", "err", fmt.Errorf("panic: %v", r))
-			}
-		}()
-		s.retentionLoop(ctx)
 	}()
 	return s, nil
 }
@@ -569,89 +593,6 @@ func (s *Store) capBody(body []byte) (stored []byte, truncated bool) {
 		return body, false
 	}
 	return body[:s.cfg.MaxBodyBytes], true
-}
-
-func (s *Store) retentionLoop(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(s.cfg.RetentionInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			s.prune(ctx)
-		case <-s.done:
-			return
-		}
-	}
-}
-
-// prune deletes rows past the age cap, then enforces the on-disk size cap. The
-// age cutoff is computed in SQL via a strftime modifier so the store needs no Go
-// wall clock. Every failure is logged here; prune never returns an error.
-func (s *Store) prune(ctx context.Context) {
-	ageSeconds := int64(s.cfg.RetentionMaxAge / time.Second)
-	ageCutoff := "ts < CAST(strftime('%s','now','-' || ? || ' seconds') AS INTEGER)*1000000000"
-	bodiesSQL, bodiesArgs, err := sq.Delete("bodies").
-		Where("request_row_id IN (SELECT id FROM requests WHERE "+ageCutoff+")", ageSeconds).
-		ToSql()
-	if err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.build_prune_age_bodies_failed", "err", err)
-		return
-	}
-	if _, err := s.db.ExecContext(ctx, bodiesSQL, bodiesArgs...); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.prune_age_bodies_failed", "err", err)
-		return
-	}
-	requestsSQL, requestsArgs, err := sq.Delete("requests").Where(ageCutoff, ageSeconds).ToSql()
-	if err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.build_prune_age_requests_failed", "err", err)
-		return
-	}
-	if _, err := s.db.ExecContext(ctx, requestsSQL, requestsArgs...); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.prune_age_requests_failed", "err", err)
-		return
-	}
-	s.enforceSizeCap(ctx)
-}
-
-// enforceSizeCap drops the oldest tenth of rows when the database exceeds the
-// configured byte cap, then reclaims freed pages. Repeated prune ticks converge
-// without holding a long delete transaction. Failures are logged, not returned.
-func (s *Store) enforceSizeCap(ctx context.Context) {
-	var pageCount, pageSize int64
-	if err := s.db.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&pageCount); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.page_count_failed", "err", err)
-		return
-	}
-	if err := s.db.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.page_size_failed", "err", err)
-		return
-	}
-	if pageCount*pageSize <= s.cfg.RetentionMaxBytes {
-		return
-	}
-	oldestTenth := "(SELECT id FROM requests ORDER BY ts ASC LIMIT max(1, (SELECT count(*) FROM requests)/10))"
-	bodiesSQL, _, err := sq.Delete("bodies").Where("request_row_id IN " + oldestTenth).ToSql()
-	if err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.build_prune_size_bodies_failed", "err", err)
-		return
-	}
-	if _, err := s.db.ExecContext(ctx, bodiesSQL); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.prune_size_bodies_failed", "err", err)
-		return
-	}
-	requestsSQL, _, err := sq.Delete("requests").Where("id IN " + oldestTenth).ToSql()
-	if err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.build_prune_size_requests_failed", "err", err)
-		return
-	}
-	if _, err := s.db.ExecContext(ctx, requestsSQL); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.prune_size_requests_failed", "err", err)
-		return
-	}
-	if _, err := s.db.ExecContext(ctx, `PRAGMA incremental_vacuum`); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.incremental_vacuum_failed", "err", err)
-	}
 }
 
 // Close stops accepting records, drains the writer queue, checkpoints the WAL

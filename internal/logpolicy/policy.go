@@ -108,16 +108,16 @@ func Resolve(cfg config.Config) (PolicySet, error) {
 	}
 	globalRotation := resolveRotation(cfg.Logging.Rotation, RotationPolicy{
 		Enabled:    true,
-		MaxSizeMB:  64,
-		MaxBackups: 192,
-		MaxAgeDays: 14,
+		MaxSizeMB:  1,
+		MaxBackups: 1,
+		MaxAgeDays: 7,
 		Compress:   true,
 	})
 	globalCleanup, err := resolveCleanup("logging.cleanup", cfg.Logging.Cleanup, CleanupPolicy{
 		Enabled:    true,
-		MaxAgeDays: intPointer(14),
-		MaxBackups: intPointer(192),
-		MaxTotalMB: intPointer(4096),
+		MaxAgeDays: intPointer(7),
+		MaxBackups: intPointer(1),
+		MaxTotalMB: intPointer(5),
 	})
 	if err != nil {
 		return PolicySet{}, err
@@ -405,6 +405,13 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 		ConcernPolicies: resolveSloggerConcernPolicies(policies),
 		TranscriptPolicy: slogger.TranscriptPolicy{
 			Enabled: policies.Sinks[SinkTranscripts].Enabled && cfg.Logging.Transcript.IsEnabled(),
+			Rotation: slogger.RotationPolicy{
+				Enabled:    policies.Sinks[SinkTranscripts].Rotation.Enabled,
+				MaxSizeMB:  policies.Sinks[SinkTranscripts].Rotation.MaxSizeMB,
+				MaxBackups: policies.Sinks[SinkTranscripts].Rotation.MaxBackups,
+				MaxAgeDays: policies.Sinks[SinkTranscripts].Rotation.MaxAgeDays,
+				Compress:   boolPointer(policies.Sinks[SinkTranscripts].Rotation.Compress),
+			},
 		},
 		InventoryPolicy: slogger.InventoryPolicy{
 			Enabled: policies.Sinks[SinkInventory].Enabled,
@@ -421,11 +428,15 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 			// Cleanup is daemon-only. The walker scans the full state tree
 			// (logs, MITM raw captures, etc.) and must never block a CLI process
 			// start. The daemon runs RunCleanupOnce on a periodic loop instead.
-			Enabled:    processSink.Cleanup.Enabled && role == slogger.ProcessRoleDaemon,
-			Root:       config.DefaultStateDir(),
-			MaxAgeDays: cleanupInt(processSink.Cleanup.MaxAgeDays),
-			MaxBackups: cleanupInt(processSink.Cleanup.MaxBackups),
-			MaxTotalMB: cleanupInt(processSink.Cleanup.MaxTotalMB),
+			Enabled:          processSink.Cleanup.Enabled && role == slogger.ProcessRoleDaemon,
+			Root:             config.DefaultStateDir(),
+			Roots:            nil,
+			Paths:            nil,
+			KeepInPlacePaths: nil,
+			ProtectedPaths:   nil,
+			MaxAgeDays:       cleanupInt(processSink.Cleanup.MaxAgeDays),
+			MaxBackups:       cleanupInt(processSink.Cleanup.MaxBackups),
+			MaxTotalMB:       cleanupInt(processSink.Cleanup.MaxTotalMB),
 		},
 	}
 	if !concernSink.Enabled {

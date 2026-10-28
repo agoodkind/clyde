@@ -24,10 +24,8 @@ import (
 	"goodkind.io/clyde/internal/contextsvc"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemonsupervisor"
-	"goodkind.io/clyde/internal/logpolicy"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitmshow"
-	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/trace"
 )
 
@@ -154,7 +152,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	// stop is installed on the lifecycle group inside the start call, ahead of
 	// the goroutine launch, so a reload cannot begin the workers-phase drain
 	// while the distiller still reads the daemon log.
-	StartMetricsRollup(ctx, log, runtime.group)
+	metricsWorker := startMetricsRollupWorker(ctx, log, runtime.group)
 
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
@@ -196,7 +194,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	// during boot cannot trigger a reload before this worker is the
 	// established generation.
 	startConfigWatcher(ctx, log, runtime, configBaselineHash)
-	startStartupCleanup(log, cfg)
+	startStorageRetention(ctx, log, runtime, metricsWorker)
 
 	select {
 	case <-ctx.Done():
@@ -260,41 +258,6 @@ func startConfigWatcher(ctx context.Context, log *slog.Logger, runtime *runtimeS
 		log.WarnContext(ctx, "daemon.config_watch.start_failed", "concern", "process.daemon.config", "component", "daemon", "err", err)
 		runtime.configWatcher = nil
 	}
-}
-
-func startStartupCleanup(log *slog.Logger, cfg *config.Config) {
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				log.Error("daemon.log_cleanup.panic", "concern", "process.daemon.lifecycle", "component", "daemon",
-					"err", fmt.Sprintf("panic: %v", recovered),
-				)
-			}
-		}()
-		runStartupCleanup(log, cfg)
-	}()
-}
-
-func runStartupCleanup(log *slog.Logger, cfg *config.Config) {
-	if cfg == nil {
-		return
-	}
-	setupPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, slogger.ProcessRoleDaemon)
-	if err != nil {
-		log.Warn("daemon.log_cleanup.policy_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
-		return
-	}
-	result, err := slogger.RunCleanupOnce(setupPolicy.CleanupPolicy)
-	if err != nil {
-		log.Warn("daemon.log_cleanup.failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
-		return
-	}
-	log.Info("daemon.log_cleanup.completed", "concern", "process.daemon.lifecycle", "component", "daemon",
-		"scanned_roots", result.ScannedRoots,
-		"candidates", result.Candidates,
-		"deleted", result.Deleted,
-		"bytes_deleted", result.BytesDeleted,
-	)
 }
 
 // newControlServer builds the gRPC control server, wiring the closures that

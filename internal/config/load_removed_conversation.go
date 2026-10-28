@@ -105,7 +105,7 @@ func unmarshalConfigTOML(data []byte, tomlPath string, log *slog.Logger, cfg *Co
 		)
 		return fmt.Errorf("failed to parse %s: %w", tomlPath, err)
 	}
-	return nil
+	return readCaptureRetentionPresence(data, &cfg.MITM.CaptureStore)
 }
 
 func removedConversationSemanticConfigError(log *slog.Logger, tomlPath string, err error) error {
