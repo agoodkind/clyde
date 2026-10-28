@@ -57,25 +57,29 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) (_ []supervisorLogFile
 		if err != nil {
 			return nil, fmt.Errorf("read supervisor descriptor %d flags: %w", descriptor, err)
 		}
-		found := false
-		for line := range strings.SplitSeq(string(data), "\n") {
-			value, ok := strings.CutPrefix(line, "flags:")
-			if !ok {
-				continue
-			}
-			flags, err := strconv.ParseUint(strings.TrimSpace(value), 8, 64)
-			if err != nil {
-				return nil, fmt.Errorf("parse supervisor descriptor %d flags: %w", descriptor, err)
-			}
-			found = true
-			if flags&syscall.O_ACCMODE != syscall.O_RDONLY {
-				files = append(files, supervisorLogFile{path: path, descriptor: descriptor, appendMode: flags&syscall.O_APPEND != 0, size: info.Size(), links: stat.Nlink, identity: supervisorLogIdentity{device: stat.Dev, inode: stat.Ino}})
-			}
-			break
+		flags, err := readSupervisorDescriptorFlags(data, descriptor)
+		if err != nil {
+			return nil, err
 		}
-		if !found {
-			return nil, fmt.Errorf("supervisor descriptor %d does not report file flags", descriptor)
+		if flags&syscall.O_ACCMODE != syscall.O_RDONLY {
+			files = append(files, supervisorLogFile{path: path, descriptor: descriptor, appendMode: flags&syscall.O_APPEND != 0, size: info.Size(), links: stat.Nlink, identity: supervisorLogIdentity{device: stat.Dev, inode: stat.Ino}})
 		}
 	}
 	return files, nil
+}
+
+func readSupervisorDescriptorFlags(data []byte, descriptor int) (uint64, error) {
+	for line := range strings.SplitSeq(string(data), "\n") {
+		value, ok := strings.CutPrefix(line, "flags:")
+		if !ok {
+			continue
+		}
+		flags, err := strconv.ParseUint(strings.TrimSpace(value), 8, 64)
+		if err != nil {
+			slog.Warn("daemon.retention.supervisor_flags_failed", "concern", "daemon.workers", "descriptor", descriptor, "err", err)
+			return 0, fmt.Errorf("parse supervisor descriptor %d flags: %w", descriptor, err)
+		}
+		return flags, nil
+	}
+	return 0, fmt.Errorf("supervisor descriptor %d does not report file flags", descriptor)
 }
