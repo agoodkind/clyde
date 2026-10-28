@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -22,6 +23,7 @@ const (
 // metricsRollupWorker distills finished requests out of the daemon log so the
 // status command can report several windows without replaying that log itself.
 type metricsRollupWorker struct {
+	cleanup    chan metricsCleanupRequest
 	logPath    string
 	rollupPath string
 	interval   time.Duration
@@ -29,6 +31,11 @@ type metricsRollupWorker struct {
 	now        func() time.Time
 	state      metricsRollupState
 	pricing    adapterruntime.PricingTable
+}
+
+type metricsCleanupRequest struct {
+	changed bool
+	done    chan error
 }
 
 // newMetricsRollupWorker builds the worker from the daemon's own logging and
@@ -45,6 +52,7 @@ func newMetricsRollupWorker(log *slog.Logger) *metricsRollupWorker {
 	}
 	var state metricsRollupState
 	return &metricsRollupWorker{
+		cleanup:    make(chan metricsCleanupRequest),
 		logPath:    logPath,
 		rollupPath: metricsRollupPath(),
 		interval:   metricsRollupInterval,
@@ -66,7 +74,7 @@ func (w *metricsRollupWorker) run(ctx context.Context) {
 	w.recordGeneration(ctx)
 	w.state.checkpoint = readMetricsRollupCheckpoint(metricsRollupCheckpointPath())
 	w.state.saved = w.state.checkpoint
-	w.runPassAndLog(ctx)
+	_ = w.runPassAndLog(ctx)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
@@ -74,7 +82,22 @@ func (w *metricsRollupWorker) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.runPassAndLog(ctx)
+			_ = w.runPassAndLog(ctx)
+		case request := <-w.cleanup:
+			var cleanupError error
+			if request.changed {
+				cleanupError = w.state.closeSource()
+				if cleanupError != nil {
+					w.log.WarnContext(ctx, "daemon.metrics_rollup.cleanup_close_failed", "err", cleanupError)
+				}
+				var position metricsRollupSourcePosition
+				w.state.checkpoint.Source = position
+				w.state.checkpoint.CoverageSince = formatRollupTime(w.now())
+				cleanupError = errors.Join(cleanupError, w.writeCheckpoint(ctx))
+			} else {
+				cleanupError = w.runPassAndLog(ctx)
+			}
+			request.done <- cleanupError
 		}
 	}
 }
@@ -96,9 +119,10 @@ func (w *metricsRollupWorker) recordGeneration(ctx context.Context) {
 
 // runPassAndLog runs one distill pass and contains a panic to that pass, so the
 // ticker keeps its cadence and the next pass still happens.
-func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
+func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) (passError error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			passError = fmt.Errorf("metrics rollup panic: %v", recovered)
 			w.log.ErrorContext(ctx, "daemon.metrics_rollup.panic",
 				"concern", "daemon.workers",
 				"component", "daemon",
@@ -108,7 +132,7 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 		}
 	}()
 	if w.logPath == "" {
-		return
+		return errors.New("metrics rollup requires a daemon log path")
 	}
 	startedAt := w.now()
 	result, err := distillMetricsRollup(ctx, metricsRollupDistillInput{
@@ -126,10 +150,12 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 			"path", w.rollupPath,
 			"err", err.Error(),
 		)
-		return
+		return err
 	}
 	if w.state.checkpointChanged() {
-		w.writeCheckpoint(ctx)
+		if err := w.writeCheckpoint(ctx); err != nil {
+			return err
+		}
 	}
 	w.log.DebugContext(ctx, "daemon.metrics_rollup.pass_completed",
 		"concern", "daemon.workers",
@@ -140,9 +166,10 @@ func (w *metricsRollupWorker) runPassAndLog(ctx context.Context) {
 		"bytes_read", result.BytesRead,
 		"duration_ms", w.now().Sub(startedAt).Milliseconds(),
 	)
+	return nil
 }
 
-func (w *metricsRollupWorker) writeCheckpoint(ctx context.Context) {
+func (w *metricsRollupWorker) writeCheckpoint(ctx context.Context) error {
 	w.state.checkpoint.LastPassAt = formatRollupTime(w.now())
 	if err := writeMetricsRollupCheckpoint(metricsRollupCheckpointPath(), w.state.checkpoint); err != nil {
 		w.log.WarnContext(ctx, "daemon.metrics_rollup.checkpoint_write_failed",
@@ -151,9 +178,10 @@ func (w *metricsRollupWorker) writeCheckpoint(ctx context.Context) {
 			"subcomponent", "metrics_rollup",
 			"err", err.Error(),
 		)
-		return
+		return err
 	}
 	w.state.saved = w.state.checkpoint
+	return nil
 }
 
 // installMetricsRollupStop creates the worker context and registers its stop as
@@ -190,12 +218,16 @@ func installMetricsRollupStop(
 // StartMetricsRollup starts the distiller. A nil lifecycle group leaves the
 // goroutine unowned across a reload, so nothing starts.
 func StartMetricsRollup(ctx context.Context, log *slog.Logger, group *livetrack.Group) bool {
+	return startMetricsRollupWorker(ctx, log, group) != nil
+}
+
+func startMetricsRollupWorker(ctx context.Context, log *slog.Logger, group *livetrack.Group) *metricsRollupWorker {
 	if log == nil {
 		log = slog.Default()
 	}
 	workerCtx, done, owned := installMetricsRollupStop(ctx, group, log)
 	if !owned {
-		return false
+		return nil
 	}
 	worker := newMetricsRollupWorker(log)
 	go func() {
@@ -212,5 +244,25 @@ func StartMetricsRollup(ctx context.Context, log *slog.Logger, group *livetrack.
 		}()
 		worker.run(workerCtx)
 	}()
-	return true
+	return worker
+}
+
+func (w *metricsRollupWorker) prepareCleanup(ctx context.Context, changed bool) error {
+	if w == nil {
+		return nil
+	}
+	request := metricsCleanupRequest{changed: changed, done: make(chan error, 1)}
+	select {
+	case w.cleanup <- request:
+	case <-ctx.Done():
+		w.log.WarnContext(ctx, "daemon.metrics_rollup.cleanup_notify_canceled", "err", ctx.Err())
+		return fmt.Errorf("notify metrics retention: %w", ctx.Err())
+	}
+	select {
+	case err := <-request.done:
+		return err
+	case <-ctx.Done():
+		w.log.WarnContext(ctx, "daemon.metrics_rollup.cleanup_wait_canceled", "err", ctx.Err())
+		return fmt.Errorf("wait for metrics retention: %w", ctx.Err())
+	}
 }

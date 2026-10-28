@@ -1,0 +1,1 @@
+DELETE FROM bodies WHERE request_row_id IN (SELECT id FROM retention_requests) OR request_row_id IN (SELECT b.request_row_id FROM bodies b LEFT JOIN requests r ON r.id=b.request_row_id WHERE r.id IS NULL LIMIT 128)

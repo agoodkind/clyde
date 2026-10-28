@@ -44,7 +44,7 @@ func TestApplyCleanupPolicyTolerantOfMissingRoot(t *testing.T) {
 
 func TestApplyCleanupPolicyDeletesOldLogs(t *testing.T) {
 	root := t.TempDir()
-	oldPath := filepath.Join(root, "logs", "adapter", "old.jsonl")
+	oldPath := filepath.Join(root, "logs", "adapter", "old.jsonl.1")
 	newPath := filepath.Join(root, "logs", "adapter", "new.jsonl")
 	if err := os.MkdirAll(filepath.Dir(oldPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -74,7 +74,7 @@ func TestApplyCleanupPolicyDeletesOldLogs(t *testing.T) {
 
 func TestApplyCleanupPolicyDeletesOldRawCaptures(t *testing.T) {
 	root := t.TempDir()
-	oldPath := filepath.Join(root, "mitm", "raw", "api.anthropic.com", "old.raw")
+	oldPath := filepath.Join(root, "mitm", "raw", "api.anthropic.com", "old.raw.1")
 	newPath := filepath.Join(root, "mitm", "raw", "api.anthropic.com", "new.raw")
 	if err := os.MkdirAll(filepath.Dir(oldPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -150,12 +150,12 @@ func TestApplyCleanupPolicyEmitsCompletedEventWithTypedFields(t *testing.T) {
 	if candidates, ok := completed["candidates"].(float64); !ok || candidates != 8 {
 		t.Fatalf("candidates=%v want 8", completed["candidates"])
 	}
-	if deleted, ok := completed["deleted"].(float64); !ok || deleted != 8 {
-		t.Fatalf("deleted=%v want 8", completed["deleted"])
+	if trimmed, ok := completed["trimmed"].(float64); !ok || trimmed != 8 {
+		t.Fatalf("trimmed=%v want 8", completed["trimmed"])
 	}
-	bytesDeleted, ok := completed["bytes_deleted"].(float64)
-	if !ok || bytesDeleted <= 0 {
-		t.Fatalf("bytes_deleted=%v want > 0", completed["bytes_deleted"])
+	bytesTrimmed, ok := completed["bytes_trimmed"].(float64)
+	if !ok || bytesTrimmed <= 0 {
+		t.Fatalf("bytes_trimmed=%v want > 0", completed["bytes_trimmed"])
 	}
 	if skipped, ok := completed["skipped"].([]any); !ok || len(skipped) != 0 {
 		t.Fatalf("skipped=%v want empty slice", completed["skipped"])
@@ -192,13 +192,16 @@ func TestApplyCleanupPolicyReportsSkippedAndErrors(t *testing.T) {
 	if err := os.MkdirAll(lockedDir, 0o755); err != nil {
 		t.Fatalf("mkdir locked: %v", err)
 	}
-	lockedFile := filepath.Join(lockedDir, "permission-denied.jsonl")
+	lockedFile := filepath.Join(lockedDir, "permission-denied.jsonl.1")
 	if err := os.WriteFile(lockedFile, []byte("locked"), 0o600); err != nil {
 		t.Fatalf("write locked: %v", err)
 	}
 	oldTime := cleanupPolicyNow().Add(-48 * time.Hour)
 	if err := os.Chtimes(lockedFile, oldTime, oldTime); err != nil {
 		t.Fatalf("chtimes locked: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lockedDir, "permission-denied.jsonl.lock"), nil, 0o600); err != nil {
+		t.Fatalf("create archive lock: %v", err)
 	}
 	if err := os.Chmod(lockedDir, 0o555); err != nil {
 		t.Fatalf("chmod locked dir: %v", err)
@@ -236,6 +239,9 @@ func TestApplyCleanupPolicyReportsSkippedAndErrors(t *testing.T) {
 	if !ok || len(errs) == 0 {
 		t.Fatalf("errors=%v want at least one entry", completed["errors"])
 	}
+	if message, ok := errs[0].(string); !ok || !strings.Contains(message, "remove") {
+		t.Fatalf("cleanup did not report the deletion failure: %v", errs)
+	}
 }
 
 func TestRunCleanupOnceReturnsTypedResultWithAgeAndTotalCaps(t *testing.T) {
@@ -249,9 +255,9 @@ func TestRunCleanupOnceReturnsTypedResultWithAgeAndTotalCaps(t *testing.T) {
 		t.Fatalf("mkdir raw: %v", err)
 	}
 
-	oldLog := filepath.Join(logsDir, "old.jsonl")
+	oldLog := filepath.Join(logsDir, "old.jsonl.1")
 	freshLog := filepath.Join(logsDir, "fresh.jsonl")
-	oldRaw := filepath.Join(rawDir, "old.raw")
+	oldRaw := filepath.Join(rawDir, "old.raw.1")
 	freshRaw := filepath.Join(rawDir, "fresh.raw")
 
 	for _, path := range []string{oldLog, freshLog, oldRaw, freshRaw} {

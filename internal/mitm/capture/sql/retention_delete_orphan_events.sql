@@ -1,0 +1,1 @@
+DELETE FROM decoded_tool_events WHERE id IN (SELECT e.id FROM decoded_tool_events e LEFT JOIN decoded_bodies d ON d.id=e.decoded_body_id LEFT JOIN requests r ON r.id=d.request_row_id WHERE r.id IS NULL OR r.id IN (SELECT id FROM retention_requests) LIMIT 128)

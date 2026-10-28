@@ -1,0 +1,1 @@
+DELETE FROM decoded_bodies WHERE request_row_id IN (SELECT id FROM retention_requests) OR id IN (SELECT d.id FROM decoded_bodies d LEFT JOIN requests r ON r.id=d.request_row_id WHERE r.id IS NULL LIMIT 128)

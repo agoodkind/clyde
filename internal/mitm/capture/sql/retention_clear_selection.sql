@@ -1,0 +1,1 @@
+DELETE FROM retention_requests

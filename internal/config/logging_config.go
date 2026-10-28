@@ -232,13 +232,13 @@ type LoggingRotation struct {
 const (
 	// SidecarRotationMaxSizeMB is the default rotate-at size for provider
 	// JSONL sidecars when the configured size is non-positive.
-	SidecarRotationMaxSizeMB = 64
+	SidecarRotationMaxSizeMB = 1
 	// SidecarRotationMaxBackups is the default retained-backup count for
 	// provider JSONL sidecars when the configured count is non-positive.
-	SidecarRotationMaxBackups = 192
+	SidecarRotationMaxBackups = 1
 	// SidecarRotationMaxAgeDays is the default retention age for provider
 	// JSONL sidecars when the configured age is non-positive.
-	SidecarRotationMaxAgeDays = 14
+	SidecarRotationMaxAgeDays = 7
 )
 
 // SidecarRotation is the normalized rotation shape shared by the provider

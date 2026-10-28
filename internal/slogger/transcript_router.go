@@ -10,12 +10,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"goodkind.io/gklog"
 )
 
 const (
@@ -47,6 +50,8 @@ type TranscriptRouterConfig struct {
 	// Root is the directory under which <chat_key>.jsonl files are written.
 	// Typically <state>/clyde/logs/chats.
 	Root string
+	// Rotation controls the size and retained archives of each chat file.
+	Rotation RotationPolicy
 	// PoolCap caps simultaneously open file handles. Zero falls back to
 	// transcriptDefaultPoolCap.
 	PoolCap int
@@ -77,7 +82,7 @@ type transcriptRouterState struct {
 
 type transcriptHandle struct {
 	path string
-	file *os.File
+	file io.WriteCloser
 }
 
 // NewTranscriptRouter constructs a router with the given config. The router
@@ -311,16 +316,21 @@ func (s *transcriptRouterState) acquireLocked(relPath string) (*transcriptHandle
 		)
 		return nil, fmt.Errorf("transcript: mkdir %s: %w", filepath.Dir(full), err)
 	}
-	file, err := os.OpenFile(full, os.O_APPEND|os.O_CREATE|os.O_WRONLY, transcriptFilePerm)
-	if err != nil {
-		slog.Warn("transcript.open_failed",
-			"component", "transcript-router",
-			"path", full,
-			"err", err,
-		)
-		return nil, fmt.Errorf("transcript: open %s: %w", full, err)
+	rotation := s.cfg.Rotation
+	if rotation.MaxSizeMB <= 0 {
+		rotation = RotationPolicy{Enabled: true, MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 7, Compress: nil}
 	}
-	h := &transcriptHandle{path: full, file: file}
+	var writer io.WriteCloser
+	if rotation.Enabled {
+		writer = gklog.NewLockedWriteCloser(full, gklog.NewLumberjackWriterWithConfig(full, rotationConfig(rotation)))
+	} else {
+		file, err := os.OpenFile(full, os.O_APPEND|os.O_CREATE|os.O_WRONLY, transcriptFilePerm)
+		if err != nil {
+			return nil, fmt.Errorf("transcript: open %s: %w", full, err)
+		}
+		writer = gklog.NewLockedWriteCloser(full, file)
+	}
+	h := &transcriptHandle{path: full, file: writer}
 	s.cache[relPath] = h
 	s.order = append(s.order, relPath)
 	return h, nil

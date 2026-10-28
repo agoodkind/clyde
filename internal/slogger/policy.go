@@ -52,18 +52,27 @@ type InventoryPolicy struct {
 	Rotation RotationPolicy
 }
 
-// CleanupPolicy describes startup cleanup for rotated log surfaces.
+// CleanupPolicy controls retention across Clyde-owned log files.
 type CleanupPolicy struct {
-	Enabled    bool
-	Root       string
-	MaxAgeDays int
-	MaxBackups int
-	MaxTotalMB int
+	Enabled bool
+	Root    string
+	// Roots lists additional owned directory trees.
+	Roots []string
+	// Paths lists exact owned files outside the roots, including their archives.
+	Paths []string
+	// KeepInPlacePaths lists open archives that cleanup must compact in place.
+	KeepInPlacePaths []string
+	// ProtectedPaths lists files counted in the budget but never changed.
+	ProtectedPaths []string
+	MaxAgeDays     int
+	MaxBackups     int
+	MaxTotalMB     int
 }
 
 // TranscriptPolicy describes the transcript router inputs that slogger needs.
 type TranscriptPolicy struct {
-	Enabled bool
+	Enabled  bool
+	Rotation RotationPolicy
 }
 
 func rotationConfig(policy RotationPolicy) gklog.RotationConfig {

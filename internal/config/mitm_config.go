@@ -78,13 +78,17 @@ type MITMListenerConfig struct {
 
 // MITMCaptureStoreConfig configures the shared SQLite capture store that
 // persists completed MITM exchanges. DBPath defaults to <capture_dir>/capture.db;
-// the remaining fields default inside the capture package when zero.
+// config loading resolves retention defaults and preserves explicit zero limits.
 type MITMCaptureStoreConfig struct {
-	DBPath            string   `json:"dbPath,omitempty" toml:"db_path,omitempty"`
-	MaxBodyBytes      int      `json:"maxBodyBytes,omitempty" toml:"max_body_bytes,omitempty"`
-	RetentionMaxAge   Duration `json:"retentionMaxAge,omitempty" toml:"retention_max_age,omitempty"`
-	RetentionMaxBytes int64    `json:"retentionMaxBytes,omitempty" toml:"retention_max_bytes,omitempty"`
-	RetentionInterval Duration `json:"retentionInterval,omitempty" toml:"retention_interval,omitempty"`
+	retentionResolved        bool
+	retentionAgePresent      bool
+	retentionBytesPresent    bool
+	retentionIntervalPresent bool
+	DBPath                   string   `json:"dbPath,omitempty" toml:"db_path,omitempty"`
+	MaxBodyBytes             int      `json:"maxBodyBytes,omitempty" toml:"max_body_bytes,omitempty"`
+	RetentionMaxAge          Duration `json:"retentionMaxAge,omitempty" toml:"retention_max_age,omitempty"`
+	RetentionMaxBytes        int64    `json:"retentionMaxBytes,omitempty" toml:"retention_max_bytes,omitempty"`
+	RetentionInterval        Duration `json:"retentionInterval,omitempty" toml:"retention_interval,omitempty"`
 }
 
 // MITMCAConfig configures on-disk persistence of the MITM CA.

@@ -1,6 +1,7 @@
 package slogger
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -39,19 +40,33 @@ func cleanupPolicyNow() time.Time {
 // the configured Clyde log roots. The event slogger.cleanup.completed mirrors
 // these fields one-for-one.
 type CleanupResult struct {
+	// ProtectedBytes counts files that policy excludes from changes.
+	ProtectedBytes int64 `json:"protected_bytes"`
+	// ExcessBytes counts retained bytes above the combined budget.
+	ExcessBytes int64 `json:"excess_bytes"`
+	// BytesBefore counts discovered log bytes before retention.
+	BytesBefore int64 `json:"bytes_before"`
+	// BytesAfter counts retained bytes after successful mutations.
+	BytesAfter int64 `json:"bytes_after"`
+	// Trimmed counts active files compacted without replacing their inode.
+	Trimmed int `json:"trimmed"`
+	// BytesTrimmed counts bytes removed by active-file compaction.
+	BytesTrimmed int64 `json:"bytes_trimmed"`
+	// TrimmedPaths lists active files changed in place.
+	TrimmedPaths []string `json:"trimmed_paths"`
+	// DeletedPaths lists archives removed successfully.
+	DeletedPaths []string `json:"deleted_paths"`
 	// ScannedRoots lists the cleanup roots walked during this pass. It is a
 	// slice even when a single root is configured, so consumers can treat the
 	// shape uniformly.
 	ScannedRoots []string `json:"scanned_roots"`
-	// Candidates counts files identified as eligible for removal by the active
-	// policy regardless of whether removal succeeded.
+	// Candidates counts files selected for removal or compaction.
 	Candidates int `json:"candidates"`
 	// Deleted counts files the cleanup pass actually removed.
 	Deleted int `json:"deleted"`
 	// BytesDeleted sums the sizes of removed files in bytes.
 	BytesDeleted int64 `json:"bytes_deleted"`
-	// Skipped lists candidate paths the cleanup pass identified but did not
-	// remove because os.Remove returned an error other than os.IsNotExist.
+	// Skipped lists paths that cleanup could not remove or compact.
 	Skipped []string `json:"skipped"`
 	// Errors lists "<path>: <err>" strings for each candidate the cleanup
 	// pass attempted to remove but could not. Walk and collect errors also
@@ -73,81 +88,94 @@ func RunCleanupOnce(policy CleanupPolicy) (CleanupResult, error) {
 	return applyCleanupPolicy(policy)
 }
 
+// RunCleanupOnceContext applies one retention pass with the caller's context.
+func RunCleanupOnceContext(ctx context.Context, policy CleanupPolicy) (CleanupResult, error) {
+	return applyCleanupPolicyContext(ctx, policy)
+}
+
 func applyCleanupPolicy(policy CleanupPolicy) (CleanupResult, error) {
+	return applyCleanupPolicyContext(context.Background(), policy)
+}
+
+func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (CleanupResult, error) {
 	emptyResult := CleanupResult{
-		ScannedRoots: []string{},
-		Candidates:   0,
-		Deleted:      0,
-		BytesDeleted: 0,
-		Skipped:      []string{},
-		Errors:       []string{},
-		DurationMS:   0,
+		ProtectedBytes: 0,
+		ExcessBytes:    0,
+		BytesBefore:    0,
+		BytesAfter:     0,
+		Trimmed:        0,
+		BytesTrimmed:   0,
+		TrimmedPaths:   []string{},
+		DeletedPaths:   []string{},
+		ScannedRoots:   []string{},
+		Candidates:     0,
+		Deleted:        0,
+		BytesDeleted:   0,
+		Skipped:        []string{},
+		Errors:         []string{},
+		DurationMS:     0,
 	}
 	if !policy.Enabled {
-		slog.Debug("slogger.cleanup.skipped", "component", "slogger", "reason", "disabled")
+		slog.DebugContext(ctx, "slogger.cleanup.skipped", "component", "slogger", "reason", "disabled")
 		return emptyResult, nil
 	}
 	root := strings.TrimSpace(policy.Root)
-	if root == "" {
-		slog.Debug("slogger.cleanup.skipped", "component", "slogger", "reason", "empty_root")
-		return emptyResult, nil
+	if root == "" && len(policy.Roots) == 0 && len(policy.Paths) == 0 {
+		return emptyResult, errors.New("cleanup requires an owned root or file path")
 	}
-	if _, statErr := os.Stat(root); errors.Is(statErr, fs.ErrNotExist) {
-		slog.Debug("slogger.cleanup.skipped",
-			"component", "slogger",
-			"reason", "root_missing",
-			"root", root,
-		)
-		return emptyResult, nil
+	scannedRoots := append([]string(nil), policy.Roots...)
+	if root != "" {
+		scannedRoots = append(scannedRoots, root)
 	}
-	scannedRoots := []string{root}
 	startedAt := cleanupPolicyNow()
-	slog.Info("slogger.cleanup.started",
+	slog.DebugContext(ctx, "slogger.cleanup.started",
 		"component", "slogger",
 		"root", root,
 		"scanned_roots", scannedRoots,
 	)
 	result := CleanupResult{
-		ScannedRoots: scannedRoots,
-		Candidates:   0,
-		Deleted:      0,
-		BytesDeleted: 0,
-		Skipped:      []string{},
-		Errors:       []string{},
-		DurationMS:   0,
+		ProtectedBytes: 0,
+		ExcessBytes:    0,
+		BytesBefore:    0,
+		BytesAfter:     0,
+		Trimmed:        0,
+		BytesTrimmed:   0,
+		TrimmedPaths:   []string{},
+		DeletedPaths:   []string{},
+		ScannedRoots:   scannedRoots,
+		Candidates:     0,
+		Deleted:        0,
+		BytesDeleted:   0,
+		Skipped:        []string{},
+		Errors:         []string{},
+		DurationMS:     0,
 	}
-	files, walkErr := collectCleanupFiles(root)
+	files, walkErr := collectPolicyCleanupFiles(policy)
 	if walkErr != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", root, walkErr))
 	}
-	candidates := selectCleanupCandidates(files, policy, cleanupPolicyNow())
-	result.Candidates = len(candidates)
-	for _, candidate := range candidates {
-		if err := os.Remove(candidate.path); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			slog.Warn("slogger.cleanup.remove_failed",
-				"component", "slogger",
-				"path", candidate.path,
-				"err", err,
-			)
-			result.Skipped = append(result.Skipped, candidate.path)
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", candidate.path, err))
-			continue
-		}
-		result.Deleted++
-		result.BytesDeleted += candidate.size
-	}
+	retainCleanupFiles(files, policy, &result)
 	duration := max(cleanupPolicyNow().Sub(startedAt), time.Millisecond)
 	result.DurationMS = duration.Milliseconds()
-	slog.Info("slogger.cleanup.completed",
+	completionLevel := slog.LevelDebug
+	if result.Deleted > 0 || result.Trimmed > 0 || len(result.Errors) > 0 {
+		completionLevel = slog.LevelInfo
+	}
+	slog.Log(ctx, completionLevel, "slogger.cleanup.completed",
 		"component", "slogger",
 		"root", root,
 		"scanned_roots", result.ScannedRoots,
 		"candidates", result.Candidates,
 		"deleted", result.Deleted,
 		"bytes_deleted", result.BytesDeleted,
+		"bytes_before", result.BytesBefore,
+		"bytes_after", result.BytesAfter,
+		"protected_bytes", result.ProtectedBytes,
+		"excess_bytes", result.ExcessBytes,
+		"trimmed", result.Trimmed,
+		"bytes_trimmed", result.BytesTrimmed,
+		"trimmed_paths", result.TrimmedPaths,
+		"deleted_paths", result.DeletedPaths,
 		"skipped", result.Skipped,
 		"errors", result.Errors,
 		"duration_ms", result.DurationMS,
@@ -163,12 +191,20 @@ func applyCleanupPolicy(policy CleanupPolicy) (CleanupResult, error) {
 
 func collectCleanupFiles(root string) ([]cleanupFile, error) {
 	files := make([]cleanupFile, 0)
+	var failures []error
 	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			if path == root && errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			slog.Warn("slogger.cleanup.walk_entry_failed", "component", "slogger", "path", path, "err", err)
-			return fmt.Errorf("walk %s: %w", path, err)
+			failures = append(failures, fmt.Errorf("walk %s: %w", path, err))
+			return nil
 		}
 		if entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
 		if !isCleanupLogPath(path) {
@@ -177,7 +213,11 @@ func collectCleanupFiles(root string) ([]cleanupFile, error) {
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			slog.Warn("slogger.cleanup.stat_failed", "component", "slogger", "path", path, "err", infoErr)
-			return fmt.Errorf("stat %s: %w", path, infoErr)
+			failures = append(failures, fmt.Errorf("stat %s: %w", path, infoErr))
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil
 		}
 		files = append(files, cleanupFile{
 			path:    path,
@@ -188,9 +228,9 @@ func collectCleanupFiles(root string) ([]cleanupFile, error) {
 		return nil
 	})
 	if walkErr != nil {
-		return nil, fmt.Errorf("collect cleanup files under %s: %w", root, walkErr)
+		failures = append(failures, fmt.Errorf("collect cleanup files under %s: %w", root, walkErr))
 	}
-	return files, nil
+	return files, errors.Join(failures...)
 }
 
 func selectCleanupCandidates(files []cleanupFile, policy CleanupPolicy, now time.Time) []cleanupFile {
@@ -261,10 +301,16 @@ func isCleanupLogPath(path string) bool {
 	if strings.HasSuffix(base, ".lock") || base == "lock" {
 		return false
 	}
+	if _, archived := cleanupArchiveGroup(path); archived {
+		return true
+	}
 	return strings.Contains(base, ".jsonl") || strings.HasSuffix(base, ".log") || strings.HasSuffix(base, ".log.gz") || strings.HasSuffix(base, ".raw")
 }
 
 func cleanupGroup(path string) string {
+	if group, archived := cleanupArchiveGroup(path); archived {
+		return group
+	}
 	base := filepath.Base(path)
 	lower := strings.ToLower(base)
 	for _, marker := range []string{".jsonl", ".log"} {
