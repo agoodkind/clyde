@@ -62,7 +62,7 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) (_ []supervisorLogFile
 			return nil, err
 		}
 		if flags&syscall.O_ACCMODE != syscall.O_RDONLY {
-			files = append(files, supervisorLogFile{path: path, descriptor: descriptor, appendMode: flags&syscall.O_APPEND != 0, size: info.Size(), links: stat.Nlink, identity: supervisorLogIdentity{device: stat.Dev, inode: stat.Ino}})
+			files = append(files, supervisorLogFile{path: path, descriptor: descriptor, appendMode: flags&syscall.O_APPEND != 0, size: info.Size(), links: uint64(stat.Nlink), identity: supervisorLogIdentity{device: stat.Dev, inode: stat.Ino}})
 		}
 	}
 	return files, nil
