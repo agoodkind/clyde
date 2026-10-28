@@ -428,15 +428,17 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 			// Cleanup is daemon-only. The walker scans the full state tree
 			// (logs, MITM raw captures, etc.) and must never block a CLI process
 			// start. The daemon runs RunCleanupOnce on a periodic loop instead.
-			Enabled:          processSink.Cleanup.Enabled && role == slogger.ProcessRoleDaemon,
-			Root:             config.DefaultStateDir(),
-			Roots:            nil,
-			Paths:            nil,
-			KeepInPlacePaths: nil,
-			ProtectedPaths:   nil,
-			MaxAgeDays:       cleanupInt(processSink.Cleanup.MaxAgeDays),
-			MaxBackups:       cleanupInt(processSink.Cleanup.MaxBackups),
-			MaxTotalMB:       cleanupInt(processSink.Cleanup.MaxTotalMB),
+			Enabled:           processSink.Cleanup.Enabled && role == slogger.ProcessRoleDaemon,
+			Root:              config.DefaultStateDir(),
+			Roots:             nil,
+			Paths:             nil,
+			KeepInPlacePaths:  nil,
+			ProtectedPaths:    nil,
+			RetainedOpenBytes: 0,
+			RetainedOpenFiles: 0,
+			MaxAgeDays:        cleanupInt(processSink.Cleanup.MaxAgeDays),
+			MaxBackups:        cleanupInt(processSink.Cleanup.MaxBackups),
+			MaxTotalMB:        cleanupInt(processSink.Cleanup.MaxTotalMB),
 		},
 	}
 	if !concernSink.Enabled {

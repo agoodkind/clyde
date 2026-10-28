@@ -28,9 +28,20 @@ Protected files still count toward the budget, and cleanup reports any remaining
 excess bytes. Supervisor stderr does not acquire the per-file lock. Compaction
 of append-mode stderr treats concurrent lines as best effort.
 
+Rotation can remove a file's directory entry while the supervisor still has the
+file open. Closing the last descriptor releases that file's disk space. Cleanup
+counts these files once by device and inode and reports their bytes separately.
+It continues pruning files that still have paths. If the retained open files
+already exceed the budget, cleanup preserves the normal budget of recent named
+logs and reports the remaining excess.
+
 Each compaction reads a bounded tail rather than loading the entire log. Cleanup
 counts bytes only after a successful removal or compaction and continues after
 individual failures. A failed deletion does not count as freed space.
+
+The `bytes_before` and `bytes_after` fields count files that still have paths.
+The `retained_open_bytes` and `retained_open_files` fields count the supervisor's
+unlinked files. The `excess_bytes` field includes both sets of files.
 
 The `slogger.cleanup.completed` event reports discovered and retained bytes,
 deleted and trimmed bytes, changed paths, skipped paths, errors, and duration.

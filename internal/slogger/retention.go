@@ -165,8 +165,12 @@ func retainCleanupFiles(files []cleanupFile, policy CleanupPolicy, result *Clean
 		selected[file.path] = true
 	}
 	maxBytes := int64(policy.MaxTotalMB) * 1024 * 1024
+	availableBytes := maxBytes
+	if result.RetainedOpenBytes < maxBytes {
+		availableBytes -= result.RetainedOpenBytes
+	}
 	for _, file := range archives {
-		if !selected[file.path] && (maxBytes <= 0 || result.BytesAfter <= maxBytes) {
+		if !selected[file.path] && (maxBytes <= 0 || result.BytesAfter <= availableBytes) {
 			continue
 		}
 		result.Candidates++
@@ -183,16 +187,16 @@ func retainCleanupFiles(files []cleanupFile, policy CleanupPolicy, result *Clean
 		result.DeletedPaths = append(result.DeletedPaths, file.path)
 		result.BytesDeleted += mutation.freed
 	}
-	retainActiveCleanupFiles(files, policy, maxBytes, result)
+	retainActiveCleanupFiles(files, policy, maxBytes, availableBytes, result)
 	if maxBytes > 0 {
-		result.ExcessBytes = max(int64(0), result.BytesAfter-maxBytes)
+		result.ExcessBytes = max(int64(0), result.BytesAfter+result.RetainedOpenBytes-maxBytes)
 		if result.ExcessBytes > 0 {
-			result.Errors = append(result.Errors, fmt.Sprintf("retained logs exceed the combined budget by %d bytes; protected files account for %d bytes", result.ExcessBytes, result.ProtectedBytes))
+			result.Errors = append(result.Errors, fmt.Sprintf("retained logs exceed the combined budget by %d bytes; protected named files account for %d bytes and %d open unlinked files retain %d bytes", result.ExcessBytes, result.ProtectedBytes, result.RetainedOpenFiles, result.RetainedOpenBytes))
 		}
 	}
 }
 
-func retainActiveCleanupFiles(files []cleanupFile, policy CleanupPolicy, maxBytes int64, result *CleanupResult) {
+func retainActiveCleanupFiles(files []cleanupFile, policy CleanupPolicy, maxBytes, availableBytes int64, result *CleanupResult) {
 	for _, file := range files {
 		if slices.Contains(policy.ProtectedPaths, file.path) {
 			continue
@@ -204,8 +208,8 @@ func retainActiveCleanupFiles(files []cleanupFile, policy CleanupPolicy, maxByte
 		if policy.MaxAgeDays > 0 && file.modTime.Before(cleanupPolicyNow().Add(-time.Duration(policy.MaxAgeDays)*24*time.Hour)) {
 			keep = 0
 		}
-		if maxBytes > 0 && result.BytesAfter > maxBytes {
-			keep = min(keep, max(int64(0), file.size-(result.BytesAfter-maxBytes)))
+		if maxBytes > 0 && result.BytesAfter > availableBytes {
+			keep = min(keep, max(int64(0), file.size-(result.BytesAfter-availableBytes)))
 		}
 		if keep >= file.size {
 			continue
