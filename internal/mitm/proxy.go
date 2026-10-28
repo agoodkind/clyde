@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
-	"golang.org/x/net/http2"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
@@ -67,7 +66,6 @@ type Proxy struct {
 	listeners []net.Listener
 	h3Conns   []net.PacketConn
 	server    *http.Server
-	h2Server  *http2.Server
 	h3Server  *http3.Server
 
 	h3Mu             sync.Mutex
@@ -156,7 +154,6 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 		listeners:            listeners,
 		h3Conns:              h3Conns,
 		server:               nil,
-		h2Server:             &http2.Server{},
 		h3Server:             nil,
 
 		h3Mu:             sync.Mutex{},

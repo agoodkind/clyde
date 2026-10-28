@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,6 +32,13 @@ import (
 // on an unrecognized variant.
 
 const sdkRequiredTag = "required"
+
+// sdkOmittedRequiredFields maps SDK struct types to required fields that
+// Clyde omits from responses. The conformance matrix records each entry
+// as a Deviation.
+var sdkOmittedRequiredFields = map[reflect.Type][]string{
+	reflect.TypeFor[responses.Response](): {"AccessPrograms"},
+}
 
 func sdkShapeProblems(value reflect.Value, path string) []string {
 	switch value.Kind() {
@@ -81,7 +89,8 @@ func sdkStructShapeProblems(value reflect.Value, path string) []string {
 		}
 		fieldPath := path + "." + strings.Split(field.Tag.Get("json"), ",")[0]
 		raw := presence.Raw()
-		required := strings.Contains(field.Tag.Get("api"), sdkRequiredTag)
+		required := strings.Contains(field.Tag.Get("api"), sdkRequiredTag) &&
+			!slices.Contains(sdkOmittedRequiredFields[valueType], field.Name)
 		switch {
 		case raw == respjson.Omitted && required:
 			problems = append(problems, fieldPath+": missing required field")

@@ -12,7 +12,7 @@ The contract comes from these sources, read on 2026-09-27. The `access_programs`
 - [Completions reference](https://developers.openai.com/api/reference/resources/completions)
 - [Error code guide](https://developers.openai.com/api/docs/guides/error-codes)
 - The `openai` Python SDK 3.19.2 Pydantic models, which mark each required response field
-- The official OpenAI Go SDK `github.com/openai/openai-go/v3` v3.66.0, which marks each required response field with an `api:"required"` tag
+- The official OpenAI Go SDK `github.com/openai/openai-go/v3` v3.88.0, which marks each required response field with an `api:"required"` tag
 
 `TestOpenAIGoSDKConformanceCodexProvider` and `TestOpenAIGoSDKConformanceAnthropicProvider` run the Go SDK client against the generic OpenAI listener. They check every response object and stream event against the SDK's required tags and presence metadata.
 
@@ -84,6 +84,7 @@ The provider columns show the disposition of each request field that one provide
 | `response.output_text.delta` and `response.output_text.done` have an empty `logprobs` array. | Responses streaming events | Implemented | `TestOpenAIConformanceResponsesStreamEventsAndEcho` |
 | Each reasoning segment is its own reasoning output item. A reasoning segment after a message or tool item starts a new item with a new id, in the stream and in the nonstreaming object. | Responses streaming events, Response object | Implemented | `TestOpenAIConformanceResponsesSeparatesReasoningItems` |
 | A field the provider omits or overrides returns 400 unless the field is a hint or its value is the documented default. Hints are `prompt_cache_key`, `prompt_cache_options`, `prompt_cache_retention`, `user`, `safety_identifier`, `metadata`, and `stream_options`. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest`, `TestOpenAIConformanceResponsesAcceptsDocumentedDefaults` |
+| Clyde omits `access_programs` from the Response object and the `response` member of `response.created`, `response.in_progress`, and `response.completed` because neither Codex nor Anthropic reports which access program applied. | OpenAI Go SDK v3.88.0 marks `responses.Response.AccessPrograms` as required. | Deviation | `TestOpenAIGoSDKConformanceCodexProvider`, `TestOpenAIGoSDKConformanceAnthropicProvider` |
 | `access_programs: null` is accepted. A non-null access program returns 400 with `access_programs` in `error.param` because neither Codex nor Anthropic supports OpenAI access program selection. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest`, `TestOpenAIConformanceResponsesAcceptsDocumentedDefaults` |
 | A built-in or custom tool the provider cannot run returns 400 for `tools`. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest` |
 | `previous_response_id`, `prompt`, and `conversation` return 400. Clyde stores no responses, prompts, or conversations. | Create request body | Rejected | `TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest` |

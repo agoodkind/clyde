@@ -59,7 +59,7 @@ include bootstrap.mk
 BUNDLE_ID         ?= io.goodkind.clyde
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
-.PHONY: test-ginkgo test-watch coverage live setup-hooks install-hooks \
+.PHONY: test-ginkgo test-watch coverage live milvus-integration setup-hooks install-hooks \
         deploy daemon-reload deadcode proto gksyntax-grammars staticembed-model \
         native-prereqs embedded-search-bootstrap
 
@@ -92,6 +92,9 @@ coverage: ## Generate coverage report via ginkgo
 # and CLYDE_TEST_COLLECTION_ID.
 live: ## Run the live daemon validation suite (opt-in, build tag live)
 	@go test -tags live -count=1 ./test/live/
+
+milvus-integration: ## Run the shared vector layout test on a throwaway Milvus stack (opt-in, build tag milvusintegration)
+	@CLYDE_MILVUS_INTEGRATION=1 go test -tags milvusintegration -count=1 -timeout 30m -v ./internal/conversation/vectorsearch/
 
 deadcode: lint-deadcode ## Alias for the central deadcode gate
 

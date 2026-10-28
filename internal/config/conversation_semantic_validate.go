@@ -17,6 +17,9 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 	if err := validateConversationSemanticBackend(semantic.Backend); err != nil {
 		return err
 	}
+	if err := validateConversationSemanticMilvusLayout(semantic); err != nil {
+		return err
+	}
 	if semantic.EmbeddingAPIKeyEnv != "" && semantic.EmbeddingAPIKeyFile != "" {
 		return invalidConversationSemanticSetting("embedding_api_key_env", "and "+conversationSemanticKey+"embedding_api_key_file are mutually exclusive")
 	}
@@ -45,6 +48,7 @@ func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) 
 	semantic.LocalRoot = cleanExpandedPath(strings.TrimSpace(semantic.LocalRoot))
 	semantic.MilvusAddress = strings.TrimSpace(semantic.MilvusAddress)
 	semantic.MilvusDatabase = strings.TrimSpace(semantic.MilvusDatabase)
+	semantic.MilvusLayout = ConversationSemanticMilvusLayout(strings.TrimSpace(string(semantic.MilvusLayout)))
 	semantic.EmbeddingBaseURL = strings.TrimSpace(semantic.EmbeddingBaseURL)
 	semantic.EmbeddingAPIKeyEnv = strings.TrimSpace(semantic.EmbeddingAPIKeyEnv)
 	semantic.EmbeddingAPIKeyFile = cleanExpandedPath(strings.TrimSpace(semantic.EmbeddingAPIKeyFile))
@@ -57,6 +61,20 @@ func validateConversationSemanticBackend(backend ConversationSemanticBackend) er
 		return nil
 	default:
 		return invalidConversationSemanticSetting("backend", fmt.Sprintf("must be empty, %q, %q, or %q, got %q", ConversationSemanticBackendLMS, ConversationSemanticBackendMilvus, ConversationSemanticBackendLocal, backend))
+	}
+}
+
+func validateConversationSemanticMilvusLayout(semantic *ConversationSemanticConfig) error {
+	switch semantic.MilvusLayout {
+	case "", ConversationSemanticMilvusLayoutSingle:
+		return nil
+	case ConversationSemanticMilvusLayoutShared:
+		if semantic.Backend == ConversationSemanticBackendLocal {
+			return invalidConversationSemanticSetting("milvus_layout", fmt.Sprintf("must be unset when %sbackend = %q", conversationSemanticKey, ConversationSemanticBackendLocal))
+		}
+		return nil
+	default:
+		return invalidConversationSemanticSetting("milvus_layout", fmt.Sprintf("must be empty, %q, or %q, got %q", ConversationSemanticMilvusLayoutSingle, ConversationSemanticMilvusLayoutShared, semantic.MilvusLayout))
 	}
 }
 

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/milvus-io/milvus/client/v2/column"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/column"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/lm-semantic-search/collection"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
