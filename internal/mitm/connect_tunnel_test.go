@@ -693,7 +693,6 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 		cfg:             config.MITMConfig{CaptureDir: captureDir},
 		base:            "",
 		server:          nil,
-		h2Server:        &http2.Server{},
 	}
 
 	requestBody := []byte(`{"probe":"summary"}`)
@@ -966,7 +965,6 @@ func startTestProxy(t *testing.T) *testProxy {
 		cfg:             config.MITMConfig{CaptureDir: t.TempDir()},
 		base:            "http://" + listener.Addr().String(),
 		server:          nil,
-		h2Server:        &http2.Server{},
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
@@ -1014,7 +1012,6 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		cfg:             config.MITMConfig{CaptureDir: captureDir},
 		base:            "http://" + listener.Addr().String(),
 		server:          nil,
-		h2Server:        &http2.Server{},
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server

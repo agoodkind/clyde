@@ -6,10 +6,11 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
-	"golang.org/x/net/http2"
 	"goodkind.io/clyde/internal/livetrack"
 )
 
@@ -30,23 +31,63 @@ func (p *Proxy) serveProviderInterceptedHTTP2(ctx context.Context, client *tls.C
 	}()
 	defer close(stopWatcher)
 
-	h2Server := p.h2Server
-	if h2Server == nil {
-		h2Server = &http2.Server{}
+	serveHTTP2Conn(ctx, client, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		p.handleProviderH2Stream(ctx, client, w, req, target, host, provider, parent, &activeRequests)
+	}))
+}
+
+// serveHTTP2Conn serves HTTP/2 with handler on one TLS connection that
+// negotiated h2, and returns after the connection closes. Every request
+// context derives from ctx.
+func serveHTTP2Conn(ctx context.Context, conn *tls.Conn, handler http.Handler) {
+	closed := make(chan struct{})
+	var closeOnce sync.Once
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 0,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateClosed || state == http.StateHijacked {
+				closeOnce.Do(func() { close(closed) })
+			}
+		},
 	}
-	h2Server.ServeConn(client, &http2.ServeConnOpts{
-		Context: ctx,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			p.handleProviderH2Stream(ctx, client, w, req, target, host, provider, parent, &activeRequests)
-		}),
-	})
+	_ = server.Serve(newSingleConnListener(conn))
+	<-closed
+}
+
+// singleConnListener returns one connection from Accept and then
+// [net.ErrClosed], which ends [http.Server.Serve] while the connection stays
+// open.
+type singleConnListener struct {
+	conn     net.Conn
+	accepted atomic.Bool
+}
+
+func newSingleConnListener(conn net.Conn) *singleConnListener {
+	return &singleConnListener{conn: conn, accepted: atomic.Bool{}}
+}
+
+func (l *singleConnListener) Accept() (net.Conn, error) {
+	if l.accepted.Swap(true) {
+		return nil, net.ErrClosed
+	}
+	return l.conn, nil
+}
+
+func (l *singleConnListener) Close() error {
+	return nil
+}
+
+func (l *singleConnListener) Addr() net.Addr {
+	return l.conn.LocalAddr()
 }
 
 // handleProviderH2Stream serves one HTTP/2 stream as the concurrent-goroutine
 // analogue of one HTTP/1.1 loop iteration in serveProviderInterceptedHTTP1: it
 // touches the parent tunnel, registers a per-stream livetrack child, and
 // dispatches through the shared intercepted-request path with an h2 response
-// sink. It uses the connection context ctx (the ServeConnOpts.Context) for
+// sink. It uses the connection context ctx (the server base context) for
 // livetrack and logging, matching the h1 loop; the per-stream request context
 // still flows to the upstream round trip through the cloned req.
 func (p *Proxy) handleProviderH2Stream(ctx context.Context, client *tls.Conn, w http.ResponseWriter, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta], activeRequests *atomic.Int32) {
