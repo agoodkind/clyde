@@ -18,6 +18,19 @@ const (
 	BackendLocal Backend = "local"
 )
 
+// Layout selects how the Milvus backend stores a collection.
+type Layout string
+
+const (
+	// LayoutSingle stores each row with its dense vector. An empty Layout
+	// selects it.
+	LayoutSingle Layout = "single"
+	// LayoutShared stores every row without its dense vector and stores each
+	// distinct vector once in the collection that
+	// milvusstore.VectorCollectionName returns.
+	LayoutShared Layout = "shared"
+)
+
 type backend interface {
 	collection.Store
 	// collectionPresent prepares an existing collection for row queries.

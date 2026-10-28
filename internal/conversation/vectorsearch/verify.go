@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/milvus-io/milvus/client/v2/column"
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/column"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 )
 
@@ -56,9 +56,13 @@ func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample in
 		)
 		return check, fmt.Errorf("verify conversation index in %s: %w", collectionName, ErrCollectionAbsent)
 	}
+	searchCollection := collectionName
+	if milvus.shared != nil {
+		searchCollection = milvusstore.VectorCollectionName(collectionName)
+	}
 	seen := make(map[string]bool, sample)
 	for i := range sample {
-		key, vector, ok, readErr := firstRowAfter(ctx, milvus.client, collectionName, fmt.Sprintf(sampleKeyPattern, i*primaryKeySpace/sample))
+		key, vector, ok, readErr := milvus.sampleVector(ctx, collectionName, fmt.Sprintf(sampleKeyPattern, i*primaryKeySpace/sample))
 		if readErr != nil {
 			return check, readErr
 		}
@@ -66,7 +70,7 @@ func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample in
 			continue
 		}
 		seen[key] = true
-		score, searchErr := firstDenseScore(ctx, milvus.client, collectionName, vector, c.denseSearchParams)
+		score, searchErr := firstDenseScore(ctx, milvus.client, searchCollection, vector, c.denseSearchParams)
 		if searchErr != nil {
 			return check, searchErr
 		}
@@ -80,6 +84,46 @@ func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample in
 		}
 	}
 	return check, nil
+}
+
+// sampleVector returns the primary key and dense vector of the first row with
+// a primary key after after. In the shared layout it reads the row's vector key
+// from the occurrence collection and the vector from the vector collection.
+func (b *milvusBackend) sampleVector(ctx context.Context, collectionName string, after string) (string, []float32, bool, error) {
+	if b.shared == nil {
+		return firstRowAfter(ctx, b.client, collectionName, after)
+	}
+	option := milvusclient.NewQueryOption(collectionName).
+		WithFilter(fmt.Sprintf("%s > %q", milvusstore.IDField, after)).
+		WithOutputFields(milvusstore.IDField, milvusstore.VectorKeyField).
+		WithLimit(1)
+	result, err := b.client.Query(ctx, option)
+	if err != nil {
+		return "", nil, false, failRead("read a sample row of "+collectionName, err)
+	}
+	if result.ResultCount == 0 {
+		return "", nil, false, nil
+	}
+	key, err := result.GetColumn(milvusstore.IDField).GetAsString(0)
+	if err != nil {
+		return "", nil, false, failRead("read a sample key of "+collectionName, err)
+	}
+	vectorKey, err := result.GetColumn(milvusstore.VectorKeyField).GetAsString(0)
+	if err != nil {
+		return "", nil, false, failRead("read a sample vector key of "+collectionName, err)
+	}
+	vectors := milvusstore.VectorCollectionName(collectionName)
+	stored, err := b.client.Get(ctx, milvusclient.NewQueryOption(vectors).
+		WithIDs(column.NewColumnVarChar(milvusstore.VectorKeyField, []string{vectorKey})).
+		WithOutputFields(milvusstore.VectorKeyField, milvusstore.DenseVectorField))
+	if err != nil {
+		return "", nil, false, failRead("read the vector of sample "+key+" from "+vectors, err)
+	}
+	denseColumn, isFloat := stored.GetColumn(milvusstore.DenseVectorField).(*column.ColumnFloatVector)
+	if !isFloat || denseColumn.Len() == 0 {
+		return "", nil, false, failRead("read the vector of sample "+key+" from "+vectors, errors.New("vector "+vectorKey+" is missing"))
+	}
+	return key, denseColumn.Data()[0], true, nil
 }
 
 func firstRowAfter(ctx context.Context, client *milvusclient.Client, collectionName string, after string) (string, []float32, bool, error) {

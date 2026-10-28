@@ -88,6 +88,11 @@ type ConversationSemanticConfig struct {
 
 	MilvusAddress  string `json:"milvusAddress,omitempty" toml:"milvus_address,omitempty"`
 	MilvusDatabase string `json:"milvusDatabase,omitempty" toml:"milvus_database,omitempty"`
+	// MilvusLayout selects how the Milvus backend stores the collection. Empty
+	// and "single" store each row with its dense vector in one collection.
+	// "shared" stores rows without the dense vector and stores each distinct
+	// vector once in a second collection.
+	MilvusLayout ConversationSemanticMilvusLayout `json:"milvusLayout,omitempty" toml:"milvus_layout,omitempty"`
 
 	// EmbeddingBaseURL is the OpenAI-compatible embedding endpoint. The loader
 	// accepts at most one of EmbeddingAPIKeyEnv and EmbeddingAPIKeyFile, and a
@@ -143,6 +148,19 @@ const (
 	// ConversationSemanticBackendLocal selects the local code store and the
 	// static model compiled into the binary.
 	ConversationSemanticBackendLocal ConversationSemanticBackend = "local"
+)
+
+// ConversationSemanticMilvusLayout is the Milvus storage layout of the
+// conversation collection.
+type ConversationSemanticMilvusLayout string
+
+const (
+	// ConversationSemanticMilvusLayoutSingle stores each row with its dense
+	// vector, like the empty value.
+	ConversationSemanticMilvusLayoutSingle ConversationSemanticMilvusLayout = "single"
+	// ConversationSemanticMilvusLayoutShared stores each distinct dense vector
+	// once and every row without its vector.
+	ConversationSemanticMilvusLayoutShared ConversationSemanticMilvusLayout = "shared"
 )
 
 // FeedsEngine reports whether the daemon offers conversations to the search

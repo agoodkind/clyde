@@ -7,16 +7,27 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/lm-semantic-search/collection"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 	"goodkind.io/lm-semantic-search/embedding"
 )
 
+// rankingStore is the store surface the Milvus backend uses for a search: the
+// collection store, the ranking search, and the load of the selected rows.
+type rankingStore interface {
+	collection.Store
+	Rank(ctx context.Context, request collection.SearchRequest) ([]milvusstore.Candidate, error)
+	Load(ctx context.Context, collectionName string, selected []milvusstore.Candidate, scalarColumns []collection.ScalarColumn) ([]collection.Hit, error)
+}
+
+// milvusBackend stores conversation rows in Milvus. shared is nil for the
+// single-collection layout.
 type milvusBackend struct {
-	*milvusstore.Store
+	rankingStore
 	client *milvusclient.Client
+	shared *milvusstore.SharedStore
 }
 
 func openMilvusBackend(ctx context.Context, options Options) (openedBackend, error) {
@@ -45,9 +56,22 @@ func openMilvusBackend(ctx context.Context, options Options) (openedBackend, err
 	if err != nil {
 		return failed, operationError{operation: fmt.Sprintf("connect to Milvus at %q database %q", options.MilvusAddress, options.MilvusDatabase), cause: err}
 	}
-	store := &milvusBackend{
-		Store:  milvusstore.New(client, milvusstore.Options{Hybrid: true, EmbeddingModel: options.EmbeddingModel, DenseSearchParams: options.DenseSearchParams}),
-		client: client,
+	storeOptions := milvusstore.Options{Hybrid: true, EmbeddingModel: options.EmbeddingModel, DenseSearchParams: options.DenseSearchParams, DenseIndex: nil}
+	store := &milvusBackend{rankingStore: nil, client: client, shared: nil}
+	switch options.MilvusLayout {
+	case "", LayoutSingle:
+		store.rankingStore = milvusstore.New(client, storeOptions)
+	case LayoutShared:
+		shared, sharedErr := milvusstore.NewShared(client, storeOptions)
+		if sharedErr != nil {
+			_ = client.Close(context.WithoutCancel(ctx))
+			return failed, operationError{operation: "open the shared vector conversation store", cause: sharedErr}
+		}
+		store.rankingStore = shared
+		store.shared = shared
+	default:
+		_ = client.Close(context.WithoutCancel(ctx))
+		return failed, operationError{operation: "open conversation vector store", cause: fmt.Errorf("Milvus layout %q is not registered", options.MilvusLayout)}
 	}
 	return openedBackend{
 		store:          store,
@@ -61,8 +85,28 @@ func openMilvusBackend(ctx context.Context, options Options) (openedBackend, err
 	}, nil
 }
 
-// Milvus requires the collection to be loaded before stored-row queries.
+// collectionPresent loads the collection and, in the shared layout, its vector
+// collection. Milvus requires a loaded collection before stored-row queries.
+// A shared occurrence collection without its vector collection is an error.
 func (b *milvusBackend) collectionPresent(ctx context.Context, collectionName string) (bool, error) {
+	exists, err := b.loadCollection(ctx, collectionName)
+	if err != nil || !exists || b.shared == nil {
+		return exists, err
+	}
+	vectors := milvusstore.VectorCollectionName(collectionName)
+	vectorsExist, err := b.loadCollection(ctx, vectors)
+	if err != nil {
+		return false, err
+	}
+	if !vectorsExist {
+		return false, failRead("load Milvus collection "+vectors, fmt.Errorf("shared collection %s has no vector collection %s", collectionName, vectors))
+	}
+	return true, nil
+}
+
+// loadCollection loads one Milvus collection. It reports false when the
+// collection does not exist.
+func (b *milvusBackend) loadCollection(ctx context.Context, collectionName string) (bool, error) {
 	exists, err := b.client.HasCollection(ctx, milvusclient.NewHasCollectionOption(collectionName))
 	if err != nil {
 		return false, failRead("check Milvus collection "+collectionName, err)

@@ -49,6 +49,7 @@ type Options struct {
 	Backend                Backend
 	MilvusAddress          string
 	MilvusDatabase         string
+	MilvusLayout           Layout
 	EmbeddingBaseURL       string
 	EmbeddingModel         string
 	EmbeddingDimension     int

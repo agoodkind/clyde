@@ -248,6 +248,7 @@ func OpenConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 		LocalRoot:              semanticCfg.LocalRoot,
 		MilvusAddress:          semanticCfg.MilvusAddress,
 		MilvusDatabase:         semanticCfg.MilvusDatabase,
+		MilvusLayout:           vectorsearch.Layout(semanticCfg.MilvusLayout),
 		EmbeddingBaseURL:       semanticCfg.EmbeddingBaseURL,
 		EmbeddingModel:         semanticCfg.EmbeddingModel,
 		EmbeddingDimension:     semanticCfg.EmbeddingDimension,

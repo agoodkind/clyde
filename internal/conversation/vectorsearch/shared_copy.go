@@ -1,0 +1,133 @@
+package vectorsearch
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
+)
+
+// SharedCopyReport is the result of a comparison between a single-collection
+// source and its shared copy.
+type SharedCopyReport = milvusstore.CopyReport
+
+// sharedCopyPair returns the shared store of the client and the source and
+// target collection names. The source must be a single-collection collection
+// and the target a shared collection.
+func (c *Client) sharedCopyPair(sourceID string, targetID string) (*milvusstore.SharedStore, *milvusBackend, string, string, error) {
+	if c == nil {
+		return nil, nil, "", "", errors.New("copy conversation collection: client is nil")
+	}
+	milvus, isMilvus := c.store.(*milvusBackend)
+	if !isMilvus || milvus.shared == nil {
+		return nil, nil, "", "", errors.New("copy conversation collection: the client does not use the shared Milvus layout")
+	}
+	source := CollectionName(strings.TrimSpace(sourceID))
+	target := CollectionName(strings.TrimSpace(targetID))
+	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(targetID) == "" {
+		return nil, nil, "", "", errors.New("copy conversation collection: source and target collection ids are required")
+	}
+	if source == target {
+		return nil, nil, "", "", fmt.Errorf("copy conversation collection: source and target are both %s", source)
+	}
+	return milvus.shared, milvus, source, target, nil
+}
+
+// prepareSharedCopy loads the source collection, creates the shared target
+// when it is absent, and loads the target and its vector collection.
+func (c *Client) prepareSharedCopy(ctx context.Context, milvus *milvusBackend, source string, target string) error {
+	exists, err := milvus.loadCollection(ctx, source)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return failSharedCopy(ctx, "copy conversation collection: source "+source, ErrCollectionAbsent)
+	}
+	if err := c.ensureCollection(ctx, target, c.dimension); err != nil {
+		return err
+	}
+	if _, err := milvus.collectionPresent(ctx, target); err != nil {
+		return err
+	}
+	return nil
+}
+
+// CopyToShared copies every row of the single-collection source into the
+// shared target without embedding. progress receives the copied row count
+// after each page. It returns the copied row count.
+func (c *Client) CopyToShared(ctx context.Context, sourceID string, targetID string, progress func(int64)) (int64, error) {
+	shared, milvus, source, target, err := c.sharedCopyPair(sourceID, targetID)
+	if err != nil {
+		return 0, err
+	}
+	if err := c.prepareSharedCopy(ctx, milvus, source, target); err != nil {
+		return 0, err
+	}
+	copied, err := shared.CopyFrom(ctx, source, target, c.declaration, progress)
+	if err != nil {
+		slog.ErrorContext(ctx, "conversation.vectorsearch.shared_copy_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"source", source,
+			"target", target,
+			"copied", copied,
+			"err", err,
+		)
+		return copied, fmt.Errorf("copy %s into %s: %w", source, target, err)
+	}
+	return copied, nil
+}
+
+// VerifySharedCopy compares the shared target with the single-collection
+// source row by row, including the exact vector bytes.
+func (c *Client) VerifySharedCopy(ctx context.Context, sourceID string, targetID string) (SharedCopyReport, error) {
+	shared, milvus, source, target, err := c.sharedCopyPair(sourceID, targetID)
+	if err != nil {
+		return SharedCopyReport{}, err
+	}
+	if err := c.prepareSharedCopy(ctx, milvus, source, target); err != nil {
+		return SharedCopyReport{}, err
+	}
+	report, err := shared.VerifyCopy(ctx, source, target, c.declaration)
+	if err != nil {
+		return report, failSharedCopy(ctx, "verify copy of "+source+" in "+target, err)
+	}
+	return report, nil
+}
+
+// RepairSharedCopy copies the missing and mismatched rows that report lists
+// and removes the extra rows that report lists.
+func (c *Client) RepairSharedCopy(ctx context.Context, sourceID string, targetID string, report SharedCopyReport) error {
+	shared, _, source, target, err := c.sharedCopyPair(sourceID, targetID)
+	if err != nil {
+		return err
+	}
+	rewrite := make([]string, 0, len(report.Missing)+len(report.Mismatched))
+	rewrite = append(rewrite, report.Missing...)
+	rewrite = append(rewrite, report.Mismatched...)
+	if err := shared.CopyIDs(ctx, source, target, c.declaration, rewrite); err != nil {
+		return failSharedCopy(ctx, "repair copy of "+source+" in "+target, err)
+	}
+	if len(report.Extra) == 0 {
+		return nil
+	}
+	if _, err := shared.RemoveOccurrences(ctx, target, report.Extra); err != nil {
+		return failSharedCopy(ctx, "remove extra rows from "+target, err)
+	}
+	return nil
+}
+
+// failSharedCopy logs a failed copy operation and returns it wrapped with the
+// operation.
+func failSharedCopy(ctx context.Context, operation string, err error) error {
+	slog.WarnContext(ctx, "conversation.vectorsearch.shared_copy_operation_failed",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"operation", operation,
+		"err", err,
+	)
+	return fmt.Errorf("%s: %w", operation, err)
+}
