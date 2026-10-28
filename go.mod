@@ -28,7 +28,7 @@ require (
 	goodkind.io/gklog v0.4.5
 	goodkind.io/gksyntax v0.1.0
 	goodkind.io/go-makefile v0.1.0
-	goodkind.io/lm-semantic-search v0.0.0-20261028001235-2520b5db98a8
+	goodkind.io/lm-semantic-search v0.0.0-20261028040131-d6130d786420
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 )
