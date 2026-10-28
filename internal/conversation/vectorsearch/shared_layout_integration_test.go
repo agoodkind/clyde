@@ -319,7 +319,7 @@ func TestSharedLayoutCopiesAndSearchesLikeSingleLayout(t *testing.T) {
 	if _, err := single.UpsertConversationDocuments(ctx, sourceCollectionID, docs, manifest); err != nil {
 		t.Fatalf("write single layout: %v", err)
 	}
-	copied, err := shared.CopyToShared(ctx, sourceCollectionID, sharedCollectionID, nil)
+	copied, err := shared.CopyToShared(ctx, sourceCollectionID, sharedCollectionID, false, nil)
 	if err != nil {
 		t.Fatalf("copy to shared layout: %v", err)
 	}
@@ -327,6 +327,13 @@ func TestSharedLayoutCopiesAndSearchesLikeSingleLayout(t *testing.T) {
 		t.Fatalf("copy wrote %d rows, want %d", copied, len(docs))
 	}
 	time.Sleep(visibilityWait)
+	resumed, err := shared.CopyToShared(ctx, sourceCollectionID, sharedCollectionID, true, nil)
+	if err != nil {
+		t.Fatalf("resume copy to shared layout: %v", err)
+	}
+	if resumed != 0 {
+		t.Fatalf("resumed copy wrote %d rows after a complete copy, want 0", resumed)
+	}
 	report, err := shared.VerifySharedCopy(ctx, sourceCollectionID, sharedCollectionID)
 	if err != nil {
 		t.Fatalf("verify shared copy: %v", err)

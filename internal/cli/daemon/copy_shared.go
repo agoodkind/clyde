@@ -24,20 +24,24 @@ type copySharedOptions struct {
 	FromCollectionID string
 	ToCollectionID   string
 	VerifyOnly       bool
+	Resume           bool
 	RepairRounds     int
 }
 
 func newCopySharedIndexCmd(f *cli.Factory) *cobra.Command {
-	options := copySharedOptions{FromCollectionID: "", ToCollectionID: "", VerifyOnly: false, RepairRounds: defaultCopySharedRepairRounds}
+	options := copySharedOptions{FromCollectionID: "", ToCollectionID: "", VerifyOnly: false, Resume: false, RepairRounds: defaultCopySharedRepairRounds}
 	cmd := &cobra.Command{
 		Use:   "copy-shared",
 		Short: "Copy a conversation collection into the shared vector layout and verify it",
 		Long: "Copy every row of the single-collection conversation collection named by --from into the shared vector layout named by --to, " +
 			"without embedding. The copy keeps each row's ID, every column, the content hash, the embedding model, and the exact vector bytes. " +
 			"The command then compares the two collections row by row, repairs the rows that differ, and fails unless every row matches. " +
-			"It never changes or deletes the source collection. Stop conversation ingestion before the copy, because rows that the source " +
-			"gains or loses during the copy appear as differences.",
+			"Before the copy, it gives the target vector collection the dense index definition of the source and enables mmap on both target collections. " +
+			"It never changes or deletes the source collection. The command refuses to run while conversation.semantic.ingestion_enabled is true, " +
+			"because rows that the source gains or loses during the copy appear as differences. --resume copies only the source rows after the " +
+			"largest primary key the target already stores.",
 		Example: "clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared\n" +
+			"clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared --resume\n" +
 			"clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared --verify-only",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -47,6 +51,7 @@ func newCopySharedIndexCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&options.FromCollectionID, "from", "", "Collection id of the single-collection source.")
 	cmd.Flags().StringVar(&options.ToCollectionID, "to", "", "Collection id of the shared vector target.")
 	cmd.Flags().BoolVar(&options.VerifyOnly, "verify-only", false, "Compare and repair without the full copy.")
+	cmd.Flags().BoolVar(&options.Resume, "resume", false, "Copy only the source rows after the largest primary key the target stores.")
 	cmd.Flags().IntVar(&options.RepairRounds, "repair-rounds", defaultCopySharedRepairRounds, "Maximum number of compare and repair rounds.")
 	_ = cmd.MarkFlagRequired("from")
 	_ = cmd.MarkFlagRequired("to")
@@ -66,6 +71,12 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 	if semanticCfg.Backend == config.ConversationSemanticBackendLocal {
 		return errors.New("copy shared conversation collection: the local backend has no Milvus collection")
 	}
+	if semanticCfg.IngestionEnabled {
+		return errors.New("copy shared conversation collection: set conversation.semantic.ingestion_enabled = false and run `clyde daemon reload` before the copy")
+	}
+	if options.Resume && options.VerifyOnly {
+		return errors.New("copy shared conversation collection: --resume and --verify-only cannot be combined")
+	}
 	semanticCfg.MilvusLayout = config.ConversationSemanticMilvusLayoutShared
 	client, err := daemonsvc.OpenConversationSearchClient(ctx, semanticCfg)
 	if err != nil {
@@ -77,7 +88,7 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 	copied := int64(-1)
 	if !options.VerifyOnly {
 		nextReport := int64(copySharedProgressEveryRows)
-		copied, err = client.CopyToShared(ctx, options.FromCollectionID, options.ToCollectionID, func(rows int64) {
+		copied, err = client.CopyToShared(ctx, options.FromCollectionID, options.ToCollectionID, options.Resume, func(rows int64) {
 			if rows >= nextReport {
 				slog.InfoContext(ctx, "cli.daemon.copy_shared.progress", "concern", "cli.daemon", "component", "cli", "rows", rows)
 				nextReport += copySharedProgressEveryRows

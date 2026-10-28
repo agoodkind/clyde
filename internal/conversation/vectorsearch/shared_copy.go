@@ -36,9 +36,10 @@ func (c *Client) sharedCopyPair(sourceID string, targetID string) (*milvusstore.
 	return milvus.shared, milvus, source, target, nil
 }
 
-// prepareSharedCopy loads the source collection, creates the shared target
-// when it is absent, and loads the target and its vector collection.
-func (c *Client) prepareSharedCopy(ctx context.Context, milvus *milvusBackend, source string, target string) error {
+// prepareSharedCopy loads the source collection, creates each absent target
+// collection, gives the target vector collection the source dense index
+// definition, enables mmap on both target collections, and loads them.
+func (c *Client) prepareSharedCopy(ctx context.Context, milvus *milvusBackend, shared *milvusstore.SharedStore, source string, target string) error {
 	exists, err := milvus.loadCollection(ctx, source)
 	if err != nil {
 		return err
@@ -49,36 +50,74 @@ func (c *Client) prepareSharedCopy(ctx context.Context, milvus *milvusBackend, s
 	if err := c.ensureCollection(ctx, target, c.dimension); err != nil {
 		return err
 	}
+	replaced, err := shared.MatchDenseIndex(ctx, source, target)
+	if err != nil {
+		return failSharedCopy(ctx, "match the dense index of "+target+" to "+source, err)
+	}
+	changed, err := shared.EnsureMmap(ctx, target)
+	if err != nil {
+		return failSharedCopy(ctx, "enable mmap on "+target, err)
+	}
 	if _, err := milvus.collectionPresent(ctx, target); err != nil {
 		return err
 	}
+	slog.InfoContext(ctx, "conversation.vectorsearch.shared_copy_prepared",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"source", source,
+		"target", target,
+		"dense_index_replaced", replaced,
+		"mmap_changed", changed,
+	)
 	return nil
 }
 
-// CopyToShared copies every row of the single-collection source into the
-// shared target without embedding. progress receives the copied row count
-// after each page. It returns the copied row count.
-func (c *Client) CopyToShared(ctx context.Context, sourceID string, targetID string, progress func(int64)) (int64, error) {
+// CopyToShared copies the rows of the single-collection source into the shared
+// target without embedding. With resume, it copies only the source rows with
+// a primary key greater than the largest target primary key. progress receives
+// the copied row count after each page. It returns the copied row count.
+func (c *Client) CopyToShared(ctx context.Context, sourceID string, targetID string, resume bool, progress func(int64)) (int64, error) {
 	shared, milvus, source, target, err := c.sharedCopyPair(sourceID, targetID)
 	if err != nil {
 		return 0, err
 	}
-	if err := c.prepareSharedCopy(ctx, milvus, source, target); err != nil {
+	if err := c.prepareSharedCopy(ctx, milvus, shared, source, target); err != nil {
 		return 0, err
 	}
-	copied, err := shared.CopyFrom(ctx, source, target, c.declaration, progress)
+	afterID := ""
+	if resume {
+		afterID, err = shared.MaxOccurrenceID(ctx, target)
+		if err != nil {
+			return 0, failSharedCopy(ctx, "read the largest copied primary key of "+target, err)
+		}
+		slog.InfoContext(ctx, "conversation.vectorsearch.shared_copy_resumed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"target", target,
+			"after_id", afterID,
+		)
+	}
+	copied, err := shared.CopyFromAfter(ctx, source, target, c.declaration, afterID, progress)
 	if err != nil {
 		slog.ErrorContext(ctx, "conversation.vectorsearch.shared_copy_failed",
 			"concern", "conversation.semantic",
 			"component", "conversation",
 			"source", source,
 			"target", target,
-			"copied", copied,
+			"copied", copied.Occurrences,
+			"vectors_written", copied.VectorsWritten,
 			"err", err,
 		)
-		return copied, fmt.Errorf("copy %s into %s: %w", source, target, err)
+		return copied.Occurrences, fmt.Errorf("copy %s into %s: %w", source, target, err)
 	}
-	return copied, nil
+	slog.InfoContext(ctx, "conversation.vectorsearch.shared_copy_written",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"target", target,
+		"occurrences", copied.Occurrences,
+		"vectors_written", copied.VectorsWritten,
+	)
+	return copied.Occurrences, nil
 }
 
 // VerifySharedCopy compares the shared target with the single-collection
@@ -88,7 +127,7 @@ func (c *Client) VerifySharedCopy(ctx context.Context, sourceID string, targetID
 	if err != nil {
 		return SharedCopyReport{}, err
 	}
-	if err := c.prepareSharedCopy(ctx, milvus, source, target); err != nil {
+	if err := c.prepareSharedCopy(ctx, milvus, shared, source, target); err != nil {
 		return SharedCopyReport{}, err
 	}
 	report, err := shared.VerifyCopy(ctx, source, target, c.declaration)
@@ -98,8 +137,9 @@ func (c *Client) VerifySharedCopy(ctx context.Context, sourceID string, targetID
 	return report, nil
 }
 
-// RepairSharedCopy copies the missing and mismatched rows that report lists
-// and removes the extra rows that report lists.
+// RepairSharedCopy copies the missing and mismatched rows that report lists,
+// removes the extra rows that report lists, and removes every vector that no
+// row references when report counts any.
 func (c *Client) RepairSharedCopy(ctx context.Context, sourceID string, targetID string, report SharedCopyReport) error {
 	shared, _, source, target, err := c.sharedCopyPair(sourceID, targetID)
 	if err != nil {
@@ -111,12 +151,24 @@ func (c *Client) RepairSharedCopy(ctx context.Context, sourceID string, targetID
 	if err := shared.CopyIDs(ctx, source, target, c.declaration, rewrite); err != nil {
 		return failSharedCopy(ctx, "repair copy of "+source+" in "+target, err)
 	}
-	if len(report.Extra) == 0 {
+	if len(report.Extra) > 0 {
+		if _, err := shared.RemoveOccurrences(ctx, target, report.Extra); err != nil {
+			return failSharedCopy(ctx, "remove extra rows from "+target, err)
+		}
+	}
+	if report.UnreferencedVectors == 0 {
 		return nil
 	}
-	if _, err := shared.RemoveOccurrences(ctx, target, report.Extra); err != nil {
-		return failSharedCopy(ctx, "remove extra rows from "+target, err)
+	removed, err := shared.RemoveUnreferencedVectors(ctx, target)
+	if err != nil {
+		return failSharedCopy(ctx, "remove unreferenced vectors from "+target, err)
 	}
+	slog.InfoContext(ctx, "conversation.vectorsearch.shared_unreferenced_vectors_removed",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"target", target,
+		"removed", removed,
+	)
 	return nil
 }
 
