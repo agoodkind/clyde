@@ -71,7 +71,7 @@ func openMilvusBackend(ctx context.Context, options Options) (openedBackend, err
 		store.shared = shared
 	default:
 		_ = client.Close(context.WithoutCancel(ctx))
-		return failed, operationError{operation: "open conversation vector store", cause: fmt.Errorf("Milvus layout %q is not registered", options.MilvusLayout)}
+		return failed, operationError{operation: "open conversation vector store", cause: fmt.Errorf("milvus layout %q is not registered", options.MilvusLayout)}
 	}
 	return openedBackend{
 		store:          store,
