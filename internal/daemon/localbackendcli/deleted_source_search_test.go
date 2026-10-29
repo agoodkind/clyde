@@ -62,13 +62,11 @@ func requireRetainedRecords(t *testing.T, path string, conversationIDs []string)
 	return content
 }
 
-// deletedSourceCase pairs a case name with its search request.
 type deletedSourceCase struct {
 	name    string
 	request localProofSearchRequest
 }
 
-// deletedSourceCases returns the eight search cases.
 func deletedSourceCases() []deletedSourceCase {
 	request := func(provider string, workspace string, roles string, after string, before string, includeArchived bool) localProofSearchRequest {
 		return localProofSearchRequest{Query: localProofQuery, Provider: provider, Workspace: workspace, Roles: roles, After: after, Before: before, Limit: localProofMaxLimit, Offset: 0, IncludeArchived: includeArchived}
