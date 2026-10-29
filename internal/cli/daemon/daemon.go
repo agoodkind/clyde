@@ -52,6 +52,7 @@ func NewConversationIndexCmd(f *cli.Factory) *cobra.Command {
 	index.AddCommand(newBackfillConversationScalarsCmd(f))
 	index.AddCommand(newBackfillConversationDocumentsCmd(f))
 	index.AddCommand(newCopySharedIndexCmd(f))
+	index.AddCommand(newRepairConversationTimestampsCmd(f))
 	return index
 }
 

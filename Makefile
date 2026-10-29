@@ -93,8 +93,8 @@ coverage: ## Generate coverage report via ginkgo
 live: ## Run the live daemon validation suite (opt-in, build tag live)
 	@go test -tags live -count=1 ./test/live/
 
-milvus-integration: ## Run the shared vector layout test on a throwaway Milvus stack (opt-in, build tag milvusintegration)
-	@CLYDE_MILVUS_INTEGRATION=1 go test -tags milvusintegration -count=1 -timeout 30m -v ./internal/conversation/vectorsearch/
+milvus-integration: ## Run the Milvus integration tests on throwaway Milvus stacks (opt-in, build tag milvusintegration)
+	@CLYDE_MILVUS_INTEGRATION=1 go test -tags milvusintegration -count=1 -timeout 30m -v ./internal/conversation/vectorsearch/ ./internal/cli/daemon/
 
 deadcode: lint-deadcode ## Alias for the central deadcode gate
 
