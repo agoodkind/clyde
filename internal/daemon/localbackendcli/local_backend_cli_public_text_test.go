@@ -9,19 +9,15 @@ import (
 )
 
 const (
-	localProofTraceMarker  = "🔎"
-	localProofTraceIDField = "trace_id="
+	localProofTraceMarker     = "🔎"
+	localProofSearchMarker    = "🔍"
+	localProofTraceIDField    = "trace_id="
+	localProofCollectionLabel = "clyde-conversations"
 )
 
-// assertLocalProofPublicText runs one conversation search through the real
-// clyde binary in JSON format to find the first matching conversation ID.
-// It then checks these public text outputs:
-//
-//   - The text output of "clyde conversation search" must contain that ID.
-//   - The output of "clyde daemon status" must contain "backend=local".
-//   - The text content of the clyde_search MCP tool must contain that ID.
-//
-// Each output must not contain the magnifying glass character or "trace_id=".
+// assertLocalProofPublicText searches with the real clyde binary in JSON format and selects the first matching conversation ID.
+// It checks clyde conversation search text and clyde_search MCP text for that ID, and clyde daemon status text for backend=local.
+// It rejects U+1F50D, U+1F50E, trace_id=, and clyde-conversations in all three outputs.
 func assertLocalProofPublicText(t *testing.T, d *localProofDaemon) {
 	t.Helper()
 	request := localProofSearchRequest{Query: localProofQuery, Provider: "", Workspace: "", Roles: "", Limit: localProofPageLimit, Offset: 0, IncludeArchived: false}
@@ -76,7 +72,10 @@ func (d *localProofDaemon) runCLIText(t *testing.T, arguments ...string) string 
 
 func assertLocalProofOmitsTrace(t *testing.T, surface string, text string) {
 	t.Helper()
-	if strings.Contains(text, localProofTraceMarker) || strings.Contains(text, localProofTraceIDField) {
-		t.Errorf("%s text contains a trace annotation:\n%s", surface, text)
+	for _, marker := range []string{localProofTraceMarker, localProofSearchMarker, localProofTraceIDField, localProofCollectionLabel} {
+		if strings.Contains(text, marker) {
+			t.Errorf("%s contains a magnifier character, trace annotation, or collection label: %s", surface, text)
+			return
+		}
 	}
 }
