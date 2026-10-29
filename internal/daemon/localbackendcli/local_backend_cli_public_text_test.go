@@ -74,8 +74,7 @@ func assertLocalProofOmitsTrace(t *testing.T, surface string, text string) {
 	t.Helper()
 	for _, marker := range []string{localProofTraceMarker, localProofSearchMarker, localProofTraceIDField, localProofCollectionLabel} {
 		if strings.Contains(text, marker) {
-			t.Errorf("%s contains a magnifier character, trace annotation, or collection label: %s", surface, text)
-			return
+			t.Errorf("%s output contains marker %q: %s", surface, marker, text)
 		}
 	}
 }

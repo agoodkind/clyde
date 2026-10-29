@@ -536,7 +536,6 @@ func formatListResult(result conv.ListResult) string {
 	return out.String()
 }
 
-// formatSearchConversationsResult renders numbered conversation messages with human-readable timestamps, without decorations or collection names. Use --output-format json for full structured data.
 func formatSearchConversationsResult(result conv.SearchConversationsResult, query string) string {
 	var out strings.Builder
 	if len(result.Matches) == 0 {
