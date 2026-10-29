@@ -62,6 +62,11 @@ const (
 
 // Config controls the SQLite capture store. Unresolved zero values use defaults.
 type Config struct {
+	// RecordingDisabled stops exchange writes without disabling baseline storage.
+	RecordingDisabled bool
+	// RecordingUntil stops exchange writes at this deadline. A zero deadline
+	// leaves direct store callers unrestricted unless RecordingDisabled is true.
+	RecordingUntil time.Time
 	// RetentionResolved preserves explicit zero age or size limits after config loading.
 	RetentionResolved bool
 	// InitializeRetention persists the daemon's first cleanup cutoff before writes.
@@ -423,7 +428,7 @@ type queuedRecord struct {
 }
 
 func (s *Store) recordWithMetadata(rec Record, requestBytes, responseBytes int, requestTruncated, responseTruncated bool) {
-	if s == nil || s.closed.Load() {
+	if !s.RecordingEnabled() {
 		return
 	}
 	queued := queuedRecord{record: rec, requestBytes: requestBytes, responseBytes: responseBytes, requestTruncated: requestTruncated, responseTruncated: responseTruncated}

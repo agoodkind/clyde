@@ -68,6 +68,7 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 	}
 	h := newHarness(t)
 	h.writeConfig(t, h.cfg.MITMPort, []string{"claude"})
+	enableLiveCaptureRecording(t, h.configPath)
 	enableReorientInjection(t, h.configPath)
 	h.boot(t)
 
@@ -142,6 +143,24 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 	if !strings.Contains(secondSummary, "reorient-live-four") {
 		t.Fatalf("the second compaction summarized away the first compaction's retained content (%d bytes)",
 			len(secondSummary))
+	}
+}
+
+// enableLiveCaptureRecording enables the captures that verify upstream acceptance.
+func enableLiveCaptureRecording(t *testing.T, configPath string) {
+	t.Helper()
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read capture config: %v", err)
+	}
+	const section = "[mitm.capture_store]\n"
+	deadline := time.Now().Add(time.Hour).Format(time.RFC3339)
+	updated := strings.Replace(string(content), section, section+fmt.Sprintf("record_until = %q\n", deadline), 1)
+	if updated == string(content) {
+		t.Fatalf("config %s does not contain [mitm.capture_store]", configPath)
+	}
+	if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
+		t.Fatalf("write capture config: %v", err)
 	}
 }
 

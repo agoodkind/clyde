@@ -219,7 +219,11 @@ func (s *Server) copyPassthroughResponse(ctx context.Context, w http.ResponseWri
 	copyPassthroughHeaders(w.Header(), resp.Header)
 	clydeingress.SetHTTPHeaders(correlation.FromContext(ctx), w.Header())
 	w.WriteHeader(resp.StatusCode)
-	captured := capture.NewCappedBuffer(capture.DefaultMaxBodyBytes)
+	retainedBytes := 0
+	if s.deps.CaptureStore.RecordingEnabled() {
+		retainedBytes = capture.DefaultMaxBodyBytes
+	}
+	captured := capture.NewCappedBuffer(retainedBytes)
 	usageParser := newPassthroughSSEUsageParser()
 	buffer := make([]byte, 32*1024)
 	for {

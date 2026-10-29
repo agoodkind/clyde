@@ -312,10 +312,12 @@ func (p *Proxy) ApplyConfig(newCfg config.MITMConfig) error {
 // truncated by the proxy's response buffer first.
 const defaultCaptureBodyCap = 8 * 1024 * 1024
 
-// captureBodyCap returns the number of response bytes the proxy buffers for
-// the capture store, defaulting to [defaultCaptureBodyCap] when the configured
-// store MaxBodyBytes is non-positive.
+// captureBodyCap returns zero when exchange recording is disabled. Otherwise,
+// it uses the configured limit or [defaultCaptureBodyCap].
 func (p *Proxy) captureBodyCap(cfg config.MITMConfig) int {
+	if !p.store.RecordingEnabled() {
+		return 0
+	}
 	if cfg.CaptureStore.MaxBodyBytes > 0 {
 		return cfg.CaptureStore.MaxBodyBytes
 	}
@@ -521,8 +523,9 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	// the capture store while still streaming to the client. The wire-leg
 	// summary is derived from this same buffer (summarizeBody previews/caps).
 	captureBuffer := &limitedBuffer{limit: p.captureBodyCap(cfg), buf: bytes.Buffer{}}
+	counter := &countingWriter{writer: w, bytesWritten: 0}
 	flusher, _ := w.(http.Flusher)
-	copyErr := streamWithFlush(w, captureBuffer, streamResp.Body, flusher, plainHTTPSession)
+	copyErr := streamWithFlush(counter, captureBuffer, streamResp.Body, flusher, plainHTTPSession)
 	duration := clock.Since(started)
 	if copyErr != nil {
 		p.log.Warn("mitm.proxy.copy_failed", "concern", "providers.mitm.wire", "provider", provider, "path", r.URL.Path, "err", copyErr)
@@ -533,6 +536,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		upstream:         upstream,
 		requestBody:      body,
 		capture:          captureBuffer,
+		responseBytes:    counter.bytesWritten,
 		requestBodyIndex: requestBodyIndex,
 		duration:         duration,
 	})
@@ -548,6 +552,7 @@ type plainHTTPCaptureFinalize struct {
 	upstream         string
 	requestBody      []byte
 	capture          *limitedBuffer
+	responseBytes    int64
 	requestBodyIndex captureBodyIndex
 	duration         time.Duration
 }
@@ -568,7 +573,7 @@ func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, f
 		)
 	}
 	responseBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(captureBody))
-	responseBodyLen := int64(len(captureBody))
+	responseBodyLen := fin.responseBytes
 
 	p.log.Info(
 		"mitm.capture.completed", "concern", "providers.mitm.wire", "provider", fin.provider,
@@ -630,10 +635,11 @@ type captureStoreInput struct {
 	hasCaptureRules bool
 }
 
-// recordCaptureStore builds a [capture.Record] from the completed exchange and
-// hands it to the shared store. The store's Record is non-blocking and
-// nil-receiver-safe, so this fires unconditionally; a nil store is a no-op.
+// recordCaptureStore saves exchanges only while diagnostic recording is active.
 func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, in captureStoreInput) {
+	if !p.store.RecordingEnabled() {
+		return
+	}
 	contrib := extractIdentityContribution(r.Host, r.URL.Path, r.Header)
 	identity := mitmRequestIdentity(r.Header, contrib)
 	captureRules := in.captureRules

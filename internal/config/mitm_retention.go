@@ -31,6 +31,9 @@ func readCaptureRetentionPresence(data []byte, store *MITMCaptureStoreConfig) er
 }
 
 func applyCaptureRetentionDefaults(store *MITMCaptureStoreConfig) error {
+	if _, err := store.RecordingDeadline(); err != nil {
+		return err
+	}
 	if !store.retentionResolved && !store.retentionAgePresent && store.RetentionMaxAge == 0 {
 		store.RetentionMaxAge = Duration(168 * time.Hour)
 	}

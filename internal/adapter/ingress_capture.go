@@ -83,7 +83,7 @@ func (w *ingressCaptureWriter) Unwrap() http.ResponseWriter { return w.ResponseW
 // ingress knob is on, returning the wrapper. It returns nil when capture is
 // off, in which case nothing is wrapped and there is no added cost.
 func (s *Server) beginIngressCapture(hctx *handlerCtx) *ingressCaptureWriter {
-	if s.deps.CaptureStore == nil || !s.cfg.CaptureIngress {
+	if !s.deps.CaptureStore.RecordingEnabled() || !s.cfg.CaptureIngress {
 		return nil
 	}
 	capW := newIngressCaptureWriter(hctx.Writer, capture.DefaultMaxBodyBytes)
@@ -98,7 +98,7 @@ func (s *Server) beginIngressCapture(hctx *handlerCtx) *ingressCaptureWriter {
 // rendered downstream on the raw writer rather than through the wrapper.
 // Credential and account values are removed from both captured stages.
 func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlation.Context, r *http.Request, body []byte, started time.Time, handlerErr error) {
-	if capW == nil {
+	if capW == nil || !s.deps.CaptureStore.RecordingEnabled() {
 		return
 	}
 	status := capW.status
