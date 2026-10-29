@@ -76,6 +76,13 @@ func newConversationRegistry() *conversation.Registry {
 	return registry
 }
 
+// ConversationStoredTextNormalizer returns the registered parser's normalizer
+// for the provider. It returns false if the provider does not have a registered parser or
+// the parser does not implement the contract.
+func ConversationStoredTextNormalizer(provider providerid.Provider) (conversation.StoredTextNormalizer, bool) {
+	return newConversationRegistry().StoredTextNormalizer(provider)
+}
+
 // ConversationProviders returns the providers wired into the conversation
 // parser registry in display order.
 func ConversationProviders() []providerid.Provider {
