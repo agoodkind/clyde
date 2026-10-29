@@ -28,6 +28,7 @@ func writeOriginFixtures(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	projectDir := filepath.Join(home, ".claude", "projects", "-repo")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
@@ -159,6 +160,7 @@ func TestSkipKeepsTheParentOfASidechainTranscript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	projectDir := filepath.Join(home, ".claude", "projects", "-repo")
 	subagentDir := filepath.Join(projectDir, parentSessionID, "subagents")
@@ -237,6 +239,7 @@ func writeClaudeParentAndSidechain(t *testing.T, parentSessionID string) (string
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	projectDir := filepath.Join(home, ".claude", "projects", "-repo")
 	subagentDir := filepath.Join(projectDir, parentSessionID, "subagents")
@@ -272,6 +275,7 @@ func TestResolveOfAParentSessionIDNeverReturnsASidechainSibling(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	projectDir := filepath.Join(home, ".claude", "projects", "-repo")
 	subagentDir := filepath.Join(projectDir, parentSessionID, "subagents")

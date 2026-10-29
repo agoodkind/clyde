@@ -41,6 +41,9 @@ type Index struct {
 	includeSubagents bool
 	registry         *Registry
 	records          []Record
+	// retained lists records of conversations with deleted transcripts. The index reads and writes these records at retainedPath.
+	retained         []Record
+	retainedPath     string
 	prevRecords      map[string]Record
 	prevStamps       map[string]FileStamp
 	prevMultiStates  map[string]MultiConversationScanState
@@ -68,6 +71,8 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		includeSubagents: conversationConfig.IncludeSubagentConversations,
 		registry:         registry,
 		records:          nil,
+		retained:         nil,
+		retainedPath:     RetainedPath(),
 		prevRecords:      nil,
 		prevStamps:       nil,
 		prevMultiStates:  nil,
@@ -141,68 +146,6 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	return idx.visibleRecords(), nil
-}
-
-// visibleRecords returns the cached records this index serves under its subagent
-// setting. Every read path funnels through it, so a conversation a dispatched
-// agent wrote is absent from listing, paging, search scoping, and the semantic
-// sync feeder alike while the setting hides it. Callers hold idx.mu.
-func (idx *Index) visibleRecords() []Record {
-	if idx.includeSubagents {
-		return cloneRecords(idx.records)
-	}
-	out := make([]Record, 0, len(idx.records))
-	for _, record := range idx.records {
-		if record.IsSubagent() {
-			continue
-		}
-		out = append(out, record)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// ListWithStamps returns cached records and artifact stamps without a refresh.
-func (idx *Index) ListWithStamps(ctx context.Context) ([]StampedRecord, error) {
-	if err := idx.loadOnce(); err != nil {
-		return nil, err
-	}
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	return cloneStampedRecords(idx.visibleRecords(), idx.prevStamps), nil
-}
-
-// RecordByID returns the cached record with the exact id from the in-memory
-// snapshot, taking no refresh. The second result is false when no record
-// matches.
-func (idx *Index) RecordByID(id string) (Record, bool) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return emptyRecord(), false
-	}
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	// A hidden record is skipped rather than returned as a miss, so a subagent
-	// conversation that somehow shares an id with a real one can never mask it.
-	for _, record := range idx.records {
-		if record.ID != id {
-			continue
-		}
-		if record.IsSubagent() && !idx.includeSubagents {
-			continue
-		}
-		return record, true
-	}
-	return emptyRecord(), false
-}
-
-func (idx *Index) recordsSnapshot() []Record {
-	idx.mu.Lock()
-	records := idx.visibleRecords()
-	idx.mu.Unlock()
-	return records
 }
 
 // Resolve finds one conversation by id, native id, title, artifact path, or
@@ -634,13 +577,30 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshRe
 		return fmt.Errorf("refresh conversation index: %w", err)
 	}
 	sortRecords(result.records)
+	idx.mu.Lock()
+	previous := idx.records
+	retainedBefore := idx.retained
+	idx.mu.Unlock()
+	// Save retained records before writing the cache. If the cache write fails, refresh returns without installing the new records in memory, and the retained file lists every deleted conversation for the next load.
+	retained, newlyRetained, retainedChanged := retainDropped(previous, result.records, retainedBefore)
+	if retainedChanged {
+		if err := writeRetained(idx.retainedPath, retained); err != nil {
+			return err
+		}
+		slog.InfoContext(ctx, "conversation.index.records_retained",
+			"concern", "conversation.index",
+			"component", "conversation",
+			"newly_retained", newlyRetained,
+			"retained", len(retained),
+		)
+	}
 	completedAt := clock.Now()
 	if result.changed {
 		if err := writeCache(idx.cachePath, result.records, result.stamps, result.multiStates, completedAt); err != nil {
 			return err
 		}
 	}
-	idx.installRefreshResult(result, completedAt)
+	idx.installRefreshResult(result, retained, completedAt)
 	cacheChanged = result.changed
 	if result.changed {
 		idx.reportSkippedSubagents(ctx, result.records)
@@ -710,10 +670,11 @@ func (idx *Index) waitForRefresh(ctx context.Context, run *refreshRun) error {
 	}
 }
 
-func (idx *Index) installRefreshResult(result scanResult, completedAt time.Time) {
+func (idx *Index) installRefreshResult(result scanResult, retained []Record, completedAt time.Time) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.records = result.records
+	idx.retained = retained
 	idx.prevRecords = recordsByPath(result.records)
 	idx.prevStamps = result.stamps
 	idx.prevMultiStates = result.multiStates
@@ -757,7 +718,12 @@ func (idx *Index) loadOnce() error {
 	if err != nil {
 		return err
 	}
+	retained, err := readRetained(idx.retainedPath)
+	if err != nil {
+		return err
+	}
 	idx.records = cache.Records
+	idx.retained = retained
 	idx.prevRecords = recordsByPath(cache.Records)
 	idx.prevStamps = cache.Stamps
 	idx.prevMultiStates = cache.MultiStates

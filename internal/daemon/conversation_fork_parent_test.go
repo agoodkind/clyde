@@ -42,6 +42,7 @@ func TestProtoConversationRecordSetsForkParent(t *testing.T) {
 	// Refresh writes the index cache, so point XDG_CACHE_HOME at a temp dir to
 	// keep the real user cache untouched. t.Setenv forbids t.Parallel here.
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	parentID := conversation.DerivedID(conversation.ProviderCodex, "parent-thread", "")
 	parent := conversation.Record{

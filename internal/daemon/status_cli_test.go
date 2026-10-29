@@ -61,6 +61,7 @@ func TestDaemonStatusCommandReadsPassiveRuntime(t *testing.T) {
 		t.Run(fmt.Sprintf("ingestion_%t_search_%t", directions.ingestion, directions.search), func(t *testing.T) {
 			enabled := directions.ingestion || directions.search
 			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			cfg := config.NewConfig()
 			cfg.Conversation.Semantic.IngestionEnabled = directions.ingestion
 			cfg.Conversation.Semantic.SearchEnabled = directions.search

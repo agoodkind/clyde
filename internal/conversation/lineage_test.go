@@ -121,16 +121,17 @@ func TestResolveForkParent(t *testing.T) {
 func testLineageIndex(t *testing.T, records []Record) *Index {
 	t.Helper()
 	return &Index{
-		mu:          sync.Mutex{},
-		registry:    NewRegistry(),
-		records:     records,
-		prevRecords: nil,
-		prevStamps:  nil,
-		loaded:      true,
-		refreshing:  false,
-		lastRefresh: time.Now(),
-		cachePath:   filepath.Join(t.TempDir(), cacheFilename),
-		debounce:    time.Hour,
+		mu:           sync.Mutex{},
+		registry:     NewRegistry(),
+		records:      records,
+		prevRecords:  nil,
+		prevStamps:   nil,
+		loaded:       true,
+		refreshing:   false,
+		lastRefresh:  time.Now(),
+		cachePath:    filepath.Join(t.TempDir(), cacheFilename),
+		retainedPath: filepath.Join(t.TempDir(), retainedFilename),
+		debounce:     time.Hour,
 		scanProvider: func(context.Context, *Registry, scanCache) (scanResult, error) {
 			return scanResult{records: nil, stamps: nil}, nil
 		},

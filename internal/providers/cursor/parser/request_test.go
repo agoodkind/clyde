@@ -286,6 +286,7 @@ func TestResolveRequestIDReportsInconclusiveWhenTheStoreCannotBeRead(t *testing.
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	globalDBPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
 	if err := os.MkdirAll(filepath.Dir(globalDBPath), 0o755); err != nil {
@@ -337,6 +338,7 @@ func newColdCursorRequestIndex(t *testing.T) *conversation.Index {
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	writeCursorRequestGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"))
 	writeCursorRequestWorkspaceDB(t, rootDir, "workspace-hash")
@@ -571,6 +573,7 @@ func TestResolveRequestIDReadsAWorkspaceWithNoFolderDescriptor(t *testing.T) {
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	writeCursorRequestGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"))
 	writeEmptyWindowWorkspaceDB(t, rootDir, olderRequestID)

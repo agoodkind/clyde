@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -66,9 +67,11 @@ enabled_default = false
 // what makes it useful for judging a change to how conversations are read.
 func newSandboxCmd(f *cli.Factory) *cobra.Command {
 	var keep bool
+	var root string
 	var ingestionEnabled bool
 	var searchEnabled bool
 	var local sandboxLocalOptions
+	var semanticSettings string
 	cmd := &cobra.Command{
 		Use:   "sandbox",
 		Short: "Run a throwaway second daemon for hands-on validation",
@@ -79,15 +82,34 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 		Example: "clyde daemon sandbox",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSandbox(cmd.Context(), f, keep, ingestionEnabled, searchEnabled, local)
+			return runSandbox(cmd.Context(), f, sandboxRootOptions{keep: keep, root: root}, ingestionEnabled, searchEnabled, local, semanticSettings)
 		},
 	}
 	cmd.Flags().BoolVar(&keep, "keep", false, "keep the sandbox directories after exit instead of removing them")
+	cmd.Flags().StringVar(&root, "root", "", "Reuse a sandbox root directory kept by an earlier run with --keep and keep it on exit.")
 	cmd.Flags().BoolVar(&ingestionEnabled, "ingestion-enabled", false, "offer conversations to the semantic search engine")
 	cmd.Flags().BoolVar(&searchEnabled, "search-enabled", false, "answer conversation searches from the semantic search engine")
 	cmd.Flags().BoolVar(&local.enabled, "local", false, "use the local backend instead of Milvus")
 	cmd.Flags().StringVar(&local.root, "local-root", "", "store the local index in this temp directory, which a later sandbox run can reuse")
+	cmd.Flags().StringVar(&semanticSettings, "semantic-settings", "", "append TOML keys from a file to the conversation semantic settings")
 	return cmd
+}
+
+// sandboxSemanticSettings returns the file lines with a trailing newline, returns an empty string for an empty path, and fails if reading fails. The config loader rejects a Milvus address with the local backend.
+func sandboxSemanticSettings(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		slog.Error("cli.daemon.sandbox.semantic_settings_failed", "concern", "cmd.dispatch", "component", "cli", "path", path, "err", err)
+		return "", fmt.Errorf("read semantic settings file %s: %w", path, err)
+	}
+	settings := string(content)
+	if settings != "" && !strings.HasSuffix(settings, "\n") {
+		settings += "\n"
+	}
+	return settings, nil
 }
 
 // An empty root uses the sandbox state directory for the local index.
@@ -118,6 +140,11 @@ func (local sandboxLocalOptions) configLines() (string, error) {
 	return lines + fmt.Sprintf("local_root = %q\n", root), nil
 }
 
+type sandboxRootOptions struct {
+	keep bool
+	root string
+}
+
 // runSandbox prepares the throwaway roots, writes the listener-free config, and
 // runs the daemon in this process until the operator stops it.
 //
@@ -126,13 +153,25 @@ func (local sandboxLocalOptions) configLines() (string, error) {
 // here: a sandbox never reloads or rebinds, and a supervisor's replacement
 // worker escapes the process group, so a wrapper killed without a signal leaves
 // a daemon serving with nothing left to stop it. One process cannot.
-func runSandbox(ctx context.Context, f *cli.Factory, keep bool, ingestionEnabled bool, searchEnabled bool, local sandboxLocalOptions) error {
+func runSandbox(ctx context.Context, f *cli.Factory, rootOptions sandboxRootOptions, ingestionEnabled bool, searchEnabled bool, local sandboxLocalOptions, semanticSettingsPath string) error {
 	backendLines, err := local.configLines()
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.local_options_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return err
 	}
-	roots, err := sandbox.NewRoots()
+	semanticSettings, err := sandboxSemanticSettings(semanticSettingsPath)
+	if err != nil {
+		return err
+	}
+	backendLines += semanticSettings
+	var roots sandbox.Roots
+	keep := rootOptions.keep
+	if rootOptions.root == "" {
+		roots, err = sandbox.NewRoots()
+	} else {
+		roots, err = sandbox.ExistingRoots(rootOptions.root)
+		keep = true
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.root_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return fmt.Errorf("prepare the sandbox directories: %w", err)

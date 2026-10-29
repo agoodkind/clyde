@@ -312,6 +312,12 @@ func readRawCompactionSSEFrame(reader *bufio.Reader, maxBytes int) ([]byte, erro
 			return frame.Bytes(), err, false
 		}
 		frame.WriteByte(value)
+		if value != '\n' && value != '\r' && frame.Len() <= maxBytes {
+			value, err = appendRawCompactionSSERun(reader, &frame, maxBytes+1-frame.Len(), value)
+			if err != nil {
+				return frame.Bytes(), err, false
+			}
+		}
 		if frame.Len() > maxBytes {
 			return frame.Bytes(), nil, true
 		}
@@ -330,6 +336,29 @@ func readRawCompactionSSEFrame(reader *bufio.Reader, maxBytes int) ([]byte, erro
 		}
 		lineStart = frame.Len()
 	}
+}
+
+// appendRawCompactionSSERun appends buffered bytes through the next CR or LF,
+// up to limit bytes, without waiting for upstream data.
+func appendRawCompactionSSERun(reader *bufio.Reader, frame *bytes.Buffer, limit int, last byte) (byte, error) {
+	buffered, _ := reader.Peek(reader.Buffered())
+	if len(buffered) > limit {
+		buffered = buffered[:limit]
+	}
+	if len(buffered) == 0 {
+		return last, nil
+	}
+	end := len(buffered)
+	if lineEnd := bytes.IndexAny(buffered, "\r\n"); lineEnd >= 0 {
+		end = lineEnd + 1
+	}
+	last = buffered[end-1]
+	frame.Write(buffered[:end])
+	if _, err := reader.Discard(end); err != nil {
+		slog.Warn("adapter.codex.raw_compaction.sse_discard_failed", "concern", "adapter.providers.codex.request", "err", err)
+		return last, fmt.Errorf("discard raw compaction SSE run: %w", err)
+	}
+	return last, nil
 }
 
 func consumeRawCompactionSSECarriageReturn(reader *bufio.Reader, frame *bytes.Buffer, value byte, maxBytes int) (bool, error) {
