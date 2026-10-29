@@ -650,14 +650,18 @@ func TestPassthroughWithoutRecordingPreservesStreamUsage(t *testing.T) {
 	}
 	decoder := json.NewDecoder(&logs)
 	completed := false
-	for decoder.More() {
+	for {
 		var event struct {
 			Message          string `json:"msg"`
 			PromptTokens     int    `json:"prompt_tokens"`
 			CompletionTokens int    `json:"completion_tokens"`
 		}
-		if err := decoder.Decode(&event); err != nil {
-			t.Fatalf("read operational log: %v", err)
+		decodeErr := decoder.Decode(&event)
+		if errors.Is(decodeErr, io.EOF) {
+			break
+		}
+		if decodeErr != nil {
+			t.Fatalf("read operational log: %v", decodeErr)
 		}
 		if event.Message == "adapter.request.completed" {
 			completed = true

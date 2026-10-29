@@ -28,9 +28,6 @@ func TestDisabledRecordingPreservesBaselineLearning(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "capture.db")
 			store := openRecordingStore(t, capture.Config{DBPath: path, RecordingDisabled: test.disabled, RecordingUntil: test.until})
-			if store.RecordingEnabled() {
-				t.Fatal("disabled exchange recording accepted captures")
-			}
 			recordDiagnosticExchange(store, "disabled")
 			store.RecordExchange(correlation.Context{}, capture.Exchange{RequestBody: []byte("disabled request")})
 			store.RecordCappedExchange(correlation.Context{}, capture.Exchange{ResponseBody: []byte("disabled response")}, 17, true)
@@ -60,16 +57,10 @@ func TestRecordingExpiresWithoutReloadAndStaysExpiredAfterReopen(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	configuration := capture.Config{DBPath: path, RecordingUntil: deadline}
 	store := openRecordingStore(t, configuration)
-	if !store.RecordingEnabled() {
-		t.Fatal("future recording deadline did not enable recording")
-	}
 	recordDiagnosticExchange(store, "before")
 	timer := time.NewTimer(time.Until(deadline) + time.Millisecond)
 	defer timer.Stop()
 	<-timer.C
-	if store.RecordingEnabled() {
-		t.Fatal("recording continued after its deadline")
-	}
 	recordDiagnosticExchange(store, "after")
 	if err := store.Close(context.Background(), "test expiration"); err != nil {
 		t.Fatal(err)

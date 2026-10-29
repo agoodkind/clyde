@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -315,14 +316,18 @@ func assertExchangeRecordingEmpty(t *testing.T, proxy *mitm.Proxy, store *captur
 func assertProxyByteCounts(t *testing.T, logs io.Reader, requestBytes, responseBytes int) {
 	t.Helper()
 	decoder := json.NewDecoder(logs)
-	for decoder.More() {
+	for {
 		var event struct {
 			Leg      logevent.Leg `json:"leg"`
 			BytesIn  int          `json:"bytes_in"`
 			BytesOut int          `json:"bytes_out"`
 		}
-		if err := decoder.Decode(&event); err != nil {
-			t.Fatalf("read proxy operational log: %v", err)
+		decodeErr := decoder.Decode(&event)
+		if errors.Is(decodeErr, io.EOF) {
+			break
+		}
+		if decodeErr != nil {
+			t.Fatalf("read proxy operational log: %v", decodeErr)
 		}
 		if event.Leg != logevent.LegMITMComplete {
 			continue
