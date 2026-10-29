@@ -1,12 +1,15 @@
 package localbackendcli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/sandbox"
 )
 
 const (
@@ -14,7 +17,41 @@ const (
 	deletedSourceDeltaWorkspace = "/local-proof/delta"
 	deletedSourceAfter          = "2026-07-01T12:00:00Z"
 	deletedSourceBefore         = "2026-07-01T13:00:00Z"
+	deletedSourceFixtureEnv     = "CLYDE_TEST_RETAINED_FIXTURE"
 )
+
+// retainedRecordsPath returns the path to the retained records file under a sandbox state directory.
+func retainedRecordsPath(stateRoot string) string {
+	return filepath.Join(stateRoot, "clyde", "conversation", "retained-records.json")
+}
+
+// requireRetainedRecords reads the file at path, fails the test if it omits any given conversation ID, and returns the file bytes.
+func requireRetainedRecords(t *testing.T, path string, conversationIDs []string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("cannot read retained records file %s: %v", path, err)
+	}
+	var file struct {
+		Version int `json:"version"`
+		Records []struct {
+			ID string `json:"id"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal(content, &file); err != nil {
+		t.Fatalf("cannot decode retained records file %s: %v", path, err)
+	}
+	retained := make([]string, 0, len(file.Records))
+	for _, record := range file.Records {
+		retained = append(retained, record.ID)
+	}
+	for _, conversationID := range conversationIDs {
+		if !slices.Contains(retained, conversationID) {
+			t.Fatalf("retained records file %s does not list deleted conversation %s; retained IDs: %v", path, conversationID, retained)
+		}
+	}
+	return content
+}
 
 // deletedSourceCase pairs a case name with its search request.
 type deletedSourceCase struct {
@@ -175,4 +212,23 @@ func checkDeletedSourceSearchable(t *testing.T, flags []string, source string) {
 	second := startLocalProofDaemon(t, binaryPath, home, append(slices.Clone(flags), "--root", first.roots.Base)...)
 	waitForDeletedSourceDelta(t, second)
 	requireDeletedSourceMatchesKept(t, "after the restart", before, deletedSourceSnapshot(t, second), deletedIDs)
+	second.stop()
+
+	retained := requireRetainedRecords(t, retainedRecordsPath(first.roots.State), deletedIDs)
+	if fixture := os.Getenv(deletedSourceFixtureEnv); fixture != "" {
+		if err := os.WriteFile(fixture, retained, 0o600); err != nil {
+			t.Fatalf("cannot write retained records fixture to %s: %v", fixture, err)
+		}
+	}
+	// The third daemon starts on a new root with only the retained records file, as after restoring that file. The root has neither a conversation cache nor fingerprint records.
+	restoredBase, err := os.MkdirTemp(sandbox.RootParent, sandbox.RootPattern)
+	if err != nil {
+		t.Fatalf("cannot create restore sandbox root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(restoredBase) })
+	restoredPath := retainedRecordsPath(filepath.Join(restoredBase, "state"))
+	writeLocalProofFile(t, restoredPath, string(retained))
+	restored := startLocalProofDaemon(t, binaryPath, home, append(slices.Clone(flags), "--root", restoredBase)...)
+	waitForDeletedSourceDelta(t, restored)
+	requireDeletedSourceMatchesKept(t, "after a restore of the retained records file", before, deletedSourceSnapshot(t, restored), deletedIDs)
 }
