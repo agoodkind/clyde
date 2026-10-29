@@ -173,12 +173,18 @@ func assertLocalProofRawText(t *testing.T, sandboxDaemon *localProofDaemon) {
 
 func waitForLocalProofRows(t *testing.T, sandboxDaemon *localProofDaemon) {
 	t.Helper()
+	waitForProofRowsFrom(t, sandboxDaemon, localProofSourceLocal)
+}
+
+// waitForProofRowsFrom waits until CLI search returns every fixture row from the given search source.
+func waitForProofRowsFrom(t *testing.T, sandboxDaemon *localProofDaemon, source string) {
+	t.Helper()
 	request := localProofSearchRequest{Query: localProofQuery, Provider: "", Workspace: "", Roles: "", Limit: localProofMaxLimit, Offset: 0, IncludeArchived: true}
 	surface := sandboxDaemon.surfaces()[0]
 	deadline := time.Now().Add(localProofReadyTimeout)
 	for {
 		result, err := surface.search(request)
-		if err == nil && result.Source == localProofSourceLocal && len(result.Matches) == localProofAllRows {
+		if err == nil && result.Source == source && len(result.Matches) == localProofAllRows {
 			return
 		}
 		if time.Now().After(deadline) {

@@ -27,6 +27,8 @@ type localProofSearchRequest struct {
 	Provider        string `json:"provider,omitempty"`
 	Workspace       string `json:"workspace,omitempty"`
 	Roles           string `json:"roles,omitempty"`
+	After           string `json:"after,omitempty"`
+	Before          string `json:"before,omitempty"`
 	Limit           int    `json:"limit,omitempty"`
 	Offset          int    `json:"offset,omitempty"`
 	IncludeArchived bool   `json:"include_archived,omitempty"`
@@ -43,6 +45,7 @@ type localProofMatch struct {
 	Conversation localProofConversation `json:"conversation"`
 	MessageIndex int                    `json:"message_index"`
 	Role         string                 `json:"role"`
+	Timestamp    time.Time              `json:"timestamp"`
 	Score        float64                `json:"score"`
 	Snippet      string                 `json:"snippet"`
 }
@@ -264,6 +267,12 @@ func (d *localProofDaemon) searchCLI(request localProofSearchRequest) (localProo
 	}
 	if request.Roles != "" {
 		arguments = append(arguments, "--roles", request.Roles)
+	}
+	if request.After != "" {
+		arguments = append(arguments, "--after", request.After)
+	}
+	if request.Before != "" {
+		arguments = append(arguments, "--before", request.Before)
 	}
 	if request.IncludeArchived {
 		arguments = append(arguments, "--include-archived")

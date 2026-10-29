@@ -74,6 +74,42 @@ func NewRoots() (Roots, error) {
 	return roots, nil
 }
 
+// ExistingRoots returns the directories of an existing sandbox root under /tmp with the sandbox prefix. It creates missing subdirectories.
+func ExistingRoots(base string) (Roots, error) {
+	clean := filepath.Clean(base)
+	if !UnderTempRoot(clean) || !strings.HasPrefix(filepath.Base(clean), RootPattern) {
+		err := fmt.Errorf("sandbox root %s must be under %s with name prefix %s", base, RootParent, RootPattern)
+		slog.Error("sandbox.roots.reuse_rejected", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", base, "err", err)
+		return Roots{}, err
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		failure := fmt.Errorf("sandbox root %s is not an existing directory: %w", base, err)
+		slog.Error("sandbox.roots.reuse_missing", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", base, "err", failure)
+		return Roots{}, failure
+	}
+	if !info.IsDir() {
+		failure := fmt.Errorf("sandbox root %s is not an existing directory", base)
+		slog.Error("sandbox.roots.reuse_missing", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", base, "err", failure)
+		return Roots{}, failure
+	}
+	roots := Roots{
+		Base:    clean,
+		State:   filepath.Join(clean, stateDirName),
+		Config:  filepath.Join(clean, configDirName),
+		Cache:   filepath.Join(clean, cacheDirName),
+		Runtime: filepath.Join(clean, runtimeDirName),
+	}
+	for _, dir := range []string{roots.State, roots.Config, roots.Cache, roots.Runtime} {
+		if mkErr := os.MkdirAll(dir, rootDirMode); mkErr != nil {
+			slog.Error("sandbox.roots.create_failed", "concern", "process.daemon.lifecycle", "component", "sandbox", "path", dir, "err", mkErr)
+			return Roots{}, fmt.Errorf("create sandbox subdirectory %s: %w", dir, mkErr)
+		}
+	}
+	slog.Debug("sandbox.roots.reused", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", clean)
+	return roots, nil
+}
+
 // Env returns the redirections that move every clyde-owned path into roots, in
 // a fixed order. Returning the table rather than applying it lets a test
 // install the same values through t.Setenv, which unwinds when the test ends,
