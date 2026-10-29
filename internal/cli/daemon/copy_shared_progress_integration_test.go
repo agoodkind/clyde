@@ -106,6 +106,7 @@ func TestCopySharedPrintsPhaseProgress(t *testing.T) {
 		t.Fatalf("write single layout: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
+	writeSourceRecords(t, progressSourceCollectionID, manifest)
 
 	baseURL := os.Getenv(repairEmbeddingBaseURLEnv)
 	if baseURL == "" {

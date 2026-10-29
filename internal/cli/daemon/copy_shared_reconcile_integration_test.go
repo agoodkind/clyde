@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,7 +21,9 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/conversation/vectorsearch"
+	"goodkind.io/clyde/internal/conversation/vectorsearch/checkpointtest"
 	"goodkind.io/clyde/internal/conversation/vectorsearch/milvustest"
+	daemonsvc "goodkind.io/clyde/internal/daemon"
 )
 
 const (
@@ -105,6 +108,7 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 		t.Fatalf("write single layout: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
+	wantRecords := writeSourceRecords(t, reconcileSourceCollectionID, manifest)
 
 	baseURL := os.Getenv(repairEmbeddingBaseURLEnv)
 	if baseURL == "" {
@@ -188,4 +192,35 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 	if !slices.Equal(sourceIDs, targetIDs) {
 		t.Fatalf("target stores %d row IDs after the repair; expected the %d source row IDs", len(targetIDs), len(sourceIDs))
 	}
+	wantSummaryRecords := fmt.Sprintf("Copied %d conversation fingerprint records.", len(wantRecords))
+	if !strings.Contains(output, wantSummaryRecords) {
+		t.Fatalf("copy-shared --verify-only printed %q; expected it to contain %q", output, wantSummaryRecords)
+	}
+	if got := checkpointtest.Records(t, recordDir(reconcileTargetCollectionID)); !maps.Equal(got, wantRecords) {
+		t.Fatalf("target stores %d fingerprint records; expected the %d source records %v", len(got), len(wantRecords), wantRecords)
+	}
+	if got := checkpointtest.Records(t, recordDir(reconcileSourceCollectionID)); !maps.Equal(got, wantRecords) {
+		t.Fatalf("source stores %d fingerprint records after the copy; expected %d", len(got), len(wantRecords))
+	}
+}
+
+// writeSourceRecords writes a fingerprint record for each manifest conversation
+// under a plain numbered file name in the source collection's record directory
+// under the daemon checkpoint directory. It returns fingerprints by conversation
+// ID.
+func writeSourceRecords(t *testing.T, collectionID string, manifest []semsearch.Fingerprint) map[string]string {
+	t.Helper()
+	directory := recordDir(collectionID)
+	records := make(map[string]string, len(manifest))
+	for position, fingerprint := range manifest {
+		checkpointtest.WriteRecord(t, directory, fmt.Sprintf("record-%03d.json", position), fingerprint.ConversationID, fingerprint.Value)
+		records[fingerprint.ConversationID] = fingerprint.Value
+	}
+	return records
+}
+
+// recordDir returns the record directory for a collection under the daemon
+// checkpoint directory.
+func recordDir(collectionID string) string {
+	return filepath.Join(daemonsvc.ConversationCheckpointDir(), vectorsearch.CollectionName(collectionID))
 }

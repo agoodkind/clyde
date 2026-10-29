@@ -131,6 +131,13 @@ func (store *checkpointStore) record(collectionName string, conversationID strin
 	recorded[conversationID] = fingerprint
 }
 
+// checkpointFileName returns the first 32 hex characters of the conversation
+// ID's SHA-256 hash followed by .json.
+func checkpointFileName(conversationID string) string {
+	sum := sha256.Sum256([]byte(conversationID))
+	return hex.EncodeToString(sum[:])[:checkpointNameLength] + checkpointFileSuffix
+}
+
 // writeCheckpointFile writes one record atomically. The content is written to a
 // temporary file in the same directory, and a rename replaces the record file.
 func writeCheckpointFile(directory string, conversationID string, fingerprint string) (failure error) {
@@ -158,8 +165,7 @@ func writeCheckpointFile(directory string, conversationID string, fingerprint st
 	if err != nil {
 		return fmt.Errorf("encode checkpoint: %w", err)
 	}
-	sum := sha256.Sum256([]byte(conversationID))
-	name := hex.EncodeToString(sum[:])[:checkpointNameLength] + checkpointFileSuffix
+	name := checkpointFileName(conversationID)
 	temp, err := os.CreateTemp(directory, checkpointTempPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("create checkpoint temp file: %w", err)

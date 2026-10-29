@@ -33,6 +33,12 @@ const (
 	conversationCheckpointDirName    = "checkpoints"
 )
 
+// ConversationCheckpointDir returns the directory that stores fingerprint
+// record files for every conversation collection.
+func ConversationCheckpointDir() string {
+	return filepath.Join(config.DefaultStateDir(), conversationSemanticStateDirName, conversationCheckpointDirName)
+}
+
 func semanticRetryDelay(failures uint32, jitter time.Duration) time.Duration {
 	delay := 30 * time.Second
 	for remaining := failures; remaining > 1 && delay < 5*time.Minute; remaining-- {
@@ -256,7 +262,7 @@ func OpenConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 		EmbeddingTimeout:       semanticCfg.EmbeddingRequestTimeout.AsDuration(),
 		QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
 		DenseSearchParams:      semanticCfg.DenseSearchParams(),
-		CheckpointDir:          filepath.Join(config.DefaultStateDir(), conversationSemanticStateDirName, conversationCheckpointDirName),
+		CheckpointDir:          ConversationCheckpointDir(),
 	})
 	if err != nil {
 		return nil, semanticConnectorError{cause: err}
