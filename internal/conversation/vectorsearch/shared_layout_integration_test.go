@@ -3,32 +3,21 @@
 package vectorsearch_test
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	_ "embed"
-	"encoding/hex"
 	"fmt"
 	"math"
-	"net"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
-	"text/template"
 	"time"
 
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/conversation/vectorsearch"
+	"goodkind.io/clyde/internal/conversation/vectorsearch/milvustest"
 )
 
-//go:embed testdata/milvus-compose.yml.tmpl
-var milvusComposeTemplate string
-
 const (
-	integrationEnv           = "CLYDE_MILVUS_INTEGRATION"
 	embeddingBaseURLEnv      = "CLYDE_TEST_EMBEDDING_BASE_URL"
 	defaultEmbeddingBaseURL  = "http://[::1]:5400/v1"
 	integrationEmbeddingKey  = "clyde-milvus-integration"
@@ -36,69 +25,11 @@ const (
 	integrationDimension     = 4096
 	sourceCollectionID       = "integration-single"
 	sharedCollectionID       = "integration-shared"
-	stackReadyTimeout        = 5 * time.Minute
-	stackCommandTimeout      = 6 * time.Minute
 	integrationSearchLimit   = 8
 	integrationScoreEpsilon  = 1e-6
 	integrationVerifySamples = 200
 	visibilityWait           = 3 * time.Second
 )
-
-type composeValues struct {
-	Project  string
-	GRPCPort int
-}
-
-func freePort(t *testing.T) int {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("find free port: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release probe port: %v", err)
-	}
-	return port
-}
-
-// startMilvus starts a throwaway Milvus v2.6.18 compose project and removes
-// its containers and volumes at cleanup. It returns the gRPC address.
-func startMilvus(t *testing.T) string {
-	t.Helper()
-	idBytes := make([]byte, 4)
-	if _, err := rand.Read(idBytes); err != nil {
-		t.Fatalf("random project id: %v", err)
-	}
-	values := composeValues{Project: "clydetest-" + hex.EncodeToString(idBytes), GRPCPort: freePort(t)}
-	parsed, err := template.New("compose").Parse(milvusComposeTemplate)
-	if err != nil {
-		t.Fatalf("parse compose template: %v", err)
-	}
-	var rendered bytes.Buffer
-	if err := parsed.Execute(&rendered, values); err != nil {
-		t.Fatalf("render compose template: %v", err)
-	}
-	composePath := filepath.Join(t.TempDir(), "docker-compose.yml")
-	if err := os.WriteFile(composePath, rendered.Bytes(), 0o600); err != nil {
-		t.Fatalf("write compose file: %v", err)
-	}
-	compose := func(args ...string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), stackCommandTimeout)
-		defer cancel()
-		command := exec.CommandContext(ctx, "docker", append([]string{"compose", "-p", values.Project, "-f", composePath}, args...)...)
-		return command.CombinedOutput()
-	}
-	t.Cleanup(func() {
-		if output, err := compose("down", "--volumes", "--remove-orphans", "--timeout", "30"); err != nil {
-			t.Errorf("tear down %s: %v\n%s (remove it with: docker compose -p %s down -v)", values.Project, err, output, values.Project)
-		}
-	})
-	if output, err := compose("up", "--detach", "--wait", "--wait-timeout", strconv.Itoa(int(stackReadyTimeout.Seconds()))); err != nil {
-		t.Fatalf("start %s: %v\n%s", values.Project, err, output)
-	}
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(values.GRPCPort))
-}
 
 func openClient(t *testing.T, address string, layout vectorsearch.Layout) *vectorsearch.Client {
 	t.Helper()
@@ -308,11 +239,9 @@ func requireSharedDeleteRemovesRows(t *testing.T, shared *vectorsearch.Client) {
 // shared layout, and that new writes and a conversation delete work in the
 // shared layout.
 func TestSharedLayoutCopiesAndSearchesLikeSingleLayout(t *testing.T) {
-	if os.Getenv(integrationEnv) == "" {
-		t.Skipf("set %s=1 (make milvus-integration) to run against a throwaway Milvus stack", integrationEnv)
-	}
+	milvustest.RequireEnabled(t)
 	ctx := context.Background()
-	address := startMilvus(t)
+	address := milvustest.Start(t)
 	single := openClient(t, address, vectorsearch.LayoutSingle)
 	shared := openClient(t, address, vectorsearch.LayoutShared)
 	docs, manifest := integrationDocuments()

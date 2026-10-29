@@ -45,10 +45,17 @@ indexed_content = ["chat", "tool_calls"]
 
 [logging.rotation]
 enabled = true
-max_size_mb = 64
-max_backups = 192
-max_age_days = 14
-compress = false
+max_size_mb = 1
+max_backups = 1
+max_age_days = 7
+compress = true
+
+# The daemon applies one budget across every Clyde-owned log file and archive.
+[logging.cleanup]
+enabled = true
+max_total_mb = 5
+max_backups = 1
+max_age_days = 7
 
 # Logging sinks. The canonical sink names are: daemon, cli, codex_sidecar,
 # anthropic_sidecar, audit, concerns, transcripts, inventory_index.
@@ -445,6 +452,12 @@ reorient_summary_injection = false
 
 # sentinel = "MYKEYWORD"
 # actual_user_sentinel = "ACTUAL_USER"
+
+# Zero disables the selected limit. Keep at least one limit enabled.
+[mitm.capture_store]
+retention_max_age = "168h"
+retention_max_bytes = 5000000000
+retention_interval = "1s"
 
 # Per-client MITM listeners, split into CLIs ([mitm.cli.<name>]) and desktop apps
 # ([mitm.app.<name>]). The table key is the client name; each gets its own

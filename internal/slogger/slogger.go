@@ -239,6 +239,7 @@ func buildTranscriptRouter(policy TranscriptPolicy, concernRoot string) *Transcr
 	}
 	return NewTranscriptRouter(TranscriptRouterConfig{
 		Root: filepath.Join(concernRoot, "chats"), PoolCap: 0,
+		Rotation: policy.Rotation,
 
 		// WithConcern is part of Clyde's typed adapter surface.
 		Now: nil,

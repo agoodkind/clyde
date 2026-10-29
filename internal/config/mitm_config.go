@@ -1,7 +1,10 @@
 package config
 
 import (
+	"fmt"
+	"log/slog"
 	"slices"
+	"time"
 
 	"goodkind.io/clyde/internal/providerid"
 )
@@ -78,13 +81,34 @@ type MITMListenerConfig struct {
 
 // MITMCaptureStoreConfig configures the shared SQLite capture store that
 // persists completed MITM exchanges. DBPath defaults to <capture_dir>/capture.db;
-// the remaining fields default inside the capture package when zero.
+// config loading resolves retention defaults and preserves explicit zero limits.
 type MITMCaptureStoreConfig struct {
-	DBPath            string   `json:"dbPath,omitempty" toml:"db_path,omitempty"`
-	MaxBodyBytes      int      `json:"maxBodyBytes,omitempty" toml:"max_body_bytes,omitempty"`
+	retentionResolved        bool
+	retentionAgePresent      bool
+	retentionBytesPresent    bool
+	retentionIntervalPresent bool
+	DBPath                   string `json:"dbPath,omitempty" toml:"db_path,omitempty"`
+	MaxBodyBytes             int    `json:"maxBodyBytes,omitempty" toml:"max_body_bytes,omitempty"`
+	// RecordUntil enables exchange recording until this RFC3339 timestamp.
+	// An empty or expired timestamp disables exchange recording.
+	RecordUntil       string   `json:"recordUntil,omitempty" toml:"record_until,omitempty"`
 	RetentionMaxAge   Duration `json:"retentionMaxAge,omitempty" toml:"retention_max_age,omitempty"`
 	RetentionMaxBytes int64    `json:"retentionMaxBytes,omitempty" toml:"retention_max_bytes,omitempty"`
 	RetentionInterval Duration `json:"retentionInterval,omitempty" toml:"retention_interval,omitempty"`
+}
+
+// RecordingDeadline parses the absolute exchange-recording expiration.
+// An empty value disables recording without disabling baseline storage.
+func (c MITMCaptureStoreConfig) RecordingDeadline() (time.Time, error) {
+	if c.RecordUntil == "" {
+		return time.Time{}, nil
+	}
+	deadline, err := time.Parse(time.RFC3339, c.RecordUntil)
+	if err != nil {
+		slog.Warn("config.capture_recording_deadline_invalid", "err", err)
+		return time.Time{}, fmt.Errorf("mitm.capture_store.record_until must use RFC3339: %w", err)
+	}
+	return deadline, nil
 }
 
 // MITMCAConfig configures on-disk persistence of the MITM CA.

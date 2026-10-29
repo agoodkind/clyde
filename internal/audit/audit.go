@@ -26,9 +26,9 @@ type RotationConfig struct {
 }
 
 const (
-	defaultAuditRotationMaxSizeMB  = 64
-	defaultAuditRotationMaxBackups = 192
-	defaultAuditRotationMaxAgeDays = 14
+	defaultAuditRotationMaxSizeMB  = 1
+	defaultAuditRotationMaxBackups = 1
+	defaultAuditRotationMaxAgeDays = 7
 )
 
 func (c RotationConfig) normalized() RotationConfig {
@@ -66,12 +66,13 @@ func NewLogger(component string, rotation RotationConfig) (*slog.Logger, func())
 		Compress:   &compressCopy,
 	})
 	stderrH := slog.NewJSONHandler(os.Stderr, jsonOpts)
-	fileH := slog.NewJSONHandler(lj, jsonOpts)
+	writer := gklog.NewLockedWriteCloser(logPath, lj)
+	fileH := slog.NewJSONHandler(writer, jsonOpts)
 	logger := slog.New(gklog.NewTeeHandler(stderrH, fileH)).
 		With(slog.String("build", gklogversion.String())).
 		With("component", component)
 
-	return logger, func() { _ = lj.Close() }
+	return logger, func() { _ = writer.Close() }
 }
 
 func stderrFallback(component string) *slog.Logger {

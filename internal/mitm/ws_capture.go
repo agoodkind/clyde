@@ -322,7 +322,9 @@ func (p *Proxy) wsMakeRelay(params wsRelayParams) func(src, dst *websocket.Conn,
 				params.closeBoth(err)
 				return
 			}
-			params.captureStoreRecorder.add(payload, fromClient)
+			if p.store.RecordingEnabled() {
+				params.captureStoreRecorder.add(payload, fromClient)
+			}
 			params.session.Touch()
 		}
 	}
@@ -337,6 +339,9 @@ type wsCaptureStoreInput struct {
 }
 
 func (p *Proxy) recordWSCaptureStore(r *http.Request, responseHeader http.Header, in wsCaptureStoreInput) {
+	if !p.store.RecordingEnabled() {
+		return
+	}
 	requestBody, responseBody := in.recorder.bodies()
 	p.recordCaptureStore(r, responseHeader, captureStoreInput{
 		provider:        in.provider,
@@ -365,7 +370,7 @@ type wsCaptureStoreRecorder struct {
 
 func newWSCaptureStoreRecorder(capBytes int) *wsCaptureStoreRecorder {
 	if capBytes <= 0 {
-		capBytes = defaultCaptureBodyCap
+		return nil
 	}
 	return &wsCaptureStoreRecorder{
 		mu:       sync.Mutex{},

@@ -1,5 +1,5 @@
 # Payload Policy
 
-Request and response legs log identity, path, outcome (status, byte counts, duration), and typed facets. Full request and response bodies live only in the SQLite capture store at `mitm/capture.db`, governed by `[mitm.capture_store]` retention.
+Request and response legs log identity, path, outcome (status, byte counts, duration), and typed facets. The SQLite capture store saves full request and response bodies only during an enabled recording period. The [capture settings](config.md) control recording and retention.
 
-MITM wire legs land in `logs/providers/mitm/wire.jsonl` under the `providers.mitm.wire` concern and join to capture.db rows on `request_id`/`trace_id`. Adapter egress bodies persist to the same store, tagged by the egress client.
+MITM wire legs use the `providers.mitm.wire` concern. Recorded exchanges and wire legs share `request_id` and `trace_id` values. Adapter egress captures include the egress client label.

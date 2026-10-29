@@ -68,6 +68,7 @@ func TestLiveReorientCompactSplitsAndInjects(t *testing.T) {
 	}
 	h := newHarness(t)
 	h.writeConfig(t, h.cfg.MITMPort, []string{"claude"})
+	writeOptionalCaptureDeadline(t, h, time.Now().Add(time.Hour).Format(time.RFC3339))
 	enableReorientInjection(t, h.configPath)
 	h.boot(t)
 

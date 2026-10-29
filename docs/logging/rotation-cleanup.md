@@ -1,46 +1,49 @@
-# Rotation And Cleanup
+# Log Retention
 
-Clyde keeps file rotation and cleanup separate.
+Clyde applies one combined size budget to its process, concern, provider, chat,
+inventory, audit, metrics, and supervisor logs. Each active file can remain below
+its rotation threshold while the combined size exceeds this budget.
 
-Rotation controls active log files. It applies max file size, max backups, max age, and compression policy. Rotation is driven by `gklog` `RotationConfig`, with the rotation policy declared in `internal/logpolicy` and `internal/config`, while `internal/slogger` converts that policy into the `gklog` config and owns the cleanup walker.
+File rotation limits individual writers. The daemon also runs cleanup after startup
+and periodically during operation. CLI startup does not scan log directories.
+Cleanup reads the current policy on each pass, including configuration changes.
 
-Cleanup controls stale files. It is enabled by `logging.cleanup.enabled` and uses retention settings to remove aged rotated files, aged sidecars, empty artifacts, and files that exceed total budget rules.
+Cleanup discovers log files under Clyde-owned roots. Configured external file
+paths include only the selected file and its recognized archives. Cleanup does
+not recursively scan an external file's parent directory, follow symbolic links,
+or delete lock files. SQLite capture retention uses a separate policy under
+`mitm.capture_store`.
 
-When cleanup is disabled, Clyde may audit eligible files, but it should not delete them.
+Cleanup removes archives that exceed age or backup limits. When the combined
+size still exceeds the budget, cleanup removes older archives first and then
+compacts older active files. Compaction keeps complete trailing lines on the
+existing inode, which identifies the open file independently of its path. Cached
+chat and concern writers continue appending to that file after compaction.
 
-Cleanup applies across the logging surfaces exposed by inventory, aligned to the inventory categories in `internal/loginventory/inventory.go`:
+Writers and cleanup use the same per-file lock. Cleanup skips a busy file and
+reports the skipped path. A later pass retries retention. The daemon checks the
+open supervisor descriptors before cleanup. Cleanup compacts files with append
+descriptors in place and protects files with descriptors that do not append.
+Protected files still count toward the budget, and cleanup reports any remaining
+excess bytes. Supervisor stderr does not acquire the per-file lock. Compaction
+of append-mode stderr treats concurrent lines as best effort.
 
-- MITM capture-index wire logs.
-- MITM profile/process logs.
-- Top-level daemon/cli logs.
-- Provider sidecar logs.
-- Concern logs.
-- Per-chat transcript logs.
-- Inventory indexes.
-- Pre-repair retained logs.
-- Lock files.
-- Uncategorized.
+Rotation can remove a file's directory entry while the supervisor still has the
+file open. Closing the last descriptor releases that file's disk space. Cleanup
+counts these files once by device and inode and reports their bytes separately.
+It continues pruning files that still have paths. If the retained open files
+already exceed the budget, cleanup preserves the normal budget of recent named
+logs and reports the remaining excess.
 
-MITM wire legs are concern logs at `logs/providers/mitm/wire.jsonl`, so they fall under Concern logs.
+Each compaction reads a bounded tail rather than loading the entire log. Cleanup
+counts bytes only after a successful removal or compaction and continues after
+individual failures. A failed deletion does not count as freed space.
 
-Use `clyde logs inventory --deep --json` around manual cleanup when exact file counts matter.
+The `bytes_before` and `bytes_after` fields count files that still have paths.
+The `retained_open_bytes` and `retained_open_files` fields count the supervisor's
+unlinked files. The `excess_bytes` field includes both sets of files.
 
-## Cleanup and inventory wiring
-
-```mermaid
-flowchart LR
-  config["logging.cleanup\nconfig"] --> applyCleanupPolicy["applyCleanupPolicy"]
-  applyCleanupPolicy --> walk["filepath.WalkDir(state_root)"]
-  walk --> candidates["candidates: jsonl, log, raw"]
-  candidates --> remove["os.Remove(candidate)"]
-  remove --> cleanupCompleted["slogger.cleanup.completed event"]
-  cleanupCompleted --> sinkInventory["sink: inventory_index"]
-  sinkInventory --> eventsJSONL["logs/inventory/events.jsonl"]
-  inventoryCLI["clyde logs inventory"] --> indexedMode["indexed mode"]
-  indexedMode --> eventsJSONL
-  indexedMode --> statKnown["os.Stat(known paths)"]
-  inventoryCLI --> deepMode["deep mode"]
-  deepMode --> walk
-```
-
-The cleanup pass emits `slogger.cleanup.completed` with `scanned_roots`, `candidates`, `deleted`, `bytes_deleted`, `skipped`, `errors`, and `duration_ms`. The event flows through the inventory sink to `logs/inventory/events.jsonl`, which `clyde logs inventory` reads in indexed mode to surface the most recent cleanup result per sink. Deep mode stays off that snapshot path and reports only filesystem-derived totals.
+The `slogger.cleanup.completed` event reports discovered and retained bytes,
+deleted and trimmed bytes, changed paths, skipped paths, errors, and duration.
+Unchanged passes use debug level. Passes that change files or report errors use
+info level. Active writes can temporarily exceed the budget between passes.

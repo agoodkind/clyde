@@ -432,11 +432,12 @@ key_path = %q
 
 [mitm.capture_store]
 db_path = %q
+record_until = %q
 
 [mitm.cli.claude-code]
 host = "localhost"
 port = %d
-`, captureDir, filepath.Join(caDir, "ca.crt"), filepath.Join(caDir, "ca.key"), filepath.Join(captureDir, "capture.db"), h.cfg.MITMPort)
+`, captureDir, filepath.Join(caDir, "ca.crt"), filepath.Join(caDir, "ca.key"), filepath.Join(captureDir, "capture.db"), time.Now().Add(time.Hour).Format(time.RFC3339), h.cfg.MITMPort)
 	}
 	content := fmt.Sprintf(`[logging]
 level = "debug"
@@ -947,12 +948,12 @@ type responsesUpstreamRequest struct {
 }
 
 type responsesRequestEnvelope struct {
-	Input         string                      `json:"input"`
-	Stream        bool                        `json:"stream"`
-	CompatUnknown responsesCompatibilityProbe `json:"compat_unknown"`
+	Input    string                 `json:"input"`
+	Stream   bool                   `json:"stream"`
+	Metadata responsesMetadataProbe `json:"metadata"`
 }
 
-type responsesCompatibilityProbe struct {
+type responsesMetadataProbe struct {
 	Probe string `json:"probe"`
 }
 
@@ -981,7 +982,7 @@ func startResponsesUpstream(t *testing.T) *responsesUpstream {
 			return
 		}
 		upstream.requests <- responsesUpstreamRequest{path: request.URL.Path, body: string(body)}
-		probeID := envelope.CompatUnknown.Probe
+		probeID := envelope.Metadata.Probe
 		w.Header().Set("X-Upstream-Marker", "responses-live")
 		w.Header().Set("X-Request-Id", "upstream-"+probeID)
 		if !envelope.Stream {

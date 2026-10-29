@@ -243,9 +243,9 @@ func NewConfigWithDefaults() *Config {
 }
 
 const (
-	defaultLoggingRotationMaxSizeMB  = 64
-	defaultLoggingRotationMaxBackups = 192
-	defaultLoggingRotationMaxAgeDays = 14
+	defaultLoggingRotationMaxSizeMB  = 1
+	defaultLoggingRotationMaxBackups = 1
+	defaultLoggingRotationMaxAgeDays = 7
 )
 
 func applyLoggingDefaultsAndValidate(cfg *Config) error {
@@ -648,6 +648,9 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 		return err
 	}
 	applyMITMCaptureStoreDefaults(&mitm.CaptureStore, mitm.CaptureDir)
+	if err := applyCaptureRetentionDefaults(&mitm.CaptureStore); err != nil {
+		return err
+	}
 	if err := applyMITMCADefaultsAndValidate(&mitm.CA); err != nil {
 		return err
 	}
@@ -688,18 +691,6 @@ func normalizeMITMListener(id string, listener *MITMListenerConfig) error {
 		return fmt.Errorf("mitm.%s.port %d is outside the valid TCP port range 1-65535", listener.ID, listener.Port)
 	}
 	return nil
-}
-
-// applyMITMCaptureStoreDefaults defaults the capture store DBPath to
-// <captureDir>/capture.db when unset. The remaining store fields default
-// inside the capture package when zero, so they are left untouched here.
-func applyMITMCaptureStoreDefaults(store *MITMCaptureStoreConfig, captureDir string) {
-	store.DBPath = strings.TrimSpace(store.DBPath)
-	if store.DBPath == "" {
-		store.DBPath = filepath.Join(captureDir, "capture.db")
-		return
-	}
-	store.DBPath = cleanExpandedPath(store.DBPath)
 }
 
 func applyMITMCADefaultsAndValidate(ca *MITMCAConfig) error {

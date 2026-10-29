@@ -2,14 +2,30 @@
 
 Logging configuration is centralized under `[logging]`.
 
-Body capture:
+The `[mitm.capture_store]` table controls exchange recording and retention.
 
-- Request and response bodies persist to the SQLite capture store at `mitm/capture.db`, configured under `[mitm.capture_store]` rather than `[logging]`.
+Capture settings:
+
+| Setting | Default | Behavior |
+|---|---|---|
+| `record_until` | Empty | Enables full exchange recording until this RFC3339 timestamp. An empty or expired value disables recording. |
+| `retention_max_age` | `168h` | Deletes older exchanges and drift history. Zero disables age retention. |
+| `retention_max_bytes` | `5000000000` | Limits the combined database, WAL, and SHM file sizes. Zero disables size retention. |
+| `retention_interval` | `1s` | Controls the maintenance interval. |
+
+The recording deadline applies to MITM HTTP and websocket exchanges, adapter egress, and optional adapter ingress. The store checks the deadline when an exchange completes. An exchange that completes after expiration does not persist. Reloading preserves the absolute deadline. Disabled recording does not disable proxying, injection hooks, baseline learning, or retention of existing captures.
+
+At least one retention limit must stay enabled. Limits cannot be negative, and the maintenance interval must be positive. Maintenance deletes exchanges with their raw bodies, decoded bodies, and decoded tool events in one transaction. It also removes old drift shapes, drift checks, and baseline differences. Current baselines remain available.
+
+The first daemon maintenance run deletes captures that existed when the store opened. SQLite stores the cutoff and completion state for restart recovery. This cleanup preserves captures that the daemon records after opening the store.
+
+Maintenance checkpoints the WAL and reclaims free pages before deleting more retained history. Active readers can delay reclamation. Existing databases that require a full vacuum defer that conversion. Maintenance reports excess bytes, pinned readers, and stalled reclamation in structured logs.
 
 Cleanup controls:
 
-- `logging.cleanup.enabled` controls whether cleanup deletes eligible aged logs.
-- Retention thresholds live in `logging.cleanup.max_age_days`, `logging.cleanup.max_backups`, and `logging.cleanup.max_total_mb`.
+- `logging.cleanup.enabled` controls archive deletion and active-file compaction.
+- `logging.cleanup.max_total_mb` limits the combined size of all Clyde-owned log surfaces, including active files and archives.
+- `logging.cleanup.max_age_days` and `logging.cleanup.max_backups` limit retained history. Zero disables the corresponding threshold.
 
 Sink controls:
 

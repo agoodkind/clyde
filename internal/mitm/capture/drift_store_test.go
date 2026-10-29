@@ -1,4 +1,4 @@
-package capture
+package capture_test
 
 import (
 	"context"
@@ -6,14 +6,16 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 // waitForShapeCount polls a fresh verifier connection until drift_shapes holds
 // at least want rows for the upstream, so a test can assert against the
 // async-committed corpus without closing the live store.
-func waitForShapeCount(t *testing.T, store *Store, upstream string, want int) {
+func waitForShapeCount(t *testing.T, store *retentionTestStore, upstream string, want int) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+store.cfg.DBPath+"?_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", "file:"+store.path+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open shape verifier: %v", err)
 	}
@@ -21,7 +23,7 @@ func waitForShapeCount(t *testing.T, store *Store, upstream string, want int) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var n int
-		if scanErr := db.QueryRow(`SELECT count(*) FROM drift_shapes WHERE upstream=?`, upstream).Scan(&n); scanErr == nil && n >= want {
+		if scanErr := db.QueryRow(testCountUpstreamShapesSQL, upstream).Scan(&n); scanErr == nil && n >= want {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -36,11 +38,11 @@ func waitForShapeCount(t *testing.T, store *Store, upstream string, want int) {
 // commits asynchronously, so waiting only for the row to exist (waitForShapeCount)
 // races the later dedup upserts; a test asserting the final seen_count must wait
 // for that count, not just the row.
-func waitForShapeSeenCount(t *testing.T, store *Store, upstream, fingerprint string, want int) {
+func waitForShapeSeenCount(t *testing.T, store *retentionTestStore, upstream, fingerprint string, want int) {
 	t.Helper()
 	// Keep the busy timeout well under the poll deadline: a locked query returns
 	// quickly and the loop retries, rather than blocking past the deadline.
-	db, err := sql.Open("sqlite3", "file:"+store.cfg.DBPath+"?_busy_timeout=200")
+	db, err := sql.Open("sqlite3", "file:"+store.path+"?_busy_timeout=200")
 	if err != nil {
 		t.Fatalf("open shape verifier: %v", err)
 	}
@@ -48,7 +50,7 @@ func waitForShapeSeenCount(t *testing.T, store *Store, upstream, fingerprint str
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var seen sql.NullInt64
-		scanErr := db.QueryRow(`SELECT max(seen_count) FROM drift_shapes WHERE upstream=? AND fingerprint=?`, upstream, fingerprint).Scan(&seen)
+		scanErr := db.QueryRow(testShapeSeenCountSQL, upstream, fingerprint).Scan(&seen)
 		if scanErr == nil && seen.Valid && int(seen.Int64) >= want {
 			return
 		}
@@ -59,8 +61,8 @@ func waitForShapeSeenCount(t *testing.T, store *Store, upstream, fingerprint str
 	}
 }
 
-func sampleShape(upstream, fingerprint string, ts time.Time) DriftShape {
-	return DriftShape{
+func sampleShape(upstream, fingerprint string, ts time.Time) capture.DriftShape {
+	return capture.DriftShape{
 		Timestamp:          ts,
 		Provider:           "claude",
 		Upstream:           upstream,
@@ -76,7 +78,7 @@ func sampleShape(upstream, fingerprint string, ts time.Time) DriftShape {
 }
 
 func TestRecordShapeDedupBumpsSeenCount(t *testing.T) {
-	store := openTestStore(t, Config{})
+	store := openRetentionStore(t, capture.Config{})
 	ts := time.Unix(1700000000, 0)
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts))
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts.Add(time.Minute)))
@@ -86,9 +88,9 @@ func TestRecordShapeDedupBumpsSeenCount(t *testing.T) {
 	// the second and third upserts.
 	waitForShapeSeenCount(t, store, "claude-code", "fp-1", 3)
 
-	db := openVerifier(t, store.cfg.DBPath)
+	db := openRetentionVerifier(t, store.path)
 	var rows, seen int
-	if err := db.QueryRow(`SELECT count(*), max(seen_count) FROM drift_shapes WHERE upstream='claude-code' AND fingerprint='fp-1'`).Scan(&rows, &seen); err != nil {
+	if err := db.QueryRow(testShapeDedupCountsSQL).Scan(&rows, &seen); err != nil {
 		t.Fatalf("scan shape: %v", err)
 	}
 	if rows != 1 {
@@ -102,15 +104,15 @@ func TestRecordShapeDedupBumpsSeenCount(t *testing.T) {
 }
 
 func TestRecordShapeDistinctFingerprintAddsRow(t *testing.T) {
-	store := openTestStore(t, Config{})
+	store := openRetentionStore(t, capture.Config{})
 	ts := time.Unix(1700000000, 0)
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts))
 	store.RecordShape(sampleShape("claude-code", "fp-2", ts))
 	waitForShapeCount(t, store, "claude-code", 2)
 
-	db := openVerifier(t, store.cfg.DBPath)
+	db := openRetentionVerifier(t, store.path)
 	var rows int
-	if err := db.QueryRow(`SELECT count(*) FROM drift_shapes WHERE upstream='claude-code'`).Scan(&rows); err != nil {
+	if err := db.QueryRow(testCountClaudeShapesSQL).Scan(&rows); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 	if rows != 2 {
@@ -119,7 +121,7 @@ func TestRecordShapeDistinctFingerprintAddsRow(t *testing.T) {
 }
 
 func TestShapesForUpstreamReturnsSeenCount(t *testing.T) {
-	store := openTestStore(t, Config{})
+	store := openRetentionStore(t, capture.Config{})
 	ts := time.Unix(1700000000, 0)
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts))
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts.Add(time.Minute)))
@@ -144,15 +146,15 @@ func TestShapesForUpstreamReturnsSeenCount(t *testing.T) {
 }
 
 func TestPutBaselineUpsertsAndDedupsDiffs(t *testing.T) {
-	store := openTestStore(t, Config{})
+	store := openRetentionStore(t, capture.Config{})
 	ctx := context.Background()
 	ts := time.Unix(1700000000, 0)
 
-	change := BaselineChange{
+	change := capture.BaselineChange{
 		Timestamp: ts,
 		Upstream:  "claude-code",
 		Snapshot:  json.RawMessage(`{"upstream":{"name":"claude-code"},"flavors":[]}`),
-		Diffs: []BaselineDiff{
+		Diffs: []capture.BaselineDiff{
 			{Upstream: "claude-code", Flavor: "claude-cli", Category: "header_extra", Field: "x-new", Before: "", After: "", Reason: "extra", FirstSeen: ts, LastSeen: ts, SeenCount: 1},
 		},
 	}
@@ -168,16 +170,16 @@ func TestPutBaselineUpsertsAndDedupsDiffs(t *testing.T) {
 		t.Fatalf("PutBaseline second: %v", err)
 	}
 
-	db := openVerifier(t, store.cfg.DBPath)
+	db := openRetentionVerifier(t, store.path)
 	var baselineRows int
-	if err := db.QueryRow(`SELECT count(*) FROM baselines WHERE upstream='claude-code'`).Scan(&baselineRows); err != nil {
+	if err := db.QueryRow(testCountClaudeBaselinesSQL).Scan(&baselineRows); err != nil {
 		t.Fatalf("count baselines: %v", err)
 	}
 	if baselineRows != 1 {
 		t.Fatalf("baselines rows=%d want 1 (upsert in place)", baselineRows)
 	}
 	var diffRows, diffSeen int
-	if err := db.QueryRow(`SELECT count(*), max(seen_count) FROM baseline_diffs WHERE upstream='claude-code'`).Scan(&diffRows, &diffSeen); err != nil {
+	if err := db.QueryRow(testBaselineDiffCountsSQL).Scan(&diffRows, &diffSeen); err != nil {
 		t.Fatalf("count diffs: %v", err)
 	}
 	if diffRows != 1 {
@@ -189,7 +191,7 @@ func TestPutBaselineUpsertsAndDedupsDiffs(t *testing.T) {
 }
 
 func TestCurrentBaselineAndUpdatedAt(t *testing.T) {
-	store := openTestStore(t, Config{})
+	store := openRetentionStore(t, capture.Config{})
 	ctx := context.Background()
 	ts := time.Unix(1700000000, 0)
 
@@ -201,7 +203,7 @@ func TestCurrentBaselineAndUpdatedAt(t *testing.T) {
 	}
 
 	snap := json.RawMessage(`{"upstream":{"name":"claude-code"},"flavors":[]}`)
-	if err := store.PutBaseline(ctx, BaselineChange{Timestamp: ts, Upstream: "claude-code", Snapshot: snap, Diffs: nil}); err != nil {
+	if err := store.PutBaseline(ctx, capture.BaselineChange{Timestamp: ts, Upstream: "claude-code", Snapshot: snap, Diffs: nil}); err != nil {
 		t.Fatalf("PutBaseline: %v", err)
 	}
 	raw, ok, err := store.CurrentBaseline(ctx, "claude-code")
@@ -221,14 +223,14 @@ func TestCurrentBaselineAndUpdatedAt(t *testing.T) {
 }
 
 func TestRecordCheckInsertsRow(t *testing.T) {
-	store := openTestStore(t, Config{})
-	store.RecordCheck(DriftCheck{Timestamp: time.Unix(1700000000, 0), Upstream: "claude-code", Diverged: true, Summary: "drift"})
+	store := openRetentionStore(t, capture.Config{})
+	store.RecordCheck(capture.DriftCheck{Timestamp: time.Unix(1700000000, 0), Upstream: "claude-code", Diverged: true, Summary: "drift"})
 
-	db := openVerifier(t, store.cfg.DBPath)
+	db := openRetentionVerifier(t, store.path)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var n, diverged int
-		err := db.QueryRow(`SELECT count(*), coalesce(max(diverged),0) FROM drift_checks WHERE upstream='claude-code'`).Scan(&n, &diverged)
+		err := db.QueryRow(testDriftCheckCountsSQL).Scan(&n, &diverged)
 		if err == nil && n >= 1 {
 			if diverged != 1 {
 				t.Fatalf("drift_checks diverged=%d want 1", diverged)
@@ -239,36 +241,5 @@ func TestRecordCheckInsertsRow(t *testing.T) {
 			t.Fatalf("timed out waiting for drift_checks row")
 		}
 		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-func TestPruneNeverDeletesDriftTables(t *testing.T) {
-	store := openTestStore(t, Config{RetentionMaxAge: time.Hour})
-	ctx := context.Background()
-	old := time.Now().Add(-48 * time.Hour)
-
-	store.RecordShape(sampleShape("claude-code", "fp-old", old))
-	store.RecordCheck(DriftCheck{Timestamp: old, Upstream: "claude-code", Diverged: false, Summary: "ok"})
-	waitForShapeCount(t, store, "claude-code", 1)
-	if err := store.PutBaseline(ctx, BaselineChange{
-		Timestamp: old,
-		Upstream:  "claude-code",
-		Snapshot:  json.RawMessage(`{"upstream":{"name":"claude-code"},"flavors":[]}`),
-		Diffs:     []BaselineDiff{{Upstream: "claude-code", Flavor: "f", Category: "header_extra", Field: "x", FirstSeen: old, LastSeen: old, SeenCount: 1}},
-	}); err != nil {
-		t.Fatalf("PutBaseline: %v", err)
-	}
-
-	store.prune(ctx)
-
-	db := openVerifier(t, store.cfg.DBPath)
-	for _, table := range []string{"drift_shapes", "baselines", "baseline_diffs"} {
-		var n int
-		if err := db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&n); err != nil {
-			t.Fatalf("count %s: %v", table, err)
-		}
-		if n == 0 {
-			t.Fatalf("prune deleted all rows from %s; drift tables must be retained forever", table)
-		}
 	}
 }

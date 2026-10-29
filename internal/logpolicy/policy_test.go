@@ -24,8 +24,8 @@ func TestResolveUsesDefaults(t *testing.T) {
 	if daemonPolicy.Level != logpolicy.LevelInfo {
 		t.Fatalf("daemon level = %q, want %q", daemonPolicy.Level, logpolicy.LevelInfo)
 	}
-	if daemonPolicy.Rotation.MaxSizeMB != 64 {
-		t.Fatalf("daemon rotation max size = %d, want 64", daemonPolicy.Rotation.MaxSizeMB)
+	if daemonPolicy.Rotation.MaxSizeMB != 1 {
+		t.Fatalf("daemon rotation max size = %d, want 1", daemonPolicy.Rotation.MaxSizeMB)
 	}
 	if !daemonPolicy.Cleanup.Enabled {
 		t.Fatalf("daemon cleanup should default to enabled")
@@ -258,14 +258,14 @@ func TestResolveCleanupAppliesDefaultCaps(t *testing.T) {
 	if !daemonCleanup.Enabled {
 		t.Fatalf("daemon cleanup should default to enabled")
 	}
-	if daemonCleanup.MaxAgeDays == nil || *daemonCleanup.MaxAgeDays != 14 {
-		t.Fatalf("daemon cleanup max age days = %v, want 14", daemonCleanup.MaxAgeDays)
+	if daemonCleanup.MaxAgeDays == nil || *daemonCleanup.MaxAgeDays != 7 {
+		t.Fatalf("daemon cleanup max age days = %v, want 7", daemonCleanup.MaxAgeDays)
 	}
-	if daemonCleanup.MaxBackups == nil || *daemonCleanup.MaxBackups != 192 {
-		t.Fatalf("daemon cleanup max backups = %v, want 192", daemonCleanup.MaxBackups)
+	if daemonCleanup.MaxBackups == nil || *daemonCleanup.MaxBackups != 1 {
+		t.Fatalf("daemon cleanup max backups = %v, want 1", daemonCleanup.MaxBackups)
 	}
-	if daemonCleanup.MaxTotalMB == nil || *daemonCleanup.MaxTotalMB != 4096 {
-		t.Fatalf("daemon cleanup max total mb = %v, want 4096", daemonCleanup.MaxTotalMB)
+	if daemonCleanup.MaxTotalMB == nil || *daemonCleanup.MaxTotalMB != 5 {
+		t.Fatalf("daemon cleanup max total mb = %v, want 5", daemonCleanup.MaxTotalMB)
 	}
 }
 
@@ -279,14 +279,14 @@ func TestResolveSloggerSetupGatesCleanupByRole(t *testing.T) {
 	if !daemonPolicy.CleanupPolicy.Enabled {
 		t.Fatalf("daemon role should keep cleanup enabled by default")
 	}
-	if daemonPolicy.CleanupPolicy.MaxAgeDays != 14 {
-		t.Fatalf("daemon cleanup max age days = %d, want 14", daemonPolicy.CleanupPolicy.MaxAgeDays)
+	if daemonPolicy.CleanupPolicy.MaxAgeDays != 7 {
+		t.Fatalf("daemon cleanup max age days = %d, want 7", daemonPolicy.CleanupPolicy.MaxAgeDays)
 	}
-	if daemonPolicy.CleanupPolicy.MaxBackups != 192 {
-		t.Fatalf("daemon cleanup max backups = %d, want 192", daemonPolicy.CleanupPolicy.MaxBackups)
+	if daemonPolicy.CleanupPolicy.MaxBackups != 1 {
+		t.Fatalf("daemon cleanup max backups = %d, want 1", daemonPolicy.CleanupPolicy.MaxBackups)
 	}
-	if daemonPolicy.CleanupPolicy.MaxTotalMB != 4096 {
-		t.Fatalf("daemon cleanup max total mb = %d, want 4096", daemonPolicy.CleanupPolicy.MaxTotalMB)
+	if daemonPolicy.CleanupPolicy.MaxTotalMB != 5 {
+		t.Fatalf("daemon cleanup max total mb = %d, want 5", daemonPolicy.CleanupPolicy.MaxTotalMB)
 	}
 
 	cliPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, slogger.ProcessRoleCLI)

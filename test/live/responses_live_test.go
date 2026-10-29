@@ -197,7 +197,7 @@ func TestLiveResponsesStreamForceClosesAfterReloadDrainCap(t *testing.T) {
 }
 
 func responsesRequestBody(probeID string, stream bool) string {
-	return fmt.Sprintf(`{"model":"local-test","input":"probe %s","stream":%t,"temperature":0.25,"parallel_tool_calls":true,"compat_unknown":{"probe":"%s","mode":"preserve"}}`, probeID, stream, probeID)
+	return fmt.Sprintf(`{"model":"local-test","input":"probe %s","stream":%t,"temperature":0.25,"parallel_tool_calls":true,"metadata":{"probe":"%s","mode":"preserve"}}`, probeID, stream, probeID)
 }
 
 func assertDaemonLogAbsentWhileStreamBlocked(t *testing.T, h *harness, marker string, timeout time.Duration) {
@@ -241,7 +241,7 @@ func assertResponsesPassthroughRequest(t *testing.T, request responsesUpstreamRe
 		{name: "stream", exact: fmt.Sprintf(`"stream":%t`, stream)},
 		{name: "temperature", exact: `"temperature":0.25`},
 		{name: "parallel_tool_calls", exact: `"parallel_tool_calls":true`},
-		{name: "compat_unknown", exact: fmt.Sprintf(`"compat_unknown":{"probe":"%s","mode":"preserve"}`, probeID)},
+		{name: "metadata", exact: fmt.Sprintf(`"metadata":{"probe":"%s","mode":"preserve"}`, probeID)},
 	} {
 		if !strings.Contains(request.body, field.exact) {
 			t.Fatalf("upstream request for probe %q missing preserved field %s; body length = %d", probeID, field.name, len(request.body))

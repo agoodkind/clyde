@@ -73,6 +73,10 @@ func (r *wsFrameRecorder) add(message []byte) {
 	if r.cfg == nil {
 		return
 	}
+	if !r.cfg.store.RecordingEnabled() {
+		r.inbound = nil
+		return
+	}
 	r.inbound = append(r.inbound, message)
 }
 
@@ -80,6 +84,10 @@ func (r *wsFrameRecorder) add(message []byte) {
 // clean completion and 0 on an I/O error or panic.
 func (r *wsFrameRecorder) record(status int) {
 	if r.cfg == nil || r.recorded {
+		return
+	}
+	if !r.cfg.store.RecordingEnabled() {
+		r.inbound = nil
 		return
 	}
 	r.recorded = true
@@ -103,7 +111,7 @@ func (r *wsFrameRecorder) record(status int) {
 // tagged client="adapter.codex". A nil store is a no-op; the store's Record is
 // asynchronous and non-blocking.
 func recordCodexEgress(store *capture.Store, corr correlation.Context, in codexEgressRecord) {
-	if store == nil {
+	if !store.RecordingEnabled() {
 		return
 	}
 	host, path := "", ""

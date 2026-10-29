@@ -106,3 +106,9 @@ CREATE TABLE IF NOT EXISTS drift_checks (
 	summary TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_drift_checks_upstream ON drift_checks(upstream, ts);
+CREATE TABLE IF NOT EXISTS retention_state (
+	id INTEGER PRIMARY KEY CHECK(id=1),
+	request_cutoff INTEGER NOT NULL,
+	time_cutoff INTEGER NOT NULL,
+	initial_complete INTEGER NOT NULL DEFAULT 0
+);
