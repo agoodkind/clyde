@@ -31,24 +31,19 @@ func (c *Client) CopySharedCheckpoints(sourceID string, targetID string) (int, e
 }
 
 func copyCheckpoints(store *checkpointStore, sourceID string, targetID string) (int, error) {
-	source := CollectionName(strings.TrimSpace(sourceID))
-	target := CollectionName(strings.TrimSpace(targetID))
-	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(targetID) == "" {
+	trimmedSourceID := strings.TrimSpace(sourceID)
+	trimmedTargetID := strings.TrimSpace(targetID)
+	if trimmedSourceID == "" || trimmedTargetID == "" {
 		return 0, errors.New("copy conversation fingerprint records: source and target collection ids are required")
 	}
+	source := CollectionName(trimmedSourceID)
+	target := CollectionName(trimmedTargetID)
 	if source == target {
 		return 0, fmt.Errorf("copy conversation fingerprint records: source and target are both %s", source)
 	}
 	copied, err := store.copyCollection(source, target)
 	if err != nil {
-		slog.Error("conversation.vectorsearch.checkpoint_copy_failed",
-			"concern", "conversation.semantic",
-			"component", "conversation",
-			"source", source,
-			"target", target,
-			"err", err,
-		)
-		return 0, fmt.Errorf("copy conversation fingerprint records from %s to %s: %w", source, target, err)
+		return 0, err
 	}
 	slog.Info("conversation.vectorsearch.checkpoint_copied",
 		"concern", "conversation.semantic",
@@ -60,10 +55,11 @@ func copyCheckpoints(store *checkpointStore, sourceID string, targetID string) (
 	return copied, nil
 }
 
-// copyCollection atomically writes each source record to the target and removes
-// target record files without a source record. It reads the target again and
-// fails unless its records exactly match the source. A missing source directory
-// counts as zero records. The method does not change the source directory.
+// copyCollection reads the source records, atomically writes their saved values
+// to the target, and removes target record files absent from the source.
+// It reads the target again and fails unless its records match the source
+// exactly. A missing source directory fails the copy before the target changes.
+// The method does not change the source directory.
 func (store *checkpointStore) copyCollection(source string, target string) (int, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -72,48 +68,70 @@ func (store *checkpointStore) copyCollection(source string, target string) (int,
 	}
 	sourceDir := filepath.Join(store.root, source)
 	targetDir := filepath.Join(store.root, target)
+	operation := "copy conversation fingerprint records from " + source + " to " + target
+	// readCheckpointDir and writeCheckpointFile log their own failures.
+	// copyCollection wraps those errors without logging them again and logs only
+	// failures that start in copyCollection.
 	sourceRecords, _, err := readCheckpointDir(sourceDir)
 	if errors.Is(err, os.ErrNotExist) {
-		slog.Warn("conversation.vectorsearch.checkpoint_source_missing",
+		missing := fmt.Errorf("%s: source checkpoint directory %s does not exist: %w", operation, sourceDir, err)
+		slog.Warn("conversation.vectorsearch.checkpoint_copy_failed",
 			"concern", "conversation.semantic",
 			"component", "conversation",
-			"path", sourceDir,
+			"err", missing,
 		)
-		sourceRecords = map[string]string{}
-		err = nil
+		return 0, missing
 	}
 	if err != nil {
-		return 0, fmt.Errorf("read source records: %w", err)
+		return 0, fmt.Errorf("%s: read source records: %w", operation, err)
 	}
 	ids := slices.Sorted(maps.Keys(sourceRecords))
 	keep := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		if err := writeCheckpointFile(targetDir, id, sourceRecords[id]); err != nil {
-			return 0, err
+			return 0, fmt.Errorf("%s: %w", operation, err)
 		}
 		keep[checkpointFileName(id)] = struct{}{}
 	}
 	if err := os.MkdirAll(targetDir, checkpointDirMode); err != nil {
-		return 0, fmt.Errorf("create checkpoint directory %s: %w", targetDir, err)
+		failure := fmt.Errorf("%s: create checkpoint directory %s: %w", operation, targetDir, err)
+		slog.Warn("conversation.vectorsearch.checkpoint_copy_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"err", failure,
+		)
+		return 0, failure
 	}
 	_, targetNames, err := readCheckpointDir(targetDir)
 	if err != nil {
-		return 0, fmt.Errorf("read target records: %w", err)
+		return 0, fmt.Errorf("%s: read target records: %w", operation, err)
 	}
 	for _, name := range targetNames {
 		if _, found := keep[name]; found {
 			continue
 		}
 		if err := os.Remove(filepath.Join(targetDir, name)); err != nil {
-			return 0, fmt.Errorf("remove target record %s: %w", name, err)
+			failure := fmt.Errorf("%s: remove target record %s: %w", operation, name, err)
+			slog.Warn("conversation.vectorsearch.checkpoint_copy_failed",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"err", failure,
+			)
+			return 0, failure
 		}
 	}
 	written, _, err := readCheckpointDir(targetDir)
 	if err != nil {
-		return 0, fmt.Errorf("read target records after the copy: %w", err)
+		return 0, fmt.Errorf("%s: read target records after the copy: %w", operation, err)
 	}
 	if !maps.Equal(written, sourceRecords) {
-		return 0, fmt.Errorf("target directory %s stores %d records after the copy, want the %d source records", targetDir, len(written), len(sourceRecords))
+		failure := fmt.Errorf("%s: target directory %s stores %d records after the copy, want the %d source records", operation, targetDir, len(written), len(sourceRecords))
+		slog.Warn("conversation.vectorsearch.checkpoint_copy_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"err", failure,
+		)
+		return 0, failure
 	}
 	store.loaded[target] = maps.Clone(sourceRecords)
 	return len(sourceRecords), nil

@@ -2,9 +2,8 @@ package daemon_test
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,7 +42,9 @@ func (roots checkpointsRoots) writeConfig(t *testing.T, ingestionEnabled bool) {
 	}
 }
 
-func (roots checkpointsRoots) writeRecord(t *testing.T, collectionID string, conversationID string, fingerprint string) string {
+// writeRecord writes a fingerprint record in the daemon's JSON format under
+// fileName in the collection's record directory in the temporary state directory.
+func (roots checkpointsRoots) writeRecord(t *testing.T, collectionID string, fileName string, conversationID string, fingerprint string) {
 	t.Helper()
 	directory := roots.checkpointDir(collectionID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -53,12 +54,36 @@ func (roots checkpointsRoots) writeRecord(t *testing.T, collectionID string, con
 	if err != nil {
 		t.Fatalf("encode record: %v", err)
 	}
-	sum := sha256.Sum256([]byte(conversationID))
-	name := hex.EncodeToString(sum[:])[:32] + ".json"
-	if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, fileName), content, 0o600); err != nil {
 		t.Fatalf("write record: %v", err)
 	}
-	return name
+}
+
+// records decodes every record file in the collection's record directory and
+// returns fingerprints by conversation ID.
+func (roots checkpointsRoots) records(t *testing.T, collectionID string) map[string]string {
+	t.Helper()
+	directory := roots.checkpointDir(collectionID)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read %s: %v", directory, err)
+	}
+	records := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		content, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if readErr != nil {
+			t.Fatalf("read %s: %v", entry.Name(), readErr)
+		}
+		var record struct {
+			ConversationID string `json:"conversation_id"`
+			Fingerprint    string `json:"fingerprint"`
+		}
+		if decodeErr := json.Unmarshal(content, &record); decodeErr != nil {
+			t.Fatalf("decode %s: %v", entry.Name(), decodeErr)
+		}
+		records[record.ConversationID] = record.Fingerprint
+	}
+	return records
 }
 
 func (roots checkpointsRoots) run(t *testing.T, binary string) (string, string, error) {
@@ -99,19 +124,18 @@ func buildCheckpointsCLI(t *testing.T) string {
 	return binary
 }
 
-// TestCopySharedCheckpointsOnlyCopiesSavedRecords runs the built clyde command
-// with temporary XDG directories. It checks that copy-shared --checkpoints-only
-// refuses to run with ingestion enabled and does not create the target directory.
-// With ingestion disabled, it checks that the target stores the source record
-// files with the same bytes.
+// TestCopySharedCheckpointsOnlyCopiesSavedRecords builds clyde and runs
+// copy-shared --checkpoints-only with temporary XDG directories. It checks that
+// the command refuses to run with ingestion enabled without creating the target
+// directory. With ingestion disabled, it checks the printed record count and
+// verifies that both collections store exactly the source records.
 func TestCopySharedCheckpointsOnlyCopiesSavedRecords(t *testing.T) {
 	binary := buildCheckpointsCLI(t)
 	home := t.TempDir()
 	roots := checkpointsRoots{home: home, config: filepath.Join(home, "config"), state: filepath.Join(home, "state")}
-	names := []string{
-		roots.writeRecord(t, checkpointsSourceID, "codex:one", "saved-one"),
-		roots.writeRecord(t, checkpointsSourceID, "codex:two", "saved-two"),
-	}
+	roots.writeRecord(t, checkpointsSourceID, "one.json", "codex:one", "saved-one")
+	roots.writeRecord(t, checkpointsSourceID, "two.json", "codex:two", "saved-two")
+	want := map[string]string{"codex:one": "saved-one", "codex:two": "saved-two"}
 
 	roots.writeConfig(t, true)
 	if stdout, stderr, err := roots.run(t, binary); err == nil {
@@ -129,17 +153,10 @@ func TestCopySharedCheckpointsOnlyCopiesSavedRecords(t *testing.T) {
 	if want := "Copied 2 conversation fingerprint records."; !strings.Contains(stdout, want) {
 		t.Fatalf("copy-shared printed %q; expected it to contain %q", stdout, want)
 	}
-	for _, name := range names {
-		source, readErr := os.ReadFile(filepath.Join(roots.checkpointDir(checkpointsSourceID), name))
-		if readErr != nil {
-			t.Fatalf("read source record %s: %v", name, readErr)
-		}
-		target, readErr := os.ReadFile(filepath.Join(roots.checkpointDir(checkpointsTargetID), name))
-		if readErr != nil {
-			t.Fatalf("read target record %s: %v", name, readErr)
-		}
-		if !bytes.Equal(source, target) {
-			t.Fatalf("target record %s is %q; expected the source bytes %q", name, target, source)
-		}
+	if got := roots.records(t, checkpointsTargetID); !maps.Equal(got, want) {
+		t.Fatalf("target stores records %v, want %v", got, want)
+	}
+	if got := roots.records(t, checkpointsSourceID); !maps.Equal(got, want) {
+		t.Fatalf("source stores records %v after the copy, want %v", got, want)
 	}
 }
