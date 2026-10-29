@@ -212,7 +212,7 @@ func checkDeletedSourceSearchable(t *testing.T, flags []string, source string) {
 	}
 	deltaDir := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(deletedSourceDeltaWorkspace, "/", "-"))
 	deltaBody := `{"type":"user","message":{"role":"user","content":"delta question 0: why does the listener rebind on reload"},"sessionId":"` + deletedSourceDeltaSession + `","cwd":"` + deletedSourceDeltaWorkspace + `","uuid":"05000000-0000-4000-8000-000000000000","timestamp":"2026-07-02T09:00:00Z"}` + "\n"
-	writeLocalProofFile(t, filepath.Join(deltaDir, deletedSourceDeltaSession+".jsonl"), deltaBody)
+	installLocalProofTranscript(t, filepath.Join(deltaDir, deletedSourceDeltaSession+".jsonl"), deltaBody)
 
 	waitForDeletedSourceDelta(t, first)
 	deletedIDs := []string{alphaID, archivedID}

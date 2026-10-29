@@ -238,7 +238,7 @@ func writeLocalProofHome(t *testing.T) string {
 			}
 		}
 		projectDir := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(claudeSession.workspace, "/", "-"))
-		writeLocalProofFile(t, filepath.Join(projectDir, claudeSession.session+".jsonl"), body.String())
+		installLocalProofTranscript(t, filepath.Join(projectDir, claudeSession.session+".jsonl"), body.String())
 	}
 	rollouts := []struct {
 		id        string
@@ -263,7 +263,7 @@ func writeLocalProofHome(t *testing.T) string {
 			}
 		}
 		path := filepath.Join(home, ".codex", rollout.directory, "rollout-2026-07-01T11-00-00-"+rollout.id+".jsonl")
-		writeLocalProofFile(t, path, body.String())
+		installLocalProofTranscript(t, path, body.String())
 	}
 	return home
 }
@@ -273,6 +273,26 @@ func localProofMessageText(topic string, role string, turn int) string {
 		return fmt.Sprintf("%s question %d: why does the listener rebind on reload", topic, turn)
 	}
 	return fmt.Sprintf("%s answer %d: the watcher classifies the config change before the daemon rebinds", topic, turn)
+}
+
+// localProofTranscriptAge sets transcript modification times before the current time, beyond the one-minute growth window that the semantic sync worker waits to expire before delivering a conversation.
+const localProofTranscriptAge = 10 * time.Minute
+
+// installLocalProofTranscript writes content to a staging file, sets its modification time localProofTranscriptAge in the past, and renames it to path so a daemon scan never reads it with a current modification time.
+func installLocalProofTranscript(t *testing.T, path string, content string) {
+	t.Helper()
+	staged := filepath.Join(t.TempDir(), filepath.Base(path))
+	writeLocalProofFile(t, staged, content)
+	modified := time.Now().Add(-localProofTranscriptAge)
+	if err := os.Chtimes(staged, modified, modified); err != nil {
+		t.Fatalf("set transcript modification time for %s: %v", staged, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create transcript directory %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.Rename(staged, path); err != nil {
+		t.Fatalf("rename staged transcript %s to %s: %v", staged, path, err)
+	}
 }
 
 func writeLocalProofFile(t *testing.T, path string, content string) {
