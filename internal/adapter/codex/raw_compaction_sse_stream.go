@@ -339,9 +339,7 @@ func readRawCompactionSSEFrame(reader *bufio.Reader, maxBytes int) ([]byte, erro
 }
 
 // appendRawCompactionSSERun appends buffered bytes through the next CR or LF,
-// up to limit bytes, without waiting for upstream data. It returns the last
-// appended byte, or last if the reader buffers no bytes. It returns a wrapped
-// error only if Discard fails.
+// up to limit bytes, without waiting for upstream data.
 func appendRawCompactionSSERun(reader *bufio.Reader, frame *bytes.Buffer, limit int, last byte) (byte, error) {
 	buffered, _ := reader.Peek(reader.Buffered())
 	if len(buffered) > limit {
