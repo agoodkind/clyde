@@ -52,13 +52,12 @@ func (p *copySharedProgress) setRound(round int) {
 // callback returns the function that copy and verification call after each page.
 func (p *copySharedProgress) callback(ctx context.Context) vectorsearch.SharedCopyProgressFunc {
 	return func(progress vectorsearch.SharedCopyProgress) {
-		p.observe(ctx, progress)
+		p.observe(ctx, progress, clock.Now())
 	}
 }
 
 // observe handles one progress report.
-func (p *copySharedProgress) observe(ctx context.Context, progress vectorsearch.SharedCopyProgress) {
-	now := clock.Now()
+func (p *copySharedProgress) observe(ctx context.Context, progress vectorsearch.SharedCopyProgress, now time.Time) {
 	if progress.Phase != p.phase.Phase {
 		p.phaseStart = now
 		p.lastReport = time.Time{}

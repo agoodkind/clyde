@@ -26,6 +26,9 @@ const (
 	progressTargetCollectionID = "integration-progress-shared"
 	progressConversations      = 4
 	progressRepairRounds       = 3
+	wantRateUnknown            = "rate unknown"
+	wantEstimateUnknown        = "time remaining unknown"
+	wantFinished               = "complete"
 )
 
 // progressLinePattern matches one progress line that copy-shared prints.
@@ -163,11 +166,11 @@ func TestCopySharedPrintsPhaseProgress(t *testing.T) {
 			t.Fatalf("phase %s printed %d progress lines; expected a start line and a final line:\n%s", expected.phase, len(lines), stderr.String())
 		}
 		first := lines[0]
-		if first.done != 0 || first.total != expected.total || first.round != expected.round || first.rate != copySharedRateUnknown || first.remaining != copySharedEstimateUnknown {
+		if first.done != 0 || first.total != expected.total || first.round != expected.round || first.rate != wantRateUnknown || first.remaining != wantEstimateUnknown {
 			t.Fatalf("phase %s first line is %q; expected 0 of %d rows in round %d with an unknown rate and estimate", expected.phase, first.text, expected.total, expected.round)
 		}
 		last := lines[len(lines)-1]
-		if last.done != expected.total || last.total != expected.total || last.round != expected.round || last.remaining != copySharedFinished {
+		if last.done != expected.total || last.total != expected.total || last.round != expected.round || last.remaining != wantFinished {
 			t.Fatalf("phase %s last line is %q; expected %d of %d rows in round %d with the finished text", expected.phase, last.text, expected.total, expected.total, expected.round)
 		}
 	}
