@@ -24,23 +24,28 @@ type copySharedOptions struct {
 	ToCollectionID   string
 	VerifyOnly       bool
 	Resume           bool
+	CheckpointsOnly  bool
 	RepairRounds     int
 }
 
 func newCopySharedIndexCmd(f *cli.Factory) *cobra.Command {
-	options := copySharedOptions{FromCollectionID: "", ToCollectionID: "", VerifyOnly: false, Resume: false, RepairRounds: defaultCopySharedRepairRounds}
+	options := copySharedOptions{FromCollectionID: "", ToCollectionID: "", VerifyOnly: false, Resume: false, CheckpointsOnly: false, RepairRounds: defaultCopySharedRepairRounds}
 	cmd := &cobra.Command{
 		Use:   "copy-shared",
 		Short: "Copy a conversation collection into the shared vector layout and verify it",
 		Long: "Copy every row from the single-collection source specified by --from into the shared vector layout specified by --to without " +
 			"embedding. The command preserves each row's ID, every column, the content hash, the embedding model, and the exact vector bytes. " +
-			"Before copying, the command gives the target vector collection the source dense index definition and enables mmap on both target " +
-			"collections. After copying, each repair round reads both collections page by page, rewrites every missing or different row from " +
-			"the source, removes every target row the source lacks, removes every vector without a row reference, and compares the collections " +
-			"row by row. The command fails unless every row matches within --repair-rounds rounds. It never changes or deletes the source. The " +
-			"command refuses to run while conversation.semantic.ingestion_enabled is true because rows added to or deleted from the source " +
-			"during the copy appear as differences. With --resume, the command copies only source rows with a primary key greater than the " +
-			"largest target primary key. Row IDs are content hashes, and the repair rounds copy source rows that sort below that key.",
+			"Before copying, it applies the source dense index definition to the target vector collection and enables mmap on both target " +
+			"collections. After copying, each repair round reads both collections page by page, rewrites missing or different rows from the " +
+			"source, removes target rows that the source lacks, removes vectors without a row reference, and compares the collections row by " +
+			"row. The command fails unless every row matches within --repair-rounds rounds. It never changes or deletes the source. It refuses " +
+			"to run while conversation.semantic.ingestion_enabled is true because rows added to or deleted from the source during the copy " +
+			"appear as differences. With --resume, it copies only source rows with a primary key greater than the largest target primary key. " +
+			"Row IDs are content hashes, and the repair rounds copy source rows that sort below that key. After every row matches, the command " +
+			"copies the source's saved conversation fingerprint records to the target. On the next pass, the target requests conversations " +
+			"without a saved record and conversations with a current fingerprint that differs from the saved value. Use --checkpoints-only " +
+			"after an earlier copy-shared run reported every row equal to copy only the fingerprint records without reading Milvus. This option " +
+			"refuses to run while ingestion is enabled and cannot be combined with --resume or --verify-only.",
 		Example: "clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared\n" +
 			"clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared --resume\n" +
 			"clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared --verify-only",
@@ -53,6 +58,7 @@ func newCopySharedIndexCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&options.ToCollectionID, "to", "", "Collection id of the shared vector target.")
 	cmd.Flags().BoolVar(&options.VerifyOnly, "verify-only", false, "Compare and repair without the full copy.")
 	cmd.Flags().BoolVar(&options.Resume, "resume", false, "Copy only the source rows after the largest primary key the target stores.")
+	cmd.Flags().BoolVar(&options.CheckpointsOnly, "checkpoints-only", false, "Copy only saved conversation fingerprint records without reading Milvus after an earlier copy-shared run reported every row equal.")
 	cmd.Flags().IntVar(&options.RepairRounds, "repair-rounds", defaultCopySharedRepairRounds, "Set the maximum number of repair rounds, each of which repairs differences and then compares the collections.")
 	_ = cmd.MarkFlagRequired("from")
 	_ = cmd.MarkFlagRequired("to")
@@ -78,6 +84,16 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 	if options.Resume && options.VerifyOnly {
 		return errors.New("copy shared conversation collection: --resume and --verify-only cannot be combined")
 	}
+	if options.CheckpointsOnly {
+		if options.Resume || options.VerifyOnly {
+			return errors.New("copy shared conversation collection: --checkpoints-only cannot be combined with --resume or --verify-only")
+		}
+		records, copyErr := vectorsearch.CopyConversationCheckpoints(daemonsvc.ConversationCheckpointDir(), options.FromCollectionID, options.ToCollectionID)
+		if copyErr != nil {
+			return fmt.Errorf("copy shared conversation collection: %w", copyErr)
+		}
+		return writeCopySharedResult(ctx, f, fmt.Sprintf("Copied %d conversation fingerprint records.\n", records))
+	}
 	semanticCfg.MilvusLayout = config.ConversationSemanticMilvusLayoutShared
 	client, err := daemonsvc.OpenConversationSearchClient(ctx, semanticCfg)
 	if err != nil {
@@ -100,11 +116,19 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 	}
 	slog.InfoContext(ctx, "cli.daemon.copy_shared.equal", "concern", "cli.daemon", "component", "cli",
 		"rows", report.SourceRows, "vectors", report.TargetVectors)
-	summary := fmt.Sprintf("Verified %d source rows: the shared copy stores %d rows and %d distinct vectors, and every row matches.\n",
-		report.SourceRows, report.TargetRows, report.TargetVectors)
+	records, err := client.CopySharedCheckpoints(options.FromCollectionID, options.ToCollectionID)
+	if err != nil {
+		return fmt.Errorf("copy shared conversation collection: %w", err)
+	}
+	summary := fmt.Sprintf("Verified %d source rows: the shared copy stores %d rows and %d distinct vectors, and every row matches. Copied %d conversation fingerprint records.\n",
+		report.SourceRows, report.TargetRows, report.TargetVectors, records)
 	if copied >= 0 {
 		summary = fmt.Sprintf("Copied %d rows. ", copied) + summary
 	}
+	return writeCopySharedResult(ctx, f, summary)
+}
+
+func writeCopySharedResult(ctx context.Context, f *cli.Factory, summary string) error {
 	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, summary); writeErr != nil {
 		slog.ErrorContext(ctx, "cli.daemon.copy_shared.write_failed", "concern", "cli.daemon", "component", "cli", "err", writeErr)
 		return fmt.Errorf("write copy result: %w", writeErr)
