@@ -35,8 +35,8 @@ func TestFormatSearchConversationsResultUsesSemanticSearchLayout(t *testing.T) {
 	}
 
 	out := formatSearchConversationsResult(result, "daemon reload")
-	want := "🔍 Found 1 conversation result for query: \"daemon reload\" in collection 'clyde-conversations'\n\n" +
-		"1. Conversation message [clyde-conversations]\n" +
+	want := "Found 1 conversation result for query: \"daemon reload\"\n\n" +
+		"1. Conversation message\n" +
 		"   Conversation: claude:abc\n" +
 		"   Message index: 82\n" +
 		"   Role: user\n" +
@@ -82,7 +82,7 @@ func TestFormatSearchConversationsResultUsesFenceLongerThanSnippet(t *testing.T)
 func TestFormatSearchConversationsResultEmpty(t *testing.T) {
 	t.Parallel()
 	out := formatSearchConversationsResult(conv.SearchConversationsResult{}, "nothing here")
-	if out != "🔍 No conversation results found for query: \"nothing here\" in collection 'clyde-conversations'\n" {
+	if out != "No conversation results found for query: \"nothing here\"\n" {
 		t.Fatalf("empty render = %q", out)
 	}
 }
@@ -110,8 +110,8 @@ func TestFormatSearchConversationsResultShowsOffsetHint(t *testing.T) {
 	}
 
 	out := formatSearchConversationsResult(result, "auth")
-	want := "🔍 Found 1 conversation result for query: \"auth\" in collection 'clyde-conversations'\n\n" +
-		"1. Conversation message [clyde-conversations]\n" +
+	want := "Found 1 conversation result for query: \"auth\"\n\n" +
+		"1. Conversation message\n" +
 		"   Conversation: claude:abc\n" +
 		"   Message index: 0\n" +
 		"   Role: user\n" +

@@ -536,19 +536,13 @@ func formatListResult(result conv.ListResult) string {
 	return out.String()
 }
 
-const conversationSearchCollection = "clyde-conversations"
-
-// formatSearchConversationsResult renders the lm-semantic-search conversation
-// layout with a human timestamp. The full structured data stays available
-// through --output-format json.
 func formatSearchConversationsResult(result conv.SearchConversationsResult, query string) string {
 	var out strings.Builder
 	if len(result.Matches) == 0 {
 		fmt.Fprintf(
 			&out,
-			"🔍 No conversation results found for query: %q in collection '%s'\n",
+			"No conversation results found for query: %q\n",
 			query,
-			conversationSearchCollection,
 		)
 		return out.String()
 	}
@@ -558,18 +552,17 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 	}
 	fmt.Fprintf(
 		&out,
-		"🔍 Found %d conversation %s for query: %q in collection '%s'\n\n",
+		"Found %d conversation %s for query: %q\n\n",
 		len(result.Matches),
 		resultLabel,
 		query,
-		conversationSearchCollection,
 	)
 	for index, match := range result.Matches {
 		role := match.Role
 		if role == "" {
 			role = "unknown"
 		}
-		fmt.Fprintf(&out, "%d. Conversation message [%s]\n", index+1, conversationSearchCollection)
+		fmt.Fprintf(&out, "%d. Conversation message\n", index+1)
 		fmt.Fprintf(&out, "   Conversation: %s\n", match.Record.ID)
 		fmt.Fprintf(&out, "   Message index: %d\n", match.MessageIndex)
 		fmt.Fprintf(&out, "   Role: %s\n", role)
