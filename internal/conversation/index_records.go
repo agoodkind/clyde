@@ -30,7 +30,6 @@ func (idx *Index) visibleScannedRecords() []Record {
 	return idx.visibleFrom(idx.records)
 }
 
-// visibleFrom applies the subagent setting to records.
 func (idx *Index) visibleFrom(records []Record) []Record {
 	if idx.includeSubagents {
 		return cloneRecords(records)

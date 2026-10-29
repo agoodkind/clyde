@@ -13,6 +13,7 @@ import (
 
 func TestIndexRefreshReusesParentPrefixAndUpdatesResumeMetadata(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	resumerRelative := "proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl"
 	root := writeCursorProject(t, map[string]string{
 		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("parent"),
@@ -89,8 +90,10 @@ func TestIndexRefreshReusesParentPrefixAndUpdatesResumeMetadata(t *testing.T) {
 	if got := parent(); got != cursorParentConversationID {
 		t.Fatalf("removed resume parent = %s", got)
 	}
-	if _, ok := index.RecordByID("cursor:" + cursorLooseConversationID); ok {
-		t.Fatal("removed conversation remained indexed")
+	// The index serves the removed conversation from its retained record with the last scanned title.
+	retained, ok := index.RecordByID("cursor:" + cursorLooseConversationID)
+	if !ok || retained.Title != "first title" {
+		t.Fatalf("removed conversation is not served from its retained record with the last scanned title: found=%t record=%+v", ok, retained)
 	}
 }
 

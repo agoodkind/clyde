@@ -15,6 +15,7 @@ func TestIndexedExportKeepsRootAndSubagentSeparate(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("COPILOT_HOME", root)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	sessionDir := filepath.Join(root, "session-state", rootSessionID)
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)

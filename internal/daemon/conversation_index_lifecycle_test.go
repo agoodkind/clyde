@@ -55,6 +55,7 @@ func (parser *cachedBoundaryParser) Stream(string, conversation.LoadOptions) ite
 
 func TestCachedRequestHookAndExportTranscriptLocalSkipProviderDiscovery(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	discoveries := &atomic.Int64{}
 	requestID := "0e3f0000-0000-4000-8000-000000000000"
 	parser := &cachedBoundaryParser{
@@ -142,6 +143,7 @@ func (*lifecycleConversationParser) Stream(string, conversation.LoadOptions) ite
 
 func TestConversationIndexJoinsRefreshDuringLifecycleDrain(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	parser := &lifecycleConversationParser{started: make(chan struct{}), stopped: make(chan struct{})}
 	registry := conversation.NewRegistry()
 	registry.Register(parser)
