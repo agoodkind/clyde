@@ -5,7 +5,6 @@ package daemon
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -22,6 +21,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/conversation/vectorsearch"
+	"goodkind.io/clyde/internal/conversation/vectorsearch/checkpointtest"
 	"goodkind.io/clyde/internal/conversation/vectorsearch/milvustest"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
 )
@@ -196,10 +196,10 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 	if !strings.Contains(output, wantSummaryRecords) {
 		t.Fatalf("copy-shared --verify-only printed %q; expected it to contain %q", output, wantSummaryRecords)
 	}
-	if got := savedRecords(t, reconcileTargetCollectionID); !maps.Equal(got, wantRecords) {
+	if got := checkpointtest.Records(t, recordDir(reconcileTargetCollectionID)); !maps.Equal(got, wantRecords) {
 		t.Fatalf("target stores %d fingerprint records; expected the %d source records %v", len(got), len(wantRecords), wantRecords)
 	}
-	if got := savedRecords(t, reconcileSourceCollectionID); !maps.Equal(got, wantRecords) {
+	if got := checkpointtest.Records(t, recordDir(reconcileSourceCollectionID)); !maps.Equal(got, wantRecords) {
 		t.Fatalf("source stores %d fingerprint records after the copy; expected %d", len(got), len(wantRecords))
 	}
 }
@@ -210,49 +210,17 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 // ID.
 func writeSourceRecords(t *testing.T, collectionID string, manifest []semsearch.Fingerprint) map[string]string {
 	t.Helper()
-	directory := filepath.Join(daemonsvc.ConversationCheckpointDir(), vectorsearch.CollectionName(collectionID))
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatalf("create %s: %v", directory, err)
-	}
+	directory := recordDir(collectionID)
 	records := make(map[string]string, len(manifest))
 	for position, fingerprint := range manifest {
-		content, err := json.Marshal(map[string]string{"conversation_id": fingerprint.ConversationID, "fingerprint": fingerprint.Value})
-		if err != nil {
-			t.Fatalf("encode record: %v", err)
-		}
-		name := fmt.Sprintf("record-%03d.json", position)
-		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
-			t.Fatalf("write record: %v", err)
-		}
+		checkpointtest.WriteRecord(t, directory, fmt.Sprintf("record-%03d.json", position), fingerprint.ConversationID, fingerprint.Value)
 		records[fingerprint.ConversationID] = fingerprint.Value
 	}
 	return records
 }
 
-// savedRecords decodes every record file in the collection's record directory
-// under the daemon checkpoint directory and returns fingerprints by conversation
-// ID.
-func savedRecords(t *testing.T, collectionID string) map[string]string {
-	t.Helper()
-	directory := filepath.Join(daemonsvc.ConversationCheckpointDir(), vectorsearch.CollectionName(collectionID))
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		t.Fatalf("read %s: %v", directory, err)
-	}
-	records := make(map[string]string, len(entries))
-	for _, entry := range entries {
-		content, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
-		if readErr != nil {
-			t.Fatalf("read %s: %v", entry.Name(), readErr)
-		}
-		var record struct {
-			ConversationID string `json:"conversation_id"`
-			Fingerprint    string `json:"fingerprint"`
-		}
-		if decodeErr := json.Unmarshal(content, &record); decodeErr != nil {
-			t.Fatalf("decode %s: %v", entry.Name(), decodeErr)
-		}
-		records[record.ConversationID] = record.Fingerprint
-	}
-	return records
+// recordDir returns the record directory for a collection under the daemon
+// checkpoint directory.
+func recordDir(collectionID string) string {
+	return filepath.Join(daemonsvc.ConversationCheckpointDir(), vectorsearch.CollectionName(collectionID))
 }
