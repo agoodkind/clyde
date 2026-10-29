@@ -13,16 +13,17 @@ func TestListUsesCacheAndDoesNotForceDebouncedScan(t *testing.T) {
 
 	scanCalls := 0
 	idx := &Index{
-		mu:          sync.Mutex{},
-		registry:    NewRegistry(),
-		records:     nil,
-		prevRecords: nil,
-		prevStamps:  nil,
-		loaded:      false,
-		refreshing:  false,
-		lastRefresh: time.Now(),
-		cachePath:   filepath.Join(t.TempDir(), cacheFilename),
-		debounce:    time.Hour,
+		mu:           sync.Mutex{},
+		registry:     NewRegistry(),
+		records:      nil,
+		prevRecords:  nil,
+		prevStamps:   nil,
+		loaded:       false,
+		refreshing:   false,
+		lastRefresh:  time.Now(),
+		cachePath:    filepath.Join(t.TempDir(), cacheFilename),
+		retainedPath: filepath.Join(t.TempDir(), retainedFilename),
+		debounce:     time.Hour,
 		scanProvider: func(context.Context, *Registry, scanCache) (scanResult, error) {
 			scanCalls++
 			return scanResult{

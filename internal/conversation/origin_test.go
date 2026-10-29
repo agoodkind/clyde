@@ -29,6 +29,7 @@ func staleIndexServingCache(t *testing.T, cacheBody string, includeSubagents boo
 		refreshing:       false,
 		lastRefresh:      time.Now(),
 		cachePath:        cachePath,
+		retainedPath:     filepath.Join(filepath.Dir(cachePath), retainedFilename),
 		debounce:         time.Hour,
 		scanProvider: func(context.Context, *Registry, scanCache) (scanResult, error) {
 			t.Error("scan ran; the test asserts what the cached records decode to")

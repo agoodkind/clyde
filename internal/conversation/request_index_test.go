@@ -35,6 +35,7 @@ func TestRefreshWaitsForTheRefreshAlreadyInFlight(t *testing.T) {
 		refreshRun:       nil,
 		lastRefresh:      time.Time{},
 		cachePath:        filepath.Join(t.TempDir(), cacheFilename),
+		retainedPath:     filepath.Join(t.TempDir(), retainedFilename),
 		debounce:         time.Hour,
 		scanProvider: func(context.Context, *Registry, scanCache) (scanResult, error) {
 			startOnce.Do(func() { close(started) })
@@ -116,6 +117,7 @@ func testIndex(
 		refreshRun:       nil,
 		lastRefresh:      time.Time{},
 		cachePath:        filepath.Join(t.TempDir(), cacheFilename),
+		retainedPath:     filepath.Join(t.TempDir(), retainedFilename),
 		debounce:         time.Hour,
 		scanProvider:     scan,
 	}

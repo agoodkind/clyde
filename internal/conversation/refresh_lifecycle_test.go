@@ -108,6 +108,7 @@ func TestRefreshPersistsMetadataProgressAndRemovals(t *testing.T) {
 	}
 	reloaded := testIndex(t, scan, parser)
 	reloaded.cachePath = idx.cachePath
+	reloaded.retainedPath = idx.retainedPath
 	if err := reloaded.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +216,7 @@ func TestIndexStartWaitsUntilCompletedCacheIsDue(t *testing.T) {
 			record:      installedRecord,
 		})
 		restarted.cachePath = installed.cachePath
+		restarted.retainedPath = installed.retainedPath
 		restarted.debounce = 0
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan struct{})
@@ -396,6 +398,7 @@ func TestCachedRequestHookAndTerminalExportSkipProviderDiscovery(t *testing.T) {
 	}
 	idx := testIndex(t, scan, parser)
 	idx.cachePath = installed.cachePath
+	idx.retainedPath = installed.retainedPath
 
 	resolved, err := idx.Resolve(t.Context(), record.LatestRequestID)
 	if err != nil || resolved.ID != record.ID {
