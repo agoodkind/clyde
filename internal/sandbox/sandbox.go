@@ -74,7 +74,7 @@ func NewRoots() (Roots, error) {
 	return roots, nil
 }
 
-// ExistingRoots returns the directories of an existing sandbox root under /tmp with the sandbox prefix. It creates missing subdirectories.
+// ExistingRoots checks that base is an existing directory under a temp root and has the sandbox prefix. It creates missing state, config, cache, and run subdirectories and returns the directory set.
 func ExistingRoots(base string) (Roots, error) {
 	clean := filepath.Clean(base)
 	if !UnderTempRoot(clean) || !strings.HasPrefix(filepath.Base(clean), RootPattern) {

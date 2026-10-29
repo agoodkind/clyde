@@ -581,7 +581,7 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshRe
 	previous := idx.records
 	retainedBefore := idx.retained
 	idx.mu.Unlock()
-	// The refresh saves retained records before writing the cache. After the save succeeds, a later failure leaves every deleted conversation retained.
+	// Save retained records before writing the cache. If the cache write fails, refresh returns without installing the new records in memory, and the retained file lists every deleted conversation for the next load.
 	retained, newlyRetained, retainedChanged := retainDropped(previous, result.records, retainedBefore)
 	if retainedChanged {
 		if err := writeRetained(idx.retainedPath, retained); err != nil {

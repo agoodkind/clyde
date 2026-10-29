@@ -140,7 +140,6 @@ func (local sandboxLocalOptions) configLines() (string, error) {
 	return lines + fmt.Sprintf("local_root = %q\n", root), nil
 }
 
-// sandboxRootOptions selects a new or existing sandbox root and whether to keep it on exit.
 type sandboxRootOptions struct {
 	keep bool
 	root string

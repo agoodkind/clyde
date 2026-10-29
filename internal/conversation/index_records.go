@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// visibleRecords returns sorted scanned records and retained records of conversations with deleted transcripts for listing, paging, lookup, and search scoping. It omits retained records with a matching scanned ID and applies the subagent visibility setting. Callers must lock idx.mu.
+// visibleRecords returns sorted scanned records and retained records for deleted transcripts, omitting retained records with matching scanned IDs and applying the subagent visibility setting. Callers must lock idx.mu.
 func (idx *Index) visibleRecords() []Record {
 	if len(idx.retained) == 0 {
 		return idx.visibleFrom(idx.records)

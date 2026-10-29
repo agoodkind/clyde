@@ -25,7 +25,6 @@ func RetainedPath() string {
 	return filepath.Join(config.DefaultStateDir(), retainedDirName, retainedFilename)
 }
 
-// retainedFile represents the file's format version and retained records.
 type retainedFile struct {
 	Version int      `json:"version"`
 	Records []Record `json:"records"`
@@ -54,7 +53,6 @@ func readRetained(path string) ([]Record, error) {
 	return file.Records, nil
 }
 
-// writeRetained writes records to path using a temporary file and a rename. It logs the outcome.
 func writeRetained(path string, records []Record) (failure error) {
 	defer func() {
 		if failure != nil {

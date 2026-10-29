@@ -1,4 +1,4 @@
-// Package xdgtest directs a test binary's Clyde state and cache directories to a temporary root, preventing tests from reading or writing the operator's live state or cache.
+// Package xdgtest sets XDG_STATE_HOME and XDG_CACHE_HOME for the test process to a temporary root. All packages in the process that use those variables read and write under that root instead of the operator's state or cache.
 package xdgtest
 
 import (
