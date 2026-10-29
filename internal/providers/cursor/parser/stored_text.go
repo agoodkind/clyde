@@ -7,8 +7,7 @@ import (
 
 var _ conversation.StoredTextNormalizer = (*Parser)(nil)
 
-// NormalizeStoredText removes Cursor user and assistant envelopes from stored
-// row text using the same rules as the parser.
+// NormalizeStoredText removes Cursor user and assistant envelopes from stored row text using the same rules as the parser.
 func (*Parser) NormalizeStoredText(role string, text string) string {
 	switch role {
 	case cursorjsonl.RoleUser:
