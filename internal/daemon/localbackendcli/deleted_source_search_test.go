@@ -43,7 +43,6 @@ func requireRetainedRecords(t *testing.T, path string, conversationIDs []string)
 		t.Fatalf("cannot read retained records file %s: %v", path, err)
 	}
 	var file struct {
-		Version int `json:"version"`
 		Records []struct {
 			ID string `json:"id"`
 		} `json:"records"`

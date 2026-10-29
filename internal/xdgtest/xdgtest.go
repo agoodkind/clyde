@@ -15,7 +15,6 @@ const (
 	goBuildCacheDir = "go-build"
 )
 
-// isolatedDirs maps each environment variable to its subdirectory under the temporary root.
 var isolatedDirs = map[string]string{
 	"XDG_STATE_HOME": "state",
 	"XDG_CACHE_HOME": "cache",

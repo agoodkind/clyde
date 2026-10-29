@@ -91,7 +91,7 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().BoolVar(&searchEnabled, "search-enabled", false, "answer conversation searches from the semantic search engine")
 	cmd.Flags().BoolVar(&local.enabled, "local", false, "use the local backend instead of Milvus")
 	cmd.Flags().StringVar(&local.root, "local-root", "", "store the local index in this temp directory, which a later sandbox run can reuse")
-	cmd.Flags().StringVar(&semanticSettings, "semantic-settings", "", "append toml keys from a file to the conversation semantic settings")
+	cmd.Flags().StringVar(&semanticSettings, "semantic-settings", "", "append TOML keys from a file to the conversation semantic settings")
 	return cmd
 }
 
