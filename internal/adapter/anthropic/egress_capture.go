@@ -36,13 +36,10 @@ type egressExchange struct {
 	started    time.Time
 }
 
-// attachEgressObservers tees the streamed response body into the SQLite capture
-// store so the outbound /v1/messages exchange lands in capture.db with its
-// request body and its response body up to captureStoreBodyCap. With no capture
-// store configured, resp.Body is left untouched. Bodies are never written to a
-// log.
+// attachEgressObservers buffers the streamed response up to captureStoreBodyCap
+// while diagnostic recording is active. It does not write bodies to logs.
 func (c *Client) attachEgressObservers(ctx context.Context, resp *http.Response, base responseEvent, ex egressExchange) {
-	if c.cfg.CaptureStore == nil {
+	if !c.cfg.CaptureStore.RecordingEnabled() {
 		return
 	}
 	respHeaders := resp.Header.Clone()
@@ -60,7 +57,7 @@ func (c *Client) attachEgressObservers(ctx context.Context, resp *http.Response,
 // is asynchronous and non-blocking.
 func (c *Client) recordEgress(ctx context.Context, ex egressExchange, status int, respHeaders http.Header, respBody []byte) {
 	store := c.cfg.CaptureStore
-	if store == nil {
+	if !store.RecordingEnabled() {
 		return
 	}
 	store.RecordExchange(correlation.FromContext(ctx), capture.Exchange{

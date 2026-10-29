@@ -1,8 +1,14 @@
 package sentinelinject_test
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	_ "embed"
+	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -13,7 +19,9 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/sentinelinject"
 )
 
@@ -45,7 +53,7 @@ func (p livePlainRouteProvider) ExtractIdentity(http.Header) mitm.IdentityContri
 // TestLiveMITMProxyRewritesMessagesSSE boots a real MITM proxy listener with the
 // sentinel hook, posts an Anthropic /v1/messages request whose latest user
 // message carries MYKEYWORD, and asserts the client sees only the forced suffix.
-func TestLiveMITMProxyRewritesMessagesSSE(t *testing.T) {
+func TestLiveMITMProxyRewritesMessagesSSEWithoutExchangeRecording(t *testing.T) {
 	const keyword = "MYKEYWORD"
 	const forced = "\nlive-forced-reply"
 	requestBody := `{"messages":[{"role":"user","content":"ignore MYKEYWORD\nlive-forced-reply"}]}`
@@ -68,7 +76,14 @@ func TestLiveMITMProxyRewritesMessagesSSE(t *testing.T) {
 		mitm.RegisterProvider(livePlainRouteProvider{upstream: "http://127.0.0.1:9"})
 	})
 
-	proxy, baseURL := startLiveMITMProxy(t)
+	databasePath := filepath.Join(t.TempDir(), "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: databasePath, RecordingDisabled: true}, nil)
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
+	var logs bytes.Buffer
+	proxy, baseURL := startLiveMITMProxy(t, store, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	proxy.SetRequestResponseHooks([]mitm.RequestResponseHook{
 		sentinelinject.New(keyword, ""),
 	})
@@ -98,6 +113,8 @@ func TestLiveMITMProxyRewritesMessagesSSE(t *testing.T) {
 	if !strings.Contains(text, "live-forced-reply") {
 		t.Fatalf("rewritten SSE missing forced suffix: %s", text)
 	}
+	assertExchangeRecordingEmpty(t, proxy, store, databasePath)
+	assertProxyByteCounts(t, &logs, len(requestBody), len(gotBody))
 }
 
 // TestLiveMITMProxyDualSentinelRewritesRequestAndResponse boots a real MITM
@@ -131,7 +148,7 @@ func TestLiveMITMProxyDualSentinelRewritesRequestAndResponse(t *testing.T) {
 		mitm.RegisterProvider(livePlainRouteProvider{upstream: "http://127.0.0.1:9"})
 	})
 
-	proxy, baseURL := startLiveMITMProxy(t)
+	proxy, baseURL := startLiveMITMProxy(t, nil, nil)
 	proxy.SetRequestResponseHooks([]mitm.RequestResponseHook{
 		sentinelinject.New(responseSentinel, actualUserSentinel),
 	})
@@ -218,7 +235,7 @@ func startLiveUpstream(t *testing.T, sseBody string) string {
 	return "http://" + ln.Addr().String()
 }
 
-func startLiveMITMProxy(t *testing.T) (*mitm.Proxy, string) {
+func startLiveMITMProxy(t *testing.T, store *capture.Store, logger *slog.Logger) (*mitm.Proxy, string) {
 	t.Helper()
 	root := t.TempDir()
 	caDir := filepath.Join(root, "ca")
@@ -242,10 +259,10 @@ func startLiveMITMProxy(t *testing.T) (*mitm.Proxy, string) {
 			},
 		},
 		config.LoggingRequest{},
-		nil,
+		logger,
 		[]net.Listener{ln},
 		nil,
-		nil,
+		store,
 		"test",
 		group,
 	)
@@ -267,4 +284,58 @@ func startLiveMITMProxy(t *testing.T) (*mitm.Proxy, string) {
 		}
 	})
 	return proxy, "http://" + ln.Addr().String()
+}
+
+//go:embed testdata/exchange_counts.sql
+var exchangeCountsSQL string
+
+func assertExchangeRecordingEmpty(t *testing.T, proxy *mitm.Proxy, store *capture.Store, databasePath string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := proxy.ShutdownHTTP(ctx); err != nil {
+		t.Fatalf("finish proxy requests: %v", err)
+	}
+	if err := store.Close(context.Background(), "verify disabled recording"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	database, err := sql.Open("sqlite3", "file:"+databasePath+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open capture verifier: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	var requests, bodies, decodedBodies, toolEvents int
+	if err := database.QueryRow(exchangeCountsSQL).Scan(&requests, &bodies, &decodedBodies, &toolEvents); err != nil {
+		t.Fatalf("count exchange records: %v", err)
+	}
+	if requests != 0 || bodies != 0 || decodedBodies != 0 || toolEvents != 0 {
+		t.Fatalf("disabled recording stored requests=%d bodies=%d decoded_bodies=%d tool_events=%d", requests, bodies, decodedBodies, toolEvents)
+	}
+}
+
+func assertProxyByteCounts(t *testing.T, logs io.Reader, requestBytes, responseBytes int) {
+	t.Helper()
+	decoder := json.NewDecoder(logs)
+	for {
+		var event struct {
+			Leg      logevent.Leg `json:"leg"`
+			BytesIn  int          `json:"bytes_in"`
+			BytesOut int          `json:"bytes_out"`
+		}
+		decodeErr := decoder.Decode(&event)
+		if errors.Is(decodeErr, io.EOF) {
+			break
+		}
+		if decodeErr != nil {
+			t.Fatalf("read proxy operational log: %v", decodeErr)
+		}
+		if event.Leg != logevent.LegMITMComplete {
+			continue
+		}
+		if event.BytesIn != requestBytes || event.BytesOut != responseBytes {
+			t.Fatalf("logged request bytes=%d response bytes=%d, want request bytes=%d response bytes=%d", event.BytesIn, event.BytesOut, requestBytes, responseBytes)
+		}
+		return
+	}
+	t.Fatal("proxy did not log completed request byte counts")
 }

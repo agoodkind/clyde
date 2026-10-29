@@ -548,7 +548,7 @@ func TestPassthroughStreamCaptureRetainsTerminalUsagePastCap(t *testing.T) {
 		Body:       io.NopCloser(io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(terminal))),
 	}
 	recorder := httptest.NewRecorder()
-	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	srv := passthroughStreamRecordingServer(t)
 	result, err := srv.copyPassthroughResponse(context.Background(), recorder, response, true)
 	if err != nil {
 		t.Fatalf("copy response: %v", err)
@@ -571,7 +571,7 @@ func TestPassthroughStreamCaptureMarksReaderFailureTruncated(t *testing.T) {
 		}},
 	}
 	recorder := httptest.NewRecorder()
-	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	srv := passthroughStreamRecordingServer(t)
 	result, err := srv.copyPassthroughResponse(context.Background(), recorder, response, true)
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("copy error = %v, want unexpected EOF", err)
@@ -593,7 +593,7 @@ func TestPassthroughStreamCaptureMarksDownstreamWriteFailureTruncated(t *testing
 		}},
 	}
 	writer := &passthroughPartialWriter{header: make(http.Header), failAfter: 1}
-	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	srv := passthroughStreamRecordingServer(t)
 	result, err := srv.copyPassthroughResponse(context.Background(), writer, response, false)
 	if !errors.Is(err, errPassthroughDownstreamWrite) {
 		t.Fatalf("copy error = %v, want downstream write error", err)
@@ -615,7 +615,7 @@ func TestPassthroughStreamCaptureLeavesSuccessfulBelowCapStreamComplete(t *testi
 		Body:       io.NopCloser(strings.NewReader(stream)),
 	}
 	recorder := httptest.NewRecorder()
-	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	srv := passthroughStreamRecordingServer(t)
 	result, err := srv.copyPassthroughResponse(context.Background(), recorder, response, true)
 	if err != nil {
 		t.Fatalf("copy response: %v", err)
@@ -623,6 +623,63 @@ func TestPassthroughStreamCaptureLeavesSuccessfulBelowCapStreamComplete(t *testi
 	if !bytes.Equal(result.body, []byte(stream)) || result.totalBytes != len(stream) || result.truncated {
 		t.Fatalf("capture result = body:%q total:%d truncated:%t", result.body, result.totalBytes, result.truncated)
 	}
+}
+
+func TestPassthroughWithoutRecordingPreservesStreamUsage(t *testing.T) {
+	const stream = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, stream)
+	}))
+	t.Cleanup(upstream.Close)
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: filepath.Join(t.TempDir(), "capture.db"), RecordingDisabled: true}, nil)
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
+	var logs bytes.Buffer
+	srv, err := New(context.Background(), passthroughSnapshotConfig(upstream.URL), config.LoggingConfig{}, Deps{CaptureStore: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatalf("new adapter: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"snapshot-alias","input":"usage probe","stream":true}`))
+	srv.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != stream {
+		t.Fatalf("forwarded status=%d stream=%q, want status=%d stream=%q", recorder.Code, recorder.Body.String(), http.StatusOK, stream)
+	}
+	decoder := json.NewDecoder(&logs)
+	completed := false
+	for {
+		var event struct {
+			Message          string `json:"msg"`
+			PromptTokens     int    `json:"prompt_tokens"`
+			CompletionTokens int    `json:"completion_tokens"`
+		}
+		decodeErr := decoder.Decode(&event)
+		if errors.Is(decodeErr, io.EOF) {
+			break
+		}
+		if decodeErr != nil {
+			t.Fatalf("read operational log: %v", decodeErr)
+		}
+		if event.Message == "adapter.request.completed" {
+			completed = true
+			if event.PromptTokens != 11 || event.CompletionTokens != 7 {
+				t.Fatalf("operational usage = %+v", event)
+			}
+		}
+	}
+	if !completed {
+		t.Fatal("adapter did not log completed request usage")
+	}
+}
+
+func passthroughStreamRecordingServer(t *testing.T) *Server {
+	t.Helper()
+	store, _ := openIngressTestStore(t)
+	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
+	return &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil)), deps: Deps{CaptureStore: store}}
 }
 
 func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {

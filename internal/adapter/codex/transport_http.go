@@ -246,7 +246,7 @@ func runHTTPTransportEventsOnce(
 	responseStarted := false
 	sink := capture.NewCappedBuffer(codexCaptureBodyCap)
 	var bodyReader io.Reader = resp.Body
-	if cfg.CaptureStore != nil {
+	if cfg.CaptureStore.RecordingEnabled() {
 		bodyReader = io.TeeReader(resp.Body, sink)
 	}
 	result, parseErr := ParseSSEEventsWithOptions(ctx, bodyReader, func(event adapterrender.Event) error {

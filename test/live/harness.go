@@ -432,11 +432,12 @@ key_path = %q
 
 [mitm.capture_store]
 db_path = %q
+record_until = %q
 
 [mitm.cli.claude-code]
 host = "localhost"
 port = %d
-`, captureDir, filepath.Join(caDir, "ca.crt"), filepath.Join(caDir, "ca.key"), filepath.Join(captureDir, "capture.db"), h.cfg.MITMPort)
+`, captureDir, filepath.Join(caDir, "ca.crt"), filepath.Join(caDir, "ca.key"), filepath.Join(captureDir, "capture.db"), time.Now().Add(time.Hour).Format(time.RFC3339), h.cfg.MITMPort)
 	}
 	content := fmt.Sprintf(`[logging]
 level = "debug"

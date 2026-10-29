@@ -26,7 +26,7 @@ func (s *Server) recordPassthroughEgressAttempt(
 	result passthroughCaptureResult,
 	started time.Time,
 ) {
-	if s.deps.CaptureStore == nil || request == nil || request.URL == nil {
+	if !s.deps.CaptureStore.RecordingEnabled() || request == nil || request.URL == nil {
 		return
 	}
 	requestHeaders := sanitizedPassthroughRequestHeaders(request.Header)
