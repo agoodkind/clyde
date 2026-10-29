@@ -154,7 +154,7 @@ func startRuntime(
 }
 
 func captureStoreRequired(cfg *config.Config) bool {
-	return cfg.MITM.EnabledDefault || (cfg.Adapter.Enabled && cfg.Adapter.CaptureIngress)
+	return cfg.MITM.EnabledDefault || cfg.Adapter.Enabled
 }
 
 func startCaptureStore(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices) error {

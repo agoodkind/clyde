@@ -17,11 +17,39 @@ import (
 //go:embed testdata/optional_capture_counts.sql
 var optionalCaptureCountsSQL string
 
+func TestLiveAdapterEgressRecordingWithoutMITM(t *testing.T) {
+	upstream := startResponsesUpstream(t)
+	h := newHarness(t)
+	writeAdapterOnlyCaptureConfig(t, h, upstream.baseURL(), time.Now().Add(time.Hour).Format(time.RFC3339))
+	h.boot(t)
+	probe := uniqueProbeID(t, "adapter-egress-without-mitm")
+	response := h.postResponses(t, h.cfg.AdapterPort, responsesRequestBody(probe, false))
+	if response.statusCode != http.StatusOK || !strings.Contains(response.body, probe) {
+		t.Fatalf("forwarded response status = %d, contains probe = %t", response.statusCode, strings.Contains(response.body, probe))
+	}
+	_ = upstream.waitForRequest(t, 10*time.Second)
+	databasePath := filepath.Join(h.stateRoot, "mitm", "capture.db")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		captures, err := readResponsesCaptures(databasePath, probe)
+		if err == nil && len(captures) == 1 {
+			if captures[0].client != "adapter.passthrough" {
+				t.Fatalf("capture client = %s, want adapter.passthrough", captures[0].client)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("adapter egress capture did not commit: captures=%d, error=%v", len(captures), err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	assertOptionalCaptureCounts(t, h, 1)
+}
+
 func TestLiveResponsesDefaultRecordingDisabled(t *testing.T) {
 	upstream := startResponsesUpstream(t)
 	h := newHarness(t)
-	h.writeCombinedAdapterMITMConfig(t, h.cfg.AdapterPort, upstream.baseURL())
-	writeOptionalCaptureDeadline(t, h, "")
+	writeAdapterOnlyCaptureConfig(t, h, upstream.baseURL(), "")
 	h.boot(t)
 	probe := uniqueProbeID(t, "recording-disabled")
 	response := h.postResponses(t, h.cfg.AdapterPort, responsesRequestBody(probe, false))
@@ -73,6 +101,27 @@ func TestLiveRecordingDeadlinePreservesActiveStream(t *testing.T) {
 		t.Fatalf("response after expiration status = %d", response.statusCode)
 	}
 	assertOptionalCaptureCounts(t, h, 2)
+}
+
+func writeAdapterOnlyCaptureConfig(t *testing.T, h *harness, upstreamURL, deadline string) {
+	t.Helper()
+	h.writeCombinedAdapterMITMConfig(t, h.cfg.AdapterPort, upstreamURL)
+	data, err := os.ReadFile(h.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(data), "[mitm]\nenabled_default = true", "[mitm]\nenabled_default = false", 1)
+	if updated == string(data) {
+		t.Fatal("test configuration does not enable MITM")
+	}
+	withoutIngress := strings.Replace(updated, "capture_ingress = true", "capture_ingress = false", 1)
+	if withoutIngress == updated {
+		t.Fatal("test configuration does not enable adapter ingress capture")
+	}
+	if err := os.WriteFile(h.configPath, []byte(withoutIngress), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeOptionalCaptureDeadline(t, h, deadline)
 }
 
 func writeOptionalCaptureDeadline(t *testing.T, h *harness, deadline string) {
