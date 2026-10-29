@@ -5,7 +5,6 @@ package localbackendcli_test
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"goodkind.io/clyde/internal/conversation/vectorsearch/milvustest"
@@ -32,10 +31,6 @@ func TestMilvusBackendKeepsDeletedSourceSearchable(t *testing.T) {
 	if baseURL == "" {
 		baseURL = deletedSourceEmbeddingDefault
 	}
-	settingsPath := filepath.Join(t.TempDir(), "semantic-settings.toml")
-	settings := fmt.Sprintf(deletedSourceSettingsTemplate, address, baseURL, deletedSourceEmbeddingModel, deletedSourceEmbeddingDim)
-	if err := os.WriteFile(settingsPath, []byte(settings), 0o600); err != nil {
-		t.Fatalf("write semantic settings file %s: %v", settingsPath, err)
-	}
+	settingsPath := writeSandboxSemanticSettings(t, fmt.Sprintf(deletedSourceSettingsTemplate, address, baseURL, deletedSourceEmbeddingModel, deletedSourceEmbeddingDim))
 	checkDeletedSourceSearchable(t, []string{"--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath}, localProofSourceSemantic)
 }

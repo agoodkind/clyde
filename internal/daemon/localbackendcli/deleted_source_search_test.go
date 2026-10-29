@@ -18,7 +18,17 @@ const (
 	deletedSourceAfter          = "2026-07-01T12:00:00Z"
 	deletedSourceBefore         = "2026-07-01T13:00:00Z"
 	deletedSourceFixtureEnv     = "CLYDE_TEST_RETAINED_FIXTURE"
+	// sandboxFastIntervals sets the sandbox sync and index refresh intervals to the one-second minimum. The test daemon rescans and syncs about once a second instead of once a minute.
+	sandboxFastIntervals = "sync_interval = \"1s\"\nindex_refresh_interval = \"1s\"\n"
 )
+
+// writeSandboxSemanticSettings writes sandboxFastIntervals followed by settings to a temporary semantic settings file and returns its path.
+func writeSandboxSemanticSettings(t *testing.T, settings string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "semantic-settings.toml")
+	writeLocalProofFile(t, path, sandboxFastIntervals+settings)
+	return path
+}
 
 // retainedRecordsPath returns the path to the retained records file under a sandbox state directory.
 func retainedRecordsPath(stateRoot string) string {
@@ -163,7 +173,8 @@ func requireDeletedSourceMatchesKept(t *testing.T, stage string, before map[stri
 // TestLocalBackendKeepsDeletedSourceSearchable checks that CLI and MCP search retain deleted transcript matches after a rescan and daemon restart.
 func TestLocalBackendKeepsDeletedSourceSearchable(t *testing.T) {
 	localRoot := filepath.Join(t.TempDir(), "local-index")
-	checkDeletedSourceSearchable(t, []string{"--local", "--local-root", localRoot, "--ingestion-enabled", "--search-enabled"}, localProofSourceLocal)
+	settingsPath := writeSandboxSemanticSettings(t, "")
+	checkDeletedSourceSearchable(t, []string{"--local", "--local-root", localRoot, "--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath}, localProofSourceLocal)
 }
 
 // checkDeletedSourceSearchable checks that CLI and MCP searches report the given source and retain deleted conversation matches and values after a rescan and restart.

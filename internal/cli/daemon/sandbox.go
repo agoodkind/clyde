@@ -95,13 +95,10 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 	return cmd
 }
 
-// sandboxSemanticSettings returns the file lines with a trailing newline, or an empty string for an empty path. It fails if --local is set or the file cannot be read.
-func sandboxSemanticSettings(path string, local sandboxLocalOptions) (string, error) {
+// sandboxSemanticSettings returns the file lines with a trailing newline, returns an empty string for an empty path, and fails if reading fails. The config loader rejects a Milvus address with the local backend.
+func sandboxSemanticSettings(path string) (string, error) {
 	if path == "" {
 		return "", nil
-	}
-	if local.enabled {
-		return "", errors.New("semantic settings cannot be combined with --local")
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -163,7 +160,7 @@ func runSandbox(ctx context.Context, f *cli.Factory, rootOptions sandboxRootOpti
 		slog.ErrorContext(ctx, "cli.daemon.sandbox.local_options_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return err
 	}
-	semanticSettings, err := sandboxSemanticSettings(semanticSettingsPath, local)
+	semanticSettings, err := sandboxSemanticSettings(semanticSettingsPath)
 	if err != nil {
 		return err
 	}

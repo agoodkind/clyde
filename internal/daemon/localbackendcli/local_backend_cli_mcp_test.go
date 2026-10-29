@@ -85,7 +85,8 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := writeLocalProofHome(t)
 	localRoot := filepath.Join(t.TempDir(), "local-index")
-	localFlags := []string{"--local", "--local-root", localRoot, "--ingestion-enabled", "--search-enabled"}
+	settingsPath := writeSandboxSemanticSettings(t, "")
+	localFlags := []string{"--local", "--local-root", localRoot, "--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath}
 
 	first := startLocalProofDaemon(t, binaryPath, home, localFlags...)
 	waitForLocalProofRows(t, first)
@@ -204,7 +205,7 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 
 	t.Run("disabled search answers from raw text", func(t *testing.T) {
 		disabledRoot := filepath.Join(t.TempDir(), "local-index")
-		disabled := startLocalProofDaemon(t, binaryPath, home, "--local", "--local-root", disabledRoot, "--ingestion-enabled")
+		disabled := startLocalProofDaemon(t, binaryPath, home, "--local", "--local-root", disabledRoot, "--ingestion-enabled", "--semantic-settings", settingsPath)
 		assertLocalProofRawText(t, disabled)
 		status := disabled.status(t)
 		for _, expected := range []string{"backend=local", "search_enabled=false"} {
@@ -219,7 +220,7 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 		if err := os.WriteFile(unreadableRoot, []byte("not a directory\n"), 0o600); err != nil {
 			t.Fatalf("write a file at the local root: %v", err)
 		}
-		unreadable := startLocalProofDaemon(t, binaryPath, home, "--local", "--local-root", unreadableRoot, "--ingestion-enabled", "--search-enabled")
+		unreadable := startLocalProofDaemon(t, binaryPath, home, "--local", "--local-root", unreadableRoot, "--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath)
 		assertLocalProofRawText(t, unreadable)
 		status := unreadable.status(t)
 		for _, expected := range []string{"backend=local", "connection=unavailable"} {
@@ -230,7 +231,7 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 	})
 
 	t.Run("a sandbox without --local never reports local", func(t *testing.T) {
-		plain := startLocalProofDaemon(t, binaryPath, home)
+		plain := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
 		assertLocalProofRawText(t, plain)
 		status := plain.status(t)
 		if !strings.Contains(status, "backend=milvus") {
