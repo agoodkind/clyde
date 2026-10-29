@@ -79,11 +79,12 @@ func (c *Client) prepareSharedCopy(ctx context.Context, milvus *milvusBackend, s
 	return nil
 }
 
-// CopyToShared copies the rows of the single-collection source into the shared
-// target without embedding. With resume, it copies only the source rows with
-// a primary key greater than the largest target primary key. progress receives
-// the rows each copy phase has processed after each page. It returns the
-// copied row count.
+// CopyToShared copies rows from the single-collection source to the shared
+// target without embedding and returns the copied row count. With resume, it
+// copies only rows with a primary key greater than the largest target key.
+// Row IDs are content hashes. Rows added below that key after an earlier copy
+// remain missing until [Client.ReconcileSharedCopy] copies them. After each
+// page, progress receives the number of rows each copy phase has processed.
 func (c *Client) CopyToShared(ctx context.Context, sourceID string, targetID string, resume bool, progress SharedCopyProgressFunc) (int64, error) {
 	shared, milvus, source, target, err := c.sharedCopyPair(sourceID, targetID)
 	if err != nil {
@@ -146,39 +147,37 @@ func (c *Client) VerifySharedCopy(ctx context.Context, sourceID string, targetID
 	return report, nil
 }
 
-// RepairSharedCopy copies the missing and mismatched rows that report lists,
-// removes the extra rows that report lists, and removes every vector that no
-// row references when report counts any.
-func (c *Client) RepairSharedCopy(ctx context.Context, sourceID string, targetID string, report SharedCopyReport) error {
-	shared, _, source, target, err := c.sharedCopyPair(sourceID, targetID)
+// SharedReconcileResult aliases the LMS ReconcileResult. It counts the rows
+// one reconciliation read and every difference it repaired without a sample limit.
+type SharedReconcileResult = milvusstore.ReconcileResult
+
+// ReconcileSharedCopy prepares the target collections and makes the shared
+// target equal to the single-collection source. It rewrites every missing or
+// different row from the source, removes every target row the source lacks,
+// and removes every vector without a row reference. After each page, progress
+// receives the number of rows each pass has processed.
+func (c *Client) ReconcileSharedCopy(ctx context.Context, sourceID string, targetID string, progress SharedCopyProgressFunc) (SharedReconcileResult, error) {
+	shared, milvus, source, target, err := c.sharedCopyPair(sourceID, targetID)
 	if err != nil {
-		return err
+		return SharedReconcileResult{}, err
 	}
-	rewrite := make([]string, 0, len(report.Missing)+len(report.Mismatched))
-	rewrite = append(rewrite, report.Missing...)
-	rewrite = append(rewrite, report.Mismatched...)
-	if err := shared.CopyIDs(ctx, source, target, c.declaration, rewrite); err != nil {
-		return failSharedCopy(ctx, "repair copy of "+source+" in "+target, err)
+	if err := c.prepareSharedCopy(ctx, milvus, shared, source, target); err != nil {
+		return SharedReconcileResult{}, err
 	}
-	if len(report.Extra) > 0 {
-		if _, err := shared.RemoveOccurrences(ctx, target, report.Extra); err != nil {
-			return failSharedCopy(ctx, "remove extra rows from "+target, err)
-		}
-	}
-	if report.UnreferencedVectors == 0 {
-		return nil
-	}
-	removed, err := shared.RemoveUnreferencedVectors(ctx, target)
+	result, err := shared.ReconcileCopy(ctx, source, target, c.declaration, progress)
 	if err != nil {
-		return failSharedCopy(ctx, "remove unreferenced vectors from "+target, err)
+		return result, failSharedCopy(ctx, "reconcile copy of "+source+" in "+target, err)
 	}
-	slog.InfoContext(ctx, "conversation.vectorsearch.shared_unreferenced_vectors_removed",
+	slog.InfoContext(ctx, "conversation.vectorsearch.shared_copy_reconciled",
 		"concern", "conversation.semantic",
 		"component", "conversation",
 		"target", target,
-		"removed", removed,
+		"missing", result.Missing,
+		"mismatched", result.Mismatched,
+		"extra", result.Extra,
+		"unreferenced_vectors", result.UnreferencedVectors,
 	)
-	return nil
+	return result, nil
 }
 
 // failSharedCopy logs a failed copy operation and returns it wrapped with the
