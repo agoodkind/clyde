@@ -17,6 +17,7 @@ import (
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/output"
 	conv "goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/sandbox"
 	"goodkind.io/clyde/internal/tokencount"
 	"goodkind.io/gklog/correlation"
 	"google.golang.org/grpc/codes"
@@ -1202,12 +1203,28 @@ func TestExportDestinationPathUsesExplicitMCPOutput(t *testing.T) {
 }
 
 func TestWriteCLIExportFileConfirmationIncludesSize(t *testing.T) {
-	t.Parallel()
 	path := filepath.Join(t.TempDir(), "out.md")
 	body := []byte("alpha\nbeta\n")
+	// The real token lookup builds a conversation index and rescans on a miss. Empty temporary HOME, Clyde XDG, and provider directories confine its reads and writes.
+	roots, err := sandbox.NewRoots()
+	if err != nil {
+		t.Fatalf("create temporary directories: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(roots.Base) })
+	for _, variable := range sandbox.Env(roots) {
+		t.Setenv(variable.Name, variable.Value)
+	}
+	t.Setenv("HOME", filepath.Join(roots.Base, "home"))
+	for _, name := range []string{"CODEX_HOME", "CODEX_SQLITE_HOME", "CLYDE_CURSOR_PROJECTS_DIRS", "CLYDE_CURSOR_DATA_DIRS", "CLYDE_ZED_DATA_DIRS", "COPILOT_HOME"} {
+		directory := filepath.Join(roots.Base, "providers", name)
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("create provider directory %s: %v", directory, err)
+		}
+		t.Setenv(name, directory)
+	}
 	var out bytes.Buffer
 	sink := NewCLISink(&out)
-	err := writeCLIExportFile(context.Background(), exportPayload{
+	err = writeCLIExportFile(context.Background(), exportPayload{
 		ConversationID: "claude:probe",
 		Options: conv.ExportOptions{
 			Format: conv.ExportFormatMarkdown,
