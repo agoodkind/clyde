@@ -32,13 +32,15 @@ func newCopySharedIndexCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "copy-shared",
 		Short: "Copy a conversation collection into the shared vector layout and verify it",
-		Long: "Copy every row of the single-collection conversation collection named by --from into the shared vector layout named by --to, " +
-			"without embedding. The copy keeps each row's ID, every column, the content hash, the embedding model, and the exact vector bytes. " +
-			"The command then compares the two collections row by row, repairs the rows that differ, and fails unless every row matches. " +
-			"Before the copy, it gives the target vector collection the dense index definition of the source and enables mmap on both target collections. " +
-			"It never changes or deletes the source collection. The command refuses to run while conversation.semantic.ingestion_enabled is true, " +
-			"because rows that the source gains or loses during the copy appear as differences. --resume copies only the source rows after the " +
-			"largest primary key the target already stores.",
+		Long: "Copy every row from the single-collection source specified by --from into the shared vector layout specified by --to without " +
+			"embedding. The command preserves each row's ID, every column, the content hash, the embedding model, and the exact vector bytes. " +
+			"Before copying, the command gives the target vector collection the source dense index definition and enables mmap on both target " +
+			"collections. After copying, each repair round reads both collections page by page, rewrites every missing or different row from " +
+			"the source, removes every target row the source lacks, removes every vector without a row reference, and compares the collections " +
+			"row by row. The command fails unless every row matches within --repair-rounds rounds. It never changes or deletes the source. The " +
+			"command refuses to run while conversation.semantic.ingestion_enabled is true because rows added to or deleted from the source " +
+			"during the copy appear as differences. With --resume, the command copies only source rows with a primary key greater than the " +
+			"largest target primary key. Row IDs are content hashes, and the repair rounds copy source rows that sort below that key.",
 		Example: "clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared\n" +
 			"clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared --resume\n" +
 			"clyde conversation index copy-shared --from clyde-conversations --to clyde-conversations-shared --verify-only",
@@ -51,7 +53,7 @@ func newCopySharedIndexCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&options.ToCollectionID, "to", "", "Collection id of the shared vector target.")
 	cmd.Flags().BoolVar(&options.VerifyOnly, "verify-only", false, "Compare and repair without the full copy.")
 	cmd.Flags().BoolVar(&options.Resume, "resume", false, "Copy only the source rows after the largest primary key the target stores.")
-	cmd.Flags().IntVar(&options.RepairRounds, "repair-rounds", defaultCopySharedRepairRounds, "Maximum number of compare and repair rounds.")
+	cmd.Flags().IntVar(&options.RepairRounds, "repair-rounds", defaultCopySharedRepairRounds, "Set the maximum number of repair rounds, each of which repairs differences and then compares the collections.")
 	_ = cmd.MarkFlagRequired("from")
 	_ = cmd.MarkFlagRequired("to")
 	return cmd
@@ -92,7 +94,7 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 			return fmt.Errorf("copy shared conversation collection: %w", err)
 		}
 	}
-	report, err := verifyAndRepairSharedCopy(ctx, client, options, progress)
+	report, err := reconcileAndVerifySharedCopy(ctx, client, options, progress)
 	if err != nil {
 		return err
 	}
@@ -110,13 +112,28 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 	return nil
 }
 
-// verifyAndRepairSharedCopy compares the copy with the source and repairs the
-// listed rows until every row matches or the repair rounds run out.
-func verifyAndRepairSharedCopy(ctx context.Context, client *vectorsearch.Client, options copySharedOptions, progress *copySharedProgress) (vectorsearch.SharedCopyReport, error) {
+// reconcileAndVerifySharedCopy runs ReconcileSharedCopy and then VerifySharedCopy
+// in each round. It returns when verification finds every row equal and fails
+// if the rounds run out first.
+func reconcileAndVerifySharedCopy(ctx context.Context, client *vectorsearch.Client, options copySharedOptions, progress *copySharedProgress) (vectorsearch.SharedCopyReport, error) {
 	var report vectorsearch.SharedCopyReport
 	for round := 1; round <= options.RepairRounds; round++ {
-		var err error
 		progress.setRound(round)
+		reconciled, err := client.ReconcileSharedCopy(ctx, options.FromCollectionID, options.ToCollectionID, progress.callback(ctx))
+		if err != nil {
+			slog.ErrorContext(ctx, "cli.daemon.copy_shared.reconcile_failed", "concern", "cli.daemon", "component", "cli", "round", round, "err", err)
+			return report, fmt.Errorf("reconcile shared conversation collection: %w", err)
+		}
+		slog.DebugContext(ctx, "cli.daemon.copy_shared.reconciled", "concern", "cli.daemon", "component", "cli",
+			"round", round,
+			"source_rows", reconciled.SourceRows,
+			"target_rows", reconciled.TargetRows,
+			"missing", reconciled.Missing,
+			"mismatched", reconciled.Mismatched,
+			"dangling", reconciled.Dangling,
+			"extra", reconciled.Extra,
+			"unreferenced_vectors", reconciled.UnreferencedVectors,
+		)
 		report, err = client.VerifySharedCopy(ctx, options.FromCollectionID, options.ToCollectionID, progress.callback(ctx))
 		if err != nil {
 			slog.ErrorContext(ctx, "cli.daemon.copy_shared.verify_failed", "concern", "cli.daemon", "component", "cli", "round", round, "err", err)
@@ -135,10 +152,6 @@ func verifyAndRepairSharedCopy(ctx context.Context, client *vectorsearch.Client,
 		)
 		if report.Equal() {
 			return report, nil
-		}
-		if err := client.RepairSharedCopy(ctx, options.FromCollectionID, options.ToCollectionID, report); err != nil {
-			slog.ErrorContext(ctx, "cli.daemon.copy_shared.repair_failed", "concern", "cli.daemon", "component", "cli", "round", round, "err", err)
-			return report, fmt.Errorf("repair shared conversation collection: %w", err)
 		}
 	}
 	unequalErr := fmt.Errorf("shared conversation collection still differs after %d rounds: %d missing, %d mismatched, %d extra, %d dangling rows, %d unreferenced vectors",

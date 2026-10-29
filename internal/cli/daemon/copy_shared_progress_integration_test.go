@@ -86,9 +86,10 @@ func parseProgressLines(t *testing.T, output string) map[string][]progressLine {
 	return phases
 }
 
-// TestCopySharedPrintsPhaseProgress runs copy-shared against a throwaway Milvus and the real embedding endpoint.
-// The test checks that each copy and verification phase starts with Done 0, the phase total, an unknown rate, and an unknown estimate in the expected round.
-// The test checks that each phase ends with Done equal to the phase total and the finished text in the expected round.
+// TestCopySharedPrintsPhaseProgress runs copy-shared against a throwaway Milvus and the real embedding
+// endpoint. It checks that each copy, reconciliation, and verification phase prints a first line with
+// Done 0, the phase total, an unknown rate, and an unknown estimate in the expected round. It also checks
+// that the last line shows Done equal to the phase total and the finished text in the expected round.
 func TestCopySharedPrintsPhaseProgress(t *testing.T) {
 	milvustest.RequireEnabled(t)
 	address := milvustest.Start(t)
@@ -152,6 +153,9 @@ func TestCopySharedPrintsPhaseProgress(t *testing.T) {
 	}{
 		{phase: "copy_occurrences", round: 0, total: rows},
 		{phase: "copy_vectors", round: 0, total: rows},
+		{phase: "reconcile_rows", round: 1, total: rows},
+		{phase: "reconcile_extra_rows", round: 1, total: rows},
+		{phase: "reconcile_vectors", round: 1, total: int64(distinctTexts)},
 		{phase: "verify_rows", round: 1, total: rows},
 		{phase: "verify_extra_rows", round: 1, total: rows},
 		{phase: "verify_vector_references", round: 1, total: rows},
