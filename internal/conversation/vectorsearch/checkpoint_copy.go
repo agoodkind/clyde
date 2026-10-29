@@ -34,12 +34,12 @@ func copyCheckpoints(store *checkpointStore, sourceID string, targetID string) (
 	trimmedSourceID := strings.TrimSpace(sourceID)
 	trimmedTargetID := strings.TrimSpace(targetID)
 	if trimmedSourceID == "" || trimmedTargetID == "" {
-		return 0, errors.New("copy conversation fingerprint records: source and target collection ids are required")
+		return 0, errors.New("copy conversation fingerprint records: source and target collection IDs must not be empty")
 	}
 	source := CollectionName(trimmedSourceID)
 	target := CollectionName(trimmedTargetID)
 	if source == target {
-		return 0, fmt.Errorf("copy conversation fingerprint records: source and target are both %s", source)
+		return 0, fmt.Errorf("copy conversation fingerprint records: source and target resolve to %s", source)
 	}
 	copied, err := store.copyCollection(source, target)
 	if err != nil {
@@ -64,7 +64,7 @@ func (store *checkpointStore) copyCollection(source string, target string) (int,
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.root == "" {
-		return 0, errors.New("the checkpoint directory is not configured")
+		return 0, errors.New("record store root directory is not configured")
 	}
 	sourceDir := filepath.Join(store.root, source)
 	targetDir := filepath.Join(store.root, target)
@@ -94,7 +94,7 @@ func (store *checkpointStore) copyCollection(source string, target string) (int,
 		keep[checkpointFileName(id)] = struct{}{}
 	}
 	if err := os.MkdirAll(targetDir, checkpointDirMode); err != nil {
-		failure := fmt.Errorf("%s: create checkpoint directory %s: %w", operation, targetDir, err)
+		failure := fmt.Errorf("%s: create target checkpoint directory %s: %w", operation, targetDir, err)
 		slog.Warn("conversation.vectorsearch.checkpoint_copy_failed",
 			"concern", "conversation.semantic",
 			"component", "conversation",
@@ -122,10 +122,10 @@ func (store *checkpointStore) copyCollection(source string, target string) (int,
 	}
 	written, _, err := readCheckpointDir(targetDir)
 	if err != nil {
-		return 0, fmt.Errorf("%s: read target records after the copy: %w", operation, err)
+		return 0, fmt.Errorf("%s: read target records after copy: %w", operation, err)
 	}
 	if !maps.Equal(written, sourceRecords) {
-		failure := fmt.Errorf("%s: target directory %s stores %d records after the copy, want the %d source records", operation, targetDir, len(written), len(sourceRecords))
+		failure := fmt.Errorf("%s: target records in %s do not match saved source records", operation, targetDir)
 		slog.Warn("conversation.vectorsearch.checkpoint_copy_failed",
 			"concern", "conversation.semantic",
 			"component", "conversation",
@@ -171,7 +171,7 @@ func readCheckpointDir(directory string) (records map[string]string, names []str
 			return nil, nil, fmt.Errorf("decode checkpoint record %s: %w", path, decodeErr)
 		}
 		if record.ConversationID == "" {
-			return nil, nil, fmt.Errorf("checkpoint record %s has no conversation id", path)
+			return nil, nil, fmt.Errorf("checkpoint record %s does not contain a conversation ID", path)
 		}
 		records[record.ConversationID] = record.Fingerprint
 		names = append(names, entry.Name())
