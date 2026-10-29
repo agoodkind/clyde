@@ -17,7 +17,6 @@ import (
 
 const (
 	defaultCopySharedRepairRounds = 10
-	copySharedProgressEveryRows   = 100_000
 )
 
 type copySharedOptions struct {
@@ -85,20 +84,15 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 		return fmt.Errorf("open conversation semantic client: %w", err)
 	}
 	defer func() { _ = client.Close(context.WithoutCancel(ctx)) }()
+	progress := newCopySharedProgress(f.IOStreams.Err)
 	copied := int64(-1)
 	if !options.VerifyOnly {
-		nextReport := int64(copySharedProgressEveryRows)
-		copied, err = client.CopyToShared(ctx, options.FromCollectionID, options.ToCollectionID, options.Resume, func(rows int64) {
-			if rows >= nextReport {
-				slog.InfoContext(ctx, "cli.daemon.copy_shared.progress", "concern", "cli.daemon", "component", "cli", "rows", rows)
-				nextReport += copySharedProgressEveryRows
-			}
-		})
+		copied, err = client.CopyToShared(ctx, options.FromCollectionID, options.ToCollectionID, options.Resume, progress.callback(ctx))
 		if err != nil {
 			return fmt.Errorf("copy shared conversation collection: %w", err)
 		}
 	}
-	report, err := verifyAndRepairSharedCopy(ctx, client, options)
+	report, err := verifyAndRepairSharedCopy(ctx, client, options, progress)
 	if err != nil {
 		return err
 	}
@@ -118,11 +112,12 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 
 // verifyAndRepairSharedCopy compares the copy with the source and repairs the
 // listed rows until every row matches or the repair rounds run out.
-func verifyAndRepairSharedCopy(ctx context.Context, client *vectorsearch.Client, options copySharedOptions) (vectorsearch.SharedCopyReport, error) {
+func verifyAndRepairSharedCopy(ctx context.Context, client *vectorsearch.Client, options copySharedOptions, progress *copySharedProgress) (vectorsearch.SharedCopyReport, error) {
 	var report vectorsearch.SharedCopyReport
 	for round := 1; round <= options.RepairRounds; round++ {
 		var err error
-		report, err = client.VerifySharedCopy(ctx, options.FromCollectionID, options.ToCollectionID)
+		progress.setRound(round)
+		report, err = client.VerifySharedCopy(ctx, options.FromCollectionID, options.ToCollectionID, progress.callback(ctx))
 		if err != nil {
 			slog.ErrorContext(ctx, "cli.daemon.copy_shared.verify_failed", "concern", "cli.daemon", "component", "cli", "round", round, "err", err)
 			return report, fmt.Errorf("verify shared conversation collection: %w", err)
