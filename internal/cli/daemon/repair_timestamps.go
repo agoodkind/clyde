@@ -232,7 +232,7 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 }
 
 func (run repairTimestampsRun) loadSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairSource, error) {
-	empty := vectorsearch.TimestampRepairSource{ConversationID: record.ID, Documents: nil}
+	empty := vectorsearch.TimestampRepairSource{ConversationID: record.ID, Documents: nil, NormalizeStoredText: nil}
 	messages, err := run.index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(run.contentKinds))
 	if err != nil {
 		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.messages_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", err)
@@ -244,7 +244,11 @@ func (run repairTimestampsRun) loadSource(ctx context.Context, record conversati
 		return empty, fmt.Errorf("build conversation documents: %w", err)
 	}
 	slog.DebugContext(ctx, "cli.daemon.repair_timestamps.source_loaded", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "documents", len(built.Docs))
-	return vectorsearch.TimestampRepairSource{ConversationID: record.ID, Documents: built.Docs}, nil
+	source := vectorsearch.TimestampRepairSource{ConversationID: record.ID, Documents: built.Docs, NormalizeStoredText: nil}
+	if normalizer, found := daemonsvc.ConversationStoredTextNormalizer(record.Provider); found {
+		source.NormalizeStoredText = normalizer.NormalizeStoredText
+	}
+	return source, nil
 }
 
 func (run repairTimestampsRun) saveProgress(base timestampRepairProgress, cursor string, runReport vectorsearch.TimestampRepairReport, failed []string, complete bool) error {

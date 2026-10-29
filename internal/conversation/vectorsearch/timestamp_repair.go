@@ -33,6 +33,9 @@ var ErrTimestampRepairUnsupported = errors.New("repair timestamps: use the singl
 type TimestampRepairSource struct {
 	ConversationID string
 	Documents      []semsearch.SemDoc
+	// NormalizeStoredText converts stored row text to the parser's current text.
+	// A nil function leaves stored text unchanged.
+	NormalizeStoredText func(role string, text string) string
 }
 
 // TimestampRepairReport counts conversations and classifies each stored row
@@ -71,7 +74,9 @@ func (report *TimestampRepairReport) Add(other TimestampRepairReport) {
 
 type sourcePiece struct {
 	content       string
+	role          string
 	timestampUnix int64
+	normalize     func(role string, text string) string
 }
 
 type timestampUpdate struct {
@@ -97,7 +102,9 @@ const (
 
 // RepairConversationTimestamps compares stored rows with source documents and
 // updates their timestamps. A row matches when its relativePath matches a source
-// row and its content equals the source bytes at the stored split position.
+// row and its content equals the source bytes at a positive split position. A
+// row without a positive split position matches when its content or normalized
+// content equals the whole source piece.
 // Milvus updates only timestampUnix and the timestamp_unix metadata value. The
 // repair skips unmatched rows, source messages without timestamps, ambiguous
 // matches, and invalid metadata. A dry run counts rows without writing them.
@@ -207,7 +214,12 @@ func sourcePieces(sources []TimestampRepairSource) (map[string]map[string][]sour
 				return nil, nil, fmt.Errorf("repair conversation timestamps: build rows for %s: %w", conversationID, err)
 			}
 			for _, chunk := range chunks {
-				byPath[chunk.RelativePath] = append(byPath[chunk.RelativePath], sourcePiece{content: chunk.Content, timestampUnix: chunk.TimestampUnix})
+				byPath[chunk.RelativePath] = append(byPath[chunk.RelativePath], sourcePiece{
+					content:       chunk.Content,
+					role:          doc.Role,
+					timestampUnix: chunk.TimestampUnix,
+					normalize:     source.NormalizeStoredText,
+				})
 			}
 		}
 		pieces[conversationID] = byPath
@@ -268,7 +280,7 @@ func matchRowTimestamp(row collection.StoredRow, candidates []sourcePiece) (int6
 	found := false
 	var timestampUnix int64
 	for _, candidate := range candidates {
-		if !pieceHoldsRow(candidate.content, row) {
+		if !pieceHoldsRow(candidate, row) {
 			continue
 		}
 		if found && candidate.timestampUnix != timestampUnix {
@@ -287,10 +299,16 @@ func matchRowTimestamp(row collection.StoredRow, candidates []sourcePiece) (int6
 }
 
 // A positive split position is one more than the byte offset in the source.
-// An absent or zero split position requires a match against the whole piece.
-func pieceHoldsRow(piece string, row collection.StoredRow) bool {
+// An absent or zero split position requires the stored content or its normalized
+// form to match the whole piece.
+func pieceHoldsRow(candidate sourcePiece, row collection.StoredRow) bool {
+	piece := candidate.content
 	if !row.SplitPartRecorded || row.SplitPart == 0 {
-		return piece == row.Content
+		if piece == row.Content {
+			return true
+		}
+		// Normalize older stored text before comparing it with the source piece.
+		return candidate.normalize != nil && candidate.normalize(candidate.role, row.Content) == piece
 	}
 	offset := int(row.SplitPart) - 1
 	if offset < 0 || row.Content == "" || offset+len(row.Content) > len(piece) {

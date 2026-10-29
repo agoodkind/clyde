@@ -104,10 +104,14 @@ func cursorTextLine(t *testing.T, role string, text string) string {
 	return string(encoded) + "\n"
 }
 
+func (conversationCase repairConversation) rawUserText() string {
+	return "<timestamp>" + conversationCase.stamp + "</timestamp>\n<user_query>\n" + conversationCase.query + "\n</user_query>"
+}
+
 func writeRepairTranscripts(t *testing.T, root string) {
 	t.Helper()
 	for _, conversationCase := range repairConversations() {
-		body := cursorTextLine(t, "user", "<timestamp>"+conversationCase.stamp+"</timestamp>\n\n<user_query>"+conversationCase.query+"</user_query>") +
+		body := cursorTextLine(t, "user", conversationCase.rawUserText()) +
 			cursorTextLine(t, "assistant", conversationCase.answer)
 		path := filepath.Join(root, repairProjectKey, "agent-transcripts", conversationCase.nativeID, conversationCase.nativeID+".jsonl")
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -276,6 +280,10 @@ func seedStoredRows(t *testing.T, client *vectorsearch.Client, index *conversati
 	}
 	loader := repairTimestampsRun{contentKinds: kinds, index: index}
 	stale := repairConversations()[2].id()
+	rawUserTexts := make(map[string]string)
+	for _, conversationCase := range repairConversations() {
+		rawUserTexts[conversationCase.id()] = conversationCase.rawUserText()
+	}
 	sourceTimes := make(map[string]int64)
 	docs := make([]semsearch.SemDoc, 0)
 	manifest := make([]semsearch.Fingerprint, 0)
@@ -292,6 +300,9 @@ func seedStoredRows(t *testing.T, client *vectorsearch.Client, index *conversati
 				sourceTimes[doc.ConversationID] = doc.TimestampUnix
 			}
 			doc.TimestampUnix = time.Time{}.Unix()
+			if doc.Role == "user" {
+				doc.Text = rawUserTexts[doc.ConversationID]
+			}
 			if doc.ConversationID == stale && doc.Role == "user" {
 				doc.Text = repairStaleText
 			}
@@ -502,7 +513,7 @@ func setRowMetadata(t *testing.T, ctx context.Context, address string, id string
 	t.Helper()
 	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: "default"})
 	if err != nil {
-		t.Fatalf("connect metadata client: %v", err)
+		t.Fatalf("metadata client could not connect: %v", err)
 	}
 	defer func() { _ = client.Close(ctx) }()
 	option := milvusclient.NewColumnBasedInsertOption(vectorsearch.CollectionName(repairCollectionID)).
@@ -510,7 +521,7 @@ func setRowMetadata(t *testing.T, ctx context.Context, address string, id string
 		WithVarcharColumn("metadata", []string{metadata}).
 		WithPartialUpdate(true)
 	if _, err := client.Upsert(ctx, option); err != nil {
-		t.Fatalf("set metadata of row %s: %v", id, err)
+		t.Fatalf("client could not set metadata for row %s: %v", id, err)
 	}
 }
 
@@ -525,20 +536,20 @@ func requireInvalidMetadataUnchanged(t *testing.T, ctx context.Context, address 
 		}
 	}
 	if targetID == "" {
-		t.Fatalf("collection has no row at %s", targetPath)
+		t.Fatalf("collection does not contain a row at %s", targetPath)
 	}
 	invalid := `{"timestamp_unix":1,"timestamp_unix":2}`
 	setRowMetadata(t, ctx, address, targetID, invalid)
 	stamped, err := base.index.ListWithStamps(ctx)
 	if err != nil {
-		t.Fatalf("list conversations: %v", err)
+		t.Fatalf("index could not list conversations: %v", err)
 	}
 	var source vectorsearch.TimestampRepairSource
 	for _, entry := range stamped {
 		if entry.Record.ID == target.id() {
 			source, err = base.loadSource(ctx, entry.Record)
 			if err != nil {
-				t.Fatalf("load %s: %v", target.id(), err)
+				t.Fatalf("index could not load conversation %s: %v", target.id(), err)
 			}
 		}
 	}
@@ -549,14 +560,14 @@ func requireInvalidMetadataUnchanged(t *testing.T, ctx context.Context, address 
 	}
 	report, err := client.RepairConversationTimestamps(ctx, repairCollectionID, []vectorsearch.TimestampRepairSource{source}, false)
 	if err != nil {
-		t.Fatalf("repair with invalid metadata: %v", err)
+		t.Fatalf("timestamp repair failed with invalid metadata: %v", err)
 	}
 	if report.RowsInvalidMetadata != 1 || report.RowsWritten != 0 {
-		t.Fatalf("invalid metadata report = %+v, want 1 invalid row and 0 written", report)
+		t.Fatalf("timestamp repair reported %+v; want 1 invalid row and 0 rows written", report)
 	}
 	after := snapshotRows(t, address)[targetID]
 	if after.metadata != invalid || after.timestampUnix != repaired[targetID].timestampUnix {
-		t.Fatalf("row %s after the invalid metadata repair = %+v, want metadata %q and timestampUnix %s", targetID, after, invalid, repaired[targetID].timestampUnix)
+		t.Fatalf("row %s after timestamp repair is %+v; want metadata %q and timestampUnix %s", targetID, after, invalid, repaired[targetID].timestampUnix)
 	}
 	requireSameVector(t, targetID, repaired[targetID].vector, after.vector)
 }
