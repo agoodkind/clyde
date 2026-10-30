@@ -250,11 +250,16 @@ func documentChunks(doc semsearch.SemDoc, budget int) ([]storedChunk, error) {
 	})
 	for toolIndex, tool := range doc.Tools {
 		cleaned := semsearch.SemToolCall{
-			Name:     strings.ToValidUTF8(tool.Name, ""),
-			Display:  strings.ToValidUTF8(tool.Display, ""),
-			LangHint: strings.ToValidUTF8(tool.LangHint, ""),
-			Output:   strings.ToValidUTF8(tool.Output, ""),
-			IsError:  tool.IsError,
+			Name:          strings.ToValidUTF8(tool.Name, ""),
+			Display:       strings.ToValidUTF8(tool.Display, ""),
+			LangHint:      strings.ToValidUTF8(tool.LangHint, ""),
+			Output:        strings.ToValidUTF8(tool.Output, ""),
+			IsError:       tool.IsError,
+			TimestampUnix: tool.TimestampUnix,
+		}
+		toolDoc := doc
+		if tool.TimestampUnix != nil {
+			toolDoc.TimestampUnix = *tool.TimestampUnix
 		}
 		basePath := conversationToolCallPath(conversationID, doc.MessageIndex, toolIndex)
 		chunks = appendContinuedField(chunks, toolContent(cleaned), budget, strings.TrimSpace(cleaned.Name),
@@ -263,7 +268,7 @@ func documentChunks(doc semsearch.SemDoc, budget int) ([]storedChunk, error) {
 				if multipart {
 					path = fmt.Sprintf("%s/%d", basePath, partIndex)
 				}
-				return newChunk(doc, conversationID, parentConversationID, path, piece)
+				return newChunk(toolDoc, conversationID, parentConversationID, path, piece)
 			})
 	}
 	thinkingPath := conversationThinkingPath(conversationID, doc.MessageIndex)

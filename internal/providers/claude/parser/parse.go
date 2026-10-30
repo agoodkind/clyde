@@ -715,6 +715,7 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 				Output:      "",
 				IsError:     false,
 				Attachments: nil,
+				Timestamp:   nil,
 			})
 		case contentBlockToolResult:
 			// Assistant entries should not carry tool results; the

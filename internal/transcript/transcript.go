@@ -149,6 +149,8 @@ type ToolCall struct {
 	Output      string       `json:"output"`                // tool result text (loaded on demand, empty by default)
 	IsError     bool         `json:"is_error"`              // true if tool result was an error
 	Attachments []Attachment `json:"attachments,omitempty"` // provider-neutral result attachment metadata
+	// Timestamp is the tool call time, or nil when unavailable.
+	Timestamp *time.Time `json:"timestamp,omitempty"`
 }
 
 // Attachment preserves non-payload metadata for a binary or other external

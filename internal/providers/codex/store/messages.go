@@ -249,6 +249,7 @@ func toolCallHistoryMessage(callID, name, raw string, timestamp time.Time) (Hist
 		Output:      "",
 		IsError:     false,
 		Attachments: nil,
+		Timestamp:   nil,
 	}}
 	message.HasTools = true
 	return message, true

@@ -200,11 +200,16 @@ func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKi
 	out := make([]semsearch.SemToolCall, 0, len(tools))
 	for _, tool := range tools {
 		projected := semsearch.SemToolCall{
-			Name:     tool.Name,
-			Display:  "",
-			LangHint: "",
-			Output:   "",
-			IsError:  tool.IsError,
+			Name:          tool.Name,
+			Display:       "",
+			LangHint:      "",
+			Output:        "",
+			IsError:       tool.IsError,
+			TimestampUnix: nil,
+		}
+		if tool.Timestamp != nil && !tool.Timestamp.IsZero() {
+			stamp := tool.Timestamp.Unix()
+			projected.TimestampUnix = &stamp
 		}
 		if withArguments || withOutput {
 			// The provider's parser rendered what the user saw and named the

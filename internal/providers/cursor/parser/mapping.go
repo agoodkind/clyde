@@ -76,6 +76,7 @@ func mapJSONLMessage(
 				Output:      "",
 				IsError:     false,
 				Attachments: nil,
+				Timestamp:   nil,
 			})
 		}
 	}
@@ -171,6 +172,7 @@ func mapComposerBubble(
 			Output:      toolOutput,
 			IsError:     toolErrored(bubble.ToolCall.Status),
 			Attachments: nil,
+			Timestamp:   nil,
 		})
 	}
 	// Cursor persists whatever Clyde's MITM/BYOK ingress streamed into

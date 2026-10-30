@@ -186,6 +186,7 @@ func mapAssistantMessage(item event) (transcript.Message, bool) {
 			Output:      "",
 			IsError:     false,
 			Attachments: nil,
+			Timestamp:   nil,
 		})
 	}
 	message := transcript.Message{

@@ -24,6 +24,9 @@ const (
 // A parser uses the zero time for a message without a timestamp.
 var missingTimestampUnix = time.Time{}.Unix()
 
+// MissingTimestampUnix is the Unix value of a zero time.
+var MissingTimestampUnix = missingTimestampUnix
+
 // ErrTimestampRepairUnsupported reports that timestamp repair requires the
 // single-collection Milvus layout. The shared layout also stores timestamp
 // ranges on vector rows.

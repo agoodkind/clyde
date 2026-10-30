@@ -27,9 +27,22 @@ type TimestampSourceRepairSource struct {
 	Documents      []semsearch.SemDoc
 	// MatchText normalizes stored text before matching it against source text.
 	MatchText func(role string, text string) string
-	// ToolName converts a source tool name before matching stored tool calls.
-	// When ToolName is nil, source repair uses the original name.
-	ToolName func(name string) string
+	// CopyDocuments contains stored copies outside the ordered conversation.
+	CopyDocuments []semsearch.SemDoc
+	// ToolCalls contains native tool calls in source order.
+	ToolCalls []SourceToolTime
+	// ToolCallsComplete reports whether the native tool call state is complete.
+	ToolCallsComplete bool
+}
+
+// SourceToolTime contains native tool content, a timestamp, and an unavailable reason.
+type SourceToolTime struct {
+	Name          string
+	Display       string
+	LangHint      string
+	TimestampUnix int64
+	// Reason identifies why the native tool call timestamp is unavailable.
+	Reason string
 }
 
 // TimestampSourceRepairReport records source repair counts and matching evidence.
@@ -43,6 +56,8 @@ type TimestampSourceRepairReport struct {
 	RowsIncomplete int `json:"rows_incomplete"`
 	// Evidence records the matching outcome for each family with zero timestamp rows.
 	Evidence []SourceRepairEvidence `json:"evidence,omitempty"`
+	// Outcomes counts zero timestamp rows by matching outcome.
+	Outcomes map[string]int `json:"outcomes,omitempty"`
 }
 
 // Add combines another report's counts with this report.
@@ -51,6 +66,12 @@ func (report *TimestampSourceRepairReport) Add(other TimestampSourceRepairReport
 	report.RowsNotZeroTime += other.RowsNotZeroTime
 	report.RowsEmptyContent += other.RowsEmptyContent
 	report.RowsIncomplete += other.RowsIncomplete
+	for outcome, count := range other.Outcomes {
+		if report.Outcomes == nil {
+			report.Outcomes = map[string]int{}
+		}
+		report.Outcomes[outcome] += count
+	}
 }
 
 // RepairTimestampsFromSource matches zero timestamp rows against source documents.
@@ -66,7 +87,7 @@ func (c *Client) RepairTimestampsFromSource(
 			Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
 			RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
 		},
-		RowsNotZeroTime: 0, RowsEmptyContent: 0, RowsIncomplete: 0, Evidence: nil,
+		RowsNotZeroTime: 0, RowsEmptyContent: 0, RowsIncomplete: 0, Evidence: nil, Outcomes: map[string]int{},
 	}
 	if c == nil {
 		return report, errors.New("conversation search client is nil")
@@ -195,11 +216,23 @@ func sourceRepairRowsDeclaration() collection.Declaration {
 // sourceTimeLookup indexes source text, tool calls, and thinking by role and content.
 type sourceTimeLookup struct {
 	texts    *transcript.SourceTimeIndex
-	tools    map[string][]int64
 	thinking map[string][]int64
 	// fields indexes source text and thinking by role and family kind.
 	fields    map[string][]sourceField
 	matchText func(role string, text string) string
+	// toolCalls contains native calls in source order.
+	toolCalls         []SourceToolTime
+	toolCallsComplete bool
+	// toolBindings associates each tool row family with a native call or failure reason.
+	toolBindings map[string]toolBinding
+	// emptySource reports whether the source contains documents, copies, or tool calls.
+	emptySource bool
+}
+
+// toolBinding stores a native call or the reason binding failed.
+type toolBinding struct {
+	call   SourceToolTime
+	reason string
 }
 
 // sourceField stores source text and its timestamp.
@@ -209,9 +242,21 @@ type sourceField struct {
 }
 
 func newSourceTimeLookup(source TimestampSourceRepairSource) sourceTimeLookup {
-	entries := make([]transcript.SourceTimeEntry, 0, len(source.Documents))
-	lookup := sourceTimeLookup{texts: nil, tools: map[string][]int64{}, thinking: map[string][]int64{}, fields: map[string][]sourceField{}, matchText: source.MatchText}
-	for _, doc := range source.Documents {
+	lookup := sourceTimeLookup{
+		texts: nil, thinking: map[string][]int64{}, fields: map[string][]sourceField{}, matchText: source.MatchText,
+		toolCalls: source.ToolCalls, toolCallsComplete: source.ToolCallsComplete, toolBindings: map[string]toolBinding{},
+		emptySource: len(source.Documents) == 0 && len(source.CopyDocuments) == 0 && len(source.ToolCalls) == 0,
+	}
+	entries := lookup.indexDocuments(source.Documents)
+	copies := lookup.indexDocuments(source.CopyDocuments)
+	lookup.texts = transcript.NewSourceTimeIndex(entries, copies)
+	return lookup
+}
+
+// indexDocuments indexes document text and thinking and returns text entries.
+func (lookup sourceTimeLookup) indexDocuments(docs []semsearch.SemDoc) []transcript.SourceTimeEntry {
+	entries := make([]transcript.SourceTimeEntry, 0, len(docs))
+	for _, doc := range docs {
 		stamp := time.Time{}
 		if doc.TimestampUnix != missingTimestampUnix {
 			stamp = time.Unix(doc.TimestampUnix, 0).UTC()
@@ -225,57 +270,111 @@ func newSourceTimeLookup(source TimestampSourceRepairSource) sourceTimeLookup {
 			key := sourceRepairKey(doc.Role, conversationThinkingFamily)
 			lookup.fields[key] = append(lookup.fields[key], sourceField{text: doc.Thinking, timestampUnix: doc.TimestampUnix})
 		}
-		for _, tool := range doc.Tools {
-			name := tool.Name
-			if source.ToolName != nil {
-				name = source.ToolName(name)
-			}
-			cleaned := semsearch.SemToolCall{
-				Name:     strings.ToValidUTF8(name, ""),
-				Display:  strings.ToValidUTF8(tool.Display, ""),
-				LangHint: strings.ToValidUTF8(tool.LangHint, ""),
-				Output:   "",
-				IsError:  tool.IsError,
-			}
-			if content := toolContent(cleaned); content != "" {
-				key := sourceRepairKey(doc.Role, content)
-				lookup.tools[key] = append(lookup.tools[key], doc.TimestampUnix)
-			}
-		}
 		if thinking := strings.TrimSpace(doc.Thinking); thinking != "" {
 			key := sourceRepairKey(doc.Role, thinking)
 			lookup.thinking[key] = append(lookup.thinking[key], doc.TimestampUnix)
 		}
 	}
-	lookup.texts = transcript.NewSourceTimeIndex(entries)
-	return lookup
+	return entries
+}
+
+// bindToolFamilies binds ordered tool families to native calls when the state is
+// complete and the counts and names agree.
+func (lookup sourceTimeLookup) bindToolFamilies(families map[string][]collection.StoredRow) {
+	keys := make([]string, 0)
+	for key := range families {
+		if strings.HasPrefix(key, conversationToolFamily+familyPartSeparator) {
+			keys = append(keys, key)
+		}
+	}
+	slices.SortFunc(keys, func(left string, right string) int {
+		return slices.Compare(familyOrder(left), familyOrder(right))
+	})
+	reason := ""
+	switch {
+	case !lookup.toolCallsComplete:
+		reason = SourceOutcomeIdentityUnavailable
+	case len(keys) != len(lookup.toolCalls):
+		reason = SourceOutcomeSequenceMismatch
+	}
+	if reason == "" {
+		for index, key := range keys {
+			name, _, _ := strings.Cut(families[key][0].Content, toolContinuationBreak)
+			if strings.TrimSpace(name) != strings.TrimSpace(lookup.toolCalls[index].Name) {
+				reason = SourceOutcomeSequenceMismatch
+				break
+			}
+		}
+	}
+	for index, key := range keys {
+		if reason != "" {
+			lookup.toolBindings[key] = toolBinding{call: emptySourceToolTime(), reason: reason}
+			continue
+		}
+		lookup.toolBindings[key] = toolBinding{call: lookup.toolCalls[index], reason: ""}
+	}
+}
+
+func emptySourceToolTime() SourceToolTime {
+	return SourceToolTime{Name: "", Display: "", LangHint: "", TimestampUnix: missingTimestampUnix, Reason: ""}
+}
+
+// toolFamilyOutcome checks a tool family's binding, content, and timestamp reason.
+func (lookup sourceTimeLookup) toolFamilyOutcome(key string, text string, evidence *SourceRepairEvidence) {
+	binding, found := lookup.toolBindings[key]
+	if !found {
+		evidence.Outcome = SourceOutcomeSequenceMismatch
+		return
+	}
+	if binding.reason != "" {
+		evidence.Outcome = binding.reason
+		return
+	}
+	rendered := toolContent(semsearch.SemToolCall{
+		Name: strings.ToValidUTF8(binding.call.Name, ""), Display: strings.ToValidUTF8(binding.call.Display, ""),
+		LangHint: strings.ToValidUTF8(binding.call.LangHint, ""), Output: "", IsError: false, TimestampUnix: nil,
+	})
+	if rendered != text {
+		evidence.Outcome = SourceOutcomeContentMismatch
+		return
+	}
+	if binding.call.Reason != "" {
+		evidence.Outcome = binding.call.Reason
+		return
+	}
+	evidence.Outcome = SourceOutcomeMatched
+	evidence.Candidates = []int64{binding.call.TimestampUnix}
+	evidence.Chosen = binding.call.TimestampUnix
+	evidence.Match = sourceMatchNativeIdentity
 }
 
 func sourceRepairKey(role string, content string) string {
 	return role + sourceRepairKeySeparator + strings.TrimSpace(content)
 }
 
-// familyCandidates returns source timestamps matching the family kind, role, and text.
-func (lookup sourceTimeLookup) familyCandidates(familyKind string, role string, text string) []int64 {
-	switch familyKind {
-	case conversationToolFamily:
-		return lookup.tools[sourceRepairKey(role, text)]
-	case conversationThinkingFamily:
-		return lookup.thinking[sourceRepairKey(role, text)]
+// familyCandidates returns single source timestamps and reports combined matches.
+func (lookup sourceTimeLookup) familyCandidates(familyKind string, role string, text string) ([]int64, bool) {
+	if familyKind == conversationThinkingFamily {
+		return lookup.thinking[sourceRepairKey(role, text)], false
 	}
-	stamps := lookup.texts.TextCandidates(role, text)
-	if len(stamps) == 0 && lookup.matchText != nil {
-		stamps = lookup.texts.TextCandidates(role, lookup.matchText(role, text))
+	matches := lookup.texts.TextCandidates(role, text)
+	if len(matches) == 0 && lookup.matchText != nil {
+		matches = lookup.texts.TextCandidates(role, lookup.matchText(role, text))
 	}
-	candidates := make([]int64, 0, len(stamps))
-	for _, stamp := range stamps {
-		if stamp.IsZero() {
+	candidates := make([]int64, 0, len(matches))
+	combined := false
+	for _, match := range matches {
+		if match.Combined {
+			combined = true
+			continue
+		}
+		if match.Timestamp.IsZero() {
 			candidates = append(candidates, missingTimestampUnix)
 			continue
 		}
-		candidates = append(candidates, stamp.Unix())
+		candidates = append(candidates, match.Timestamp.Unix())
 	}
-	return candidates
+	return candidates, combined
 }
 
 // fragmentCandidates returns source timestamps matching a stored row fragment.
@@ -300,11 +399,29 @@ func (lookup sourceTimeLookup) fragmentCandidates(familyKind string, role string
 		return nil
 	}
 	for _, field := range fields {
-		if strings.Contains(field.text, fragment) {
+		if strings.TrimSpace(field.text) == fragment {
 			candidates = append(candidates, field.timestampUnix)
 		}
 	}
 	return candidates
+}
+
+// fragmentContained reports whether a source field contains the row content.
+func (lookup sourceTimeLookup) fragmentContained(familyKind string, role string, row collection.StoredRow) bool {
+	fragment := row.Content
+	if familyKind == conversationTextFamily && lookup.matchText != nil {
+		fragment = lookup.matchText(role, fragment)
+	}
+	fragment = strings.TrimSpace(fragment)
+	if fragment == "" {
+		return false
+	}
+	for _, field := range lookup.fields[sourceRepairKey(role, familyKind)] {
+		if strings.Contains(field.text, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // distinctCandidates sorts and deduplicates timestamps and identifies undated matches.
@@ -332,6 +449,26 @@ const (
 	SourceOutcomeUndated    = "undated"
 	SourceOutcomeEmpty      = "empty_content"
 	SourceOutcomeIncomplete = "incomplete"
+	// SourceOutcomeMixed indicates that a match joins multiple source messages.
+	SourceOutcomeMixed = "mixed_source"
+	// SourceOutcomeSourceFragment indicates that an unsplit row is part of a source field.
+	SourceOutcomeSourceFragment = "source_fragment"
+	// SourceOutcomeMissingSource indicates that the source contains no matching material.
+	SourceOutcomeMissingSource = "missing_source"
+	// SourceOutcomeIdentityUnavailable indicates that native tool state is incomplete.
+	SourceOutcomeIdentityUnavailable = "native_identity_unavailable"
+	// SourceOutcomeSequenceMismatch indicates that tool family counts or names differ.
+	SourceOutcomeSequenceMismatch = "native_sequence_mismatch"
+	// SourceOutcomeContentMismatch indicates that tool family content differs from the call.
+	SourceOutcomeContentMismatch = "content_mismatch"
+	// SourceOutcomeIdentityAbsent indicates that a tool call lacks a dated identity bubble.
+	SourceOutcomeIdentityAbsent = "identity_bubble_absent"
+	// SourceOutcomeIdentityConflict indicates that identity bubble dates disagree.
+	SourceOutcomeIdentityConflict = "identity_dates_conflict"
+	// SourceOutcomeReadError indicates that reading the source failed.
+	SourceOutcomeReadError = "read_error"
+	// sourceMatchNativeIdentity identifies a match using a native tool call.
+	sourceMatchNativeIdentity = "native_identity"
 )
 
 // SourceRepairEvidence records the outcome and candidates for one stored row family.
@@ -360,6 +497,7 @@ func matchSourceFamilies(conversationID string, rows []collection.StoredRow, loo
 		key := chunkFamilyKey(conversationID, row.RelativePath)
 		families[key] = append(families[key], row)
 	}
+	lookup.bindToolFamilies(families)
 	ordered := make([]pendingFamily, 0, len(families))
 	for key, members := range families {
 		groups := [][]collection.StoredRow{members}
@@ -413,9 +551,20 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 		evidence.Outcome = SourceOutcomeEmpty
 		return family, dated
 	}
-	candidates, undated := distinctCandidates(lookup.familyCandidates(familyKind, rowRole(members), text))
+	if lookup.emptySource {
+		evidence.Outcome = SourceOutcomeMissingSource
+		return family, dated
+	}
+	if familyKind == conversationToolFamily {
+		lookup.toolFamilyOutcome(key, text, evidence)
+		return family, dated
+	}
+	matches, combined := lookup.familyCandidates(familyKind, rowRole(members), text)
+	candidates, undated := distinctCandidates(matches)
 	evidence.Candidates = candidates
 	switch {
+	case len(matches) == 0 && combined:
+		evidence.Outcome = SourceOutcomeMixed
 	case undated:
 		evidence.Outcome = SourceOutcomeUndated
 	case len(candidates) == 1:
@@ -449,6 +598,8 @@ func fragmentFallback(conversationID string, key string, family pendingFamily, l
 		candidates, undated := distinctCandidates(lookup.fragmentCandidates(familyKind, role, row))
 		evidence.Candidates = candidates
 		switch {
+		case len(candidates) == 0 && !undated && lookup.fragmentContained(familyKind, role, row):
+			evidence.Outcome = SourceOutcomeSourceFragment
 		case undated:
 			evidence.Outcome = SourceOutcomeUndated
 		case len(candidates) == 1:
@@ -471,14 +622,18 @@ const sourceMatchFragment = "fragment"
 func tallyFamily(family pendingFamily, matched map[string]matchedRow, report *TimestampSourceRepairReport) {
 	report.Evidence = append(report.Evidence, *family.evidence)
 	count := len(family.rows)
+	if report.Outcomes == nil {
+		report.Outcomes = map[string]int{}
+	}
+	report.Outcomes[family.evidence.Outcome] += count
 	switch family.evidence.Outcome {
 	case SourceOutcomeMatched:
 		for _, row := range family.rows {
 			matched[row.ID] = matchedRow{relativePath: row.RelativePath, timestampUnix: family.evidence.Chosen}
 		}
-	case SourceOutcomeAmbiguous:
+	case SourceOutcomeAmbiguous, SourceOutcomeIdentityConflict:
 		report.RowsAmbiguous += count
-	case SourceOutcomeUndated:
+	case SourceOutcomeUndated, SourceOutcomeIdentityAbsent:
 		report.RowsMissingTimestamp += count
 	case SourceOutcomeEmpty:
 		report.RowsEmptyContent += count

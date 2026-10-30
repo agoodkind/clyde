@@ -40,6 +40,8 @@ type SemToolCall struct {
 	LangHint string
 	Output   string
 	IsError  bool
+	// TimestampUnix is the tool call's Unix timestamp, or nil when unavailable.
+	TimestampUnix *int64
 }
 
 // Fingerprint pairs a conversation id with a value that changes when the

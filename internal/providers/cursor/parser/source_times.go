@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,24 +16,30 @@ import (
 )
 
 const (
-	sourceTimesComponent = "source_times"
-	toolKeySeparator     = "\x00"
+	sourceTimesComponent     = "source_times"
+	sourceSignatureSeparator = "\x00"
+	// SourceToolReasonIdentityAbsent indicates that a call lacks a dated identity bubble.
+	SourceToolReasonIdentityAbsent = "identity_bubble_absent"
+	// SourceToolReasonIdentityConflict indicates that identity bubble dates disagree.
+	SourceToolReasonIdentityConflict = "identity_dates_conflict"
+	sourceCopiesMarker               = "copies"
+	sourceToolsMarker                = "tools"
 )
 
 var _ conversation.SourceStoreReader = (*Parser)(nil)
 
 // SourceStoreMessages reads composer messages when the record has a supported native ID.
-func (*Parser) SourceStoreMessages(ctx context.Context, record conversation.Record, opts conversation.LoadOptions) ([]transcript.Message, bool, error) {
+func (*Parser) SourceStoreMessages(ctx context.Context, record conversation.Record, opts conversation.LoadOptions) (conversation.SourceMessages, bool, error) {
 	composerID := strings.TrimSpace(record.NativeID)
 	if composerID == "" || record.ArtifactKind == artifactKindCursorLegacyChat {
-		return nil, false, nil
+		return emptySourceMessages(), false, nil
 	}
 	rootHash := ""
 	if strings.HasPrefix(record.ArtifactPath, virtualPathPrefix) {
 		virtualPath, err := ParseVirtualPath(record.ArtifactPath)
 		if err != nil {
 			slog.WarnContext(ctx, "providers.cursor.parser.source_times_virtual_path_failed", "concern", concern, "path", record.ArtifactPath, "err", err)
-			return nil, false, fmt.Errorf("parse cursor data root from record path %s: %w", record.ArtifactPath, err)
+			return emptySourceMessages(), false, fmt.Errorf("parse cursor data root from record path %s: %w", record.ArtifactPath, err)
 		}
 		rootHash = virtualPath.RootHash
 	}
@@ -58,23 +65,8 @@ func (p *Parser) SourceMatchText(role string, text string) string {
 	return normalized[:lastBreak]
 }
 
-// sourceToolAliases maps Cursor store tool names to transcript tool names.
-// Cursor 3.27.18 maps run_terminal_command_v2 to Shell.
-var sourceToolAliases = map[string]string{
-	"run_terminal_command_v2": "Shell",
-}
-
-// SourceToolName returns the transcript name for a Cursor store tool name.
-// It returns the original name when the store name has no alias.
-func (*Parser) SourceToolName(name string) string {
-	return sourceToolName(name)
-}
-
-func sourceToolName(name string) string {
-	if alias, found := sourceToolAliases[name]; found {
-		return alias
-	}
-	return name
+func emptySourceMessages() conversation.SourceMessages {
+	return conversation.SourceMessages{Messages: nil, Copies: nil, ToolCalls: nil, ToolCallsComplete: false}
 }
 
 // streamTranscript reads transcript messages, applies source times, and yields messages.
@@ -83,26 +75,20 @@ func streamTranscript(
 	opts conversation.LoadOptions,
 	yield func(transcript.Message, error) bool,
 ) {
-	messages := make([]transcript.Message, 0)
-	bodies := make([]string, 0)
+	resolver := newSourceTimeResolver(discovered, opts)
 	err := cursorjsonl.StreamMessages(discovered.Path, func(message cursorjsonl.TranscriptMessage) error {
 		mapped, include := mapJSONLMessage(message, opts)
 		if !include {
 			return nil
 		}
-		messages = append(messages, mapped)
-		bodies = append(bodies, transcriptBody(message, mapped))
+		resolver.apply(&mapped, transcriptBody(message, mapped))
+		if !yield(mapped, nil) {
+			return cursorjsonl.ErrStopStreaming
+		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, cursorjsonl.ErrStopStreaming) {
 		yield(emptyMessage(), err)
-		return
-	}
-	applySourceTimes(context.Background(), discovered, opts, messages, bodies)
-	for _, message := range messages {
-		if !yield(message, nil) {
-			return
-		}
 	}
 }
 
@@ -115,81 +101,125 @@ func transcriptBody(message cursorjsonl.TranscriptMessage, mapped transcript.Mes
 	return body
 }
 
-// applySourceTimes fills missing message timestamps when the composer store has a unique match.
-func applySourceTimes(
-	ctx context.Context,
-	discovered discoveredArtifact,
-	opts conversation.LoadOptions,
-	messages []transcript.Message,
-	bodies []string,
-) {
-	undated := false
-	for _, message := range messages {
-		if message.Timestamp.IsZero() {
-			undated = true
-			break
-		}
+// sourceTimeResolver loads source timestamps and applies them to transcript messages.
+type sourceTimeResolver struct {
+	discovered discoveredArtifact
+	opts       conversation.LoadOptions
+	loaded     bool
+	available  bool
+	source     conversation.SourceMessages
+	texts      *transcript.SourceTimeIndex
+	// nextTool identifies the next native tool call to compare.
+	nextTool int
+	// toolsBroken prevents further tool matching after a sequence mismatch.
+	toolsBroken bool
+}
+
+func newSourceTimeResolver(discovered discoveredArtifact, opts conversation.LoadOptions) *sourceTimeResolver {
+	return &sourceTimeResolver{discovered: discovered, opts: opts, loaded: false, available: false, source: emptySourceMessages(), texts: nil, nextTool: 0, toolsBroken: false}
+}
+
+// load reads source messages once and reports whether they are available.
+func (resolver *sourceTimeResolver) load() bool {
+	if resolver.loaded {
+		return resolver.available
 	}
-	if !undated || discovered.ConversationID == "" {
-		return
+	resolver.loaded = true
+	if resolver.discovered.ConversationID == "" {
+		return false
 	}
-	source, found, err := readComposerSourceMessages(ctx, discovered.ConversationID, "", opts)
+	ctx := context.Background()
+	source, found, err := readComposerSourceMessages(ctx, resolver.discovered.ConversationID, "", resolver.opts)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.source_times_failed", "concern", concern, "path", discovered.Path, "composer_id", discovered.ConversationID, "err", err)
-		return
+		slog.WarnContext(ctx, "providers.cursor.parser.source_times_failed", "concern", concern, "path", resolver.discovered.Path, "composer_id", resolver.discovered.ConversationID, "err", err)
+		return false
 	}
 	if !found {
+		return false
+	}
+	resolver.source = source
+	resolver.texts = newSourceTimeIndex(source)
+	resolver.available = true
+	return true
+}
+
+// apply adds source timestamps to a message and its tool calls when available.
+func (resolver *sourceTimeResolver) apply(message *transcript.Message, body string) {
+	if !message.Timestamp.IsZero() && len(message.Tools) == 0 {
 		return
 	}
-	texts, tools := newSourceTimeLookup(source)
-	for position := range messages {
-		if !messages[position].Timestamp.IsZero() {
+	if !resolver.load() {
+		return
+	}
+	if message.Timestamp.IsZero() && strings.TrimSpace(body) != "" {
+		if stamp, outcome := resolver.texts.TextTime(message.Role, body); outcome == transcript.SourceTimeFound {
+			message.Timestamp = stamp
+		}
+	}
+	resolver.applyTools(message)
+	if message.Timestamp.IsZero() && len(message.Tools) > 0 && strings.TrimSpace(body) == "" {
+		if stamp, shared := sharedToolTime(message.Tools); shared {
+			message.Timestamp = stamp
+		}
+	}
+}
+
+// applyTools matches tool calls by position, name, and display until a mismatch.
+func (resolver *sourceTimeResolver) applyTools(message *transcript.Message) {
+	for toolIndex := range message.Tools {
+		if resolver.toolsBroken || !resolver.source.ToolCallsComplete {
+			return
+		}
+		tool := &message.Tools[toolIndex]
+		if resolver.nextTool >= len(resolver.source.ToolCalls) {
+			resolver.breakTools("count")
+			return
+		}
+		native := resolver.source.ToolCalls[resolver.nextTool]
+		if tool.Name != native.Tool.Name || strings.TrimSpace(tool.Display) != strings.TrimSpace(native.Tool.Display) {
+			resolver.breakTools("sequence")
+			return
+		}
+		resolver.nextTool++
+		if native.Timestamp.IsZero() {
 			continue
 		}
-		if strings.TrimSpace(bodies[position]) != "" {
-			if stamp, outcome := texts.TextTime(messages[position].Role, bodies[position]); outcome == transcript.SourceTimeFound {
-				messages[position].Timestamp = stamp
-			}
-			continue
-		}
-		if len(messages[position].Tools) > 0 {
-			if stamp, ok := uniqueSourceTime(tools[toolKey(messages[position].Role, messages[position].Tools[0])]); ok {
-				messages[position].Timestamp = stamp
-			}
-		}
+		stamp := native.Timestamp
+		tool.Timestamp = &stamp
 	}
 }
 
-// newSourceTimeLookup indexes source message text and tool calls by role.
-func newSourceTimeLookup(source []transcript.Message) (*transcript.SourceTimeIndex, map[string][]time.Time) {
-	entries := make([]transcript.SourceTimeEntry, 0, len(source))
-	tools := make(map[string][]time.Time)
-	for _, message := range source {
-		entries = append(entries, transcript.SourceTimeEntry{Role: message.Role, Text: message.Text, Timestamp: message.Timestamp})
-		for _, tool := range message.Tools {
-			tool.Name = sourceToolName(tool.Name)
-			key := toolKey(message.Role, tool)
-			tools[key] = append(tools[key], message.Timestamp)
-		}
-	}
-	return transcript.NewSourceTimeIndex(entries), tools
+func (resolver *sourceTimeResolver) breakTools(reason string) {
+	resolver.toolsBroken = true
+	slog.Warn("providers.cursor.parser.native_tool_sequence_mismatch", "concern", concern, "path", resolver.discovered.Path, "position", resolver.nextTool, "reason", reason)
 }
 
-func toolKey(role string, tool transcript.ToolCall) string {
-	return strings.Join([]string{role, tool.Name, strings.TrimSpace(tool.Display)}, toolKeySeparator)
-}
-
-// uniqueSourceTime returns a timestamp when all candidates share one nonzero time.
-func uniqueSourceTime(times []time.Time) (time.Time, bool) {
-	if len(times) == 0 {
-		return time.Time{}, false
-	}
-	for _, stamp := range times[1:] {
-		if !stamp.Equal(times[0]) {
+// sharedToolTime returns the timestamp when every tool has the same nonzero time.
+func sharedToolTime(tools []transcript.ToolCall) (time.Time, bool) {
+	var shared time.Time
+	for index, tool := range tools {
+		if tool.Timestamp == nil || tool.Timestamp.IsZero() {
 			return time.Time{}, false
 		}
+		if index > 0 && !tool.Timestamp.Equal(shared) {
+			return time.Time{}, false
+		}
+		shared = *tool.Timestamp
 	}
-	return times[0], !times[0].IsZero()
+	return shared, true
+}
+
+// newSourceTimeIndex indexes ordered source messages and stored copies.
+func newSourceTimeIndex(source conversation.SourceMessages) *transcript.SourceTimeIndex {
+	return transcript.NewSourceTimeIndex(sourceTimeEntries(source.Messages), sourceTimeEntries(source.Copies))
+}
+
+func sourceTimeEntries(messages []transcript.Message) []transcript.SourceTimeEntry {
+	entries := make([]transcript.SourceTimeEntry, 0, len(messages))
+	for _, message := range messages {
+		entries = append(entries, transcript.SourceTimeEntry{Role: message.Role, Text: message.Text, Timestamp: message.Timestamp})
+	}
+	return entries
 }
 
 // readComposerSourceMessages reads a composer from the data root matching
@@ -197,34 +227,34 @@ func uniqueSourceTime(times []time.Time) (time.Time, bool) {
 // composer from every configured data root that contains it. It returns an error
 // when two roots return different messages or times. It reports found as false
 // when no root contains the composer.
-func readComposerSourceMessages(ctx context.Context, composerID string, rootHash string, opts conversation.LoadOptions) ([]transcript.Message, bool, error) {
+func readComposerSourceMessages(ctx context.Context, composerID string, rootHash string, opts conversation.LoadOptions) (conversation.SourceMessages, bool, error) {
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_roots_failed", "concern", concern, "composer_id", composerID, "err", err)
-		return nil, false, fmt.Errorf("resolve Cursor data roots: %w", err)
+		return emptySourceMessages(), false, fmt.Errorf("resolve Cursor data roots: %w", err)
 	}
-	var chosen []transcript.Message
+	chosen := emptySourceMessages()
 	chosenPath := ""
 	for _, root := range roots {
 		if rootHash != "" && RootHash(root.RootDir) != rootHash {
 			continue
 		}
-		messages, found, readErr := rootComposerSourceMessages(ctx, root.GlobalDBPath, composerID, opts)
+		source, found, readErr := rootComposerSourceMessages(ctx, root.GlobalDBPath, composerID, opts)
 		if readErr != nil {
-			return nil, false, readErr
+			return emptySourceMessages(), false, readErr
 		}
 		if !found {
 			continue
 		}
 		if chosenPath == "" {
-			chosen = messages
+			chosen = source
 			chosenPath = root.GlobalDBPath
 			continue
 		}
-		if sourceSignature(messages) != sourceSignature(chosen) {
+		if sourceSignature(source) != sourceSignature(chosen) {
 			conflictErr := fmt.Errorf("cursor composer %q has different messages or times in global databases %s and %s", composerID, chosenPath, root.GlobalDBPath)
 			slog.WarnContext(ctx, "providers.cursor.parser.source_times_roots_conflict", "concern", concern, "composer_id", composerID, "first", chosenPath, "second", root.GlobalDBPath, "err", conflictErr)
-			return nil, false, conflictErr
+			return emptySourceMessages(), false, conflictErr
 		}
 	}
 	return chosen, chosenPath != "", nil
@@ -233,62 +263,130 @@ func readComposerSourceMessages(ctx context.Context, composerID string, rootHash
 // rootComposerSourceMessages reads a composer's messages from the global
 // database at path. It reports found as false when the database or composer
 // is absent.
-func rootComposerSourceMessages(ctx context.Context, path string, composerID string, opts conversation.LoadOptions) ([]transcript.Message, bool, error) {
+func rootComposerSourceMessages(ctx context.Context, path string, composerID string, opts conversation.LoadOptions) (conversation.SourceMessages, bool, error) {
 	db, availability := openOptionalDatabase(ctx, path, sourceTimesComponent)
 	switch availability {
 	case databaseAvailabilityAbsent:
-		return nil, false, nil
+		return emptySourceMessages(), false, nil
 	case databaseAvailabilityUnreadable:
-		return nil, false, fmt.Errorf("open Cursor global database %s", path)
+		return emptySourceMessages(), false, fmt.Errorf("open Cursor global database %s", path)
 	case databaseAvailabilityOpen:
 	}
-	messages, found, readErr := composerSourceMessages(ctx, db, composerID, opts)
+	source, found, readErr := composerSourceMessages(ctx, db, composerID, opts)
 	closeErr := db.Close()
 	if readErr != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_read_failed", "concern", concern, "path", path, "composer_id", composerID, "err", readErr)
-		return nil, false, fmt.Errorf("read composer from Cursor global database %s: %w", path, readErr)
+		return emptySourceMessages(), false, fmt.Errorf("read composer from Cursor global database %s: %w", path, readErr)
 	}
 	if closeErr != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_close_failed", "concern", concern, "path", path, "err", closeErr)
-		return nil, false, fmt.Errorf("close Cursor global database %s: %w", path, closeErr)
+		return emptySourceMessages(), false, fmt.Errorf("close Cursor global database %s: %w", path, closeErr)
 	}
-	return messages, found, nil
+	return source, found, nil
 }
 
-// sourceSignature returns a string built from each message's role, text,
-// reasoning, time, and tool calls for comparison between roots.
-func sourceSignature(messages []transcript.Message) string {
+// sourceSignature serializes source content and timestamps for root comparison.
+func sourceSignature(source conversation.SourceMessages) string {
 	var builder strings.Builder
-	for _, message := range messages {
-		builder.WriteString(message.Role + toolKeySeparator + message.Text + toolKeySeparator + message.Thinking + toolKeySeparator + message.Timestamp.UTC().Format(time.RFC3339Nano))
-		for _, tool := range message.Tools {
-			builder.WriteString(toolKeySeparator + toolKey(message.Role, tool))
-		}
-		builder.WriteString("\n")
+	writeSignatureMessages(&builder, source.Messages)
+	builder.WriteString(sourceCopiesMarker + "\n")
+	writeSignatureMessages(&builder, source.Copies)
+	fmt.Fprintf(&builder, "%s %t\n", sourceToolsMarker, source.ToolCallsComplete)
+	for _, call := range source.ToolCalls {
+		builder.WriteString(call.Tool.Name + sourceSignatureSeparator + call.Tool.Display + sourceSignatureSeparator + call.Timestamp.UTC().Format(time.RFC3339Nano) + sourceSignatureSeparator + call.Reason + "\n")
 	}
 	return builder.String()
 }
 
-func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, opts conversation.LoadOptions) ([]transcript.Message, bool, error) {
+func writeSignatureMessages(builder *strings.Builder, messages []transcript.Message) {
+	for _, message := range messages {
+		builder.WriteString(message.Role + sourceSignatureSeparator + message.Text + sourceSignatureSeparator + message.Thinking + sourceSignatureSeparator + message.Timestamp.UTC().Format(time.RFC3339Nano))
+		for _, tool := range message.Tools {
+			builder.WriteString(sourceSignatureSeparator + tool.Name + sourceSignatureSeparator + strings.TrimSpace(tool.Display))
+		}
+		builder.WriteString("\n")
+	}
+}
+
+func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, opts conversation.LoadOptions) (conversation.SourceMessages, bool, error) {
+	source := emptySourceMessages()
 	header, found, err := cursorstore.ReadComposerHeader(ctx, db, composerID)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_header_failed", "concern", concern, "composer_id", composerID, "err", err)
-		return nil, false, fmt.Errorf("read composer header %q: %w", composerID, err)
+		return source, false, fmt.Errorf("read composer header %q: %w", composerID, err)
 	}
 	if !found {
-		return nil, false, nil
+		return source, false, nil
 	}
-	messages := make([]transcript.Message, 0)
+	kept := make(map[string]bool)
+	source.Messages = make([]transcript.Message, 0)
 	err = cursorstore.StreamComposerBubbles(ctx, db, composerID, header, func(bubble cursorstore.Bubble) bool {
+		kept[bubble.BubbleID] = true
 		mapped, include := mapComposerBubble(bubble, opts)
 		if include {
-			messages = append(messages, mapped)
+			source.Messages = append(source.Messages, mapped)
 		}
 		return true
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_bubbles_failed", "concern", concern, "composer_id", composerID, "err", err)
-		return nil, false, fmt.Errorf("read composer bubbles %q: %w", composerID, err)
+		return source, false, fmt.Errorf("read composer bubbles %q: %w", composerID, err)
 	}
-	return messages, true, nil
+	callDates := make(map[string][]time.Time)
+	source.Copies = make([]transcript.Message, 0)
+	err = cursorstore.ForEachStoredComposerBubble(ctx, db, composerID, func(bubble cursorstore.Bubble) error {
+		if bubble.ToolCall != nil && bubble.ToolCall.ToolCallID != "" {
+			callDates[bubble.ToolCall.ToolCallID] = append(callDates[bubble.ToolCall.ToolCallID], composerBubbleTimestamp(bubble.CreatedAt))
+		}
+		if kept[bubble.BubbleID] {
+			return nil
+		}
+		if mapped, include := mapComposerBubble(bubble, opts); include {
+			source.Copies = append(source.Copies, mapped)
+		}
+		return nil
+	})
+	if err != nil {
+		return source, false, fmt.Errorf("read stored composer bubbles %q: %w", composerID, err)
+	}
+	native, nativeFound, err := cursorstore.ReadComposerNativeToolCalls(ctx, db, composerID)
+	if err != nil {
+		return source, false, fmt.Errorf("read native tool calls for composer %q: %w", composerID, err)
+	}
+	source.ToolCallsComplete = nativeFound && native.Complete
+	source.ToolCalls = make([]conversation.SourceToolCall, 0, len(native.Calls))
+	for _, call := range native.Calls {
+		source.ToolCalls = append(source.ToolCalls, nativeSourceToolCall(call, callDates[call.ID]))
+	}
+	return source, true, nil
+}
+
+// nativeSourceToolCall builds a source tool call and selects its identity bubble time.
+func nativeSourceToolCall(call cursorstore.NativeToolCall, dates []time.Time) conversation.SourceToolCall {
+	input := transcript.ToolInputJSON{Raw: cloneRaw(call.Args)}
+	display, displayLang := toolDisplayText(call.Name, input)
+	tool := transcript.ToolCall{
+		ID:          call.ID,
+		Name:        call.Name,
+		Input:       input,
+		Display:     display,
+		DisplayLang: displayLang,
+		Output:      "",
+		IsError:     false,
+		Attachments: nil,
+		Timestamp:   nil,
+	}
+	result := conversation.SourceToolCall{Tool: tool, Timestamp: time.Time{}, Reason: ""}
+	if len(dates) == 0 || dates[0].IsZero() {
+		result.Reason = SourceToolReasonIdentityAbsent
+		return result
+	}
+	for _, stamp := range dates[1:] {
+		if !stamp.Equal(dates[0]) {
+			result.Reason = SourceToolReasonIdentityConflict
+			return result
+		}
+	}
+	result.Timestamp = dates[0]
+	return result
 }

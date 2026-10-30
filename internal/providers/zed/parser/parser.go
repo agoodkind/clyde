@@ -694,6 +694,7 @@ func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) 
 				Output:      output,
 				IsError:     isError,
 				Attachments: nil,
+				Timestamp:   nil,
 			})
 		}
 	}

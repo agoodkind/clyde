@@ -5,7 +5,10 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -26,6 +29,7 @@ import (
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/conversation/vectorsearch"
 	"goodkind.io/clyde/internal/conversation/vectorsearch/milvustest"
+	daemonsvc "goodkind.io/clyde/internal/daemon"
 	cursorparser "goodkind.io/clyde/internal/providers/cursor/parser"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 )
@@ -51,13 +55,31 @@ const (
 	sourceRepairLiteral     = "Please repeat this"
 	sourceRepairMarkerLine  = "[turn ended: error]"
 	sourceRepairShellAlias  = "git status --short"
-	sourceRepairOtherTool   = "make lint"
 	sourceRepairShellTwice  = "go test ./..."
 	sourceRepairShellDay    = "2026-03-14"
+	sourceRepairCopied      = "Which bucket keeps the nightly backups?"
 )
 
-func shellBubbleTool(name string, command string) string {
-	return `{"name":"` + name + `","rawArgs":"{\"command\":\"` + command + `\"}","status":"completed"}`
+func shellBubbleTool(callID string, rawArgs string) string {
+	return `{"name":"run_terminal_command_v2","rawArgs":"` + rawArgs + `","status":"completed","toolCallId":"` + callID + `"}`
+}
+
+func shellArgs(command string) string {
+	return `{\"command\":\"` + command + `\"}`
+}
+
+func nativeToolCall(id string, name string, args string) string {
+	return `{"type":"tool-call","toolCallId":"` + id + `","toolName":"` + name + `","args":` + args + `}`
+}
+
+// sourceRepairNative returns native messages for the source repair fixture.
+func sourceRepairNative() []string {
+	return []string{
+		`{"role":"assistant","content":[` + nativeToolCall("call_read", "read_file", `{"path":"internal/online/online.go"}`) + `]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_git", "Shell", `{"command":"`+sourceRepairShellAlias+`"}`) + `]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_test_one", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_test_two", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
+	}
 }
 
 func shellToolDoc(command string, messageIndex int32, timestampUnix int64) semsearch.SemDoc {
@@ -67,18 +89,20 @@ func shellToolDoc(command string, messageIndex int32, timestampUnix int64) semse
 }
 
 type sourceBubble struct {
-	id      string
-	kind    int
-	text    string
-	created string
-	tool    string
+	id           string
+	kind         int
+	text         string
+	created      string
+	tool         string
+	server       string
+	unreferenced bool
 }
 
 func sourceRepairBubbles() []sourceBubble {
 	return []sourceBubble{
 		{id: "b1", kind: 1, text: sourceRepairQuestion, created: "2026-03-02T10:00:00.000Z", tool: ""},
 		{id: "b2", kind: 2, text: sourceRepairAnswer, created: "2026-03-03T10:00:00.000Z", tool: ""},
-		{id: "b3", kind: 2, text: "", created: "2026-03-04T10:00:00.000Z", tool: `{"name":"read_file","rawArgs":"{\"path\":\"internal/online/online.go\"}","status":"completed"}`},
+		{id: "b3", kind: 2, text: "", created: "2026-03-04T10:00:00.000Z", tool: `{"name":"read_file","rawArgs":"{\"path\":\"internal/online/online.go\"}","status":"completed","toolCallId":"call_read"}`},
 		{id: "b4", kind: 2, text: sourceRepairPartA, created: "2026-03-05T10:00:00.000Z", tool: ""},
 		{id: "b5", kind: 2, text: sourceRepairPartB, created: "2026-03-06T10:00:00.000Z", tool: ""},
 		{id: "b6", kind: 1, text: "Did the nightly retention job finish?", created: "2026-03-07T10:00:00.000Z", tool: ""},
@@ -90,10 +114,12 @@ func sourceRepairBubbles() []sourceBubble {
 		{id: "b12", kind: 1, text: sourceRepairReordered, created: "2026-03-01T09:00:00.000Z", tool: ""},
 		{id: "b13", kind: 1, text: sourceRepairLiteral, created: "2026-03-12T10:00:00.000Z", tool: ""},
 		{id: "b14", kind: 1, text: sourceRepairLiteral + `\n` + sourceRepairMarkerLine, created: "2026-03-13T10:00:00.000Z", tool: ""},
-		{id: "b15", kind: 2, text: "", created: "2026-03-14T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellAlias)},
-		{id: "b16", kind: 2, text: "", created: "2026-03-15T10:00:00.000Z", tool: shellBubbleTool("run_command", sourceRepairOtherTool)},
-		{id: "b17", kind: 2, text: "", created: "2026-03-16T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellTwice)},
-		{id: "b18", kind: 2, text: "", created: "2026-03-17T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellTwice)},
+		{id: "b15", kind: 2, text: "", created: "2026-03-14T10:00:00.000Z", tool: shellBubbleTool("call_git", "")},
+		{id: "b17", kind: 2, text: "", created: "2026-03-16T10:00:00.000Z", tool: shellBubbleTool("call_test_one", "")},
+		{id: "b18", kind: 2, text: "", created: "2026-03-17T10:00:00.000Z", tool: shellBubbleTool("call_test_two", "")},
+		{id: "b19", kind: 2, text: "", created: "2026-03-20T10:00:00.000Z", tool: shellBubbleTool("aaaaaaaa-0000-4000-8000-000000000019", shellArgs(sourceRepairShellAlias)), server: "server-git", unreferenced: true},
+		{id: "b20", kind: 1, text: sourceRepairCopied, created: "2026-03-18T10:00:00.000Z", tool: ""},
+		{id: "b21", kind: 1, text: sourceRepairCopied, created: "2026-03-19T10:00:00.000Z", tool: "", server: "server-copied", unreferenced: true},
 	}
 }
 
@@ -109,11 +135,11 @@ func writeSourceRepairStoreWith(t *testing.T, dataRoot string, createdAt func(st
 	for position := range bubbles {
 		bubbles[position].created = createdAt(bubbles[position].created)
 	}
-	writeComposerStore(t, dataRoot, sourceRepairComposerID, bubbles)
+	writeComposerStore(t, dataRoot, sourceRepairComposerID, bubbles, sourceRepairNative())
 }
 
 // writeComposerStore writes a composer and its bubbles to a Cursor source store.
-func writeComposerStore(t *testing.T, dataRoot string, composerID string, bubbles []sourceBubble) {
+func writeComposerStore(t *testing.T, dataRoot string, composerID string, bubbles []sourceBubble, native []string) {
 	t.Helper()
 	dbPath := filepath.Join(dataRoot, "globalStorage", "state.vscdb")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
@@ -128,15 +154,31 @@ func writeComposerStore(t *testing.T, dataRoot string, composerID string, bubble
 	statements := []string{"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)", "CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)"}
 	for _, bubble := range bubbles {
 		kind := strconv.Itoa(bubble.kind)
-		headers = append(headers, `{"bubbleId":"`+bubble.id+`","type":`+kind+`}`)
+		if !bubble.unreferenced {
+			headers = append(headers, `{"bubbleId":"`+bubble.id+`","type":`+kind+`}`)
+		}
 		value := `{"_v":3,"type":` + kind + `,"bubbleId":"` + bubble.id + `","text":"` + bubble.text + `","createdAt":"` + bubble.created + `"`
+		if bubble.server != "" {
+			value += `,"serverBubbleId":"` + bubble.server + `"`
+		}
 		if bubble.tool != "" {
 			value += `,"toolFormerData":` + bubble.tool
 		}
 		value += "}"
 		statements = append(statements, "INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:"+composerID+":"+bubble.id+"', '"+value+"')")
 	}
-	statements = append(statements, `INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+composerID+`', '{"composerId":"`+composerID+`","name":"Source repair","createdAt":1772445600000,"lastUpdatedAt":1773136800000,"fullConversationHeadersOnly":[`+strings.Join(headers, ",")+`]}')`)
+	state := ""
+	if native != nil {
+		var references []byte
+		for _, message := range native {
+			digest := sha256.Sum256([]byte(message))
+			references = append(references, 0x0a, byte(len(digest)))
+			references = append(references, digest[:]...)
+			statements = append(statements, "INSERT INTO cursorDiskKV(key, value) VALUES ('agentKv:blob:"+hex.EncodeToString(digest[:])+"', X'"+hex.EncodeToString([]byte(message))+"')")
+		}
+		state = `"conversationState":"~` + base64.StdEncoding.EncodeToString(references) + `",`
+	}
+	statements = append(statements, `INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+composerID+`', '{"composerId":"`+composerID+`","name":"Source repair","createdAt":1772445600000,"lastUpdatedAt":1773136800000,`+state+`"fullConversationHeadersOnly":[`+strings.Join(headers, ",")+`]}')`)
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("execute source store statement %q: %v", statement, err)
@@ -286,8 +328,9 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		sourceRepairDoc(sourceRepairOverlong, 68, "assistant", zero),
 		sourceRepairDoc(sourceRepairLiteral+"\n"+sourceRepairMarkerLine, 69, "user", zero),
 		shellToolDoc(sourceRepairShellAlias, 70, zero),
-		shellToolDoc(sourceRepairOtherTool, 71, zero),
 		shellToolDoc(sourceRepairShellTwice, 72, zero),
+		shellToolDoc(sourceRepairShellTwice, 73, zero),
+		sourceRepairDoc(sourceRepairCopied, 74, "user", zero),
 	}
 	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + sourceRepairComposerID, Value: "old-parser"}}
 	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
@@ -307,7 +350,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run source repair dry run: %v", err)
 	}
-	if !strings.Contains(output, "read 16 rows, found 0 current, 10 changed, 0 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
+	if !strings.Contains(output, "read 17 rows, found 0 current, 10 changed, 0 written, 4 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair dry run returned unexpected output %q", output)
 	}
 	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(seeded, after) {
@@ -320,7 +363,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute source repair: %v", err)
 	}
-	if !strings.Contains(output, "10 changed, 10 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
+	if !strings.Contains(output, "10 changed, 10 written, 4 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair returned unexpected output %q", output)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -334,13 +377,11 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		}
 	}
 	wantDays := map[string]string{
-		sourceRepairQuestion:                                "2026-03-02",
-		sourceRepairAnswer:                                  "2026-03-03",
-		sourceRepairPartA + "\n" + sourceRepairPartB:        "2026-03-05",
-		sourceRepairSameQ:                                   "2026-03-11T10:00:00",
-		sourceRepairSameA:                                   "2026-03-11T10:00:00",
-		sourceRepairReordered:                               "2026-03-01T09:00:00",
-		sourceRepairFragment:                                "2026-03-03",
+		sourceRepairQuestion:  "2026-03-02",
+		sourceRepairAnswer:    "2026-03-03",
+		sourceRepairSameQ:     "2026-03-11T10:00:00",
+		sourceRepairSameA:     "2026-03-11T10:00:00",
+		sourceRepairReordered: "2026-03-01T09:00:00",
 		sourceRepairLiteral + "\n" + sourceRepairMarkerLine: "2026-03-13",
 	}
 	changed := 0
@@ -356,8 +397,8 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 			continue
 		}
 		changed++
-		rejectedTool := strings.Contains(before.content, sourceRepairOtherTool) || strings.Contains(before.content, sourceRepairShellTwice)
-		if before.timestampUnix != zero || rejectedTool || before.content == sourceRepairRepeated || before.content == sourceRepairUnsaved || before.content == sourceRepairOverlong {
+		unknown := []string{sourceRepairRepeated, sourceRepairUnsaved, sourceRepairOverlong, sourceRepairPartA + "\n" + sourceRepairPartB, sourceRepairFragment, sourceRepairCopied}
+		if before.timestampUnix != zero || slices.Contains(unknown, before.content) {
 			t.Fatalf("repair changed a row that should remain unchanged %s", id)
 		}
 		want, known := wantDays[before.content]
@@ -367,8 +408,13 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		}
 		if strings.HasPrefix(before.relativePath, "convtool/") {
 			want, known = sourceRepairToolDay, true
-			if strings.Contains(before.content, sourceRepairShellAlias) {
+			switch {
+			case strings.Contains(before.content, sourceRepairShellAlias):
 				want = sourceRepairShellDay
+			case strings.HasSuffix(before.relativePath, "/72/0"):
+				want = "2026-03-16"
+			case strings.HasSuffix(before.relativePath, "/73/0"):
+				want = "2026-03-17"
 			}
 		}
 		if !known || day != want {
@@ -381,7 +427,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	for _, check := range []struct {
 		query string
 		day   int
-	}{{query: sourceRepairQuestion, day: 2}, {query: sourceRepairAnswer, day: 3}, {query: sourceRepairPartA, day: 5}} {
+	}{{query: sourceRepairQuestion, day: 2}, {query: sourceRepairAnswer, day: 3}} {
 		hits := searchDay(t, client, check.query, 2026, time.March, check.day)
 		if len(hits) == 0 || hits[0].ConversationID != "cursor:"+sourceRepairComposerID {
 			t.Fatalf("date-filtered search did not return the expected conversation for query %q: %+v", check.query, hits)
@@ -393,7 +439,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute source repair: %v", err)
 	}
-	if !strings.Contains(output, "read 16 rows, found 0 current, 0 changed, 0 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
+	if !strings.Contains(output, "read 17 rows, found 0 current, 0 changed, 0 written, 4 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair rerun returned unexpected output %q", output)
 	}
 }
@@ -524,7 +570,7 @@ func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) 
 		doc.Role = "user"
 		docs = append(docs, doc)
 	}
-	writeComposerStore(t, dataRoot, partialComposerID, bubbles)
+	writeComposerStore(t, dataRoot, partialComposerID, bubbles, nil)
 
 	ctx := context.Background()
 	client := openRepairClient(t, address, vectorsearch.LayoutShared)
@@ -674,7 +720,7 @@ func TestRepairTimestampsFromCursorStoreKeepsQueuedRetriesInEveryCheckpoint(t *t
 		root := filepath.Join(home, fmt.Sprintf("cursor-%d", position))
 		roots = append(roots, root)
 		message := fmt.Sprintf("Queued retry message %d asks about restic snapshots.", position)
-		writeComposerStore(t, root, composer, []sourceBubble{{id: "q1", kind: 1, text: message, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""}})
+		writeComposerStore(t, root, composer, []sourceBubble{{id: "q1", kind: 1, text: message, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""}}, nil)
 		doc := repairDoc("cursor:"+composer, message, zero)
 		doc.Role = "user"
 		docs = append(docs, doc)
@@ -774,7 +820,7 @@ func TestRepairTimestampsFromCursorStoreUsesTranscriptEnvelopesWhenTheStoreLacks
 	projects := filepath.Join(home, "cursor-projects")
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
-	writeComposerStore(t, dataRoot, sourceRepairComposerID, sourceRepairBubbles())
+	writeComposerStore(t, dataRoot, sourceRepairComposerID, sourceRepairBubbles(), nil)
 	composer := "b2b2b2b2-0000-4000-8000-000000000001"
 	question := "Which bucket stores the retained restic snapshots?"
 	answer := "The retained snapshots live in the backups bucket."
@@ -844,5 +890,111 @@ func TestRepairTimestampsFromCursorStoreUsesTranscriptEnvelopesWhenTheStoreLacks
 		if after.timestampUnix != wantTime {
 			t.Fatalf("unexpected timestamp, row path, actual timestamp, expected timestamp: %s: %d, %d", after.relativePath, after.timestampUnix, wantTime)
 		}
+	}
+}
+
+// TestIngestingAGroupedCursorTurnKeepsEachToolCallDate checks the stored
+// user and tool row timestamps after ingesting a grouped Cursor turn.
+func TestIngestingAGroupedCursorTurnKeepsEachToolCallDate(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	dataRoot := filepath.Join(home, "cursor-data")
+	projects := filepath.Join(home, "cursor-projects")
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
+	composer := "c3c3c3c3-0000-4000-8000-000000000001"
+	question := "Check the tree and run the tests twice."
+	writeComposerStore(t, dataRoot, composer, []sourceBubble{
+		{id: "g1", kind: 1, text: question, created: "2026-05-20T10:00:00.000Z", tool: "", server: "", unreferenced: false},
+		{id: "g2", kind: 2, text: "", created: "2026-05-20T10:01:00.000Z", tool: shellBubbleTool("call_git", ""), server: "", unreferenced: false},
+		{id: "g3", kind: 2, text: "", created: "2026-05-20T10:02:00.000Z", tool: shellBubbleTool("call_test_one", ""), server: "", unreferenced: false},
+		{id: "g4", kind: 2, text: "", created: "2026-05-20T10:04:00.000Z", tool: shellBubbleTool("call_test_two", ""), server: "", unreferenced: false},
+		{id: "g5", kind: 2, text: "", created: "2026-05-20T12:00:00.000Z", tool: shellBubbleTool("aaaaaaaa-0000-4000-8000-0000000000g5", shellArgs(sourceRepairShellAlias)), server: "server-g5", unreferenced: true},
+	}, []string{
+		`{"role":"user","content":[{"type":"text","text":"` + question + `"}]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_git", "Shell", `{"command":"`+sourceRepairShellAlias+`"}`) + `,` + nativeToolCall("call_test_one", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_test_two", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
+	})
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", composer, composer+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	shellCall := func(command string) string {
+		return `{"type":"tool_use","name":"Shell","input":{"command":"` + command + `"}}`
+	}
+	lines := `{"role":"user","message":{"content":[{"type":"text","text":"` + question + `"}]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[` + shellCall(sourceRepairShellAlias) + `,` + shellCall(sourceRepairShellTwice) + `]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[` + shellCall(sourceRepairShellTwice) + `]}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o600); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+
+	ctx := context.Background()
+	registry := conversation.NewRegistry()
+	registry.Register(cursorparser.New())
+	index := conversation.NewIndex(registry, config.NewConfigWithDefaults().Conversation)
+	if err := index.Refresh(ctx); err != nil {
+		t.Fatalf("refresh conversation index: %v", err)
+	}
+	stamped, err := index.ListWithStamps(ctx)
+	if err != nil {
+		t.Fatalf("list indexed conversations: %v", err)
+	}
+	var record conversation.Record
+	for _, entry := range stamped {
+		if entry.Record.NativeID == composer && strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
+			record = entry.Record
+		}
+	}
+	if record.ID == "" {
+		t.Fatalf("transcript record is absent; indexed record count: %d", len(stamped))
+	}
+	kinds := backfillTestContentKinds(t)
+	messages, err := index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
+	if err != nil {
+		t.Fatalf("load conversation messages: %v", err)
+	}
+	built, err := daemonsvc.BuildSemanticConversationDocuments(record, messages, kinds)
+	if err != nil {
+		t.Fatalf("build semantic conversation documents: %v", err)
+	}
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	manifest := []semsearch.Fingerprint{{ConversationID: record.ID, Value: "grouped"}}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, built.Docs, manifest); err != nil {
+		t.Fatalf("store semantic conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	rows, _ := sharedSnapshot(t, address)
+	wantTools := []time.Time{
+		time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC),
+		time.Date(2026, time.May, 20, 10, 2, 0, 0, time.UTC),
+		time.Date(2026, time.May, 20, 10, 4, 0, 0, time.UTC),
+	}
+	tools := 0
+	for _, row := range rows {
+		parts := strings.Split(row.relativePath, "/")
+		switch parts[0] {
+		case "convtool":
+			toolIndex, convErr := strconv.Atoi(parts[3])
+			if convErr != nil || toolIndex >= len(wantTools) {
+				t.Fatalf("invalid tool row path: %s", row.relativePath)
+			}
+			tools++
+			if row.timestampUnix != wantTools[toolIndex].Unix() {
+				t.Fatalf("unexpected tool row timestamp; row path, actual, expected: %s: %d, %d", row.relativePath, row.timestampUnix, wantTools[toolIndex].Unix())
+			}
+		case "conv":
+			if want := time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC).Unix(); row.content == question && row.timestampUnix != want {
+				t.Fatalf("unexpected user row timestamp; actual, expected: %d, %d", row.timestampUnix, want)
+			}
+		}
+	}
+	if tools != len(wantTools) {
+		t.Fatalf("unexpected tool row count; actual, expected: %d, %d", tools, len(wantTools))
 	}
 }
