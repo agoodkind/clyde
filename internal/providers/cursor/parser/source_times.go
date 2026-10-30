@@ -176,6 +176,10 @@ func (resolver *sourceTimeResolver) applyTools(message *transcript.Message) {
 			return
 		}
 		native := resolver.source.ToolCalls[resolver.nextTool]
+		if toolIndex == 0 && !native.MessageStart {
+			resolver.breakTools("boundary")
+			return
+		}
 		if tool.Name != native.Tool.Name || strings.TrimSpace(tool.Display) != strings.TrimSpace(native.Tool.Display) {
 			resolver.breakTools("sequence")
 			return
@@ -293,7 +297,7 @@ func sourceSignature(source conversation.SourceMessages) string {
 	writeSignatureMessages(&builder, source.Copies)
 	fmt.Fprintf(&builder, "%s %t\n", sourceToolsMarker, source.ToolCallsComplete)
 	for _, call := range source.ToolCalls {
-		builder.WriteString(call.Tool.Name + sourceSignatureSeparator + call.Tool.Display + sourceSignatureSeparator + call.Timestamp.UTC().Format(time.RFC3339Nano) + sourceSignatureSeparator + call.Reason + "\n")
+		fmt.Fprintf(&builder, "%s%s%s%s%s%s%s%s%t\n", call.Tool.Name, sourceSignatureSeparator, call.Tool.Display, sourceSignatureSeparator, call.Timestamp.UTC().Format(time.RFC3339Nano), sourceSignatureSeparator, call.Reason, sourceSignatureSeparator, call.MessageStart)
 	}
 	return builder.String()
 }
@@ -354,9 +358,12 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 		return source, false, fmt.Errorf("read native tool calls for composer %q: %w", composerID, err)
 	}
 	source.ToolCallsComplete = nativeFound && native.Complete
-	source.ToolCalls = make([]conversation.SourceToolCall, 0, len(native.Calls))
-	for _, call := range native.Calls {
-		source.ToolCalls = append(source.ToolCalls, nativeSourceToolCall(call, callDates[call.ID]))
+	sequence := native.Sequence()
+	source.ToolCalls = make([]conversation.SourceToolCall, 0, len(sequence))
+	for _, entry := range sequence {
+		call := nativeSourceToolCall(entry.Call, callDates[entry.Call.ID])
+		call.MessageStart = entry.MessageStart
+		source.ToolCalls = append(source.ToolCalls, call)
 	}
 	return source, true, nil
 }
@@ -376,7 +383,7 @@ func nativeSourceToolCall(call cursorstore.NativeToolCall, dates []time.Time) co
 		Attachments: nil,
 		Timestamp:   nil,
 	}
-	result := conversation.SourceToolCall{Tool: tool, Timestamp: time.Time{}, Reason: ""}
+	result := conversation.SourceToolCall{Tool: tool, Timestamp: time.Time{}, Reason: "", MessageStart: false}
 	if len(dates) == 0 || dates[0].IsZero() {
 		result.Reason = SourceToolReasonIdentityAbsent
 		return result

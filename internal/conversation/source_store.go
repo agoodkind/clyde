@@ -14,6 +14,8 @@ type SourceToolCall struct {
 	Timestamp time.Time
 	// Reason identifies why the tool call timestamp is unavailable.
 	Reason string
+	// MessageStart reports whether this is the first tool call in its native message.
+	MessageStart bool
 }
 
 // SourceMessages contains ordered messages, stored copies, and native tool calls.

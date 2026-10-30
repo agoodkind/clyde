@@ -41,6 +41,8 @@ type SourceToolTime struct {
 	Display       string
 	LangHint      string
 	TimestampUnix int64
+	// MessageStart reports whether this is the first tool call in its native message.
+	MessageStart bool
 	// Reason identifies why the native tool call timestamp is unavailable.
 	Reason string
 }
@@ -297,6 +299,9 @@ func (lookup sourceTimeLookup) bindToolFamilies(families map[string][]collection
 	case len(keys) != len(lookup.toolCalls):
 		reason = SourceOutcomeSequenceMismatch
 	}
+	if reason == "" && !storedStartsAreNativeStarts(keys, lookup.toolCalls) {
+		reason = SourceOutcomeSequenceMismatch
+	}
 	if reason == "" {
 		for index, key := range keys {
 			name, _, _ := strings.Cut(families[key][0].Content, toolContinuationBreak)
@@ -315,8 +320,20 @@ func (lookup sourceTimeLookup) bindToolFamilies(families map[string][]collection
 	}
 }
 
+// storedStartsAreNativeStarts reports whether each stored tool message starts with
+// // the first tool call in a native message.
+func storedStartsAreNativeStarts(keys []string, calls []SourceToolTime) bool {
+	for index, key := range keys {
+		start := index == 0 || familyOrder(key)[0] != familyOrder(keys[index-1])[0]
+		if start && !calls[index].MessageStart {
+			return false
+		}
+	}
+	return true
+}
+
 func emptySourceToolTime() SourceToolTime {
-	return SourceToolTime{Name: "", Display: "", LangHint: "", TimestampUnix: missingTimestampUnix, Reason: ""}
+	return SourceToolTime{Name: "", Display: "", LangHint: "", TimestampUnix: missingTimestampUnix, Reason: "", MessageStart: false}
 }
 
 // toolFamilyOutcome checks a tool family's binding, content, and timestamp reason.

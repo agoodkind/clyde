@@ -145,6 +145,56 @@ func TestTranscriptToolCallsStayUndatedWhenTheNativeSequenceDiffers(t *testing.T
 }
 
 // TestTranscriptStreamStopsEarlyWithSourceTimes checks that the first dated message
+// TestSourceStoreMessagesReportsAnUnreadableNativeState checks that an unreadable
+// // native state returns an error.
+func TestSourceStoreMessagesReportsAnUnreadableNativeState(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + nativeComposerID + `', '{"composerId":"` + nativeComposerID + `","name":"Broken","createdAt":1779267600000,"lastUpdatedAt":1779268000000,"conversationState":"~%%%","fullConversationHeadersOnly":[{"bubbleId":"x1","type":1}]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + nativeComposerID + `:x1', '{"_v":3,"type":1,"bubbleId":"x1","text":"broken state","createdAt":"2026-05-20T10:00:00.000Z"}')`,
+	})
+	record := conversation.Record{
+		ID: "cursor:" + nativeComposerID, Provider: providerid.ProviderCursor, NativeID: nativeComposerID, Selector: "",
+		Lineage: nil, Origin: conversation.OriginUnspecified, Title: "", TitleUncertain: false, WorkspaceRoot: "",
+		ArtifactPath: "", ArtifactKind: "", Model: "", CreatedAt: time.Time{}, UpdatedAt: time.Time{}, SizeBytes: 0, Archived: false, LatestRequestID: "",
+	}
+	if _, found, err := parser.New().SourceStoreMessages(t.Context(), record, sourceRootLoadOptions()); err == nil {
+		t.Fatalf("source store returned without an error for unreadable native state; found: %v", found)
+	}
+}
+
+// TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer checks tool times
+// // when a transcript message starts within a native message.
+func TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer(t *testing.T) {
+	transcriptPath := writeNativeFixture(t, "Shell")
+	lines := strings.Join([]string{
+		`{"role":"user","message":{"content":[{"type":"text","text":"check the tree"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeGitCommand + `"}}]}}`,
+		`{"role":"user","message":{"content":[{"type":"text","text":"now the tests"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `"}},{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `"}}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+	if err != nil {
+		t.Fatalf("stream transcript: %v", err)
+	}
+	if len(messages) != 4 {
+		t.Fatalf("unexpected message count: %d", len(messages))
+	}
+	if got, want := toolTime(t, messages, 1, 0), time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("unexpected timestamp before boundary mismatch; actual, expected: %v, %v", got, want)
+	}
+	for _, toolIndex := range []int{0, 1} {
+		if got := toolTime(t, messages, 3, toolIndex); !got.IsZero() {
+			t.Fatalf("tool after boundary mismatch has a timestamp; tool index, timestamp: %d: %v", toolIndex, got)
+		}
+	}
+}
+
 // is available before the FIFO writer closes.
 func TestTranscriptStreamStopsEarlyWithSourceTimes(t *testing.T) {
 	rootDir := t.TempDir()

@@ -454,7 +454,7 @@ func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conve
 			stamp = call.Timestamp.Unix()
 		}
 		empty.ToolCalls = append(empty.ToolCalls, vectorsearch.SourceToolTime{
-			Name: call.Tool.Name, Display: call.Tool.Display, LangHint: call.Tool.DisplayLang, TimestampUnix: stamp, Reason: call.Reason,
+			Name: call.Tool.Name, Display: call.Tool.Display, LangHint: call.Tool.DisplayLang, TimestampUnix: stamp, Reason: call.Reason, MessageStart: call.MessageStart,
 		})
 	}
 	return empty, nil
