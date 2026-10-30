@@ -43,6 +43,13 @@ jobs:
       # make test runs before it compiles.
       - name: Native build prerequisites
         run: make native-prereqs
+      # The step builds clyde with the flags used by the test helpers.
+      # It compiles and links every race test binary, then runs true in place of each binary.
+      # The timed race run reuses those build cache entries.
+      - name: Build race test inputs
+        run: |
+          go build -o "${RUNNER_TEMP}/clyde" ./cmd/clyde
+          go test -race -count=1 -exec true ./...
       # Race coverage runs the suites with `go test -race` (Go's own runner)
       # rather than `ginkgo -r --race`. The ginkgo CLI orchestrator wedges after
       # the suites finish on linux/amd64 under -race (reproduced on every CI run,
