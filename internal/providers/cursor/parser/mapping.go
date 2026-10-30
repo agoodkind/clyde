@@ -124,7 +124,7 @@ func mapJSONLMessage(
 // gets no marker, because the artifact says nothing about it either way.
 func turnOutcomeMarker(outcome cursorjsonl.TurnOutcome) string {
 	if outcome.Uncertain {
-		return "[turn boundary unreadable: this turn may be incomplete]"
+		return turnBoundaryUnreadableMarker
 	}
 	if !outcome.Failed() {
 		return ""
@@ -134,10 +134,16 @@ func turnOutcomeMarker(outcome cursorjsonl.TurnOutcome) string {
 	label := outcome.Label()
 	reason := strings.TrimSpace(outcome.Error)
 	if reason == "" {
-		return "[turn ended: " + label + "]"
+		return turnEndedMarkerPrefix + label + turnMarkerSuffix
 	}
-	return "[turn ended: " + label + " (" + reason + ")]"
+	return turnEndedMarkerPrefix + label + " (" + reason + ")" + turnMarkerSuffix
 }
+
+const (
+	turnBoundaryUnreadableMarker = "[turn boundary unreadable: this turn may be incomplete]"
+	turnEndedMarkerPrefix        = "[turn ended: "
+	turnMarkerSuffix             = "]"
+)
 
 func mapComposerBubble(
 	bubble cursorstore.Bubble,

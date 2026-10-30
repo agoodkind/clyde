@@ -21,6 +21,7 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/vectorsearch"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/response"
 )
 
@@ -30,6 +31,8 @@ const (
 	repairTimestampsProgressFileExt  = ".json"
 	repairTimestampsProgressFileMode = 0o600
 	repairTimestampsProgressDirMode  = 0o700
+	// repairTimestampsSourceStoreSuffix distinguishes source store progress files.
+	repairTimestampsSourceStoreSuffix = "-source-store"
 )
 
 type repairTimestampsOptions struct {
@@ -41,15 +44,20 @@ type repairTimestampsOptions struct {
 	After          string
 	Resume         bool
 	ProgressPath   string
+	SourceStore    bool
+	EvidencePath   string
 }
 
 type timestampRepairClient interface {
 	RepairConversationTimestamps(context.Context, string, []vectorsearch.TimestampRepairSource, bool) (vectorsearch.TimestampRepairReport, error)
+	RepairTimestampsFromSource(context.Context, string, []vectorsearch.TimestampSourceRepairSource, bool) (vectorsearch.TimestampSourceRepairReport, error)
+	ZeroTimeConversationIDs(context.Context, string, string) ([]string, error)
 }
 
 type timestampRepairProgress struct {
 	Collection  string                             `json:"collection"`
 	Provider    string                             `json:"provider,omitempty"`
+	SourceStore bool                               `json:"source_store,omitempty"`
 	Cursor      string                             `json:"cursor"`
 	Complete    bool                               `json:"complete"`
 	UpdatedAt   time.Time                          `json:"updated_at"`
@@ -66,10 +74,14 @@ type repairTimestampsRun struct {
 	index          conversationDocumentBackfillIndex
 	client         timestampRepairClient
 	out            io.Writer
+	// sourceTotals accumulates source repair counts for the current run.
+	sourceTotals *vectorsearch.TimestampSourceRepairReport
+	// evidenceOut receives JSON evidence entries when an evidence file is configured.
+	evidenceOut io.Writer
 }
 
 func newRepairConversationTimestampsCmd(f *cli.Factory) *cobra.Command {
-	options := repairTimestampsOptions{DryRun: true, Provider: "", ConversationID: "", Limit: 0, MaxRows: defaultRepairTimestampsMaxRows, After: "", Resume: false, ProgressPath: ""}
+	options := repairTimestampsOptions{DryRun: true, Provider: "", ConversationID: "", Limit: 0, MaxRows: defaultRepairTimestampsMaxRows, After: "", Resume: false, ProgressPath: "", SourceStore: false, EvidencePath: ""}
 	execute := false
 	cmd := &cobra.Command{
 		Use:   "repair-timestamps",
@@ -94,6 +106,8 @@ func newRepairConversationTimestampsCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&options.After, "after", "", "Start after this conversation ID.")
 	cmd.Flags().BoolVar(&options.Resume, "resume", false, "Continue after the cursor in the progress file.")
 	cmd.Flags().StringVar(&options.ProgressPath, "progress-file", "", "Read and write progress at this path.")
+	cmd.Flags().BoolVar(&options.SourceStore, "source-store", false, "Match zero timestamp rows against the provider source store.")
+	cmd.Flags().StringVar(&options.EvidencePath, "evidence-file", "", "Append source repair evidence as JSON lines to this file.")
 	return cmd
 }
 
@@ -107,7 +121,10 @@ func runRepairConversationTimestamps(ctx context.Context, f *cli.Factory, option
 		return fmt.Errorf("load configuration: %w", err)
 	}
 	semanticCfg := cfg.Conversation.Semantic
-	if semanticCfg.Backend == config.ConversationSemanticBackendLocal || semanticCfg.MilvusLayout == config.ConversationSemanticMilvusLayoutShared {
+	if semanticCfg.Backend == config.ConversationSemanticBackendLocal {
+		return vectorsearch.ErrTimestampRepairUnsupported
+	}
+	if semanticCfg.MilvusLayout == config.ConversationSemanticMilvusLayoutShared && !options.SourceStore {
 		return vectorsearch.ErrTimestampRepairUnsupported
 	}
 	contentKinds, err := daemonsvc.SemanticContentKinds(semanticCfg)
@@ -116,7 +133,11 @@ func runRepairConversationTimestamps(ctx context.Context, f *cli.Factory, option
 	}
 	collectionName := vectorsearch.CollectionName(semanticCfg.CollectionID)
 	if options.ProgressPath == "" {
-		options.ProgressPath = filepath.Join(config.DefaultStateDir(), repairTimestampsProgressDirName, collectionName+repairTimestampsProgressFileExt)
+		progressName := collectionName
+		if options.SourceStore {
+			progressName += repairTimestampsSourceStoreSuffix
+		}
+		options.ProgressPath = filepath.Join(config.DefaultStateDir(), repairTimestampsProgressDirName, progressName+repairTimestampsProgressFileExt)
 	}
 	client, err := daemonsvc.OpenConversationSearchClient(ctx, semanticCfg)
 	if err != nil {
@@ -132,6 +153,17 @@ func runRepairConversationTimestamps(ctx context.Context, f *cli.Factory, option
 		index:          daemonsvc.NewConversationIndex(),
 		client:         client,
 		out:            f.IOStreams.Out,
+		sourceTotals:   newSourceRepairTotals(),
+		evidenceOut:    nil,
+	}
+	if options.EvidencePath != "" {
+		evidenceFile, err := os.OpenFile(options.EvidencePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, repairTimestampsProgressFileMode)
+		if err != nil {
+			slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.evidence_open_failed", "concern", "cli.daemon", "component", "cli", "path", options.EvidencePath, "err", err)
+			return fmt.Errorf("open evidence file %s: %w", options.EvidencePath, err)
+		}
+		defer func() { _ = evidenceFile.Close() }()
+		run.evidenceOut = evidenceFile
 	}
 	return run.execute(ctx)
 }
@@ -164,12 +196,15 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
 		RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
 	}
-	progress := timestampRepairProgress{Collection: run.collectionName, Provider: run.options.Provider, Cursor: "", Complete: false, UpdatedAt: time.Time{}, Totals: emptyTotals, Failed: nil, LastRunRows: 0}
+	progress := timestampRepairProgress{Collection: run.collectionName, Provider: run.options.Provider, SourceStore: run.options.SourceStore, Cursor: "", Complete: false, UpdatedAt: time.Time{}, Totals: emptyTotals, Failed: nil, LastRunRows: 0}
 	after := strings.TrimSpace(run.options.After)
 	if run.options.Resume {
 		stored, err := readTimestampRepairProgress(run.options.ProgressPath)
 		if err != nil {
 			return err
+		}
+		if stored.SourceStore != run.options.SourceStore {
+			return fmt.Errorf("progress file %s records source-store as %t; the current setting is %t", run.options.ProgressPath, stored.SourceStore, run.options.SourceStore)
 		}
 		if stored.Collection != run.collectionName || stored.Provider != run.options.Provider {
 			return fmt.Errorf("progress file %s records collection %q and provider %q; the current selection uses collection %q and provider %q", run.options.ProgressPath, stored.Collection, stored.Provider, run.collectionName, run.options.Provider)
@@ -186,7 +221,7 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.list_failed", "concern", "cli.daemon", "component", "cli", "err", err)
 		return fmt.Errorf("list indexed conversations: %w", err)
 	}
-	ordered, err := repairTimestampRecords(stamped, run.options.Provider, run.options.ConversationID)
+	ordered, err := run.repairRecords(ctx, stamped)
 	if err != nil {
 		return err
 	}
@@ -201,14 +236,12 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		if runReport.RowsChanged >= run.options.MaxRows || ctx.Err() != nil {
 			break
 		}
-		source, loadErr := run.loadSource(ctx, record)
-		if loadErr != nil {
-			slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
+		report, loaded, repairErr := run.repairRecord(ctx, record)
+		if !loaded {
 			failed = append(failed, record.ID)
 			cursor = record.ID
 			continue
 		}
-		report, repairErr := run.client.RepairConversationTimestamps(ctx, run.collectionID, []vectorsearch.TimestampRepairSource{source}, run.options.DryRun)
 		if repairErr != nil {
 			if saveErr := run.saveProgress(progress, cursor, runReport, failed, false); saveErr != nil {
 				return errors.Join(fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr), saveErr)
@@ -229,6 +262,88 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		return fmt.Errorf("timestamp repair stopped after %s: %w", cursor, ctxErr)
 	}
 	return run.writeResult(ctx, runReport, failed, cursor, complete)
+}
+
+// repairRecord loads a conversation source and repairs its stored timestamps.
+func (run repairTimestampsRun) repairRecord(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairReport, bool, error) {
+	var empty vectorsearch.TimestampRepairReport
+	if !run.options.SourceStore {
+		source, loadErr := run.loadSource(ctx, record)
+		if loadErr != nil {
+			slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
+			return empty, false, nil
+		}
+		report, repairErr := run.client.RepairConversationTimestamps(ctx, run.collectionID, []vectorsearch.TimestampRepairSource{source}, run.options.DryRun)
+		if repairErr != nil {
+			return report, true, fmt.Errorf("repair timestamps from transcript: %w", repairErr)
+		}
+		return report, true, nil
+	}
+	source, loadErr := run.loadStoreSource(ctx, record)
+	if loadErr != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
+		return empty, false, nil
+	}
+	report, repairErr := run.client.RepairTimestampsFromSource(ctx, run.collectionID, []vectorsearch.TimestampSourceRepairSource{source}, run.options.DryRun)
+	if repairErr != nil {
+		return report.TimestampRepairReport, true, fmt.Errorf("repair timestamps from source store: %w", repairErr)
+	}
+	run.sourceTotals.Add(report)
+	if err := run.writeEvidence(report.Evidence); err != nil {
+		return report.TimestampRepairReport, true, err
+	}
+	return report.TimestampRepairReport, true, nil
+}
+
+// writeEvidence writes each evidence entry as JSON when an output is configured.
+func (run repairTimestampsRun) writeEvidence(evidence []vectorsearch.SourceRepairEvidence) error {
+	if run.evidenceOut == nil {
+		return nil
+	}
+	encoder := json.NewEncoder(run.evidenceOut)
+	for _, entry := range evidence {
+		if err := encoder.Encode(entry); err != nil {
+			slog.Error("cli.daemon.repair_timestamps.evidence_write_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+			return fmt.Errorf("write source repair evidence: %w", err)
+		}
+	}
+	return nil
+}
+
+func newSourceRepairTotals() *vectorsearch.TimestampSourceRepairReport {
+	return &vectorsearch.TimestampSourceRepairReport{
+		TimestampRepairReport: vectorsearch.TimestampRepairReport{
+			Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
+			RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
+		},
+		RowsNotZeroTime: 0, RowsEmptyContent: 0, RowsIncomplete: 0, Evidence: nil,
+	}
+}
+
+// loadStoreSource builds semantic documents from a provider's source store messages.
+func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampSourceRepairSource, error) {
+	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil}
+	reader, found := daemonsvc.ConversationSourceStoreReader(record.Provider)
+	if !found {
+		return empty, fmt.Errorf("source store reader is unavailable for provider %q", record.Provider)
+	}
+	empty.MatchText = reader.SourceMatchText
+	kinds := conversation.NewContentKindSet(conversation.ContentKindChat, conversation.ContentKindThinking, conversation.ContentKindToolCalls)
+	messages, stored, err := reader.SourceStoreMessages(ctx, record, daemonsvc.SemanticConversationLoadOptions(kinds))
+	if err != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.source_store_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", err)
+		return empty, fmt.Errorf("read source store messages: %w", err)
+	}
+	if !stored {
+		return empty, nil
+	}
+	built, err := daemonsvc.BuildSemanticConversationDocuments(record, messages, kinds)
+	if err != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.source_documents_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", err)
+		return empty, fmt.Errorf("build source store documents: %w", err)
+	}
+	empty.Documents = built.Docs
+	return empty, nil
 }
 
 func (run repairTimestampsRun) loadSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairSource, error) {
@@ -279,6 +394,9 @@ func (run repairTimestampsRun) writeResult(ctx context.Context, report vectorsea
 		mode, run.collectionName, report.Conversations, report.RowsRead, report.RowsCurrent, report.RowsChanged, report.RowsWritten,
 		report.RowsUnmatched, report.RowsMissingTimestamp, report.RowsAmbiguous, report.RowsInvalidMetadata, len(failed), nextCursor,
 	)
+	if run.options.SourceStore {
+		text += fmt.Sprintf("Already dated rows: %d; rows with empty content: %d; rows with split parts that could not be joined: %d.\n", run.sourceTotals.RowsNotZeroTime, run.sourceTotals.RowsEmptyContent, run.sourceTotals.RowsIncomplete)
+	}
 	if !run.options.DryRun && strings.TrimSpace(run.options.ConversationID) == "" {
 		text += fmt.Sprintf("Saved progress in %s.\n", run.options.ProgressPath)
 	}
@@ -287,6 +405,59 @@ func (run repairTimestampsRun) writeResult(ctx context.Context, report vectorsea
 		return fmt.Errorf("write timestamp repair result: %w", err)
 	}
 	return nil
+}
+
+// repairRecords selects indexed records or conversations with zero timestamp rows.
+func (run repairTimestampsRun) repairRecords(ctx context.Context, stamped []conversation.StampedRecord) ([]conversation.Record, error) {
+	if !run.options.SourceStore {
+		return repairTimestampRecords(stamped, run.options.Provider, run.options.ConversationID)
+	}
+	storedIDs, err := run.client.ZeroTimeConversationIDs(ctx, run.collectionID, run.options.Provider)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.stored_ids_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return nil, fmt.Errorf("list conversations with zero timestamp rows: %w", err)
+	}
+	indexed, err := repairTimestampRecords(stamped, run.options.Provider, "")
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]conversation.Record, len(indexed))
+	for _, record := range indexed {
+		byID[record.ID] = record
+	}
+	selected := strings.TrimSpace(run.options.ConversationID)
+	ordered := make([]conversation.Record, 0, len(storedIDs))
+	for _, id := range storedIDs {
+		if selected != "" && id != selected {
+			continue
+		}
+		record, found := byID[id]
+		if !found {
+			stored, ok := storedOnlyRecord(id)
+			if !ok {
+				slog.WarnContext(ctx, "cli.daemon.repair_timestamps.stored_id_unparsed", "concern", "cli.daemon", "component", "cli", "conversation_id", id)
+				continue
+			}
+			record = stored
+		}
+		ordered = append(ordered, record)
+	}
+	if selected != "" && len(ordered) == 0 {
+		return nil, fmt.Errorf("cannot find zero timestamp rows for conversation %q", selected)
+	}
+	return ordered, nil
+}
+
+// storedOnlyRecord builds a record from a provider-prefixed conversation ID.
+func storedOnlyRecord(id string) (conversation.Record, bool) {
+	label, nativeID, cut := strings.Cut(id, ":")
+	provider, known := providerid.Parse(label)
+	record := conversation.Record{
+		ID: id, Provider: provider, NativeID: nativeID, Selector: "", Lineage: nil, Origin: conversation.OriginUnspecified,
+		Title: "", TitleUncertain: false, WorkspaceRoot: "", ArtifactPath: "", ArtifactKind: "", Model: "",
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, SizeBytes: 0, Archived: false, LatestRequestID: "",
+	}
+	return record, cut && known && strings.TrimSpace(nativeID) != ""
 }
 
 func repairTimestampRecords(stamped []conversation.StampedRecord, provider string, conversationID string) ([]conversation.Record, error) {
