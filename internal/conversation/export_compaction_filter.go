@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"slices"
+	"strings"
 
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -9,6 +10,7 @@ import (
 const (
 	compactedRoleDeveloper = "developer"
 	compactedRoleSystem    = "system"
+	compactedDataURLPrefix = "data:"
 )
 
 // filterCompactionSelectionItems returns a copy of the segment selection with
@@ -59,7 +61,11 @@ func filterCompactionContextItems(
 		if !compactedItemSelected(item, content) {
 			continue
 		}
-		kept = append(kept, compactedItemWithoutRaw(item))
+		item = compactedItemWithoutRaw(item)
+		if !content.Has(ContentKindToolCalls) && !content.Has(ContentKindToolOutputs) {
+			item = compactedCallSummary(item)
+		}
+		kept = append(kept, item)
 	}
 	if len(kept) == 0 {
 		return nil
@@ -118,8 +124,11 @@ func compactedMessageSelected(message *transcript.CompactedMessageItem, content 
 	}
 }
 
-// compactedItemWithoutRaw returns a copy without raw JSON copies or encrypted
-// reasoning content. The copy retains text, arguments, and outputs.
+// compactedItemWithoutRaw returns a copy of a saved compaction item without raw JSON
+// copies, encrypted reasoning content, image data URLs in message content, or image
+// generation results. The copy retains message text, reasoning summaries, readable
+// reasoning content, tool arguments, and tool outputs. For each removed image data
+// URL, the message content item retains its type as a placeholder.
 func compactedItemWithoutRaw(item transcript.CompactedContextItem) transcript.CompactedContextItem {
 	if item.Message != nil {
 		item.Message = compactedMessageWithoutRaw(*item.Message)
@@ -136,6 +145,9 @@ func compactedMessageWithoutRaw(message transcript.CompactedMessageItem) *transc
 	message.Content = slices.Clone(message.Content)
 	for i := range message.Content {
 		message.Content[i].Raw = nil
+		if strings.HasPrefix(message.Content[i].ImageURL, compactedDataURLPrefix) {
+			message.Content[i].ImageURL = ""
+		}
 	}
 	return &message
 }
@@ -143,7 +155,6 @@ func compactedMessageWithoutRaw(message transcript.CompactedMessageItem) *transc
 func compactedReasoningWithoutRaw(reasoning transcript.CompactedReasoningItem) *transcript.CompactedReasoningItem {
 	reasoning.Raw = nil
 	reasoning.SummaryRaw = nil
-	reasoning.ContentRaw = nil
 	reasoning.EncryptedContent = ""
 	reasoning.Summary = slices.Clone(reasoning.Summary)
 	for i := range reasoning.Summary {
@@ -183,9 +194,36 @@ func compactedToolItemWithoutRaw(item transcript.CompactedContextItem) transcrip
 	if item.ImageGenerationCall != nil {
 		call := *item.ImageGenerationCall
 		call.Raw = nil
+		call.Result = ""
 		item.ImageGenerationCall = &call
 	}
 	return compactedToolOutputWithoutRaw(item)
+}
+
+// compactedCallSummary reduces a copied saved tool call to the summary detail used by
+// the tools selection for ordinary messages. The result contains the tool name, call
+// ID, and status. The function clears arguments, input, shell actions, search
+// arguments, and image prompts on the copy passed in.
+func compactedCallSummary(item transcript.CompactedContextItem) transcript.CompactedContextItem {
+	if item.LocalShellCall != nil {
+		item.LocalShellCall.ActionRaw = nil
+	}
+	if item.FunctionCall != nil {
+		item.FunctionCall.Arguments = ""
+	}
+	if item.ToolSearchCall != nil {
+		item.ToolSearchCall.ArgumentsRaw = nil
+	}
+	if item.CustomToolCall != nil {
+		item.CustomToolCall.Input = ""
+	}
+	if item.WebSearchCall != nil {
+		item.WebSearchCall.ActionRaw = nil
+	}
+	if item.ImageGenerationCall != nil {
+		item.ImageGenerationCall.RevisedPrompt = ""
+	}
+	return item
 }
 
 func compactedToolOutputWithoutRaw(item transcript.CompactedContextItem) transcript.CompactedContextItem {

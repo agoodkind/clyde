@@ -348,7 +348,7 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 			Format:         string(p.Options.Format),
 			Path:           path,
 			Bytes:          len(body),
-			Pipe:           p.Stdout,
+			Pipe:           p.Stdout && path == "",
 		},
 		Body:        body,
 		DefaultPath: path,
