@@ -22,6 +22,8 @@ const (
 	searchOverfetchAttempts = 3
 	// searchOverfetchFactor multiplies the engine limit on each retry.
 	searchOverfetchFactor = 4
+	// searchSkippedOverfetchSteps counts the overfetch steps skipped before the first engine call. That call requests searchLimit times searchOverfetchFactor and counts as attempt searchSkippedOverfetchSteps plus one. Later limits and the attempt budget match a loop starting at searchLimit.
+	searchSkippedOverfetchSteps = 1
 	// maxEngineOverfetchLimit caps the retry at the engine ranking window. The
 	// engine ranks at most 16,384 rows for one query (lm-semantic-search
 	// CollectionRankingDepth) and returns no hit past that depth.
@@ -112,9 +114,10 @@ func engineSearchMatches(
 		return emptyEngineSearchPage(), nil
 	}
 
-	engineLimit := searchLimit
+	// The first engine call starts one overfetch step above the page bound. Hidden and archived rows usually occupy part of that bound. The loop ends after one call if the larger limit fills the page.
+	engineLimit := nextEngineOverfetchLimit(searchLimit)
 	var page engineSearchPage
-	for attempt := 1; ; attempt++ {
+	for attempt := searchSkippedOverfetchSteps + 1; ; attempt++ {
 		hits, searchErr := semantic.SearchConversations(
 			ctx,
 			collectionID,

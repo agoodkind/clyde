@@ -245,8 +245,8 @@ func TestSearchConversationsResultEngineAppliesOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
-	if len(semantic.limits) != 1 || semantic.limits[0] != 2 {
-		t.Fatalf("engine limits = %v, want [2]", semantic.limits)
+	if len(semantic.limits) != 1 || semantic.limits[0] != 8 {
+		t.Fatalf("engine limits = %v, want [8]", semantic.limits)
 	}
 	if result.Offset != 1 || result.NextOffset != 2 {
 		t.Fatalf("offsets = %d/%d, want 1/2", result.Offset, result.NextOffset)
@@ -277,8 +277,8 @@ func TestSearchConversationsResultEngineNormalizesLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
-	if len(semantic.limits) != 1 || semantic.limits[0] != int32(conversation.DefaultSearchLimit+1) {
-		t.Fatalf("engine limits = %v, want [%d]", semantic.limits, conversation.DefaultSearchLimit+1)
+	if len(semantic.limits) != 1 || semantic.limits[0] != int32(4*(conversation.DefaultSearchLimit+1)) {
+		t.Fatalf("engine limits = %v, want [%d]", semantic.limits, 4*(conversation.DefaultSearchLimit+1))
 	}
 	if result.Limit != conversation.DefaultSearchLimit {
 		t.Fatalf("limit = %d, want %d", result.Limit, conversation.DefaultSearchLimit)
@@ -307,8 +307,8 @@ func TestSearchConversationsResultEngineNormalizesNegativeOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
-	if len(semantic.limits) != 1 || semantic.limits[0] != 1 {
-		t.Fatalf("engine limits = %v, want [1]", semantic.limits)
+	if len(semantic.limits) != 1 || semantic.limits[0] != 4 {
+		t.Fatalf("engine limits = %v, want [4]", semantic.limits)
 	}
 	if result.Offset != 0 || result.NextOffset != 1 {
 		t.Fatalf("offsets = %d/%d, want 0/1", result.Offset, result.NextOffset)
@@ -595,7 +595,7 @@ func filterStageRemaining(stages []conversation.FilterStage, name string) (int, 
 // gets a short page and no signal that anything was withheld.
 func TestSearchConversationsResultOverfetchesPastHiddenConversations(t *testing.T) {
 	t.Parallel()
-	hits, records := hiddenAndVisibleHits(3, 10)
+	hits, records := hiddenAndVisibleHits(45, 10)
 	idx := &fakeSearchIndex{records: records}
 	semantic := &fakeSemanticSearch{hits: hits, err: nil}
 	req := &clydev1.SearchConversationsRequest{Query: "milvus checkpoint", Limit: 10}
