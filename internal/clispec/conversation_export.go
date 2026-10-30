@@ -161,12 +161,11 @@ func renderExportParam(declaration exportargs.Declaration, bind exportBind) Para
 // parameters, and declares output and stdout itself. Those two select a
 // destination file. The compaction path accepts no destination.
 func exportParams() []Param[exportInput] {
-	outputPathParam := StringParam("output", "Write output to path. MCP requires an absolute path. Use - for terminal stdout.", "", false,
+	outputPathParam := StringParam("output", "Write the export to this path; MCP requires an absolute path. Use - for stdout on the terminal or inline output on MCP.", "", false,
 		func(in *exportInput, v string) { in.OutputPath = v })
 
-	stdoutParam := BoolParam("stdout", "Write the export body directly to stdout. Equivalent to --output -.", false,
+	stdoutParam := BoolParam("stdout", "Write the body to stdout on the terminal, equivalent to output -. On MCP, return the body inline when it is at most 32768 bytes.", false,
 		func(in *exportInput, v bool) { in.Stdout = v })
-	stdoutParam.CLIOnly = true
 
 	binds := exportBinds()
 	declarations := exportargs.Declarations()
@@ -184,7 +183,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindArtifact,
 		Short:      "Export a conversation transcript.",
-		Long:       "Export one conversation transcript in the chosen format. Terminal export reads local artifacts and does not require the daemon. MCP export uses the daemon. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, with no destination and no --copy, export writes the default artifact file; pass --output PATH to write a file, or --stdout or --output - to write the export body to stdout. The global --copy flag copies the body to the clipboard and, on its own, replaces the default file write, so --copy alone copies without writing a file; combine --copy with --output to also write a file. Clipboard copy matches the selected format, is macOS only for now, and errors on other platforms. The MCP tool returns the transcript body unless output names an absolute file path.",
+		Long:       "Export one conversation transcript in the chosen format. Terminal export reads local artifacts and does not require the daemon. MCP export uses the daemon. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, with no destination and no --copy, export writes the default artifact file; pass --output PATH to write a file, or --stdout or --output - to write the export body to stdout. The global --copy flag copies the body to the clipboard and, on its own, replaces the default file write, so --copy alone copies without writing a file; combine --copy with --output to also write a file. Clipboard copy matches the selected format, is macOS only for now, and errors on other platforms. MCP returns inline exports up to 32768 bytes, including when output is omitted or set to -. For larger inline exports, the server writes the complete body to a private temporary file and returns its absolute path and byte count. An explicit absolute output path receives the complete body, and the result returns only the path and byte count.",
 		Examples: []string{
 			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
 			"clyde conversation export claude:1a2b3c --only chat --include-compactions 0 --stdout",
@@ -274,7 +273,7 @@ func newExportInput() exportInput {
 // writing a file.
 func exportDestinationPath(ctx context.Context, p exportPayload) (string, error) {
 	if surfaceFromContext(ctx) == SurfaceMCP {
-		if p.OutputPath == "" {
+		if p.Stdout || p.OutputPath == "" {
 			return "", nil
 		}
 		if !filepath.IsAbs(p.OutputPath) {
@@ -333,6 +332,12 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 		slog.WarnContext(ctx, "clispec.export_destination_invalid", "concern", "cli.conversation", "component", "clispec", "err", err)
 		return nil, fmt.Errorf("select export destination: %w", err)
 	}
+	if surfaceFromContext(ctx) == SurfaceMCP && path == "" && len(body) > maxInlineMCPExportBytes {
+		path, err = temporaryMCPExportPath(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+	}
 	text := ""
 	if path != "" {
 		text = wroteConfirmation(path, body, tokenEstimateFromSpec(spec, body))
@@ -352,6 +357,29 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 		InlineText:  string(body),
 		Tokens:      spec,
 	}, nil
+}
+
+// maxInlineMCPExportBytes is the largest MCP export body in bytes that the
+// server returns inline. The server writes a larger inline export to a private
+// temporary file.
+const maxInlineMCPExportBytes = 32768
+
+const temporaryMCPExportDirPattern = "clyde-export-"
+
+// temporaryMCPExportPath creates a private temporary directory and returns the
+// absolute export file path built from the conversation ID and format.
+func temporaryMCPExportPath(ctx context.Context, p exportPayload) (string, error) {
+	directory, err := os.MkdirTemp("", temporaryMCPExportDirPattern)
+	if err != nil {
+		slog.WarnContext(ctx, "clispec.export_temp_dir_failed", "concern", "mcp.server.context", "component", "clispec", "err", err)
+		return "", fmt.Errorf("create temporary export directory: %w", err)
+	}
+	absDirectory, err := filepath.Abs(directory)
+	if err != nil {
+		slog.WarnContext(ctx, "clispec.export_temp_dir_resolve_failed", "concern", "mcp.server.context", "component", "clispec", "path", directory, "err", err)
+		return "", fmt.Errorf("resolve temporary export directory %s: %w", directory, err)
+	}
+	return filepath.Join(absDirectory, defaultExportOutputPath(p.ConversationID, p.Options.Format)), nil
 }
 
 func exportTailOp() Operation[exportTailInput, exportTailPayload] {

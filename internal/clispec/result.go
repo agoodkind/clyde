@@ -275,6 +275,8 @@ func renderMCPResult(ctx context.Context, wantKind resultKind, result Result) (*
 			if err := writeFile(typed.DefaultPath, typed.Body); err != nil {
 				return nil, err
 			}
+			// Return only the receipt text and structured payload when the result wrote a file.
+			return newMCPStructuredResult(ctx, typed.Payload, typed.Text)
 		}
 		text := typed.InlineText
 		if text == "" {
