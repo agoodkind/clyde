@@ -32,6 +32,14 @@ func (c *Client) ensureCollection(ctx context.Context, collectionName string, di
 	if err != nil {
 		return failRead("ensure conversation collection "+collectionName, err)
 	}
+	if milvus, isMilvus := c.store.(*milvusBackend); isMilvus && milvus.shared != nil {
+		// Load both collections because SharedStore reads stored vector keys before writing
+		// rows, and Milvus rejects reads from a collection until it loads the collection.
+		// loadStoredBatch loads existing collections, but it does not load newly created ones.
+		if _, loadErr := milvus.collectionPresent(ctx, collectionName); loadErr != nil {
+			return loadErr
+		}
+	}
 	c.ensured[collectionName] = true
 	return nil
 }
