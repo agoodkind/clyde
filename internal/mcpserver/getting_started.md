@@ -44,13 +44,10 @@ Export a conversation transcript.
   to `include_compactions: "all"`.
 - last_n (optional): keep only the last N visible messages after compaction
   segment selection.
-- output (optional): Write the export to an absolute path and return the path
-  and byte count. Omit output or use `-` to return the body inline up to 32768
-  bytes. Above that limit, the server writes the body to a private temporary file
-  and returns its absolute path and byte count.
-- stdout (optional): Return the body inline up to 32768 bytes. Above that limit,
-  the server writes the body to a private temporary file and returns its absolute
-  path and byte count. This parameter conflicts with an output file path.
+- output (optional): Write the export to an absolute path.
+- stdout (optional): Return the body inline. See
+  [MCP export output](../../docs/conversations.md#mcp) for the inline size
+  limit and the file receipt.
 
 Content kinds for the `only` array: `chat`, `thinking`, `tools`, `tool_calls`,
 `tool_outputs`, `system_prompts`, `system_messages`, `injected`, and
