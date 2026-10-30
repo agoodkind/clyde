@@ -283,11 +283,20 @@ func (run repairTimestampsRun) repairPending(ctx context.Context, progress times
 		if !retry {
 			state.cursor = record.ID
 		}
-		if saveErr := run.saveProgress(progress, state.cursor, state.report, state.failed, false); saveErr != nil {
+		if saveErr := run.saveProgress(progress, state.cursor, state.report, failedWithRemainingRetries(state.failed, retries, position+1), false); saveErr != nil {
 			return saveErr
 		}
 	}
 	return nil
+}
+
+// failedWithRemainingRetries returns failed IDs followed by the IDs of retries
+// starting at next.
+func failedWithRemainingRetries(failed []string, retries []conversation.Record, next int) []string {
+	if next >= len(retries) {
+		return failed
+	}
+	return append(slices.Clone(failed), recordIDs(retries[next:])...)
 }
 
 // recordRepairer repairs the stored timestamps of one conversation record.

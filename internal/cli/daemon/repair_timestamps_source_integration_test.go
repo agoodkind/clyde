@@ -613,3 +613,124 @@ func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) 
 		}
 	}
 }
+
+// progressCapture reads and records progress each time it receives an evidence entry.
+type progressCapture struct {
+	path      string
+	snapshots []timestampRepairProgress
+}
+
+func (capture *progressCapture) Write(entry []byte) (int, error) {
+	progress, err := readTimestampRepairProgress(capture.path)
+	if err != nil {
+		return 0, err
+	}
+	capture.snapshots = append(capture.snapshots, progress)
+	return len(entry), nil
+}
+
+// TestRepairTimestampsFromCursorStoreKeepsQueuedRetriesInEveryCheckpoint checks
+// saved retry IDs after each repair and resumes from the checkpoint before the last retry.
+func TestRepairTimestampsFromCursorStoreKeepsQueuedRetriesInEveryCheckpoint(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", filepath.Join(home, "cursor-projects"))
+	composers := []string{"a1a1a1a1-0000-4000-8000-000000000001", "a1a1a1a1-0000-4000-8000-000000000002", "a1a1a1a1-0000-4000-8000-000000000003"}
+	roots := make([]string, 0, len(composers))
+	docs := make([]semsearch.SemDoc, 0, len(composers))
+	conversationIDs := make([]string, 0, len(composers))
+	zero := time.Time{}.Unix()
+	for position, composer := range composers {
+		root := filepath.Join(home, fmt.Sprintf("cursor-%d", position))
+		roots = append(roots, root)
+		message := fmt.Sprintf("Queued retry message %d asks about restic snapshots.", position)
+		writeComposerStore(t, root, composer, []sourceBubble{{id: "q1", kind: 1, text: message, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""}})
+		doc := repairDoc("cursor:"+composer, message, zero)
+		doc.Role = "user"
+		docs = append(docs, doc)
+		conversationIDs = append(conversationIDs, "cursor:"+composer)
+	}
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", strings.Join(roots, string(os.PathListSeparator)))
+
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	manifest := make([]semsearch.Fingerprint, 0, len(conversationIDs))
+	for _, id := range conversationIDs {
+		manifest = append(manifest, semsearch.Fingerprint{ConversationID: id, Value: "old-parser"})
+	}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
+		t.Fatalf("seed conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+
+	progressPath := filepath.Join(home, "progress.json")
+	emptyTotals := vectorsearch.TimestampRepairReport{Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0, RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0}
+	seededProgress := timestampRepairProgress{Collection: vectorsearch.CollectionName(repairCollectionID), Provider: "cursor", SourceStore: true, Cursor: "cursor:zzzzzzzz", Complete: false, UpdatedAt: time.Time{}, Totals: emptyTotals, Failed: conversationIDs, LastRunRows: 0}
+	if err := writeTimestampRepairProgress(progressPath, seededProgress); err != nil {
+		t.Fatalf("seed progress file: %v", err)
+	}
+	capture := &progressCapture{path: progressPath, snapshots: nil}
+	base := repairTimestampsRun{
+		options:        repairTimestampsOptions{},
+		collectionID:   repairCollectionID,
+		collectionName: vectorsearch.CollectionName(repairCollectionID),
+		contentKinds:   backfillTestContentKinds(t),
+		index:          conversation.NewIndex(conversation.NewRegistry(), config.NewConfigWithDefaults().Conversation),
+		client:         client,
+		out:            nil,
+		sourceTotals:   newSourceRepairTotals(),
+		evidenceOut:    capture,
+	}
+	options := repairTimestampsOptions{DryRun: false, Provider: "cursor", ConversationID: "", Limit: 10, MaxRows: 100, After: "", Resume: true, ProgressPath: progressPath, SourceStore: true, EvidencePath: ""}
+	if _, err := runRepair(t, ctx, base, options); err != nil {
+		t.Fatalf("run queued retries: %v", err)
+	}
+	if len(capture.snapshots) != len(conversationIDs) {
+		t.Fatalf("unexpected snapshot count and expected count: %d, %d", len(capture.snapshots), len(conversationIDs))
+	}
+	afterFirst := capture.snapshots[1]
+	if afterFirst.Cursor != seededProgress.Cursor || !slices.Equal(afterFirst.Failed, conversationIDs[1:]) {
+		t.Fatalf("unexpected checkpoint after first retry: %+v", afterFirst)
+	}
+	final := readProgress(t, progressPath)
+	if !final.Complete || len(final.Failed) != 0 || final.Totals.RowsWritten != len(conversationIDs) {
+		t.Fatalf("unexpected progress after queued retries: %+v", final)
+	}
+
+	// Restore the checkpoint before the last retry and reset that conversation's rows.
+	unrepaired := conversationIDs[len(conversationIDs)-1]
+	if !slices.Equal(capture.snapshots[2].Failed, []string{unrepaired}) {
+		t.Fatalf("unexpected checkpoint after second retry: %+v", capture.snapshots[2])
+	}
+	if _, err := client.DeleteConversation(ctx, repairCollectionID, unrepaired); err != nil {
+		t.Fatalf("delete conversation before reseeding: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs[len(docs)-1:], manifest[len(manifest)-1:]); err != nil {
+		t.Fatalf("seed conversation documents: %v", err)
+	}
+	if err := writeTimestampRepairProgress(progressPath, capture.snapshots[2]); err != nil {
+		t.Fatalf("restore progress checkpoint: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	base.sourceTotals = newSourceRepairTotals()
+	base.evidenceOut = nil
+	if _, err := runRepair(t, ctx, base, options); err != nil {
+		t.Fatalf("resume source repair: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	repaired, _ := sharedSnapshot(t, address)
+	for _, row := range repaired {
+		if row.timestampUnix == zero {
+			t.Fatalf("row retains a zero timestamp, row path: %s", row.relativePath)
+		}
+	}
+	if resumed := readProgress(t, progressPath); !resumed.Complete || len(resumed.Failed) != 0 {
+		t.Fatalf("unexpected progress after resume: %+v", resumed)
+	}
+}
