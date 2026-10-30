@@ -28,7 +28,11 @@ func searchFilter(filter semsearch.SearchFilter) *collection.Filter {
 		children = append(children, collection.ColumnIn(roleColumn, collection.StringValues(lowercaseAll(filter.Roles))))
 	}
 	if len(filter.ConversationIDs) > 0 {
-		children = append(children, collection.ColumnIn(conversationIDColumn, collection.StringValues(filter.ConversationIDs)))
+		membership := collection.ColumnIn(conversationIDColumn, collection.StringValues(filter.ConversationIDs))
+		if filter.MatchNullConversationID {
+			membership = collection.AnyOf(membership, collection.ColumnIsNull(conversationIDColumn))
+		}
+		children = append(children, membership)
 	}
 	if filter.ParentConversationID != "" {
 		children = append(children, collection.ColumnEquals(parentConversationIDColumn, collection.StringScalar(filter.ParentConversationID)))

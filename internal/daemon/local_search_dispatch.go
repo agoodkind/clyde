@@ -80,16 +80,17 @@ func localSearchMatches(
 		conversationIDs = append(conversationIDs, conversationID)
 	}
 	filter := semsearch.SearchFilter{
-		Providers:            nil,
-		WorkspaceRoots:       nil,
-		Roles:                options.Roles,
-		FromUnix:             options.FromUnix,
-		UntilUnix:            options.UntilUnix,
-		ConversationIDs:      conversationIDs,
-		ParentConversationID: "",
-		MinScore:             options.MinScore,
-		MessageIndexFrom:     0,
-		MessageIndexUntil:    0,
+		Providers:               nil,
+		WorkspaceRoots:          nil,
+		Roles:                   options.Roles,
+		FromUnix:                options.FromUnix,
+		UntilUnix:               options.UntilUnix,
+		ConversationIDs:         conversationIDs,
+		MatchNullConversationID: false,
+		ParentConversationID:    "",
+		MinScore:                options.MinScore,
+		MessageIndexFrom:        0,
+		MessageIndexUntil:       0,
 	}
 	hits, err := semantic.SearchConversations(
 		ctx,

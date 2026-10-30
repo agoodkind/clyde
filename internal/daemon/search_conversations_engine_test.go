@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -382,15 +383,13 @@ func TestSemanticConversationSearchSourceReturnsSuccessfulEmptyResult(t *testing
 	}
 }
 
-// TestSearchConversationsResultNativeFilters proves a provider-scoped request
-// filters natively on the provider column (not a resolved id set), a
-// workspace-scoped request resolves to the conversation-id set under that
-// workspace, and an unscoped request pushes neither.
+// TestSearchConversationsResultNativeFilters checks that searches send eligible conversation IDs for the provider, workspace, and archived settings. Provider scoped searches also filter on the provider column, and IncludeArchived adds archived IDs.
 func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	t.Parallel()
 	idx := &fakeSearchIndex{
 		records: map[string]conversation.Record{
-			"claude:one": daemonTestRecord("claude:one", false),
+			"claude:one":      daemonTestRecord("claude:one", false),
+			"claude:archived": daemonTestRecord("claude:archived", true),
 		},
 	}
 	semantic := &fakeSemanticSearch{
@@ -412,8 +411,8 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	if len(providerFilter.Providers) != 1 || providerFilter.Providers[0] != "claude" {
 		t.Fatalf("provider filter providers = %v, want [claude]", providerFilter.Providers)
 	}
-	if len(providerFilter.ConversationIDs) != 0 {
-		t.Fatalf("provider filter ids = %v, want none (provider is native)", providerFilter.ConversationIDs)
+	if !slices.Equal(providerFilter.ConversationIDs, []string{"claude:one"}) {
+		t.Fatalf("provider filter ids = %v, want the eligible non-archived id [claude:one]", providerFilter.ConversationIDs)
 	}
 
 	workspaceScoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Workspace: "/repo"}
@@ -435,8 +434,17 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	if len(semantic.filters) != 3 {
 		t.Fatalf("engine calls = %d, want 3", len(semantic.filters))
 	}
-	if len(semantic.filters[2].ConversationIDs) != 0 || len(semantic.filters[2].Providers) != 0 {
-		t.Fatalf("unscoped filter = %+v, want no provider or id scope", semantic.filters[2])
+	if !slices.Equal(semantic.filters[2].ConversationIDs, []string{"claude:one"}) || len(semantic.filters[2].Providers) != 0 {
+		t.Fatalf("unscoped filter = %+v, want the eligible non-archived id [claude:one] and no provider scope", semantic.filters[2])
+	}
+
+	archivedScoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, IncludeArchived: true}
+	if _, err := searchSemanticSource(context.Background(), idx, semantic, archivedScoped); err != nil {
+		t.Fatalf("include-archived search: %v", err)
+	}
+	archivedIDs := slices.Sorted(slices.Values(semantic.filters[3].ConversationIDs))
+	if !slices.Equal(archivedIDs, []string{"claude:archived", "claude:one"}) {
+		t.Fatalf("include-archived filter ids = %v, want [claude:archived claude:one]", archivedIDs)
 	}
 }
 
@@ -468,8 +476,8 @@ func TestSearchConversationsResultNativeFiltersSupportZedProvider(t *testing.T) 
 	if len(semantic.filters[0].Providers) != 1 || semantic.filters[0].Providers[0] != "zed" {
 		t.Fatalf("provider filter providers = %v, want [zed]", semantic.filters[0].Providers)
 	}
-	if len(semantic.filters[0].ConversationIDs) != 0 {
-		t.Fatalf("provider filter ids = %v, want none for native zed filtering", semantic.filters[0].ConversationIDs)
+	if !slices.Equal(semantic.filters[0].ConversationIDs, []string{"zed:one"}) {
+		t.Fatalf("provider filter ids = %v, want the eligible zed id [zed:one]", semantic.filters[0].ConversationIDs)
 	}
 	if len(result.Matches) != 1 || result.Matches[0].Record.Provider != conversation.ProviderZed {
 		t.Fatalf("matches = %+v", result.Matches)
