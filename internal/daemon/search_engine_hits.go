@@ -63,16 +63,17 @@ func emptyEngineSearchPage() engineSearchPage {
 // is never sent to the engine.
 func emptySearchFilter() semsearch.SearchFilter {
 	return semsearch.SearchFilter{
-		Providers:            nil,
-		WorkspaceRoots:       nil,
-		Roles:                nil,
-		FromUnix:             0,
-		UntilUnix:            0,
-		ConversationIDs:      nil,
-		ParentConversationID: "",
-		MinScore:             0,
-		MessageIndexFrom:     0,
-		MessageIndexUntil:    0,
+		Providers:               nil,
+		WorkspaceRoots:          nil,
+		Roles:                   nil,
+		FromUnix:                0,
+		UntilUnix:               0,
+		ConversationIDs:         nil,
+		MatchNullConversationID: false,
+		ParentConversationID:    "",
+		MinScore:                0,
+		MessageIndexFrom:        0,
+		MessageIndexUntil:       0,
 	}
 }
 
@@ -193,33 +194,38 @@ func engineSearchFilter(
 		providers = []string{provider.String()}
 	}
 	var conversationIDs []string
+	matchNullConversationID := false
 	switch {
 	case options.ConversationID != "":
 		// A conversation_id scopes the engine to that one conversation, the
 		// within-search behavior. Provider and workspace scope are irrelevant
 		// then but still safe to pass; the id set is the tightest filter.
 		conversationIDs = []string{options.ConversationID}
-	case options.WorkspaceRoot != "":
-		resolved, err := workspaceConversationIDs(ctx, idx, options.WorkspaceRoot)
+	default:
+		// Requests without a conversation_id limit ranking to conversations the index serves for the provider, workspace, and archived setting. A workspace without eligible conversations returns an empty result without calling the engine. An unscoped request still calls the engine.
+		resolved, err := eligibleConversationIDs(ctx, idx, options)
 		if err != nil {
 			return emptySearchFilter(), false, err
 		}
-		if len(resolved) == 0 {
+		if len(resolved) == 0 && options.WorkspaceRoot != "" {
 			return emptySearchFilter(), false, nil
 		}
 		conversationIDs = resolved
+		// The eligible ID filter also matches rows with a null conversationId. Rows that store their identity only in metadata remain searchable, and the caller withholds rows the index does not serve. A workspace scope uses the plain ID filter.
+		matchNullConversationID = options.WorkspaceRoot == ""
 	}
 	return semsearch.SearchFilter{
-		Providers:            providers,
-		WorkspaceRoots:       nil,
-		Roles:                options.Roles,
-		FromUnix:             options.FromUnix,
-		UntilUnix:            options.UntilUnix,
-		ConversationIDs:      conversationIDs,
-		ParentConversationID: "",
-		MinScore:             options.MinScore,
-		MessageIndexFrom:     0,
-		MessageIndexUntil:    0,
+		Providers:               providers,
+		WorkspaceRoots:          nil,
+		Roles:                   options.Roles,
+		FromUnix:                options.FromUnix,
+		UntilUnix:               options.UntilUnix,
+		ConversationIDs:         conversationIDs,
+		MatchNullConversationID: matchNullConversationID,
+		ParentConversationID:    "",
+		MinScore:                options.MinScore,
+		MessageIndexFrom:        0,
+		MessageIndexUntil:       0,
 	}, true, nil
 }
 
@@ -313,19 +319,15 @@ func resolveEngineHits(
 	}
 }
 
-// workspaceConversationIDs resolves a workspace filter to the conversation-id
-// set under it (prefix match, so a project root includes its subdirectories),
-// regardless of provider or archived state, which are handled separately. The
-// engine filters natively on the conversation_id column and batches a large set.
-func workspaceConversationIDs(ctx context.Context, idx conversationSearchIndex, workspace string) ([]string, error) {
-	var anyProvider conversation.Provider
-	conversationIDs, err := idx.ConversationIDsMatching(ctx, anyProvider, workspace, true)
+// eligibleConversationIDs returns IDs the index serves for the provider, workspace prefix, and IncludeArchived setting. The set includes retained records of deleted transcripts and excludes hidden subagent conversations.
+func eligibleConversationIDs(ctx context.Context, idx conversationSearchIndex, options conversation.SearchConversationsOptions) ([]string, error) {
+	conversationIDs, err := idx.ConversationIDsMatching(ctx, options.Provider, options.WorkspaceRoot, options.IncludeArchived)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search_conversations.scope_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
 		return nil, failedConversationSearchSourceError(
-			fmt.Errorf("resolve workspace conversation ids for %q: %w", workspace, err),
+			fmt.Errorf("resolve eligible conversation ids for workspace %q: %w", options.WorkspaceRoot, err),
 		)
 	}
 	return conversationIDs, nil
