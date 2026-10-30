@@ -42,22 +42,24 @@ func filterCompactionMessageItems(messages []transcript.Message, content Content
 	}
 }
 
-// filterCompactionContextItems returns context items selected by content kind.
-// It removes raw JSON copies unless raw_json_metadata is selected and returns nil
-// when the selection contains no items.
+// filterCompactionContextItems returns copies of every saved item when the content
+// kinds select raw_json_metadata. The export sanitizer later removes encrypted content.
+// Otherwise, it returns copies of the items selected by the content kinds, excluding
+// raw JSON copies and reasoning encrypted content. It returns nil if the content
+// kinds select no items.
 func filterCompactionContextItems(
 	items []transcript.CompactedContextItem,
 	content ContentKindSet,
 ) []transcript.CompactedContextItem {
+	if content.Has(ContentKindRawJSONMetadata) {
+		return copyContextItems(items)
+	}
 	kept := make([]transcript.CompactedContextItem, 0, len(items))
 	for _, item := range items {
 		if !compactedItemSelected(item, content) {
 			continue
 		}
-		if !content.Has(ContentKindRawJSONMetadata) {
-			item = compactedItemWithoutRaw(item)
-		}
-		kept = append(kept, item)
+		kept = append(kept, compactedItemWithoutRaw(item))
 	}
 	if len(kept) == 0 {
 		return nil
