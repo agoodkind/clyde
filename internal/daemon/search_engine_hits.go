@@ -21,8 +21,7 @@ const (
 	// headroom every one of them costs the caller a result.
 	searchOverfetchAttempts = 3
 	// searchOverfetchFactor multiplies the engine limit on each retry.
-	searchOverfetchFactor = 4
-	// searchSkippedOverfetchSteps counts the overfetch steps skipped before the first engine call. That call requests searchLimit times searchOverfetchFactor and counts as attempt searchSkippedOverfetchSteps plus one. Later limits and the attempt budget match a loop starting at searchLimit.
+	searchOverfetchFactor       = 4
 	searchSkippedOverfetchSteps = 1
 	// maxEngineOverfetchLimit caps the retry at the engine ranking window. The
 	// engine ranks at most 16,384 rows for one query (lm-semantic-search
@@ -114,10 +113,14 @@ func engineSearchMatches(
 		return emptyEngineSearchPage(), nil
 	}
 
-	// The first engine call starts one overfetch step above the page bound. Hidden and archived rows usually occupy part of that bound. The loop ends after one call if the larger limit fills the page.
-	engineLimit := nextEngineOverfetchLimit(searchLimit)
+	engineLimit := searchLimit
+	firstAttempt := 1
+	if !hasDateBound(options) {
+		engineLimit = nextEngineOverfetchLimit(searchLimit)
+		firstAttempt = searchSkippedOverfetchSteps + 1
+	}
 	var page engineSearchPage
-	for attempt := searchSkippedOverfetchSteps + 1; ; attempt++ {
+	for attempt := firstAttempt; ; attempt++ {
 		hits, searchErr := semantic.SearchConversations(
 			ctx,
 			collectionID,
@@ -161,6 +164,11 @@ func engineSearchMatches(
 		"engine_limit", engineLimit,
 	)
 	return page, nil
+}
+
+// hasDateBound reports whether a search request sets a FromUnix or UntilUnix bound.
+func hasDateBound(options conversation.SearchConversationsOptions) bool {
+	return options.FromUnix != 0 || options.UntilUnix != 0
 }
 
 // engineSearchCallError classifies one failed engine call into the typed source

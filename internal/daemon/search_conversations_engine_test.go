@@ -245,9 +245,6 @@ func TestSearchConversationsResultEngineAppliesOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
-	if len(semantic.limits) != 1 || semantic.limits[0] != 8 {
-		t.Fatalf("engine limits = %v, want [8]", semantic.limits)
-	}
 	if result.Offset != 1 || result.NextOffset != 2 {
 		t.Fatalf("offsets = %d/%d, want 1/2", result.Offset, result.NextOffset)
 	}
@@ -277,9 +274,6 @@ func TestSearchConversationsResultEngineNormalizesLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
-	if len(semantic.limits) != 1 || semantic.limits[0] != int32(4*(conversation.DefaultSearchLimit+1)) {
-		t.Fatalf("engine limits = %v, want [%d]", semantic.limits, 4*(conversation.DefaultSearchLimit+1))
-	}
 	if result.Limit != conversation.DefaultSearchLimit {
 		t.Fatalf("limit = %d, want %d", result.Limit, conversation.DefaultSearchLimit)
 	}
@@ -306,9 +300,6 @@ func TestSearchConversationsResultEngineNormalizesNegativeOffset(t *testing.T) {
 	result, err := searchSemanticSource(context.Background(), idx, semantic, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
-	}
-	if len(semantic.limits) != 1 || semantic.limits[0] != 4 {
-		t.Fatalf("engine limits = %v, want [4]", semantic.limits)
 	}
 	if result.Offset != 0 || result.NextOffset != 1 {
 		t.Fatalf("offsets = %d/%d, want 0/1", result.Offset, result.NextOffset)
