@@ -27,7 +27,16 @@ func (*Parser) SourceStoreMessages(ctx context.Context, record conversation.Reco
 	if composerID == "" || record.ArtifactKind == artifactKindCursorLegacyChat {
 		return nil, false, nil
 	}
-	return readComposerSourceMessages(ctx, composerID, opts)
+	rootHash := ""
+	if strings.HasPrefix(record.ArtifactPath, virtualPathPrefix) {
+		virtualPath, err := ParseVirtualPath(record.ArtifactPath)
+		if err != nil {
+			slog.WarnContext(ctx, "providers.cursor.parser.source_times_virtual_path_failed", "concern", concern, "path", record.ArtifactPath, "err", err)
+			return nil, false, fmt.Errorf("parse cursor data root from record path %s: %w", record.ArtifactPath, err)
+		}
+		rootHash = virtualPath.RootHash
+	}
+	return readComposerSourceMessages(ctx, composerID, rootHash, opts)
 }
 
 // SourceMatchText normalizes stored text and removes a trailing turn outcome marker.
@@ -102,7 +111,7 @@ func applySourceTimes(
 	if !undated || discovered.ConversationID == "" {
 		return
 	}
-	source, found, err := readComposerSourceMessages(ctx, discovered.ConversationID, opts)
+	source, found, err := readComposerSourceMessages(ctx, discovered.ConversationID, "", opts)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_failed", "concern", concern, "path", discovered.Path, "composer_id", discovered.ConversationID, "err", err)
 		return
@@ -160,37 +169,81 @@ func uniqueSourceTime(times []time.Time) (time.Time, bool) {
 	return times[0], !times[0].IsZero()
 }
 
-// readComposerSourceMessages reads the first composer found in the configured data roots.
-func readComposerSourceMessages(ctx context.Context, composerID string, opts conversation.LoadOptions) ([]transcript.Message, bool, error) {
+// readComposerSourceMessages reads a composer from the data root matching
+// rootHash when rootHash is not empty. When rootHash is empty, it reads the
+// composer from every configured data root that contains it. It returns an error
+// when two roots return different messages or times. It reports found as false
+// when no root contains the composer.
+func readComposerSourceMessages(ctx context.Context, composerID string, rootHash string, opts conversation.LoadOptions) ([]transcript.Message, bool, error) {
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_roots_failed", "concern", concern, "composer_id", composerID, "err", err)
 		return nil, false, fmt.Errorf("resolve Cursor data roots: %w", err)
 	}
+	var chosen []transcript.Message
+	chosenPath := ""
 	for _, root := range roots {
-		db, availability := openOptionalDatabase(ctx, root.GlobalDBPath, sourceTimesComponent)
-		switch availability {
-		case databaseAvailabilityAbsent:
+		if rootHash != "" && RootHash(root.RootDir) != rootHash {
 			continue
-		case databaseAvailabilityUnreadable:
-			return nil, false, fmt.Errorf("open Cursor global database %s", root.GlobalDBPath)
-		case databaseAvailabilityOpen:
 		}
-		messages, found, readErr := composerSourceMessages(ctx, db, composerID, opts)
-		closeErr := db.Close()
+		messages, found, readErr := rootComposerSourceMessages(ctx, root.GlobalDBPath, composerID, opts)
 		if readErr != nil {
-			slog.WarnContext(ctx, "providers.cursor.parser.source_times_read_failed", "concern", concern, "path", root.GlobalDBPath, "composer_id", composerID, "err", readErr)
-			return nil, false, fmt.Errorf("read composer from Cursor global database %s: %w", root.GlobalDBPath, readErr)
+			return nil, false, readErr
 		}
-		if closeErr != nil {
-			slog.WarnContext(ctx, "providers.cursor.parser.source_times_close_failed", "concern", concern, "path", root.GlobalDBPath, "err", closeErr)
-			return nil, false, fmt.Errorf("close Cursor global database %s: %w", root.GlobalDBPath, closeErr)
+		if !found {
+			continue
 		}
-		if found {
-			return messages, true, nil
+		if chosenPath == "" {
+			chosen = messages
+			chosenPath = root.GlobalDBPath
+			continue
+		}
+		if sourceSignature(messages) != sourceSignature(chosen) {
+			conflictErr := fmt.Errorf("cursor composer %q has different messages or times in global databases %s and %s", composerID, chosenPath, root.GlobalDBPath)
+			slog.WarnContext(ctx, "providers.cursor.parser.source_times_roots_conflict", "concern", concern, "composer_id", composerID, "first", chosenPath, "second", root.GlobalDBPath, "err", conflictErr)
+			return nil, false, conflictErr
 		}
 	}
-	return nil, false, nil
+	return chosen, chosenPath != "", nil
+}
+
+// rootComposerSourceMessages reads a composer's messages from the global
+// database at path. It reports found as false when the database or composer
+// is absent.
+func rootComposerSourceMessages(ctx context.Context, path string, composerID string, opts conversation.LoadOptions) ([]transcript.Message, bool, error) {
+	db, availability := openOptionalDatabase(ctx, path, sourceTimesComponent)
+	switch availability {
+	case databaseAvailabilityAbsent:
+		return nil, false, nil
+	case databaseAvailabilityUnreadable:
+		return nil, false, fmt.Errorf("open Cursor global database %s", path)
+	case databaseAvailabilityOpen:
+	}
+	messages, found, readErr := composerSourceMessages(ctx, db, composerID, opts)
+	closeErr := db.Close()
+	if readErr != nil {
+		slog.WarnContext(ctx, "providers.cursor.parser.source_times_read_failed", "concern", concern, "path", path, "composer_id", composerID, "err", readErr)
+		return nil, false, fmt.Errorf("read composer from Cursor global database %s: %w", path, readErr)
+	}
+	if closeErr != nil {
+		slog.WarnContext(ctx, "providers.cursor.parser.source_times_close_failed", "concern", concern, "path", path, "err", closeErr)
+		return nil, false, fmt.Errorf("close Cursor global database %s: %w", path, closeErr)
+	}
+	return messages, found, nil
+}
+
+// sourceSignature returns a string built from each message's role, text,
+// reasoning, time, and tool calls for comparison between roots.
+func sourceSignature(messages []transcript.Message) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		builder.WriteString(message.Role + toolKeySeparator + message.Text + toolKeySeparator + message.Thinking + toolKeySeparator + message.Timestamp.UTC().Format(time.RFC3339Nano))
+		for _, tool := range message.Tools {
+			builder.WriteString(toolKeySeparator + toolKey(message.Role, tool))
+		}
+		builder.WriteString("\n")
+	}
+	return builder.String()
 }
 
 func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, opts conversation.LoadOptions) ([]transcript.Message, bool, error) {
