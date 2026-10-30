@@ -598,11 +598,10 @@ func TestSearchConversationsResultOverfetchesPastHiddenConversations(t *testing.
 	if len(result.Matches) != 10 {
 		t.Fatalf("matches = %d, want a full page of 10; hidden conversations consumed ranked slots", len(result.Matches))
 	}
-	if len(semantic.limits) < 2 {
-		t.Fatalf("engine limits = %v, want a second, larger query once hidden hits shortened the page", semantic.limits)
-	}
-	if semantic.limits[1] <= semantic.limits[0] {
-		t.Fatalf("engine limits = %v, want the retry to ask for more than the first attempt", semantic.limits)
+	for position, match := range result.Matches {
+		if want := "claude:visible-" + strconv.Itoa(position); match.Record.ID != want {
+			t.Fatalf("match %d = %s, want %s in rank order", position, match.Record.ID, want)
+		}
 	}
 }
 

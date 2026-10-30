@@ -166,7 +166,6 @@ func engineSearchMatches(
 	return page, nil
 }
 
-// hasDateBound reports whether a search request sets a FromUnix or UntilUnix bound.
 func hasDateBound(options conversation.SearchConversationsOptions) bool {
 	return options.FromUnix != 0 || options.UntilUnix != 0
 }
