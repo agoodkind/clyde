@@ -255,6 +255,7 @@ type repairLoopState struct {
 
 // repairPending repairs retry records before pending records and saves progress.
 func (run repairTimestampsRun) repairPending(ctx context.Context, progress timestampRepairProgress, retries []conversation.Record, pending []conversation.Record, state *repairLoopState) error {
+	repair := run.recordRepairer()
 	for position, record := range append(slices.Clone(retries), pending...) {
 		retry := position < len(retries)
 		if state.report.RowsChanged >= run.options.MaxRows || ctx.Err() != nil {
@@ -263,7 +264,7 @@ func (run repairTimestampsRun) repairPending(ctx context.Context, progress times
 			}
 			return nil
 		}
-		report, loaded, repairErr := run.repairRecord(ctx, record)
+		report, loaded, repairErr := repair(ctx, record)
 		state.report.Add(report)
 		if repairErr != nil {
 			// Keep the cursor before the failed record so a later run can retry it.
@@ -289,21 +290,39 @@ func (run repairTimestampsRun) repairPending(ctx context.Context, progress times
 	return nil
 }
 
-// repairRecord loads a conversation source and repairs its stored timestamps.
-func (run repairTimestampsRun) repairRecord(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairReport, bool, error) {
-	var empty vectorsearch.TimestampRepairReport
-	if !run.options.SourceStore {
-		source, loadErr := run.loadSource(ctx, record)
-		if loadErr != nil {
-			slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
-			return empty, false, nil
-		}
-		report, repairErr := run.client.RepairConversationTimestamps(ctx, run.collectionID, []vectorsearch.TimestampRepairSource{source}, run.options.DryRun)
-		if repairErr != nil {
-			return report, true, fmt.Errorf("repair timestamps from transcript: %w", repairErr)
-		}
-		return report, true, nil
+// recordRepairer repairs the stored timestamps of one conversation record.
+type recordRepairer func(context.Context, conversation.Record) (vectorsearch.TimestampRepairReport, bool, error)
+
+// recordRepairer returns repairSourceStoreRecord when the run uses the source store,
+// and repairTranscriptRecord otherwise. repairPending selects the function once
+// before its loop over records.
+func (run repairTimestampsRun) recordRepairer() recordRepairer {
+	if run.options.SourceStore {
+		return run.repairSourceStoreRecord
 	}
+	return run.repairTranscriptRecord
+}
+
+// repairTranscriptRecord loads transcript documents and requests timestamp repair.
+// If loading fails, it logs the error and returns false without an error.
+func (run repairTimestampsRun) repairTranscriptRecord(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairReport, bool, error) {
+	var empty vectorsearch.TimestampRepairReport
+	source, loadErr := run.loadSource(ctx, record)
+	if loadErr != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
+		return empty, false, nil
+	}
+	report, repairErr := run.client.RepairConversationTimestamps(ctx, run.collectionID, []vectorsearch.TimestampRepairSource{source}, run.options.DryRun)
+	if repairErr != nil {
+		return report, true, fmt.Errorf("repair timestamps from transcript: %w", repairErr)
+	}
+	return report, true, nil
+}
+
+// repairSourceStoreRecord loads source store documents and requests timestamp repair.
+// It adds the report to source totals and writes evidence when configured.
+func (run repairTimestampsRun) repairSourceStoreRecord(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairReport, bool, error) {
+	var empty vectorsearch.TimestampRepairReport
 	source, loadErr := run.loadStoreSource(ctx, record)
 	if loadErr != nil {
 		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
