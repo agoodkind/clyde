@@ -39,6 +39,9 @@ const (
 	exportProbeEarlierUser     = "exportprobe earlier user question"
 	exportProbeEarlierAnswer   = "exportprobe earlier assistant answer"
 	exportProbeReasoning       = "exportprobe reasoning summary"
+	exportProbeReasoningText   = "exportprobe reasoning content text"
+	exportProbeImageData       = "data:image/png;base64,ZXhwb3J0cHJvYmUtaW1hZ2UtYnl0ZXM="
+	exportProbeImageType       = "input_image"
 	exportProbeCipher          = "exportprobe-cipher"
 	exportProbeCallName        = "exportprobe_call_name"
 	exportProbeCallArguments   = "exportprobe call arguments"
@@ -121,7 +124,10 @@ func TestExportFiltersCompactionAndRoutesMCPOutput(t *testing.T) {
 				t.Errorf("chat export does not contain expected text %q:\n%s", kept, body)
 			}
 		}
-		for _, omitted := range []string{exportProbeToolDefinition, exportProbeDeveloperPrompt, exportProbeReasoning, exportProbeCipher, exportProbeCallName, exportProbeCallArguments, exportProbeToolOutput, exportProbeRawKey} {
+		if !strings.Contains(body, exportProbeImageType) {
+			t.Errorf("chat export does not contain the image placeholder:\n%s", body)
+		}
+		for _, omitted := range []string{exportProbeToolDefinition, exportProbeDeveloperPrompt, exportProbeReasoning, exportProbeReasoningText, exportProbeCipher, exportProbeCallName, exportProbeCallArguments, exportProbeToolOutput, exportProbeRawKey, exportProbeImageData} {
 			if strings.Contains(body, omitted) {
 				t.Errorf("chat export contains excluded text %q:\n%s", omitted, body)
 			}
@@ -153,9 +159,13 @@ func TestExportFiltersCompactionAndRoutesMCPOutput(t *testing.T) {
 		if !strings.Contains(calls, exportProbeCallName) || strings.Contains(calls, exportProbeToolOutput) {
 			t.Errorf("tool call export does not contain the call or contains the tool output\n%s", calls)
 		}
+		summaries := exportProbeCLI(t, binaryPath, environment, exportProbeCompactedRollout, "tools")
+		if !strings.Contains(summaries, exportProbeCallName) || strings.Contains(summaries, exportProbeCallArguments) || strings.Contains(summaries, exportProbeToolOutput) {
+			t.Errorf("tool summary export omits the call name or contains call arguments or tool output\n%s", summaries)
+		}
 		thinking := exportProbeCLI(t, binaryPath, environment, exportProbeCompactedRollout, "thinking")
-		if !strings.Contains(thinking, exportProbeReasoning) || strings.Contains(thinking, exportProbeCipher) {
-			t.Errorf("thinking export does not contain the reasoning summary or contains encrypted content\n%s", thinking)
+		if !strings.Contains(thinking, exportProbeReasoning) || !strings.Contains(thinking, exportProbeReasoningText) || strings.Contains(thinking, exportProbeCipher) {
+			t.Errorf("thinking export omits the reasoning summary or reasoning content or contains encrypted content\n%s", thinking)
 		}
 		prompts := exportProbeCLI(t, binaryPath, environment, exportProbeCompactedRollout, "system_prompts")
 		if !strings.Contains(prompts, exportProbeDeveloperPrompt) {
@@ -239,17 +249,19 @@ func TestExportFiltersCompactionAndRoutesMCPOutput(t *testing.T) {
 	})
 }
 
-// exportProbeCompactedBody returns a Codex rollout with a compacted record.
-// Its replacement history contains a tool definition, a developer prompt, chat
-// messages, reasoning with encrypted content, a tool call, a tool output, a
-// compaction item, and a summary message. Two messages follow the compacted record.
+// exportProbeCompactedBody returns a Codex rollout with a compacted record. The
+// replacement history contains a tool definition, a developer prompt, a user message
+// with an image data URL, an assistant message, reasoning with a summary and
+// encrypted content, reasoning with only readable content, a tool call, a tool output,
+// a compaction item, and the summary message. Two messages follow the compacted record.
 func exportProbeCompactedBody() string {
 	replacement := []string{
 		`{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"` + exportProbeToolDefinition + `"}]}`,
 		`{"type":"message","role":"developer","content":[{"type":"input_text","text":"` + exportProbeDeveloperPrompt + `"}]}`,
-		`{"type":"message","role":"user","content":[{"type":"input_text","text":"` + exportProbeEarlierUser + `"}]}`,
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"` + exportProbeEarlierUser + `"},{"type":"` + exportProbeImageType + `","image_url":"` + exportProbeImageData + `"}]}`,
 		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + exportProbeEarlierAnswer + `"}]}`,
 		`{"type":"reasoning","summary":[{"type":"summary_text","text":"` + exportProbeReasoning + `"}],"encrypted_content":"` + exportProbeCipher + `"}`,
+		`{"type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":"` + exportProbeReasoningText + `"}]}`,
 		`{"type":"function_call","name":"` + exportProbeCallName + `","arguments":"{\"cmd\":\"` + exportProbeCallArguments + `\"}","call_id":"call-export-probe"}`,
 		`{"type":"function_call_output","call_id":"call-export-probe","output":"` + exportProbeToolOutput + `"}`,
 		`{"type":"compaction","encrypted_content":"` + exportProbeCipher + `"}`,
