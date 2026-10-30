@@ -409,7 +409,15 @@ func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conve
 		return empty, fmt.Errorf("read source store messages: %w", err)
 	}
 	if !stored {
-		return empty, nil
+		if strings.TrimSpace(record.ArtifactPath) == "" {
+			return empty, nil
+		}
+		// Load transcript messages when the source store does not contain the conversation.
+		messages, err = run.index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
+		if err != nil {
+			slog.WarnContext(ctx, "cli.daemon.repair_timestamps.transcript_source_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", err)
+			return empty, fmt.Errorf("read transcript source messages: %w", err)
+		}
 	}
 	built, err := daemonsvc.BuildSemanticConversationDocuments(record, messages, kinds)
 	if err != nil {

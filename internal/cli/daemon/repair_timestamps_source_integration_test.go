@@ -759,3 +759,90 @@ func TestRepairTimestampsFromCursorStoreKeepsQueuedRetriesInEveryCheckpoint(t *t
 		t.Fatalf("unexpected progress after resume: %+v", resumed)
 	}
 }
+
+// TestRepairTimestampsFromCursorStoreUsesTranscriptEnvelopesWhenTheStoreLacksTheComposer
+// checks timestamp repair from a transcript when the Cursor store lacks the composer.
+func TestRepairTimestampsFromCursorStoreUsesTranscriptEnvelopesWhenTheStoreLacksTheComposer(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	dataRoot := filepath.Join(home, "cursor-data")
+	projects := filepath.Join(home, "cursor-projects")
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
+	writeComposerStore(t, dataRoot, sourceRepairComposerID, sourceRepairBubbles())
+	composer := "b2b2b2b2-0000-4000-8000-000000000001"
+	question := "Which bucket stores the retained restic snapshots?"
+	answer := "The retained snapshots live in the backups bucket."
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", composer, composer+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	lines := `{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>2026-04-02T08:30:00Z</timestamp>\n<user_query>\n` + question + `\n</user_query>"}]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"` + answer + `"}]}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o600); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	zero := time.Time{}.Unix()
+	user := repairDoc("cursor:"+composer, question, zero)
+	user.Role = "user"
+	assistant := repairDoc("cursor:"+composer, answer, zero)
+	assistant.Role = "assistant"
+	assistant.MessageIndex = 1
+	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + composer, Value: "old-parser"}}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, []semsearch.SemDoc{user, assistant}, manifest); err != nil {
+		t.Fatalf("seed conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	seeded, seededVectors := sharedSnapshot(t, address)
+
+	registry := conversation.NewRegistry()
+	registry.Register(cursorparser.New())
+	base := repairTimestampsRun{
+		options:        repairTimestampsOptions{},
+		collectionID:   repairCollectionID,
+		collectionName: vectorsearch.CollectionName(repairCollectionID),
+		contentKinds:   backfillTestContentKinds(t),
+		index:          conversation.NewIndex(registry, config.NewConfigWithDefaults().Conversation),
+		client:         client,
+		out:            nil,
+		sourceTotals:   newSourceRepairTotals(),
+		evidenceOut:    nil,
+	}
+	options := repairTimestampsOptions{DryRun: false, Provider: "", ConversationID: "cursor:" + composer, Limit: 0, MaxRows: 100, After: "", Resume: false, ProgressPath: filepath.Join(home, "progress.json"), SourceStore: true, EvidencePath: ""}
+	output, err := runRepair(t, ctx, base, options)
+	if err != nil {
+		t.Fatalf("run source repair: %v", err)
+	}
+	if !strings.Contains(output, "read 2 rows, found 0 current, 1 changed, 1 written, 0 unmatched, 1 without a source timestamp, 0 ambiguous") {
+		t.Fatalf("unexpected repair output, output: %q", output)
+	}
+	time.Sleep(repairVisibilityWait)
+	repaired, repairedVectors := sharedSnapshot(t, address)
+	for key, bits := range seededVectors {
+		if !slices.Equal(bits, repairedVectors[key]) {
+			t.Fatalf("vector changed, vector key: %s", key)
+		}
+	}
+	want := time.Date(2026, time.April, 2, 8, 30, 0, 0, time.UTC).Unix()
+	for id, after := range repaired {
+		before := seeded[id]
+		if after.content != before.content || after.relativePath != before.relativePath || after.vectorKey != before.vectorKey || after.others != before.others {
+			t.Fatalf("stored fields changed, row ID, initial row, repaired row: %s: %+v, %+v", id, before, after)
+		}
+		wantTime := zero
+		if after.content == question {
+			wantTime = want
+		}
+		if after.timestampUnix != wantTime {
+			t.Fatalf("unexpected timestamp, row path, actual timestamp, expected timestamp: %s: %d, %d", after.relativePath, after.timestampUnix, wantTime)
+		}
+	}
+}
