@@ -2,6 +2,7 @@ package vectorsearch
 
 import (
 	"strings"
+	"time"
 
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/lm-semantic-search/collection"
@@ -33,13 +34,19 @@ func searchFilter(filter semsearch.SearchFilter) *collection.Filter {
 	if filter.ParentConversationID != "" {
 		children = append(children, collection.ColumnEquals(parentConversationIDColumn, collection.StringScalar(filter.ParentConversationID)))
 	}
-	if filter.FromUnix > 0 {
-		lower := filter.FromUnix
+	if filter.FromUnix != nil {
+		lower := *filter.FromUnix
 		children = append(children, collection.ColumnRange(timestampUnixColumn, &lower, nil))
 	}
-	if filter.UntilUnix > 0 {
-		upper := filter.UntilUnix
-		children = append(children, collection.ColumnRange(timestampUnixColumn, nil, &upper))
+	if filter.UntilUnix != nil {
+		upper := *filter.UntilUnix
+		var lower *int64
+		if filter.FromUnix == nil {
+			// Exclude the zero time value that represents an unknown timestamp.
+			knownFloor := time.Time{}.Unix() + 1
+			lower = &knownFloor
+		}
+		children = append(children, collection.ColumnRange(timestampUnixColumn, lower, &upper))
 	}
 	if filter.MessageIndexFrom > 0 {
 		lower := int64(filter.MessageIndexFrom)

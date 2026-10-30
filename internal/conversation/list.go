@@ -53,9 +53,10 @@ type SearchConversationsOptions struct {
 	IncludeArchived bool
 	// Roles, FromUnix, UntilUnix, and MinScore narrow retrieval by row
 	// attributes. PerConversationLimit caps hits per conversation.
-	Roles                []string
-	FromUnix             int64
-	UntilUnix            int64
+	Roles []string
+	// FromUnix is inclusive and UntilUnix is exclusive. A nil pointer leaves the corresponding bound unset.
+	FromUnix             *int64
+	UntilUnix            *int64
 	MinScore             float64
 	PerConversationLimit int
 	// ConversationID scopes discovery to a single conversation, the within-search
