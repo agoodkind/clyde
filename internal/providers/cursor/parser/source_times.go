@@ -1,11 +1,14 @@
 package parser
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -180,7 +183,7 @@ func (resolver *sourceTimeResolver) applyTools(message *transcript.Message) {
 			resolver.breakTools("boundary")
 			return
 		}
-		if tool.Name != native.Tool.Name || strings.TrimSpace(tool.Display) != strings.TrimSpace(native.Tool.Display) {
+		if tool.Name != native.Tool.Name || !sameToolInput(tool.Input.Raw, native.Tool.Input.Raw) {
 			resolver.breakTools("sequence")
 			return
 		}
@@ -190,7 +193,85 @@ func (resolver *sourceTimeResolver) applyTools(message *transcript.Message) {
 		}
 		stamp := native.Timestamp
 		tool.Timestamp = &stamp
+		tool.TimestampUnknown = false
 	}
+}
+
+// sameToolInput compares two tool inputs as canonical JSON.
+func sameToolInput(left json.RawMessage, right json.RawMessage) bool {
+	leftCanonical, leftOK := canonicalToolInput(left)
+	rightCanonical, rightOK := canonicalToolInput(right)
+	return leftOK && rightOK && leftCanonical == rightCanonical
+}
+
+// canonicalToolInput decodes a JSON input and returns its canonical encoding.
+func canonicalToolInput(raw json.RawMessage) (string, bool) {
+	var builder bytes.Buffer
+	if !writeCanonicalJSON(&builder, bytes.TrimSpace(raw)) {
+		return "", false
+	}
+	return builder.String(), true
+}
+
+func writeCanonicalObject(builder *bytes.Buffer, raw []byte) bool {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return false
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	builder.WriteByte('{')
+	for index, key := range keys {
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		encodedKey, err := json.Marshal(key)
+		if err != nil {
+			return false
+		}
+		builder.Write(encodedKey)
+		builder.WriteByte(':')
+		if !writeCanonicalJSON(builder, bytes.TrimSpace(object[key])) {
+			return false
+		}
+	}
+	builder.WriteByte('}')
+	return true
+}
+
+// writeCanonicalJSON writes JSON with sorted object keys and compact values.
+// It preserves array order and returns false when the input is invalid.
+func writeCanonicalJSON(builder *bytes.Buffer, raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	switch raw[0] {
+	case '{':
+		return writeCanonicalObject(builder, raw)
+	case '[':
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return false
+		}
+		builder.WriteByte('[')
+		for index, item := range items {
+			if index > 0 {
+				builder.WriteByte(',')
+			}
+			if !writeCanonicalJSON(builder, bytes.TrimSpace(item)) {
+				return false
+			}
+		}
+		builder.WriteByte(']')
+	default:
+		if err := json.Compact(builder, raw); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (resolver *sourceTimeResolver) breakTools(reason string) {
@@ -373,15 +454,16 @@ func nativeSourceToolCall(call cursorstore.NativeToolCall, dates []time.Time) co
 	input := transcript.ToolInputJSON{Raw: cloneRaw(call.Args)}
 	display, displayLang := toolDisplayText(call.Name, input)
 	tool := transcript.ToolCall{
-		ID:          call.ID,
-		Name:        call.Name,
-		Input:       input,
-		Display:     display,
-		DisplayLang: displayLang,
-		Output:      "",
-		IsError:     false,
-		Attachments: nil,
-		Timestamp:   nil,
+		ID:               call.ID,
+		Name:             call.Name,
+		Input:            input,
+		Display:          display,
+		DisplayLang:      displayLang,
+		Output:           "",
+		IsError:          false,
+		Attachments:      nil,
+		Timestamp:        nil,
+		TimestampUnknown: false,
 	}
 	result := conversation.SourceToolCall{Tool: tool, Timestamp: time.Time{}, Reason: "", MessageStart: false}
 	if len(dates) == 0 || dates[0].IsZero() {

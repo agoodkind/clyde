@@ -42,6 +42,9 @@ type SemToolCall struct {
 	IsError  bool
 	// TimestampUnix is the tool call's Unix timestamp, or nil when unavailable.
 	TimestampUnix *int64
+	// TimestampUnknown marks a tool call whose time is explicitly unknown.
+	// When false and TimestampUnix is nil, the call uses the message time.
+	TimestampUnknown bool
 }
 
 // Fingerprint pairs a conversation id with a value that changes when the

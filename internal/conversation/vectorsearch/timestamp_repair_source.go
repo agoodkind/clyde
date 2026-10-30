@@ -349,7 +349,7 @@ func (lookup sourceTimeLookup) toolFamilyOutcome(key string, text string, eviden
 	}
 	rendered := toolContent(semsearch.SemToolCall{
 		Name: strings.ToValidUTF8(binding.call.Name, ""), Display: strings.ToValidUTF8(binding.call.Display, ""),
-		LangHint: strings.ToValidUTF8(binding.call.LangHint, ""), Output: "", IsError: false, TimestampUnix: nil,
+		LangHint: strings.ToValidUTF8(binding.call.LangHint, ""), Output: "", IsError: false, TimestampUnix: nil, TimestampUnknown: false,
 	})
 	if rendered != text {
 		evidence.Outcome = SourceOutcomeContentMismatch
@@ -696,6 +696,12 @@ func wholeVersions(key string, members []collection.StoredRow) bool {
 		}
 	}
 	return true
+}
+
+// rowTimestampPresent reports whether the timestamp column contains a value.
+func rowTimestampPresent(row collection.StoredRow) bool {
+	cell, found := row.Scalars[timestampUnixColumn]
+	return found && cell.State == collection.ScalarCellValue
 }
 
 func rowHasZeroTime(row collection.StoredRow) bool {

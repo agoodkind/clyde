@@ -166,6 +166,35 @@ func TestSourceStoreMessagesReportsAnUnreadableNativeState(t *testing.T) {
 }
 
 // TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer checks tool times
+// TestTranscriptToolCallsStayUndatedWhenTheCompleteInputDiffers checks that a
+// matching display does not bind calls when their complete inputs differ.
+func TestTranscriptToolCallsStayUndatedWhenTheCompleteInputDiffers(t *testing.T) {
+	transcriptPath := writeNativeFixture(t, "Shell")
+	lines := strings.Join([]string{
+		`{"role":"user","message":{"content":[{"type":"text","text":"check the tree"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeGitCommand + `"}},{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `","working_directory":"/other"}}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `"}}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+	if err != nil {
+		t.Fatalf("stream transcript: %v", err)
+	}
+	if messages[1].Tools[1].Display != nativeTestCommand {
+		t.Fatalf("unexpected tool display, actual: %q", messages[1].Tools[1].Display)
+	}
+	if got, want := toolTime(t, messages, 1, 0), time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("unexpected first tool time, actual, expected: %v, %v", got, want)
+	}
+	for _, toolIndex := range []int{1, 2} {
+		if got := toolTime(t, messages, 1, toolIndex); !got.IsZero() {
+			t.Fatalf("tool has a timestamp after the input mismatch, tool index, actual: %d: %v", toolIndex, got)
+		}
+	}
+}
+
 // // when a transcript message starts within a native message.
 func TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer(t *testing.T) {
 	transcriptPath := writeNativeFixture(t, "Shell")

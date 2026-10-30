@@ -116,12 +116,12 @@ func (c *Client) UpsertConversationDocuments(
 	if err != nil {
 		return "", err
 	}
-	stats := ingestStats{conversations: len(order), rowsWritten: 0, reused: 0, embedded: 0, split: 0, dropped: 0}
+	stats := ingestStats{conversations: len(order), rowsWritten: 0, reused: 0, embedded: 0, split: 0, dropped: 0, timesFilled: 0}
 	// writtenConversations lists each conversation that received rows, as
 	// "<conversation id>=<row count>", for the completion log record.
 	writtenConversations := make([]string, 0)
 	for _, conversationID := range order {
-		chunks, planErr := c.planConversation(conversationID, byConversation[conversationID], batch.state(conversationID))
+		chunks, fills, planErr := c.planConversation(conversationID, byConversation[conversationID], batch.state(conversationID))
 		if planErr != nil {
 			return "", planErr
 		}
@@ -130,6 +130,11 @@ func (c *Client) UpsertConversationDocuments(
 			return "", err
 		}
 		stats.rowsWritten += writer.written
+		filled, fillErr := c.fillUnknownTimes(ctx, collectionName, fills)
+		if fillErr != nil {
+			return "", fillErr
+		}
+		stats.timesFilled += filled
 		if writer.written > 0 {
 			writtenConversations = append(writtenConversations, fmt.Sprintf("%s=%d", conversationID, writer.written))
 		}
@@ -150,6 +155,7 @@ func (c *Client) UpsertConversationDocuments(
 		"vectors_embedded", stats.embedded,
 		"inputs_split", stats.split,
 		"inputs_skipped", stats.dropped,
+		"times_filled", stats.timesFilled,
 	)
 	c.recordUpsert(UpsertStats{JobID: jobID, RowsWritten: stats.rowsWritten, VectorsReused: stats.reused, VectorsEmbedded: stats.embedded})
 	return jobID, nil
@@ -181,23 +187,28 @@ func groupDocuments(docs []semsearch.SemDoc) (map[string][]semsearch.SemDoc, []s
 
 // planConversation includes edited text because a stored row does not prove
 // that the current message text has been ingested.
-func (c *Client) planConversation(conversationID string, docs []semsearch.SemDoc, state *conversationState) ([]storedChunk, error) {
+func (c *Client) planConversation(conversationID string, docs []semsearch.SemDoc, state *conversationState) ([]storedChunk, map[string]matchedRow, error) {
 	generated := make([]storedChunk, 0)
+	fills := make(map[string]matchedRow)
 	for _, doc := range docs {
 		documentRows, err := documentChunks(doc, conversationChunkMaxBytes)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		generated = append(generated, documentRows...)
 	}
 	chunks := make([]storedChunk, 0, len(generated))
 	seen := make(map[string]struct{})
 	for _, family := range groupFamilies(conversationID, generated) {
-		if state.present(family.Key) && !state.differs(family.Key, family.Chunks) {
-			continue
-		}
+		unchanged := state.present(family.Key) && !state.differs(family.Key, family.Chunks)
 		for _, chunk := range expandOverBudget(family.Chunks, c.byteBudget) {
 			id := chunkID(chunk)
+			if chunk.TimestampUnix != missingTimestampUnix && state.hasUnknownTimeRow(family.Key, id) {
+				fills[id] = matchedRow{relativePath: chunk.RelativePath, timestampUnix: chunk.TimestampUnix}
+			}
+			if unchanged {
+				continue
+			}
 			if _, duplicate := seen[id]; duplicate {
 				continue
 			}
@@ -208,5 +219,28 @@ func (c *Client) planConversation(conversationID string, docs []semsearch.SemDoc
 			chunks = append(chunks, chunk)
 		}
 	}
-	return chunks, nil
+	return chunks, fills, nil
+}
+
+// fillUnknownTimes writes known timestamps to matching stored rows after checking metadata.
+func (c *Client) fillUnknownTimes(ctx context.Context, collectionName string, fills map[string]matchedRow) (int, error) {
+	if len(fills) == 0 {
+		return 0, nil
+	}
+	milvus, isMilvus := c.store.(*milvusBackend)
+	if !isMilvus {
+		return 0, ErrTimestampRepairUnsupported
+	}
+	report := TimestampRepairReport{
+		Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
+		RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
+	}
+	updates, err := plannedTimestampUpdates(ctx, milvus, collectionName, fills, &report)
+	if err != nil {
+		return 0, err
+	}
+	if err := writeSourceTimestamps(ctx, c, milvus, collectionName, updates, &report); err != nil {
+		return report.RowsWritten, err
+	}
+	return report.RowsWritten, nil
 }

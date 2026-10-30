@@ -140,6 +140,8 @@ type ingestStats struct {
 	embedded      int
 	split         int
 	dropped       int
+	// timesFilled counts stored rows that received a timestamp.
+	timesFilled int
 }
 
 // rowWriter buffers embedded rows and writes them to the collection in batches

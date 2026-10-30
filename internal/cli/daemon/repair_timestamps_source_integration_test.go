@@ -998,3 +998,174 @@ func TestIngestingAGroupedCursorTurnKeepsEachToolCallDate(t *testing.T) {
 		t.Fatalf("unexpected tool row count; actual, expected: %d, %d", tools, len(wantTools))
 	}
 }
+
+// TestIngestingADatedCursorTurnKeepsAnUnresolvedCallUndated checks that a dated
+// reply and its unresolved tool call have separate stored timestamps.
+func TestIngestingADatedCursorTurnKeepsAnUnresolvedCallUndated(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	dataRoot := filepath.Join(home, "cursor-data")
+	projects := filepath.Join(home, "cursor-projects")
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
+	composer := "c4c4c4c4-0000-4000-8000-000000000001"
+	question := "Run the status check please."
+	reply := "Running the status check now."
+	writeComposerStore(t, dataRoot, composer, []sourceBubble{
+		{id: "u1", kind: 1, text: question, created: "2026-05-20T10:00:00.000Z", tool: "", server: "", unreferenced: false},
+		{id: "a1", kind: 2, text: reply, created: "2026-05-20T10:00:30.000Z", tool: "", server: "", unreferenced: false},
+	}, []string{
+		`{"role":"user","content":[{"type":"text","text":"` + question + `"}]}`,
+		`{"role":"assistant","content":[{"type":"text","text":"` + reply + `"},` + nativeToolCall("call_unbacked", "Shell", `{"command":"`+sourceRepairShellAlias+`"}`) + `]}`,
+	})
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", composer, composer+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	lines := `{"role":"user","message":{"content":[{"type":"text","text":"` + question + `"}]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"` + reply + `"},{"type":"tool_use","name":"Shell","input":{"command":"` + sourceRepairShellAlias + `"}}]}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o600); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+
+	ctx := context.Background()
+	registry := conversation.NewRegistry()
+	registry.Register(cursorparser.New())
+	index := conversation.NewIndex(registry, config.NewConfigWithDefaults().Conversation)
+	if err := index.Refresh(ctx); err != nil {
+		t.Fatalf("refresh conversation index: %v", err)
+	}
+	stamped, err := index.ListWithStamps(ctx)
+	if err != nil {
+		t.Fatalf("list indexed conversations: %v", err)
+	}
+	var record conversation.Record
+	for _, entry := range stamped {
+		if entry.Record.NativeID == composer && strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
+			record = entry.Record
+		}
+	}
+	if record.ID == "" {
+		t.Fatalf("transcript record is absent, indexed record count: %d", len(stamped))
+	}
+	kinds := backfillTestContentKinds(t)
+	messages, err := index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
+	if err != nil {
+		t.Fatalf("load conversation messages: %v", err)
+	}
+	built, err := daemonsvc.BuildSemanticConversationDocuments(record, messages, kinds)
+	if err != nil {
+		t.Fatalf("build semantic conversation documents: %v", err)
+	}
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	manifest := []semsearch.Fingerprint{{ConversationID: record.ID, Value: "unresolved"}}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, built.Docs, manifest); err != nil {
+		t.Fatalf("store semantic conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	rows, _ := sharedSnapshot(t, address)
+	replyTime := time.Date(2026, time.May, 20, 10, 0, 30, 0, time.UTC).Unix()
+	zero := time.Time{}.Unix()
+	seen := map[string]bool{}
+	for _, row := range rows {
+		kind := strings.SplitN(row.relativePath, "/", 2)[0]
+		switch {
+		case kind == "convtool":
+			seen["tool"] = true
+			if row.timestampUnix != zero {
+				t.Fatalf("unresolved tool has a timestamp, row path, timestamp: %s: %d", row.relativePath, row.timestampUnix)
+			}
+		case kind == "conv" && row.content == reply:
+			seen["reply"] = true
+			if row.timestampUnix != replyTime {
+				t.Fatalf("unexpected reply timestamp, actual, expected: %d, %d", row.timestampUnix, replyTime)
+			}
+		}
+	}
+	if !seen["tool"] || !seen["reply"] {
+		t.Fatalf("expected tool and reply rows, rows found: %v", seen)
+	}
+}
+
+// TestUpsertingARecoveredToolTimeFillsTheRowWithoutNewVectors checks timestamp
+// updates and preserves row counts, vector keys, and vector bytes.
+func TestUpsertingARecoveredToolTimeFillsTheRowWithoutNewVectors(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	conversationID := "cursor:c5c5c5c5-0000-4000-8000-000000000001"
+	first := time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC).Unix()
+	second := time.Date(2026, time.May, 20, 10, 9, 0, 0, time.UTC).Unix()
+	toolDoc := func(stamp *int64, unknown bool) semsearch.SemDoc {
+		doc := repairDoc(conversationID, "", time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC).Unix())
+		doc.Role = "assistant"
+		doc.Tools = []semsearch.SemToolCall{{Name: "Shell", Display: sourceRepairShellAlias, LangHint: "bash", Output: "", IsError: false, TimestampUnix: stamp, TimestampUnknown: unknown}}
+		return doc
+	}
+	upsert := func(doc semsearch.SemDoc, fingerprint string) {
+		docs := []semsearch.SemDoc{doc}
+		manifest := []semsearch.Fingerprint{{ConversationID: conversationID, Value: daemonsvc.SemanticProjectionHash(docs) + fingerprint}}
+		if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
+			t.Fatalf("upsert conversation documents: %v", err)
+		}
+		time.Sleep(repairVisibilityWait)
+	}
+	toolRow := func(rows map[string]sharedStoredRow) sharedStoredRow {
+		for _, row := range rows {
+			if strings.HasPrefix(row.relativePath, "convtool/") {
+				return row
+			}
+		}
+		t.Fatalf("tool row is absent, row count: %d", len(rows))
+		return sharedStoredRow{}
+	}
+	firstDoc := toolDoc(&first, false)
+	secondDoc := toolDoc(&second, false)
+	unknownDoc := toolDoc(nil, true)
+	if daemonsvc.SemanticProjectionHash([]semsearch.SemDoc{firstDoc}) == daemonsvc.SemanticProjectionHash([]semsearch.SemDoc{secondDoc}) {
+		t.Fatal("semantic projection hash does not distinguish tool times")
+	}
+	if daemonsvc.SemanticProjectionHash([]semsearch.SemDoc{firstDoc}) == daemonsvc.SemanticProjectionHash([]semsearch.SemDoc{unknownDoc}) {
+		t.Fatal("semantic projection hash does not distinguish the unknown tool time")
+	}
+	upsert(unknownDoc, "")
+	before, beforeVectors := sharedSnapshot(t, address)
+	beforeRow := toolRow(before)
+	unknownTime := time.Time{}.Unix()
+	if beforeRow.timestampUnix != unknownTime {
+		t.Fatalf("unexpected initial tool timestamp, actual: %d", beforeRow.timestampUnix)
+	}
+	for _, check := range []struct {
+		doc  semsearch.SemDoc
+		want int64
+	}{{doc: firstDoc, want: first}, {doc: unknownDoc, want: first}} {
+		upsert(check.doc, "")
+		after, afterVectors := sharedSnapshot(t, address)
+		afterRow := toolRow(after)
+		if len(after) != len(before) || len(afterVectors) != len(beforeVectors) {
+			t.Fatalf("row or vector count changed, rows after, rows before, vectors after, vectors before: %d, %d, %d, %d", len(after), len(before), len(afterVectors), len(beforeVectors))
+		}
+		if afterRow.timestampUnix != check.want {
+			t.Fatalf("unexpected tool timestamp, actual, expected: %d, %d", afterRow.timestampUnix, check.want)
+		}
+		if afterRow.vectorKey != beforeRow.vectorKey || afterRow.content != beforeRow.content {
+			t.Fatalf("tool row vector key or content changed, before, after: %+v, %+v", beforeRow, afterRow)
+		}
+		for key, bits := range beforeVectors {
+			if !slices.Equal(bits, afterVectors[key]) {
+				t.Fatalf("vector bytes changed, vector key: %s", key)
+			}
+		}
+	}
+}

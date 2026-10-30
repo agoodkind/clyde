@@ -707,15 +707,16 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 			m.HasTools = true
 			display, displayLang := toolDisplayText(b.Name, b.Input)
 			m.Tools = append(m.Tools, transcript.ToolCall{
-				ID:          b.ID,
-				Name:        b.Name,
-				Input:       b.Input,
-				Display:     display,
-				DisplayLang: displayLang,
-				Output:      "",
-				IsError:     false,
-				Attachments: nil,
-				Timestamp:   nil,
+				ID:               b.ID,
+				Name:             b.Name,
+				Input:            b.Input,
+				Display:          display,
+				DisplayLang:      displayLang,
+				Output:           "",
+				IsError:          false,
+				Attachments:      nil,
+				Timestamp:        nil,
+				TimestampUnknown: false,
 			})
 		case contentBlockToolResult:
 			// Assistant entries should not carry tool results; the

@@ -178,15 +178,16 @@ func mapAssistantMessage(item event) (transcript.Message, bool) {
 	tools := make([]transcript.ToolCall, 0, len(data.ToolRequests))
 	for _, request := range data.ToolRequests {
 		tools = append(tools, transcript.ToolCall{
-			ID:          request.ToolCallID,
-			Name:        request.Name,
-			Input:       transcript.ToolInputJSON{Raw: append(json.RawMessage(nil), request.Arguments...)},
-			Display:     firstNonEmpty(request.IntentionSummary, request.ToolTitle),
-			DisplayLang: "",
-			Output:      "",
-			IsError:     false,
-			Attachments: nil,
-			Timestamp:   nil,
+			ID:               request.ToolCallID,
+			Name:             request.Name,
+			Input:            transcript.ToolInputJSON{Raw: append(json.RawMessage(nil), request.Arguments...)},
+			Display:          firstNonEmpty(request.IntentionSummary, request.ToolTitle),
+			DisplayLang:      "",
+			Output:           "",
+			IsError:          false,
+			Attachments:      nil,
+			Timestamp:        nil,
+			TimestampUnknown: false,
 		})
 	}
 	message := transcript.Message{
