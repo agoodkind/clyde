@@ -12,6 +12,8 @@ type SourceStoreReader interface {
 	SourceStoreMessages(ctx context.Context, record Record, opts LoadOptions) ([]transcript.Message, bool, error)
 	// SourceMatchText prepares stored text for matching against source messages.
 	SourceMatchText(role string, text string) string
+	// SourceToolName returns the tool name used to match source timestamps.
+	SourceToolName(name string) string
 }
 
 // SourceStoreReader returns the provider's source store reader when its parser implements it.

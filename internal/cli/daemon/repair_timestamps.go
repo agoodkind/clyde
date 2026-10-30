@@ -395,12 +395,13 @@ func newSourceRepairTotals() *vectorsearch.TimestampSourceRepairReport {
 
 // loadStoreSource builds semantic documents from a provider's source store messages.
 func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampSourceRepairSource, error) {
-	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil}
+	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, ToolName: nil}
 	reader, found := daemonsvc.ConversationSourceStoreReader(record.Provider)
 	if !found {
 		return empty, fmt.Errorf("source store reader is unavailable for provider %q", record.Provider)
 	}
 	empty.MatchText = reader.SourceMatchText
+	empty.ToolName = reader.SourceToolName
 	kinds := conversation.NewContentKindSet(conversation.ContentKindChat, conversation.ContentKindThinking, conversation.ContentKindToolCalls)
 	messages, stored, err := reader.SourceStoreMessages(ctx, record, daemonsvc.SemanticConversationLoadOptions(kinds))
 	if err != nil {

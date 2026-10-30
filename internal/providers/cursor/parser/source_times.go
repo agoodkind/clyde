@@ -58,6 +58,25 @@ func (p *Parser) SourceMatchText(role string, text string) string {
 	return normalized[:lastBreak]
 }
 
+// sourceToolAliases maps Cursor store tool names to transcript tool names.
+// Cursor 3.27.18 maps run_terminal_command_v2 to Shell.
+var sourceToolAliases = map[string]string{
+	"run_terminal_command_v2": "Shell",
+}
+
+// SourceToolName returns the transcript name for a Cursor store tool name.
+// It returns the original name when the store name has no alias.
+func (*Parser) SourceToolName(name string) string {
+	return sourceToolName(name)
+}
+
+func sourceToolName(name string) string {
+	if alias, found := sourceToolAliases[name]; found {
+		return alias
+	}
+	return name
+}
+
 // streamTranscript reads transcript messages, applies source times, and yields messages.
 func streamTranscript(
 	discovered discoveredArtifact,
@@ -148,6 +167,7 @@ func newSourceTimeLookup(source []transcript.Message) (*transcript.SourceTimeInd
 	for _, message := range source {
 		entries = append(entries, transcript.SourceTimeEntry{Role: message.Role, Text: message.Text, Timestamp: message.Timestamp})
 		for _, tool := range message.Tools {
+			tool.Name = sourceToolName(tool.Name)
 			key := toolKey(message.Role, tool)
 			tools[key] = append(tools[key], message.Timestamp)
 		}

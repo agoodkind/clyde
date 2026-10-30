@@ -50,7 +50,21 @@ const (
 	sourceRepairOverlong    = sourceRepairAnswer + " The store does not contain this sentence."
 	sourceRepairLiteral     = "Please repeat this"
 	sourceRepairMarkerLine  = "[turn ended: error]"
+	sourceRepairShellAlias  = "git status --short"
+	sourceRepairOtherTool   = "make lint"
+	sourceRepairShellTwice  = "go test ./..."
+	sourceRepairShellDay    = "2026-03-14"
 )
+
+func shellBubbleTool(name string, command string) string {
+	return `{"name":"` + name + `","rawArgs":"{\"command\":\"` + command + `\"}","status":"completed"}`
+}
+
+func shellToolDoc(command string, messageIndex int32, timestampUnix int64) semsearch.SemDoc {
+	doc := sourceRepairDoc("", messageIndex, "assistant", timestampUnix)
+	doc.Tools = []semsearch.SemToolCall{{Name: "Shell", Display: command, LangHint: "bash", Output: "", IsError: false}}
+	return doc
+}
 
 type sourceBubble struct {
 	id      string
@@ -76,6 +90,10 @@ func sourceRepairBubbles() []sourceBubble {
 		{id: "b12", kind: 1, text: sourceRepairReordered, created: "2026-03-01T09:00:00.000Z", tool: ""},
 		{id: "b13", kind: 1, text: sourceRepairLiteral, created: "2026-03-12T10:00:00.000Z", tool: ""},
 		{id: "b14", kind: 1, text: sourceRepairLiteral + `\n` + sourceRepairMarkerLine, created: "2026-03-13T10:00:00.000Z", tool: ""},
+		{id: "b15", kind: 2, text: "", created: "2026-03-14T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellAlias)},
+		{id: "b16", kind: 2, text: "", created: "2026-03-15T10:00:00.000Z", tool: shellBubbleTool("run_command", sourceRepairOtherTool)},
+		{id: "b17", kind: 2, text: "", created: "2026-03-16T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellTwice)},
+		{id: "b18", kind: 2, text: "", created: "2026-03-17T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellTwice)},
 	}
 }
 
@@ -267,6 +285,9 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		sourceRepairDoc(sourceRepairFragment, 67, "assistant", zero),
 		sourceRepairDoc(sourceRepairOverlong, 68, "assistant", zero),
 		sourceRepairDoc(sourceRepairLiteral+"\n"+sourceRepairMarkerLine, 69, "user", zero),
+		shellToolDoc(sourceRepairShellAlias, 70, zero),
+		shellToolDoc(sourceRepairOtherTool, 71, zero),
+		shellToolDoc(sourceRepairShellTwice, 72, zero),
 	}
 	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + sourceRepairComposerID, Value: "old-parser"}}
 	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
@@ -286,7 +307,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run source repair dry run: %v", err)
 	}
-	if !strings.Contains(output, "read 13 rows, found 0 current, 9 changed, 0 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
+	if !strings.Contains(output, "read 16 rows, found 0 current, 10 changed, 0 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair dry run returned unexpected output %q", output)
 	}
 	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(seeded, after) {
@@ -299,7 +320,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute source repair: %v", err)
 	}
-	if !strings.Contains(output, "9 changed, 9 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
+	if !strings.Contains(output, "10 changed, 10 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair returned unexpected output %q", output)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -335,7 +356,8 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 			continue
 		}
 		changed++
-		if before.timestampUnix != zero || before.content == sourceRepairRepeated || before.content == sourceRepairUnsaved || before.content == sourceRepairOverlong {
+		rejectedTool := strings.Contains(before.content, sourceRepairOtherTool) || strings.Contains(before.content, sourceRepairShellTwice)
+		if before.timestampUnix != zero || rejectedTool || before.content == sourceRepairRepeated || before.content == sourceRepairUnsaved || before.content == sourceRepairOverlong {
 			t.Fatalf("repair changed a row that should remain unchanged %s", id)
 		}
 		want, known := wantDays[before.content]
@@ -345,12 +367,15 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		}
 		if strings.HasPrefix(before.relativePath, "convtool/") {
 			want, known = sourceRepairToolDay, true
+			if strings.Contains(before.content, sourceRepairShellAlias) {
+				want = sourceRepairShellDay
+			}
 		}
 		if !known || day != want {
 			t.Fatalf("row has an unexpected timestamp %s: %s, %s", id, day, want)
 		}
 	}
-	if changed != 9 {
+	if changed != 10 {
 		t.Fatalf("unexpected number of rows changed %d", changed)
 	}
 	for _, check := range []struct {
@@ -368,7 +393,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute source repair: %v", err)
 	}
-	if !strings.Contains(output, "read 13 rows, found 0 current, 0 changed, 0 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
+	if !strings.Contains(output, "read 16 rows, found 0 current, 0 changed, 0 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair rerun returned unexpected output %q", output)
 	}
 }

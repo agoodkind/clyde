@@ -17,7 +17,47 @@ import (
 
 const sourceTimesConversationID = "77777777-7777-4777-8777-777777777777"
 
-const sourceRootComposerID = "88888888-8888-4888-8888-888888888888"
+const (
+	sourceRootComposerID  = "88888888-8888-4888-8888-888888888888"
+	shellAliasComposerID  = "99999999-9999-4999-8999-999999999999"
+	shellAliasCommandLine = "git status --short"
+)
+
+// TestTranscriptShellCallTakesTheTimeOfTheStoredTerminalCommand checks that a
+// Shell call matches run_terminal_command_v2 and does not match run_command.
+func TestTranscriptShellCallTakesTheTimeOfTheStoredTerminalCommand(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+	transcriptPath := writeSourceTimesTranscript(t, projectsDir, "Users-alice-shell-alias", shellAliasComposerID, []string{
+		`{"role":"user","message":{"content":[{"type":"text","text":"check the tree"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + shellAliasCommandLine + `"}}]}}`,
+		`{"role":"user","message":{"content":[{"type":"text","text":"run lint"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"make lint"}}]}}`,
+	})
+	prefix := "bubbleId:" + shellAliasComposerID + ":"
+	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + shellAliasComposerID + `', '{"composerId":"` + shellAliasComposerID + `","name":"Shell alias","createdAt":1779267600000,"lastUpdatedAt":1779268000000,"fullConversationHeadersOnly":[{"bubbleId":"s1","type":1},{"bubbleId":"s2","type":2},{"bubbleId":"s3","type":1},{"bubbleId":"s4","type":2}]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `s1', '{"_v":3,"type":1,"bubbleId":"s1","text":"check the tree","createdAt":"2026-05-20T10:00:00.000Z"}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `s2', '{"_v":3,"type":2,"bubbleId":"s2","text":"","createdAt":"2026-05-20T10:01:00.000Z","toolFormerData":{"name":"run_terminal_command_v2","rawArgs":"{\"command\":\"` + shellAliasCommandLine + `\"}","status":"completed"}}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `s3', '{"_v":3,"type":1,"bubbleId":"s3","text":"run lint","createdAt":"2026-05-20T10:02:00.000Z"}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `s4', '{"_v":3,"type":2,"bubbleId":"s4","text":"","createdAt":"2026-05-20T10:03:00.000Z","toolFormerData":{"name":"run_command","rawArgs":"{\"command\":\"make lint\"}","status":"completed"}}')`,
+	})
+	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+	if err != nil {
+		t.Fatalf("stream transcript: %v", err)
+	}
+	if len(messages) != 4 || messages[1].Tools[0].Name != "Shell" {
+		t.Fatalf("transcript messages do not contain the expected Shell call; messages: %+v", messages)
+	}
+	if want := time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC); !messages[1].Timestamp.Equal(want) {
+		t.Fatalf("Shell timestamp differs from the store timestamp; actual, expected: %v, %v", messages[1].Timestamp, want)
+	}
+	if !messages[3].Timestamp.IsZero() {
+		t.Fatalf("Shell call matched a run_command source; timestamp: %v", messages[3].Timestamp)
+	}
+}
 
 func writeSourceRootStore(t *testing.T, root string, questionTime string, answerTime string) {
 	t.Helper()

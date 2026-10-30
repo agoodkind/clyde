@@ -27,6 +27,9 @@ type TimestampSourceRepairSource struct {
 	Documents      []semsearch.SemDoc
 	// MatchText normalizes stored text before matching it against source text.
 	MatchText func(role string, text string) string
+	// ToolName converts a source tool name before matching stored tool calls.
+	// When ToolName is nil, source repair uses the original name.
+	ToolName func(name string) string
 }
 
 // TimestampSourceRepairReport records source repair counts and matching evidence.
@@ -223,8 +226,12 @@ func newSourceTimeLookup(source TimestampSourceRepairSource) sourceTimeLookup {
 			lookup.fields[key] = append(lookup.fields[key], sourceField{text: doc.Thinking, timestampUnix: doc.TimestampUnix})
 		}
 		for _, tool := range doc.Tools {
+			name := tool.Name
+			if source.ToolName != nil {
+				name = source.ToolName(name)
+			}
 			cleaned := semsearch.SemToolCall{
-				Name:     strings.ToValidUTF8(tool.Name, ""),
+				Name:     strings.ToValidUTF8(name, ""),
 				Display:  strings.ToValidUTF8(tool.Display, ""),
 				LangHint: strings.ToValidUTF8(tool.LangHint, ""),
 				Output:   "",
