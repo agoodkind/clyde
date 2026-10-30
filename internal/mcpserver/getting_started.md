@@ -44,6 +44,10 @@ Export a conversation transcript.
   to `include_compactions: "all"`.
 - last_n (optional): keep only the last N visible messages after compaction
   segment selection.
+- output (optional): Write the export to an absolute path.
+- stdout (optional): Return the body inline. See
+  [MCP export output](../../docs/conversations.md#mcp) for the inline size
+  limit and the file receipt.
 
 Content kinds for the `only` array: `chat`, `thinking`, `tools`, `tool_calls`,
 `tool_outputs`, `system_prompts`, `system_messages`, `injected`, and

@@ -182,8 +182,15 @@ operations. Use `clyde_conversation_info` to inspect metadata and the segment
 stack. Use `clyde_export_transcript` to export transcript content.
 
 `clyde_export_transcript` accepts `include_compactions`, `full_history`, and
-`last_n` with the same segment selection rules as the CLI. The MCP tool returns
-the export body unless `output` names an absolute file path, which it writes.
+`last_n` with the same segment selection rules as the CLI.
+MCP returns the body inline when `output` is omitted or set to `-` and the body
+is at most 32768 bytes. For larger inline exports, the server writes the complete
+body to a private temporary file and returns its absolute path and byte count.
+An explicit absolute `output` path receives the complete body, and the result
+returns only the path and byte count. The `stdout` parameter also selects inline
+output and conflicts with an output file path. A write failure returns an MCP
+tool error with the path. Saved compaction context follows the same content kinds
+as ordinary messages.
 
 `conversation export tail` is a CLI-only shortcut. MCP clients can request the
 same range by calling `clyde_export_transcript` with `include_compactions: "0"`,

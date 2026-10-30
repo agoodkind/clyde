@@ -48,6 +48,7 @@ func exportMessages(record Record, messages []transcript.Message, options Export
 		return nil, err
 	}
 	selection = applyLastNToSegmentSelection(messages, selection, options.LastN)
+	selection = filterCompactionSelectionItems(selection, options.Content)
 	selection, err = sanitizeCompactionSelectionForExport(selection)
 	if err != nil {
 		slog.Warn("conversation.export.sanitize_selection_failed", "concern", "conversation.export", "component", "conversation", "err", err)
@@ -55,6 +56,7 @@ func exportMessages(record Record, messages []transcript.Message, options Export
 	}
 	selectedMessages := selectedCompactionSegmentMessages(messages, selection)
 	selectedMessages = filterMessages(selectedMessages, options)
+	filterCompactionMessageItems(selectedMessages, options.Content)
 	selectedMessages, err = sanitizeCompactionMessagesForExport(selectedMessages)
 	if err != nil {
 		slog.Warn("conversation.export.sanitize_messages_failed", "concern", "conversation.export", "component", "conversation", "err", err)
@@ -302,6 +304,7 @@ func buildCompactionExportBlock(selection CompactionSegmentSelection) *compactio
 			timestamp := segment.SummaryTimestamp
 			summaryTimestamp = &timestamp
 		}
+		contextItems := copyContextItems(segment.Checkpoint.ContextItems)
 		segmentBlocks = append(segmentBlocks, compactionExportSegmentBlock{
 			SegmentIndex:        segment.Index,
 			HasStartingSummary:  segment.HasStartingSummary,
@@ -310,8 +313,8 @@ func buildCompactionExportBlock(selection CompactionSegmentSelection) *compactio
 			SummaryMessageIndex: segment.SummaryMessageIndex,
 			SummaryUUID:         segment.SummaryUUID,
 			SummaryTimestamp:    summaryTimestamp,
-			SummaryItems:        summaryContextItems(segment.Checkpoint.ContextItems),
-			ContextItems:        copyContextItems(segment.Checkpoint.ContextItems),
+			SummaryItems:        summaryContextItems(contextItems),
+			ContextItems:        contextItems,
 		})
 	}
 	if len(segmentBlocks) == 0 {

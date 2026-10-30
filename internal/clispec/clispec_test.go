@@ -957,6 +957,7 @@ func TestRenderMCPArtifactWritesFileAndPreservesResult(t *testing.T) {
 		},
 		Body:        body,
 		DefaultPath: path,
+		Text:        "wrote: " + path + "\n",
 		InlineText:  string(body),
 	})
 	if err != nil {
@@ -977,8 +978,8 @@ func TestRenderMCPArtifactWritesFileAndPreservesResult(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("export file permissions = %o, want 600", got)
 	}
-	if got := textOf(t, result); got != string(body) {
-		t.Fatalf("MCP text = %q, want %q", got, string(body))
+	if got := textOf(t, result); got != "wrote: "+path+"\n" {
+		t.Fatalf("mcp text after file write does not match receipt; got text and path: %q, %q", got, path)
 	}
 
 	raw, ok := result.StructuredContent.(json.RawMessage)
