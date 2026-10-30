@@ -173,7 +173,7 @@ func TestExportOmitsEncryptedCompactionContent(t *testing.T) {
 				MaxTokens:    "",
 				TokenModel:   "",
 				Whitespace:   WhitespacePreserve,
-				Content:      NewContentKindSet(ContentKindChat),
+				Content:      NewContentKindSet(ContentKindChat, ContentKindThinking),
 				Compaction: CompactionExportOptions{
 					IncludeSelector: "0",
 					FullHistory:     false,

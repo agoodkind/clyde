@@ -43,8 +43,8 @@ func TestExportOnlyParamShape(t *testing.T) {
 	if stdout.Kind != KindBool {
 		t.Errorf("stdout kind = %d, want KindBool", stdout.Kind)
 	}
-	if !stdout.CLIOnly {
-		t.Errorf("stdout should be CLI-only")
+	if stdout.CLIOnly {
+		t.Errorf("mcp does not make stdout available")
 	}
 
 	for _, canonical := range []string{
@@ -190,7 +190,10 @@ func TestExportMCPOnlyIsRequiredArray(t *testing.T) {
 			t.Errorf("old mcp property %q should be removed", gone)
 		}
 	}
-	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout", "preserve", "tidy", "dense"} {
+	if _, present := tool.InputSchema.Properties["stdout"]; !present {
+		t.Errorf("mcp export schema does not include stdout")
+	}
+	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "preserve", "tidy", "dense"} {
 		if _, present := tool.InputSchema.Properties[cliOnly]; present {
 			t.Errorf("cli-only property %q should not appear on the MCP surface", cliOnly)
 		}
