@@ -42,6 +42,9 @@ func (*Parser) SourceStoreMessages(ctx context.Context, record conversation.Reco
 // SourceMatchText normalizes stored text and removes a trailing turn outcome marker.
 func (p *Parser) SourceMatchText(role string, text string) string {
 	normalized := p.NormalizeStoredText(role, text)
+	if role != cursorjsonl.RoleAssistant {
+		return normalized
+	}
 	lastBreak := strings.LastIndexByte(normalized, '\n')
 	lastLine := normalized[lastBreak+1:]
 	isMarker := lastLine == turnBoundaryUnreadableMarker ||

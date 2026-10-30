@@ -194,12 +194,12 @@ type sourceTimeLookup struct {
 	texts    *transcript.SourceTimeIndex
 	tools    map[string][]int64
 	thinking map[string][]int64
-	// @@FIELDS_DOC@@
+	// fields indexes source text and thinking by role and family kind.
 	fields    map[string][]sourceField
 	matchText func(role string, text string) string
 }
 
-// @@SOURCE_FIELD_DOC@@
+// sourceField stores source text and its timestamp.
 type sourceField struct {
 	text          string
 	timestampUnix int64
@@ -256,11 +256,10 @@ func (lookup sourceTimeLookup) familyCandidates(familyKind string, role string, 
 	case conversationThinkingFamily:
 		return lookup.thinking[sourceRepairKey(role, text)]
 	}
-	matchText := text
-	if lookup.matchText != nil {
-		matchText = lookup.matchText(role, text)
+	stamps := lookup.texts.TextCandidates(role, text)
+	if len(stamps) == 0 && lookup.matchText != nil {
+		stamps = lookup.texts.TextCandidates(role, lookup.matchText(role, text))
 	}
-	stamps := lookup.texts.TextCandidates(role, matchText)
 	candidates := make([]int64, 0, len(stamps))
 	for _, stamp := range stamps {
 		if stamp.IsZero() {
@@ -272,7 +271,7 @@ func (lookup sourceTimeLookup) familyCandidates(familyKind string, role string, 
 	return candidates
 }
 
-// @@FRAGMENT_CANDIDATES_DOC@@
+// fragmentCandidates returns source timestamps matching a stored row fragment.
 func (lookup sourceTimeLookup) fragmentCandidates(familyKind string, role string, row collection.StoredRow) []int64 {
 	fields := lookup.fields[sourceRepairKey(role, familyKind)]
 	candidates := make([]int64, 0)
@@ -336,7 +335,7 @@ type SourceRepairEvidence struct {
 	Outcome        string   `json:"outcome"`
 	Candidates     []int64  `json:"candidates,omitempty"`
 	Chosen         int64    `json:"chosen,omitempty"`
-	// @@MATCH_KIND_DOC@@
+	// Match records the matching method when fragment matching is used.
 	Match string `json:"match,omitempty"`
 }
 
@@ -423,7 +422,8 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 	return family, dated
 }
 
-// @@FRAGMENT_FALLBACK_DOC@@
+// fragmentFallback matches each row when a text or thinking family is unmatched
+// or incomplete.
 func fragmentFallback(conversationID string, key string, family pendingFamily, lookup sourceTimeLookup) []pendingFamily {
 	familyKind, _, _ := strings.Cut(key, familyPartSeparator)
 	outcome := family.evidence.Outcome
@@ -457,7 +457,7 @@ func fragmentFallback(conversationID string, key string, family pendingFamily, l
 	return split
 }
 
-// @@SOURCE_MATCH_FRAGMENT_DOC@@
+// sourceMatchFragment identifies evidence from fragment matching.
 const sourceMatchFragment = "fragment"
 
 // tallyFamily records evidence and counts or selects rows according to the outcome.

@@ -225,36 +225,18 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	retries := retryRecords(ordered, progress.Failed)
+	progress.Failed = nil
 	pending := recordsAfter(ordered, after)
 	if run.options.Limit > 0 && len(pending) > run.options.Limit {
 		pending = pending[:run.options.Limit]
 	}
-	runReport := emptyTotals
-	failed := make([]string, 0)
-	cursor := after
-	for _, record := range pending {
-		if runReport.RowsChanged >= run.options.MaxRows || ctx.Err() != nil {
-			break
-		}
-		report, loaded, repairErr := run.repairRecord(ctx, record)
-		if !loaded {
-			failed = append(failed, record.ID)
-			cursor = record.ID
-			continue
-		}
-		if repairErr != nil {
-			if saveErr := run.saveProgress(progress, cursor, runReport, failed, false); saveErr != nil {
-				return errors.Join(fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr), saveErr)
-			}
-			return fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr)
-		}
-		runReport.Add(report)
-		cursor = record.ID
-		if saveErr := run.saveProgress(progress, cursor, runReport, failed, false); saveErr != nil {
-			return saveErr
-		}
+	state := repairLoopState{report: emptyTotals, failed: make([]string, 0), cursor: after}
+	if err := run.repairPending(ctx, progress, retries, pending, &state); err != nil {
+		return err
 	}
-	complete := len(recordsAfter(ordered, cursor)) == 0
+	runReport, failed, cursor := state.report, state.failed, state.cursor
+	complete := len(recordsAfter(ordered, cursor)) == 0 && len(failed) == 0
 	if saveErr := run.saveProgress(progress, cursor, runReport, failed, complete); saveErr != nil {
 		return saveErr
 	}
@@ -262,6 +244,49 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		return fmt.Errorf("timestamp repair stopped after %s: %w", cursor, ctxErr)
 	}
 	return run.writeResult(ctx, runReport, failed, cursor, complete)
+}
+
+// repairLoopState records the current report, failed IDs, and cursor.
+type repairLoopState struct {
+	report vectorsearch.TimestampRepairReport
+	failed []string
+	cursor string
+}
+
+// repairPending repairs retry records before pending records and saves progress.
+func (run repairTimestampsRun) repairPending(ctx context.Context, progress timestampRepairProgress, retries []conversation.Record, pending []conversation.Record, state *repairLoopState) error {
+	for position, record := range append(slices.Clone(retries), pending...) {
+		retry := position < len(retries)
+		if state.report.RowsChanged >= run.options.MaxRows || ctx.Err() != nil {
+			if retry {
+				state.failed = append(state.failed, recordIDs(retries[position:])...)
+			}
+			return nil
+		}
+		report, loaded, repairErr := run.repairRecord(ctx, record)
+		state.report.Add(report)
+		if repairErr != nil {
+			// Keep the cursor before the failed record so a later run can retry it.
+			if retry {
+				state.failed = append(state.failed, recordIDs(retries[position:])...)
+			}
+			slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.record_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "cursor", state.cursor, "err", repairErr)
+			if saveErr := run.saveProgress(progress, state.cursor, state.report, state.failed, false); saveErr != nil {
+				return errors.Join(fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr), saveErr)
+			}
+			return fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr)
+		}
+		if !loaded {
+			state.failed = append(state.failed, record.ID)
+		}
+		if !retry {
+			state.cursor = record.ID
+		}
+		if saveErr := run.saveProgress(progress, state.cursor, state.report, state.failed, false); saveErr != nil {
+			return saveErr
+		}
+	}
+	return nil
 }
 
 // repairRecord loads a conversation source and repairs its stored timestamps.
@@ -282,15 +307,16 @@ func (run repairTimestampsRun) repairRecord(ctx context.Context, record conversa
 	source, loadErr := run.loadStoreSource(ctx, record)
 	if loadErr != nil {
 		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
-		return empty, false, nil
+		return empty, false, fmt.Errorf("load source store: %w", loadErr)
 	}
 	report, repairErr := run.client.RepairTimestampsFromSource(ctx, run.collectionID, []vectorsearch.TimestampSourceRepairSource{source}, run.options.DryRun)
-	if repairErr != nil {
-		return report.TimestampRepairReport, true, fmt.Errorf("repair timestamps from source store: %w", repairErr)
-	}
 	run.sourceTotals.Add(report)
-	if err := run.writeEvidence(report.Evidence); err != nil {
-		return report.TimestampRepairReport, true, err
+	evidenceErr := run.writeEvidence(report.Evidence)
+	if repairErr != nil {
+		return report.TimestampRepairReport, true, errors.Join(fmt.Errorf("repair timestamps from source store: %w", repairErr), evidenceErr)
+	}
+	if evidenceErr != nil {
+		return report.TimestampRepairReport, true, evidenceErr
 	}
 	return report.TimestampRepairReport, true, nil
 }
@@ -308,6 +334,25 @@ func (run repairTimestampsRun) writeEvidence(evidence []vectorsearch.SourceRepai
 		}
 	}
 	return nil
+}
+
+// retryRecords selects records with failed IDs in the order of ordered.
+func retryRecords(ordered []conversation.Record, failedIDs []string) []conversation.Record {
+	retries := make([]conversation.Record, 0, len(failedIDs))
+	for _, record := range ordered {
+		if slices.Contains(failedIDs, record.ID) {
+			retries = append(retries, record)
+		}
+	}
+	return retries
+}
+
+func recordIDs(records []conversation.Record) []string {
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.ID)
+	}
+	return ids
 }
 
 func newSourceRepairTotals() *vectorsearch.TimestampSourceRepairReport {

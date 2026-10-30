@@ -3,8 +3,10 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -46,6 +48,8 @@ const (
 	sourceRepairReordered   = "Which restic command lists the retained snapshots?"
 	sourceRepairFragment    = "segcore interimIndex enableIndex setting"
 	sourceRepairOverlong    = sourceRepairAnswer + " The store does not contain this sentence."
+	sourceRepairLiteral     = "Please repeat this"
+	sourceRepairMarkerLine  = "[turn ended: error]"
 )
 
 type sourceBubble struct {
@@ -70,10 +74,28 @@ func sourceRepairBubbles() []sourceBubble {
 		{id: "b10", kind: 1, text: sourceRepairSameQ, created: "2026-03-11T10:00:00.100Z", tool: ""},
 		{id: "b11", kind: 2, text: sourceRepairSameA, created: "2026-03-11T10:00:00.900Z", tool: ""},
 		{id: "b12", kind: 1, text: sourceRepairReordered, created: "2026-03-01T09:00:00.000Z", tool: ""},
+		{id: "b13", kind: 1, text: sourceRepairLiteral, created: "2026-03-12T10:00:00.000Z", tool: ""},
+		{id: "b14", kind: 1, text: sourceRepairLiteral + `\n` + sourceRepairMarkerLine, created: "2026-03-13T10:00:00.000Z", tool: ""},
 	}
 }
 
 func writeSourceRepairStore(t *testing.T, dataRoot string) {
+	t.Helper()
+	writeSourceRepairStoreWith(t, dataRoot, func(created string) string { return created })
+}
+
+// writeSourceRepairStoreWith writes the source repair bubbles with transformed times.
+func writeSourceRepairStoreWith(t *testing.T, dataRoot string, createdAt func(string) string) {
+	t.Helper()
+	bubbles := sourceRepairBubbles()
+	for position := range bubbles {
+		bubbles[position].created = createdAt(bubbles[position].created)
+	}
+	writeComposerStore(t, dataRoot, sourceRepairComposerID, bubbles)
+}
+
+// writeComposerStore writes a composer and its bubbles to a Cursor source store.
+func writeComposerStore(t *testing.T, dataRoot string, composerID string, bubbles []sourceBubble) {
 	t.Helper()
 	dbPath := filepath.Join(dataRoot, "globalStorage", "state.vscdb")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
@@ -86,7 +108,7 @@ func writeSourceRepairStore(t *testing.T, dataRoot string) {
 	defer func() { _ = db.Close() }()
 	headers := make([]string, 0)
 	statements := []string{"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)", "CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)"}
-	for _, bubble := range sourceRepairBubbles() {
+	for _, bubble := range bubbles {
 		kind := strconv.Itoa(bubble.kind)
 		headers = append(headers, `{"bubbleId":"`+bubble.id+`","type":`+kind+`}`)
 		value := `{"_v":3,"type":` + kind + `,"bubbleId":"` + bubble.id + `","text":"` + bubble.text + `","createdAt":"` + bubble.created + `"`
@@ -94,9 +116,9 @@ func writeSourceRepairStore(t *testing.T, dataRoot string) {
 			value += `,"toolFormerData":` + bubble.tool
 		}
 		value += "}"
-		statements = append(statements, "INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:"+sourceRepairComposerID+":"+bubble.id+"', '"+value+"')")
+		statements = append(statements, "INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:"+composerID+":"+bubble.id+"', '"+value+"')")
 	}
-	statements = append(statements, `INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+sourceRepairComposerID+`', '{"composerId":"`+sourceRepairComposerID+`","name":"Source repair","createdAt":1772445600000,"lastUpdatedAt":1773136800000,"fullConversationHeadersOnly":[`+strings.Join(headers, ",")+`]}')`)
+	statements = append(statements, `INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+composerID+`', '{"composerId":"`+composerID+`","name":"Source repair","createdAt":1772445600000,"lastUpdatedAt":1773136800000,"fullConversationHeadersOnly":[`+strings.Join(headers, ",")+`]}')`)
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("execute source store statement %q: %v", statement, err)
@@ -244,6 +266,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		sourceRepairDoc(sourceRepairReordered, 66, "user", zero),
 		sourceRepairDoc(sourceRepairFragment, 67, "assistant", zero),
 		sourceRepairDoc(sourceRepairOverlong, 68, "assistant", zero),
+		sourceRepairDoc(sourceRepairLiteral+"\n"+sourceRepairMarkerLine, 69, "user", zero),
 	}
 	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + sourceRepairComposerID, Value: "old-parser"}}
 	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
@@ -263,7 +286,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run source repair dry run: %v", err)
 	}
-	if !strings.Contains(output, "read 12 rows, found 0 current, 8 changed, 0 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
+	if !strings.Contains(output, "read 13 rows, found 0 current, 9 changed, 0 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
 		t.Fatalf("source repair dry run returned unexpected output %q", output)
 	}
 	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(seeded, after) {
@@ -276,7 +299,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute source repair: %v", err)
 	}
-	if !strings.Contains(output, "8 changed, 8 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
+	if !strings.Contains(output, "9 changed, 9 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
 		t.Fatalf("source repair returned unexpected output %q", output)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -290,13 +313,14 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		}
 	}
 	wantDays := map[string]string{
-		sourceRepairQuestion:                         "2026-03-02",
-		sourceRepairAnswer:                           "2026-03-03",
-		sourceRepairPartA + "\n" + sourceRepairPartB: "2026-03-05",
-		sourceRepairSameQ:                            "2026-03-11T10:00:00",
-		sourceRepairSameA:                            "2026-03-11T10:00:00",
-		sourceRepairReordered:                        "2026-03-01T09:00:00",
-		sourceRepairFragment:                         "2026-03-03",
+		sourceRepairQuestion:                                "2026-03-02",
+		sourceRepairAnswer:                                  "2026-03-03",
+		sourceRepairPartA + "\n" + sourceRepairPartB:        "2026-03-05",
+		sourceRepairSameQ:                                   "2026-03-11T10:00:00",
+		sourceRepairSameA:                                   "2026-03-11T10:00:00",
+		sourceRepairReordered:                               "2026-03-01T09:00:00",
+		sourceRepairFragment:                                "2026-03-03",
+		sourceRepairLiteral + "\n" + sourceRepairMarkerLine: "2026-03-13",
 	}
 	changed := 0
 	for id, before := range seeded {
@@ -326,7 +350,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 			t.Fatalf("row has an unexpected timestamp %s: %s, %s", id, day, want)
 		}
 	}
-	if changed != 8 {
+	if changed != 9 {
 		t.Fatalf("unexpected number of rows changed %d", changed)
 	}
 	for _, check := range []struct {
@@ -344,7 +368,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute source repair: %v", err)
 	}
-	if !strings.Contains(output, "read 12 rows, found 0 current, 0 changed, 0 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
+	if !strings.Contains(output, "read 13 rows, found 0 current, 0 changed, 0 written, 2 unmatched, 0 without a source timestamp, 1 ambiguous") {
 		t.Fatalf("source repair rerun returned unexpected output %q", output)
 	}
 }
@@ -359,4 +383,233 @@ func sharedRowsEqual(left map[string]sharedStoredRow, right map[string]sharedSto
 		}
 	}
 	return true
+}
+
+// TestRepairTimestampsFromCursorStoreRetriesAfterAReadError checks that a run stops
+// on conflicting source stores and resumes after the conflict is removed.
+func TestRepairTimestampsFromCursorStoreRetriesAfterAReadError(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	rootA := filepath.Join(home, "cursor-a")
+	rootB := filepath.Join(home, "cursor-b")
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", filepath.Join(home, "cursor-projects"))
+	writeSourceRepairStore(t, rootA)
+	writeSourceRepairStoreWith(t, rootB, func(created string) string { return strings.Replace(created, "2026-03", "2026-04", 1) })
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootA+string(os.PathListSeparator)+rootB)
+
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	zero := time.Time{}.Unix()
+	docs := []semsearch.SemDoc{sourceRepairDoc(sourceRepairQuestion, 0, "user", zero)}
+	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + sourceRepairComposerID, Value: "old-parser"}}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
+		t.Fatalf("seed conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	seeded, _ := sharedSnapshot(t, address)
+
+	base := repairTimestampsRun{
+		options:        repairTimestampsOptions{},
+		collectionID:   repairCollectionID,
+		collectionName: vectorsearch.CollectionName(repairCollectionID),
+		contentKinds:   backfillTestContentKinds(t),
+		index:          conversation.NewIndex(conversation.NewRegistry(), config.NewConfigWithDefaults().Conversation),
+		client:         client,
+		out:            nil,
+		sourceTotals:   newSourceRepairTotals(),
+		evidenceOut:    nil,
+	}
+	progressPath := filepath.Join(home, "progress.json")
+	options := repairTimestampsOptions{DryRun: false, Provider: "cursor", ConversationID: "", Limit: 10, MaxRows: 100, After: "", Resume: false, ProgressPath: progressPath, SourceStore: true, EvidencePath: ""}
+	if _, err := runRepair(t, ctx, base, options); err == nil {
+		t.Fatal("source repair accepted conflicting source stores")
+	}
+	progress := readProgress(t, progressPath)
+	if progress.Cursor != "" || progress.Complete || len(progress.Failed) != 0 {
+		t.Fatalf("unexpected progress after source read error: %+v", progress)
+	}
+	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(seeded, after) {
+		t.Fatal("source repair changed stored rows after a read error")
+	}
+
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootA)
+	base.sourceTotals = newSourceRepairTotals()
+	options.Resume = true
+	if _, err := runRepair(t, ctx, base, options); err != nil {
+		t.Fatalf("resume source repair: %v", err)
+	}
+	progress = readProgress(t, progressPath)
+	if !progress.Complete || progress.Totals.RowsWritten != 1 || len(progress.Failed) != 0 {
+		t.Fatalf("unexpected progress after resume: %+v", progress)
+	}
+	time.Sleep(repairVisibilityWait)
+	repaired, _ := sharedSnapshot(t, address)
+	for _, row := range repaired {
+		if day := time.Unix(row.timestampUnix, 0).UTC().Format(time.DateOnly); day != "2026-03-02" {
+			t.Fatalf("unexpected timestamp day after resume: %s", day)
+		}
+	}
+}
+
+const (
+	partialComposerID = "e1e1e1e1-2222-4333-8444-555555555555"
+	// partialRepairRows sets the number of rows in the partial write test.
+	partialRepairRows     = 501
+	partialMetadataLength = 65_530
+)
+
+func partialMessageTime(position int) time.Time {
+	return time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC).Add(time.Duration(position) * time.Minute)
+}
+
+func partialMetadata(messageIndex string, padding int) string {
+	prefix := `{"conversation_id":"cursor:` + partialComposerID + `","message_index":` + messageIndex + `,"role":"user","timestamp_unix":0`
+	if padding <= 0 {
+		return prefix + "}"
+	}
+	return prefix + `,"padding":"` + strings.Repeat("x", padding-len(prefix)-len(`,"padding":""}`)) + `"}`
+}
+
+// TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite checks progress,
+// evidence, and stored rows after a partial write and resume.
+func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	dataRoot := filepath.Join(home, "cursor-data")
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", filepath.Join(home, "cursor-projects"))
+	bubbles := make([]sourceBubble, 0, partialRepairRows)
+	docs := make([]semsearch.SemDoc, 0, partialRepairRows)
+	zero := time.Time{}.Unix()
+	for position := range partialRepairRows {
+		message := fmt.Sprintf("Partial write message %03d asks about bucket retention.", position)
+		bubbles = append(bubbles, sourceBubble{id: fmt.Sprintf("p%03d", position), kind: 1, text: message, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""})
+		doc := repairDoc("cursor:"+partialComposerID, message, zero)
+		doc.MessageIndex = int32(position)
+		doc.Role = "user"
+		docs = append(docs, doc)
+	}
+	writeComposerStore(t, dataRoot, partialComposerID, bubbles)
+
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + partialComposerID, Value: "old-parser"}}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
+		t.Fatalf("seed conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	seeded, seededVectors := sharedSnapshot(t, address)
+	if len(seeded) != partialRepairRows {
+		t.Fatalf("unexpected seeded row count and expected count: %d, %d", len(seeded), partialRepairRows)
+	}
+	ids := make([]string, 0, len(seeded))
+	for id := range seeded {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	lastID := ids[len(ids)-1]
+	lastIndex := seeded[lastID].relativePath[strings.LastIndexByte(seeded[lastID].relativePath, '/')+1:]
+	// Expand the last row's metadata so its timestamp update exceeds the Milvus limit.
+	setRowMetadata(t, ctx, address, lastID, partialMetadata(lastIndex, partialMetadataLength))
+	time.Sleep(repairVisibilityWait)
+	before, _ := sharedSnapshot(t, address)
+
+	var evidence bytes.Buffer
+	base := repairTimestampsRun{
+		options:        repairTimestampsOptions{},
+		collectionID:   repairCollectionID,
+		collectionName: vectorsearch.CollectionName(repairCollectionID),
+		contentKinds:   backfillTestContentKinds(t),
+		index:          conversation.NewIndex(conversation.NewRegistry(), config.NewConfigWithDefaults().Conversation),
+		client:         client,
+		out:            nil,
+		sourceTotals:   newSourceRepairTotals(),
+		evidenceOut:    &evidence,
+	}
+	progressPath := filepath.Join(home, "progress.json")
+	options := repairTimestampsOptions{DryRun: false, Provider: "cursor", ConversationID: "", Limit: 10, MaxRows: 10_000, After: "", Resume: false, ProgressPath: progressPath, SourceStore: true, EvidencePath: ""}
+	if _, err := runRepair(t, ctx, base, options); err == nil {
+		t.Fatal("source repair accepted the oversized metadata update")
+	}
+	progress := readProgress(t, progressPath)
+	if progress.Cursor != "" || progress.Complete || len(progress.Failed) != 0 || progress.Totals.RowsWritten != partialRepairRows-1 {
+		t.Fatalf("unexpected progress after partial write: %+v", progress)
+	}
+	if lines, matched := strings.Count(evidence.String(), "\n"), strings.Count(evidence.String(), `"outcome":"matched"`); lines != partialRepairRows || matched != partialRepairRows {
+		t.Fatalf("unexpected evidence line count and matched count after partial write: %d, %d", lines, matched)
+	}
+	time.Sleep(repairVisibilityWait)
+	partial, _ := sharedSnapshot(t, address)
+	dated := 0
+	for id, row := range partial {
+		if row.timestampUnix != zero {
+			dated++
+		}
+		if id == lastID && (row.timestampUnix != zero || row.metadata != before[id].metadata) {
+			t.Fatalf("failed row changed, row ID and row: %s: %+v", id, row)
+		}
+	}
+	if dated != partialRepairRows-1 {
+		t.Fatalf("unexpected dated row count after partial write: %d", dated)
+	}
+
+	shortMetadata := partialMetadata(lastIndex, 0)
+	setRowMetadata(t, ctx, address, lastID, shortMetadata)
+	time.Sleep(repairVisibilityWait)
+	evidence.Reset()
+	base.sourceTotals = newSourceRepairTotals()
+	options.Resume = true
+	output, err := runRepair(t, ctx, base, options)
+	if err != nil {
+		t.Fatalf("resume source repair: %v", err)
+	}
+	if !strings.Contains(output, "1 changed, 1 written") {
+		t.Fatalf("unexpected output after resume: %q", output)
+	}
+	progress = readProgress(t, progressPath)
+	if !progress.Complete || len(progress.Failed) != 0 || progress.Totals.RowsWritten != partialRepairRows {
+		t.Fatalf("unexpected progress after resume: %+v", progress)
+	}
+	if lines := strings.Count(evidence.String(), "\n"); lines != 1 {
+		t.Fatalf("unexpected evidence line count after resume: %d", lines)
+	}
+
+	time.Sleep(repairVisibilityWait)
+	repaired, repairedVectors := sharedSnapshot(t, address)
+	if len(repaired) != len(seeded) || len(repairedVectors) != len(seededVectors) {
+		t.Fatalf("row or vector count changed, repaired rows, seeded rows, repaired vectors, seeded vectors: %d, %d, %d, %d", len(repaired), len(seeded), len(repairedVectors), len(seededVectors))
+	}
+	for key, bits := range seededVectors {
+		if !slices.Equal(bits, repairedVectors[key]) {
+			t.Fatalf("vector changed, vector key: %s", key)
+		}
+	}
+	for id, after := range repaired {
+		start := seeded[id]
+		if after.relativePath != start.relativePath || after.content != start.content || after.vectorKey != start.vectorKey || after.others != start.others {
+			t.Fatalf("stored fields changed, row ID, initial row, repaired row: %s: %+v, %+v", id, start, after)
+		}
+		position, convErr := strconv.Atoi(after.relativePath[strings.LastIndexByte(after.relativePath, '/')+1:])
+		if convErr != nil {
+			t.Fatalf("cannot parse message position, row path: %s: %v", after.relativePath, convErr)
+		}
+		want := partialMessageTime(position).Unix()
+		wantMetadata := strings.Replace(start.metadata, `"timestamp_unix":`+strconv.FormatInt(zero, 10), `"timestamp_unix":`+strconv.FormatInt(want, 10), 1)
+		if id == lastID {
+			wantMetadata = strings.Replace(shortMetadata, `"timestamp_unix":0`, `"timestamp_unix":`+strconv.FormatInt(want, 10), 1)
+		}
+		if after.timestampUnix != want || after.metadata != wantMetadata {
+			t.Fatalf("unexpected repaired row, row ID, timestamp, expected timestamp, metadata, expected metadata: %s: %d, %d, %q, %q", id, after.timestampUnix, want, after.metadata, wantMetadata)
+		}
+	}
 }
