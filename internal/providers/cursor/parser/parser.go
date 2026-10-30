@@ -5,7 +5,6 @@ package parser
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -331,19 +330,7 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 		}
 		switch discovered.Kind {
 		case discoveredKindJSONL:
-			err := cursorjsonl.StreamMessages(path, func(message cursorjsonl.TranscriptMessage) error {
-				mapped, include := mapJSONLMessage(message, opts)
-				if !include {
-					return nil
-				}
-				if !yield(mapped, nil) {
-					return cursorjsonl.ErrStopStreaming
-				}
-				return nil
-			})
-			if err != nil && !errors.Is(err, cursorjsonl.ErrStopStreaming) {
-				yield(emptyMessage(), err)
-			}
+			streamTranscript(discovered, opts, yield)
 		case discoveredKindComposer:
 			streamComposer(discovered, opts, yield)
 		case discoveredKindLegacy:

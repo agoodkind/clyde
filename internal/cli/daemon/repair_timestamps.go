@@ -21,6 +21,7 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/vectorsearch"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/response"
 )
 
@@ -30,6 +31,8 @@ const (
 	repairTimestampsProgressFileExt  = ".json"
 	repairTimestampsProgressFileMode = 0o600
 	repairTimestampsProgressDirMode  = 0o700
+	// repairTimestampsSourceStoreSuffix distinguishes source store progress files.
+	repairTimestampsSourceStoreSuffix = "-source-store"
 )
 
 type repairTimestampsOptions struct {
@@ -41,15 +44,20 @@ type repairTimestampsOptions struct {
 	After          string
 	Resume         bool
 	ProgressPath   string
+	SourceStore    bool
+	EvidencePath   string
 }
 
 type timestampRepairClient interface {
 	RepairConversationTimestamps(context.Context, string, []vectorsearch.TimestampRepairSource, bool) (vectorsearch.TimestampRepairReport, error)
+	RepairTimestampsFromSource(context.Context, string, []vectorsearch.TimestampSourceRepairSource, bool) (vectorsearch.TimestampSourceRepairReport, error)
+	ZeroTimeConversationIDs(context.Context, string, string) ([]string, error)
 }
 
 type timestampRepairProgress struct {
 	Collection  string                             `json:"collection"`
 	Provider    string                             `json:"provider,omitempty"`
+	SourceStore bool                               `json:"source_store,omitempty"`
 	Cursor      string                             `json:"cursor"`
 	Complete    bool                               `json:"complete"`
 	UpdatedAt   time.Time                          `json:"updated_at"`
@@ -66,10 +74,14 @@ type repairTimestampsRun struct {
 	index          conversationDocumentBackfillIndex
 	client         timestampRepairClient
 	out            io.Writer
+	// sourceTotals accumulates source repair counts for the current run.
+	sourceTotals *vectorsearch.TimestampSourceRepairReport
+	// evidenceOut receives JSON evidence entries when an evidence file is configured.
+	evidenceOut io.Writer
 }
 
 func newRepairConversationTimestampsCmd(f *cli.Factory) *cobra.Command {
-	options := repairTimestampsOptions{DryRun: true, Provider: "", ConversationID: "", Limit: 0, MaxRows: defaultRepairTimestampsMaxRows, After: "", Resume: false, ProgressPath: ""}
+	options := repairTimestampsOptions{DryRun: true, Provider: "", ConversationID: "", Limit: 0, MaxRows: defaultRepairTimestampsMaxRows, After: "", Resume: false, ProgressPath: "", SourceStore: false, EvidencePath: ""}
 	execute := false
 	cmd := &cobra.Command{
 		Use:   "repair-timestamps",
@@ -94,6 +106,8 @@ func newRepairConversationTimestampsCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&options.After, "after", "", "Start after this conversation ID.")
 	cmd.Flags().BoolVar(&options.Resume, "resume", false, "Continue after the cursor in the progress file.")
 	cmd.Flags().StringVar(&options.ProgressPath, "progress-file", "", "Read and write progress at this path.")
+	cmd.Flags().BoolVar(&options.SourceStore, "source-store", false, "Match zero timestamp rows against the provider source store.")
+	cmd.Flags().StringVar(&options.EvidencePath, "evidence-file", "", "Append source repair evidence as JSON lines to this file.")
 	return cmd
 }
 
@@ -107,7 +121,10 @@ func runRepairConversationTimestamps(ctx context.Context, f *cli.Factory, option
 		return fmt.Errorf("load configuration: %w", err)
 	}
 	semanticCfg := cfg.Conversation.Semantic
-	if semanticCfg.Backend == config.ConversationSemanticBackendLocal || semanticCfg.MilvusLayout == config.ConversationSemanticMilvusLayoutShared {
+	if semanticCfg.Backend == config.ConversationSemanticBackendLocal {
+		return vectorsearch.ErrTimestampRepairUnsupported
+	}
+	if semanticCfg.MilvusLayout == config.ConversationSemanticMilvusLayoutShared && !options.SourceStore {
 		return vectorsearch.ErrTimestampRepairUnsupported
 	}
 	contentKinds, err := daemonsvc.SemanticContentKinds(semanticCfg)
@@ -116,7 +133,11 @@ func runRepairConversationTimestamps(ctx context.Context, f *cli.Factory, option
 	}
 	collectionName := vectorsearch.CollectionName(semanticCfg.CollectionID)
 	if options.ProgressPath == "" {
-		options.ProgressPath = filepath.Join(config.DefaultStateDir(), repairTimestampsProgressDirName, collectionName+repairTimestampsProgressFileExt)
+		progressName := collectionName
+		if options.SourceStore {
+			progressName += repairTimestampsSourceStoreSuffix
+		}
+		options.ProgressPath = filepath.Join(config.DefaultStateDir(), repairTimestampsProgressDirName, progressName+repairTimestampsProgressFileExt)
 	}
 	client, err := daemonsvc.OpenConversationSearchClient(ctx, semanticCfg)
 	if err != nil {
@@ -132,6 +153,17 @@ func runRepairConversationTimestamps(ctx context.Context, f *cli.Factory, option
 		index:          daemonsvc.NewConversationIndex(),
 		client:         client,
 		out:            f.IOStreams.Out,
+		sourceTotals:   newSourceRepairTotals(),
+		evidenceOut:    nil,
+	}
+	if options.EvidencePath != "" {
+		evidenceFile, err := os.OpenFile(options.EvidencePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, repairTimestampsProgressFileMode)
+		if err != nil {
+			slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.evidence_open_failed", "concern", "cli.daemon", "component", "cli", "path", options.EvidencePath, "err", err)
+			return fmt.Errorf("open evidence file %s: %w", options.EvidencePath, err)
+		}
+		defer func() { _ = evidenceFile.Close() }()
+		run.evidenceOut = evidenceFile
 	}
 	return run.execute(ctx)
 }
@@ -164,12 +196,15 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
 		RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
 	}
-	progress := timestampRepairProgress{Collection: run.collectionName, Provider: run.options.Provider, Cursor: "", Complete: false, UpdatedAt: time.Time{}, Totals: emptyTotals, Failed: nil, LastRunRows: 0}
+	progress := timestampRepairProgress{Collection: run.collectionName, Provider: run.options.Provider, SourceStore: run.options.SourceStore, Cursor: "", Complete: false, UpdatedAt: time.Time{}, Totals: emptyTotals, Failed: nil, LastRunRows: 0}
 	after := strings.TrimSpace(run.options.After)
 	if run.options.Resume {
 		stored, err := readTimestampRepairProgress(run.options.ProgressPath)
 		if err != nil {
 			return err
+		}
+		if stored.SourceStore != run.options.SourceStore {
+			return fmt.Errorf("progress file %s records source-store as %t; the current setting is %t", run.options.ProgressPath, stored.SourceStore, run.options.SourceStore)
 		}
 		if stored.Collection != run.collectionName || stored.Provider != run.options.Provider {
 			return fmt.Errorf("progress file %s records collection %q and provider %q; the current selection uses collection %q and provider %q", run.options.ProgressPath, stored.Collection, stored.Provider, run.collectionName, run.options.Provider)
@@ -186,42 +221,22 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.list_failed", "concern", "cli.daemon", "component", "cli", "err", err)
 		return fmt.Errorf("list indexed conversations: %w", err)
 	}
-	ordered, err := repairTimestampRecords(stamped, run.options.Provider, run.options.ConversationID)
+	ordered, err := run.repairRecords(ctx, stamped)
 	if err != nil {
 		return err
 	}
+	retries := retryRecords(ordered, progress.Failed)
+	progress.Failed = nil
 	pending := recordsAfter(ordered, after)
 	if run.options.Limit > 0 && len(pending) > run.options.Limit {
 		pending = pending[:run.options.Limit]
 	}
-	runReport := emptyTotals
-	failed := make([]string, 0)
-	cursor := after
-	for _, record := range pending {
-		if runReport.RowsChanged >= run.options.MaxRows || ctx.Err() != nil {
-			break
-		}
-		source, loadErr := run.loadSource(ctx, record)
-		if loadErr != nil {
-			slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
-			failed = append(failed, record.ID)
-			cursor = record.ID
-			continue
-		}
-		report, repairErr := run.client.RepairConversationTimestamps(ctx, run.collectionID, []vectorsearch.TimestampRepairSource{source}, run.options.DryRun)
-		if repairErr != nil {
-			if saveErr := run.saveProgress(progress, cursor, runReport, failed, false); saveErr != nil {
-				return errors.Join(fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr), saveErr)
-			}
-			return fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr)
-		}
-		runReport.Add(report)
-		cursor = record.ID
-		if saveErr := run.saveProgress(progress, cursor, runReport, failed, false); saveErr != nil {
-			return saveErr
-		}
+	state := repairLoopState{report: emptyTotals, failed: make([]string, 0), cursor: after}
+	if err := run.repairPending(ctx, progress, retries, pending, &state); err != nil {
+		return err
 	}
-	complete := len(recordsAfter(ordered, cursor)) == 0
+	runReport, failed, cursor := state.report, state.failed, state.cursor
+	complete := len(recordsAfter(ordered, cursor)) == 0 && len(failed) == 0
 	if saveErr := run.saveProgress(progress, cursor, runReport, failed, complete); saveErr != nil {
 		return saveErr
 	}
@@ -229,6 +244,180 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		return fmt.Errorf("timestamp repair stopped after %s: %w", cursor, ctxErr)
 	}
 	return run.writeResult(ctx, runReport, failed, cursor, complete)
+}
+
+// repairLoopState records the current report, failed IDs, and cursor.
+type repairLoopState struct {
+	report vectorsearch.TimestampRepairReport
+	failed []string
+	cursor string
+}
+
+// repairPending repairs retry records before pending records and saves progress.
+func (run repairTimestampsRun) repairPending(ctx context.Context, progress timestampRepairProgress, retries []conversation.Record, pending []conversation.Record, state *repairLoopState) error {
+	repair := run.recordRepairer()
+	for position, record := range append(slices.Clone(retries), pending...) {
+		retry := position < len(retries)
+		if state.report.RowsChanged >= run.options.MaxRows || ctx.Err() != nil {
+			if retry {
+				state.failed = append(state.failed, recordIDs(retries[position:])...)
+			}
+			return nil
+		}
+		report, loaded, repairErr := repair(ctx, record)
+		state.report.Add(report)
+		if repairErr != nil {
+			// Keep the cursor before the failed record so a later run can retry it.
+			if retry {
+				state.failed = append(state.failed, recordIDs(retries[position:])...)
+			}
+			slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.record_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "cursor", state.cursor, "err", repairErr)
+			if saveErr := run.saveProgress(progress, state.cursor, state.report, state.failed, false); saveErr != nil {
+				return errors.Join(fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr), saveErr)
+			}
+			return fmt.Errorf("repair timestamps for %s: %w", record.ID, repairErr)
+		}
+		if !loaded {
+			state.failed = append(state.failed, record.ID)
+		}
+		if !retry {
+			state.cursor = record.ID
+		}
+		if saveErr := run.saveProgress(progress, state.cursor, state.report, failedWithRemainingRetries(state.failed, retries, position+1), false); saveErr != nil {
+			return saveErr
+		}
+	}
+	return nil
+}
+
+// failedWithRemainingRetries returns failed IDs followed by the IDs of retries
+// starting at next.
+func failedWithRemainingRetries(failed []string, retries []conversation.Record, next int) []string {
+	if next >= len(retries) {
+		return failed
+	}
+	return append(slices.Clone(failed), recordIDs(retries[next:])...)
+}
+
+// recordRepairer repairs the stored timestamps of one conversation record.
+type recordRepairer func(context.Context, conversation.Record) (vectorsearch.TimestampRepairReport, bool, error)
+
+// recordRepairer returns repairSourceStoreRecord when the run uses the source store,
+// and repairTranscriptRecord otherwise. repairPending selects the function once
+// before its loop over records.
+func (run repairTimestampsRun) recordRepairer() recordRepairer {
+	if run.options.SourceStore {
+		return run.repairSourceStoreRecord
+	}
+	return run.repairTranscriptRecord
+}
+
+// repairTranscriptRecord loads transcript documents and requests timestamp repair.
+// If loading fails, it logs the error and returns false without an error.
+func (run repairTimestampsRun) repairTranscriptRecord(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairReport, bool, error) {
+	var empty vectorsearch.TimestampRepairReport
+	source, loadErr := run.loadSource(ctx, record)
+	if loadErr != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
+		return empty, false, nil
+	}
+	report, repairErr := run.client.RepairConversationTimestamps(ctx, run.collectionID, []vectorsearch.TimestampRepairSource{source}, run.options.DryRun)
+	if repairErr != nil {
+		return report, true, fmt.Errorf("repair timestamps from transcript: %w", repairErr)
+	}
+	return report, true, nil
+}
+
+// repairSourceStoreRecord loads source store documents and requests timestamp repair.
+// It adds the report to source totals and writes evidence when configured.
+func (run repairTimestampsRun) repairSourceStoreRecord(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairReport, bool, error) {
+	var empty vectorsearch.TimestampRepairReport
+	source, loadErr := run.loadStoreSource(ctx, record)
+	if loadErr != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
+		return empty, false, fmt.Errorf("load source store: %w", loadErr)
+	}
+	report, repairErr := run.client.RepairTimestampsFromSource(ctx, run.collectionID, []vectorsearch.TimestampSourceRepairSource{source}, run.options.DryRun)
+	run.sourceTotals.Add(report)
+	evidenceErr := run.writeEvidence(report.Evidence)
+	if repairErr != nil {
+		return report.TimestampRepairReport, true, errors.Join(fmt.Errorf("repair timestamps from source store: %w", repairErr), evidenceErr)
+	}
+	if evidenceErr != nil {
+		return report.TimestampRepairReport, true, evidenceErr
+	}
+	return report.TimestampRepairReport, true, nil
+}
+
+// writeEvidence writes each evidence entry as JSON when an output is configured.
+func (run repairTimestampsRun) writeEvidence(evidence []vectorsearch.SourceRepairEvidence) error {
+	if run.evidenceOut == nil {
+		return nil
+	}
+	encoder := json.NewEncoder(run.evidenceOut)
+	for _, entry := range evidence {
+		if err := encoder.Encode(entry); err != nil {
+			slog.Error("cli.daemon.repair_timestamps.evidence_write_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+			return fmt.Errorf("write source repair evidence: %w", err)
+		}
+	}
+	return nil
+}
+
+// retryRecords selects records with failed IDs in the order of ordered.
+func retryRecords(ordered []conversation.Record, failedIDs []string) []conversation.Record {
+	retries := make([]conversation.Record, 0, len(failedIDs))
+	for _, record := range ordered {
+		if slices.Contains(failedIDs, record.ID) {
+			retries = append(retries, record)
+		}
+	}
+	return retries
+}
+
+func recordIDs(records []conversation.Record) []string {
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.ID)
+	}
+	return ids
+}
+
+func newSourceRepairTotals() *vectorsearch.TimestampSourceRepairReport {
+	return &vectorsearch.TimestampSourceRepairReport{
+		TimestampRepairReport: vectorsearch.TimestampRepairReport{
+			Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
+			RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
+		},
+		RowsNotZeroTime: 0, RowsEmptyContent: 0, RowsIncomplete: 0, Evidence: nil,
+	}
+}
+
+// loadStoreSource builds semantic documents from a provider's source store messages.
+func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampSourceRepairSource, error) {
+	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, ToolName: nil}
+	reader, found := daemonsvc.ConversationSourceStoreReader(record.Provider)
+	if !found {
+		return empty, fmt.Errorf("source store reader is unavailable for provider %q", record.Provider)
+	}
+	empty.MatchText = reader.SourceMatchText
+	empty.ToolName = reader.SourceToolName
+	kinds := conversation.NewContentKindSet(conversation.ContentKindChat, conversation.ContentKindThinking, conversation.ContentKindToolCalls)
+	messages, stored, err := reader.SourceStoreMessages(ctx, record, daemonsvc.SemanticConversationLoadOptions(kinds))
+	if err != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.source_store_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", err)
+		return empty, fmt.Errorf("read source store messages: %w", err)
+	}
+	if !stored {
+		return empty, nil
+	}
+	built, err := daemonsvc.BuildSemanticConversationDocuments(record, messages, kinds)
+	if err != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.source_documents_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", err)
+		return empty, fmt.Errorf("build source store documents: %w", err)
+	}
+	empty.Documents = built.Docs
+	return empty, nil
 }
 
 func (run repairTimestampsRun) loadSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairSource, error) {
@@ -279,6 +468,9 @@ func (run repairTimestampsRun) writeResult(ctx context.Context, report vectorsea
 		mode, run.collectionName, report.Conversations, report.RowsRead, report.RowsCurrent, report.RowsChanged, report.RowsWritten,
 		report.RowsUnmatched, report.RowsMissingTimestamp, report.RowsAmbiguous, report.RowsInvalidMetadata, len(failed), nextCursor,
 	)
+	if run.options.SourceStore {
+		text += fmt.Sprintf("Already dated rows: %d; rows with empty content: %d; rows with split parts that could not be joined: %d.\n", run.sourceTotals.RowsNotZeroTime, run.sourceTotals.RowsEmptyContent, run.sourceTotals.RowsIncomplete)
+	}
 	if !run.options.DryRun && strings.TrimSpace(run.options.ConversationID) == "" {
 		text += fmt.Sprintf("Saved progress in %s.\n", run.options.ProgressPath)
 	}
@@ -287,6 +479,59 @@ func (run repairTimestampsRun) writeResult(ctx context.Context, report vectorsea
 		return fmt.Errorf("write timestamp repair result: %w", err)
 	}
 	return nil
+}
+
+// repairRecords selects indexed records or conversations with zero timestamp rows.
+func (run repairTimestampsRun) repairRecords(ctx context.Context, stamped []conversation.StampedRecord) ([]conversation.Record, error) {
+	if !run.options.SourceStore {
+		return repairTimestampRecords(stamped, run.options.Provider, run.options.ConversationID)
+	}
+	storedIDs, err := run.client.ZeroTimeConversationIDs(ctx, run.collectionID, run.options.Provider)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.stored_ids_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return nil, fmt.Errorf("list conversations with zero timestamp rows: %w", err)
+	}
+	indexed, err := repairTimestampRecords(stamped, run.options.Provider, "")
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]conversation.Record, len(indexed))
+	for _, record := range indexed {
+		byID[record.ID] = record
+	}
+	selected := strings.TrimSpace(run.options.ConversationID)
+	ordered := make([]conversation.Record, 0, len(storedIDs))
+	for _, id := range storedIDs {
+		if selected != "" && id != selected {
+			continue
+		}
+		record, found := byID[id]
+		if !found {
+			stored, ok := storedOnlyRecord(id)
+			if !ok {
+				slog.WarnContext(ctx, "cli.daemon.repair_timestamps.stored_id_unparsed", "concern", "cli.daemon", "component", "cli", "conversation_id", id)
+				continue
+			}
+			record = stored
+		}
+		ordered = append(ordered, record)
+	}
+	if selected != "" && len(ordered) == 0 {
+		return nil, fmt.Errorf("cannot find zero timestamp rows for conversation %q", selected)
+	}
+	return ordered, nil
+}
+
+// storedOnlyRecord builds a record from a provider-prefixed conversation ID.
+func storedOnlyRecord(id string) (conversation.Record, bool) {
+	label, nativeID, cut := strings.Cut(id, ":")
+	provider, known := providerid.Parse(label)
+	record := conversation.Record{
+		ID: id, Provider: provider, NativeID: nativeID, Selector: "", Lineage: nil, Origin: conversation.OriginUnspecified,
+		Title: "", TitleUncertain: false, WorkspaceRoot: "", ArtifactPath: "", ArtifactKind: "", Model: "",
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, SizeBytes: 0, Archived: false, LatestRequestID: "",
+	}
+	return record, cut && known && strings.TrimSpace(nativeID) != ""
 }
 
 func repairTimestampRecords(stamped []conversation.StampedRecord, provider string, conversationID string) ([]conversation.Record, error) {

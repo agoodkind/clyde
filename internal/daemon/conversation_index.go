@@ -83,6 +83,11 @@ func ConversationStoredTextNormalizer(provider providerid.Provider) (conversatio
 	return newConversationRegistry().StoredTextNormalizer(provider)
 }
 
+// ConversationSourceStoreReader returns the registered provider's source store reader.
+func ConversationSourceStoreReader(provider providerid.Provider) (conversation.SourceStoreReader, bool) {
+	return newConversationRegistry().SourceStoreReader(provider)
+}
+
 // ConversationProviders returns the providers wired into the conversation
 // parser registry in display order.
 func ConversationProviders() []providerid.Provider {
