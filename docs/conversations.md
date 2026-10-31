@@ -111,8 +111,9 @@ segment.
 Message indexes are zero-based. `start_message_index` is included in the
 segment. `end_message_index` is excluded from the segment.
 
-Visible message counts exclude compaction metadata messages and meta-only
-messages.
+The visible message count for each segment excludes compaction metadata messages
+and meta-only messages. The count does not depend on content kinds and can
+differ from the count used by `--last-n`.
 
 ## Export Selection
 
@@ -131,17 +132,23 @@ Use `--full-history` as readable sugar for `--include-compactions all`.
 Unknown or out-of-range selectors fail with the available range, such as
 `conversation has compaction segments 0..2`.
 
-Use `--last-n N` to keep only the last `N` visible messages after segment
-selection. When `--last-n` keeps messages from a segment that has a starting
-summary, the export preserves that starting summary.
+Use `--last-n N` to keep the last `N` messages that render content under the
+requested content kinds after segment selection. The export counts backward from
+the newest selected message and renders from the first kept message forward.
+Meta-only messages do not count. A compaction metadata message counts and
+renders only when the content kinds include `system_messages`. For example,
+`chat` counts chat messages but not messages containing only tool calls or
+thinking. `chat,tools` also counts tool call messages. When a kept segment has a
+starting summary, the export includes that summary.
 
 Use `--copy` on macOS to send the raw export body to `pbcopy`. On other
 operating systems, the command returns a clear error instead of silently doing
 nothing.
 
-Use `clyde conversation export tail CONVERSATION_ID --last-n N` for a short
-terminal transcript. Tail uses dense Markdown, includes `chat,tools`, selects
-segment `0`, and writes the raw export body to stdout.
+Use `clyde conversation export tail CONVERSATION_ID --last-n N` to write dense
+Markdown to stdout. Tail selects segment `0` and includes `chat,tools`. The
+`--last-n` count includes chat messages and tool call messages. Messages with
+neither chat text nor tool calls do not count.
 
 ## Examples
 
@@ -194,7 +201,7 @@ as ordinary messages.
 
 For a compact summary containing a framed pre-compaction transcript, CLI and MCP exports include the summary prose outside the transcript and only the segments selected by the content kinds. `chat` selects chat segments, `thinking` selects thinking segments, any tool kind selects tool calls, `tool_outputs` also selects tool outputs, `system_prompts` selects system segments, and `raw_json_metadata` selects other segments. A content filtered export of a compact summary containing an unframed transcript fails with an error identifying the conversation and summary, and the export writes nothing. Selecting `all` in the CLI or `only: ["all"]` through MCP exports the summary text unchanged. Exports never read ordinary user messages as transcripts, even when those messages quote transcript tags, `### System`, or JSON.
 
-`conversation export tail` is a CLI-only shortcut. MCP clients can request the
-same range by calling `clyde_export_transcript` with `include_compactions: "0"`,
-`last_n`, `format: "markdown"`, `whitespace: "dense"`, and `only: ["chat",
-"tools"]`.
+`conversation export tail` is a CLI shortcut. MCP clients can request the same
+range and use the same message count by calling `clyde_export_transcript` with
+`include_compactions: "0"`, `last_n`, `format: "markdown"`,
+`whitespace: "dense"`, and `only: ["chat", "tools"]`.
