@@ -48,6 +48,16 @@ func exportMessages(record Record, messages []transcript.Message, options Export
 		return nil, err
 	}
 	selection = applyLastNToSegmentSelection(messages, selection, options.LastN)
+	// A filtered export fails before rendering or writing output when a
+	// selected compact summary contains a transcript wrapper outside every
+	// resolved span. An export with raw_json_metadata skips this check and
+	// preserves the summary text.
+	if !options.Content.Has(ContentKindRawJSONMetadata) {
+		if summaryUUID, unresolved := unresolvedInjectedTranscriptSummary(selection); unresolved {
+			slog.Warn("conversation.export.unresolved_injected_transcript", "concern", "conversation.export", "component", "conversation", "conversation_id", record.ID, "summary_uuid", summaryUUID)
+			return nil, fmt.Errorf(unresolvedInjectedTranscriptError, record.ID, summaryUUID)
+		}
+	}
 	selection = filterCompactionSelectionItems(selection, options.Content)
 	selection, err = sanitizeCompactionSelectionForExport(selection)
 	if err != nil {

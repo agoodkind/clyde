@@ -192,6 +192,8 @@ output and conflicts with an output file path. A write failure returns an MCP
 tool error with the path. Saved compaction context follows the same content kinds
 as ordinary messages.
 
+For a compact summary containing a framed pre-compaction transcript, CLI and MCP exports include the summary prose outside the transcript and only the segments selected by the content kinds. `chat` selects chat segments, `thinking` selects thinking segments, any tool kind selects tool calls, `tool_outputs` also selects tool outputs, `system_prompts` selects system segments, and `raw_json_metadata` selects other segments. A content filtered export of a compact summary containing an unframed transcript fails with an error identifying the conversation and summary, and the export writes nothing. Selecting `all` in the CLI or `only: ["all"]` through MCP exports the summary text unchanged. Exports never read ordinary user messages as transcripts, even when those messages quote transcript tags, `### System`, or JSON.
+
 `conversation export tail` is a CLI-only shortcut. MCP clients can request the
 same range by calling `clyde_export_transcript` with `include_compactions: "0"`,
 `last_n`, `format: "markdown"`, `whitespace: "dense"`, and `only: ["chat",

@@ -41,6 +41,12 @@ func filterCompactionMessageItems(messages []transcript.Message, content Content
 		metadata := *messages[i].Compaction
 		metadata.ContextItems = filterCompactionContextItems(metadata.ContextItems, content)
 		messages[i].Compaction = &metadata
+		// A summary message renders its text when system_messages is selected.
+		// Unless raw_json_metadata is selected, the text uses the same segment
+		// selection as context items.
+		if metadata.Kind == transcript.CompactionKindSummary && !content.Has(ContentKindRawJSONMetadata) {
+			messages[i].Text = filterInjectedTranscriptText(messages[i].Text, content)
+		}
 	}
 }
 
@@ -57,7 +63,7 @@ func filterCompactionContextItems(
 		return copyContextItems(items)
 	}
 	kept := make([]transcript.CompactedContextItem, 0, len(items))
-	for _, item := range items {
+	for _, item := range expandInjectedTranscriptItems(items) {
 		if !compactedItemSelected(item, content) {
 			continue
 		}
