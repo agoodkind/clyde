@@ -301,7 +301,7 @@ func (lookup sourceTimeLookup) bindToolFamilies(families map[string][]collection
 	case len(keys) != len(lookup.toolCalls):
 		reason = SourceOutcomeSequenceMismatch
 	}
-	if reason == "" && !storedStartsAreNativeStarts(keys, lookup.toolCalls) {
+	if reason == "" && !storedStartsAreNativeStarts(keys, lookup.toolCalls, storedUserMessages(families)) {
 		reason = SourceOutcomeSequenceMismatch
 	}
 	if reason == "" {
@@ -324,10 +324,45 @@ func (lookup sourceTimeLookup) bindToolFamilies(families map[string][]collection
 
 // storedStartsAreNativeStarts reports whether each stored tool message starts with
 // // the first tool call in a native message.
-func storedStartsAreNativeStarts(keys []string, calls []SourceToolTime) bool {
+// storedUserRole identifies stored text rows with the user role.
+const storedUserRole = "user"
+
+// storedUserMessages returns message positions for stored user text families.
+func storedUserMessages(families map[string][]collection.StoredRow) []int {
+	users := make([]int, 0)
+	for key, rows := range families {
+		if !strings.HasPrefix(key, conversationTextFamily+familyPartSeparator) {
+			continue
+		}
+		for _, row := range rows {
+			cell, found := row.Scalars[roleColumn]
+			if found && cell.State == collection.ScalarCellValue && strings.EqualFold(cell.Value.String, storedUserRole) {
+				users = append(users, familyOrder(key)[0])
+				break
+			}
+		}
+	}
+	return users
+}
+
+// userBetween reports whether a user message position is strictly between two positions.
+func userBetween(users []int, previous int, current int) bool {
+	for _, message := range users {
+		if previous < message && message < current {
+			return true
+		}
+	}
+	return false
+}
+
+func storedStartsAreNativeStarts(keys []string, calls []SourceToolTime, users []int) bool {
 	for index, key := range keys {
 		start := index == 0 || familyOrder(key)[0] != familyOrder(keys[index-1])[0]
 		if start && !calls[index].MessageStart {
+			return false
+		}
+		// Reject a stored user turn between tool messages when the native call lacks AfterUser.
+		if start && index > 0 && !calls[index].AfterUser && userBetween(users, familyOrder(keys[index-1])[0], familyOrder(key)[0]) {
 			return false
 		}
 		// Reject a native user turn between calls in one stored tool message.
