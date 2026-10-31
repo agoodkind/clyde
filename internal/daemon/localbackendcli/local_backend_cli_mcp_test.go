@@ -112,13 +112,13 @@ func TestLocalBackendCLIAndMCP(t *testing.T) {
 
 	t.Run("filters exclude ineligible conversations", func(t *testing.T) {
 		for _, surface := range first.surfaces() {
-			assertLocalProofFilters(t, surface)
+			assertLocalProofFilters(t, surface, localProofSourceLocal)
 		}
 	})
 
 	t.Run("offset pages partition one ranking", func(t *testing.T) {
 		for _, surface := range first.surfaces() {
-			assertLocalProofPages(t, surface)
+			assertLocalProofPages(t, surface, localProofSourceLocal)
 		}
 	})
 
