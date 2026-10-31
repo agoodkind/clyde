@@ -1002,8 +1002,9 @@ func TestIngestingAGroupedCursorTurnKeepsEachToolCallDate(t *testing.T) {
 				t.Fatalf("unexpected tool row timestamp; row path, actual, expected: %s: %d, %d", row.relativePath, row.timestampUnix, wantTools[toolIndex].Unix())
 			}
 		case "conv":
-			if want := time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC).Unix(); row.content == question && row.timestampUnix != want {
-				t.Fatalf("unexpected user row timestamp; actual, expected: %d, %d", row.timestampUnix, want)
+			// The first user message precedes every original tool anchor and stays undated.
+			if row.content == question && !row.timestampNull {
+				t.Fatalf("first user row has a known timestamp; actual timestamp: %d", row.timestampUnix)
 			}
 		}
 	}

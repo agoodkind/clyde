@@ -448,13 +448,24 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 	if !found {
 		return source, false, nil
 	}
+	native, nativeFound, err := cursorstore.ReadComposerNativeToolCalls(ctx, db, composerID)
+	if err != nil {
+		return source, false, fmt.Errorf("read native tool calls for composer %q: %w", composerID, err)
+	}
+	chronologyKeys := map[chronologyKey]bool{}
+	if nativeFound && native.Complete {
+		chronologyKeys = nativeChronologyKeys(native)
+	}
 	kept := make(map[string]bool)
 	source.Messages = make([]transcript.Message, 0)
+	messageKeys := make([]chronologyKey, 0)
 	err = cursorstore.StreamComposerBubbles(ctx, db, composerID, header, func(bubble cursorstore.Bubble) bool {
 		kept[bubble.BubbleID] = true
 		mapped, include := mapComposerBubble(bubble, opts)
 		if include {
 			source.Messages = append(source.Messages, mapped)
+			key, _ := bubbleChronologyKey(bubble)
+			messageKeys = append(messageKeys, key)
 		}
 		return true
 	})
@@ -463,25 +474,33 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 		return source, false, fmt.Errorf("read composer bubbles %q: %w", composerID, err)
 	}
 	callDates := make(map[string][]time.Time)
+	candidates := make(map[chronologyKey][]chronologyCandidate)
 	source.Copies = make([]transcript.Message, 0)
+	copyKeys := make([]chronologyKey, 0)
 	err = cursorstore.ForEachStoredComposerBubble(ctx, db, composerID, func(bubble cursorstore.Bubble) error {
 		if bubble.ToolCall != nil && bubble.ToolCall.ToolCallID != "" {
 			callDates[bubble.ToolCall.ToolCallID] = append(callDates[bubble.ToolCall.ToolCallID], composerBubbleTimestamp(bubble.CreatedAt))
+		}
+		key, keyed := bubbleChronologyKey(bubble)
+		if keyed && chronologyKeys[key] {
+			candidates[key] = append(candidates[key], chronologyCandidate{created: composerBubbleTimestamp(bubble.CreatedAt), requestID: bubble.RequestID})
 		}
 		if kept[bubble.BubbleID] {
 			return nil
 		}
 		if mapped, include := mapComposerBubble(bubble, opts); include {
 			source.Copies = append(source.Copies, mapped)
+			copyKeys = append(copyKeys, key)
 		}
 		return nil
 	})
 	if err != nil {
 		return source, false, fmt.Errorf("read stored composer bubbles %q: %w", composerID, err)
 	}
-	native, nativeFound, err := cursorstore.ReadComposerNativeToolCalls(ctx, db, composerID)
-	if err != nil {
-		return source, false, fmt.Errorf("read native tool calls for composer %q: %w", composerID, err)
+	if len(chronologyKeys) > 0 {
+		governed := nativeChronologyTimes(native, callDates, candidates)
+		applyChronologyTimes(source.Messages, messageKeys, governed)
+		applyChronologyTimes(source.Copies, copyKeys, governed)
 	}
 	source.ToolCallsComplete = nativeFound && native.Complete
 	source.MissingNativeRecords = native.MissingBlobs
@@ -494,6 +513,19 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 		source.ToolCalls = append(source.ToolCalls, call)
 	}
 	return source, true, nil
+}
+
+// applyChronologyTimes assigns dates, including zero dates, to matching message keys.
+// It leaves timestamps unchanged for keys without a result.
+func applyChronologyTimes(messages []transcript.Message, keys []chronologyKey, governed map[chronologyKey]time.Time) {
+	if governed == nil {
+		return
+	}
+	for index := range messages {
+		if stamp, found := governed[keys[index]]; found {
+			messages[index].Timestamp = stamp
+		}
+	}
 }
 
 // nativeSourceToolCall builds a source tool call and selects its identity bubble time.

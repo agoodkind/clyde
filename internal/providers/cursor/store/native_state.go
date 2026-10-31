@@ -2,12 +2,14 @@ package cursorstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -22,6 +24,8 @@ const (
 	nativeBlobReferenceBytes  = 32
 	nativeToolCallPartType    = "tool-call"
 	nativeUserRole            = "user"
+	nativeAssistantRole       = "assistant"
+	nativeTextPartType        = "text"
 	nativeUserQueryTag        = "<user_query>"
 	nativeRootArchive         = -1
 	// NativeProjectionVersion identifies the native tool call projection format.
@@ -30,6 +34,13 @@ const (
 	NativeSourceArchive = "archive"
 	// NativeSourceRoot identifies a message referenced by the root state.
 	NativeSourceRoot = "root"
+)
+
+var (
+	// nativeUserQueryPattern captures content between user_query tags across lines.
+	nativeUserQueryPattern = regexp.MustCompile(`(?s)<user_query>(.*?)</user_query>`)
+	// nativeThinkPattern matches think blocks across lines.
+	nativeThinkPattern = regexp.MustCompile(`(?s)<think>.*?</think>`)
 )
 
 // NativeToolCall contains a native call ID, name, and arguments.
@@ -54,7 +65,13 @@ type NativeMessage struct {
 	Missing bool
 	// RealUser reports whether this user message contains real user text.
 	RealUser bool
-	Calls    []NativeToolCall
+	// Text contains trimmed user or assistant text for matching stored bubbles.
+	Text string
+	// RequestID is the Cursor request ID from providerOptions.cursor.requestId.
+	RequestID string
+	// ContentHash is the hexadecimal SHA-256 of the raw content JSON.
+	ContentHash string
+	Calls       []NativeToolCall
 }
 
 // NativeToolCalls records the projection version and referenced messages.
@@ -110,8 +127,28 @@ type protobufField struct {
 }
 
 type nativeMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role            string                `json:"role"`
+	Content         json.RawMessage       `json:"content"`
+	ProviderOptions nativeProviderOptions `json:"providerOptions"`
+}
+
+type nativeProviderOptions struct {
+	Cursor nativeCursorOptions `json:"cursor"`
+}
+
+type nativeCursorOptions struct {
+	RequestID string `json:"requestId"`
+}
+
+// nativeMessageFields records the role, real user flag, matching text, request ID,
+// content hash, and tool calls from a native message.
+type nativeMessageFields struct {
+	role        string
+	realUser    bool
+	text        string
+	requestID   string
+	contentHash string
+	calls       []NativeToolCall
 }
 
 type nativeContentPart struct {
@@ -168,7 +205,7 @@ func ReadComposerNativeToolCalls(ctx context.Context, db *sql.DB, composerID str
 // readNativeMessage reads a referenced blob and extracts its role and tool calls.
 func readNativeMessage(ctx context.Context, db *sql.DB, composerID string, reference nativeReference, seen map[string]bool) (NativeMessage, error) {
 	key := hex.EncodeToString(reference.digest)
-	message := NativeMessage{Source: reference.source, Archive: reference.archive, Index: reference.index, BlobRef: key, Role: "", Duplicate: seen[key], Missing: false, RealUser: false, Calls: nil}
+	message := NativeMessage{Source: reference.source, Archive: reference.archive, Index: reference.index, BlobRef: key, Role: "", Duplicate: seen[key], Missing: false, RealUser: false, Text: "", RequestID: "", ContentHash: "", Calls: nil}
 	if len(reference.digest) != nativeBlobReferenceBytes {
 		slog.WarnContext(ctx, "providers.cursor.store.native_reference_invalid", "concern", concern, "composer_id", composerID, "length", len(reference.digest))
 		return message, fmt.Errorf("invalid native message reference length for composer %s: %d", composerID, len(reference.digest))
@@ -182,14 +219,17 @@ func readNativeMessage(ctx context.Context, db *sql.DB, composerID string, refer
 		message.Missing = true
 		return message, nil
 	}
-	role, realUser, calls, err := unmarshalNativeToolCalls(data)
+	decoded, err := unmarshalNativeMessage(data)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.native_message_decode_failed", "concern", concern, "composer_id", composerID, "blob", key, "err", err)
 		return message, fmt.Errorf("decode native message for composer and blob %s %s: %w", composerID, key, err)
 	}
-	message.Role = role
-	message.RealUser = realUser
-	message.Calls = calls
+	message.Role = decoded.role
+	message.RealUser = decoded.realUser
+	message.Text = decoded.text
+	message.RequestID = decoded.requestID
+	message.ContentHash = decoded.contentHash
+	message.Calls = decoded.calls
 	return message, nil
 }
 
@@ -270,42 +310,77 @@ func readNativeBlob(ctx context.Context, db *sql.DB, reference []byte) ([]byte, 
 	return ReadKVValue(ctx, db, KVTableCursorDiskKV, nativeBlobKeyPrefix+hex.EncodeToString(reference))
 }
 
-// unmarshalNativeToolCalls extracts tool calls from a native message's content.
-// It also reports whether a user message contains real user text.
-func unmarshalNativeToolCalls(data []byte) (string, bool, []NativeToolCall, error) {
+// unmarshalNativeMessage decodes the role, request ID, text, and tool calls.
+// It hashes the raw content JSON and detects real user text.
+func unmarshalNativeMessage(data []byte) (nativeMessageFields, error) {
+	fields := nativeMessageFields{role: "", realUser: false, text: "", requestID: "", contentHash: "", calls: nil}
 	var message nativeMessage
 	if err := json.Unmarshal(data, &message); err != nil {
 		slog.Warn("providers.cursor.store.native_message_json_failed", "concern", concern, "err", err)
-		return "", false, nil, fmt.Errorf("decode native message JSON: %w", err)
+		return fields, fmt.Errorf("decode native message JSON: %w", err)
 	}
+	fields.role = message.Role
+	fields.requestID = message.ProviderOptions.Cursor.RequestID
 	if len(message.Content) == 0 {
-		return message.Role, false, nil, nil
+		return fields, nil
 	}
+	sum := sha256.Sum256(message.Content)
+	fields.contentHash = hex.EncodeToString(sum[:])
+	texts := make([]string, 0)
 	if message.Content[0] != '[' {
-		var text string
-		if err := json.Unmarshal(message.Content, &text); err != nil {
+		var plain string
+		if err := json.Unmarshal(message.Content, &plain); err != nil {
 			slog.Warn("providers.cursor.store.native_message_text_failed", "concern", concern, "err", err)
-			return message.Role, false, nil, fmt.Errorf("decode native message text: %w", err)
+			return fields, fmt.Errorf("decode native message text: %w", err)
 		}
-		return message.Role, message.Role == nativeUserRole && RealUserText(text), nil, nil
-	}
-	var parts []nativeContentPart
-	if err := json.Unmarshal(message.Content, &parts); err != nil {
-		slog.Warn("providers.cursor.store.native_message_parts_failed", "concern", concern, "err", err)
-		return message.Role, false, nil, fmt.Errorf("decode native message content parts: %w", err)
-	}
-	calls := make([]NativeToolCall, 0)
-	realUser := false
-	for _, part := range parts {
-		if message.Role == nativeUserRole && RealUserText(part.Text) {
-			realUser = true
+		texts = append(texts, plain)
+	} else {
+		var parts []nativeContentPart
+		if err := json.Unmarshal(message.Content, &parts); err != nil {
+			slog.Warn("providers.cursor.store.native_message_parts_failed", "concern", concern, "err", err)
+			return fields, fmt.Errorf("decode native message content parts: %w", err)
 		}
-		if part.Type != nativeToolCallPartType {
-			continue
+		fields.calls = make([]NativeToolCall, 0)
+		for _, part := range parts {
+			switch part.Type {
+			case nativeToolCallPartType:
+				fields.calls = append(fields.calls, NativeToolCall{ID: part.ToolCallID, Name: part.ToolName, Args: part.Args})
+			case nativeTextPartType:
+				texts = append(texts, part.Text)
+			}
 		}
-		calls = append(calls, NativeToolCall{ID: part.ToolCallID, Name: part.ToolName, Args: part.Args})
 	}
-	return message.Role, realUser, calls, nil
+	for _, part := range texts {
+		if message.Role == nativeUserRole && RealUserText(part) {
+			fields.realUser = true
+		}
+	}
+	fields.text = nativeMatchText(message.Role, texts)
+	return fields, nil
+}
+
+// nativeMatchText returns trimmed text for matching user or assistant bubbles.
+// For users, it selects the first user_query match. Without a match, it joins
+// nonempty text parts that do not start with < after trimming.
+// For assistants, it joins text parts and removes think blocks.
+func nativeMatchText(role string, texts []string) string {
+	switch role {
+	case nativeUserRole:
+		plain := make([]string, 0, len(texts))
+		for _, part := range texts {
+			if match := nativeUserQueryPattern.FindStringSubmatch(part); match != nil {
+				return strings.TrimSpace(match[1])
+			}
+			if trimmed := strings.TrimSpace(part); trimmed != "" && !strings.HasPrefix(trimmed, "<") {
+				plain = append(plain, part)
+			}
+		}
+		return strings.TrimSpace(strings.Join(plain, "\n"))
+	case nativeAssistantRole:
+		return strings.TrimSpace(nativeThinkPattern.ReplaceAllString(strings.Join(texts, ""), ""))
+	default:
+		return ""
+	}
 }
 
 // RealUserText reports whether text contains a user_query tag or nonempty text

@@ -270,9 +270,8 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 			t.Fatalf("vector bytes changed for key: %s", key)
 		}
 	}
-	firstUser := time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC).Unix()
 	toolRows := 0
-	userDated := false
+	firstUserUnknown := false
 	for id, after := range repaired {
 		before := seeded[id]
 		if after.content != before.content || after.vectorKey != before.vectorKey || after.others != before.others {
@@ -284,11 +283,12 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 				t.Fatalf("tool row timestamp or metadata changed; path, timestamp: %s: %d", after.relativePath, after.timestampUnix)
 			}
 		}
-		if after.content == userBoundaryFirst && after.timestampUnix == firstUser {
-			userDated = true
+		// The first user message lacks an earlier original tool anchor and stays undated.
+		if after.content == userBoundaryFirst && after.timestampNull {
+			firstUserUnknown = true
 		}
 	}
-	if toolRows != 2 || !userDated {
-		t.Fatalf("unexpected tool row count or first user timestamp match; tool rows, user dated: %d, %v", toolRows, userDated)
+	if toolRows != 2 || !firstUserUnknown {
+		t.Fatalf("repair must preserve two tool rows and an unknown first user timestamp; tool row count, first user timestamp unknown: %d, %v", toolRows, firstUserUnknown)
 	}
 }
