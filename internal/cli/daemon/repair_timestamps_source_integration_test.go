@@ -77,6 +77,7 @@ func nativeToolCall(id string, name string, args string) string {
 func sourceRepairNative() []string {
 	return []string{
 		`{"role":"assistant","content":[` + nativeToolCall("call_read", "read_file", `{"path":"internal/online/online.go"}`) + `]}`,
+		`{"role":"user","content":[{"type":"text","text":"` + sourceRepairSameQ + `"}]}`,
 		`{"role":"assistant","content":[` + nativeToolCall("call_git", "Shell", `{"command":"`+sourceRepairShellAlias+`"}`) + `]}`,
 		`{"role":"assistant","content":[` + nativeToolCall("call_test_one", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
 		`{"role":"assistant","content":[` + nativeToolCall("call_test_two", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
