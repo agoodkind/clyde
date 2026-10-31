@@ -17,8 +17,10 @@ import (
 const (
 	lastNProbeChatSession = "4e2b7d1c-6a3f-4c8e-9b5d-1f0a2c3e4d77"
 	lastNProbeTailSession = "5f3c8e2d-7b4a-4d9f-8c6e-2a1b3d4f5e88"
+	lastNProbeAllSession  = "6a4d9f3e-8c5b-4e0a-9d7f-3b2c4e5f6a99"
 	lastNProbeWorkspace   = "/lastn-probe/workspace"
 	lastNProbeCount       = 3
+	lastNProbeAllCount    = 4
 	lastNProbeMaxTokens   = "150"
 	lastNProbeOnlyChat    = "chat"
 	lastNProbeOnlyTail    = "chat,tools"
@@ -58,6 +60,7 @@ type lastNProbeArguments struct {
 	Only               []string `json:"only"`
 	LastN              int      `json:"last_n"`
 	IncludeCompactions string   `json:"include_compactions,omitempty"`
+	FullHistory        bool     `json:"full_history,omitempty"`
 	MaxTokens          string   `json:"max_tokens,omitempty"`
 	Format             string   `json:"format"`
 	Whitespace         string   `json:"whitespace,omitempty"`
@@ -117,6 +120,7 @@ func TestExportLastNCountsOnlyMessagesTheContentKindsRender(t *testing.T) {
 			Only:               []string{lastNProbeOnlyChat},
 			LastN:              lastNProbeCount,
 			IncludeCompactions: "",
+			FullHistory:        false,
 			MaxTokens:          export.maxTokens,
 			Format:             export.format,
 			Whitespace:         "",
@@ -156,6 +160,7 @@ func TestExportTailLastNCountsChatAndToolMessages(t *testing.T) {
 		Only:               strings.Split(lastNProbeOnlyTail, ","),
 		LastN:              lastNProbeCount,
 		IncludeCompactions: lastNProbeSegment,
+		FullHistory:        false,
 		MaxTokens:          "",
 		Format:             lastNProbeMarkdown,
 		Whitespace:         lastNProbeDense,
@@ -170,6 +175,38 @@ func TestExportTailLastNCountsChatAndToolMessages(t *testing.T) {
 	}
 	if cliBody != mcpBody {
 		t.Errorf("cli tail body differs from the equivalent mcp export:\ncli:\n%s\nmcp:\n%s", cliBody, mcpBody)
+	}
+}
+
+// TestExportLastNWithAllSkipsCompactionMessages checks CLI and MCP exports with only=all
+// and last_n=4. Each export includes the starting summary, the assistant answer before
+// compaction, and three chat messages in order, and omits the earlier user question.
+func TestExportLastNWithAllSkipsCompactionMessages(t *testing.T) {
+	binaryPath := buildClydeCLI(t)
+	home := t.TempDir()
+	installLastNProbeTranscript(t, home, lastNProbeAllSession, lastNProbeAllRecords(t))
+	environment := environmentWith(localProofProviderEnvironment(t, home)...)
+	settingsPath := writeSandboxSemanticSettings(t, "")
+	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
+	waitForLastNProbeMCP(t, binaryPath, sandboxDaemon.environment, lastNProbeAllSession)
+
+	cliBody := runLastNProbeCLI(t, binaryPath, environment, []string{"conversation", "export", "claude:" + lastNProbeAllSession, "--only", lastNProbeAll, "--full-history", "--last-n", strconv.Itoa(lastNProbeAllCount), "--format", lastNProbeMarkdown, "--stdout"})
+	mcpBody := lastNProbeMCPBody(t, binaryPath, sandboxDaemon.environment, lastNProbeArguments{
+		ConversationID:     "claude:" + lastNProbeAllSession,
+		Only:               []string{lastNProbeAll},
+		LastN:              lastNProbeAllCount,
+		IncludeCompactions: "",
+		FullHistory:        true,
+		MaxTokens:          "",
+		Format:             lastNProbeMarkdown,
+		Whitespace:         "",
+		Stdout:             true,
+	})
+	for surface, body := range map[string]string{"cli": cliBody, "mcp": mcpBody} {
+		label := surface + " all"
+		assertLastNProbeContains(t, label, body, lastNProbeSummaryProse)
+		assertLastNProbeOrder(t, label, body, []string{lastNProbeBeforeAnswer, lastNProbeChatOne, lastNProbeChatTwo, lastNProbeChatThree})
+		assertLastNProbeOmits(t, label, body, lastNProbeBeforeQuestion)
 	}
 }
 
@@ -261,6 +298,17 @@ func lastNProbeTailRecords(t *testing.T) []string {
 	records = append(records, lastNProbeToolUseRecord(t, session, len(records), "toolu_tailprobe_late", tailProbeToolLate))
 	records = append(records, lastNProbeToolResultRecord(t, session, len(records), "toolu_tailprobe_late", lastNProbeToolOutput))
 	records = append(records, lastNProbeThinkingRecord(t, session, len(records), tailProbeThinkingThree))
+	return records
+}
+
+// lastNProbeAllRecords returns the compacted head records followed by three
+// chat messages that alternate between user and assistant.
+func lastNProbeAllRecords(t *testing.T) []string {
+	t.Helper()
+	records := lastNProbeCompactedHead(t, lastNProbeAllSession)
+	for index, text := range []string{lastNProbeChatOne, lastNProbeChatTwo, lastNProbeChatThree} {
+		records = append(records, lastNProbeTextRecord(t, lastNProbeAllSession, len(records), lastNProbeRole(index), text))
+	}
 	return records
 }
 
@@ -370,6 +418,7 @@ func waitForLastNProbeMCP(t *testing.T, binaryPath string, environment []string,
 		Only:               []string{lastNProbeAll},
 		LastN:              0,
 		IncludeCompactions: "",
+		FullHistory:        false,
 		MaxTokens:          "",
 		Format:             lastNProbeMarkdown,
 		Whitespace:         "",

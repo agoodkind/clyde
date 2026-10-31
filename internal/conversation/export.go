@@ -279,10 +279,13 @@ func applyLastNToSegmentSelection(
 	}
 }
 
-// messageCountsForLastN reports whether a message counts toward last_n.
-// It excludes meta-only messages and checks whether the export renders each other
-// message with the requested options.
+// messageCountsForLastN returns false for compaction metadata messages and
+// meta-only messages. Otherwise, it returns messageRendersForExport(message, options),
+// which reports whether the export renders the message under the requested options.
 func messageCountsForLastN(message transcript.Message, options ExportOptions) bool {
+	if message.Compaction != nil {
+		return false
+	}
 	if message.Visibility == transcript.MessageVisibilityMetaOnly {
 		return false
 	}

@@ -135,11 +135,12 @@ Unknown or out-of-range selectors fail with the available range, such as
 Use `--last-n N` to keep the last `N` messages that render content under the
 requested content kinds after segment selection. The export counts backward from
 the newest selected message and renders from the first kept message forward.
-Meta-only messages do not count. A compaction metadata message counts and
-renders only when the content kinds include `system_messages`. For example,
+Meta-only messages do not count. Compaction metadata messages do not count under
+any content selection, including `system_messages` and `all`. For example,
 `chat` counts chat messages but not messages containing only tool calls or
 thinking. `chat,tools` also counts tool call messages. When a kept segment has a
-starting summary, the export includes that summary.
+starting summary, the export includes that summary. The summary does not count
+toward `last_n`.
 
 Use `--copy` on macOS to send the raw export body to `pbcopy`. On other
 operating systems, the command returns a clear error instead of silently doing
