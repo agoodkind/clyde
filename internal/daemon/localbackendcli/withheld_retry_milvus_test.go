@@ -97,9 +97,9 @@ func settledSearchRecords(t *testing.T, stateRoots []string, since time.Time) []
 	return searchCompletedRecords(t, stateRoots, since)
 }
 
-// TestMilvusSearchSkipsFirstRetryForWithheldHits checks CLI and MCP searches
-// return a full page of matches excluding archived conversations in one engine
-// call, and the same matches with an after date bound in two engine calls.
+// TestMilvusSearchSkipsFirstRetryForWithheldHits checks that CLI and MCP
+// searches return a full page of matches excluding archived conversations in one
+// engine call, and the same matches with an after date bound in two engine calls.
 func TestMilvusSearchSkipsFirstRetryForWithheldHits(t *testing.T) {
 	milvustest.RequireEnabled(t)
 	address := milvustest.Start(t)
