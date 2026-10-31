@@ -2229,9 +2229,11 @@ type SearchConversationsRequest struct {
 	Workspace       string                 `protobuf:"bytes,4,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	IncludeArchived bool                   `protobuf:"varint,5,opt,name=include_archived,json=includeArchived,proto3" json:"include_archived,omitempty"`
 	Roles           []string               `protobuf:"bytes,6,rep,name=roles,proto3" json:"roles,omitempty"`
-	FromUnix        int64                  `protobuf:"varint,7,opt,name=from_unix,json=fromUnix,proto3" json:"from_unix,omitempty"`
-	UntilUnix       int64                  `protobuf:"varint,8,opt,name=until_unix,json=untilUnix,proto3" json:"until_unix,omitempty"`
-	MinScore        float64                `protobuf:"fixed64,9,opt,name=min_score,json=minScore,proto3" json:"min_score,omitempty"`
+	// from_unix is an inclusive lower bound in Unix seconds. Omit it to leave the lower bound unset.
+	FromUnix *int64 `protobuf:"varint,7,opt,name=from_unix,json=fromUnix,proto3,oneof" json:"from_unix,omitempty"`
+	// until_unix is an exclusive upper bound in Unix seconds. Omit it to leave the upper bound unset.
+	UntilUnix *int64  `protobuf:"varint,8,opt,name=until_unix,json=untilUnix,proto3,oneof" json:"until_unix,omitempty"`
+	MinScore  float64 `protobuf:"fixed64,9,opt,name=min_score,json=minScore,proto3" json:"min_score,omitempty"`
 	// per_conversation_limit caps hits per conversation so one large transcript
 	// does not monopolize the result list. Zero means uncapped.
 	PerConversationLimit int64 `protobuf:"varint,10,opt,name=per_conversation_limit,json=perConversationLimit,proto3" json:"per_conversation_limit,omitempty"`
@@ -2324,15 +2326,15 @@ func (x *SearchConversationsRequest) GetRoles() []string {
 }
 
 func (x *SearchConversationsRequest) GetFromUnix() int64 {
-	if x != nil {
-		return x.FromUnix
+	if x != nil && x.FromUnix != nil {
+		return *x.FromUnix
 	}
 	return 0
 }
 
 func (x *SearchConversationsRequest) GetUntilUnix() int64 {
-	if x != nil {
-		return x.UntilUnix
+	if x != nil && x.UntilUnix != nil {
+		return *x.UntilUnix
 	}
 	return 0
 }
@@ -4684,24 +4686,27 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x06before\x18\x04 \x01(\x03R\x06before\x12\x14\n" +
 	"\x05after\x18\x05 \x01(\x03R\x05after\x12\x1d\n" +
 	"\n" +
-	"load_rules\x18\x06 \x01(\tR\tloadRules\"\xe6\x03\n" +
+	"load_rules\x18\x06 \x01(\tR\tloadRules\"\x8d\x04\n" +
 	"\x1aSearchConversationsRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x03R\x05limit\x12.\n" +
 	"\bprovider\x18\x03 \x01(\x0e2\x12.clyde.v1.ProviderR\bprovider\x12\x1c\n" +
 	"\tworkspace\x18\x04 \x01(\tR\tworkspace\x12)\n" +
 	"\x10include_archived\x18\x05 \x01(\bR\x0fincludeArchived\x12\x14\n" +
-	"\x05roles\x18\x06 \x03(\tR\x05roles\x12\x1b\n" +
-	"\tfrom_unix\x18\a \x01(\x03R\bfromUnix\x12\x1d\n" +
+	"\x05roles\x18\x06 \x03(\tR\x05roles\x12 \n" +
+	"\tfrom_unix\x18\a \x01(\x03H\x00R\bfromUnix\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"until_unix\x18\b \x01(\x03R\tuntilUnix\x12\x1b\n" +
+	"until_unix\x18\b \x01(\x03H\x01R\tuntilUnix\x88\x01\x01\x12\x1b\n" +
 	"\tmin_score\x18\t \x01(\x01R\bminScore\x124\n" +
 	"\x16per_conversation_limit\x18\n" +
 	" \x01(\x03R\x14perConversationLimit\x12'\n" +
 	"\x0fconversation_id\x18\v \x01(\tR\x0econversationId\x12%\n" +
 	"\x0econtext_window\x18\f \x01(\x03R\rcontextWindow\x12\x16\n" +
 	"\x06offset\x18\r \x01(\x03R\x06offset\x12\x16\n" +
-	"\x06cursor\x18\x0e \x01(\tR\x06cursor\"\xf4\x02\n" +
+	"\x06cursor\x18\x0e \x01(\tR\x06cursorB\f\n" +
+	"\n" +
+	"_from_unixB\r\n" +
+	"\v_until_unix\"\xf4\x02\n" +
 	"\x17ConversationSearchMatch\x12@\n" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.clyde.v1.ConversationRecordR\fconversation\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x03R\fmessageIndex\x12\x12\n" +
@@ -5139,6 +5144,7 @@ func file_clyde_v1_daemon_service_proto_init() {
 	file_clyde_v1_daemon_service_proto_msgTypes[3].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[4].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[7].OneofWrappers = []any{}
+	file_clyde_v1_daemon_service_proto_msgTypes[27].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[47].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[49].OneofWrappers = []any{}
 	file_clyde_v1_daemon_service_proto_msgTypes[50].OneofWrappers = []any{

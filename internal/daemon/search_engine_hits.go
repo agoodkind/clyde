@@ -67,8 +67,8 @@ func emptySearchFilter() semsearch.SearchFilter {
 		Providers:            nil,
 		WorkspaceRoots:       nil,
 		Roles:                nil,
-		FromUnix:             0,
-		UntilUnix:            0,
+		FromUnix:             nil,
+		UntilUnix:            nil,
 		ConversationIDs:      nil,
 		ParentConversationID: "",
 		MinScore:             0,
@@ -167,7 +167,7 @@ func engineSearchMatches(
 }
 
 func hasDateBound(options conversation.SearchConversationsOptions) bool {
-	return options.FromUnix != 0 || options.UntilUnix != 0
+	return options.FromUnix != nil || options.UntilUnix != nil
 }
 
 // engineSearchCallError classifies one failed engine call into the typed source

@@ -22,6 +22,7 @@ const (
 	withheldQuery       = "archived question 0 archived answer 0 archived"
 	withheldSearchEvent = "conversation.vectorsearch.search_completed"
 	withheldDatedAfter  = "2000-01-01"
+	withheldEpochAfter  = "1970-01-01T00:00:00Z"
 	withheldDatedCalls  = 2
 	withheldLogWait     = 10 * time.Second
 	withheldLogSettle   = 2 * time.Second
@@ -133,17 +134,20 @@ func TestMilvusSearchSkipsFirstRetryForWithheldHits(t *testing.T) {
 		if len(searchRecords) != 1 {
 			t.Fatalf("%s logged %d %s records for one request, want 1: %v", surface.name, len(searchRecords), withheldSearchEvent, searchRecords)
 		}
-		datedRequest := request
-		datedRequest.After = withheldDatedAfter
-		since = time.Now()
-		dated := mustLocalProofSearch(t, surface, datedRequest)
-		datedRecords := settledSearchRecords(t, stateRoots, since)
-		if !slices.Equal(localProofMatchKeys(dated.Matches), localProofMatchKeys(result.Matches)) {
-			t.Fatalf("%s with --after %s returned %v, want %v", surface.name, withheldDatedAfter, localProofMatchKeys(dated.Matches), localProofMatchKeys(result.Matches))
+		for _, after := range []string{withheldDatedAfter, withheldEpochAfter} {
+			datedRequest := request
+			datedRequest.After = after
+			since = time.Now()
+			dated := mustLocalProofSearch(t, surface, datedRequest)
+			datedRecords := settledSearchRecords(t, stateRoots, since)
+			if !slices.Equal(localProofMatchKeys(dated.Matches), localProofMatchKeys(result.Matches)) {
+				t.Fatalf("%s with --after %s returned %v, want %v", surface.name, after, localProofMatchKeys(dated.Matches), localProofMatchKeys(result.Matches))
+			}
+			if len(datedRecords) != withheldDatedCalls {
+				t.Fatalf("%s with --after %s logged %d %s records, want %d: %v", surface.name, after, len(datedRecords), withheldSearchEvent, withheldDatedCalls, datedRecords)
+			}
+			t.Logf("%s with --after %s made %d engine calls", surface.name, after, withheldDatedCalls)
 		}
-		if len(datedRecords) != withheldDatedCalls {
-			t.Fatalf("%s with --after %s logged %d %s records, want %d: %v", surface.name, withheldDatedAfter, len(datedRecords), withheldSearchEvent, withheldDatedCalls, datedRecords)
-		}
-		t.Logf("%s returned %v with 1 engine call, and with --after %s it made %d calls; with archived conversations it returned %v", surface.name, localProofMatchKeys(result.Matches), withheldDatedAfter, withheldDatedCalls, localProofMatchKeys(archived.Matches))
+		t.Logf("%s returned %v with 1 engine call; with archived conversations it returned %v", surface.name, localProofMatchKeys(result.Matches), localProofMatchKeys(archived.Matches))
 	}
 }
