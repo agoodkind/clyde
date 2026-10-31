@@ -79,11 +79,12 @@ type SemHit struct {
 // WorkspaceRoots: the workspaceRoot column is null on older rows, and every row
 // has a conversation id.
 type SearchFilter struct {
-	Providers            []string
-	WorkspaceRoots       []string
-	Roles                []string
-	FromUnix             int64
-	UntilUnix            int64
+	Providers      []string
+	WorkspaceRoots []string
+	Roles          []string
+	// FromUnix is inclusive and UntilUnix is exclusive. A nil pointer leaves the corresponding bound unset.
+	FromUnix             *int64
+	UntilUnix            *int64
 	ConversationIDs      []string
 	ParentConversationID string
 	MinScore             float64

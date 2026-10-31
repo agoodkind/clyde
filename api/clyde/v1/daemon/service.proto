@@ -254,8 +254,10 @@ message SearchConversationsRequest {
   string workspace = 4;
   bool include_archived = 5;
   repeated string roles = 6;
-  int64 from_unix = 7;
-  int64 until_unix = 8;
+  // from_unix is an inclusive lower bound in Unix seconds. Omit it to leave the lower bound unset.
+  optional int64 from_unix = 7;
+  // until_unix is an exclusive upper bound in Unix seconds. Omit it to leave the upper bound unset.
+  optional int64 until_unix = 8;
   double min_score = 9;
   // per_conversation_limit caps hits per conversation so one large transcript
   // does not monopolize the result list. Zero means uncapped.
