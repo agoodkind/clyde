@@ -85,6 +85,8 @@ func TestDateBoundsKeepEpochZeroAndExcludeUnknownTimes(t *testing.T) {
 		{name: "after epoch zero", request: request("1970-01-01T00:00:00Z", ""), want: []string{epoch}},
 		{name: "before one second after epoch", request: request("", "1970-01-01T00:00:01Z"), want: []string{epoch}},
 		{name: "negative lower bound", request: request("1969-12-31T23:59:00Z", "1970-01-01T00:00:01Z"), want: []string{epoch}},
+		{name: "lower bound at the unknown marker", request: request("0001-01-01T00:00:00Z", ""), want: []string{epoch}},
+		{name: "lower bound below the unknown marker", request: request("0000-06-01T00:00:00Z", "1970-01-01T00:00:01Z"), want: []string{epoch}},
 		{name: "before epoch zero", request: request("", "1970-01-01T00:00:00Z"), want: []string{}},
 	}
 	for _, searchSurface := range sandboxDaemon.surfaces() {

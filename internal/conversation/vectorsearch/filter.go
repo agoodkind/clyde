@@ -34,19 +34,18 @@ func searchFilter(filter semsearch.SearchFilter) *collection.Filter {
 	if filter.ParentConversationID != "" {
 		children = append(children, collection.ColumnEquals(parentConversationIDColumn, collection.StringScalar(filter.ParentConversationID)))
 	}
-	if filter.FromUnix != nil {
-		lower := *filter.FromUnix
-		children = append(children, collection.ColumnRange(timestampUnixColumn, &lower, nil))
-	}
-	if filter.UntilUnix != nil {
-		upper := *filter.UntilUnix
-		var lower *int64
-		if filter.FromUnix == nil {
-			// Exclude the zero time value that represents an unknown timestamp.
-			knownFloor := time.Time{}.Unix() + 1
-			lower = &knownFloor
+	if filter.FromUnix != nil || filter.UntilUnix != nil {
+		// Exclude the zero-time marker that older rows use for unknown timestamps.
+		lower := time.Time{}.Unix() + 1
+		if filter.FromUnix != nil && *filter.FromUnix > lower {
+			lower = *filter.FromUnix
 		}
-		children = append(children, collection.ColumnRange(timestampUnixColumn, lower, &upper))
+		var upper *int64
+		if filter.UntilUnix != nil {
+			bound := *filter.UntilUnix
+			upper = &bound
+		}
+		children = append(children, collection.ColumnRange(timestampUnixColumn, &lower, upper))
 	}
 	if filter.MessageIndexFrom > 0 {
 		lower := int64(filter.MessageIndexFrom)

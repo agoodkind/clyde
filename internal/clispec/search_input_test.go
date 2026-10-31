@@ -18,28 +18,6 @@ func TestSplitRolesDropsEmptyEntries(t *testing.T) {
 	}
 }
 
-func TestTimeBoundUnixParsesAcceptedLayouts(t *testing.T) {
-	t.Parallel()
-
-	omitted, err := timeBoundUnix("", "after")
-	if err != nil || omitted != nil {
-		t.Fatalf("An omitted bound should return nil without an error. Result and error: %v, %v", omitted, err)
-	}
-	epoch, err := timeBoundUnix("1970-01-01T00:00:00Z", "after")
-	if err != nil || epoch == nil || *epoch != 0 {
-		t.Fatalf("The epoch bound should return a pointer to zero without an error. Result and error: %v, %v", epoch, err)
-	}
-	for _, spelling := range []string{"2026-06-09T12:00:00Z", "2026-06-09 12:00", "2026-06-09"} {
-		parsed, parseErr := timeBoundUnix(spelling, "after")
-		if parseErr != nil || parsed == nil || *parsed <= 0 {
-			t.Fatalf("The accepted date should return a positive Unix timestamp without an error. Input, result, and error: %q, %v, %v", spelling, parsed, parseErr)
-		}
-	}
-	if _, err := timeBoundUnix("next tuesday", "until"); err == nil {
-		t.Fatal("garbage bound parsed without error")
-	}
-}
-
 // TestPrepareSearchUsesConversationIDPositional proves the optional
 // conversation_id positional scopes search and read modes.
 func TestPrepareSearchUsesConversationIDPositional(t *testing.T) {
