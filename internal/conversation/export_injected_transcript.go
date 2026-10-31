@@ -22,14 +22,21 @@ const (
 // segment in that span.
 type injectedTranscriptResolver func(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan
 
-// injectedTranscriptResolvers lists resolvers in the order the export tries
-// them. Its single resolver reads framed transcripts.
+// injectedTranscriptResolvers lists resolvers in the order export tries them.
+// The first reads framed transcripts in the text; the second returns spans
+// that the provider parser attached to the content item.
 func injectedTranscriptResolvers() []injectedTranscriptResolver {
-	return []injectedTranscriptResolver{resolveFramedTranscriptSpans}
+	return []injectedTranscriptResolver{resolveFramedTranscriptSpans, resolveParsedTranscriptSpans}
 }
 
 func resolveFramedTranscriptSpans(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan {
 	return reorienttag.ParseTranscriptSpans(content.Text)
+}
+
+// resolveParsedTranscriptSpans returns the spans that the provider parser
+// attached to the content item.
+func resolveParsedTranscriptSpans(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan {
+	return content.TranscriptSpans
 }
 
 // resolveInjectedTranscriptSpans returns spans from the first resolver that
@@ -138,6 +145,7 @@ func appendSummaryProse(
 	}
 	source.Text = text
 	source.Raw = nil
+	source.TranscriptSpans = nil
 	return append(prose, source)
 }
 
@@ -221,7 +229,7 @@ func injectedMessageItem(role string, text string) transcript.CompactedContextIt
 		Role:  role,
 		Phase: "",
 		Content: []transcript.CompactedMessageContentItem{
-			{Type: injectedChatContentType, Text: text, ImageURL: "", Detail: "", Raw: nil},
+			{Type: injectedChatContentType, Text: text, ImageURL: "", Detail: "", Raw: nil, TranscriptSpans: nil},
 		},
 		ContentRaw:   nil,
 		MessageClass: transcript.CompactedMessageClassOrdinary,
@@ -261,16 +269,16 @@ func emptyInjectedContextItem(kind transcript.CompactedContextItemKind) transcri
 }
 
 // filterInjectedTranscriptText keeps selected segments in resolved spans and
-// preserves surrounding prose. It keeps a tool call frame with empty text
-// unless tool_calls or tool_outputs is selected.
-func filterInjectedTranscriptText(text string, content ContentKindSet) string {
-	spans := resolveInjectedTranscriptSpans(transcript.CompactedMessageContentItem{
-		Type:     injectedChatContentType,
-		Text:     text,
-		ImageURL: "",
-		Detail:   "",
-		Raw:      nil,
-	})
+// preserves surrounding prose. It resolves spans from the summary content item
+// in items with the same text, including any spans the parser attached to that
+// item. It keeps a tool call frame with empty text unless the content filter
+// selects tool_calls or tool_outputs.
+func filterInjectedTranscriptText(
+	text string,
+	items []transcript.CompactedContextItem,
+	content ContentKindSet,
+) string {
+	spans := resolveInjectedTranscriptSpans(summaryContentItemForText(text, items))
 	if len(spans) == 0 {
 		return text
 	}
@@ -283,6 +291,34 @@ func filterInjectedTranscriptText(text string, content ContentKindSet) string {
 	}
 	builder.WriteString(text[previousEnd:])
 	return builder.String()
+}
+
+// summaryContentItemForText returns the summary content item in items with
+// exactly this text. Without a match, it returns a text item without spans.
+func summaryContentItemForText(
+	text string,
+	items []transcript.CompactedContextItem,
+) transcript.CompactedMessageContentItem {
+	for _, item := range items {
+		if item.Kind != transcript.CompactedContextItemKindMessage ||
+			item.Message == nil ||
+			item.Message.MessageClass != transcript.CompactedMessageClassSummary {
+			continue
+		}
+		for _, contentItem := range item.Message.Content {
+			if contentItem.Text == text {
+				return contentItem
+			}
+		}
+	}
+	return transcript.CompactedMessageContentItem{
+		Type:            injectedChatContentType,
+		Text:            text,
+		ImageURL:        "",
+		Detail:          "",
+		Raw:             nil,
+		TranscriptSpans: nil,
+	}
 }
 
 func selectedInjectedSegments(

@@ -138,11 +138,12 @@ func (idx *Index) renderReorientSnapshot(current Record, options ReorientOptions
 	// boundary records included, so the segment indexes and the latest-boundary
 	// fingerprint line up with the export selection.
 	messages, err := idx.LoadMessagesWithOptions(current, LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: true,
-		IncludeToolOutputs:    content.Has(ContentKindToolOutputs),
-		IncludeInjected:       false,
-		HarnessTally:          nil,
+		IncludeSystemPrompts:       false,
+		IncludeSystemMessages:      true,
+		IncludeToolOutputs:         content.Has(ContentKindToolOutputs),
+		IncludeInjected:            false,
+		HarnessTally:               nil,
+		ResolveInjectedTranscripts: false,
 	})
 	if err != nil {
 		return reorientSnapshot{}, err

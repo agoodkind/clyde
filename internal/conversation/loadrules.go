@@ -49,11 +49,12 @@ func LoadRulesTag(kinds ContentKindSet) string {
 // degraded read instead of failing it.
 func LoadOptionsForRules(tag string) (options LoadOptions, known bool) {
 	defaultOptions := LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-		IncludeInjected:       false,
-		HarnessTally:          nil,
+		IncludeSystemPrompts:       false,
+		IncludeSystemMessages:      false,
+		IncludeToolOutputs:         false,
+		IncludeInjected:            false,
+		HarnessTally:               nil,
+		ResolveInjectedTranscripts: false,
 	}
 	if tag == "" {
 		return defaultOptions, true

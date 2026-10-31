@@ -22,6 +22,10 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 		IncludeToolOutputs:    options.Content.Has(ContentKindToolOutputs),
 		IncludeInjected:       options.Content.Has(ContentKindInjected),
 		HarnessTally:          nil,
+		// Export requests typed spans for unframed transcript wrappers only when the
+		// content filter excludes raw_json_metadata. An export with raw_json_metadata
+		// writes summary text unchanged.
+		ResolveInjectedTranscripts: !options.Content.Has(ContentKindRawJSONMetadata),
 	})
 	if err != nil {
 		return nil, err

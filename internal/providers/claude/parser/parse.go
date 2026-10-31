@@ -646,11 +646,12 @@ func claudeSummaryContextItem(
 	text string,
 ) transcript.CompactedContextItem {
 	contentItem := transcript.CompactedMessageContentItem{
-		Type:     "text",
-		Text:     text,
-		ImageURL: "",
-		Detail:   "",
-		Raw:      cloneRawMessage(contentRaw),
+		Type:            "text",
+		Text:            text,
+		ImageURL:        "",
+		Detail:          "",
+		Raw:             cloneRawMessage(contentRaw),
+		TranscriptSpans: nil,
 	}
 	messageItem := transcript.CompactedMessageItem{
 		Role:         "user",

@@ -39,13 +39,14 @@ func filterCompactionMessageItems(messages []transcript.Message, content Content
 			continue
 		}
 		metadata := *messages[i].Compaction
-		metadata.ContextItems = filterCompactionContextItems(metadata.ContextItems, content)
+		sourceItems := metadata.ContextItems
+		metadata.ContextItems = filterCompactionContextItems(sourceItems, content)
 		messages[i].Compaction = &metadata
 		// A summary message renders its text when system_messages is selected.
 		// Unless raw_json_metadata is selected, the text uses the same segment
 		// selection as context items.
 		if metadata.Kind == transcript.CompactionKindSummary && !content.Has(ContentKindRawJSONMetadata) {
-			messages[i].Text = filterInjectedTranscriptText(messages[i].Text, content)
+			messages[i].Text = filterInjectedTranscriptText(messages[i].Text, sourceItems, content)
 		}
 	}
 }

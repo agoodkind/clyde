@@ -1,6 +1,10 @@
 package transcript
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"goodkind.io/clyde/internal/reorienttag"
+)
 
 // CompactedContextItemKind is part of Clyde's typed adapter surface.
 type CompactedContextItemKind string
@@ -85,6 +89,10 @@ type CompactedMessageContentItem struct {
 	ImageURL string          `json:"image_url"`
 	Detail   string          `json:"detail"`
 	Raw      json.RawMessage `json:"raw,omitempty"`
+	// TranscriptSpans stores typed transcript spans on a compacted content item
+	// after the provider parser verifies them against the stored summary text.
+	// Byte offsets refer to Text. JSON encoding omits this field.
+	TranscriptSpans []reorienttag.TranscriptSpan `json:"-"`
 }
 
 // CompactedReasoningItem preserves a compacted reasoning item.
