@@ -23,15 +23,17 @@ import (
 const localProofRefusedAddress = "[::1]:1"
 
 type localProofSearchRequest struct {
-	Query           string `json:"query"`
-	Provider        string `json:"provider,omitempty"`
-	Workspace       string `json:"workspace,omitempty"`
-	Roles           string `json:"roles,omitempty"`
-	After           string `json:"after,omitempty"`
-	Before          string `json:"before,omitempty"`
-	Limit           int    `json:"limit,omitempty"`
-	Offset          int    `json:"offset,omitempty"`
-	IncludeArchived bool   `json:"include_archived,omitempty"`
+	Query           string  `json:"query"`
+	Provider        string  `json:"provider,omitempty"`
+	Workspace       string  `json:"workspace,omitempty"`
+	Roles           string  `json:"roles,omitempty"`
+	After           string  `json:"after,omitempty"`
+	Before          string  `json:"before,omitempty"`
+	Limit           int     `json:"limit,omitempty"`
+	Offset          int     `json:"offset,omitempty"`
+	IncludeArchived bool    `json:"include_archived,omitempty"`
+	ConversationID  string  `json:"conversation_id,omitempty"`
+	MinScore        float64 `json:"min_score,omitempty"`
 }
 
 type localProofConversation struct {
@@ -258,7 +260,14 @@ func (d *localProofDaemon) config(t *testing.T) string {
 
 func (d *localProofDaemon) searchCLI(request localProofSearchRequest) (localProofSearchOutput, error) {
 	var empty localProofSearchOutput
-	arguments := []string{"--output-format", "json", "conversation", "search", "--query", request.Query, "--limit", strconv.Itoa(request.Limit), "--offset", strconv.Itoa(request.Offset)}
+	arguments := []string{"--output-format", "json", "conversation", "search"}
+	if request.ConversationID != "" {
+		arguments = append(arguments, request.ConversationID)
+	}
+	arguments = append(arguments, "--query", request.Query, "--limit", strconv.Itoa(request.Limit), "--offset", strconv.Itoa(request.Offset))
+	if request.MinScore != 0 {
+		arguments = append(arguments, "--min-score", strconv.FormatFloat(request.MinScore, 'g', -1, 64))
+	}
 	if request.Provider != "" {
 		arguments = append(arguments, "--provider", request.Provider)
 	}
