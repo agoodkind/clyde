@@ -21,6 +21,8 @@ const (
 	nativeArchiveMessageField = protowire.Number(1)
 	nativeBlobReferenceBytes  = 32
 	nativeToolCallPartType    = "tool-call"
+	nativeUserRole            = "user"
+	nativeUserQueryTag        = "<user_query>"
 	nativeRootArchive         = -1
 	// NativeProjectionVersion identifies the native tool call projection format.
 	NativeProjectionVersion = 1
@@ -50,7 +52,9 @@ type NativeMessage struct {
 	Duplicate bool
 	// Missing reports whether the referenced message blob is absent.
 	Missing bool
-	Calls   []NativeToolCall
+	// RealUser reports whether this user message contains real user text.
+	RealUser bool
+	Calls    []NativeToolCall
 }
 
 // NativeToolCalls records the projection version and referenced messages.
@@ -72,17 +76,28 @@ type NativeSequenceCall struct {
 	Ordinal int
 	// MessageStart reports whether this is the first tool call in the native message.
 	MessageStart bool
+	// AfterUser reports whether a real user turn appeared since the previous call.
+	AfterUser bool
 }
 
 // Sequence returns tool calls in source order, excluding duplicate and missing messages.
 func (state NativeToolCalls) Sequence() []NativeSequenceCall {
 	sequence := make([]NativeSequenceCall, 0)
+	afterUser := false
 	for messageIndex, message := range state.Messages {
-		if message.Duplicate || message.Missing {
+		if message.Missing {
+			continue
+		}
+		// Count a repeated user message before skipping its duplicate tool calls.
+		if message.RealUser {
+			afterUser = true
+		}
+		if message.Duplicate {
 			continue
 		}
 		for ordinal, call := range message.Calls {
-			sequence = append(sequence, NativeSequenceCall{Call: call, Message: messageIndex, Ordinal: ordinal, MessageStart: ordinal == 0})
+			sequence = append(sequence, NativeSequenceCall{Call: call, Message: messageIndex, Ordinal: ordinal, MessageStart: ordinal == 0, AfterUser: afterUser})
+			afterUser = false
 		}
 	}
 	return sequence
@@ -104,6 +119,7 @@ type nativeContentPart struct {
 	ToolCallID string          `json:"toolCallId"`
 	ToolName   string          `json:"toolName"`
 	Args       json.RawMessage `json:"args"`
+	Text       string          `json:"text"`
 }
 
 type nativeReference struct {
@@ -152,7 +168,7 @@ func ReadComposerNativeToolCalls(ctx context.Context, db *sql.DB, composerID str
 // readNativeMessage reads a referenced blob and extracts its role and tool calls.
 func readNativeMessage(ctx context.Context, db *sql.DB, composerID string, reference nativeReference, seen map[string]bool) (NativeMessage, error) {
 	key := hex.EncodeToString(reference.digest)
-	message := NativeMessage{Source: reference.source, Archive: reference.archive, Index: reference.index, BlobRef: key, Role: "", Duplicate: seen[key], Missing: false, Calls: nil}
+	message := NativeMessage{Source: reference.source, Archive: reference.archive, Index: reference.index, BlobRef: key, Role: "", Duplicate: seen[key], Missing: false, RealUser: false, Calls: nil}
 	if len(reference.digest) != nativeBlobReferenceBytes {
 		slog.WarnContext(ctx, "providers.cursor.store.native_reference_invalid", "concern", concern, "composer_id", composerID, "length", len(reference.digest))
 		return message, fmt.Errorf("invalid native message reference length for composer %s: %d", composerID, len(reference.digest))
@@ -166,12 +182,13 @@ func readNativeMessage(ctx context.Context, db *sql.DB, composerID string, refer
 		message.Missing = true
 		return message, nil
 	}
-	role, calls, err := unmarshalNativeToolCalls(data)
+	role, realUser, calls, err := unmarshalNativeToolCalls(data)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.store.native_message_decode_failed", "concern", concern, "composer_id", composerID, "blob", key, "err", err)
 		return message, fmt.Errorf("decode native message for composer and blob %s %s: %w", composerID, key, err)
 	}
 	message.Role = role
+	message.RealUser = realUser
 	message.Calls = calls
 	return message, nil
 }
@@ -254,28 +271,51 @@ func readNativeBlob(ctx context.Context, db *sql.DB, reference []byte) ([]byte, 
 }
 
 // unmarshalNativeToolCalls extracts tool calls from a native message's content.
-func unmarshalNativeToolCalls(data []byte) (string, []NativeToolCall, error) {
+// It also reports whether a user message contains real user text.
+func unmarshalNativeToolCalls(data []byte) (string, bool, []NativeToolCall, error) {
 	var message nativeMessage
 	if err := json.Unmarshal(data, &message); err != nil {
 		slog.Warn("providers.cursor.store.native_message_json_failed", "concern", concern, "err", err)
-		return "", nil, fmt.Errorf("decode native message JSON: %w", err)
+		return "", false, nil, fmt.Errorf("decode native message JSON: %w", err)
 	}
-	if len(message.Content) == 0 || message.Content[0] != '[' {
-		return message.Role, nil, nil
+	if len(message.Content) == 0 {
+		return message.Role, false, nil, nil
+	}
+	if message.Content[0] != '[' {
+		var text string
+		if err := json.Unmarshal(message.Content, &text); err != nil {
+			slog.Warn("providers.cursor.store.native_message_text_failed", "concern", concern, "err", err)
+			return message.Role, false, nil, fmt.Errorf("decode native message text: %w", err)
+		}
+		return message.Role, message.Role == nativeUserRole && RealUserText(text), nil, nil
 	}
 	var parts []nativeContentPart
 	if err := json.Unmarshal(message.Content, &parts); err != nil {
 		slog.Warn("providers.cursor.store.native_message_parts_failed", "concern", concern, "err", err)
-		return message.Role, nil, fmt.Errorf("decode native message content parts: %w", err)
+		return message.Role, false, nil, fmt.Errorf("decode native message content parts: %w", err)
 	}
 	calls := make([]NativeToolCall, 0)
+	realUser := false
 	for _, part := range parts {
+		if message.Role == nativeUserRole && RealUserText(part.Text) {
+			realUser = true
+		}
 		if part.Type != nativeToolCallPartType {
 			continue
 		}
 		calls = append(calls, NativeToolCall{ID: part.ToolCallID, Name: part.ToolName, Args: part.Args})
 	}
-	return message.Role, calls, nil
+	return message.Role, realUser, calls, nil
+}
+
+// RealUserText reports whether text contains a user_query tag or nonempty text
+// that does not start with "<" after whitespace is trimmed.
+func RealUserText(text string) bool {
+	if strings.Contains(text, nativeUserQueryTag) {
+		return true
+	}
+	trimmed := strings.TrimSpace(text)
+	return trimmed != "" && !strings.HasPrefix(trimmed, "<")
 }
 
 // unmarshalProtobufFields reads protobuf field numbers, wire types, and byte values.

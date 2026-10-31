@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,7 +47,15 @@ func (*Parser) SourceStoreMessages(ctx context.Context, record conversation.Reco
 		}
 		rootHash = virtualPath.RootHash
 	}
-	return readComposerSourceMessages(ctx, composerID, rootHash, opts)
+	source, found, err := readComposerSourceMessages(ctx, composerID, rootHash, opts)
+	if err != nil || !found {
+		return source, found, err
+	}
+	if source.MissingNativeRecords > 0 {
+		slog.WarnContext(ctx, "providers.cursor.parser.source_times_native_records_missing", "concern", concern, "composer_id", composerID, "missing", source.MissingNativeRecords)
+		return emptySourceMessages(), false, fmt.Errorf("missing native records for composer %q: %d", composerID, source.MissingNativeRecords)
+	}
+	return source, found, nil
 }
 
 // SourceMatchText normalizes stored text and removes a trailing turn outcome marker.
@@ -69,7 +78,7 @@ func (p *Parser) SourceMatchText(role string, text string) string {
 }
 
 func emptySourceMessages() conversation.SourceMessages {
-	return conversation.SourceMessages{Messages: nil, Copies: nil, ToolCalls: nil, ToolCallsComplete: false}
+	return conversation.SourceMessages{Messages: nil, Copies: nil, ToolCalls: nil, ToolCallsComplete: false, MissingNativeRecords: 0}
 }
 
 // streamTranscript reads transcript messages, applies source times, and yields messages.
@@ -80,6 +89,7 @@ func streamTranscript(
 ) {
 	resolver := newSourceTimeResolver(discovered, opts)
 	err := cursorjsonl.StreamMessages(discovered.Path, func(message cursorjsonl.TranscriptMessage) error {
+		resolver.observe(message)
 		mapped, include := mapJSONLMessage(message, opts)
 		if !include {
 			return nil
@@ -116,10 +126,25 @@ type sourceTimeResolver struct {
 	nextTool int
 	// toolsBroken prevents further tool matching after a sequence mismatch.
 	toolsBroken bool
+	// userSinceTool reports whether a real transcript user turn appeared since the last matched tool call.
+	userSinceTool bool
 }
 
 func newSourceTimeResolver(discovered discoveredArtifact, opts conversation.LoadOptions) *sourceTimeResolver {
-	return &sourceTimeResolver{discovered: discovered, opts: opts, loaded: false, available: false, source: emptySourceMessages(), texts: nil, nextTool: 0, toolsBroken: false}
+	return &sourceTimeResolver{discovered: discovered, opts: opts, loaded: false, available: false, source: emptySourceMessages(), texts: nil, nextTool: 0, toolsBroken: false, userSinceTool: false}
+}
+
+// observe records a real user turn in the transcript message.
+func (resolver *sourceTimeResolver) observe(message cursorjsonl.TranscriptMessage) {
+	if message.Role != cursorjsonl.RoleUser {
+		return
+	}
+	for _, part := range message.Parts {
+		if part.Type == cursorjsonl.PartTypeText && cursorstore.RealUserText(part.Text) {
+			resolver.userSinceTool = true
+			return
+		}
+	}
 }
 
 // load reads source messages once and reports whether they are available.
@@ -183,6 +208,12 @@ func (resolver *sourceTimeResolver) applyTools(message *transcript.Message) {
 			resolver.breakTools("boundary")
 			return
 		}
+		afterUser := toolIndex == 0 && resolver.userSinceTool
+		if native.AfterUser != afterUser {
+			resolver.breakTools("user_boundary")
+			return
+		}
+		resolver.userSinceTool = false
 		if tool.Name != native.Tool.Name || !sameToolInput(tool.Input.Raw, native.Tool.Input.Raw) {
 			resolver.breakTools("sequence")
 			return
@@ -266,6 +297,17 @@ func writeCanonicalJSON(builder *bytes.Buffer, raw []byte) bool {
 			}
 		}
 		builder.WriteByte(']')
+	case '"':
+		// Decode and re-encode strings to normalize equivalent JSON escapes.
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return false
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return false
+		}
+		builder.Write(encoded)
 	default:
 		if err := json.Compact(builder, raw); err != nil {
 			return false
@@ -377,8 +419,11 @@ func sourceSignature(source conversation.SourceMessages) string {
 	builder.WriteString(sourceCopiesMarker + "\n")
 	writeSignatureMessages(&builder, source.Copies)
 	fmt.Fprintf(&builder, "%s %t\n", sourceToolsMarker, source.ToolCallsComplete)
+	fmt.Fprintf(&builder, "missing %d\n", source.MissingNativeRecords)
 	for _, call := range source.ToolCalls {
-		fmt.Fprintf(&builder, "%s%s%s%s%s%s%s%s%t\n", call.Tool.Name, sourceSignatureSeparator, call.Tool.Display, sourceSignatureSeparator, call.Timestamp.UTC().Format(time.RFC3339Nano), sourceSignatureSeparator, call.Reason, sourceSignatureSeparator, call.MessageStart)
+		input, _ := canonicalToolInput(call.Tool.Input.Raw)
+		fields := []string{call.Tool.ID, call.Tool.Name, input, call.Tool.Display, call.Timestamp.UTC().Format(time.RFC3339Nano), call.Reason, strconv.FormatBool(call.MessageStart), strconv.FormatBool(call.AfterUser)}
+		builder.WriteString(strings.Join(fields, sourceSignatureSeparator) + "\n")
 	}
 	return builder.String()
 }
@@ -439,11 +484,13 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 		return source, false, fmt.Errorf("read native tool calls for composer %q: %w", composerID, err)
 	}
 	source.ToolCallsComplete = nativeFound && native.Complete
+	source.MissingNativeRecords = native.MissingBlobs
 	sequence := native.Sequence()
 	source.ToolCalls = make([]conversation.SourceToolCall, 0, len(sequence))
 	for _, entry := range sequence {
 		call := nativeSourceToolCall(entry.Call, callDates[entry.Call.ID])
 		call.MessageStart = entry.MessageStart
+		call.AfterUser = entry.AfterUser
 		source.ToolCalls = append(source.ToolCalls, call)
 	}
 	return source, true, nil
@@ -465,7 +512,7 @@ func nativeSourceToolCall(call cursorstore.NativeToolCall, dates []time.Time) co
 		Timestamp:        nil,
 		TimestampUnknown: false,
 	}
-	result := conversation.SourceToolCall{Tool: tool, Timestamp: time.Time{}, Reason: "", MessageStart: false}
+	result := conversation.SourceToolCall{Tool: tool, Timestamp: time.Time{}, Reason: "", MessageStart: false, AfterUser: false}
 	if len(dates) == 0 || dates[0].IsZero() {
 		result.Reason = SourceToolReasonIdentityAbsent
 		return result

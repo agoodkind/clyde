@@ -16,6 +16,8 @@ type SourceToolCall struct {
 	Reason string
 	// MessageStart reports whether this is the first tool call in its native message.
 	MessageStart bool
+	// AfterUser reports whether a real user turn appeared since the previous call.
+	AfterUser bool
 }
 
 // SourceMessages contains ordered messages, stored copies, and native tool calls.
@@ -27,6 +29,8 @@ type SourceMessages struct {
 	ToolCalls []SourceToolCall
 	// ToolCallsComplete reports whether the native tool call state is complete.
 	ToolCallsComplete bool
+	// MissingNativeRecords counts referenced native records that do not exist.
+	MissingNativeRecords int
 }
 
 // SourceStoreReader reads provider messages and prepares stored text for source matching.

@@ -1,0 +1,2 @@
+CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB);
+CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB);

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -144,8 +145,6 @@ func TestTranscriptToolCallsStayUndatedWhenTheNativeSequenceDiffers(t *testing.T
 	}
 }
 
-// TestTranscriptStreamStopsEarlyWithSourceTimes checks that the first dated message
-// TestSourceStoreMessagesReportsAnUnreadableNativeState checks that an unreadable
 // TestTranscriptCombinedMessageIgnoresACopiedWholeBody checks that a combined
 // message stays undated when a copied whole body also matches.
 func TestTranscriptCombinedMessageIgnoresACopiedWholeBody(t *testing.T) {
@@ -156,18 +155,19 @@ func TestTranscriptCombinedMessageIgnoresACopiedWholeBody(t *testing.T) {
 	first := "The first reply part checks the retention rules."
 	second := "The second reply part lists the remaining snapshots."
 	transcriptPath := writeSourceTimesTranscript(t, projectsDir, "Users-alice-combined", sourceTimesConversationID, []string{
-		`{"role":"user","message":{"content":[{"type":"text","text":"check retention"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"` + first + `"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"` + second + `"}]}}`,
+		userLine(t, "check retention"),
+		assistantTextLine(t, first),
+		assistantTextLine(t, second),
 	})
-	prefix := "bubbleId:" + sourceTimesConversationID + ":"
-	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + sourceTimesConversationID + `', '{"composerId":"` + sourceTimesConversationID + `","name":"Combined","createdAt":1779267600000,"lastUpdatedAt":1779268000000,"fullConversationHeadersOnly":[{"bubbleId":"c1","type":1},{"bubbleId":"c2","type":2},{"bubbleId":"c3","type":2}]}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `c1', '{"_v":3,"type":1,"bubbleId":"c1","text":"check retention","createdAt":"2026-05-20T10:00:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `c2', '{"_v":3,"type":2,"bubbleId":"c2","text":"` + first + `","createdAt":"2026-05-20T10:01:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `c3', '{"_v":3,"type":2,"bubbleId":"c3","text":"` + second + `","createdAt":"2026-05-20T10:02:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `copy', '{"_v":3,"type":2,"bubbleId":"copy","text":"` + first + `\\n` + second + `","createdAt":"2026-05-20T12:00:00.000Z","serverBubbleId":"server-copy"}')`,
-	})
+	copied := assistantBubble("copy", first+"\n"+second, "2026-05-20T12:00:00.000Z")
+	copied.ServerBubbleID = "server-copy"
+	copied.Unreferenced = true
+	writeNativeStore(t, rootDir, nativeStoreFixture{composerID: sourceTimesConversationID, messages: nil, omitted: nil, bubbles: []fixtureBubble{
+		userBubble("c1", "check retention", "2026-05-20T10:00:00.000Z"),
+		assistantBubble("c2", first, "2026-05-20T10:01:00.000Z"),
+		assistantBubble("c3", second, "2026-05-20T10:02:00.000Z"),
+		copied,
+	}})
 	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
 	if err != nil {
 		t.Fatalf("cannot stream the transcript: %v", err)
@@ -178,9 +178,28 @@ func TestTranscriptCombinedMessageIgnoresACopiedWholeBody(t *testing.T) {
 	if !messages[1].Timestamp.IsZero() {
 		t.Fatalf("combined message has a timestamp; timestamp: %v", messages[1].Timestamp)
 	}
+	record := conversation.Record{
+		ID: "cursor:" + sourceTimesConversationID, Provider: providerid.ProviderCursor, NativeID: sourceTimesConversationID, Selector: "",
+		Lineage: nil, Origin: conversation.OriginUnspecified, Title: "", TitleUncertain: false, WorkspaceRoot: "",
+		ArtifactPath: "", ArtifactKind: "", Model: "", CreatedAt: time.Time{}, UpdatedAt: time.Time{}, SizeBytes: 0, Archived: false, LatestRequestID: "",
+	}
+	source, found, err := parser.New().SourceStoreMessages(t.Context(), record, sourceRootLoadOptions())
+	if err != nil || !found {
+		t.Fatalf("cannot read source messages; found, error: %v, %v", found, err)
+	}
+	wholeBody := 0
+	for _, stored := range append(slices.Clone(source.Messages), source.Copies...) {
+		if stored.Text == messages[1].Text {
+			wholeBody++
+		}
+	}
+	if wholeBody != 1 {
+		t.Fatalf("stored message count matching the transcript text differs from 1; count: %d", wholeBody)
+	}
 }
 
-// // native state returns an error.
+// TestSourceStoreMessagesReportsAnUnreadableNativeState checks that an unreadable
+// native state returns an error.
 func TestSourceStoreMessagesReportsAnUnreadableNativeState(t *testing.T) {
 	rootDir := t.TempDir()
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
@@ -199,7 +218,6 @@ func TestSourceStoreMessagesReportsAnUnreadableNativeState(t *testing.T) {
 	}
 }
 
-// TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer checks tool times
 // TestTranscriptToolCallsStayUndatedWhenTheCompleteInputDiffers checks that a
 // matching display does not bind calls when their complete inputs differ.
 func TestTranscriptToolCallsStayUndatedWhenTheCompleteInputDiffers(t *testing.T) {
@@ -229,7 +247,8 @@ func TestTranscriptToolCallsStayUndatedWhenTheCompleteInputDiffers(t *testing.T)
 	}
 }
 
-// // when a transcript message starts within a native message.
+// TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer checks tool times
+// when a transcript message starts within a native message.
 func TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer(t *testing.T) {
 	transcriptPath := writeNativeFixture(t, "Shell")
 	lines := strings.Join([]string{
@@ -258,6 +277,7 @@ func TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer(t *testing.T)
 	}
 }
 
+// TestTranscriptStreamStopsEarlyWithSourceTimes checks that the first dated message
 // is available before the FIFO writer closes.
 func TestTranscriptStreamStopsEarlyWithSourceTimes(t *testing.T) {
 	rootDir := t.TempDir()

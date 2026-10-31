@@ -43,6 +43,8 @@ type SourceToolTime struct {
 	TimestampUnix int64
 	// MessageStart reports whether this is the first tool call in its native message.
 	MessageStart bool
+	// AfterUser reports whether a real user turn appeared since the previous call.
+	AfterUser bool
 	// Reason identifies why the native tool call timestamp is unavailable.
 	Reason string
 }
@@ -328,12 +330,16 @@ func storedStartsAreNativeStarts(keys []string, calls []SourceToolTime) bool {
 		if start && !calls[index].MessageStart {
 			return false
 		}
+		// Reject a native user turn between calls in one stored tool message.
+		if !start && calls[index].AfterUser {
+			return false
+		}
 	}
 	return true
 }
 
 func emptySourceToolTime() SourceToolTime {
-	return SourceToolTime{Name: "", Display: "", LangHint: "", TimestampUnix: missingTimestampUnix, Reason: "", MessageStart: false}
+	return SourceToolTime{Name: "", Display: "", LangHint: "", TimestampUnix: missingTimestampUnix, Reason: "", MessageStart: false, AfterUser: false}
 }
 
 // toolFamilyOutcome checks a tool family's binding, content, and timestamp reason.
