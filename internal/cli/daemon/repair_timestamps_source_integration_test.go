@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,6 +192,8 @@ type sharedStoredRow struct {
 	content       string
 	metadata      string
 	timestampUnix int64
+	// timestampNull reports whether the timestampUnix scalar is NULL.
+	timestampNull bool
 	vectorKey     string
 	others        string
 }
@@ -216,15 +219,24 @@ func sharedSnapshot(t *testing.T, address string) (map[string]sharedStoredRow, m
 		for _, name := range others {
 			builder.WriteString(name + "=" + cellText(t, resultSet.GetColumn(name), rowIndex) + ";")
 		}
-		stamp, stampErr := resultSet.GetColumn("timestampUnix").GetAsInt64(rowIndex)
-		if stampErr != nil {
-			t.Fatalf("query Milvus snapshot: %v", stampErr)
+		stamp := time.Time{}.Unix()
+		stampNull, nullErr := resultSet.GetColumn("timestampUnix").IsNull(rowIndex)
+		if nullErr != nil {
+			t.Fatalf("query Milvus snapshot: %v", nullErr)
+		}
+		if !stampNull {
+			value, stampErr := resultSet.GetColumn("timestampUnix").GetAsInt64(rowIndex)
+			if stampErr != nil {
+				t.Fatalf("query Milvus snapshot: %v", stampErr)
+			}
+			stamp = value
 		}
 		rows[cellText(t, resultSet.GetColumn("id"), rowIndex)] = sharedStoredRow{
 			relativePath:  cellText(t, resultSet.GetColumn("relativePath"), rowIndex),
 			content:       cellText(t, resultSet.GetColumn("content"), rowIndex),
 			metadata:      cellText(t, resultSet.GetColumn("metadata"), rowIndex),
 			timestampUnix: stamp,
+			timestampNull: stampNull,
 			vectorKey:     cellText(t, resultSet.GetColumn(milvusstore.VectorKeyField), rowIndex),
 			others:        builder.String(),
 		}
@@ -675,7 +687,7 @@ func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) 
 			t.Fatalf("cannot parse message position, row path: %s: %v", after.relativePath, convErr)
 		}
 		want := partialMessageTime(position).Unix()
-		wantMetadata := strings.Replace(start.metadata, `"timestamp_unix":`+strconv.FormatInt(zero, 10), `"timestamp_unix":`+strconv.FormatInt(want, 10), 1)
+		wantMetadata := strings.Replace(start.metadata, `"timestamp_unix":null`, `"timestamp_unix":`+strconv.FormatInt(want, 10), 1)
 		if id == lastID {
 			wantMetadata = strings.Replace(shortMetadata, `"timestamp_unix":0`, `"timestamp_unix":`+strconv.FormatInt(want, 10), 1)
 		}
@@ -1077,7 +1089,7 @@ func TestIngestingADatedCursorTurnKeepsAnUnresolvedCallUndated(t *testing.T) {
 		switch {
 		case kind == "convtool":
 			seen["tool"] = true
-			if row.timestampUnix != zero {
+			if row.timestampUnix != zero || !row.timestampNull {
 				t.Fatalf("unresolved tool has a timestamp, row path, timestamp: %s: %d", row.relativePath, row.timestampUnix)
 			}
 		case kind == "conv" && row.content == reply:
@@ -1143,7 +1155,7 @@ func TestUpsertingARecoveredToolTimeFillsTheRowWithoutNewVectors(t *testing.T) {
 	before, beforeVectors := sharedSnapshot(t, address)
 	beforeRow := toolRow(before)
 	unknownTime := time.Time{}.Unix()
-	if beforeRow.timestampUnix != unknownTime {
+	if beforeRow.timestampUnix != unknownTime || !beforeRow.timestampNull {
 		t.Fatalf("unexpected initial tool timestamp, actual: %d", beforeRow.timestampUnix)
 	}
 	for _, check := range []struct {
@@ -1165,6 +1177,147 @@ func TestUpsertingARecoveredToolTimeFillsTheRowWithoutNewVectors(t *testing.T) {
 		for key, bits := range beforeVectors {
 			if !slices.Equal(bits, afterVectors[key]) {
 				t.Fatalf("vector bytes changed, vector key: %s", key)
+			}
+		}
+	}
+}
+
+// rowTimeState records whether a row has a known timestamp and its metadata.
+type rowTimeState struct {
+	known         bool
+	timestampUnix int64
+	metadata      string
+}
+
+// readRowTime reads the timestamp and metadata for one Milvus row.
+func readRowTime(ctx context.Context, client *milvusclient.Client, id string) (rowTimeState, error) {
+	empty := rowTimeState{known: false, timestampUnix: 0, metadata: ""}
+	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(vectorsearch.CollectionName(repairCollectionID)).
+		WithFilter(`id == "`+id+`"`).WithOutputFields("timestampUnix", "metadata").WithConsistencyLevel(entity.ClStrong))
+	if err != nil || resultSet.ResultCount != 1 {
+		return empty, fmt.Errorf("cannot read row timestamp; row ID, result count: %s %d: %w", id, resultSet.ResultCount, err)
+	}
+	isNull, err := resultSet.GetColumn("timestampUnix").IsNull(0)
+	if err != nil {
+		return empty, err
+	}
+	metadata, err := resultSet.GetColumn("metadata").GetAsString(0)
+	if err != nil {
+		return empty, err
+	}
+	if isNull {
+		return rowTimeState{known: false, timestampUnix: 0, metadata: metadata}, nil
+	}
+	stamp, err := resultSet.GetColumn("timestampUnix").GetAsInt64(0)
+	if err != nil {
+		return empty, err
+	}
+	return rowTimeState{known: stamp != time.Time{}.Unix(), timestampUnix: stamp, metadata: metadata}, nil
+}
+
+// TestConcurrentUpsertsKeepTheFirstRecoveredTime checks that concurrent upserts
+// preserve the first observed known timestamp, metadata, row content, and vectors.
+func TestConcurrentUpsertsKeepTheFirstRecoveredTime(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	reader, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: "default"})
+	if err != nil {
+		t.Fatalf("cannot connect the Milvus reader: %v", err)
+	}
+	defer func() { _ = reader.Close(ctx) }()
+	const writers = 6
+	const rounds = 3
+	base := time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC).Unix()
+	for round := range rounds {
+		conversationID := fmt.Sprintf("cursor:c7c7c7c7-0000-4000-8000-%012d", round)
+		content := fmt.Sprintf("Concurrent fill round %d checks the backup bucket.", round)
+		upsert := func(stamp int64, fingerprint string) error {
+			docs := []semsearch.SemDoc{repairDoc(conversationID, content, stamp)}
+			_, upsertErr := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, []semsearch.Fingerprint{{ConversationID: conversationID, Value: fingerprint}})
+			return upsertErr
+		}
+		if err := upsert(time.Time{}.Unix(), "unknown"); err != nil {
+			t.Fatalf("cannot seed the row with an unknown timestamp: %v", err)
+		}
+		time.Sleep(repairVisibilityWait)
+		before, beforeVectors := sharedSnapshot(t, address)
+		rowID := ""
+		for id, row := range before {
+			if row.content == content {
+				rowID = id
+			}
+		}
+		if rowID == "" || !before[rowID].timestampNull {
+			t.Fatalf("seeded row is missing or its timestamp is not null; row ID, row: %q %+v", rowID, before[rowID])
+		}
+		stop := make(chan struct{})
+		observed := make(chan []rowTimeState, 1)
+		go func() {
+			states := make([]rowTimeState, 0)
+			for {
+				select {
+				case <-stop:
+					observed <- states
+					return
+				default:
+				}
+				state, readErr := readRowTime(ctx, reader, rowID)
+				if readErr == nil && state.known {
+					states = append(states, state)
+				}
+			}
+		}()
+		start := make(chan struct{})
+		failures := make(chan error, writers)
+		var group sync.WaitGroup
+		for writer := range writers {
+			group.Go(func() {
+				<-start
+				if upsertErr := upsert(base+int64(writer)*60, fmt.Sprintf("writer-%d", writer)); upsertErr != nil {
+					failures <- upsertErr
+				}
+			})
+		}
+		close(start)
+		group.Wait()
+		close(stop)
+		states := <-observed
+		close(failures)
+		for upsertErr := range failures {
+			t.Fatalf("cannot upsert conversation documents: %v", upsertErr)
+		}
+		time.Sleep(repairVisibilityWait)
+		final, err := readRowTime(ctx, reader, rowID)
+		if err != nil || !final.known {
+			t.Fatalf("final row does not have a known timestamp; row: %+v: %v", final, err)
+		}
+		first := final
+		if len(states) > 0 {
+			first = states[0]
+		}
+		for _, state := range append(states, final) {
+			if state != first {
+				t.Fatalf("row timestamp or metadata changed; first observed state, later state: %+v, %+v", first, state)
+			}
+		}
+		if !strings.Contains(final.metadata, fmt.Sprintf(`"timestamp_unix":%d`, final.timestampUnix)) {
+			t.Fatalf("metadata timestamp differs from the scalar; scalar, metadata: %d %q", final.timestampUnix, final.metadata)
+		}
+		after, afterVectors := sharedSnapshot(t, address)
+		beforeRow, afterRow := before[rowID], after[rowID]
+		if len(after) != len(before) || len(afterVectors) != len(beforeVectors) || afterRow.content != beforeRow.content || afterRow.vectorKey != beforeRow.vectorKey || afterRow.others != beforeRow.others || afterRow.relativePath != beforeRow.relativePath {
+			t.Fatalf("row or collection changed; row before, row after: %+v, %+v", beforeRow, afterRow)
+		}
+		for key, bits := range beforeVectors {
+			if !slices.Equal(bits, afterVectors[key]) {
+				t.Fatalf("vector changed; vector key: %s", key)
 			}
 		}
 	}

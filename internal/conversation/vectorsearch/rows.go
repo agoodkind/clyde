@@ -349,21 +349,25 @@ type chunkMetadataJSON struct {
 	ParentConversationID string `json:"parent_conversation_id,omitempty"`
 	MessageIndex         *int32 `json:"message_index,omitempty"`
 	Role                 string `json:"role,omitempty"`
-	TimestampUnix        *int64 `json:"timestamp_unix,omitempty"`
+	TimestampUnix        *int64 `json:"timestamp_unix"`
 }
 
 // encodeChunkMetadata returns the metadata JSON of a row. message_index and
 // timestamp_unix are always present.
 func encodeChunkMetadata(chunk storedChunk) string {
 	messageIndex := chunk.MessageIndex
-	timestampUnix := chunk.TimestampUnix
+	var timestampUnix *int64
+	if chunk.TimestampUnix != missingTimestampUnix {
+		known := chunk.TimestampUnix
+		timestampUnix = &known
+	}
 	metadata := chunkMetadataJSON{
 		Language:             "",
 		ConversationID:       chunk.ConversationID,
 		ParentConversationID: chunk.ParentConversationID,
 		MessageIndex:         &messageIndex,
 		Role:                 chunk.Role,
-		TimestampUnix:        &timestampUnix,
+		TimestampUnix:        timestampUnix,
 	}
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
@@ -382,7 +386,7 @@ func chunkScalars(chunk storedChunk) map[string]collection.ScalarValue {
 		providerColumn:             collection.StringScalar(providerFromConversationID(chunk.ConversationID)),
 		workspaceRootColumn:        collection.StringScalar(chunk.WorkspaceRoot),
 		archivedColumn:             collection.BoolScalar(chunk.Archived),
-		timestampUnixColumn:        collection.Int64Scalar(chunk.TimestampUnix),
+		timestampUnixColumn:        timestampScalar(chunk.TimestampUnix),
 		messageIndexColumn:         collection.Int64Scalar(int64(chunk.MessageIndex)),
 		loadRulesColumn:            collection.StringScalar(chunk.LoadRules),
 	}

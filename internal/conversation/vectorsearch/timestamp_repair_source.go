@@ -192,7 +192,7 @@ func writeSourceTimestamps(ctx context.Context, c *Client, milvus *milvusBackend
 				SplitPart:         0,
 				SplitPartRecorded: false,
 				Vector:            nil,
-				Scalars:           map[string]collection.ScalarValue{timestampUnixColumn: collection.Int64Scalar(update.timestampUnix)},
+				Scalars:           map[string]collection.ScalarValue{timestampUnixColumn: timestampScalar(update.timestampUnix)},
 			})
 		}
 		written, err := milvus.shared.UpdateRowScalars(ctx, collectionName, columns, rows)
@@ -580,7 +580,7 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 	candidates, undated := distinctCandidates(matches)
 	evidence.Candidates = candidates
 	switch {
-	case len(matches) == 0 && combined:
+	case combined:
 		evidence.Outcome = SourceOutcomeMixed
 	case undated:
 		evidence.Outcome = SourceOutcomeUndated
@@ -706,7 +706,7 @@ func rowTimestampPresent(row collection.StoredRow) bool {
 
 func rowHasZeroTime(row collection.StoredRow) bool {
 	cell, found := row.Scalars[timestampUnixColumn]
-	return found && cell.State == collection.ScalarCellValue && cell.Value.Int64 == missingTimestampUnix
+	return found && (cell.State == collection.ScalarCellNull || (cell.State == collection.ScalarCellValue && cell.Value.Int64 == missingTimestampUnix))
 }
 
 // rowRole returns the first nonempty role in the family.

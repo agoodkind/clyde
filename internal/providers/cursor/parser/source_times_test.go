@@ -146,6 +146,40 @@ func TestTranscriptToolCallsStayUndatedWhenTheNativeSequenceDiffers(t *testing.T
 
 // TestTranscriptStreamStopsEarlyWithSourceTimes checks that the first dated message
 // TestSourceStoreMessagesReportsAnUnreadableNativeState checks that an unreadable
+// TestTranscriptCombinedMessageIgnoresACopiedWholeBody checks that a combined
+// message stays undated when a copied whole body also matches.
+func TestTranscriptCombinedMessageIgnoresACopiedWholeBody(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+	first := "The first reply part checks the retention rules."
+	second := "The second reply part lists the remaining snapshots."
+	transcriptPath := writeSourceTimesTranscript(t, projectsDir, "Users-alice-combined", sourceTimesConversationID, []string{
+		`{"role":"user","message":{"content":[{"type":"text","text":"check retention"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"` + first + `"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"` + second + `"}]}}`,
+	})
+	prefix := "bubbleId:" + sourceTimesConversationID + ":"
+	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + sourceTimesConversationID + `', '{"composerId":"` + sourceTimesConversationID + `","name":"Combined","createdAt":1779267600000,"lastUpdatedAt":1779268000000,"fullConversationHeadersOnly":[{"bubbleId":"c1","type":1},{"bubbleId":"c2","type":2},{"bubbleId":"c3","type":2}]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `c1', '{"_v":3,"type":1,"bubbleId":"c1","text":"check retention","createdAt":"2026-05-20T10:00:00.000Z"}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `c2', '{"_v":3,"type":2,"bubbleId":"c2","text":"` + first + `","createdAt":"2026-05-20T10:01:00.000Z"}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `c3', '{"_v":3,"type":2,"bubbleId":"c3","text":"` + second + `","createdAt":"2026-05-20T10:02:00.000Z"}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `copy', '{"_v":3,"type":2,"bubbleId":"copy","text":"` + first + `\\n` + second + `","createdAt":"2026-05-20T12:00:00.000Z","serverBubbleId":"server-copy"}')`,
+	})
+	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+	if err != nil {
+		t.Fatalf("cannot stream the transcript: %v", err)
+	}
+	if len(messages) != 2 || messages[1].Text != first+"\n"+second {
+		t.Fatalf("unexpected combined messages; messages: %+v", messages)
+	}
+	if !messages[1].Timestamp.IsZero() {
+		t.Fatalf("combined message has a timestamp; timestamp: %v", messages[1].Timestamp)
+	}
+}
+
 // // native state returns an error.
 func TestSourceStoreMessagesReportsAnUnreadableNativeState(t *testing.T) {
 	rootDir := t.TempDir()

@@ -227,20 +227,85 @@ func (c *Client) fillUnknownTimes(ctx context.Context, collectionName string, fi
 	if len(fills) == 0 {
 		return 0, nil
 	}
-	milvus, isMilvus := c.store.(*milvusBackend)
-	if !isMilvus {
+	c.fillMu.Lock()
+	defer c.fillMu.Unlock()
+	switch store := c.store.(type) {
+	case *localBackend:
+		return store.fillUnknownTimes(ctx, collectionName, fills)
+	case *milvusBackend:
+		return c.fillUnknownMilvusTimes(ctx, store, collectionName, fills)
+	default:
 		return 0, ErrTimestampRepairUnsupported
+	}
+}
+
+// fillUnknownMilvusTimes reads stored timestamps and fills eligible Milvus rows.
+func (c *Client) fillUnknownMilvusTimes(ctx context.Context, milvus *milvusBackend, collectionName string, fills map[string]matchedRow) (int, error) {
+	ids := sortedFillIDs(fills)
+	stored, err := milvus.readRowTimestamps(ctx, collectionName, ids)
+	if err != nil {
+		return 0, err
+	}
+	updates := make([]timestampUpdate, 0, len(ids))
+	for _, id := range ids {
+		row, found := stored[id]
+		if !found {
+			continue
+		}
+		fill := fills[id]
+		rewritten, apply := unknownTimeFill(id, row.metadata, row.timestampKnown, row.timestampUnix, fill.timestampUnix)
+		if !apply {
+			continue
+		}
+		updates = append(updates, timestampUpdate{id: id, relativePath: fill.relativePath, metadata: rewritten, timestampUnix: fill.timestampUnix})
 	}
 	report := TimestampRepairReport{
 		Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
 		RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
 	}
-	updates, err := plannedTimestampUpdates(ctx, milvus, collectionName, fills, &report)
-	if err != nil {
-		return 0, err
-	}
 	if err := writeSourceTimestamps(ctx, c, milvus, collectionName, updates, &report); err != nil {
 		return report.RowsWritten, err
 	}
 	return report.RowsWritten, nil
+}
+
+// fillUnknownTimes fills eligible local rows with known timestamps.
+func (b *localBackend) fillUnknownTimes(ctx context.Context, collectionName string, fills map[string]matchedRow) (int, error) {
+	columns := []collection.ScalarColumn{{Name: timestampUnixColumn, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0}}
+	written, err := b.UpdateRows(ctx, collectionName, sortedFillIDs(fills), columns,
+		func(id string, metadata string, cells map[string]collection.ScalarCell) (string, map[string]collection.ScalarValue, bool, error) {
+			cell := cells[timestampUnixColumn]
+			want := fills[id].timestampUnix
+			rewritten, apply := unknownTimeFill(id, metadata, cell.State == collection.ScalarCellValue, cell.Value.Int64, want)
+			if !apply {
+				return "", nil, false, nil
+			}
+			return rewritten, map[string]collection.ScalarValue{timestampUnixColumn: timestampScalar(want)}, true, nil
+		})
+	if err != nil {
+		return written, failRead("fill unknown row times in "+collectionName, err)
+	}
+	return written, nil
+}
+
+// unknownTimeFill replaces an unknown metadata timestamp when the target is known
+// and the stored scalar is null or contains the unknown marker.
+func unknownTimeFill(id string, metadata string, scalarKnown bool, scalarValue int64, want int64) (string, bool) {
+	if want == missingTimestampUnix || (scalarKnown && scalarValue != missingTimestampUnix) {
+		return "", false
+	}
+	rewritten, metadataTimestamp, err := replaceMetadataTimestamp(id, metadata, want)
+	if err != nil || metadataTimestamp != missingTimestampUnix {
+		return "", false
+	}
+	return rewritten, true
+}
+
+func sortedFillIDs(fills map[string]matchedRow) []string {
+	ids := make([]string, 0, len(fills))
+	for id := range fills {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
 }

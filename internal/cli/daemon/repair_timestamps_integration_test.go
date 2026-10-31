@@ -458,7 +458,6 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 	if len(repaired) != len(seeded) {
 		t.Fatalf("collection stores %d rows after the repair, want %d", len(repaired), len(seeded))
 	}
-	zero := strconv.FormatInt(time.Time{}.Unix(), 10)
 	changedRows := 0
 	for id, before := range seeded {
 		after := repaired[id]
@@ -466,6 +465,9 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 			t.Fatalf("row %s changed a kept field: before %+v, after %+v", id, before, after)
 		}
 		requireSameVector(t, id, before.vector, after.vector)
+		if before.timestampUnix != "null" {
+			t.Fatalf("seeded row timestamp is not null; row ID, timestamp: %s: %s", id, before.timestampUnix)
+		}
 		if after.timestampUnix == before.timestampUnix {
 			if after.metadata != before.metadata {
 				t.Fatalf("row %s changed metadata without a timestamp change: %q to %q", id, before.metadata, after.metadata)
@@ -477,7 +479,7 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 		if after.timestampUnix != want {
 			t.Fatalf("row %s timestampUnix = %s, want %s", id, after.timestampUnix, want)
 		}
-		wantMetadata := strings.Replace(before.metadata, `"timestamp_unix":`+zero, `"timestamp_unix":`+want, 1)
+		wantMetadata := strings.Replace(before.metadata, `"timestamp_unix":null`, `"timestamp_unix":`+want, 1)
 		if after.metadata != wantMetadata {
 			t.Fatalf("row %s metadata = %q, want %q", id, after.metadata, wantMetadata)
 		}

@@ -93,10 +93,10 @@ func (index *SourceTimeIndex) TextTime(role string, text string) (time.Time, Sou
 		}
 		candidates = append(candidates, candidate.Timestamp)
 	}
+	if combined {
+		return time.Time{}, SourceTimeCombined
+	}
 	if len(candidates) == 0 {
-		if combined {
-			return time.Time{}, SourceTimeCombined
-		}
 		return time.Time{}, SourceTimeNone
 	}
 	stamp := candidates[0]

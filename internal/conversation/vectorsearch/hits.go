@@ -71,7 +71,7 @@ func semHit(hit collection.Hit) (semsearch.SemHit, error) {
 	if metadata.MessageIndex != nil {
 		messageIndex = *metadata.MessageIndex
 	}
-	var timestampUnix int64
+	timestampUnix := missingTimestampUnix
 	if metadata.TimestampUnix != nil {
 		timestampUnix = *metadata.TimestampUnix
 	}

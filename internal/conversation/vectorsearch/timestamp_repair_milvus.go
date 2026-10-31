@@ -82,7 +82,7 @@ func (b *milvusBackend) writeRowTimestamps(ctx context.Context, collectionName s
 			SplitPart:         0,
 			SplitPartRecorded: false,
 			Vector:            nil,
-			Scalars:           map[string]collection.ScalarValue{timestampUnixColumn: collection.Int64Scalar(update.timestampUnix)},
+			Scalars:           map[string]collection.ScalarValue{timestampUnixColumn: timestampScalar(update.timestampUnix)},
 		})
 	}
 	scalarColumns, err := milvusstore.DeclaredScalarInsertColumns(collectionName, columns, rows)

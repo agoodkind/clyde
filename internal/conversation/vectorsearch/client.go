@@ -91,6 +91,9 @@ type Client struct {
 	ensured  map[string]bool
 	jobCount int
 
+	// fillMu serializes unknown timestamp fills within this client.
+	fillMu sync.Mutex
+
 	lastUpsert      UpsertStats
 	lastUpsertKnown bool
 
@@ -130,6 +133,8 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 		ingestMu:   sync.Mutex{},
 		ensured:    make(map[string]bool),
 		jobCount:   0,
+
+		fillMu: sync.Mutex{},
 
 		lastUpsert:      UpsertStats{JobID: "", RowsWritten: 0, VectorsReused: 0, VectorsEmbedded: 0},
 		lastUpsertKnown: false,
