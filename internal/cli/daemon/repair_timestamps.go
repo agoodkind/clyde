@@ -561,8 +561,7 @@ func (run repairTimestampsRun) repairRecords(ctx context.Context, stamped []conv
 	}
 	storedIDs, err := run.repairConversationIDs(ctx)
 	if err != nil {
-		slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.stored_ids_failed", "concern", "cli.daemon", "component", "cli", "err", err)
-		return nil, fmt.Errorf("list conversations with zero timestamp rows: %w", err)
+		return nil, err
 	}
 	indexed, err := repairTimestampRecords(stamped, run.options.Provider, "")
 	if err != nil {
@@ -619,7 +618,7 @@ func repairTimestampRecords(stamped []conversation.StampedRecord, provider strin
 		if trimmedConversationID != "" && recordID != trimmedConversationID {
 			continue
 		}
-		if provider != "" && !strings.HasPrefix(recordID, provider+":") {
+		if !conversationInProvider(recordID, provider) {
 			continue
 		}
 		if existing, seen := best[recordID]; seen && !preferBackfillRecord(record, existing) {
@@ -640,6 +639,10 @@ func repairTimestampRecords(stamped []conversation.StampedRecord, provider strin
 		ordered = append(ordered, best[id])
 	}
 	return ordered, nil
+}
+
+func conversationInProvider(conversationID string, provider string) bool {
+	return provider == "" || strings.HasPrefix(conversationID, provider+":")
 }
 
 func recordsAfter(ordered []conversation.Record, cursor string) []conversation.Record {

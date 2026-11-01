@@ -419,6 +419,8 @@ func unmarshalProtobufFields(data []byte) ([]protobufField, error) {
 			}
 			field.varint = value
 			data = data[valueLength:]
+		case protowire.Fixed32Type, protowire.Fixed64Type, protowire.StartGroupType, protowire.EndGroupType:
+			fallthrough
 		default:
 			valueLength := protowire.ConsumeFieldValue(number, wire, data)
 			if valueLength < 0 {

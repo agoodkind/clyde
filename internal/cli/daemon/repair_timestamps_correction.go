@@ -29,11 +29,12 @@ type correctionState struct {
 }
 
 type correctionManifestRow struct {
-	RowID                 string `json:"row_id"`
-	ConversationID        string `json:"conversation_id"`
-	ExpectedTimestampUnix *int64 `json:"expected_timestamp_unix"`
-	ExpectedMetadataHash  string `json:"expected_metadata_sha256"`
-	ExpectedVectorKey     string `json:"expected_vector_key"`
+	RowID                         string `json:"row_id"`
+	ConversationID                string `json:"conversation_id"`
+	ExpectedTimestampUnix         *int64 `json:"expected_timestamp_unix"`
+	ExpectedMetadataTimestampUnix *int64 `json:"expected_metadata_timestamp_unix"`
+	ExpectedMetadataHash          string `json:"expected_metadata_sha256"`
+	ExpectedVectorKey             string `json:"expected_vector_key"`
 }
 
 // loadCorrectionManifest reads expected row values, rejects incomplete entries and duplicate row IDs within a conversation, and groups rows by conversation ID.
@@ -57,8 +58,8 @@ func loadCorrectionManifest(path string) (*correctionState, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
 			return nil, fmt.Errorf("cannot decode correction manifest row at %s:%d: %w", path, line, err)
 		}
-		if row.RowID == "" || row.ConversationID == "" || row.ExpectedTimestampUnix == nil || row.ExpectedMetadataHash == "" || row.ExpectedVectorKey == "" {
-			return nil, fmt.Errorf("correction manifest row requires row_id, conversation_id, expected_timestamp_unix, expected_metadata_sha256, and expected_vector_key at %s:%d", path, line)
+		if row.RowID == "" || row.ConversationID == "" || row.ExpectedTimestampUnix == nil || row.ExpectedMetadataTimestampUnix == nil || row.ExpectedMetadataHash == "" || row.ExpectedVectorKey == "" {
+			return nil, fmt.Errorf("correction manifest row requires row_id, conversation_id, expected_timestamp_unix, expected_metadata_timestamp_unix, expected_metadata_sha256, and expected_vector_key at %s:%d", path, line)
 		}
 		conversationRows := state.rows[row.ConversationID]
 		if conversationRows == nil {
@@ -68,7 +69,7 @@ func loadCorrectionManifest(path string) (*correctionState, error) {
 		if _, duplicate := conversationRows[row.RowID]; duplicate {
 			return nil, fmt.Errorf("correction manifest repeats a row ID within a conversation at %s:%d: %s", path, line, row.RowID)
 		}
-		conversationRows[row.RowID] = vectorsearch.TimestampCorrectionGuard{TimestampUnix: *row.ExpectedTimestampUnix, MetadataSHA256: row.ExpectedMetadataHash, VectorKey: row.ExpectedVectorKey}
+		conversationRows[row.RowID] = vectorsearch.TimestampCorrectionGuard{TimestampUnix: *row.ExpectedTimestampUnix, MetadataTimestampUnix: *row.ExpectedMetadataTimestampUnix, MetadataSHA256: row.ExpectedMetadataHash, VectorKey: row.ExpectedVectorKey}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read correction manifest %s: %w", path, err)
@@ -79,10 +80,12 @@ func loadCorrectionManifest(path string) (*correctionState, error) {
 	return state, nil
 }
 
-func (state *correctionState) conversationIDs() []string {
+func (state *correctionState) conversationIDs(provider string) []string {
 	ids := make([]string, 0, len(state.rows))
 	for id := range state.rows {
-		ids = append(ids, id)
+		if conversationInProvider(id, provider) {
+			ids = append(ids, id)
+		}
 	}
 	slices.Sort(ids)
 	return ids
@@ -112,13 +115,16 @@ func (state *correctionState) summary() string {
 		"Source outcome counts are " + formatOutcomes(totals.SourceOutcomes) + ".\n"
 }
 
-// repairConversationIDs selects manifest conversations during correction and otherwise queries conversations with zero timestamp rows.
+// repairConversationIDs selects manifest conversations that match the selected
+// provider during correction. Otherwise, it queries conversations with zero
+// timestamp rows for that provider.
 func (run repairTimestampsRun) repairConversationIDs(ctx context.Context) ([]string, error) {
 	if run.correction != nil {
-		return run.correction.conversationIDs(), nil
+		return run.correction.conversationIDs(run.options.Provider), nil
 	}
 	ids, err := run.client.ZeroTimeConversationIDs(ctx, run.collectionID, run.options.Provider)
 	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.stored_ids_failed", "concern", "cli.daemon", "component", "cli", "err", err)
 		return nil, fmt.Errorf("cannot list conversations with zero timestamp rows: %w", err)
 	}
 	return ids, nil

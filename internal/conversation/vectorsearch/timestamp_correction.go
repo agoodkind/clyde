@@ -34,11 +34,13 @@ const (
 	CorrectionSourceLoadFailed = "source_load_failed"
 )
 
-// TimestampCorrectionGuard specifies the expected timestamp, metadata hash, and vector key for a row.
+// TimestampCorrectionGuard records the expected scalar timestamp, metadata
+// timestamp, metadata hash, and vector key for a row.
 type TimestampCorrectionGuard struct {
-	TimestampUnix  int64
-	MetadataSHA256 string
-	VectorKey      string
+	TimestampUnix         int64
+	MetadataTimestampUnix int64
+	MetadataSHA256        string
+	VectorKey             string
 }
 
 // TimestampCorrectionEvidence records a row's source matching outcome, correction decision, timestamps, and verified write status.
@@ -218,7 +220,7 @@ func (c *Client) planCorrections(ctx context.Context, milvus *milvusBackend, col
 		case current.vectorKey != guard.VectorKey:
 			evidence.Correction = CorrectionGuardMismatch
 			report.GuardMismatch++
-		case evaluated && current.timestampUnix == target.desired && current.timestampUnix != guard.TimestampUnix && correctedFromGuard(id, current, guard):
+		case evaluated && correctedFromGuard(id, current, guard, target.desired):
 			evidence.Correction = CorrectionCurrent
 			report.RowsCurrent++
 		case current.timestampUnix != guard.TimestampUnix || current.metadataSHA256 != guard.MetadataSHA256:
@@ -231,9 +233,9 @@ func (c *Client) planCorrections(ctx context.Context, milvus *milvusBackend, col
 			switch {
 			case replaceErr != nil:
 				report.NotEvaluated++
-			case metadataTimestamp == target.desired && current.timestampUnix == target.desired:
-				evidence.Correction = CorrectionCurrent
-				report.RowsCurrent++
+			case metadataTimestamp != guard.MetadataTimestampUnix:
+				evidence.Correction = CorrectionGuardMismatch
+				report.GuardMismatch++
 			default:
 				evidence.Correction = CorrectionPlanned
 				report.RowsPlanned++
@@ -250,14 +252,19 @@ func (c *Client) planCorrections(ctx context.Context, milvus *milvusBackend, col
 	return updates, nil
 }
 
-// correctedFromGuard reports whether restoring the expected timestamp in the current metadata reproduces the expected metadata hash.
-func correctedFromGuard(id string, current storedGuard, guard TimestampCorrectionGuard) bool {
-	restored, _, err := replaceMetadataTimestamp(id, current.metadata, guard.TimestampUnix)
-	if err != nil {
+// correctedFromGuard reports whether the scalar and metadata timestamps equal
+// desired and restoring guard.MetadataTimestampUnix reproduces
+// guard.MetadataSHA256.
+func correctedFromGuard(id string, current storedGuard, guard TimestampCorrectionGuard, desired int64) bool {
+	if current.timestampUnix != desired {
+		return false
+	}
+	restored, metadataTimestamp, err := replaceMetadataTimestamp(id, current.metadata, guard.MetadataTimestampUnix)
+	if err != nil || metadataTimestamp != desired {
 		return false
 	}
 	forms := []string{restored}
-	if guard.TimestampUnix == missingTimestampUnix {
+	if guard.MetadataTimestampUnix == missingTimestampUnix {
 		nullField := fmt.Sprintf("%q:%s", metadataTimestampKey, metadataNull)
 		markerField := fmt.Sprintf("%q:%d", metadataTimestampKey, missingTimestampUnix)
 		forms = append(forms, strings.Replace(restored, nullField, markerField, 1))
