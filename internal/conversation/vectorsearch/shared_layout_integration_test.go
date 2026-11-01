@@ -114,12 +114,14 @@ type searchCase struct {
 
 func integrationSearchCases() []searchCase {
 	cases := make([]searchCase, 0)
+	from := int64(1_790_000_100)
+	until := int64(1_790_000_400)
 	for _, query := range []string{"segment compaction configuration", "test suite failures", "logs report warning", "build main branch", "WireGuard routing value"} {
 		cases = append(cases,
 			searchCase{name: "all", query: query, filter: semsearch.SearchFilter{}},
 			searchCase{name: "assistant", query: query, filter: semsearch.SearchFilter{Roles: []string{"assistant"}}},
 			searchCase{name: "conversations", query: query, filter: semsearch.SearchFilter{ConversationIDs: []string{"codex:integration-01", "codex:integration-04"}}},
-			searchCase{name: "time", query: query, filter: semsearch.SearchFilter{FromUnix: 1_790_000_100, UntilUnix: 1_790_000_400}},
+			searchCase{name: "time", query: query, filter: semsearch.SearchFilter{FromUnix: &from, UntilUnix: &until}},
 		)
 	}
 	return cases

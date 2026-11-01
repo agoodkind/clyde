@@ -21,7 +21,8 @@ const (
 	// headroom every one of them costs the caller a result.
 	searchOverfetchAttempts = 3
 	// searchOverfetchFactor multiplies the engine limit on each retry.
-	searchOverfetchFactor = 4
+	searchOverfetchFactor       = 4
+	searchSkippedOverfetchSteps = 1
 	// maxEngineOverfetchLimit caps the retry at the engine ranking window. The
 	// engine ranks at most 16,384 rows for one query (lm-semantic-search
 	// CollectionRankingDepth) and returns no hit past that depth.
@@ -66,8 +67,8 @@ func emptySearchFilter() semsearch.SearchFilter {
 		Providers:            nil,
 		WorkspaceRoots:       nil,
 		Roles:                nil,
-		FromUnix:             0,
-		UntilUnix:            0,
+		FromUnix:             nil,
+		UntilUnix:            nil,
 		ConversationIDs:      nil,
 		ParentConversationID: "",
 		MinScore:             0,
@@ -113,8 +114,13 @@ func engineSearchMatches(
 	}
 
 	engineLimit := searchLimit
+	firstAttempt := 1
+	if !hasDateBound(options) {
+		engineLimit = nextEngineOverfetchLimit(searchLimit)
+		firstAttempt = searchSkippedOverfetchSteps + 1
+	}
 	var page engineSearchPage
-	for attempt := 1; ; attempt++ {
+	for attempt := firstAttempt; ; attempt++ {
 		hits, searchErr := semantic.SearchConversations(
 			ctx,
 			collectionID,
@@ -158,6 +164,10 @@ func engineSearchMatches(
 		"engine_limit", engineLimit,
 	)
 	return page, nil
+}
+
+func hasDateBound(options conversation.SearchConversationsOptions) bool {
+	return options.FromUnix != nil || options.UntilUnix != nil
 }
 
 // engineSearchCallError classifies one failed engine call into the typed source

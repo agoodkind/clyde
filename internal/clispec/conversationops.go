@@ -330,7 +330,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         mode,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: nil, UntilUnix: nil, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     conv.ListOptions{Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", Query: "", IncludeArchived: false, All: false},
 			Conversation: conversation,
 			Around:       in.Around,
@@ -344,7 +344,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         searchModeBrowse,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: nil, UntilUnix: nil, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     opts,
 			Conversation: "",
 			Around:       in.Around,
@@ -477,18 +477,19 @@ var timeBoundLayouts = []string{time.RFC3339, "2006-01-02 15:04", "2006-01-02T15
 // timeBoundUnix parses one time flag to a unix timestamp. Empty means
 // unbounded and returns zero. Naive spellings (no zone) are interpreted in the
 // host's current zone, since the flag describes the operator's wall clock.
-func timeBoundUnix(raw string, flagName string) (int64, error) {
+func timeBoundUnix(raw string, flagName string) (*int64, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return 0, nil
+		return nil, nil
 	}
 	hostZone := clock.Now().Location()
 	for _, layout := range timeBoundLayouts {
 		if parsed, err := time.ParseInLocation(layout, trimmed, hostZone); err == nil {
-			return parsed.Unix(), nil
+			bound := parsed.Unix()
+			return &bound, nil
 		}
 	}
-	return 0, fmt.Errorf("parse %s %q: want RFC3339, YYYY-MM-DD HH:MM, or YYYY-MM-DD", flagName, trimmed)
+	return nil, fmt.Errorf("parse %s %q: want RFC3339, YYYY-MM-DD HH:MM, or YYYY-MM-DD", flagName, trimmed)
 }
 
 func providerFilter(raw string) (conv.Provider, error) {

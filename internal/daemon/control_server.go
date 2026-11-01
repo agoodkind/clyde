@@ -198,6 +198,14 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	return searchConversationsResponse(ctx, s.index, result), nil
 }
 
+func copyBound(bound *int64) *int64 {
+	if bound == nil {
+		return nil
+	}
+	value := *bound
+	return &value
+}
+
 func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest) conversation.SearchConversationsOptions {
 	return conversation.SearchConversationsOptions{
 		Query:                req.GetQuery(),
@@ -207,8 +215,8 @@ func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest
 		WorkspaceRoot:        req.GetWorkspace(),
 		IncludeArchived:      req.GetIncludeArchived(),
 		Roles:                req.GetRoles(),
-		FromUnix:             req.GetFromUnix(),
-		UntilUnix:            req.GetUntilUnix(),
+		FromUnix:             copyBound(req.FromUnix),
+		UntilUnix:            copyBound(req.UntilUnix),
 		MinScore:             req.GetMinScore(),
 		PerConversationLimit: int(req.GetPerConversationLimit()),
 		ConversationID:       req.GetConversationId(),

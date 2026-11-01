@@ -322,7 +322,9 @@ func seedStoredRows(t *testing.T, client *vectorsearch.Client, index *conversati
 func searchDay(t *testing.T, client *vectorsearch.Client, query string, year int, month time.Month, day int) []semsearch.SemHit {
 	t.Helper()
 	start := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
-	filter := semsearch.SearchFilter{FromUnix: start.Unix(), UntilUnix: start.Add(24 * time.Hour).Unix()}
+	from := start.Unix()
+	until := start.Add(24 * time.Hour).Unix()
+	filter := semsearch.SearchFilter{FromUnix: &from, UntilUnix: &until}
 	hits, err := client.SearchConversations(context.Background(), repairCollectionID, query, 5, filter, 0)
 	if err != nil {
 		t.Fatalf("search %q on %s: %v", query, start.Format(time.DateOnly), err)
