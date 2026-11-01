@@ -370,10 +370,6 @@ func (resolver *legacyResolver) decomposeWith(
 	if !ok {
 		return nil, newResolutionError(subject, "exactly one wrapper body must equal the replayed rendering")
 	}
-	wrapperEnd := match.bodyEnd + 1 + len(reorienttag.PreCompactionTranscriptClose)
-	if hasTranscriptCloseLine(content[wrapperEnd:]) {
-		return nil, newResolutionError(subject, "a line containing only the transcript close tag appears after the wrapper that this request reproduces")
-	}
 	decomposition := resolver.buildDecomposition(uuid, content, match)
 	decomposition.requestID = snapshot.id
 	decomposition.positions = len(snapshot.refs)
@@ -383,18 +379,6 @@ func (resolver *legacyResolver) decomposeWith(
 		}
 	}
 	return decomposition, nil
-}
-
-// hasTranscriptCloseLine reports whether a line contains only the transcript
-// close tag that Clyde writes on its own line. It does not count a sentence
-// that quotes the tag.
-func hasTranscriptCloseLine(text string) bool {
-	for line := range strings.Lines(text) {
-		if strings.TrimSpace(line) == reorienttag.PreCompactionTranscriptClose {
-			return true
-		}
-	}
-	return false
 }
 
 func lastUserMessage(request anthropic.CompactionRequest) int {

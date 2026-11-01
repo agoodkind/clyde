@@ -163,14 +163,13 @@ func (index *provenanceIndex) observe(line []byte, offset int64) {
 }
 
 // observeRequest replays an api-request by retaining the first keep references
-// of the previous snapshot and appending tail. A request with keep 0 starts a
-// new replay and saves the previous snapshot as a reset candidate. A keep
-// larger than the previous snapshot stops replay until the next request with
-// keep 0.
+// from the previous snapshot and appending tail. A request with keep 0 starts
+// a new replay and saves the previous snapshot as a reset candidate. If keep
+// is missing or exceeds the previous snapshot's reference count,
+// observeRequest invalidates replay until the next request with keep 0.
 func (index *provenanceIndex) observeRequest(decoded provenanceLine) {
 	if decoded.Keep == nil {
-		index.replaying = false
-		index.hasLatest = false
+		index.invalidateReplay()
 		return
 	}
 	keep := *decoded.Keep
@@ -184,8 +183,7 @@ func (index *provenanceIndex) observeRequest(decoded provenanceLine) {
 		index.replaying = true
 	}
 	if !index.replaying || keep < 0 || keep > len(index.refs) {
-		index.replaying = false
-		index.hasLatest = false
+		index.invalidateReplay()
 		return
 	}
 	refs := make([]string, 0, keep+len(decoded.Tail))
@@ -194,6 +192,15 @@ func (index *provenanceIndex) observeRequest(decoded provenanceLine) {
 	index.refs = refs
 	index.latest = requestSnapshot{id: decoded.ID, refs: refs}
 	index.hasLatest = true
+}
+
+// invalidateReplay stops replay and clears the latest snapshot and live reset
+// candidates because the transcript cannot prove them. It does not change
+// candidates that the index already copied into earlier summaries.
+func (index *provenanceIndex) invalidateReplay() {
+	index.replaying = false
+	index.hasLatest = false
+	index.resets = index.resets[:0]
 }
 
 func (index *provenanceIndex) observeRecord(decoded provenanceLine, span lineSpan) {
@@ -214,5 +221,9 @@ func (index *provenanceIndex) observeRecord(decoded provenanceLine, span lineSpa
 		candidates := slices.Clone(index.resets)
 		slices.Reverse(candidates)
 		index.summaries[decoded.UUID] = summaryProvenance{span: span, candidates: candidates}
+		// A compaction request precedes its summary record. The index discards request
+		// snapshots from before this summary here because later summaries cannot use
+		// them as their source.
+		index.resets = index.resets[:0]
 	}
 }

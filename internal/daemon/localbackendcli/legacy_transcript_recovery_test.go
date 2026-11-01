@@ -19,7 +19,8 @@ const (
 	recoveryProbeCorruptSession    = "5b8d3f0c-2e4a-4c7b-9f6d-8a1e3b0c4d25"
 	recoveryProbeStoppedSession    = "6c9e4a1d-3f5b-4d8c-a07e-9b2f4c1d5e36"
 	recoveryProbeCloseQuoteSession = "7d0f5b2e-4a6c-4e9d-b18f-0c3a5d2e6f47"
-	recoveryProbeCloseQuote        = "The literal closing tag is </pre-compaction-transcript>."
+	recoveryProbeUnresolvedSession = "8e1a6c3f-5b7d-4fae-92a0-1d4b6e3f7a58"
+	recoveryProbeCloseQuote        = "The literal closing tag is </pre-compaction-transcript>.\n\n```text\n</pre-compaction-transcript>\n```"
 	recoveryProbeSummaryIndex      = 20
 	recoveryProbeCutBytes          = 10
 	recoveryProbeExportFile        = "recovery-export.txt"
@@ -136,10 +137,10 @@ func TestExportRejectsLegacyInjectedClaudeTranscriptWithCorruptedProvenance(t *t
 }
 
 // TestExportRejectsLegacyClaudeTranscriptAfterReplayStops inserts an
-// api-request that omits keep between the request that produced the second
-// summary and the next request with keep 0. It verifies that CLI and MCP chat
-// exports fail without writing a file because the index discards the snapshot
-// from before replay stopped.
+// api-request without keep after the request that produced the second summary
+// and before the next request with keep 0. It checks that CLI and MCP chat
+// exports fail without writing a file because the index clears request
+// snapshots that the transcript cannot prove after the invalid request.
 func TestExportRejectsLegacyClaudeTranscriptAfterReplayStops(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
@@ -155,10 +156,29 @@ func TestExportRejectsLegacyClaudeTranscriptAfterReplayStops(t *testing.T) {
 	assertRecoveryProbeFilteredExportFails(t, binaryPath, home, recoveryProbeStoppedSession, lines)
 }
 
+// TestExportRejectsLegacyClaudeTranscriptWithUnresolvedSourceRequest adds a
+// reference without a source to the request that produced the second summary.
+// It checks that CLI and MCP chat exports fail without writing a file and do
+// not use a request snapshot from before the first summary to explain a prefix
+// of the second wrapper.
+func TestExportRejectsLegacyClaudeTranscriptWithUnresolvedSourceRequest(t *testing.T) {
+	binaryPath := buildClydeCLI(t)
+	home := t.TempDir()
+	fixture := recoveryProbeTranscript(t, recoveryProbeUnresolvedSession, false)
+	sourceRequest := slices.IndexFunc(fixture.lines, func(line string) bool {
+		return strings.Contains(line, `"id":"request-second-b"`)
+	})
+	if sourceRequest < 0 {
+		t.Fatal("The fixture does not contain the source request for the second summary.")
+	}
+	fixture.lines[sourceRequest] = strings.Replace(fixture.lines[sourceRequest], `"tail":["`, `"tail":["missing-reference","`, 1)
+	assertRecoveryProbeFilteredExportFails(t, binaryPath, home, recoveryProbeUnresolvedSession, fixture.lines)
+}
+
 // TestExportPreservesCloseTagQuotationInLegacyClaudeSummaryTrailer appends a
-// sentence that quotes the transcript close tag to the trailer of a compact
-// summary that request replay verifies. It checks that CLI and MCP chat
-// exports omit non-chat text and preserve the quoted sentence.
+// sentence and a fenced block that quote the transcript close tag to the
+// trailer of a compact summary that request replay verifies. It checks that
+// CLI and MCP chat exports omit non-chat text and preserve both quotations.
 func TestExportPreservesCloseTagQuotationInLegacyClaudeSummaryTrailer(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
