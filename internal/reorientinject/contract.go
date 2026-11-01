@@ -47,21 +47,6 @@ const (
 	RoleOther Role = "other"
 )
 
-// Heading is the name the retained text gives this role.
-func (r Role) Heading() string {
-	switch r {
-	case RoleUser:
-		return "User"
-	case RoleAssistant:
-		return "Assistant"
-	case RoleSystem:
-		return "System"
-	case RoleOther:
-		return "Other"
-	}
-	return "Other"
-}
-
 // Message is one message of a compaction request.
 type Message struct {
 	Role     Role

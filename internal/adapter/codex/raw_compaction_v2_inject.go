@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -77,10 +78,6 @@ func InjectRawResponsesCompactionV2Recovery(
 	if !trace.inputJSONValid {
 		return request, nil, false
 	}
-	trace.transcriptTagAbsent = !rawResponsesCompactionV2InputHasTranscriptTag(input)
-	if !trace.transcriptTagAbsent {
-		return request, nil, false
-	}
 	compactionIndex, encryptedContent, normalizerValid, compactionItemCount, ok := rawResponsesCompactionV2InjectedCompactionTrace(input)
 	trace.normalizerValid = normalizerValid
 	trace.compactionItemCount = compactionItemCount
@@ -91,6 +88,11 @@ func InjectRawResponsesCompactionV2Recovery(
 	injection, generation, ok := registry.Reserve(sessionID, encryptedContent)
 	trace.registryReserved = ok
 	if !ok {
+		return request, nil, false
+	}
+	trace.transcriptTagAbsent = !rawResponsesCompactionV2InputHasMarkedTranscript(input, injection)
+	if !trace.transcriptTagAbsent {
+		registry.Release(sessionID, encryptedContent, generation)
 		return request, nil, false
 	}
 	item, err := json.Marshal(struct {
@@ -132,23 +134,24 @@ func InjectRawResponsesCompactionV2Recovery(
 	}, true
 }
 
-func rawResponsesCompactionV2InputHasTranscriptTag(input []json.RawMessage) bool {
-	normalized := codexstore.NormalizeResponseInputItems(input)
-	if len(normalized) != len(input) {
-		return false
-	}
-	for _, item := range normalized {
-		if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil || item.Message.Role != "assistant" {
-			continue
+// rawResponsesCompactionV2InputHasMarkedTranscript reports whether an input
+// item marks a content part with exactly the pending injection. Text without
+// the marker and marked text with a different value do not count.
+func rawResponsesCompactionV2InputHasMarkedTranscript(input []json.RawMessage, injection string) bool {
+	return slices.ContainsFunc(input, func(item json.RawMessage) bool {
+		var message struct {
+			Content []rawCompactionSSEContentPart `json:"content"`
 		}
-		for _, content := range item.Message.Content {
-			openIndex := strings.Index(content.Text, "<pre-compaction-transcript>")
-			if openIndex >= 0 && strings.Contains(content.Text[openIndex+len("<pre-compaction-transcript>"):], "</pre-compaction-transcript>") {
+		if json.Unmarshal(item, &message) != nil {
+			return false
+		}
+		for _, index := range codexstore.InjectedTranscriptIndexes(item) {
+			if index < len(message.Content) && message.Content[index].Text == injection {
 				return true
 			}
 		}
-	}
-	return false
+		return false
+	})
 }
 
 type rawResponsesCompactionV2InjectionTrace struct {
@@ -192,9 +195,16 @@ func rawResponsesCompactionV2RegularTurn(header http.Header) bool {
 		return false
 	}
 	if metadata.RequestKind == "turn" {
-		return metadata.Compaction.Phase == "final_answer"
+		return rawResponsesCompactionV2FinalAnswerPhase(metadata.Compaction.Phase)
 	}
 	return metadata.RequestKind == "" && metadata.Compaction.Phase == ""
+}
+
+// rawResponsesCompactionV2FinalAnswerPhase accepts final_answer and an empty
+// phase. Bundled Codex 0.166.0-alpha.5.1 omits the compaction phase on the
+// request after a mid_turn compaction.
+func rawResponsesCompactionV2FinalAnswerPhase(phase string) bool {
+	return phase == "" || phase == "final_answer"
 }
 
 func rawResponsesCompactionV2Release(registry *RawResponsesCompactionV2Registry, sessionID, encryptedContent string, generation uint64) func() {

@@ -315,12 +315,15 @@ func applyHeaderLine(fields *headerFields, header claudeHeader) {
 	}
 }
 
-// Stream yields one parsed message at a time. With IncludeToolOutputs unset it
-// holds at most one message in flight, so a caller reading a window can stop
-// early. With IncludeToolOutputs set it must buffer to attach tool results that
-// appear on later lines, matching the prior two-pass behavior.
+// Stream yields one parsed message at a time; with IncludeToolOutputs and
+// ResolveInjectedTranscripts both unset, it keeps at most one parsed message
+// in memory and lets a caller reading a window stop early. With
+// IncludeToolOutputs set, Stream buffers every message to attach tool results
+// from later lines. With ResolveInjectedTranscripts set, Stream buffers every
+// message and attaches typed spans to unframed transcript wrappers in compact
+// summaries before yielding.
 func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
-	if opts.IncludeToolOutputs {
+	if opts.IncludeToolOutputs || opts.ResolveInjectedTranscripts {
 		return p.streamWithToolOutputs(path, opts)
 	}
 	return func(yield func(transcript.Message, error) bool) {
@@ -383,7 +386,9 @@ func (p Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions
 			yield(emptyMessage(), err)
 			return
 		}
-		attachToolResults(messages, results)
+		if opts.IncludeToolOutputs {
+			attachToolResults(messages, results)
+		}
 		for _, msg := range messages {
 			if !yield(msg, nil) {
 				return
@@ -392,9 +397,12 @@ func (p Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions
 	}
 }
 
-// collectWithToolResults reads the transcript once, returning every usable turn
-// and every tool result the file carried. A result arrives on a later line than
-// the call it answers, which is why the turns are buffered rather than streamed.
+// collectWithToolResults reads the transcript once and returns every usable
+// turn and every tool result in the file. It buffers turns because each tool
+// result appears on a later line than the tool_use block it answers. With
+// ResolveInjectedTranscripts set, it also indexes request provenance during
+// the read and attaches typed spans to compact summaries at the end of the
+// file.
 func collectWithToolResults(path string, opts conversation.LoadOptions) ([]transcript.Message, []claudeToolResult, error) {
 	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
@@ -411,7 +419,12 @@ func collectWithToolResults(path string, opts conversation.LoadOptions) ([]trans
 	}
 	messages := make([]transcript.Message, 0)
 	results := make([]claudeToolResult, 0)
+	var provenance *provenanceIndex
+	if opts.ResolveInjectedTranscripts {
+		provenance = newProvenanceIndex()
+	}
 	reader := bufio.NewReader(file)
+	var offset int64
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if trimmed := trimLine(line); len(trimmed) > 0 {
@@ -420,8 +433,17 @@ func collectWithToolResults(path string, opts conversation.LoadOptions) ([]trans
 			if ok {
 				messages = append(messages, message)
 			}
+			if provenance != nil {
+				provenance.observe(trimmed, offset)
+			}
 		}
+		offset += int64(len(line))
 		if readErr == io.EOF {
+			if provenance != nil {
+				if err := resolveLegacyTranscripts(path, provenance, messages, parseOpts); err != nil {
+					return nil, nil, err
+				}
+			}
 			return messages, results, nil
 		}
 		if readErr != nil {

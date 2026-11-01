@@ -22,6 +22,10 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 		IncludeToolOutputs:    options.Content.Has(ContentKindToolOutputs),
 		IncludeInjected:       options.Content.Has(ContentKindInjected),
 		HarnessTally:          nil,
+		// The export requests typed spans when the content filter excludes
+		// raw_json_metadata. An export that includes raw_json_metadata preserves the
+		// original text without requesting typed spans.
+		ResolveInjectedTranscripts: !options.Content.Has(ContentKindRawJSONMetadata),
 	})
 	if err != nil {
 		return nil, err
@@ -47,7 +51,17 @@ func exportMessages(record Record, messages []transcript.Message, options Export
 	if err != nil {
 		return nil, err
 	}
-	selection = applyLastNToSegmentSelection(messages, selection, options.LastN)
+	selection = applyLastNToSegmentSelection(messages, selection, options)
+	if !options.Content.Has(ContentKindRawJSONMetadata) {
+		if summaryUUID, unresolved := unresolvedInjectedTranscriptSummary(selection); unresolved {
+			slog.Warn("conversation.export.unresolved_injected_transcript", "concern", "conversation.export", "component", "conversation", "conversation_id", record.ID, "summary_uuid", summaryUUID)
+			return nil, fmt.Errorf(unresolvedInjectedTranscriptError, record.ID, summaryUUID)
+		}
+		if messageIndex, unresolved := unresolvedLiveTranscriptIndex(selectedCompactionSegmentMessages(messages, selection)); unresolved {
+			slog.Warn("conversation.export.unresolved_live_transcript", "concern", "conversation.export", "component", "conversation", "conversation_id", record.ID, "message_index", messageIndex)
+			return nil, fmt.Errorf(unresolvedLiveTranscriptError, record.ID, messageIndex)
+		}
+	}
 	selection = filterCompactionSelectionItems(selection, options.Content)
 	selection, err = sanitizeCompactionSelectionForExport(selection)
 	if err != nil {
@@ -125,16 +139,7 @@ func renderMessagesWithCompaction(
 	options ExportOptions,
 	compactionBlock *compactionExportBlock,
 ) ([]byte, error) {
-	includeTools := hasToolContent(options.Content)
-	shapeOptions := transcript.ShapeOptions{
-		IncludeThinking:  options.Content.Has(ContentKindThinking),
-		ConversationOnly: !includeTools,
-		MaxTextRunes:     0,
-		ToolOnly:         transcript.ToolOnlyOmit,
-	}
-	if includeTools {
-		shapeOptions.ToolOnly = exportToolOnlyMode(options.Content)
-	}
+	shapeOptions := exportShapeOptions(options.Content)
 	switch options.Format {
 	case ExportFormatHTML:
 		body := []byte(transcript.RenderHTMLWithOptions(messages, shapeOptions))
@@ -229,17 +234,17 @@ func renderRawJSON(
 func applyLastNToSegmentSelection(
 	messages []transcript.Message,
 	selection CompactionSegmentSelection,
-	lastN int,
+	options ExportOptions,
 ) CompactionSegmentSelection {
-	if lastN <= 0 {
+	if options.LastN <= 0 {
 		return selection
 	}
-	remaining := lastN
+	remaining := options.LastN
 	cutoffSelectionIndex := 0
 	cutoffMessageIndex := -1
 	for i, segment := range slices.Backward(selection.Segments) {
 		for messageIndex := min(segment.EndMessageIndex, len(messages)) - 1; messageIndex >= segment.StartMessageIndex; messageIndex-- {
-			if !messageCountsForLastN(messages[messageIndex]) {
+			if !messageCountsForLastN(messages[messageIndex], options) {
 				continue
 			}
 			remaining--
@@ -270,11 +275,14 @@ func applyLastNToSegmentSelection(
 	}
 }
 
-func messageCountsForLastN(message transcript.Message) bool {
+func messageCountsForLastN(message transcript.Message, options ExportOptions) bool {
 	if message.Compaction != nil {
 		return false
 	}
-	return message.Visibility != transcript.MessageVisibilityMetaOnly
+	if message.Visibility == transcript.MessageVisibilityMetaOnly {
+		return false
+	}
+	return messageRendersForExport(message, options)
 }
 
 func selectedCompactionSegmentMessages(
@@ -427,7 +435,10 @@ func filterMessages(messages []transcript.Message, options ExportOptions) []tran
 		if message.Compaction != nil && !options.Content.Has(ContentKindSystemMessages) {
 			continue
 		}
-		if !options.Content.Has(ContentKindChat) && message.Text != "" {
+		if len(message.TextParts) > 0 && !options.Content.Has(ContentKindRawJSONMetadata) {
+			message.Text = filterLiveTextParts(message.TextParts, options.Content)
+		}
+		if !options.Content.Has(ContentKindChat) && len(message.TextParts) == 0 && message.Text != "" {
 			message.Text = ""
 		}
 		if !options.Content.Has(ContentKindThinking) {

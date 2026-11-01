@@ -7,8 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/clyde/internal/transcript"
 )
+
+const summaryPieceSeparator = "\n\n"
 
 // parseOptions controls noise stripping while parsing Claude transcript lines.
 type parseOptions struct {
@@ -251,6 +254,7 @@ func emptyMessage() transcript.Message {
 		HasTools:          false,
 		Tools:             nil,
 		Attachments:       nil,
+		TextParts:         nil,
 	}
 }
 
@@ -298,7 +302,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
+		Attachments:       nil, TextParts: nil,
 	}
 
 	if entry.Type == EntryTypeUser {
@@ -307,8 +311,10 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 			// tool result entry, skip the turn and keep its results
 			return emptyMessage(), content.Results, false
 		}
-		m.Text = strings.TrimSpace(stripUserText(content.Text, opts))
-		if entry.IsCompactSummary {
+		if !entry.IsCompactSummary {
+			m.Text = strings.TrimSpace(stripUserText(content.Text, opts))
+		} else {
+			m.Text = strings.TrimSpace(stripSummaryText(content.Text, opts))
 			m.Compaction = claudeSummaryMetadata(
 				entry.SummarizeMetadata,
 				entry.Message,
@@ -347,6 +353,46 @@ func stripUserText(text string, opts parseOptions) string {
 		}
 	}
 	return text
+}
+
+func stripSummaryText(text string, opts parseOptions) string {
+	spans := reorienttag.ParseTranscriptSpans(text)
+	if len(spans) == 0 {
+		return stripUserText(text, opts)
+	}
+	pieces := make([]string, 0, 2*len(spans)+1)
+	previousEnd := 0
+	for _, span := range spans {
+		pieces = appendSummaryPiece(pieces, strings.TrimSpace(stripUserText(text[previousEnd:span.Start], opts)))
+		pieces = appendSummaryPiece(pieces, reorienttag.FramedTranscript(stripSummarySegments(span.Segments, opts)))
+		previousEnd = span.End
+	}
+	pieces = appendSummaryPiece(pieces, strings.TrimSpace(stripUserText(text[previousEnd:], opts)))
+	return strings.Join(pieces, summaryPieceSeparator)
+}
+
+// stripSummarySegments applies ordinary user message rules to remove hook text
+// and system tags from user chat segments. It drops segments that become empty
+// and preserves other segments.
+func stripSummarySegments(segments []reorienttag.Segment, opts parseOptions) []reorienttag.Segment {
+	kept := make([]reorienttag.Segment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.Role == reorienttag.SegmentRoleUser && segment.Kind == reorienttag.SegmentKindChat {
+			segment.Text = stripUserText(segment.Text, opts)
+			if segment.Text == "" {
+				continue
+			}
+		}
+		kept = append(kept, segment)
+	}
+	return kept
+}
+
+func appendSummaryPiece(pieces []string, piece string) []string {
+	if piece == "" {
+		return pieces
+	}
+	return append(pieces, piece)
 }
 
 func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
@@ -389,7 +435,7 @@ func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
+		Attachments:       nil, TextParts: nil,
 	}, true
 }
 
@@ -595,11 +641,13 @@ func claudeSummaryContextItem(
 	text string,
 ) transcript.CompactedContextItem {
 	contentItem := transcript.CompactedMessageContentItem{
-		Type:     "text",
-		Text:     text,
-		ImageURL: "",
-		Detail:   "",
-		Raw:      cloneRawMessage(contentRaw),
+		Type:                 "text",
+		Text:                 text,
+		ImageURL:             "",
+		Detail:               "",
+		Raw:                  cloneRawMessage(contentRaw),
+		TranscriptSpans:      nil,
+		UnresolvedTranscript: false,
 	}
 	messageItem := transcript.CompactedMessageItem{
 		Role:         "user",

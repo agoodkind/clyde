@@ -120,6 +120,10 @@ type LoadOptions struct {
 	// because stripping emptied it, or withheld whole by an exclusion gate,
 	// still counts. Nil disables tallying.
 	HarnessTally *transcript.HarnessStrips
+	// ResolveInjectedTranscripts allows a parser to read the whole artifact before
+	// yielding messages when true. The parser attaches typed spans to unframed
+	// transcript wrappers in compact summaries. Export sets this load option.
+	ResolveInjectedTranscripts bool
 }
 
 // Parser reads one provider's raw conversation artifacts. Each provider

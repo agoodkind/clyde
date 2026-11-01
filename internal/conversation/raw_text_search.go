@@ -89,11 +89,12 @@ func (idx *Index) SearchRawText(ctx context.Context, options SearchConversations
 
 func (idx *Index) firstRawTextMatch(record Record, terms []string, options SearchConversationsOptions) (SearchMatch, bool, error) {
 	stream, err := idx.resolveStream(record, LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    true,
-		IncludeInjected:       false,
-		HarnessTally:          nil,
+		IncludeSystemPrompts:       false,
+		IncludeSystemMessages:      false,
+		IncludeToolOutputs:         true,
+		IncludeInjected:            false,
+		HarnessTally:               nil,
+		ResolveInjectedTranscripts: false,
 	})
 	if err != nil {
 		return emptySearchMatch(), false, err

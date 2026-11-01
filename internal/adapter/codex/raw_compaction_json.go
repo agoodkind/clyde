@@ -57,12 +57,8 @@ func appendRawCompactionAssistantItem(
 	if !ok {
 		return item, false, false
 	}
-	var target rawCompactionInterval
-	hasTarget := false
-	for index := range slices.Backward(contentRanges) {
-		partStart := contentStart + contentRanges[index].start
-		partEnd := contentStart + contentRanges[index].end
-		part := item[partStart:partEnd]
+	for _, contentRange := range contentRanges {
+		part := item[contentStart+contentRange.start : contentStart+contentRange.end]
 		var contentIdentity struct {
 			Type string `json:"type"`
 		}
@@ -81,60 +77,11 @@ func appendRawCompactionAssistantItem(
 			json.Unmarshal(part[textStart:textEnd], &text) != nil {
 			return item, false, false
 		}
-		if rawCompactionTranscriptPresent(text, transcriptText) {
-			return item, true, true
-		}
-		if !hasTarget {
-			target = rawCompactionInterval{start: partStart, end: partEnd}
-			hasTarget = true
-		}
 	}
-	if !hasTarget {
-		return appendRawCompactionAssistantContentPart(item, contentStart, contentEnd, true, transcriptText)
+	if rawCompactionAssistantHasTranscript(item, item[contentStart:contentEnd], transcriptText) {
+		return item, true, true
 	}
-	part := item[target.start:target.end]
-	textStart, textEnd, ok := jsonObjectFieldValueRange(part, "text")
-	if !ok {
-		return item, false, false
-	}
-	var text string
-	if bytes.Equal(bytes.TrimSpace(part[textStart:textEnd]), []byte("null")) ||
-		json.Unmarshal(part[textStart:textEnd], &text) != nil {
-		return item, false, false
-	}
-	encodedText, ok := marshalRawCompactionString(text + transcriptText)
-	if !ok {
-		return item, false, false
-	}
-	mutatedPart := replaceByteRange(part, textStart, textEnd, encodedText)
-	return replaceByteRange(item, target.start, target.end, mutatedPart), true, true
-}
-
-func rawCompactionTranscriptPresent(text, transcriptText string) bool {
-	needle := strings.TrimSpace(transcriptText)
-	if needle == "" {
-		return false
-	}
-	searchStart := 0
-	for searchStart < len(text) {
-		matchOffset := strings.Index(text[searchStart:], needle)
-		if matchOffset < 0 {
-			return false
-		}
-		matchStart := searchStart + matchOffset
-		matchEnd := matchStart + len(needle)
-		beforeBoundary := matchStart == 0 || rawCompactionTranscriptBoundary(text[matchStart-1])
-		afterBoundary := matchEnd == len(text) || rawCompactionTranscriptBoundary(text[matchEnd])
-		if beforeBoundary && afterBoundary {
-			return true
-		}
-		searchStart = matchStart + 1
-	}
-	return false
-}
-
-func rawCompactionTranscriptBoundary(value byte) bool {
-	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
+	return appendRawCompactionAssistantContentPart(item, contentStart, contentEnd, true, transcriptText)
 }
 
 func marshalRawCompactionString(value string) ([]byte, bool) {

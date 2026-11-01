@@ -101,46 +101,6 @@ func TestAppendRawCompactionAssistantItemCreatesOutputTextTarget(t *testing.T) {
 	}
 }
 
-func TestAppendRawCompactionAssistantItemRequiresCompleteTranscriptWrapper(t *testing.T) {
-	transcriptText := reorienttag.WrapInjection("recent", "")
-	tests := []struct {
-		name      string
-		text      string
-		unchanged bool
-	}{
-		{name: "opening tag", text: "quoted " + reorienttag.PreCompactionTranscriptOpen},
-		{name: "closing tag", text: "quoted " + reorienttag.PreCompactionTranscriptClose},
-		{name: "complete older wrapper", text: "summary" + reorienttag.WrapInjection("older", "")},
-		{name: "complete current wrapper", text: "summary" + transcriptText, unchanged: true},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			item := []byte(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(testCase.text) + `}]}`)
-			mutated, matched, valid := appendRawCompactionAssistantItem(item, transcriptText)
-			if !matched || !valid {
-				t.Fatalf("append result matched=%t valid=%t", matched, valid)
-			}
-			if testCase.unchanged {
-				if !bytes.Equal(mutated, item) {
-					t.Fatalf("complete wrapper changed:\n got: %s\nwant: %s", mutated, item)
-				}
-				return
-			}
-			var decoded struct {
-				Content []struct {
-					Text string `json:"text"`
-				} `json:"content"`
-			}
-			if err := json.Unmarshal(mutated, &decoded); err != nil {
-				t.Fatalf("decode mutated item: %v", err)
-			}
-			if len(decoded.Content) != 1 || !strings.Contains(decoded.Content[0].Text, transcriptText) {
-				t.Fatalf("lone tag prevented transcript injection: %s", mutated)
-			}
-		})
-	}
-}
-
 func TestRawResponsesCompactionResponseFailuresPassThrough(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
 	assistantCandidate := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"

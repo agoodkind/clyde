@@ -118,6 +118,7 @@ func mapJSONLMessage(
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
 		Attachments:       nil,
+		TextParts:         nil,
 	}, true
 }
 
@@ -210,6 +211,7 @@ func mapComposerBubble(
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
 		Attachments:       nil,
+		TextParts:         nil,
 	}, true
 }
 
@@ -277,7 +279,7 @@ func mapLegacyBubble(
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
+		Attachments:       nil, TextParts: nil,
 	}, true
 }
 
@@ -294,7 +296,7 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
+		Attachments:       nil, TextParts: nil,
 	}
 }
 

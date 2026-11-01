@@ -232,6 +232,7 @@ func streamDiscoveredContext(discovered discoveredThread, opts conversation.Load
 			HasTools:          false,
 			Tools:             nil,
 			Attachments:       nil,
+			TextParts:         nil,
 		}, nil)
 		return
 	}
@@ -265,7 +266,7 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
+		Attachments:       nil, TextParts: nil,
 	}
 }
 
@@ -573,7 +574,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			Attachments:       nil,
+			Attachments:       nil, TextParts: nil,
 		}, true
 	case zedstore.ThreadMessageKindAgent:
 		if message.Agent == nil {
@@ -595,7 +596,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          thinking,
 			HasTools:          len(tools) > 0,
 			Tools:             tools,
-			Attachments:       nil,
+			Attachments:       nil, TextParts: nil,
 		}, true
 	case zedstore.ThreadMessageKindResume:
 		return transcript.Message{
@@ -610,7 +611,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			Attachments:       nil,
+			Attachments:       nil, TextParts: nil,
 		}, true
 	case zedstore.ThreadMessageKindCompaction:
 		if !opts.IncludeSystemMessages || message.Compaction == nil {
@@ -632,7 +633,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			Attachments:       nil,
+			Attachments:       nil, TextParts: nil,
 		}, true
 	default:
 		return emptyMessage(), false

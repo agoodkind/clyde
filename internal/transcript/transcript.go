@@ -3,6 +3,8 @@ package transcript
 import (
 	"encoding/json"
 	"time"
+
+	"goodkind.io/clyde/internal/reorienttag"
 )
 
 // Message represents a single parsed conversation turn. It is the generic model
@@ -21,6 +23,19 @@ type Message struct {
 	HasTools          bool                `json:"has_tools"`             // true if assistant message contained tool_use blocks
 	Tools             []ToolCall          `json:"tools,omitempty"`       // parsed tool calls with inputs
 	Attachments       []Attachment        `json:"attachments,omitempty"` // provider-neutral attachment metadata
+	// TextParts stores text part boundaries and injection markers for export
+	// filtering. JSON encoding omits TextParts.
+	TextParts []MessageTextPart `json:"-"`
+}
+
+// MessageTextPart stores one text part and records whether Clyde generated it
+// as an injected transcript.
+type MessageTextPart struct {
+	Text               string
+	InjectedTranscript bool
+	// TranscriptSpans stores typed transcript spans for an injected transcript
+	// part. Each byte offset refers to Text.
+	TranscriptSpans []reorienttag.TranscriptSpan
 }
 
 // HarnessStrips accumulates harness-written content a parser removed or

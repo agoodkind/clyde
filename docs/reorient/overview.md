@@ -40,6 +40,40 @@ The counter is `tokencount.LocalCounter` under the `[export]` settings, which is
 
 The budget comes from a `--max-tokens` argument typed after `/compact`. Claude Code appends that text to the compaction prompt below a line reading `Additional Instructions:`. `internal/providers/claude/compaction` reads the declared `clyde conversation export` arguments from that block and stops at the first token that is not one. Free prose and PreCompact hook instructions reach the model unchanged. Without a `--max-tokens` argument, the budget is `reorient_inject_max_tokens`. An unreadable argument never fails a compaction: the split logs it and uses the configured budget.
 
+### Retained transcript format
+
+The Claude path and the native Codex path write the same retained text between the `<pre-compaction-transcript>` open and close tags. The first line after the open tag is `<clyde-transcript-format version="2"/>`. A transcript without that line uses the unframed format, which writes a `### User`, `### Assistant`, `### System`, or `### Other` heading for each message and does not record content kinds.
+
+The framed format writes each retained content block as a segment. Each segment has a header line, `<segment role="..." kind="..." bytes="N">`, followed by the exact block text and a `</segment>` line. The attribute values are Go quoted strings, and `N` is the byte length of the text. A blank line separates segments.
+
+Each segment role identifies the message role.
+
+Segment roles:
+
+| Role | Message role |
+| --- | --- |
+| `user` | User |
+| `assistant` | Assistant |
+| `system` | System |
+| `other` | Other |
+
+Each segment kind identifies the type of content.
+
+Segment kinds:
+
+| Kind | Content |
+| --- | --- |
+| `chat` | User or assistant text |
+| `thinking` | Model reasoning |
+| `tool_call` | Tool call input |
+| `tool_output` | Tool call results |
+| `system` | System message text |
+| `other` | Any other block or role |
+
+A reader takes exactly `N` bytes of text for each segment. Text inside a segment cannot end the segment or the transcript, even when it contains quoted frame tags, the format line, `### System`, or the transcript close tag. A reader does not treat a transcript as framed if any length or footer check fails.
+
+The split measures the complete retained text, including every frame and the format line. The retained text measures strictly under the token budget. The reorient renderer uses byte counts to remove a prior framed transcript before removing unframed transcripts.
+
 ### Keeping the forwarded request valid
 
 The forwarded request retains every message before the cut, the boundary message truncated at the cut, and the instruction region unchanged. Anthropic accepts a truncated request only when three structural conditions hold. `internal/adapter/anthropic/compaction_truncate.go` enforces each condition on the rewrite. `compaction_validity_test.go` asserts each condition at every cut of one conversation.

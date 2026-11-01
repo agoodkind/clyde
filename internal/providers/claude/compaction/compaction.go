@@ -8,14 +8,14 @@ import (
 	"goodkind.io/clyde/internal/conversation/exportargs"
 )
 
-// promptSignature is a distinctive substring of every Claude Code compaction
+// PromptSignature is a distinctive substring of every Claude Code compaction
 // prompt. The full prompt and the partial variants all contain it.
 //
 // A compaction request is structurally identical to a normal turn on the wire,
 // including the full tool schema, so this first-party control string is the
 // only discriminator the body offers. A changed prompt stops matching, and the
 // split then leaves the request alone.
-const promptSignature = "Your task is to create a detailed summary of"
+const PromptSignature = "Your task is to create a detailed summary of"
 
 // instructionsHeading precedes the text the operator typed after /compact
 // (claude-code source, src/services/compact/prompt.ts:293-303).
@@ -38,7 +38,7 @@ func PromptIndex(roles []string, texts []string) (int, bool) {
 		if roles[index] != "user" {
 			continue
 		}
-		if strings.Contains(texts[index], promptSignature) {
+		if strings.Contains(texts[index], PromptSignature) {
 			return index, true
 		}
 		return 0, false

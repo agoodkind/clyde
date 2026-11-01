@@ -138,11 +138,12 @@ func (idx *Index) renderReorientSnapshot(current Record, options ReorientOptions
 	// boundary records included, so the segment indexes and the latest-boundary
 	// fingerprint line up with the export selection.
 	messages, err := idx.LoadMessagesWithOptions(current, LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: true,
-		IncludeToolOutputs:    content.Has(ContentKindToolOutputs),
-		IncludeInjected:       false,
-		HarnessTally:          nil,
+		IncludeSystemPrompts:       false,
+		IncludeSystemMessages:      true,
+		IncludeToolOutputs:         content.Has(ContentKindToolOutputs),
+		IncludeInjected:            false,
+		HarnessTally:               nil,
+		ResolveInjectedTranscripts: false,
 	})
 	if err != nil {
 		return reorientSnapshot{}, err
@@ -411,16 +412,18 @@ func stripPriorReorientInjectionMetadata(
 	return &out, true
 }
 
-// stripPriorReorientInjectionSpans removes every balanced transcript span and
-// every balanced instructions span from a stored compact summary.
+// stripPriorReorientInjectionSpans removes framed transcript spans by segment
+// byte count, then balanced unframed transcript spans, then balanced
+// instructions spans from a stored compact summary.
 func stripPriorReorientInjectionSpans(body string) (string, bool) {
-	withoutTranscript, transcriptChanged := stripBalancedSpans(
-		body, reorienttag.PreCompactionTranscriptOpen, reorienttag.PreCompactionTranscriptClose,
+	withoutFramed, framedChanged := reorienttag.RemoveTranscriptSpans(body)
+	withoutTranscript, legacyChanged := stripBalancedSpans(
+		withoutFramed, reorienttag.PreCompactionTranscriptOpen, reorienttag.PreCompactionTranscriptClose,
 	)
 	withoutInstructions, instructionsChanged := stripBalancedSpans(
 		withoutTranscript, reorienttag.CompactionInstructionsOpen, reorienttag.CompactionInstructionsClose,
 	)
-	return withoutInstructions, transcriptChanged || instructionsChanged
+	return withoutInstructions, framedChanged || legacyChanged || instructionsChanged
 }
 
 func stripBalancedSpans(body, openTag, closeTag string) (string, bool) {

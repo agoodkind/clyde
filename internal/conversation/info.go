@@ -36,11 +36,12 @@ const (
 // require rendering the transcript body.
 func (idx *Index) ConversationInfo(record Record) (Info, error) {
 	messages, err := idx.LoadMessagesWithOptions(record, LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: true,
-		IncludeToolOutputs:    true,
-		IncludeInjected:       false,
-		HarnessTally:          nil,
+		IncludeSystemPrompts:       false,
+		IncludeSystemMessages:      true,
+		IncludeToolOutputs:         true,
+		IncludeInjected:            false,
+		HarnessTally:               nil,
+		ResolveInjectedTranscripts: false,
 	})
 	if err != nil {
 		return Info{}, err

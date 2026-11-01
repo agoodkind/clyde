@@ -61,11 +61,12 @@ func SemanticProjectionHash(docs []semsearch.SemDoc) string {
 // are applied when the documents are projected.
 func SemanticConversationLoadOptions(kinds conversation.ContentKindSet) conversation.LoadOptions {
 	return conversation.LoadOptions{
-		IncludeSystemPrompts:  kinds.Has(conversation.ContentKindSystemPrompts),
-		IncludeSystemMessages: kinds.Has(conversation.ContentKindSystemMessages),
-		IncludeToolOutputs:    kinds.Has(conversation.ContentKindToolOutputs),
-		IncludeInjected:       kinds.Has(conversation.ContentKindInjected),
-		HarnessTally:          nil,
+		IncludeSystemPrompts:       kinds.Has(conversation.ContentKindSystemPrompts),
+		IncludeSystemMessages:      kinds.Has(conversation.ContentKindSystemMessages),
+		IncludeToolOutputs:         kinds.Has(conversation.ContentKindToolOutputs),
+		IncludeInjected:            kinds.Has(conversation.ContentKindInjected),
+		HarnessTally:               nil,
+		ResolveInjectedTranscripts: false,
 	}
 }
 

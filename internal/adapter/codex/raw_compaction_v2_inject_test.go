@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/reorienttag"
 )
 
@@ -93,7 +94,7 @@ func TestInjectRawResponsesCompactionV2RecoveryFailsOpen(t *testing.T) {
 		{name: "wrong digest", request: RawResponsesRequest{Body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`), Header: base.Header}},
 		{name: "malformed request", request: RawResponsesRequest{Body: []byte(`{"input":[`), Header: base.Header}},
 		{name: "duplicate compaction", request: RawResponsesRequest{Body: []byte(`{"input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), Header: base.Header}},
-		{name: "existing transcript", request: RawResponsesRequest{Body: []byte(`{"input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>kept</pre-compaction-transcript>"}]}]}`), Header: base.Header}},
+		{name: "matching marked transcript", request: RawResponsesRequest{Body: []byte(`{"input":[{"type":"compaction","encrypted_content":"cipher"},` + rawCompactionMarkedInputItemForTest("recovered transcript") + `]}`), Header: base.Header}},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -113,14 +114,48 @@ func TestInjectRawResponsesCompactionV2RecoveryFailsOpen(t *testing.T) {
 	}
 }
 
-func TestInjectRawResponsesCompactionV2RecoveryRequiresExplicitFinalAnswer(t *testing.T) {
+func rawCompactionMarkedInputItemForTest(text string) string {
+	return `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"},{"type":"output_text","text":` + quotedJSONForTest(text) +
+		`}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown",` + quotedJSONForTest(codexstore.InjectedTranscriptContentKind) + `]}}`
+}
+
+func TestInjectRawResponsesCompactionV2RecoveryIgnoresOtherTranscripts(t *testing.T) {
+	const pending = "recovered transcript"
+	metadata := `{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn"}`
+	for name, item := range map[string]string{
+		"older marked transcript": rawCompactionMarkedInputItemForTest("older transcript"),
+		"unmarked quotation":      `{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(pending) + `}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			registry := NewRawResponsesCompactionV2Registry(nil)
+			if !registry.Arm("session-1", "cipher", pending) {
+				t.Fatal("The test could not arm the registry.")
+			}
+			request := RawResponsesRequest{
+				Body:   []byte(`{"input":[` + item + `,{"type":"compaction","encrypted_content":"cipher"}]}`),
+				Header: http.Header{CodexTurnMetadataHeader: {metadata}},
+			}
+			_, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
+			if !changed || recovery == nil {
+				t.Fatalf("The recovery did not inject the transcript: changed=%t", changed)
+			}
+			if _, _, reserved := registry.Reserve("session-1", "cipher"); reserved {
+				t.Fatal("The injection did not keep the recovery lease.")
+			}
+		})
+	}
+}
+
+func TestInjectRawResponsesCompactionV2RecoveryRequiresFinalAnswerTurn(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
 		metadata string
 		want     bool
 	}{
-		{name: "missing explicit phase", metadata: `{"session_id":"session-1","request_kind":"turn"}`, want: false},
+		{name: "native turn without phase", metadata: `{"session_id":"session-1","request_kind":"turn"}`, want: true},
 		{name: "non-final phase", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"phase":"mid_turn"}}`, want: false},
+		{name: "implementation without phase", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"implementation":"responses_compaction_v2"}}`, want: false},
+		{name: "strategy without phase", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"strategy":"memento"}}`, want: false},
 		{name: "final answer", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"phase":"final_answer"}}`, want: true},
 		{name: "legacy empty metadata", metadata: `{"session_id":"session-1"}`, want: true},
 	} {

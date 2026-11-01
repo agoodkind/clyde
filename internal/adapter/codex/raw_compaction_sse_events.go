@@ -166,13 +166,12 @@ func appendRawCompactionSSEContentPart(item []byte, transcriptText string) ([]by
 		if partType != "output_text" {
 			continue
 		}
-		text, ok := rawCompactionSSEStringField(part, "text")
-		if !ok {
+		if _, ok := rawCompactionSSEStringField(part, "text"); !ok {
 			return item, false, false
 		}
-		if rawCompactionTranscriptPresent(text, transcriptText) {
-			return item, false, true
-		}
+	}
+	if rawCompactionAssistantHasTranscript(item, item[contentStart:contentEnd], transcriptText) {
+		return item, false, true
 	}
 	mutated, _, valid := appendRawCompactionAssistantContentPart(item, contentStart, contentEnd, true, transcriptText)
 	return mutated, valid, valid

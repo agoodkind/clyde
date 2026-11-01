@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/clyde/internal/tokencount"
 )
 
@@ -42,9 +43,9 @@ func planCut(
 	if budget <= 0 || request.RetainStart < 0 || request.InstructionStart <= request.RetainStart {
 		return noPlan(), false
 	}
-	// The retained text adds a role heading per message, which the per-segment
-	// count does not see. A first pass that overshoots lowers the planning
-	// budget by the overage and plans again. A byte cap overage lowers it by
+	// The segment count includes frames and the marker. The final check
+	// measures all retained text. At or over the budget, planning subtracts the
+	// overage and retries; a byte cap overage reduces the planning budget by
 	// the same fraction.
 	planningBudget := budget
 	for range planAttempts {
@@ -89,16 +90,19 @@ func planOnce(
 	counter tokencount.Counter,
 	include func(SegmentKind) bool,
 ) (plan, bool) {
-	used := 0
+	// The count starts with the tokens in the format marker line, which begins
+	// every retained text.
+	used := counter.Estimate(reorienttag.TranscriptFormatMarker + "\n")
 	cut := Cut{MessageIndex: -1, SegmentIndex: 0, HeadRunes: 0}
 
 	for messageIndex := request.InstructionStart - 1; messageIndex >= request.RetainStart; messageIndex-- {
-		segments := request.Messages[messageIndex].Segments
-		for segmentIndex, segment := range slices.Backward(segments) {
+		message := request.Messages[messageIndex]
+		for segmentIndex, segment := range slices.Backward(message.Segments) {
 			if !include(segment.Kind) {
 				continue
 			}
-			count := counter.Estimate(segment.Text)
+			framed := frameSegment(message.Role, segment, segment.Text)
+			count := counter.Estimate(reorienttag.EncodeSegment(framed))
 			if used+count < budget {
 				used += count
 				cut = Cut{MessageIndex: messageIndex, SegmentIndex: segmentIndex, HeadRunes: 0}
@@ -108,7 +112,10 @@ func planOnce(
 			// A head of its full length summarizes all of it and retains none.
 			head := len([]rune(segment.Text))
 			if !segment.Atomic {
-				head = headRunesThatFit(segment.Text, budget-used, counter)
+				// The boundary segment tail receives the remaining budget minus
+				// the token count of its empty frame.
+				overhead := counter.Estimate(reorienttag.EncodeSegment(frameSegment(message.Role, segment, "")))
+				head = headRunesThatFit(segment.Text, budget-used-overhead, counter)
 			}
 			return finishPlan(request, Cut{
 				MessageIndex: messageIndex,
@@ -158,19 +165,16 @@ func finishPlan(
 	include func(SegmentKind) bool,
 ) (plan, bool) {
 	retained := retainedText(request, cut, include)
-	if strings.TrimSpace(retained) == "" {
+	if retained == "" {
 		return noPlan(), false
 	}
 	return plan{Cut: cut, Retained: retained, RetainedTokens: 0}, true
 }
 
-// retainedText renders the retained conversation. It starts at the boundary
-// segment's tail and runs to the message before the instruction region.
 func retainedText(request ParsedRequest, cut Cut, include func(SegmentKind) bool) string {
-	var builder strings.Builder
+	segments := make([]reorienttag.Segment, 0)
 	for messageIndex := cut.MessageIndex; messageIndex < request.InstructionStart; messageIndex++ {
 		message := request.Messages[messageIndex]
-		written := 0
 		for segmentIndex, segment := range message.Segments {
 			if messageIndex == cut.MessageIndex && segmentIndex < cut.SegmentIndex {
 				continue
@@ -185,18 +189,60 @@ func retainedText(request ParsedRequest, cut Cut, include func(SegmentKind) bool
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
-			if written == 0 {
-				builder.WriteString("\n\n### ")
-				builder.WriteString(message.Role.Heading())
-				builder.WriteString("\n\n")
-			} else {
-				builder.WriteString("\n\n")
-			}
-			builder.WriteString(text)
-			written++
+			segments = append(segments, frameSegment(message.Role, segment, text))
 		}
 	}
-	return strings.TrimSpace(builder.String())
+	return reorienttag.EncodeTranscript(segments)
+}
+
+func frameSegment(role Role, segment Segment, text string) reorienttag.Segment {
+	return reorienttag.Segment{
+		Role: frameRole(role),
+		Kind: frameKind(role, segment.Kind),
+		Text: text,
+	}
+}
+
+func frameRole(role Role) reorienttag.SegmentRole {
+	switch role {
+	case RoleUser:
+		return reorienttag.SegmentRoleUser
+	case RoleAssistant:
+		return reorienttag.SegmentRoleAssistant
+	case RoleSystem:
+		return reorienttag.SegmentRoleSystem
+	case RoleOther:
+		return reorienttag.SegmentRoleOther
+	}
+	return reorienttag.SegmentRoleOther
+}
+
+func frameKind(role Role, kind SegmentKind) reorienttag.SegmentKind {
+	switch kind {
+	case KindText:
+		return textFrameKind(role)
+	case KindThinking:
+		return reorienttag.SegmentKindThinking
+	case KindToolUse:
+		return reorienttag.SegmentKindToolCall
+	case KindToolResult:
+		return reorienttag.SegmentKindToolOutput
+	case KindImage, KindOther:
+		return reorienttag.SegmentKindOther
+	}
+	return reorienttag.SegmentKindOther
+}
+
+func textFrameKind(role Role) reorienttag.SegmentKind {
+	switch role {
+	case RoleUser, RoleAssistant:
+		return reorienttag.SegmentKindChat
+	case RoleSystem:
+		return reorienttag.SegmentKindSystem
+	case RoleOther:
+		return reorienttag.SegmentKindOther
+	}
+	return reorienttag.SegmentKindOther
 }
 
 // tailRunes returns text with its first headRunes runes removed.
