@@ -147,6 +147,22 @@ func RemoveTranscriptSpans(text string) (string, bool) {
 	if len(spans) == 0 {
 		return text, false
 	}
+	return textOutsideSpans(text, spans), true
+}
+
+// CompleteTranscriptSpans returns the ParseTranscriptSpans result when those
+// spans contain every transcript wrapper start in text. It returns nil when a
+// wrapper start remains outside those spans because a framed transcript can be
+// a quotation inside an unframed wrapper.
+func CompleteTranscriptSpans(text string) []TranscriptSpan {
+	spans := ParseTranscriptSpans(text)
+	if ContainsTranscriptWrapper(textOutsideSpans(text, spans)) {
+		return nil
+	}
+	return spans
+}
+
+func textOutsideSpans(text string, spans []TranscriptSpan) string {
 	var builder strings.Builder
 	previousEnd := 0
 	for _, span := range spans {
@@ -154,7 +170,7 @@ func RemoveTranscriptSpans(text string) (string, bool) {
 		previousEnd = span.End
 	}
 	builder.WriteString(text[previousEnd:])
-	return builder.String(), true
+	return builder.String()
 }
 
 // ContainsTranscriptWrapper reports whether text contains the start of a Clyde

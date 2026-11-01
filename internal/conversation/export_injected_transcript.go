@@ -27,10 +27,11 @@ const (
 type injectedTranscriptResolver func(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan
 
 // injectedTranscriptResolvers lists resolvers in the order export tries them.
-// The first reads framed transcripts in the text; the second returns spans
-// that the provider parser attached to the content item.
+// Export tries spans that the provider parser attached before framed
+// transcripts in the text because a recovered wrapper can quote a framed
+// transcript.
 func injectedTranscriptResolvers() []injectedTranscriptResolver {
-	return []injectedTranscriptResolver{resolveFramedTranscriptSpans, resolveParsedTranscriptSpans}
+	return []injectedTranscriptResolver{resolveParsedTranscriptSpans, resolveFramedTranscriptSpans}
 }
 
 func resolveFramedTranscriptSpans(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan {

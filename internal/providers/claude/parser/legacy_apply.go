@@ -47,7 +47,7 @@ func (resolver *legacyResolver) applyToMessage(message *transcript.Message, opts
 	if err != nil {
 		return
 	}
-	if len(reorienttag.ParseTranscriptSpans(content)) > 0 || !reorienttag.ContainsTranscriptWrapper(content) {
+	if len(reorienttag.CompleteTranscriptSpans(content)) > 0 || !reorienttag.ContainsTranscriptWrapper(content) {
 		return
 	}
 	resolution, err := resolver.resolveSummary(message.UUID)

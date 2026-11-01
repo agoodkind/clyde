@@ -351,7 +351,7 @@ func completeWrapper(text string) bool {
 // returns nil when reconstruction fails.
 func appendedSpans(text string, start int, clientRequest []byte) []reorienttag.TranscriptSpan {
 	suffix := text[start:]
-	if framed := reorienttag.ParseTranscriptSpans(suffix); len(framed) > 0 {
+	if framed := reorienttag.CompleteTranscriptSpans(suffix); len(framed) > 0 {
 		shifted := make([]reorienttag.TranscriptSpan, 0, len(framed))
 		for _, span := range framed {
 			span.Start += start

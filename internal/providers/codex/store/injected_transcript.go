@@ -150,7 +150,7 @@ func compactedMessageQuotesTranscript(message *transcript.CompactedMessageItem) 
 // proves that Clyde generated the part.
 func annotateInjectedTranscript(message *transcript.CompactedMessageItem, index int, timestamp time.Time, opts HistoryOptions) {
 	content := &message.Content[index]
-	spans := reorienttag.ParseTranscriptSpans(content.Text)
+	spans := reorienttag.CompleteTranscriptSpans(content.Text)
 	if len(spans) > 0 {
 		content.TranscriptSpans = spans
 		return
@@ -236,7 +236,7 @@ func markedTextParts(raw json.RawMessage, payload responsePayload, indexes []int
 }
 
 func markedPartSpans(raw json.RawMessage, text string, index int, timestamp time.Time, opts HistoryOptions) []reorienttag.TranscriptSpan {
-	if spans := reorienttag.ParseTranscriptSpans(text); len(spans) > 0 {
+	if spans := reorienttag.CompleteTranscriptSpans(text); len(spans) > 0 {
 		return spans
 	}
 	resolved, ok := resolveTranscript(raw, timestamp, opts, opts.history.lastCompactionWindow(), index)

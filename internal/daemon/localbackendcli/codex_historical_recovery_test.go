@@ -28,6 +28,7 @@ const (
 	historyProbeConfig    = "[mitm.capture_store]\ndb_path = %q\n"
 	historyProbeBaseTime  = "2026-07-01T11:00:02.000Z"
 	historyProbeUserTail  = "retained user chat"
+	historyProbeNested    = "historyprobe nested quotation"
 
 	historyProbeTruncatedBytes = 200
 )
@@ -85,6 +86,14 @@ func historyProbeLegacyInjection() string {
 func historyProbeUserInjection(userText string) string {
 	retained := "### User\n\n" + userText + "\n\n" + historyProbeToolTranscript("{\"cmd\":\"echo "+historyProbeTool+"\"}")
 	return reorienttag.WrapInjection(retained, "")
+}
+
+func historyProbeNestedQuotation() string {
+	return "quoted " + reorienttag.FramedTranscript([]reorienttag.Segment{{Role: reorienttag.SegmentRoleUser, Kind: reorienttag.SegmentKindChat, Text: historyProbeNested}})
+}
+
+func historyProbeNestedInjection() string {
+	return reorienttag.WrapInjection("### User\n\n"+historyProbeNestedQuotation(), "")
 }
 
 func historyProbeAtomicInjection(arguments string) string {
@@ -210,7 +219,12 @@ func historyProbeCases(t *testing.T) []historyProbeCase {
 	markedTail := newCase("marked partial text first segment", 15, "msg-text-tail",
 		historyProbeMarkedItem(t, "msg-text-tail", historyProbeSummary, historyProbeUserInjection(historyProbeUserTail)), items, historyProbeRecovered)
 	markedTail.chat = []string{historyProbeSummary, historyProbeUserTail, historyProbeAssistant}
+	nestedPrior := []string{historyProbeMessage("user", "input_text", historyProbeNestedQuotation(), t)}
+	markedNested := newCase("marked transcript with a nested framed quotation", 16, "msg-nested",
+		historyProbeMarkedItem(t, "msg-nested", historyProbeSummary, historyProbeNestedInjection()), nestedPrior, historyProbeRecovered)
+	markedNested.chat = []string{historyProbeSummary, historyProbeNested}
 	return []historyProbeCase{
+		markedNested,
 		newCase("truncated capture without source", 8, "msg-truncated", historyProbeResponseItem(t, "msg-truncated", full), nil, historyProbeOrdinary, cut),
 		newCase("proven by capture", 1, "msg-proven", historyProbeResponseItem(t, "msg-proven", full), nil, historyProbeRecovered, proven(request, "msg-proven")),
 		newCase("proven with unusable request", 2, "msg-unresolved", historyProbeResponseItem(t, "msg-unresolved", full), nil, historyProbeUnresolved, proven(otherRequest, "msg-unresolved")),
@@ -326,6 +340,7 @@ func TestExportReconstructsSuccessiveCodexCompactions(t *testing.T) {
 		"second window":   historyProbeSession + "20",
 		"replaced window": historyProbeSession + "21",
 		"live message":    historyProbeSession + "22",
+		"nested live":     historyProbeSession + "23",
 	}
 	rollouts := map[string][]string{
 		"second window":   {compacted(secondItem, historyProbeResponseItem(t, "msg-stale", stale))},
@@ -334,6 +349,12 @@ func TestExportReconstructsSuccessiveCodexCompactions(t *testing.T) {
 			compacted(historyProbeMessage("user", "input_text", historyProbeUser, t)),
 			`{"timestamp":"2026-07-01T11:00:02.100Z","type":"event_msg","payload":{"type":"agent_message","message":` + injectedProbeJSON(t, historyProbeSummary+injection) + `,"phase":"final_answer"}}`,
 			`{"timestamp":"2026-07-01T11:00:02.200Z","type":"response_item","payload":` + liveItem + `}`,
+		},
+		"nested live": {
+			`{"timestamp":"2026-07-01T11:00:01.900Z","type":"response_item","payload":` + historyProbeMessage("user", "input_text", historyProbeNestedQuotation(), t) + `}`,
+			compacted(),
+			`{"timestamp":"2026-07-01T11:00:02.100Z","type":"event_msg","payload":{"type":"agent_message","message":` + injectedProbeJSON(t, historyProbeSummary+historyProbeNestedInjection()) + `,"phase":"final_answer"}}`,
+			`{"timestamp":"2026-07-01T11:00:02.200Z","type":"response_item","payload":` + historyProbeMarkedItem(t, "msg-nested-live", historyProbeSummary, historyProbeNestedInjection()) + `}`,
 		},
 	}
 	for name, session := range sessions {
@@ -356,8 +377,12 @@ func TestExportReconstructsSuccessiveCodexCompactions(t *testing.T) {
 				"cli": injectedProbeCLI(t, binaryPath, environment, chat),
 				"mcp": injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, chat),
 			}
+			want := []string{historyProbeSummary, historyProbeUser, historyProbeAssistant}
+			if name == "nested live" {
+				want = []string{historyProbeSummary, historyProbeNested}
+			}
 			for surface, body := range bodies {
-				assertCodexProbeContains(t, surface, body, historyProbeSummary, historyProbeUser, historyProbeAssistant)
+				assertCodexProbeContains(t, surface, body, want...)
 				assertCodexProbeOmits(t, surface, body, historyProbeTool)
 				if name == "second window" && !strings.Contains(body, injectedProbeJSONBody(t, stale)) {
 					t.Errorf("The %s export changed an unmarked quotation even though the compaction window does not prove that Clyde generated it:\n%s", surface, body)
