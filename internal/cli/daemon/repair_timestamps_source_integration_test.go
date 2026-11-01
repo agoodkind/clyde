@@ -1182,7 +1182,6 @@ func TestUpsertingARecoveredToolTimeFillsTheRowWithoutNewVectors(t *testing.T) {
 	}
 }
 
-// rowTimeState records whether a row has a known timestamp and its metadata.
 type rowTimeState struct {
 	known         bool
 	timestampUnix int64
@@ -1261,16 +1260,22 @@ func TestConcurrentUpsertsKeepTheFirstRecoveredTime(t *testing.T) {
 		}
 		stop := make(chan struct{})
 		observed := make(chan []rowTimeState, 1)
+		pollFailure := make(chan error, 1)
 		go func() {
 			states := make([]rowTimeState, 0)
+			var firstFailure error
 			for {
 				select {
 				case <-stop:
+					pollFailure <- firstFailure
 					observed <- states
 					return
 				default:
 				}
 				state, readErr := readRowTime(ctx, reader, rowID)
+				if readErr != nil && firstFailure == nil {
+					firstFailure = readErr
+				}
 				if readErr == nil && state.known {
 					states = append(states, state)
 				}
@@ -1291,6 +1296,9 @@ func TestConcurrentUpsertsKeepTheFirstRecoveredTime(t *testing.T) {
 		group.Wait()
 		close(stop)
 		states := <-observed
+		if readErr := <-pollFailure; readErr != nil {
+			t.Fatalf("reading the row timestamp during concurrent upserts failed: %v", readErr)
+		}
 		close(failures)
 		for upsertErr := range failures {
 			t.Fatalf("cannot upsert conversation documents: %v", upsertErr)

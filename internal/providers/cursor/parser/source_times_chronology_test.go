@@ -165,10 +165,18 @@ func TestTranscriptReplyCrossesSequencesOnlyThroughAUserWithContent(t *testing.T
 			if err != nil {
 				t.Fatalf("transcript message collection failed: %v", err)
 			}
+			replyFound := false
 			for _, message := range messages {
-				if message.Text == chronologyReply && message.Timestamp.IsZero() == testCase.dated {
+				if message.Text != chronologyReply {
+					continue
+				}
+				replyFound = true
+				if message.Timestamp.IsZero() == testCase.dated {
 					t.Fatalf("reply timestamp does not match the expected dated state: %v, %v", message.Timestamp, testCase.dated)
 				}
+			}
+			if !replyFound {
+				t.Fatalf("collected transcript messages do not contain the expected reply: %d", len(messages))
 			}
 		})
 	}
