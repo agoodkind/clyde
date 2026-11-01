@@ -103,6 +103,8 @@ type BubbleToolCall struct {
 	// rows in a real store, and it is what separates one call from another when
 	// two rows would otherwise read identically.
 	ToolCallID string `json:"toolCallId"`
+	// ToolCallBinary stores Cursor tool call protobuf data as base64 text.
+	ToolCallBinary string `json:"toolCallBinary"`
 }
 
 // BubbleToolResult is a tool's result as Cursor stores it. The on-disk format is

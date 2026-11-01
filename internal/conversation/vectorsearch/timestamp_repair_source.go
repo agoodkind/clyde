@@ -33,6 +33,8 @@ type TimestampSourceRepairSource struct {
 	ToolCalls []SourceToolTime
 	// ToolCallsComplete reports whether the native tool call state is complete.
 	ToolCallsComplete bool
+	// Corrections selects row IDs for correction and supplies their expected state. A nil map selects zero timestamp rows instead.
+	Corrections map[string]TimestampCorrectionGuard
 }
 
 // SourceToolTime contains native tool content, a timestamp, and an unavailable reason.
@@ -231,6 +233,7 @@ type sourceTimeLookup struct {
 	toolBindings map[string]toolBinding
 	// emptySource reports whether the source contains documents, copies, or tool calls.
 	emptySource bool
+	corrections map[string]TimestampCorrectionGuard
 }
 
 // toolBinding stores a native call or the reason binding failed.
@@ -250,6 +253,7 @@ func newSourceTimeLookup(source TimestampSourceRepairSource) sourceTimeLookup {
 		texts: nil, thinking: map[string][]int64{}, fields: map[string][]sourceField{}, matchText: source.MatchText,
 		toolCalls: source.ToolCalls, toolCallsComplete: source.ToolCallsComplete, toolBindings: map[string]toolBinding{},
 		emptySource: len(source.Documents) == 0 && len(source.CopyDocuments) == 0 && len(source.ToolCalls) == 0,
+		corrections: source.Corrections,
 	}
 	entries := lookup.indexDocuments(source.Documents)
 	copies := lookup.indexDocuments(source.CopyDocuments)
@@ -404,6 +408,14 @@ func (lookup sourceTimeLookup) toolFamilyOutcome(key string, text string, eviden
 	evidence.Candidates = []int64{binding.call.TimestampUnix}
 	evidence.Chosen = binding.call.TimestampUnix
 	evidence.Match = sourceMatchNativeIdentity
+}
+
+func (lookup sourceTimeLookup) isTarget(row collection.StoredRow) bool {
+	if lookup.corrections != nil {
+		_, listed := lookup.corrections[row.ID]
+		return listed
+	}
+	return rowHasZeroTime(row)
 }
 
 func sourceRepairKey(role string, content string) string {
@@ -587,7 +599,7 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 	zeroTime := make([]collection.StoredRow, 0, len(members))
 	ids := make([]string, 0, len(members))
 	for _, row := range members {
-		if rowHasZeroTime(row) {
+		if lookup.isTarget(row) {
 			zeroTime = append(zeroTime, row)
 			ids = append(ids, row.ID)
 		}

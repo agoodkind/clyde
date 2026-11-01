@@ -124,6 +124,7 @@ type protobufField struct {
 	number protowire.Number
 	wire   protowire.Type
 	bytes  []byte
+	varint uint64
 }
 
 type nativeMessage struct {
@@ -402,15 +403,23 @@ func unmarshalProtobufFields(data []byte) ([]protobufField, error) {
 			return nil, protobufParseError(tagLength)
 		}
 		data = data[tagLength:]
-		field := protobufField{number: number, wire: wire, bytes: nil}
-		if wire == protowire.BytesType {
+		field := protobufField{number: number, wire: wire, bytes: nil, varint: 0}
+		switch wire {
+		case protowire.BytesType:
 			value, valueLength := protowire.ConsumeBytes(data)
 			if valueLength < 0 {
 				return nil, protobufParseError(valueLength)
 			}
 			field.bytes = value
 			data = data[valueLength:]
-		} else {
+		case protowire.VarintType:
+			value, valueLength := protowire.ConsumeVarint(data)
+			if valueLength < 0 {
+				return nil, protobufParseError(valueLength)
+			}
+			field.varint = value
+			data = data[valueLength:]
+		default:
 			valueLength := protowire.ConsumeFieldValue(number, wire, data)
 			if valueLength < 0 {
 				return nil, protobufParseError(valueLength)

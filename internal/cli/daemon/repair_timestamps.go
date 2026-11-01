@@ -33,6 +33,7 @@ const (
 	repairTimestampsProgressDirMode  = 0o700
 	// repairTimestampsSourceStoreSuffix distinguishes source store progress files.
 	repairTimestampsSourceStoreSuffix = "-source-store"
+	repairTimestampsCorrectionSuffix  = "-correction"
 )
 
 type repairTimestampsOptions struct {
@@ -46,24 +47,30 @@ type repairTimestampsOptions struct {
 	ProgressPath   string
 	SourceStore    bool
 	EvidencePath   string
+	// CorrectionManifest specifies the JSON lines file containing row IDs, conversation IDs, and expected row values.
+	CorrectionManifest string
 }
 
 type timestampRepairClient interface {
 	RepairConversationTimestamps(context.Context, string, []vectorsearch.TimestampRepairSource, bool) (vectorsearch.TimestampRepairReport, error)
 	RepairTimestampsFromSource(context.Context, string, []vectorsearch.TimestampSourceRepairSource, bool) (vectorsearch.TimestampSourceRepairReport, error)
 	ZeroTimeConversationIDs(context.Context, string, string) ([]string, error)
+	CorrectTimestampsFromSource(context.Context, string, []vectorsearch.TimestampSourceRepairSource, bool) (vectorsearch.TimestampCorrectionReport, error)
 }
 
 type timestampRepairProgress struct {
-	Collection  string                             `json:"collection"`
-	Provider    string                             `json:"provider,omitempty"`
-	SourceStore bool                               `json:"source_store,omitempty"`
-	Cursor      string                             `json:"cursor"`
-	Complete    bool                               `json:"complete"`
-	UpdatedAt   time.Time                          `json:"updated_at"`
-	Totals      vectorsearch.TimestampRepairReport `json:"totals"`
-	Failed      []string                           `json:"failed,omitempty"`
-	LastRunRows int                                `json:"last_run_rows_written"`
+	Collection  string `json:"collection"`
+	Provider    string `json:"provider,omitempty"`
+	SourceStore bool   `json:"source_store,omitempty"`
+	// CorrectionManifest stores the SHA-256 hash of the correction manifest
+	// used for this progress file.
+	CorrectionManifest string                             `json:"correction_manifest_sha256,omitempty"`
+	Cursor             string                             `json:"cursor"`
+	Complete           bool                               `json:"complete"`
+	UpdatedAt          time.Time                          `json:"updated_at"`
+	Totals             vectorsearch.TimestampRepairReport `json:"totals"`
+	Failed             []string                           `json:"failed,omitempty"`
+	LastRunRows        int                                `json:"last_run_rows_written"`
 }
 
 type repairTimestampsRun struct {
@@ -78,10 +85,11 @@ type repairTimestampsRun struct {
 	sourceTotals *vectorsearch.TimestampSourceRepairReport
 	// evidenceOut receives JSON evidence entries when an evidence file is configured.
 	evidenceOut io.Writer
+	correction  *correctionState
 }
 
 func newRepairConversationTimestampsCmd(f *cli.Factory) *cobra.Command {
-	options := repairTimestampsOptions{DryRun: true, Provider: "", ConversationID: "", Limit: 0, MaxRows: defaultRepairTimestampsMaxRows, After: "", Resume: false, ProgressPath: "", SourceStore: false, EvidencePath: ""}
+	options := repairTimestampsOptions{DryRun: true, Provider: "", ConversationID: "", Limit: 0, MaxRows: defaultRepairTimestampsMaxRows, After: "", Resume: false, ProgressPath: "", SourceStore: false, EvidencePath: "", CorrectionManifest: ""}
 	execute := false
 	cmd := &cobra.Command{
 		Use:   "repair-timestamps",
@@ -108,6 +116,7 @@ func newRepairConversationTimestampsCmd(f *cli.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&options.ProgressPath, "progress-file", "", "Read and write progress at this path.")
 	cmd.Flags().BoolVar(&options.SourceStore, "source-store", false, "Match zero timestamp rows against the provider source store.")
 	cmd.Flags().StringVar(&options.EvidencePath, "evidence-file", "", "Append source repair evidence as JSON lines to this file.")
+	cmd.Flags().StringVar(&options.CorrectionManifest, "correction-manifest", "", "Select rows and their expected state from this JSON lines manifest for timestamp correction. Use --source-store with this flag.")
 	return cmd
 }
 
@@ -137,6 +146,9 @@ func runRepairConversationTimestamps(ctx context.Context, f *cli.Factory, option
 		if options.SourceStore {
 			progressName += repairTimestampsSourceStoreSuffix
 		}
+		if options.CorrectionManifest != "" {
+			progressName += repairTimestampsCorrectionSuffix
+		}
 		options.ProgressPath = filepath.Join(config.DefaultStateDir(), repairTimestampsProgressDirName, progressName+repairTimestampsProgressFileExt)
 	}
 	client, err := daemonsvc.OpenConversationSearchClient(ctx, semanticCfg)
@@ -155,6 +167,14 @@ func runRepairConversationTimestamps(ctx context.Context, f *cli.Factory, option
 		out:            f.IOStreams.Out,
 		sourceTotals:   newSourceRepairTotals(),
 		evidenceOut:    nil,
+		correction:     nil,
+	}
+	if options.CorrectionManifest != "" {
+		correction, err := loadCorrectionManifest(options.CorrectionManifest)
+		if err != nil {
+			return err
+		}
+		run.correction = correction
 	}
 	if options.EvidencePath != "" {
 		evidenceFile, err := os.OpenFile(options.EvidencePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, repairTimestampsProgressFileMode)
@@ -179,6 +199,9 @@ func validateRepairTimestampsOptions(options repairTimestampsOptions) error {
 	if conversationID != "" && (options.Limit > 0 || options.After != "" || options.Resume || options.Provider != "") {
 		return errors.New("use --conversation without --limit, --after, --resume, or --provider")
 	}
+	if options.CorrectionManifest != "" && !options.SourceStore {
+		return errors.New("--correction-manifest requires --source-store")
+	}
 	if options.After != "" && options.Resume {
 		return errors.New("use either --after or --resume")
 	}
@@ -196,7 +219,7 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
 		RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
 	}
-	progress := timestampRepairProgress{Collection: run.collectionName, Provider: run.options.Provider, SourceStore: run.options.SourceStore, Cursor: "", Complete: false, UpdatedAt: time.Time{}, Totals: emptyTotals, Failed: nil, LastRunRows: 0}
+	progress := timestampRepairProgress{Collection: run.collectionName, Provider: run.options.Provider, SourceStore: run.options.SourceStore, CorrectionManifest: run.correctionManifestHash(), Cursor: "", Complete: false, UpdatedAt: time.Time{}, Totals: emptyTotals, Failed: nil, LastRunRows: 0}
 	after := strings.TrimSpace(run.options.After)
 	if run.options.Resume {
 		stored, err := readTimestampRepairProgress(run.options.ProgressPath)
@@ -205,6 +228,9 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 		}
 		if stored.SourceStore != run.options.SourceStore {
 			return fmt.Errorf("progress file %s records source-store as %t; the current setting is %t", run.options.ProgressPath, stored.SourceStore, run.options.SourceStore)
+		}
+		if stored.CorrectionManifest != run.correctionManifestHash() {
+			return fmt.Errorf("cannot resume with a different correction manifest; progress file, saved hash, current hash: %s: %q, %q", run.options.ProgressPath, stored.CorrectionManifest, run.correctionManifestHash())
 		}
 		if stored.Collection != run.collectionName || stored.Provider != run.options.Provider {
 			return fmt.Errorf("progress file %s records collection %q and provider %q; the current selection uses collection %q and provider %q", run.options.ProgressPath, stored.Collection, stored.Provider, run.collectionName, run.options.Provider)
@@ -306,6 +332,9 @@ type recordRepairer func(context.Context, conversation.Record) (vectorsearch.Tim
 // and repairTranscriptRecord otherwise. repairPending selects the function once
 // before its loop over records.
 func (run repairTimestampsRun) recordRepairer() recordRepairer {
+	if run.correction != nil {
+		return run.correctSourceStoreRecord
+	}
 	if run.options.SourceStore {
 		return run.repairSourceStoreRecord
 	}
@@ -410,7 +439,7 @@ func newSourceRepairTotals() *vectorsearch.TimestampSourceRepairReport {
 
 // loadStoreSource builds semantic documents from a provider's source store messages.
 func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampSourceRepairSource, error) {
-	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, CopyDocuments: nil, ToolCalls: nil, ToolCallsComplete: false}
+	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, CopyDocuments: nil, ToolCalls: nil, ToolCallsComplete: false, Corrections: nil}
 	reader, found := daemonsvc.ConversationSourceStoreReader(record.Provider)
 	if !found {
 		return empty, fmt.Errorf("source store reader is unavailable for provider %q", record.Provider)
@@ -512,6 +541,9 @@ func (run repairTimestampsRun) writeResult(ctx context.Context, report vectorsea
 		text += fmt.Sprintf("Already dated rows: %d; rows with empty content: %d; rows with split parts that could not be joined: %d.\n", run.sourceTotals.RowsNotZeroTime, run.sourceTotals.RowsEmptyContent, run.sourceTotals.RowsIncomplete)
 		text += fmt.Sprintf("Rows by outcome: %s.\n", formatOutcomes(run.sourceTotals.Outcomes))
 	}
+	if run.correction != nil {
+		text += run.correction.summary()
+	}
 	if !run.options.DryRun && strings.TrimSpace(run.options.ConversationID) == "" {
 		text += fmt.Sprintf("Saved progress in %s.\n", run.options.ProgressPath)
 	}
@@ -527,7 +559,7 @@ func (run repairTimestampsRun) repairRecords(ctx context.Context, stamped []conv
 	if !run.options.SourceStore {
 		return repairTimestampRecords(stamped, run.options.Provider, run.options.ConversationID)
 	}
-	storedIDs, err := run.client.ZeroTimeConversationIDs(ctx, run.collectionID, run.options.Provider)
+	storedIDs, err := run.repairConversationIDs(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.repair_timestamps.stored_ids_failed", "concern", "cli.daemon", "component", "cli", "err", err)
 		return nil, fmt.Errorf("list conversations with zero timestamp rows: %w", err)

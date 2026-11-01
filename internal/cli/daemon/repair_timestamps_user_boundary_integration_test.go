@@ -92,6 +92,21 @@ type userBoundaryLine struct {
 // writeUserBoundaryStore writes native messages and timestamped bubbles to a SQLite store.
 func writeUserBoundaryStore(t *testing.T, dataRoot string, commandArgs func(string) json.RawMessage) {
 	t.Helper()
+	native := []userBoundaryNativeMessage{
+		{Role: "user", Content: []userBoundaryNativePart{{Type: "text", Text: userBoundaryFirst, ToolCallID: "", ToolName: "", Args: nil}}},
+		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_a", ToolName: "Shell", Args: commandArgs(userBoundaryGit)}}},
+		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_b", ToolName: "Shell", Args: commandArgs(userBoundaryTest)}}},
+	}
+	bubbles := []userBoundaryBubble{
+		{Version: 3, Type: 1, BubbleID: "u1", Text: userBoundaryFirst, CreatedAt: "2026-05-20T10:00:00.000Z", ToolFormerData: nil},
+		{Version: 3, Type: 2, BubbleID: "t1", Text: "", CreatedAt: "2026-05-20T10:01:00.000Z", ToolFormerData: &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: "call_a"}},
+		{Version: 3, Type: 2, BubbleID: "t2", Text: "", CreatedAt: "2026-05-20T10:03:00.000Z", ToolFormerData: &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: "call_b"}},
+	}
+	writeNativeComposerStore(t, dataRoot, userBoundaryComposerID, native, bubbles, nil)
+}
+
+func writeNativeComposerStore(t *testing.T, dataRoot string, composerID string, native []userBoundaryNativeMessage, bubbles []userBoundaryBubble, unreferenced []userBoundaryBubble) {
+	t.Helper()
 	marshal := combinedCopyJSON(t)
 	dbPath := filepath.Join(dataRoot, "globalStorage", "state.vscdb")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
@@ -118,11 +133,6 @@ func writeUserBoundaryStore(t *testing.T, dataRoot string, commandArgs func(stri
 			t.Fatalf("insert user boundary store key: %s: %v", key, err)
 		}
 	}
-	native := []userBoundaryNativeMessage{
-		{Role: "user", Content: []userBoundaryNativePart{{Type: "text", Text: userBoundaryFirst, ToolCallID: "", ToolName: "", Args: nil}}},
-		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_a", ToolName: "Shell", Args: commandArgs(userBoundaryGit)}}},
-		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_b", ToolName: "Shell", Args: commandArgs(userBoundaryTest)}}},
-	}
 	var state []byte
 	for _, message := range native {
 		data := []byte(marshal(json.Marshal(message)))
@@ -131,20 +141,18 @@ func writeUserBoundaryStore(t *testing.T, dataRoot string, commandArgs func(stri
 		state = append(state, digest[:]...)
 		exec("agentKv:blob:"+hex.EncodeToString(digest[:]), data)
 	}
-	bubbles := []userBoundaryBubble{
-		{Version: 3, Type: 1, BubbleID: "u1", Text: userBoundaryFirst, CreatedAt: "2026-05-20T10:00:00.000Z", ToolFormerData: nil},
-		{Version: 3, Type: 2, BubbleID: "t1", Text: "", CreatedAt: "2026-05-20T10:01:00.000Z", ToolFormerData: &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: "call_a"}},
-		{Version: 3, Type: 2, BubbleID: "t2", Text: "", CreatedAt: "2026-05-20T10:03:00.000Z", ToolFormerData: &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: "call_b"}},
-	}
 	composer := userBoundaryComposer{
-		ComposerID: userBoundaryComposerID, Name: "User boundary", CreatedAt: 1779267600000, LastUpdatedAt: 1779268000000,
+		ComposerID: composerID, Name: "User boundary", CreatedAt: 1779267600000, LastUpdatedAt: 1779268000000,
 		ConversationState: "~" + base64.StdEncoding.EncodeToString(state), Headers: nil,
 	}
 	for _, bubble := range bubbles {
 		composer.Headers = append(composer.Headers, combinedCopyHeader{BubbleID: bubble.BubbleID, Type: bubble.Type})
-		exec("bubbleId:"+userBoundaryComposerID+":"+bubble.BubbleID, []byte(marshal(json.Marshal(bubble))))
+		exec("bubbleId:"+composerID+":"+bubble.BubbleID, []byte(marshal(json.Marshal(bubble))))
 	}
-	if _, err := db.Exec(string(insert), "composerData:"+userBoundaryComposerID, marshal(json.Marshal(composer))); err != nil {
+	for _, bubble := range unreferenced {
+		exec("bubbleId:"+composerID+":"+bubble.BubbleID, []byte(marshal(json.Marshal(bubble))))
+	}
+	if _, err := db.Exec(string(insert), "composerData:"+composerID, marshal(json.Marshal(composer))); err != nil {
 		t.Fatalf("insert user boundary store key: composerData: %v", err)
 	}
 }

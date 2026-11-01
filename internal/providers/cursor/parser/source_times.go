@@ -473,13 +473,13 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_bubbles_failed", "concern", concern, "composer_id", composerID, "err", err)
 		return source, false, fmt.Errorf("read composer bubbles %q: %w", composerID, err)
 	}
-	callDates := make(map[string][]time.Time)
+	toolDates := newToolIdentityDates()
 	candidates := make(map[chronologyKey][]chronologyCandidate)
 	source.Copies = make([]transcript.Message, 0)
 	copyKeys := make([]chronologyKey, 0)
 	err = cursorstore.ForEachStoredComposerBubble(ctx, db, composerID, func(bubble cursorstore.Bubble) error {
-		if bubble.ToolCall != nil && bubble.ToolCall.ToolCallID != "" {
-			callDates[bubble.ToolCall.ToolCallID] = append(callDates[bubble.ToolCall.ToolCallID], composerBubbleTimestamp(bubble.CreatedAt))
+		if err := toolDates.add(bubble); err != nil {
+			return err
 		}
 		key, keyed := bubbleChronologyKey(bubble)
 		if keyed && chronologyKeys[key] {
@@ -497,6 +497,7 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 	if err != nil {
 		return source, false, fmt.Errorf("read stored composer bubbles %q: %w", composerID, err)
 	}
+	callDates := toolDates.resolve()
 	if len(chronologyKeys) > 0 {
 		governed := nativeChronologyTimes(native, callDates, candidates)
 		applyChronologyTimes(source.Messages, messageKeys, governed)

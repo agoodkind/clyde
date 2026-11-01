@@ -28,10 +28,11 @@ const (
 )
 
 type fixtureToolFormer struct {
-	Name       string `json:"name"`
-	RawArgs    string `json:"rawArgs"`
-	Status     string `json:"status"`
-	ToolCallID string `json:"toolCallId"`
+	Name           string `json:"name"`
+	RawArgs        string `json:"rawArgs"`
+	Status         string `json:"status"`
+	ToolCallID     string `json:"toolCallId"`
+	ToolCallBinary string `json:"toolCallBinary,omitempty"`
 }
 
 // fixtureBubble stores a Cursor bubble for a native store fixture.
@@ -200,7 +201,7 @@ func assistantBubble(bubbleID string, text string, created string) fixtureBubble
 
 func toolBubble(bubbleID string, created string, callID string) fixtureBubble {
 	bubble := assistantBubble(bubbleID, "", created)
-	bubble.ToolFormerData = &fixtureToolFormer{Name: fixtureToolName, RawArgs: "", Status: fixtureToolStatus, ToolCallID: callID}
+	bubble.ToolFormerData = &fixtureToolFormer{Name: fixtureToolName, RawArgs: "", Status: fixtureToolStatus, ToolCallID: callID, ToolCallBinary: ""}
 	return bubble
 }
 
