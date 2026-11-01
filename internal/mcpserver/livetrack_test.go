@@ -213,7 +213,7 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- serveStdioLocked(ctx, mcpSrv, group, 200*time.Millisecond, stdinR, &stdout)
+		serveDone <- serveStdioLocked(ctx, mcpSrv, group, 200*time.Millisecond, stdinR, &stdout, func() {})
 	}()
 
 	// Cancel the context to make serveStdioLocked exit, then close stdin so
