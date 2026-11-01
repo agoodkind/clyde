@@ -15,12 +15,14 @@ import (
 )
 
 const (
-	recoveryProbeSession        = "4a7c2e9b-1d3f-4b6a-8e5c-7f0d2a9b3c14"
-	recoveryProbeCorruptSession = "5b8d3f0c-2e4a-4c7b-9f6d-8a1e3b0c4d25"
-	recoveryProbeStoppedSession = "6c9e4a1d-3f5b-4d8c-a07e-9b2f4c1d5e36"
-	recoveryProbeSummaryIndex   = 20
-	recoveryProbeCutBytes       = 10
-	recoveryProbeExportFile     = "recovery-export.txt"
+	recoveryProbeSession           = "4a7c2e9b-1d3f-4b6a-8e5c-7f0d2a9b3c14"
+	recoveryProbeCorruptSession    = "5b8d3f0c-2e4a-4c7b-9f6d-8a1e3b0c4d25"
+	recoveryProbeStoppedSession    = "6c9e4a1d-3f5b-4d8c-a07e-9b2f4c1d5e36"
+	recoveryProbeCloseQuoteSession = "7d0f5b2e-4a6c-4e9d-b18f-0c3a5d2e6f47"
+	recoveryProbeCloseQuote        = "The literal closing tag is </pre-compaction-transcript>."
+	recoveryProbeSummaryIndex      = 20
+	recoveryProbeCutBytes          = 10
+	recoveryProbeExportFile        = "recovery-export.txt"
 
 	recoveryProbeFirstQuestion = "recoveryprobe first question"
 	recoveryProbeToolCallOne   = "echo recoveryprobe tool call one"
@@ -151,6 +153,44 @@ func TestExportRejectsLegacyClaudeTranscriptAfterReplayStops(t *testing.T) {
 	stop := `{"type":"api-request","sessionId":"` + recoveryProbeStoppedSession + `","id":"request-without-keep","tail":[]}`
 	lines := slices.Insert(fixture.lines, postRequest-1, stop)
 	assertRecoveryProbeFilteredExportFails(t, binaryPath, home, recoveryProbeStoppedSession, lines)
+}
+
+// TestExportPreservesCloseTagQuotationInLegacyClaudeSummaryTrailer appends a
+// sentence that quotes the transcript close tag to the trailer of a compact
+// summary that request replay verifies. It checks that CLI and MCP chat
+// exports omit non-chat text and preserve the quoted sentence.
+func TestExportPreservesCloseTagQuotationInLegacyClaudeSummaryTrailer(t *testing.T) {
+	binaryPath := buildClydeCLI(t)
+	home := t.TempDir()
+	fixture := recoveryProbeTranscript(t, recoveryProbeCloseQuoteSession, false)
+	summaryID := `"uuid":"` + injectedProbeUUID(recoveryProbeSummaryIndex) + `"`
+	summaryLine := slices.IndexFunc(fixture.lines, func(line string) bool { return strings.Contains(line, summaryID) })
+	if summaryLine < 0 {
+		t.Fatal("The fixture does not contain the second compact summary.")
+	}
+	trailer := recoveryProbeTrailer + `"`
+	if !strings.Contains(fixture.lines[summaryLine], trailer) {
+		t.Fatal("The second compact summary does not end with the fixture trailer.")
+	}
+	quoted := strings.Trim(injectedProbeJSON(t, recoveryProbeTrailer+" "+recoveryProbeCloseQuote), `"`) + `"`
+	fixture.lines[summaryLine] = strings.Replace(fixture.lines[summaryLine], trailer, quoted, 1)
+	transcriptPath := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(injectedProbeWorkspace, "/", "-"), recoveryProbeCloseQuoteSession+".jsonl")
+	installLocalProofTranscript(t, transcriptPath, strings.Join(fixture.lines, "\n")+"\n")
+	environment := environmentWith(localProofProviderEnvironment(t, home)...)
+
+	settingsPath := writeSandboxSemanticSettings(t, "")
+	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, recoveryProbeCloseQuoteSession)
+
+	chat := injectedProbeExport{name: "close tag quotation chat", provider: injectedProbeClaude, session: recoveryProbeCloseQuoteSession, only: injectedProbeChatOnly, maxTokens: "", output: ""}
+	bodies := map[string]string{
+		"cli": injectedProbeCLI(t, binaryPath, environment, chat),
+		"mcp": injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, chat),
+	}
+	for surface, body := range bodies {
+		assertRecoveryProbeChat(t, surface, body)
+		assertCodexProbeContains(t, surface, body, recoveryProbeCloseQuote)
+	}
 }
 
 func assertRecoveryProbeFilteredExportFails(t *testing.T, binaryPath string, home string, session string, lines []string) {
