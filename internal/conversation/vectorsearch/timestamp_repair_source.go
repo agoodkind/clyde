@@ -215,6 +215,114 @@ func (c *Client) RepairTimestampsFromSource(
 	return report, nil
 }
 
+// TimestampSourceRepairPlan stores one conversation's report and planned timestamp updates before any write.
+type TimestampSourceRepairPlan struct {
+	// Report records row counts and evidence for the plan.
+	Report  TimestampSourceRepairReport
+	updates []timestampUpdate
+}
+
+// PlanTimestampsFromSource matches one conversation's stored rows against its source and returns updates without writing them.
+func (c *Client) PlanTimestampsFromSource(ctx context.Context, collectionID string, source TimestampSourceRepairSource) (TimestampSourceRepairPlan, error) {
+	plan := TimestampSourceRepairPlan{Report: TimestampSourceRepairReport{
+		TimestampRepairReport: TimestampRepairReport{
+			Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0,
+			RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0,
+		},
+		RowsNotZeroTime: 0, RowsEmptyContent: 0, RowsIncomplete: 0, Evidence: nil, Outcomes: map[string]int{},
+	}, updates: nil}
+	if c == nil {
+		return plan, errors.New("conversation search client is nil")
+	}
+	milvus, isMilvus := c.store.(*milvusBackend)
+	if !isMilvus {
+		return plan, ErrTimestampRepairUnsupported
+	}
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+	if trimmedCollectionID == "" {
+		return plan, errors.New("collection ID is empty")
+	}
+	conversationID := strings.TrimSpace(source.ConversationID)
+	if conversationID == "" {
+		return plan, errors.New("source conversation ID is empty")
+	}
+	collectionName := CollectionName(trimmedCollectionID)
+	exists, err := c.loadCollectionIfPresent(ctx, collectionName)
+	if err != nil {
+		return plan, err
+	}
+	if !exists {
+		slog.WarnContext(ctx, "conversation.vectorsearch.source_timestamp_plan_collection_absent",
+			"concern", "conversation.semantic", "component", "conversation", "collection", collectionName)
+		return plan, fmt.Errorf("collection does not exist %s: %w", collectionName, ErrCollectionAbsent)
+	}
+	plan.Report.Conversations = 1
+	rows, err := c.store.QueryRows(ctx, collection.RowsRequest{
+		Collection:  collectionName,
+		Declaration: sourceRepairRowsDeclaration(),
+		ItemIDs:     []string{conversationID},
+		PathPrefixes: []string{
+			conversationRelativePathPrefix(conversationID),
+			conversationToolRelativePathPrefix(conversationID),
+			conversationThinkingRelativePathPrefix(conversationID),
+		},
+		IncludeVector: false,
+	})
+	if err != nil {
+		return plan, failRead("read conversation rows from collection "+collectionName, err)
+	}
+	matched := make(map[string]matchedRow)
+	matchSourceFamilies(conversationID, rows, newSourceTimeLookup(source), matched, &plan.Report)
+	plan.updates, err = plannedTimestampUpdates(ctx, milvus, collectionName, matched, &plan.Report.TimestampRepairReport)
+	return plan, err
+}
+
+// WriteTimestampSourcePlans writes all planned updates in one shared update call and returns the written row count.
+func (c *Client) WriteTimestampSourcePlans(ctx context.Context, collectionID string, plans []TimestampSourceRepairPlan) (int, error) {
+	if c == nil {
+		return 0, errors.New("conversation search client is nil")
+	}
+	milvus, isMilvus := c.store.(*milvusBackend)
+	if !isMilvus {
+		return 0, ErrTimestampRepairUnsupported
+	}
+	updates := make([]timestampUpdate, 0)
+	for _, plan := range plans {
+		updates = append(updates, plan.updates...)
+	}
+	collectionName := CollectionName(strings.TrimSpace(collectionID))
+	report := TimestampRepairReport{Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0, RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0}
+	if milvus.shared == nil {
+		err := writeSourceTimestamps(ctx, c, milvus, collectionName, updates, &report)
+		return report.RowsWritten, err
+	}
+	rows := make([]collection.Row, 0, len(updates))
+	for _, update := range updates {
+		rows = append(rows, sharedTimestampRow(update))
+	}
+	written, err := milvus.shared.UpdateRowScalars(ctx, collectionName, declaredColumns(c.declaration, timestampUnixColumn), rows)
+	if err != nil {
+		return written, failRead("update shared row timestamps in "+collectionName, err)
+	}
+	return written, nil
+}
+
+func sharedTimestampRow(update timestampUpdate) collection.Row {
+	return collection.Row{
+		ID:                update.id,
+		Content:           "",
+		RelativePath:      update.relativePath,
+		StartLine:         0,
+		EndLine:           0,
+		FileExtension:     "",
+		Metadata:          update.metadata,
+		SplitPart:         0,
+		SplitPartRecorded: false,
+		Vector:            nil,
+		Scalars:           map[string]collection.ScalarValue{timestampUnixColumn: timestampScalar(update.timestampUnix)},
+	}
+}
+
 // writeSourceTimestamps writes timestamp updates in batches and counts written rows.
 func writeSourceTimestamps(ctx context.Context, c *Client, milvus *milvusBackend, collectionName string, updates []timestampUpdate, report *TimestampRepairReport) error {
 	columns := declaredColumns(c.declaration, timestampUnixColumn)
@@ -229,19 +337,7 @@ func writeSourceTimestamps(ctx context.Context, c *Client, milvus *milvusBackend
 		}
 		rows := make([]collection.Row, 0, len(batch))
 		for _, update := range batch {
-			rows = append(rows, collection.Row{
-				ID:                update.id,
-				Content:           "",
-				RelativePath:      update.relativePath,
-				StartLine:         0,
-				EndLine:           0,
-				FileExtension:     "",
-				Metadata:          update.metadata,
-				SplitPart:         0,
-				SplitPartRecorded: false,
-				Vector:            nil,
-				Scalars:           map[string]collection.ScalarValue{timestampUnixColumn: timestampScalar(update.timestampUnix)},
-			})
+			rows = append(rows, sharedTimestampRow(update))
 		}
 		written, err := milvus.shared.UpdateRowScalars(ctx, collectionName, columns, rows)
 		report.RowsWritten += written

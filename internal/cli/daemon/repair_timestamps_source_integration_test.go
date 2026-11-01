@@ -542,6 +542,7 @@ const (
 	partialComposerID = "e1e1e1e1-2222-4333-8444-555555555555"
 	// partialRepairRows sets the number of rows in the partial write test.
 	partialRepairRows     = 501
+	partialFirstBatchRows = 256
 	partialMetadataLength = 65_530
 )
 
@@ -624,7 +625,7 @@ func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) 
 		t.Fatal("source repair accepted the oversized metadata update")
 	}
 	progress := readProgress(t, progressPath)
-	if progress.Cursor != "" || progress.Complete || len(progress.Failed) != 0 || progress.Totals.RowsWritten != partialRepairRows-1 {
+	if progress.Cursor != "" || progress.Complete || len(progress.Failed) != 0 || progress.Totals.RowsWritten != partialFirstBatchRows {
 		t.Fatalf("unexpected progress after partial write: %+v", progress)
 	}
 	if lines, matched := strings.Count(evidence.String(), "\n"), strings.Count(evidence.String(), `"outcome":"matched"`); lines != partialRepairRows || matched != partialRepairRows {
@@ -641,7 +642,7 @@ func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) 
 			t.Fatalf("failed row changed, row ID and row: %s: %+v", id, row)
 		}
 	}
-	if dated != partialRepairRows-1 {
+	if dated != partialFirstBatchRows {
 		t.Fatalf("unexpected dated row count after partial write: %d", dated)
 	}
 
@@ -655,14 +656,15 @@ func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) 
 	if err != nil {
 		t.Fatalf("resume source repair: %v", err)
 	}
-	if !strings.Contains(output, "1 changed, 1 written") {
+	remainingRows := partialRepairRows - partialFirstBatchRows
+	if !strings.Contains(output, fmt.Sprintf("%d changed, %d written", remainingRows, remainingRows)) {
 		t.Fatalf("unexpected output after resume: %q", output)
 	}
 	progress = readProgress(t, progressPath)
 	if !progress.Complete || len(progress.Failed) != 0 || progress.Totals.RowsWritten != partialRepairRows {
 		t.Fatalf("unexpected progress after resume: %+v", progress)
 	}
-	if lines := strings.Count(evidence.String(), "\n"); lines != 1 {
+	if lines := strings.Count(evidence.String(), "\n"); lines != remainingRows {
 		t.Fatalf("unexpected evidence line count after resume: %d", lines)
 	}
 
@@ -775,20 +777,18 @@ func TestRepairTimestampsFromCursorStoreKeepsQueuedRetriesInEveryCheckpoint(t *t
 	if len(capture.snapshots) != len(conversationIDs) {
 		t.Fatalf("unexpected snapshot count and expected count: %d, %d", len(capture.snapshots), len(conversationIDs))
 	}
-	afterFirst := capture.snapshots[1]
-	if afterFirst.Cursor != seededProgress.Cursor || !slices.Equal(afterFirst.Failed, conversationIDs[1:]) {
-		t.Fatalf("unexpected checkpoint after first retry: %+v", afterFirst)
+	for _, snapshot := range capture.snapshots {
+		if snapshot.Cursor != seededProgress.Cursor || !slices.Equal(snapshot.Failed, conversationIDs) {
+			t.Fatalf("The checkpoint changed before the retry group finished its write: %+v", snapshot)
+		}
 	}
 	final := readProgress(t, progressPath)
 	if !final.Complete || len(final.Failed) != 0 || final.Totals.RowsWritten != len(conversationIDs) {
 		t.Fatalf("unexpected progress after queued retries: %+v", final)
 	}
 
-	// Restore the checkpoint before the last retry and reset that conversation's rows.
+	// The test restores the checkpoint before the retry group and resets the last conversation's rows.
 	unrepaired := conversationIDs[len(conversationIDs)-1]
-	if !slices.Equal(capture.snapshots[2].Failed, []string{unrepaired}) {
-		t.Fatalf("unexpected checkpoint after second retry: %+v", capture.snapshots[2])
-	}
 	if _, err := client.DeleteConversation(ctx, repairCollectionID, unrepaired); err != nil {
 		t.Fatalf("delete conversation before reseeding: %v", err)
 	}
@@ -796,7 +796,7 @@ func TestRepairTimestampsFromCursorStoreKeepsQueuedRetriesInEveryCheckpoint(t *t
 	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs[len(docs)-1:], manifest[len(manifest)-1:]); err != nil {
 		t.Fatalf("seed conversation documents: %v", err)
 	}
-	if err := writeTimestampRepairProgress(progressPath, capture.snapshots[2]); err != nil {
+	if err := writeTimestampRepairProgress(progressPath, capture.snapshots[0]); err != nil {
 		t.Fatalf("restore progress checkpoint: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)

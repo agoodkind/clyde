@@ -58,6 +58,8 @@ type timestampRepairClient interface {
 	RepairTimestampsFromSource(context.Context, string, []vectorsearch.TimestampSourceRepairSource, bool) (vectorsearch.TimestampSourceRepairReport, error)
 	ZeroTimeConversationIDs(context.Context, string, string) ([]string, error)
 	CorrectTimestampsFromSource(context.Context, string, []vectorsearch.TimestampSourceRepairSource, bool) (vectorsearch.TimestampCorrectionReport, error)
+	PlanTimestampsFromSource(context.Context, string, vectorsearch.TimestampSourceRepairSource) (vectorsearch.TimestampSourceRepairPlan, error)
+	WriteTimestampSourcePlans(context.Context, string, []vectorsearch.TimestampSourceRepairPlan) (int, error)
 }
 
 type timestampRepairProgress struct {
@@ -283,6 +285,9 @@ type repairLoopState struct {
 
 // repairPending repairs retry records before pending records and saves progress.
 func (run repairTimestampsRun) repairPending(ctx context.Context, progress timestampRepairProgress, retries []conversation.Record, pending []conversation.Record, state *repairLoopState) error {
+	if run.options.SourceStore && run.correction == nil {
+		return run.repairSourceGroups(ctx, progress, retries, pending, state)
+	}
 	repair := run.recordRepairer()
 	for position, record := range append(slices.Clone(retries), pending...) {
 		retry := position < len(retries)
@@ -337,9 +342,6 @@ func (run repairTimestampsRun) recordRepairer() recordRepairer {
 	if run.correction != nil {
 		return run.correctSourceStoreRecord
 	}
-	if run.options.SourceStore {
-		return run.repairSourceStoreRecord
-	}
 	return run.repairTranscriptRecord
 }
 
@@ -357,28 +359,6 @@ func (run repairTimestampsRun) repairTranscriptRecord(ctx context.Context, recor
 		return report, true, fmt.Errorf("repair timestamps from transcript: %w", repairErr)
 	}
 	return report, true, nil
-}
-
-// repairSourceStoreRecord loads source store documents and requests timestamp repair.
-// It adds the report to source totals and writes evidence when configured.
-func (run repairTimestampsRun) repairSourceStoreRecord(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairReport, bool, error) {
-	var empty vectorsearch.TimestampRepairReport
-	source, loadErr := run.loadStoreSource(ctx, record)
-	if loadErr != nil {
-		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
-		readError := vectorsearch.SourceRepairEvidence{ConversationID: record.ID, Family: "", Rows: nil, Outcome: vectorsearch.SourceOutcomeReadError, Candidates: nil, Chosen: 0, Match: "", ToolCallID: "", ToolProjection: ""}
-		return empty, false, errors.Join(fmt.Errorf("load source store: %w", loadErr), run.writeEvidence([]vectorsearch.SourceRepairEvidence{readError}))
-	}
-	report, repairErr := run.client.RepairTimestampsFromSource(ctx, run.collectionID, []vectorsearch.TimestampSourceRepairSource{source}, run.options.DryRun)
-	run.sourceTotals.Add(report)
-	evidenceErr := run.writeEvidence(report.Evidence)
-	if repairErr != nil {
-		return report.TimestampRepairReport, true, errors.Join(fmt.Errorf("repair timestamps from source store: %w", repairErr), evidenceErr)
-	}
-	if evidenceErr != nil {
-		return report.TimestampRepairReport, true, evidenceErr
-	}
-	return report.TimestampRepairReport, true, nil
 }
 
 // writeEvidence writes each evidence entry as JSON when an output is configured.
