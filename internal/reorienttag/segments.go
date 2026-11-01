@@ -90,7 +90,6 @@ func EncodeSegment(segment Segment) string {
 
 // EncodeTranscript returns the marker line and encoded segments, with a blank
 // line between segments. It returns an empty string for zero segments.
-// WrapInjection places the result between the transcript tags.
 func EncodeTranscript(segments []Segment) string {
 	if len(segments) == 0 {
 		return ""

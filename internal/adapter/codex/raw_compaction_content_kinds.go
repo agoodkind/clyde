@@ -3,6 +3,7 @@ package codex
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strconv"
 
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
@@ -114,14 +115,14 @@ func appendRawCompactionObjectField(object []byte, field string, value []byte) (
 	if closing < 0 || object[closing] != '}' {
 		return object, false
 	}
-	replacement := make([]byte, 0, len(object)+len(field)+len(value)+4)
-	replacement = append(replacement, object[:closing]...)
-	if len(bytes.TrimSpace(object[1:closing])) > 0 {
-		replacement = append(replacement, ',')
+	separator := rawCompactionMemberSeparator(object[1:closing])
+	name := strconv.AppendQuote(nil, field)
+	return slices.Concat(object[:closing], separator, name, []byte{':'}, value, object[closing:]), true
+}
+
+func rawCompactionMemberSeparator(members []byte) []byte {
+	if len(bytes.TrimSpace(members)) == 0 {
+		return nil
 	}
-	replacement = strconv.AppendQuote(replacement, field)
-	replacement = append(replacement, ':')
-	replacement = append(replacement, value...)
-	replacement = append(replacement, object[closing:]...)
-	return replacement, true
+	return []byte{','}
 }

@@ -198,7 +198,6 @@ func retainedText(request ParsedRequest, cut Cut, include func(SegmentKind) bool
 	return reorienttag.EncodeTranscript(segments)
 }
 
-// frameSegment builds a framed segment for a source block and the given text.
 func frameSegment(role Role, segment Segment, text string) reorienttag.Segment {
 	return reorienttag.Segment{
 		Role: frameRole(role),

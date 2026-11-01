@@ -3,12 +3,10 @@ package codex
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 )
 
-// appendRawCompactionAssistantContentPart appends transcriptText as a separate
-// output_text part and marks that part. It preserves every existing part. If
-// either write fails, it returns the original item with valid equal to false.
 func appendRawCompactionAssistantContentPart(
 	item []byte,
 	contentStart int,
@@ -55,14 +53,8 @@ func appendRawCompactionContentArrayPart(item []byte, contentStart int, contentE
 	if closing < 0 || content[closing] != ']' {
 		return item, false
 	}
-	hasParts := len(bytes.TrimSpace(content[1:closing])) > 0
-	replacement := make([]byte, 0, len(content)+len(part)+1)
-	replacement = append(replacement, content[:closing]...)
-	if hasParts {
-		replacement = append(replacement, ',')
-	}
-	replacement = append(replacement, part...)
-	replacement = append(replacement, content[closing:]...)
+	separator := rawCompactionMemberSeparator(content[1:closing])
+	replacement := slices.Concat(content[:closing], separator, part, content[closing:])
 	return replaceByteRange(item, contentStart, contentEnd, replacement), true
 }
 

@@ -330,7 +330,6 @@ func injectedMessageItem(role string, text string) transcript.CompactedContextIt
 	return item
 }
 
-// injectedOutputRaw encodes segment text as a JSON string.
 func injectedOutputRaw(text string) json.RawMessage {
 	encoded, err := json.Marshal(text)
 	if err != nil {
