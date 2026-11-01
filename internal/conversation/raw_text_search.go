@@ -141,7 +141,7 @@ func emptySearchMatch() SearchMatch {
 
 // messageMatchesRowFilters applies the role and time filters. The lower time
 // bound is inclusive and the upper bound is exclusive.
-func messageMatchesRowFilters(message transcript.Message, roles []string, fromUnix int64, untilUnix int64) bool {
+func messageMatchesRowFilters(message transcript.Message, roles []string, fromUnix *int64, untilUnix *int64) bool {
 	if len(roles) > 0 {
 		matched := false
 		for _, role := range roles {
@@ -154,11 +154,17 @@ func messageMatchesRowFilters(message transcript.Message, roles []string, fromUn
 			return false
 		}
 	}
-	timestamp := message.Timestamp.Unix()
-	if fromUnix > 0 && timestamp < fromUnix {
+	if fromUnix == nil && untilUnix == nil {
+		return true
+	}
+	if message.Timestamp.IsZero() {
 		return false
 	}
-	if untilUnix > 0 && timestamp >= untilUnix {
+	timestamp := message.Timestamp.Unix()
+	if fromUnix != nil && timestamp < *fromUnix {
+		return false
+	}
+	if untilUnix != nil && timestamp >= *untilUnix {
 		return false
 	}
 	return true

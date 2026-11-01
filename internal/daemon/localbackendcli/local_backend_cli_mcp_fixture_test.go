@@ -17,7 +17,7 @@ import (
 	"goodkind.io/clyde/internal/sandbox"
 )
 
-func assertLocalProofFilters(t *testing.T, surface localProofSurface) {
+func assertLocalProofFilters(t *testing.T, surface localProofSurface, source string) {
 	t.Helper()
 	alphaID := localProofProviderClaude + ":" + localProofAlphaSession
 	archivedID := localProofProviderCodex + ":" + localProofArchivedRollout
@@ -95,8 +95,8 @@ func assertLocalProofFilters(t *testing.T, surface localProofSurface) {
 	results := localProofSearchAll(t, surface, requests)
 	for position, testCase := range testCases {
 		result := results[position]
-		if result.Source != localProofSourceLocal {
-			t.Errorf("%s %s: source = %q, want %q", surface.name, testCase.name, result.Source, localProofSourceLocal)
+		if result.Source != source {
+			t.Errorf("%s %s: source = %q, want %q", surface.name, testCase.name, result.Source, source)
 		}
 		if len(result.Matches) != testCase.want {
 			t.Errorf("%s %s: returned %d matches, want %d: %v", surface.name, testCase.name, len(result.Matches), testCase.want, localProofMatchKeys(result.Matches))
@@ -109,7 +109,7 @@ func assertLocalProofFilters(t *testing.T, surface localProofSurface) {
 	}
 }
 
-func assertLocalProofPages(t *testing.T, surface localProofSurface) {
+func assertLocalProofPages(t *testing.T, surface localProofSurface, source string) {
 	t.Helper()
 	const pageCount = 3
 	requests := []localProofSearchRequest{{Query: localProofQuery, Provider: "", Workspace: "", Roles: "", Limit: pageCount * localProofPageLimit, Offset: 0, IncludeArchived: false}}
@@ -125,8 +125,8 @@ func assertLocalProofPages(t *testing.T, surface localProofSurface) {
 	seen := make(map[localProofMatchKey]int, len(ranking))
 	for page, result := range results[1:] {
 		offset := page * localProofPageLimit
-		if result.Source != localProofSourceLocal {
-			t.Errorf("%s offset %d source = %q, want %q", surface.name, offset, result.Source, localProofSourceLocal)
+		if result.Source != source {
+			t.Errorf("%s offset %d source = %q, want %q", surface.name, offset, result.Source, source)
 		}
 		keys := localProofMatchKeys(result.Matches)
 		if len(keys) != localProofPageLimit {
