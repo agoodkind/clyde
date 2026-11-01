@@ -70,7 +70,10 @@ func rawResponsesCompactionV2FinalAnswerTurn(header http.Header) bool {
 	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
 		return false
 	}
-	return metadata.RequestKind == "turn" && metadata.Compaction.Phase == "final_answer"
+	return metadata.RequestKind == "turn" &&
+		metadata.Compaction.Implementation == "" &&
+		metadata.Compaction.Strategy == "" &&
+		rawResponsesCompactionV2FinalAnswerPhase(metadata.Compaction.Phase)
 }
 
 func newRawCompactionSSEBody(inner io.ReadCloser, transcriptText string, onMutatedCallbacks ...func()) *rawCompactionSSEBody {

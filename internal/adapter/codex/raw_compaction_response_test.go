@@ -61,7 +61,6 @@ func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T
 		{name: "commentary", metadata: `{"request_kind":"turn","compaction":{"phase":"commentary"}}`, response: rawJSONResponse(http.StatusOK, "comment")},
 		{name: "tool only", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","call_id":"call"}]}`))}},
 		{name: "malformed", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":[`))}},
-		{name: "duplicate tag", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: rawFinalAnswerJSONResponse(http.StatusOK, "<pre-compaction-transcript>kept</pre-compaction-transcript>")},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {testCase.metadata}}}
@@ -80,13 +79,25 @@ func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T
 	}
 }
 
-func TestRawResponsesCompactionV2RecoveryAllowsOpeningMarkerMention(t *testing.T) {
+func TestRawResponsesCompactionV2RecoveryAcceptsNativeTurnWithoutPhase(t *testing.T) {
 	recovery := &RawResponsesCompactionV2Recovery{injection: reorienttag.WrapInjection("recovered transcript", "")}
-	request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}
+	request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn"}`}}}
 	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
-	body := readResponseBody(t, transformer.TransformResponse(rawFinalAnswerJSONResponse(http.StatusOK, "mentions <pre-compaction-transcript> here")))
+	if transformer == nil {
+		t.Fatal("The native turn without a phase did not create a transformer.")
+	}
+	body := readResponseBody(t, transformer.TransformResponse(rawFinalAnswerJSONResponse(http.StatusOK, "answer")))
 	if !transformer.DidMutateResponse() || !bytes.Contains(body, []byte("recovered transcript")) {
-		t.Fatalf("opening marker mention did not preserve recovery: %s", body)
+		t.Fatalf("The final answer mutation did not match the expected result: %t body=%s", transformer.DidMutateResponse(), body)
+	}
+	for _, metadata := range []string{
+		`{"request_kind":"turn","compaction":{"implementation":"responses_compaction_v2"}}`,
+		`{"request_kind":"turn","compaction":{"strategy":"memento"}}`,
+	} {
+		request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {metadata}}}
+		if NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery) != nil {
+			t.Fatalf("The test unexpectedly created a transformer for metadata %s", metadata)
+		}
 	}
 }
 

@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// appendRawCompactionAssistantContentPart appends transcriptText as a separate
+// output_text part and marks that part. It preserves every existing part. If
+// either write fails, it returns the original item with valid equal to false.
 func appendRawCompactionAssistantContentPart(
 	item []byte,
 	contentStart int,
@@ -13,49 +16,54 @@ func appendRawCompactionAssistantContentPart(
 	hasContent bool,
 	transcriptText string,
 ) ([]byte, bool, bool) {
+	partIndex := 0
+	if hasContent {
+		ranges, ok := jsonArrayValueRanges(item[contentStart:contentEnd])
+		if !ok {
+			return item, false, false
+		}
+		partIndex = len(ranges)
+	}
 	encodedText, ok := marshalRawCompactionString(transcriptText)
 	if !ok {
 		return item, false, false
 	}
 	part := append([]byte(`{"type":"output_text","annotations":[],"logprobs":[],"text":`), encodedText...)
 	part = append(part, '}')
+	var appended []byte
 	if hasContent {
-		content := item[contentStart:contentEnd]
-		closing := len(content) - 1
-		for closing >= 0 && (content[closing] == ' ' || content[closing] == '\t' || content[closing] == '\r' || content[closing] == '\n') {
-			closing--
-		}
-		if closing < 0 || content[closing] != ']' {
-			return item, false, false
-		}
-		hasParts := len(bytes.TrimSpace(content[1:closing])) > 0
-		replacement := make([]byte, 0, len(content)+len(part)+1)
-		replacement = append(replacement, content[:closing]...)
-		if hasParts {
-			replacement = append(replacement, ',')
-		}
-		replacement = append(replacement, part...)
-		replacement = append(replacement, content[closing:]...)
-		return replaceByteRange(item, contentStart, contentEnd, replacement), true, true
+		appended, ok = appendRawCompactionContentArrayPart(item, contentStart, contentEnd, part)
+	} else {
+		appended, ok = appendRawCompactionObjectField(item, "content", append(append([]byte{'['}, part...), ']'))
 	}
-	closing := len(item) - 1
-	for closing >= 0 && (item[closing] == ' ' || item[closing] == '\t' || item[closing] == '\r' || item[closing] == '\n') {
-		closing--
-	}
-	if closing < 0 || item[closing] != '}' {
+	if !ok {
 		return item, false, false
 	}
-	hasFields := len(bytes.TrimSpace(item[1:closing])) > 0
-	replacement := make([]byte, 0, len(item)+len(part)+13)
-	replacement = append(replacement, item[:closing]...)
-	if hasFields {
+	marked, ok := markRawCompactionTranscriptPart(appended, partIndex)
+	if !ok {
+		return item, false, false
+	}
+	return marked, true, true
+}
+
+func appendRawCompactionContentArrayPart(item []byte, contentStart int, contentEnd int, part []byte) ([]byte, bool) {
+	content := item[contentStart:contentEnd]
+	closing := len(content) - 1
+	for closing >= 0 && (content[closing] == ' ' || content[closing] == '\t' || content[closing] == '\r' || content[closing] == '\n') {
+		closing--
+	}
+	if closing < 0 || content[closing] != ']' {
+		return item, false
+	}
+	hasParts := len(bytes.TrimSpace(content[1:closing])) > 0
+	replacement := make([]byte, 0, len(content)+len(part)+1)
+	replacement = append(replacement, content[:closing]...)
+	if hasParts {
 		replacement = append(replacement, ',')
 	}
-	replacement = append(replacement, `"content":[`...)
 	replacement = append(replacement, part...)
-	replacement = append(replacement, ']')
-	replacement = append(replacement, item[closing:]...)
-	return replacement, true, true
+	replacement = append(replacement, content[closing:]...)
+	return replaceByteRange(item, contentStart, contentEnd, replacement), true
 }
 
 func rawSSEFrameEvent(frame []byte) rawCompactionSSEEvent {

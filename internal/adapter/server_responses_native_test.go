@@ -26,6 +26,7 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/mitm/capture"
 	codexcompaction "goodkind.io/clyde/internal/providers/codex/compaction"
+	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/reorientinject"
 	"goodkind.io/clyde/internal/reorienttag"
 	"goodkind.io/clyde/internal/tokencount"
@@ -1382,6 +1383,19 @@ func TestNativeCodexResponsesCompactionV2OpenDoesNotCompleteOrMutateRecovery(t *
 	}
 }
 
+func nativeMarkedTranscriptBody(t *testing.T, escaped bool) []byte {
+	t.Helper()
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(escaped)
+	if err := encoder.Encode(reorienttag.WrapInjection("recovered transcript", "")); err != nil {
+		t.Fatalf("The test could not encode the transcript: %v", err)
+	}
+	text := strings.TrimSpace(encoded.String())
+	return []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"},{"type":"output_text","text":` + text +
+		`}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown","` + codexstore.InjectedTranscriptContentKind + `"]}}]}`)
+}
+
 func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpen(t *testing.T) {
 	base := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`)
 	tests := []struct {
@@ -1394,8 +1408,8 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpen(t *testing.T) 
 		{name: "wrong digest", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "duplicate compaction", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "malformed input field", body: []byte(`{"model":"gpt-native","input":"invalid"}`), metadata: nativeTurnMetadata(t)},
-		{name: "tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>kept</pre-compaction-transcript>"}]}]}`), metadata: nativeTurnMetadata(t)},
-		{name: "escaped tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"\u003cpre-compaction-transcript\u003ekept\u003c/pre-compaction-transcript\u003e"}]}]}`), metadata: nativeTurnMetadata(t)},
+		{name: "matching marked transcript", body: nativeMarkedTranscriptBody(t, false), metadata: nativeTurnMetadata(t)},
+		{name: "escaped matching marked transcript", body: nativeMarkedTranscriptBody(t, true), metadata: nativeTurnMetadata(t)},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1437,8 +1451,8 @@ func TestNativeCodexResponsesCompactionV2RecoveryRequestFailsOpenZstd(t *testing
 		{name: "wrong digest", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "duplicate compaction", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), metadata: nativeTurnMetadata(t)},
 		{name: "malformed input field", body: []byte(`{"model":"gpt-native","input":"invalid"}`), metadata: nativeTurnMetadata(t)},
-		{name: "tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<pre-compaction-transcript>kept</pre-compaction-transcript>"}]}]}`), metadata: nativeTurnMetadata(t)},
-		{name: "escaped tagged", body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"\u003cpre-compaction-transcript\u003ekept\u003c/pre-compaction-transcript\u003e"}]}]}`), metadata: nativeTurnMetadata(t)},
+		{name: "matching marked transcript", body: nativeMarkedTranscriptBody(t, false), metadata: nativeTurnMetadata(t)},
+		{name: "escaped matching marked transcript", body: nativeMarkedTranscriptBody(t, true), metadata: nativeTurnMetadata(t)},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
