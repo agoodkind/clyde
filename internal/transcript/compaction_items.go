@@ -93,6 +93,11 @@ type CompactedMessageContentItem struct {
 	// after the provider parser verifies them against the stored summary text.
 	// Byte offsets refer to Text. JSON encoding omits this field.
 	TranscriptSpans []reorienttag.TranscriptSpan `json:"-"`
+	// UnresolvedTranscript reports that evidence proves Clyde generated a
+	// transcript in the content item, but the parser cannot recover its segment
+	// kinds. A filtered export fails when a selected compaction contains this
+	// item. JSON encoding omits UnresolvedTranscript.
+	UnresolvedTranscript bool `json:"-"`
 }
 
 // CompactedReasoningItem preserves a compacted reasoning item.

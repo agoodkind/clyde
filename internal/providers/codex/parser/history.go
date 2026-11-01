@@ -27,6 +27,7 @@ func codexTranscriptMessage(
 			HasTools:          false,
 			Tools:             nil,
 			Attachments:       nil,
+			TextParts:         nil,
 		}, true
 	}
 
@@ -47,5 +48,31 @@ func codexTranscriptMessage(
 		HasTools:          msg.HasTools,
 		Tools:             msg.Tools,
 		Attachments:       nil,
+		TextParts:         codexTextParts(msg.TextParts),
 	}, true
+}
+
+// codexTextParts applies NormalizeConversationOnlyText to ordinary parts,
+// preserves injected transcript text and its spans, and omits parts with empty
+// text.
+func codexTextParts(parts []transcript.MessageTextPart) []transcript.MessageTextPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	normalized := make([]transcript.MessageTextPart, 0, len(parts))
+	for _, part := range parts {
+		text := part.Text
+		if !part.InjectedTranscript {
+			text = transcript.NormalizeConversationOnlyText(text)
+		}
+		if text == "" {
+			continue
+		}
+		normalized = append(normalized, transcript.MessageTextPart{
+			Text:               text,
+			InjectedTranscript: part.InjectedTranscript,
+			TranscriptSpans:    part.TranscriptSpans,
+		})
+	}
+	return normalized
 }

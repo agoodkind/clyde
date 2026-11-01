@@ -89,6 +89,9 @@ type HistoryMessage struct {
 	ToolOutputIsError bool
 	Timestamp         time.Time
 	Phase             string
+	// TextParts stores assistant output_text parts when a marker or capture proof
+	// identifies an injected transcript part.
+	TextParts []transcript.MessageTextPart
 }
 
 const headerLineCap = 64
@@ -172,6 +175,12 @@ type HistoryOptions struct {
 	// messages. Injected records count as Injected; system-message and
 	// system-prompt records count as System.
 	Tally *transcript.HarnessStrips
+	// ResolveUnmarked stores the resolver that export uses to classify generated
+	// transcript text without usable typed spans. A nil value leaves unmarked text
+	// ordinary.
+	ResolveUnmarked UnmarkedTranscriptResolver
+
+	history *rolloutHistory
 }
 
 // StreamMessages yields normalized Codex rollout messages as each JSONL envelope
@@ -187,37 +196,52 @@ func StreamMessages(path string, opts HistoryOptions) iter.Seq2[HistoryMessage, 
 		}
 		defer func() { _ = f.Close() }()
 
-		reader := bufio.NewReaderSize(f, streamReaderBufferSize)
-		for {
-			if !opts.IncludeSystemMessages {
-				skipped, skipErr := skipLargeCompactedLine(reader)
-				if skipErr != nil {
-					reportStreamReadError(path, skipErr, yield)
-					return
-				}
-				if skipped {
-					continue
-				}
-			}
-			raw, readErr := reader.ReadBytes('\n')
-			if !emitStreamLine(raw, opts, yield) {
+		if opts.ResolveUnmarked != nil {
+			opts.history = &rolloutHistory{window: nil, lastWindow: nil}
+		}
+		streamRolloutLines(bufio.NewReaderSize(f, streamReaderBufferSize), path, opts, yield)
+	}
+}
+
+func streamRolloutLines(reader *bufio.Reader, path string, opts HistoryOptions, yield func(HistoryMessage, error) bool) {
+	held := heldAgentMessage{message: nil}
+	for {
+		if !opts.IncludeSystemMessages {
+			skipped, skipErr := skipLargeCompactedLine(reader)
+			if skipErr != nil {
+				finishRolloutStream(path, skipErr, &held, yield)
 				return
 			}
-			if readErr == io.EOF {
-				return
-			}
-			if readErr != nil {
-				reportStreamReadError(path, readErr, yield)
-				return
+			if skipped {
+				continue
 			}
 		}
+		raw, readErr := reader.ReadBytes('\n')
+		if !emitStreamLine(raw, opts, &held, yield) {
+			return
+		}
+		if readErr != nil {
+			finishRolloutStream(path, readErr, &held, yield)
+			return
+		}
+	}
+}
+
+func finishRolloutStream(path string, readErr error, held *heldAgentMessage, yield func(HistoryMessage, error) bool) {
+	if held.flush(yield) && !errors.Is(readErr, io.EOF) {
+		reportStreamReadError(path, readErr, yield)
 	}
 }
 
 // emitStreamLine decodes one raw JSONL line and yields its normalized message
 // when the envelope produces one. It returns false when the consumer asked to
 // stop iterating, and true otherwise so the caller continues reading.
-func emitStreamLine(raw []byte, opts HistoryOptions, yield func(HistoryMessage, error) bool) bool {
+func emitStreamLine(
+	raw []byte,
+	opts HistoryOptions,
+	held *heldAgentMessage,
+	yield func(HistoryMessage, error) bool,
+) bool {
 	line := bytes.TrimRight(raw, "\r\n")
 	if len(line) == 0 {
 		return true
@@ -226,8 +250,17 @@ func emitStreamLine(raw []byte, opts HistoryOptions, yield func(HistoryMessage, 
 	if json.Unmarshal(line, &envelope) != nil {
 		return true
 	}
+	held.applyMarkedResponseItem(envelope, opts)
 	msg, ok := streamMessageFromEnvelope(envelope, opts)
+	opts.history.record(envelope)
 	if !ok {
+		return true
+	}
+	if !held.flush(yield) {
+		return false
+	}
+	if envelopeIsAgentMessage(envelope) {
+		held.message = &msg
 		return true
 	}
 	return yield(msg, nil)
@@ -340,7 +373,7 @@ func streamMessageFromEnvelope(envelope historyLine, opts HistoryOptions) (Histo
 		if !opts.IncludeSystemMessages {
 			return emptyHistoryMessage(), false
 		}
-		return compactedMessage(envelope.Payload, lineTime)
+		return compactedMessage(envelope.Payload, lineTime, opts)
 	case historyEnvelopeSessionMeta:
 		if !opts.IncludeSystemPrompts {
 			return emptyHistoryMessage(), false
@@ -687,6 +720,7 @@ func emptyHistoryMessage() HistoryMessage {
 		ToolOutputIsError: false,
 		Timestamp:         time.Time{},
 		Phase:             "",
+		TextParts:         nil,
 	}
 }
 

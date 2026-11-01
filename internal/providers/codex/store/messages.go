@@ -61,7 +61,9 @@ func responseItemMessage(raw json.RawMessage, timestamp time.Time, opts HistoryO
 		if payload.Role == "user" {
 			return userTextMessage(text, timestamp, payload.Phase, opts)
 		}
-		return textHistoryMessage(payload.Role, text, timestamp, payload.Phase), true
+		message := textHistoryMessage(payload.Role, text, timestamp, payload.Phase)
+		message.TextParts = transcriptTextParts(raw, payload, timestamp, opts)
+		return message, true
 	case responseItemFunctionCall:
 		return toolCallHistoryMessage(payload.CallID, payload.Name, payload.Arguments, timestamp)
 	case responseItemCustomToolCall:
@@ -227,6 +229,7 @@ func textHistoryMessage(role, text string, timestamp time.Time, phase string) Hi
 		ToolOutputIsError: false,
 		Timestamp:         timestamp,
 		Phase:             phase,
+		TextParts:         nil,
 	}
 }
 
@@ -299,7 +302,7 @@ func outputText(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func compactedMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
+func compactedMessage(raw json.RawMessage, timestamp time.Time, opts HistoryOptions) (HistoryMessage, bool) {
 	var payload compactedPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
@@ -310,6 +313,7 @@ func compactedMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage,
 	if payload.ReplacementHistory != nil {
 		replacementHistoryCount = len(*payload.ReplacementHistory)
 		contextItems = normalizeCompactedContextItems(*payload.ReplacementHistory)
+		annotateInjectedTranscripts(contextItems, timestamp, opts)
 	} else if trimmedMessage != "" {
 		contextItems = []transcript.CompactedContextItem{
 			legacyCompactedSummaryContextItem(trimmedMessage),
@@ -350,5 +354,6 @@ func compactedMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage,
 		ToolOutputIsError: false,
 		Timestamp:         timestamp,
 		Phase:             "",
+		TextParts:         nil,
 	}, true
 }

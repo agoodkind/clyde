@@ -256,6 +256,7 @@ func emptyMessage() transcript.Message {
 		HasTools:          false,
 		Tools:             nil,
 		Attachments:       nil,
+		TextParts:         nil,
 	}
 }
 
@@ -303,7 +304,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
+		Attachments:       nil, TextParts: nil,
 	}
 
 	if entry.Type == EntryTypeUser {
@@ -440,7 +441,7 @@ func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
+		Attachments:       nil, TextParts: nil,
 	}, true
 }
 
@@ -646,12 +647,13 @@ func claudeSummaryContextItem(
 	text string,
 ) transcript.CompactedContextItem {
 	contentItem := transcript.CompactedMessageContentItem{
-		Type:            "text",
-		Text:            text,
-		ImageURL:        "",
-		Detail:          "",
-		Raw:             cloneRawMessage(contentRaw),
-		TranscriptSpans: nil,
+		Type:                 "text",
+		Text:                 text,
+		ImageURL:             "",
+		Detail:               "",
+		Raw:                  cloneRawMessage(contentRaw),
+		TranscriptSpans:      nil,
+		UnresolvedTranscript: false,
 	}
 	messageItem := transcript.CompactedMessageItem{
 		Role:         "user",

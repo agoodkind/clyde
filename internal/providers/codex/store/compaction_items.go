@@ -235,22 +235,24 @@ func normalizeCompactedMessageContentItems(
 		var item rawCompactedMessageContentItem
 		if err := json.Unmarshal(rawItem, &item); err != nil {
 			items = append(items, transcript.CompactedMessageContentItem{
-				Type:            "",
-				Text:            "",
-				ImageURL:        "",
-				Detail:          "",
-				Raw:             cloneRawMessage(rawItem),
-				TranscriptSpans: nil,
+				Type:                 "",
+				Text:                 "",
+				ImageURL:             "",
+				Detail:               "",
+				Raw:                  cloneRawMessage(rawItem),
+				TranscriptSpans:      nil,
+				UnresolvedTranscript: false,
 			})
 			continue
 		}
 		items = append(items, transcript.CompactedMessageContentItem{
-			Type:            item.Type,
-			Text:            item.Text,
-			ImageURL:        item.ImageURL,
-			Detail:          item.Detail,
-			Raw:             cloneRawMessage(rawItem),
-			TranscriptSpans: nil,
+			Type:                 item.Type,
+			Text:                 item.Text,
+			ImageURL:             item.ImageURL,
+			Detail:               item.Detail,
+			Raw:                  cloneRawMessage(rawItem),
+			TranscriptSpans:      nil,
+			UnresolvedTranscript: false,
 		})
 	}
 	return items
@@ -583,12 +585,13 @@ func legacyCompactedSummaryContentItem(
 	contentRaw json.RawMessage,
 ) transcript.CompactedMessageContentItem {
 	return transcript.CompactedMessageContentItem{
-		Type:            "input_text",
-		Text:            text,
-		ImageURL:        "",
-		Detail:          "",
-		Raw:             cloneRawMessage(contentRaw),
-		TranscriptSpans: nil,
+		Type:                 "input_text",
+		Text:                 text,
+		ImageURL:             "",
+		Detail:               "",
+		Raw:                  cloneRawMessage(contentRaw),
+		TranscriptSpans:      nil,
+		UnresolvedTranscript: false,
 	}
 }
 
