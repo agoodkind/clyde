@@ -95,6 +95,7 @@ func emptyMessage() transcript.Message {
 		HasTools:          false,
 		Tools:             nil,
 		Attachments:       nil,
+		TextParts:         nil,
 	}
 }
 
@@ -267,12 +268,7 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 		return p.streamWithToolOutputs(path, opts)
 	}
 	return func(yield func(transcript.Message, error) bool) {
-		streamOpts := codexstore.HistoryOptions{
-			IncludeSystemMessages: opts.IncludeSystemMessages,
-			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
-			IncludeInjected:       opts.IncludeInjected,
-			Tally:                 opts.HarnessTally,
-		}
+		streamOpts := codexHistoryOptions(opts)
 		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {
 				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
@@ -289,17 +285,22 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 	}
 }
 
+func codexHistoryOptions(opts conversation.LoadOptions) codexstore.HistoryOptions {
+	return codexstore.HistoryOptions{
+		IncludeSystemMessages: opts.IncludeSystemMessages,
+		IncludeSystemPrompts:  opts.IncludeSystemPrompts,
+		IncludeInjected:       opts.IncludeInjected,
+		Tally:                 opts.HarnessTally,
+		ResolveUnmarked:       captureTranscriptResolver(opts),
+	}
+}
+
 // streamWithToolOutputs collects the whole rollout, links each tool-output
 // record to its tool call by call_id, and then yields the shaped messages.
 func (p *Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
 		var history []codexstore.HistoryMessage
-		streamOpts := codexstore.HistoryOptions{
-			IncludeSystemMessages: opts.IncludeSystemMessages,
-			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
-			IncludeInjected:       opts.IncludeInjected,
-			Tally:                 opts.HarnessTally,
-		}
+		streamOpts := codexHistoryOptions(opts)
 		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {
 				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))

@@ -162,7 +162,7 @@ func mapUserMessage(item event, opts conversation.LoadOptions) (transcript.Messa
 		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "user",
 		Visibility: transcript.MessageVisibilityVisible, Compaction: nil,
 		Timestamp: parseTime(item.Timestamp), Text: data.Content, Thinking: "",
-		HasTools: false, Tools: nil, Attachments: attachments,
+		HasTools: false, Tools: nil, Attachments: attachments, TextParts: nil,
 	}, true
 }
 
@@ -192,7 +192,7 @@ func mapAssistantMessage(item event) (transcript.Message, bool) {
 		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant",
 		Visibility: transcript.MessageVisibilityVisible, Compaction: nil,
 		Timestamp: parseTime(item.Timestamp), Text: data.Content, Thinking: data.ReasoningText,
-		HasTools: len(tools) > 0, Tools: tools, Attachments: nil,
+		HasTools: len(tools) > 0, Tools: tools, Attachments: nil, TextParts: nil,
 	}
 	return message, data.Content != "" || data.ReasoningText != "" || len(tools) > 0
 }
@@ -208,7 +208,7 @@ func mapAssistantReasoning(item event) (transcript.Message, bool) {
 		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant",
 		Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: nil,
 		Timestamp: parseTime(item.Timestamp), Text: "", Thinking: data.Content,
-		HasTools: false, Tools: nil, Attachments: nil,
+		HasTools: false, Tools: nil, Attachments: nil, TextParts: nil,
 	}, true
 }
 
@@ -229,7 +229,7 @@ func mapSystemMessage(item event, opts conversation.LoadOptions) (transcript.Mes
 		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "system",
 		Visibility: transcript.MessageVisibilityMetaOnly, Compaction: nil,
 		Timestamp: parseTime(item.Timestamp), Text: data.Content, Thinking: "",
-		HasTools: false, Tools: nil, Attachments: nil,
+		HasTools: false, Tools: nil, Attachments: nil, TextParts: nil,
 	}, true
 }
 
@@ -263,7 +263,7 @@ func mapCompaction(item event) (transcript.Message, bool) {
 		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant",
 		Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: metadata,
 		Timestamp: parseTime(item.Timestamp), Text: data.SummaryContent, Thinking: "",
-		HasTools: false, Tools: nil, Attachments: nil,
+		HasTools: false, Tools: nil, Attachments: nil, TextParts: nil,
 	}, true
 }
 
@@ -316,6 +316,6 @@ func emptyMessage() transcript.Message {
 	return transcript.Message{
 		UUID: "", ParentUUID: "", LogicalParentUUID: "", Role: "",
 		Visibility: "", Compaction: nil, Timestamp: parseTime(""), Text: "",
-		Thinking: "", HasTools: false, Tools: nil, Attachments: nil,
+		Thinking: "", HasTools: false, Tools: nil, Attachments: nil, TextParts: nil,
 	}
 }

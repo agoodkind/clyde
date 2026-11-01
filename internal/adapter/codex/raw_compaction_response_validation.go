@@ -134,7 +134,7 @@ func rawCompactionStrictFinalAnswerContent(raw json.RawMessage) bool {
 	if json.Unmarshal(part["type"], &partType) != nil || json.Unmarshal(part["text"], &text) != nil {
 		return false
 	}
-	if partType != "output_text" || rawCompactionHasCompleteTranscriptWrapper(text) {
+	if partType != "output_text" {
 		return false
 	}
 	for key := range part {
@@ -143,23 +143,4 @@ func rawCompactionStrictFinalAnswerContent(raw json.RawMessage) bool {
 		}
 	}
 	return true
-}
-
-func rawCompactionHasCompleteTranscriptWrapper(text string) bool {
-	const openTag = "<pre-compaction-transcript>"
-	const closeTag = "</pre-compaction-transcript>"
-	openIndex := strings.Index(text, openTag)
-	for openIndex >= 0 {
-		closeIndex := strings.Index(text[openIndex+len(openTag):], closeTag)
-		if closeIndex >= 0 {
-			return true
-		}
-		nextOffset := openIndex + len(openTag)
-		nextIndex := strings.Index(text[nextOffset:], openTag)
-		if nextIndex < 0 {
-			return false
-		}
-		openIndex = nextOffset + nextIndex
-	}
-	return false
 }

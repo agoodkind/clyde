@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/reorientinject"
@@ -307,7 +308,14 @@ func TestHookLeavesANonStreamingResponseUnchanged(t *testing.T) {
 // markers appear only in message 0's tail and only inside a tool_use input.
 func recompactionBody(t *testing.T, arguments string) []byte {
 	t.Helper()
-	priorInjection := strings.TrimSpace(strings.Repeat("prior injected line ", 6000))
+	return recompactionBodyWithPrior(t, arguments, strings.TrimSpace(strings.Repeat("prior injected line ", 6000)))
+}
+
+// recompactionBodyWithPrior builds a recompaction request with the given text
+// as message 0, then a marker, a tool call, its result, an assistant answer,
+// and the compaction prompt with the given arguments.
+func recompactionBodyWithPrior(t *testing.T, arguments string, priorInjection string) []byte {
+	t.Helper()
 	toolInput := strings.TrimSpace(strings.Repeat("patched line of source ", 1500))
 	messages := []map[string]any{
 		{"role": "user", "content": priorInjection + " prior-tail-marker"},
@@ -437,6 +445,70 @@ func TestSplitRetainsTheTailOfMessageZero(t *testing.T) {
 	if !bytes.Contains(forwarded, []byte("prior injected line")) {
 		t.Error("the forwarded request dropped the head of message 0")
 	}
+}
+
+// TestSplitFramesRetainedSegmentsUnderTheBudget checks Claude compaction for
+// ASCII and multibyte requests. Each summary must contain one framed transcript
+// under 10,000 tokens, starting with message 0's tail and retaining valid UTF-8
+// chat, tool call, and tool output segments.
+func TestSplitFramesRetainedSegmentsUnderTheBudget(t *testing.T) {
+	t.Parallel()
+	const budget = 10_000
+	bodies := map[string][]byte{
+		"ascii":     recompactionBody(t, ""),
+		"non-ascii": recompactionBodyWithPrior(t, "", strings.TrimSpace(strings.Repeat("prior é 𝄞 line ", 6000))),
+	}
+	for name, body := range bodies {
+		_, summary := splitOnce(t, body, budget)
+		text := summaryStreamText(t, summary)
+		spans := reorienttag.ParseTranscriptSpans(text)
+		if len(spans) != 1 {
+			t.Fatalf("%s summary has %d framed transcripts, want 1: %s", name, len(spans), text)
+		}
+		kinds := map[reorienttag.SegmentKind]bool{}
+		for _, segment := range spans[0].Segments {
+			kinds[segment.Kind] = true
+			if !utf8.ValidString(segment.Text) {
+				t.Errorf("%s segment text is not valid UTF-8: %q", name, segment.Text)
+			}
+		}
+		for _, want := range []reorienttag.SegmentKind{reorienttag.SegmentKindChat, reorienttag.SegmentKindToolCall, reorienttag.SegmentKindToolOutput} {
+			if !kinds[want] {
+				t.Errorf("%s framed transcript has no %s segment: %v", name, want, kinds)
+			}
+		}
+		if !strings.Contains(spans[0].Segments[0].Text, "prior-tail-marker") {
+			t.Errorf("%s framed transcript does not start with the tail of message 0: %q", name, spans[0].Segments[0].Text)
+		}
+		counter := tokencount.LocalCounter(tokencount.FamilyClaude, "claude-opus-5", tokencount.Settings{})
+		retained := reorienttag.EncodeTranscript(spans[0].Segments)
+		if got := counter.Estimate(retained); got >= budget {
+			t.Fatalf("%s framed transcript measures %d tokens, budget %d", name, got, budget)
+		}
+	}
+}
+
+// summaryStreamText decodes each data: line in an SSE summary response and
+// joins the delta text fields in order.
+func summaryStreamText(t *testing.T, stream string) string {
+	t.Helper()
+	var text strings.Builder
+	for line := range strings.Lines(stream) {
+		payload, found := strings.CutPrefix(strings.TrimSuffix(line, "\n"), "data: ")
+		if !found {
+			continue
+		}
+		var event struct {
+			Delta struct {
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatalf("decode summary event %q: %v", payload, err)
+		}
+		text.WriteString(event.Delta.Text)
+	}
+	return text.String()
 }
 
 // TestSplitHonorsAnExplicitContentSelector asserts a typed selector still

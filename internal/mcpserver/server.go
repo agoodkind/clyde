@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -108,12 +109,14 @@ func (srv *Server) Serve(ctx context.Context) error {
 		Op:         "serve",
 	}
 	srv.log.InfoContext(ctx, "mcp.server.starting", "concern", "mcp.server.requests", "server_name", serveMeta.ServerName, "op", serveMeta.Op)
+	releaseServe := func() {}
 	serveHandle, err := srv.Tunnels.Register(ctx, "mcp.serve", serveMeta, &contextCancelCloser{cancel: func() {}})
 	if err == nil {
-		defer srv.Tunnels.Release(ctx, serveHandle, "mcp.serve.done")
+		releaseServe = sync.OnceFunc(func() { srv.Tunnels.Release(ctx, serveHandle, "mcp.serve.done") })
+		defer releaseServe()
 	}
 
-	return serveStdioLocked(ctx, srv.mcp, srv.group, mcpShutdownCap, os.Stdin, os.Stdout)
+	return serveStdioLocked(ctx, srv.mcp, srv.group, mcpShutdownCap, os.Stdin, os.Stdout, releaseServe)
 }
 
 // mcpShutdownCap bounds how long the MCP server drains in-flight tool calls
@@ -230,7 +233,7 @@ func registerPrompt(mcpServer *server.MCPServer) {
 	)
 }
 
-func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, group *livetrack.Group, shutdownCap time.Duration, stdin io.Reader, stdout io.Writer) error {
+func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, group *livetrack.Group, shutdownCap time.Duration, stdin io.Reader, stdout io.Writer, releaseServe func()) error {
 	stdio := server.NewStdioServer(mcpSrv)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -253,6 +256,10 @@ func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, group *l
 	}()
 
 	listenErr := stdio.Listen(ctx, stdin, newMCPStdoutWriter(stdout))
+	// The serve session remains registered until this function returns. Quiesce
+	// waits for every registered session and would wait for this session for the
+	// full shutdownCap. Release the serve session before the drain.
+	releaseServe()
 	// Drain the in-flight MCP tool calls through the server's lifecycle group
 	// under shutdownCap. The registry emits its own drain-complete event with the
 	// force-closed count, so no bespoke force-close log is needed here.
