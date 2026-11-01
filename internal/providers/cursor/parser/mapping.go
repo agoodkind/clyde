@@ -68,14 +68,16 @@ func mapJSONLMessage(
 			input := transcript.ToolInputJSON{Raw: cloneRaw(part.ToolInput)}
 			display, displayLang := toolDisplayText(part.ToolName, input)
 			tools = append(tools, transcript.ToolCall{
-				ID:          "",
-				Name:        part.ToolName,
-				Input:       input,
-				Display:     display,
-				DisplayLang: displayLang,
-				Output:      "",
-				IsError:     false,
-				Attachments: nil,
+				ID:               "",
+				Name:             part.ToolName,
+				Input:            input,
+				Display:          display,
+				DisplayLang:      displayLang,
+				Output:           "",
+				IsError:          false,
+				Attachments:      nil,
+				Timestamp:        nil,
+				TimestampUnknown: true,
 			})
 		}
 	}
@@ -164,14 +166,16 @@ func mapComposerBubble(
 		input := transcript.ToolInputJSON{Raw: rawArgsToJSON(bubble.ToolCall.RawArgs)}
 		display, displayLang := toolDisplayText(bubble.ToolCall.Name, input)
 		tools = append(tools, transcript.ToolCall{
-			ID:          "",
-			Name:        bubble.ToolCall.Name,
-			Input:       input,
-			Display:     display,
-			DisplayLang: displayLang,
-			Output:      toolOutput,
-			IsError:     toolErrored(bubble.ToolCall.Status),
-			Attachments: nil,
+			ID:               "",
+			Name:             bubble.ToolCall.Name,
+			Input:            input,
+			Display:          display,
+			DisplayLang:      displayLang,
+			Output:           toolOutput,
+			IsError:          toolErrored(bubble.ToolCall.Status),
+			Attachments:      nil,
+			Timestamp:        nil,
+			TimestampUnknown: false,
 		})
 	}
 	// Cursor persists whatever Clyde's MITM/BYOK ingress streamed into

@@ -1,10 +1,16 @@
 package parser_test
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -13,49 +19,322 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/providers/cursor/parser"
+	"goodkind.io/clyde/internal/transcript"
 )
-
-const sourceTimesConversationID = "77777777-7777-4777-8777-777777777777"
 
 const (
-	sourceRootComposerID  = "88888888-8888-4888-8888-888888888888"
-	shellAliasComposerID  = "99999999-9999-4999-8999-999999999999"
-	shellAliasCommandLine = "git status --short"
+	sourceTimesConversationID = "77777777-7777-4777-8777-777777777777"
+	earlyStopDeadline         = 15 * time.Second
 )
 
-// TestTranscriptShellCallTakesTheTimeOfTheStoredTerminalCommand checks that a
-// Shell call matches run_terminal_command_v2 and does not match run_command.
-func TestTranscriptShellCallTakesTheTimeOfTheStoredTerminalCommand(t *testing.T) {
+const (
+	sourceRootComposerID = "88888888-8888-4888-8888-888888888888"
+	nativeComposerID     = "99999999-9999-4999-8999-999999999999"
+	nativeGitCommand     = "git status --short"
+	nativeTestCommand    = "go test ./..."
+)
+
+// nativeStateStatements builds SQL statements for native message blobs and state.
+func nativeStateStatements(composerID string, headers string, messages []string) []string {
+	var state []byte
+	statements := make([]string, 0, len(messages)+1)
+	for _, message := range messages {
+		digest := sha256.Sum256([]byte(message))
+		state = append(state, 0x0a, byte(len(digest)))
+		state = append(state, digest[:]...)
+		statements = append(statements, "INSERT INTO cursorDiskKV(key, value) VALUES ('agentKv:blob:"+hex.EncodeToString(digest[:])+"', X'"+hex.EncodeToString([]byte(message))+"')")
+	}
+	encoded := "~" + base64.StdEncoding.EncodeToString(state)
+	statements = append(statements, `INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+composerID+`', '{"composerId":"`+composerID+`","name":"Native","createdAt":1779267600000,"lastUpdatedAt":1779268000000,"conversationState":"`+encoded+`","fullConversationHeadersOnly":[`+headers+`]}')`)
+	return statements
+}
+
+func nativeCall(id string, name string, command string) string {
+	return `{"type":"tool-call","toolCallId":"` + id + `","toolName":"` + name + `","args":{"command":"` + command + `"}}`
+}
+
+func nativeToolBubble(bubbleID string, created string, callID string, rawArgs string, serverID string) string {
+	prefix := "bubbleId:" + nativeComposerID + ":"
+	return `INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + bubbleID + `', '{"_v":3,"type":2,"bubbleId":"` + bubbleID + `","text":"","createdAt":"` + created + `","serverBubbleId":"` + serverID + `","toolFormerData":{"name":"run_terminal_command_v2","rawArgs":"` + rawArgs + `","status":"completed","toolCallId":"` + callID + `"}}')`
+}
+
+func writeNativeFixture(t *testing.T, secondCallName string) string {
+	t.Helper()
 	rootDir := t.TempDir()
 	projectsDir := t.TempDir()
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
-	transcriptPath := writeSourceTimesTranscript(t, projectsDir, "Users-alice-shell-alias", shellAliasComposerID, []string{
+	transcriptPath := writeSourceTimesTranscript(t, projectsDir, "Users-alice-native", nativeComposerID, []string{
 		`{"role":"user","message":{"content":[{"type":"text","text":"check the tree"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + shellAliasCommandLine + `"}}]}}`,
-		`{"role":"user","message":{"content":[{"type":"text","text":"run lint"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"make lint"}}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeGitCommand + `"}},{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `"}}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `"}}]}}`,
 	})
-	prefix := "bubbleId:" + shellAliasComposerID + ":"
-	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + shellAliasComposerID + `', '{"composerId":"` + shellAliasComposerID + `","name":"Shell alias","createdAt":1779267600000,"lastUpdatedAt":1779268000000,"fullConversationHeadersOnly":[{"bubbleId":"s1","type":1},{"bubbleId":"s2","type":2},{"bubbleId":"s3","type":1},{"bubbleId":"s4","type":2}]}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `s1', '{"_v":3,"type":1,"bubbleId":"s1","text":"check the tree","createdAt":"2026-05-20T10:00:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `s2', '{"_v":3,"type":2,"bubbleId":"s2","text":"","createdAt":"2026-05-20T10:01:00.000Z","toolFormerData":{"name":"run_terminal_command_v2","rawArgs":"{\"command\":\"` + shellAliasCommandLine + `\"}","status":"completed"}}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `s3', '{"_v":3,"type":1,"bubbleId":"s3","text":"run lint","createdAt":"2026-05-20T10:02:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `s4', '{"_v":3,"type":2,"bubbleId":"s4","text":"","createdAt":"2026-05-20T10:03:00.000Z","toolFormerData":{"name":"run_command","rawArgs":"{\"command\":\"make lint\"}","status":"completed"}}')`,
+	prefix := "bubbleId:" + nativeComposerID + ":"
+	statements := nativeStateStatements(nativeComposerID, `{"bubbleId":"n1","type":1},{"bubbleId":"n2","type":2},{"bubbleId":"n3","type":2},{"bubbleId":"n4","type":2}`, []string{
+		`{"role":"user","content":[{"type":"text","text":"check the tree"}]}`,
+		`{"role":"assistant","content":[` + nativeCall("call_git", "Shell", nativeGitCommand) + `,` + nativeCall("call_test_one", secondCallName, nativeTestCommand) + `]}`,
+		`{"role":"assistant","content":[` + nativeCall("call_test_two", "Shell", nativeTestCommand) + `]}`,
 	})
+	statements = append(statements,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('`+prefix+`n1', '{"_v":3,"type":1,"bubbleId":"n1","text":"check the tree","createdAt":"2026-05-20T10:00:00.000Z"}')`,
+		nativeToolBubble("n2", "2026-05-20T10:01:00.000Z", "call_git", "", ""),
+		nativeToolBubble("n3", "2026-05-20T10:02:00.000Z", "call_test_one", "", ""),
+		nativeToolBubble("n4", "2026-05-20T10:04:00.000Z", "call_test_two", "", ""),
+		nativeToolBubble("copy-git", "2026-05-20T12:00:00.000Z", "aaaaaaaa-0000-4000-8000-000000000001", `{\"command\":\"`+nativeGitCommand+`\"}`, "server-git"),
+	)
+	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), statements)
+	return transcriptPath
+}
+
+func toolTime(t *testing.T, messages []transcript.Message, message int, tool int) time.Time {
+	t.Helper()
+	if len(messages) <= message || len(messages[message].Tools) <= tool {
+		t.Fatalf("tool call is absent; message index, tool index, messages: %d %d: %+v", message, tool, messages)
+	}
+	stamp := messages[message].Tools[tool].Timestamp
+	if stamp == nil {
+		return time.Time{}
+	}
+	return *stamp
+}
+
+// TestTranscriptToolCallsTakeTheTimesOfTheirNativeIdentities checks each tool time
+// and the grouped message time.
+func TestTranscriptToolCallsTakeTheTimesOfTheirNativeIdentities(t *testing.T) {
+	transcriptPath := writeNativeFixture(t, "Shell")
 	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
 	if err != nil {
 		t.Fatalf("stream transcript: %v", err)
 	}
-	if len(messages) != 4 || messages[1].Tools[0].Name != "Shell" {
-		t.Fatalf("transcript messages do not contain the expected Shell call; messages: %+v", messages)
+	if len(messages) != 2 {
+		t.Fatalf("unexpected message count: %d", len(messages))
 	}
-	if want := time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC); !messages[1].Timestamp.Equal(want) {
-		t.Fatalf("Shell timestamp differs from the store timestamp; actual, expected: %v, %v", messages[1].Timestamp, want)
+	wants := []time.Time{
+		time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC),
+		time.Date(2026, time.May, 20, 10, 2, 0, 0, time.UTC),
+		time.Date(2026, time.May, 20, 10, 4, 0, 0, time.UTC),
 	}
-	if !messages[3].Timestamp.IsZero() {
-		t.Fatalf("Shell call matched a run_command source; timestamp: %v", messages[3].Timestamp)
+	for tool, want := range wants {
+		if got := toolTime(t, messages, 1, tool); !got.Equal(want) {
+			t.Fatalf("unexpected tool timestamp; tool index, actual, expected: %d: %v, %v", tool, got, want)
+		}
+	}
+	if !messages[1].Timestamp.IsZero() {
+		t.Fatalf("grouped message has a timestamp: %v", messages[1].Timestamp)
+	}
+}
+
+// TestTranscriptToolCallsStayUndatedWhenTheNativeSequenceDiffers checks tool times
+// before and after a native sequence mismatch.
+func TestTranscriptToolCallsStayUndatedWhenTheNativeSequenceDiffers(t *testing.T) {
+	transcriptPath := writeNativeFixture(t, "run_command")
+	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+	if err != nil {
+		t.Fatalf("stream transcript: %v", err)
+	}
+	if got, want := toolTime(t, messages, 1, 0), time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("unexpected timestamp before mismatch; actual, expected: %v, %v", got, want)
+	}
+	for _, toolIndex := range []int{1, 2} {
+		if got := toolTime(t, messages, 1, toolIndex); !got.IsZero() {
+			t.Fatalf("tool after mismatch has a timestamp; tool index, timestamp: %d: %v", toolIndex, got)
+		}
+	}
+	if !messages[1].Timestamp.IsZero() {
+		t.Fatalf("message with mismatched tools has a timestamp: %v", messages[1].Timestamp)
+	}
+}
+
+// TestTranscriptCombinedMessageIgnoresACopiedWholeBody checks that a combined
+// message stays undated when a copied whole body also matches.
+func TestTranscriptCombinedMessageIgnoresACopiedWholeBody(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+	first := "The first reply part checks the retention rules."
+	second := "The second reply part lists the remaining snapshots."
+	transcriptPath := writeSourceTimesTranscript(t, projectsDir, "Users-alice-combined", sourceTimesConversationID, []string{
+		userLine(t, "check retention"),
+		assistantTextLine(t, first),
+		assistantTextLine(t, second),
+	})
+	copied := assistantBubble("copy", first+"\n"+second, "2026-05-20T12:00:00.000Z")
+	copied.ServerBubbleID = "server-copy"
+	copied.Unreferenced = true
+	writeNativeStore(t, rootDir, nativeStoreFixture{composerID: sourceTimesConversationID, messages: nil, omitted: nil, bubbles: []fixtureBubble{
+		userBubble("c1", "check retention", "2026-05-20T10:00:00.000Z"),
+		assistantBubble("c2", first, "2026-05-20T10:01:00.000Z"),
+		assistantBubble("c3", second, "2026-05-20T10:02:00.000Z"),
+		copied,
+	}})
+	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+	if err != nil {
+		t.Fatalf("cannot stream the transcript: %v", err)
+	}
+	if len(messages) != 2 || messages[1].Text != first+"\n"+second {
+		t.Fatalf("unexpected combined messages; messages: %+v", messages)
+	}
+	if !messages[1].Timestamp.IsZero() {
+		t.Fatalf("combined message has a timestamp; timestamp: %v", messages[1].Timestamp)
+	}
+	record := conversation.Record{
+		ID: "cursor:" + sourceTimesConversationID, Provider: providerid.ProviderCursor, NativeID: sourceTimesConversationID, Selector: "",
+		Lineage: nil, Origin: conversation.OriginUnspecified, Title: "", TitleUncertain: false, WorkspaceRoot: "",
+		ArtifactPath: "", ArtifactKind: "", Model: "", CreatedAt: time.Time{}, UpdatedAt: time.Time{}, SizeBytes: 0, Archived: false, LatestRequestID: "",
+	}
+	source, found, err := parser.New().SourceStoreMessages(t.Context(), record, sourceRootLoadOptions())
+	if err != nil || !found {
+		t.Fatalf("cannot read source messages; found, error: %v, %v", found, err)
+	}
+	wholeBody := 0
+	for _, stored := range append(slices.Clone(source.Messages), source.Copies...) {
+		if stored.Text == messages[1].Text {
+			wholeBody++
+		}
+	}
+	if wholeBody != 1 {
+		t.Fatalf("stored message count matching the transcript text differs from 1; count: %d", wholeBody)
+	}
+}
+
+// TestSourceStoreMessagesReportsAnUnreadableNativeState checks that an unreadable
+// native state returns an error.
+func TestSourceStoreMessagesReportsAnUnreadableNativeState(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
+	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + nativeComposerID + `', '{"composerId":"` + nativeComposerID + `","name":"Broken","createdAt":1779267600000,"lastUpdatedAt":1779268000000,"conversationState":"~%%%","fullConversationHeadersOnly":[{"bubbleId":"x1","type":1}]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + nativeComposerID + `:x1', '{"_v":3,"type":1,"bubbleId":"x1","text":"broken state","createdAt":"2026-05-20T10:00:00.000Z"}')`,
+	})
+	record := conversation.Record{
+		ID: "cursor:" + nativeComposerID, Provider: providerid.ProviderCursor, NativeID: nativeComposerID, Selector: "",
+		Lineage: nil, Origin: conversation.OriginUnspecified, Title: "", TitleUncertain: false, WorkspaceRoot: "",
+		ArtifactPath: "", ArtifactKind: "", Model: "", CreatedAt: time.Time{}, UpdatedAt: time.Time{}, SizeBytes: 0, Archived: false, LatestRequestID: "",
+	}
+	if _, found, err := parser.New().SourceStoreMessages(t.Context(), record, sourceRootLoadOptions()); err == nil {
+		t.Fatalf("source store returned without an error for unreadable native state; found: %v", found)
+	}
+}
+
+// TestTranscriptToolCallsStayUndatedWhenTheCompleteInputDiffers checks that a
+// matching display does not bind calls when their complete inputs differ.
+func TestTranscriptToolCallsStayUndatedWhenTheCompleteInputDiffers(t *testing.T) {
+	transcriptPath := writeNativeFixture(t, "Shell")
+	lines := strings.Join([]string{
+		`{"role":"user","message":{"content":[{"type":"text","text":"check the tree"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeGitCommand + `"}},{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `","working_directory":"/other"}}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `"}}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+	if err != nil {
+		t.Fatalf("stream transcript: %v", err)
+	}
+	if messages[1].Tools[1].Display != nativeTestCommand {
+		t.Fatalf("unexpected tool display, actual: %q", messages[1].Tools[1].Display)
+	}
+	if got, want := toolTime(t, messages, 1, 0), time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("unexpected first tool time, actual, expected: %v, %v", got, want)
+	}
+	for _, toolIndex := range []int{1, 2} {
+		if got := toolTime(t, messages, 1, toolIndex); !got.IsZero() {
+			t.Fatalf("tool has a timestamp after the input mismatch, tool index, actual: %d: %v", toolIndex, got)
+		}
+	}
+}
+
+// TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer checks tool times
+// when a transcript message starts within a native message.
+func TestTranscriptToolCallsStayUndatedWhenMessageBoundariesDiffer(t *testing.T) {
+	transcriptPath := writeNativeFixture(t, "Shell")
+	lines := strings.Join([]string{
+		`{"role":"user","message":{"content":[{"type":"text","text":"check the tree"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeGitCommand + `"}}]}}`,
+		`{"role":"user","message":{"content":[{"type":"text","text":"now the tests"}]}}`,
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `"}},{"type":"tool_use","name":"Shell","input":{"command":"` + nativeTestCommand + `"}}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+	if err != nil {
+		t.Fatalf("stream transcript: %v", err)
+	}
+	if len(messages) != 4 {
+		t.Fatalf("unexpected message count: %d", len(messages))
+	}
+	if got, want := toolTime(t, messages, 1, 0), time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("unexpected timestamp before boundary mismatch; actual, expected: %v, %v", got, want)
+	}
+	for _, toolIndex := range []int{0, 1} {
+		if got := toolTime(t, messages, 3, toolIndex); !got.IsZero() {
+			t.Fatalf("tool after boundary mismatch has a timestamp; tool index, timestamp: %d: %v", toolIndex, got)
+		}
+	}
+}
+
+// TestTranscriptStreamStopsEarlyWithSourceTimes checks that the first dated message
+// is available before the FIFO writer closes.
+func TestTranscriptStreamStopsEarlyWithSourceTimes(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+	prefix := "bubbleId:" + sourceTimesConversationID + ":"
+	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), []string{
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + sourceTimesConversationID + `', '{"composerId":"` + sourceTimesConversationID + `","name":"Stream","createdAt":1779267600000,"lastUpdatedAt":1779268000000,"fullConversationHeadersOnly":[{"bubbleId":"f1","type":1}]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('` + prefix + `f1', '{"_v":3,"type":1,"bubbleId":"f1","text":"stream question","createdAt":"2026-05-20T10:00:00.000Z"}')`,
+	})
+	transcriptPath := filepath.Join(projectsDir, "Users-alice-stream", "agent-transcripts", sourceTimesConversationID, sourceTimesConversationID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("create transcript directory: %v", err)
+	}
+	if err := syscall.Mkfifo(transcriptPath, 0o600); err != nil {
+		t.Fatalf("create transcript FIFO: %v", err)
+	}
+	release := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writer, err := os.OpenFile(transcriptPath, os.O_WRONLY, 0)
+		if err != nil {
+			writerDone <- err
+			return
+		}
+		_, writeErr := writer.WriteString(`{"role":"user","message":{"content":[{"type":"text","text":"stream question"}]}}` + "\n" +
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"first answer"}]}}` + "\n")
+		<-release
+		writerDone <- errors.Join(writeErr, writer.Close())
+	}()
+	defer func() {
+		close(release)
+		<-writerDone
+	}()
+	result := make(chan transcript.Message, 1)
+	failure := make(chan error, 1)
+	go func() {
+		for message, err := range parser.New().Stream(transcriptPath, sourceRootLoadOptions()) {
+			if err != nil {
+				failure <- err
+				return
+			}
+			result <- message
+			return
+		}
+		failure <- errors.New("transcript stream returned without a message")
+	}()
+	select {
+	case message := <-result:
+		if want := time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC); !message.Timestamp.Equal(want) {
+			t.Fatalf("unexpected first message timestamp; actual, expected: %v, %v", message.Timestamp, want)
+		}
+	case err := <-failure:
+		t.Fatalf("stream transcript: %v", err)
+	case <-time.After(earlyStopDeadline):
+		t.Fatal("transcript stream waited for the FIFO writer to close")
 	}
 }
 
@@ -120,7 +399,7 @@ func TestComposerSourceRootFollowsTheRecordAndRefusesConflicts(t *testing.T) {
 			}
 		}
 		messages, found, err := parser.New().SourceStoreMessages(t.Context(), recordB, sourceRootLoadOptions())
-		if err != nil || !found || len(messages) == 0 || !messages[0].Timestamp.Equal(wantB) {
+		if err != nil || !found || len(messages.Messages) == 0 || !messages.Messages[0].Timestamp.Equal(wantB) {
 			t.Fatalf("source messages did not come from the record's root; root order, found, error, messages: %v: %v, %v, %+v", order, found, err, messages)
 		}
 	}
@@ -175,7 +454,7 @@ func TestTranscriptMessagesTakeTimesFromTheComposerStore(t *testing.T) {
 		time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC),
 		{},
 		time.Date(2026, time.May, 20, 9, 0, 0, 0, time.UTC),
-		time.Date(2026, time.May, 20, 10, 2, 0, 0, time.UTC),
+		{},
 		time.Date(2026, time.May, 20, 10, 5, 0, 100_000_000, time.UTC),
 		time.Date(2026, time.May, 20, 10, 5, 0, 900_000_000, time.UTC),
 		time.Date(2026, time.May, 20, 8, 0, 0, 0, time.UTC),

@@ -80,7 +80,7 @@ type searchConversationsMatchOutput struct {
 	Conversation  conv.Record `json:"conversation"`
 	MessageIndex  int         `json:"message_index"`
 	Role          string      `json:"role"`
-	Timestamp     time.Time   `json:"timestamp"`
+	Timestamp     time.Time   `json:"timestamp,omitzero"`
 	Snippet       string      `json:"snippet"`
 	Score         float64     `json:"score"`
 	ContextWindow string      `json:"context_window,omitempty"`

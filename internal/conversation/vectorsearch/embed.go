@@ -140,6 +140,7 @@ type ingestStats struct {
 	embedded      int
 	split         int
 	dropped       int
+	timesFilled   int
 }
 
 // rowWriter buffers embedded rows and writes them to the collection in batches

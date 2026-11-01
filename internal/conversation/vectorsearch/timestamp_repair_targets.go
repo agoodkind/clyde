@@ -36,7 +36,7 @@ func (c *Client) ZeroTimeConversationIDs(ctx context.Context, collectionID strin
 		slog.WarnContext(ctx, "conversation.vectorsearch.zero_time_collection_absent", "concern", "conversation.semantic", "component", "conversation", "collection", collectionName)
 		return nil, fmt.Errorf("collection does not exist %s: %w", collectionName, ErrCollectionAbsent)
 	}
-	filter := timestampUnixColumn + " == " + strconv.FormatInt(missingTimestampUnix, 10)
+	filter := "(" + timestampUnixColumn + " == " + strconv.FormatInt(missingTimestampUnix, 10) + " or " + timestampUnixColumn + " IS NULL)"
 	iterator, err := milvus.client.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
 		WithBatchSize(timestampRepairTargetBatch).
 		WithFilter(filter).

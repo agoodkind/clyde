@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	metadataNull                  = "null"
 	metadataTimestampKey          = "timestamp_unix"
 	timestampRepairWriteBatchRows = 500
 )
@@ -24,10 +25,21 @@ const (
 // A parser uses the zero time for a message without a timestamp.
 var missingTimestampUnix = time.Time{}.Unix()
 
+// MissingTimestampUnix is the Unix value of a zero time.
+var MissingTimestampUnix = missingTimestampUnix
+
 // ErrTimestampRepairUnsupported reports that timestamp repair requires the
 // single-collection Milvus layout. The shared layout also stores timestamp
 // ranges on vector rows.
 var ErrTimestampRepairUnsupported = errors.New("repair timestamps: use the single-collection Milvus layout")
+
+// timestampScalar returns a null scalar for an unknown timestamp.
+func timestampScalar(timestampUnix int64) collection.ScalarValue {
+	if timestampUnix == missingTimestampUnix {
+		return collection.ScalarValue{Type: collection.ScalarTypeInt64, Null: true, String: "", Bool: false, Int64: 0}
+	}
+	return collection.Int64Scalar(timestampUnix)
+}
 
 // TimestampRepairSource supplies the current documents for one conversation.
 type TimestampRepairSource struct {
@@ -348,7 +360,11 @@ func plannedTimestampUpdates(
 			report.RowsInvalidMetadata++
 			continue
 		}
-		if metadataTimestamp == want && row.timestampKnown && row.timestampUnix == want {
+		current := metadataTimestamp == want && row.timestampKnown && row.timestampUnix == want
+		if want == missingTimestampUnix {
+			current = metadataTimestamp == want && !row.timestampKnown
+		}
+		if current {
 			report.RowsCurrent++
 			continue
 		}
@@ -406,6 +422,10 @@ func replaceMetadataTimestamp(rowID string, metadata string, timestampUnix int64
 		if valueStart < 0 || metadata[valueStart:valueEnd] != string(raw) {
 			return "", 0, errors.New("cannot locate timestamp_unix in metadata")
 		}
+		if string(raw) == metadataNull {
+			stored = missingTimestampUnix
+			continue
+		}
 		parsed, parseErr := strconv.ParseInt(string(raw), 10, 64)
 		if parseErr != nil {
 			return "", 0, fmt.Errorf("parse metadata timestamp_unix as an integer: %w", parseErr)
@@ -421,5 +441,9 @@ func replaceMetadataTimestamp(rowID string, metadata string, timestampUnix int64
 	if !found {
 		return "", 0, errors.New("metadata must contain timestamp_unix")
 	}
-	return metadata[:valueStart] + strconv.FormatInt(timestampUnix, 10) + metadata[valueEnd:], stored, nil
+	replacement := metadataNull
+	if timestampUnix != missingTimestampUnix {
+		replacement = strconv.FormatInt(timestampUnix, 10)
+	}
+	return metadata[:valueStart] + replacement + metadata[valueEnd:], stored, nil
 }

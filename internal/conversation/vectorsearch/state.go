@@ -22,6 +22,7 @@ type storedFamilyRow struct {
 	content           string
 	splitPart         int32
 	splitPartRecorded bool
+	timeKnown         bool
 }
 
 func (row storedFamilyRow) hasCurrentKey() bool {
@@ -55,6 +56,18 @@ const (
 // conversation as a message family.
 type conversationState struct {
 	families map[string][]storedFamilyRow
+}
+
+func (state *conversationState) hasUnknownTimeRow(familyKey string, id string) bool {
+	if state == nil {
+		return false
+	}
+	for _, row := range state.families[familyKey] {
+		if row.id == id {
+			return !row.timeKnown
+		}
+	}
+	return false
 }
 
 func (state *conversationState) hasRow(familyKey string, id string) bool {
@@ -189,6 +202,7 @@ func (batch *storedBatch) add(conversationID string, row collection.StoredRow, c
 		content:           row.Content,
 		splitPart:         row.SplitPart,
 		splitPartRecorded: row.SplitPartRecorded,
+		timeKnown:         !rowHasZeroTime(row) && rowTimestampPresent(row),
 	})
 }
 
@@ -230,7 +244,10 @@ func assignConversationID(row collection.StoredRow, requested []string) string {
 func storedRowsDeclaration() collection.Declaration {
 	return collection.Declaration{
 		ItemIDColumn: conversationIDColumn,
-		Scalars:      []collection.ScalarColumn{nullableStringColumn(conversationIDColumn, conversationIDMaxLength)},
+		Scalars: []collection.ScalarColumn{
+			nullableStringColumn(conversationIDColumn, conversationIDMaxLength),
+			{Name: timestampUnixColumn, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+		},
 	}
 }
 

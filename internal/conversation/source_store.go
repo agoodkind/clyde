@@ -2,18 +2,59 @@ package conversation
 
 import (
 	"context"
+	"time"
 
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/transcript"
 )
 
+// SourceToolCall contains a native tool call and its source timestamp.
+type SourceToolCall struct {
+	Tool      transcript.ToolCall
+	Timestamp time.Time
+	// Reason identifies why the tool call timestamp is unavailable.
+	Reason string
+	// MessageStart reports whether this is the first tool call in its native message.
+	MessageStart bool
+	// AfterUser reports whether a real user turn appeared since the previous call.
+	AfterUser bool
+	// GroupedMessage records the message position when the projection joins
+	// consecutive native assistant messages.
+	GroupedMessage int
+	// GroupedOrdinal records the call position within the combined assistant
+	// message.
+	GroupedOrdinal int
+	// ActualMessage records the message position when the projection counts
+	// native messages separately.
+	ActualMessage int
+	// ActualOrdinal records the call position within its native message.
+	ActualOrdinal int
+}
+
+// SourceMessages contains ordered messages, stored copies, and native tool calls.
+type SourceMessages struct {
+	Messages []transcript.Message
+	// Copies contains stored messages outside the ordered conversation.
+	Copies []transcript.Message
+	// ToolCalls contains native tool calls in source order.
+	ToolCalls []SourceToolCall
+	// ToolCallsComplete reports whether the native tool call state is complete.
+	ToolCallsComplete bool
+	// GroupedUsers records user turns under the message numbering that combines
+	// consecutive native assistant messages.
+	GroupedUsers []transcript.UserTurn
+	// ActualUsers records user turns under the message numbering that counts
+	// native messages separately.
+	ActualUsers []transcript.UserTurn
+	// MissingNativeRecords counts referenced native records that do not exist.
+	MissingNativeRecords int
+}
+
 // SourceStoreReader reads provider messages and prepares stored text for source matching.
 type SourceStoreReader interface {
-	SourceStoreMessages(ctx context.Context, record Record, opts LoadOptions) ([]transcript.Message, bool, error)
+	SourceStoreMessages(ctx context.Context, record Record, opts LoadOptions) (SourceMessages, bool, error)
 	// SourceMatchText prepares stored text for matching against source messages.
 	SourceMatchText(role string, text string) string
-	// SourceToolName returns the tool name used to match source timestamps.
-	SourceToolName(name string) string
 }
 
 // SourceStoreReader returns the provider's source store reader when its parser implements it.

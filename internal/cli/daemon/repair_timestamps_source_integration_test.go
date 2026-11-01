@@ -5,7 +5,10 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -13,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +30,7 @@ import (
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/conversation/vectorsearch"
 	"goodkind.io/clyde/internal/conversation/vectorsearch/milvustest"
+	daemonsvc "goodkind.io/clyde/internal/daemon"
 	cursorparser "goodkind.io/clyde/internal/providers/cursor/parser"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 )
@@ -51,13 +56,31 @@ const (
 	sourceRepairLiteral     = "Please repeat this"
 	sourceRepairMarkerLine  = "[turn ended: error]"
 	sourceRepairShellAlias  = "git status --short"
-	sourceRepairOtherTool   = "make lint"
 	sourceRepairShellTwice  = "go test ./..."
 	sourceRepairShellDay    = "2026-03-14"
+	sourceRepairCopied      = "Which bucket keeps the nightly backups?"
 )
 
-func shellBubbleTool(name string, command string) string {
-	return `{"name":"` + name + `","rawArgs":"{\"command\":\"` + command + `\"}","status":"completed"}`
+func shellBubbleTool(callID string, rawArgs string) string {
+	return `{"name":"run_terminal_command_v2","rawArgs":"` + rawArgs + `","status":"completed","toolCallId":"` + callID + `"}`
+}
+
+func shellArgs(command string) string {
+	return `{\"command\":\"` + command + `\"}`
+}
+
+func nativeToolCall(id string, name string, args string) string {
+	return `{"type":"tool-call","toolCallId":"` + id + `","toolName":"` + name + `","args":` + args + `}`
+}
+
+func sourceRepairNative() []string {
+	return []string{
+		`{"role":"assistant","content":[` + nativeToolCall("call_read", "read_file", `{"path":"internal/online/online.go"}`) + `]}`,
+		`{"role":"user","content":[{"type":"text","text":"` + sourceRepairSameQ + `"}]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_git", "Shell", `{"command":"`+sourceRepairShellAlias+`"}`) + `]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_test_one", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_test_two", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
+	}
 }
 
 func shellToolDoc(command string, messageIndex int32, timestampUnix int64) semsearch.SemDoc {
@@ -67,18 +90,20 @@ func shellToolDoc(command string, messageIndex int32, timestampUnix int64) semse
 }
 
 type sourceBubble struct {
-	id      string
-	kind    int
-	text    string
-	created string
-	tool    string
+	id           string
+	kind         int
+	text         string
+	created      string
+	tool         string
+	server       string
+	unreferenced bool
 }
 
 func sourceRepairBubbles() []sourceBubble {
 	return []sourceBubble{
 		{id: "b1", kind: 1, text: sourceRepairQuestion, created: "2026-03-02T10:00:00.000Z", tool: ""},
 		{id: "b2", kind: 2, text: sourceRepairAnswer, created: "2026-03-03T10:00:00.000Z", tool: ""},
-		{id: "b3", kind: 2, text: "", created: "2026-03-04T10:00:00.000Z", tool: `{"name":"read_file","rawArgs":"{\"path\":\"internal/online/online.go\"}","status":"completed"}`},
+		{id: "b3", kind: 2, text: "", created: "2026-03-04T10:00:00.000Z", tool: `{"name":"read_file","rawArgs":"{\"path\":\"internal/online/online.go\"}","status":"completed","toolCallId":"call_read"}`},
 		{id: "b4", kind: 2, text: sourceRepairPartA, created: "2026-03-05T10:00:00.000Z", tool: ""},
 		{id: "b5", kind: 2, text: sourceRepairPartB, created: "2026-03-06T10:00:00.000Z", tool: ""},
 		{id: "b6", kind: 1, text: "Did the nightly retention job finish?", created: "2026-03-07T10:00:00.000Z", tool: ""},
@@ -90,10 +115,12 @@ func sourceRepairBubbles() []sourceBubble {
 		{id: "b12", kind: 1, text: sourceRepairReordered, created: "2026-03-01T09:00:00.000Z", tool: ""},
 		{id: "b13", kind: 1, text: sourceRepairLiteral, created: "2026-03-12T10:00:00.000Z", tool: ""},
 		{id: "b14", kind: 1, text: sourceRepairLiteral + `\n` + sourceRepairMarkerLine, created: "2026-03-13T10:00:00.000Z", tool: ""},
-		{id: "b15", kind: 2, text: "", created: "2026-03-14T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellAlias)},
-		{id: "b16", kind: 2, text: "", created: "2026-03-15T10:00:00.000Z", tool: shellBubbleTool("run_command", sourceRepairOtherTool)},
-		{id: "b17", kind: 2, text: "", created: "2026-03-16T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellTwice)},
-		{id: "b18", kind: 2, text: "", created: "2026-03-17T10:00:00.000Z", tool: shellBubbleTool("run_terminal_command_v2", sourceRepairShellTwice)},
+		{id: "b15", kind: 2, text: "", created: "2026-03-14T10:00:00.000Z", tool: shellBubbleTool("call_git", "")},
+		{id: "b17", kind: 2, text: "", created: "2026-03-16T10:00:00.000Z", tool: shellBubbleTool("call_test_one", "")},
+		{id: "b18", kind: 2, text: "", created: "2026-03-17T10:00:00.000Z", tool: shellBubbleTool("call_test_two", "")},
+		{id: "b19", kind: 2, text: "", created: "2026-03-20T10:00:00.000Z", tool: shellBubbleTool("aaaaaaaa-0000-4000-8000-000000000019", shellArgs(sourceRepairShellAlias)), server: "server-git", unreferenced: true},
+		{id: "b20", kind: 1, text: sourceRepairCopied, created: "2026-03-18T10:00:00.000Z", tool: ""},
+		{id: "b21", kind: 1, text: sourceRepairCopied, created: "2026-03-19T10:00:00.000Z", tool: "", server: "server-copied", unreferenced: true},
 	}
 }
 
@@ -109,11 +136,11 @@ func writeSourceRepairStoreWith(t *testing.T, dataRoot string, createdAt func(st
 	for position := range bubbles {
 		bubbles[position].created = createdAt(bubbles[position].created)
 	}
-	writeComposerStore(t, dataRoot, sourceRepairComposerID, bubbles)
+	writeComposerStore(t, dataRoot, sourceRepairComposerID, bubbles, sourceRepairNative())
 }
 
 // writeComposerStore writes a composer and its bubbles to a Cursor source store.
-func writeComposerStore(t *testing.T, dataRoot string, composerID string, bubbles []sourceBubble) {
+func writeComposerStore(t *testing.T, dataRoot string, composerID string, bubbles []sourceBubble, native []string) {
 	t.Helper()
 	dbPath := filepath.Join(dataRoot, "globalStorage", "state.vscdb")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
@@ -128,15 +155,31 @@ func writeComposerStore(t *testing.T, dataRoot string, composerID string, bubble
 	statements := []string{"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)", "CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)"}
 	for _, bubble := range bubbles {
 		kind := strconv.Itoa(bubble.kind)
-		headers = append(headers, `{"bubbleId":"`+bubble.id+`","type":`+kind+`}`)
+		if !bubble.unreferenced {
+			headers = append(headers, `{"bubbleId":"`+bubble.id+`","type":`+kind+`}`)
+		}
 		value := `{"_v":3,"type":` + kind + `,"bubbleId":"` + bubble.id + `","text":"` + bubble.text + `","createdAt":"` + bubble.created + `"`
+		if bubble.server != "" {
+			value += `,"serverBubbleId":"` + bubble.server + `"`
+		}
 		if bubble.tool != "" {
 			value += `,"toolFormerData":` + bubble.tool
 		}
 		value += "}"
 		statements = append(statements, "INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:"+composerID+":"+bubble.id+"', '"+value+"')")
 	}
-	statements = append(statements, `INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+composerID+`', '{"composerId":"`+composerID+`","name":"Source repair","createdAt":1772445600000,"lastUpdatedAt":1773136800000,"fullConversationHeadersOnly":[`+strings.Join(headers, ",")+`]}')`)
+	state := ""
+	if native != nil {
+		var references []byte
+		for _, message := range native {
+			digest := sha256.Sum256([]byte(message))
+			references = append(references, 0x0a, byte(len(digest)))
+			references = append(references, digest[:]...)
+			statements = append(statements, "INSERT INTO cursorDiskKV(key, value) VALUES ('agentKv:blob:"+hex.EncodeToString(digest[:])+"', X'"+hex.EncodeToString([]byte(message))+"')")
+		}
+		state = `"conversationState":"~` + base64.StdEncoding.EncodeToString(references) + `",`
+	}
+	statements = append(statements, `INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+composerID+`', '{"composerId":"`+composerID+`","name":"Source repair","createdAt":1772445600000,"lastUpdatedAt":1773136800000,`+state+`"fullConversationHeadersOnly":[`+strings.Join(headers, ",")+`]}')`)
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("execute source store statement %q: %v", statement, err)
@@ -149,6 +192,7 @@ type sharedStoredRow struct {
 	content       string
 	metadata      string
 	timestampUnix int64
+	timestampNull bool
 	vectorKey     string
 	others        string
 }
@@ -174,15 +218,24 @@ func sharedSnapshot(t *testing.T, address string) (map[string]sharedStoredRow, m
 		for _, name := range others {
 			builder.WriteString(name + "=" + cellText(t, resultSet.GetColumn(name), rowIndex) + ";")
 		}
-		stamp, stampErr := resultSet.GetColumn("timestampUnix").GetAsInt64(rowIndex)
-		if stampErr != nil {
-			t.Fatalf("query Milvus snapshot: %v", stampErr)
+		stamp := time.Time{}.Unix()
+		stampNull, nullErr := resultSet.GetColumn("timestampUnix").IsNull(rowIndex)
+		if nullErr != nil {
+			t.Fatalf("query Milvus snapshot: %v", nullErr)
+		}
+		if !stampNull {
+			value, stampErr := resultSet.GetColumn("timestampUnix").GetAsInt64(rowIndex)
+			if stampErr != nil {
+				t.Fatalf("query Milvus snapshot: %v", stampErr)
+			}
+			stamp = value
 		}
 		rows[cellText(t, resultSet.GetColumn("id"), rowIndex)] = sharedStoredRow{
 			relativePath:  cellText(t, resultSet.GetColumn("relativePath"), rowIndex),
 			content:       cellText(t, resultSet.GetColumn("content"), rowIndex),
 			metadata:      cellText(t, resultSet.GetColumn("metadata"), rowIndex),
 			timestampUnix: stamp,
+			timestampNull: stampNull,
 			vectorKey:     cellText(t, resultSet.GetColumn(milvusstore.VectorKeyField), rowIndex),
 			others:        builder.String(),
 		}
@@ -286,8 +339,9 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		sourceRepairDoc(sourceRepairOverlong, 68, "assistant", zero),
 		sourceRepairDoc(sourceRepairLiteral+"\n"+sourceRepairMarkerLine, 69, "user", zero),
 		shellToolDoc(sourceRepairShellAlias, 70, zero),
-		shellToolDoc(sourceRepairOtherTool, 71, zero),
 		shellToolDoc(sourceRepairShellTwice, 72, zero),
+		shellToolDoc(sourceRepairShellTwice, 73, zero),
+		sourceRepairDoc(sourceRepairCopied, 74, "user", zero),
 	}
 	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + sourceRepairComposerID, Value: "old-parser"}}
 	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
@@ -307,7 +361,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run source repair dry run: %v", err)
 	}
-	if !strings.Contains(output, "read 16 rows, found 0 current, 10 changed, 0 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
+	if !strings.Contains(output, "read 17 rows, found 0 current, 10 changed, 0 written, 4 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair dry run returned unexpected output %q", output)
 	}
 	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(seeded, after) {
@@ -320,7 +374,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute source repair: %v", err)
 	}
-	if !strings.Contains(output, "10 changed, 10 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
+	if !strings.Contains(output, "10 changed, 10 written, 4 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair returned unexpected output %q", output)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -334,13 +388,11 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		}
 	}
 	wantDays := map[string]string{
-		sourceRepairQuestion:                                "2026-03-02",
-		sourceRepairAnswer:                                  "2026-03-03",
-		sourceRepairPartA + "\n" + sourceRepairPartB:        "2026-03-05",
-		sourceRepairSameQ:                                   "2026-03-11T10:00:00",
-		sourceRepairSameA:                                   "2026-03-11T10:00:00",
-		sourceRepairReordered:                               "2026-03-01T09:00:00",
-		sourceRepairFragment:                                "2026-03-03",
+		sourceRepairQuestion:  "2026-03-02",
+		sourceRepairAnswer:    "2026-03-03",
+		sourceRepairSameQ:     "2026-03-11T10:00:00",
+		sourceRepairSameA:     "2026-03-11T10:00:00",
+		sourceRepairReordered: "2026-03-01T09:00:00",
 		sourceRepairLiteral + "\n" + sourceRepairMarkerLine: "2026-03-13",
 	}
 	changed := 0
@@ -356,8 +408,8 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 			continue
 		}
 		changed++
-		rejectedTool := strings.Contains(before.content, sourceRepairOtherTool) || strings.Contains(before.content, sourceRepairShellTwice)
-		if before.timestampUnix != zero || rejectedTool || before.content == sourceRepairRepeated || before.content == sourceRepairUnsaved || before.content == sourceRepairOverlong {
+		unknown := []string{sourceRepairRepeated, sourceRepairUnsaved, sourceRepairOverlong, sourceRepairPartA + "\n" + sourceRepairPartB, sourceRepairFragment, sourceRepairCopied}
+		if before.timestampUnix != zero || slices.Contains(unknown, before.content) {
 			t.Fatalf("repair changed a row that should remain unchanged %s", id)
 		}
 		want, known := wantDays[before.content]
@@ -367,8 +419,13 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 		}
 		if strings.HasPrefix(before.relativePath, "convtool/") {
 			want, known = sourceRepairToolDay, true
-			if strings.Contains(before.content, sourceRepairShellAlias) {
+			switch {
+			case strings.Contains(before.content, sourceRepairShellAlias):
 				want = sourceRepairShellDay
+			case strings.HasSuffix(before.relativePath, "/72/0"):
+				want = "2026-03-16"
+			case strings.HasSuffix(before.relativePath, "/73/0"):
+				want = "2026-03-17"
 			}
 		}
 		if !known || day != want {
@@ -381,7 +438,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	for _, check := range []struct {
 		query string
 		day   int
-	}{{query: sourceRepairQuestion, day: 2}, {query: sourceRepairAnswer, day: 3}, {query: sourceRepairPartA, day: 5}} {
+	}{{query: sourceRepairQuestion, day: 2}, {query: sourceRepairAnswer, day: 3}} {
 		hits := searchDay(t, client, check.query, 2026, time.March, check.day)
 		if len(hits) == 0 || hits[0].ConversationID != "cursor:"+sourceRepairComposerID {
 			t.Fatalf("date-filtered search did not return the expected conversation for query %q: %+v", check.query, hits)
@@ -393,7 +450,7 @@ func TestRepairTimestampsFromCursorStoreInSharedLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute source repair: %v", err)
 	}
-	if !strings.Contains(output, "read 16 rows, found 0 current, 0 changed, 0 written, 3 unmatched, 0 without a source timestamp, 2 ambiguous") {
+	if !strings.Contains(output, "read 17 rows, found 0 current, 0 changed, 0 written, 4 unmatched, 0 without a source timestamp, 2 ambiguous") {
 		t.Fatalf("source repair rerun returned unexpected output %q", output)
 	}
 }
@@ -524,7 +581,7 @@ func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) 
 		doc.Role = "user"
 		docs = append(docs, doc)
 	}
-	writeComposerStore(t, dataRoot, partialComposerID, bubbles)
+	writeComposerStore(t, dataRoot, partialComposerID, bubbles, nil)
 
 	ctx := context.Background()
 	client := openRepairClient(t, address, vectorsearch.LayoutShared)
@@ -629,7 +686,7 @@ func TestRepairTimestampsFromCursorStoreResumesAfterAPartialWrite(t *testing.T) 
 			t.Fatalf("cannot parse message position, row path: %s: %v", after.relativePath, convErr)
 		}
 		want := partialMessageTime(position).Unix()
-		wantMetadata := strings.Replace(start.metadata, `"timestamp_unix":`+strconv.FormatInt(zero, 10), `"timestamp_unix":`+strconv.FormatInt(want, 10), 1)
+		wantMetadata := strings.Replace(start.metadata, `"timestamp_unix":null`, `"timestamp_unix":`+strconv.FormatInt(want, 10), 1)
 		if id == lastID {
 			wantMetadata = strings.Replace(shortMetadata, `"timestamp_unix":0`, `"timestamp_unix":`+strconv.FormatInt(want, 10), 1)
 		}
@@ -674,7 +731,7 @@ func TestRepairTimestampsFromCursorStoreKeepsQueuedRetriesInEveryCheckpoint(t *t
 		root := filepath.Join(home, fmt.Sprintf("cursor-%d", position))
 		roots = append(roots, root)
 		message := fmt.Sprintf("Queued retry message %d asks about restic snapshots.", position)
-		writeComposerStore(t, root, composer, []sourceBubble{{id: "q1", kind: 1, text: message, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""}})
+		writeComposerStore(t, root, composer, []sourceBubble{{id: "q1", kind: 1, text: message, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""}}, nil)
 		doc := repairDoc("cursor:"+composer, message, zero)
 		doc.Role = "user"
 		docs = append(docs, doc)
@@ -757,5 +814,521 @@ func TestRepairTimestampsFromCursorStoreKeepsQueuedRetriesInEveryCheckpoint(t *t
 	}
 	if resumed := readProgress(t, progressPath); !resumed.Complete || len(resumed.Failed) != 0 {
 		t.Fatalf("unexpected progress after resume: %+v", resumed)
+	}
+}
+
+// TestRepairTimestampsFromCursorStoreUsesTranscriptEnvelopesWhenTheStoreLacksTheComposer
+// checks timestamp repair from a transcript when the Cursor store lacks the composer.
+func TestRepairTimestampsFromCursorStoreUsesTranscriptEnvelopesWhenTheStoreLacksTheComposer(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	dataRoot := filepath.Join(home, "cursor-data")
+	projects := filepath.Join(home, "cursor-projects")
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
+	writeComposerStore(t, dataRoot, sourceRepairComposerID, sourceRepairBubbles(), nil)
+	composer := "b2b2b2b2-0000-4000-8000-000000000001"
+	question := "Which bucket stores the retained restic snapshots?"
+	answer := "The retained snapshots live in the backups bucket."
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", composer, composer+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	lines := `{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>2026-04-02T08:30:00Z</timestamp>\n<user_query>\n` + question + `\n</user_query>"}]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"` + answer + `"}]}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o600); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	zero := time.Time{}.Unix()
+	user := repairDoc("cursor:"+composer, question, zero)
+	user.Role = "user"
+	assistant := repairDoc("cursor:"+composer, answer, zero)
+	assistant.Role = "assistant"
+	assistant.MessageIndex = 1
+	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + composer, Value: "old-parser"}}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, []semsearch.SemDoc{user, assistant}, manifest); err != nil {
+		t.Fatalf("seed conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	seeded, seededVectors := sharedSnapshot(t, address)
+
+	registry := conversation.NewRegistry()
+	registry.Register(cursorparser.New())
+	base := repairTimestampsRun{
+		options:        repairTimestampsOptions{},
+		collectionID:   repairCollectionID,
+		collectionName: vectorsearch.CollectionName(repairCollectionID),
+		contentKinds:   backfillTestContentKinds(t),
+		index:          conversation.NewIndex(registry, config.NewConfigWithDefaults().Conversation),
+		client:         client,
+		out:            nil,
+		sourceTotals:   newSourceRepairTotals(),
+		evidenceOut:    nil,
+	}
+	options := repairTimestampsOptions{DryRun: false, Provider: "", ConversationID: "cursor:" + composer, Limit: 0, MaxRows: 100, After: "", Resume: false, ProgressPath: filepath.Join(home, "progress.json"), SourceStore: true, EvidencePath: ""}
+	output, err := runRepair(t, ctx, base, options)
+	if err != nil {
+		t.Fatalf("run source repair: %v", err)
+	}
+	if !strings.Contains(output, "read 2 rows, found 0 current, 1 changed, 1 written, 0 unmatched, 1 without a source timestamp, 0 ambiguous") {
+		t.Fatalf("unexpected repair output, output: %q", output)
+	}
+	time.Sleep(repairVisibilityWait)
+	repaired, repairedVectors := sharedSnapshot(t, address)
+	for key, bits := range seededVectors {
+		if !slices.Equal(bits, repairedVectors[key]) {
+			t.Fatalf("vector changed, vector key: %s", key)
+		}
+	}
+	want := time.Date(2026, time.April, 2, 8, 30, 0, 0, time.UTC).Unix()
+	for id, after := range repaired {
+		before := seeded[id]
+		if after.content != before.content || after.relativePath != before.relativePath || after.vectorKey != before.vectorKey || after.others != before.others {
+			t.Fatalf("stored fields changed, row ID, initial row, repaired row: %s: %+v, %+v", id, before, after)
+		}
+		wantTime := zero
+		if after.content == question {
+			wantTime = want
+		}
+		if after.timestampUnix != wantTime {
+			t.Fatalf("unexpected timestamp, row path, actual timestamp, expected timestamp: %s: %d, %d", after.relativePath, after.timestampUnix, wantTime)
+		}
+	}
+}
+
+// TestIngestingAGroupedCursorTurnKeepsEachToolCallDate checks the stored
+// user and tool row timestamps after ingesting a grouped Cursor turn.
+func TestIngestingAGroupedCursorTurnKeepsEachToolCallDate(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	dataRoot := filepath.Join(home, "cursor-data")
+	projects := filepath.Join(home, "cursor-projects")
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
+	composer := "c3c3c3c3-0000-4000-8000-000000000001"
+	question := "Check the tree and run the tests twice."
+	writeComposerStore(t, dataRoot, composer, []sourceBubble{
+		{id: "g1", kind: 1, text: question, created: "2026-05-20T10:00:00.000Z", tool: "", server: "", unreferenced: false},
+		{id: "g2", kind: 2, text: "", created: "2026-05-20T10:01:00.000Z", tool: shellBubbleTool("call_git", ""), server: "", unreferenced: false},
+		{id: "g3", kind: 2, text: "", created: "2026-05-20T10:02:00.000Z", tool: shellBubbleTool("call_test_one", ""), server: "", unreferenced: false},
+		{id: "g4", kind: 2, text: "", created: "2026-05-20T10:04:00.000Z", tool: shellBubbleTool("call_test_two", ""), server: "", unreferenced: false},
+		{id: "g5", kind: 2, text: "", created: "2026-05-20T12:00:00.000Z", tool: shellBubbleTool("aaaaaaaa-0000-4000-8000-0000000000g5", shellArgs(sourceRepairShellAlias)), server: "server-g5", unreferenced: true},
+	}, []string{
+		`{"role":"user","content":[{"type":"text","text":"` + question + `"}]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_git", "Shell", `{"command":"`+sourceRepairShellAlias+`"}`) + `,` + nativeToolCall("call_test_one", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
+		`{"role":"assistant","content":[` + nativeToolCall("call_test_two", "Shell", `{"command":"`+sourceRepairShellTwice+`"}`) + `]}`,
+	})
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", composer, composer+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	shellCall := func(command string) string {
+		return `{"type":"tool_use","name":"Shell","input":{"command":"` + command + `"}}`
+	}
+	lines := `{"role":"user","message":{"content":[{"type":"text","text":"` + question + `"}]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[` + shellCall(sourceRepairShellAlias) + `,` + shellCall(sourceRepairShellTwice) + `]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[` + shellCall(sourceRepairShellTwice) + `]}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o600); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+
+	ctx := context.Background()
+	registry := conversation.NewRegistry()
+	registry.Register(cursorparser.New())
+	index := conversation.NewIndex(registry, config.NewConfigWithDefaults().Conversation)
+	if err := index.Refresh(ctx); err != nil {
+		t.Fatalf("refresh conversation index: %v", err)
+	}
+	stamped, err := index.ListWithStamps(ctx)
+	if err != nil {
+		t.Fatalf("list indexed conversations: %v", err)
+	}
+	var record conversation.Record
+	for _, entry := range stamped {
+		if entry.Record.NativeID == composer && strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
+			record = entry.Record
+		}
+	}
+	if record.ID == "" {
+		t.Fatalf("transcript record is absent; indexed record count: %d", len(stamped))
+	}
+	kinds := backfillTestContentKinds(t)
+	messages, err := index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
+	if err != nil {
+		t.Fatalf("load conversation messages: %v", err)
+	}
+	built, err := daemonsvc.BuildSemanticConversationDocuments(record, messages, kinds)
+	if err != nil {
+		t.Fatalf("build semantic conversation documents: %v", err)
+	}
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	manifest := []semsearch.Fingerprint{{ConversationID: record.ID, Value: "grouped"}}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, built.Docs, manifest); err != nil {
+		t.Fatalf("store semantic conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	rows, _ := sharedSnapshot(t, address)
+	wantTools := []time.Time{
+		time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC),
+		time.Date(2026, time.May, 20, 10, 2, 0, 0, time.UTC),
+		time.Date(2026, time.May, 20, 10, 4, 0, 0, time.UTC),
+	}
+	tools := 0
+	for _, row := range rows {
+		parts := strings.Split(row.relativePath, "/")
+		switch parts[0] {
+		case "convtool":
+			toolIndex, convErr := strconv.Atoi(parts[3])
+			if convErr != nil || toolIndex >= len(wantTools) {
+				t.Fatalf("invalid tool row path: %s", row.relativePath)
+			}
+			tools++
+			if row.timestampUnix != wantTools[toolIndex].Unix() {
+				t.Fatalf("unexpected tool row timestamp; row path, actual, expected: %s: %d, %d", row.relativePath, row.timestampUnix, wantTools[toolIndex].Unix())
+			}
+		case "conv":
+			// The first user message precedes every original tool anchor and stays undated.
+			if row.content == question && !row.timestampNull {
+				t.Fatalf("first user row has a known timestamp; actual timestamp: %d", row.timestampUnix)
+			}
+		}
+	}
+	if tools != len(wantTools) {
+		t.Fatalf("unexpected tool row count; actual, expected: %d, %d", tools, len(wantTools))
+	}
+}
+
+// TestIngestingADatedCursorTurnKeepsAnUnresolvedCallUndated checks that a dated
+// reply and its unresolved tool call have separate stored timestamps.
+func TestIngestingADatedCursorTurnKeepsAnUnresolvedCallUndated(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	dataRoot := filepath.Join(home, "cursor-data")
+	projects := filepath.Join(home, "cursor-projects")
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
+	composer := "c4c4c4c4-0000-4000-8000-000000000001"
+	question := "Run the status check please."
+	reply := "Running the status check now."
+	writeComposerStore(t, dataRoot, composer, []sourceBubble{
+		{id: "u1", kind: 1, text: question, created: "2026-05-20T10:00:00.000Z", tool: "", server: "", unreferenced: false},
+		{id: "a1", kind: 2, text: reply, created: "2026-05-20T10:00:30.000Z", tool: "", server: "", unreferenced: false},
+	}, []string{
+		`{"role":"user","content":[{"type":"text","text":"` + question + `"}]}`,
+		`{"role":"assistant","content":[{"type":"text","text":"` + reply + `"},` + nativeToolCall("call_unbacked", "Shell", `{"command":"`+sourceRepairShellAlias+`"}`) + `]}`,
+	})
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", composer, composer+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	lines := `{"role":"user","message":{"content":[{"type":"text","text":"` + question + `"}]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"` + reply + `"},{"type":"tool_use","name":"Shell","input":{"command":"` + sourceRepairShellAlias + `"}}]}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(lines), 0o600); err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+
+	ctx := context.Background()
+	registry := conversation.NewRegistry()
+	registry.Register(cursorparser.New())
+	index := conversation.NewIndex(registry, config.NewConfigWithDefaults().Conversation)
+	if err := index.Refresh(ctx); err != nil {
+		t.Fatalf("refresh conversation index: %v", err)
+	}
+	stamped, err := index.ListWithStamps(ctx)
+	if err != nil {
+		t.Fatalf("list indexed conversations: %v", err)
+	}
+	var record conversation.Record
+	for _, entry := range stamped {
+		if entry.Record.NativeID == composer && strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
+			record = entry.Record
+		}
+	}
+	if record.ID == "" {
+		t.Fatalf("transcript record is absent, indexed record count: %d", len(stamped))
+	}
+	kinds := backfillTestContentKinds(t)
+	messages, err := index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
+	if err != nil {
+		t.Fatalf("load conversation messages: %v", err)
+	}
+	built, err := daemonsvc.BuildSemanticConversationDocuments(record, messages, kinds)
+	if err != nil {
+		t.Fatalf("build semantic conversation documents: %v", err)
+	}
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	manifest := []semsearch.Fingerprint{{ConversationID: record.ID, Value: "unresolved"}}
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, built.Docs, manifest); err != nil {
+		t.Fatalf("store semantic conversation documents: %v", err)
+	}
+	time.Sleep(repairVisibilityWait)
+	rows, _ := sharedSnapshot(t, address)
+	replyTime := time.Date(2026, time.May, 20, 10, 0, 30, 0, time.UTC).Unix()
+	zero := time.Time{}.Unix()
+	seen := map[string]bool{}
+	for _, row := range rows {
+		kind := strings.SplitN(row.relativePath, "/", 2)[0]
+		switch {
+		case kind == "convtool":
+			seen["tool"] = true
+			if row.timestampUnix != zero || !row.timestampNull {
+				t.Fatalf("unresolved tool has a timestamp, row path, timestamp: %s: %d", row.relativePath, row.timestampUnix)
+			}
+		case kind == "conv" && row.content == reply:
+			seen["reply"] = true
+			if row.timestampUnix != replyTime {
+				t.Fatalf("unexpected reply timestamp, actual, expected: %d, %d", row.timestampUnix, replyTime)
+			}
+		}
+	}
+	if !seen["tool"] || !seen["reply"] {
+		t.Fatalf("expected tool and reply rows, rows found: %v", seen)
+	}
+}
+
+// TestUpsertingARecoveredToolTimeFillsTheRowWithoutNewVectors checks timestamp
+// updates and preserves row counts, vector keys, and vector bytes.
+func TestUpsertingARecoveredToolTimeFillsTheRowWithoutNewVectors(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	conversationID := "cursor:c5c5c5c5-0000-4000-8000-000000000001"
+	first := time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC).Unix()
+	second := time.Date(2026, time.May, 20, 10, 9, 0, 0, time.UTC).Unix()
+	toolDoc := func(stamp *int64, unknown bool) semsearch.SemDoc {
+		doc := repairDoc(conversationID, "", time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC).Unix())
+		doc.Role = "assistant"
+		doc.Tools = []semsearch.SemToolCall{{Name: "Shell", Display: sourceRepairShellAlias, LangHint: "bash", Output: "", IsError: false, TimestampUnix: stamp, TimestampUnknown: unknown}}
+		return doc
+	}
+	upsert := func(doc semsearch.SemDoc, fingerprint string) {
+		docs := []semsearch.SemDoc{doc}
+		manifest := []semsearch.Fingerprint{{ConversationID: conversationID, Value: daemonsvc.SemanticProjectionHash(docs) + fingerprint}}
+		if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
+			t.Fatalf("upsert conversation documents: %v", err)
+		}
+		time.Sleep(repairVisibilityWait)
+	}
+	toolRow := func(rows map[string]sharedStoredRow) sharedStoredRow {
+		for _, row := range rows {
+			if strings.HasPrefix(row.relativePath, "convtool/") {
+				return row
+			}
+		}
+		t.Fatalf("tool row is absent, row count: %d", len(rows))
+		return sharedStoredRow{}
+	}
+	firstDoc := toolDoc(&first, false)
+	secondDoc := toolDoc(&second, false)
+	unknownDoc := toolDoc(nil, true)
+	if daemonsvc.SemanticProjectionHash([]semsearch.SemDoc{firstDoc}) == daemonsvc.SemanticProjectionHash([]semsearch.SemDoc{secondDoc}) {
+		t.Fatal("semantic projection hash does not distinguish tool times")
+	}
+	if daemonsvc.SemanticProjectionHash([]semsearch.SemDoc{firstDoc}) == daemonsvc.SemanticProjectionHash([]semsearch.SemDoc{unknownDoc}) {
+		t.Fatal("semantic projection hash does not distinguish the unknown tool time")
+	}
+	upsert(unknownDoc, "")
+	before, beforeVectors := sharedSnapshot(t, address)
+	beforeRow := toolRow(before)
+	unknownTime := time.Time{}.Unix()
+	if beforeRow.timestampUnix != unknownTime || !beforeRow.timestampNull {
+		t.Fatalf("unexpected initial tool timestamp, actual: %d", beforeRow.timestampUnix)
+	}
+	for _, check := range []struct {
+		doc  semsearch.SemDoc
+		want int64
+	}{{doc: firstDoc, want: first}, {doc: unknownDoc, want: first}} {
+		upsert(check.doc, "")
+		after, afterVectors := sharedSnapshot(t, address)
+		afterRow := toolRow(after)
+		if len(after) != len(before) || len(afterVectors) != len(beforeVectors) {
+			t.Fatalf("row or vector count changed, rows after, rows before, vectors after, vectors before: %d, %d, %d, %d", len(after), len(before), len(afterVectors), len(beforeVectors))
+		}
+		if afterRow.timestampUnix != check.want {
+			t.Fatalf("unexpected tool timestamp, actual, expected: %d, %d", afterRow.timestampUnix, check.want)
+		}
+		if afterRow.vectorKey != beforeRow.vectorKey || afterRow.content != beforeRow.content {
+			t.Fatalf("tool row vector key or content changed, before, after: %+v, %+v", beforeRow, afterRow)
+		}
+		for key, bits := range beforeVectors {
+			if !slices.Equal(bits, afterVectors[key]) {
+				t.Fatalf("vector bytes changed, vector key: %s", key)
+			}
+		}
+	}
+}
+
+type rowTimeState struct {
+	known         bool
+	timestampUnix int64
+	metadata      string
+}
+
+func readRowTime(ctx context.Context, client *milvusclient.Client, id string) (rowTimeState, error) {
+	empty := rowTimeState{known: false, timestampUnix: 0, metadata: ""}
+	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(vectorsearch.CollectionName(repairCollectionID)).
+		WithFilter(`id == "`+id+`"`).WithOutputFields("timestampUnix", "metadata").WithConsistencyLevel(entity.ClStrong))
+	if err != nil {
+		return empty, fmt.Errorf("cannot query milvus row timestamp and metadata %s: %w", id, err)
+	}
+	if resultSet.ResultCount != 1 {
+		return empty, fmt.Errorf("cannot read exactly one milvus row %s %d", id, resultSet.ResultCount)
+	}
+	isNull, err := resultSet.GetColumn("timestampUnix").IsNull(0)
+	if err != nil {
+		return empty, err
+	}
+	metadata, err := resultSet.GetColumn("metadata").GetAsString(0)
+	if err != nil {
+		return empty, err
+	}
+	if isNull {
+		return rowTimeState{known: false, timestampUnix: 0, metadata: metadata}, nil
+	}
+	stamp, err := resultSet.GetColumn("timestampUnix").GetAsInt64(0)
+	if err != nil {
+		return empty, err
+	}
+	return rowTimeState{known: stamp != time.Time{}.Unix(), timestampUnix: stamp, metadata: metadata}, nil
+}
+
+// TestConcurrentUpsertsKeepTheFirstRecoveredTime checks that concurrent upserts
+// preserve the first observed known timestamp, metadata, row content, and vectors.
+func TestConcurrentUpsertsKeepTheFirstRecoveredTime(t *testing.T) {
+	milvustest.RequireEnabled(t)
+	address := milvustest.Start(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	ctx := context.Background()
+	client := openRepairClient(t, address, vectorsearch.LayoutShared)
+	reader, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: "default"})
+	if err != nil {
+		t.Fatalf("cannot connect the Milvus reader: %v", err)
+	}
+	defer func() { _ = reader.Close(ctx) }()
+	const writers = 6
+	const rounds = 3
+	base := time.Date(2026, time.May, 20, 10, 0, 0, 0, time.UTC).Unix()
+	for round := range rounds {
+		conversationID := fmt.Sprintf("cursor:c7c7c7c7-0000-4000-8000-%012d", round)
+		content := fmt.Sprintf("Concurrent fill round %d checks the backup bucket.", round)
+		upsert := func(stamp int64, fingerprint string) error {
+			docs := []semsearch.SemDoc{repairDoc(conversationID, content, stamp)}
+			_, upsertErr := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, []semsearch.Fingerprint{{ConversationID: conversationID, Value: fingerprint}})
+			return upsertErr
+		}
+		if err := upsert(time.Time{}.Unix(), "unknown"); err != nil {
+			t.Fatalf("cannot seed the row with an unknown timestamp: %v", err)
+		}
+		time.Sleep(repairVisibilityWait)
+		before, beforeVectors := sharedSnapshot(t, address)
+		rowID := ""
+		for id, row := range before {
+			if row.content == content {
+				rowID = id
+			}
+		}
+		if rowID == "" || !before[rowID].timestampNull {
+			t.Fatalf("seeded row is missing or its timestamp is not null; row ID, row: %q %+v", rowID, before[rowID])
+		}
+		stop := make(chan struct{})
+		observed := make(chan []rowTimeState, 1)
+		pollFailure := make(chan error, 1)
+		go func() {
+			states := make([]rowTimeState, 0)
+			var firstFailure error
+			for {
+				select {
+				case <-stop:
+					pollFailure <- firstFailure
+					observed <- states
+					return
+				default:
+				}
+				state, readErr := readRowTime(ctx, reader, rowID)
+				if readErr != nil && firstFailure == nil {
+					firstFailure = readErr
+				}
+				if readErr == nil && state.known {
+					states = append(states, state)
+				}
+			}
+		}()
+		start := make(chan struct{})
+		failures := make(chan error, writers)
+		var group sync.WaitGroup
+		for writer := range writers {
+			group.Go(func() {
+				<-start
+				if upsertErr := upsert(base+int64(writer)*60, fmt.Sprintf("writer-%d", writer)); upsertErr != nil {
+					failures <- upsertErr
+				}
+			})
+		}
+		close(start)
+		group.Wait()
+		close(stop)
+		states := <-observed
+		if readErr := <-pollFailure; readErr != nil {
+			t.Fatalf("reading the row timestamp during concurrent upserts failed: %v", readErr)
+		}
+		close(failures)
+		for upsertErr := range failures {
+			t.Fatalf("cannot upsert conversation documents: %v", upsertErr)
+		}
+		time.Sleep(repairVisibilityWait)
+		final, err := readRowTime(ctx, reader, rowID)
+		if err != nil || !final.known {
+			t.Fatalf("final row does not have a known timestamp; row: %+v: %v", final, err)
+		}
+		first := final
+		if len(states) > 0 {
+			first = states[0]
+		}
+		for _, state := range append(states, final) {
+			if state != first {
+				t.Fatalf("row timestamp or metadata changed; first observed state, later state: %+v, %+v", first, state)
+			}
+		}
+		if !strings.Contains(final.metadata, fmt.Sprintf(`"timestamp_unix":%d`, final.timestampUnix)) {
+			t.Fatalf("metadata timestamp differs from the scalar; scalar, metadata: %d %q", final.timestampUnix, final.metadata)
+		}
+		after, afterVectors := sharedSnapshot(t, address)
+		beforeRow, afterRow := before[rowID], after[rowID]
+		if len(after) != len(before) || len(afterVectors) != len(beforeVectors) || afterRow.content != beforeRow.content || afterRow.vectorKey != beforeRow.vectorKey || afterRow.others != beforeRow.others || afterRow.relativePath != beforeRow.relativePath {
+			t.Fatalf("row or collection changed; row before, row after: %+v, %+v", beforeRow, afterRow)
+		}
+		for key, bits := range beforeVectors {
+			if !slices.Equal(bits, afterVectors[key]) {
+				t.Fatalf("vector changed; vector key: %s", key)
+			}
+		}
 	}
 }

@@ -108,7 +108,7 @@ func TestProjectionHashSeparatesContentFromBoundaries(t *testing.T) {
 }
 
 func TestConversationSemanticSyncDeliversChangedMetadata(t *testing.T) {
-	for _, field := range []string{"archived", "workspace", "timestamp", "tool_language", "tool_error"} {
+	for _, field := range []string{"archived", "workspace", "timestamp", "tool_language", "tool_error", "tool_timestamp", "tool_timestamp_unknown"} {
 		t.Run(field, func(t *testing.T) {
 			conversationID := "codex:metadata"
 			index := semanticTestIndexWithTexts(map[string]string{conversationID: "unchanged text"})
@@ -130,6 +130,11 @@ func TestConversationSemanticSyncDeliversChangedMetadata(t *testing.T) {
 				index.messagesByID[conversationID][0].Tools[0].DisplayLang = "zsh"
 			case "tool_error":
 				index.messagesByID[conversationID][0].Tools[0].IsError = true
+			case "tool_timestamp":
+				stamp := time.Unix(1710000200, 0)
+				index.messagesByID[conversationID][0].Tools[0].Timestamp = &stamp
+			case "tool_timestamp_unknown":
+				index.messagesByID[conversationID][0].Tools[0].TimestampUnknown = true
 			}
 			if err := worker.runPass(context.Background()); err != nil {
 				t.Fatal(err)

@@ -567,7 +567,7 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 		fmt.Fprintf(&out, "   Conversation: %s\n", match.Record.ID)
 		fmt.Fprintf(&out, "   Message index: %d\n", match.MessageIndex)
 		fmt.Fprintf(&out, "   Role: %s\n", role)
-		fmt.Fprintf(&out, "   Timestamp: %s\n", match.Timestamp.Format("2006-01-02 15:04 MST"))
+		fmt.Fprintf(&out, "   Timestamp: %s\n", matchTimestampText(match.Timestamp))
 		fmt.Fprintf(&out, "   Rank: %d\n", index+1)
 		snippet := strings.TrimSpace(match.Snippet)
 		fence := "```"
@@ -701,4 +701,15 @@ func logFail(ctx context.Context, surface Surface, shortEvent, operation string,
 
 func shortPath(path string) string {
 	return homedir.Contract(path)
+}
+
+// unknownTimestampText is the text shown for an unknown match timestamp.
+const unknownTimestampText = "unknown"
+
+// matchTimestampText formats a match timestamp or returns the unknown label.
+func matchTimestampText(stamp time.Time) string {
+	if stamp.IsZero() {
+		return unknownTimestampText
+	}
+	return stamp.Format("2006-01-02 15:04 MST")
 }

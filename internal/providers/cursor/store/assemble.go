@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	_ "embed"
 	"fmt"
 	"hash"
 	"log/slog"
@@ -233,11 +234,10 @@ func readComposerBubbleDigestsInSnapshot(
 	return stored, nil
 }
 
-// bubbleProjection is one row of the digest pass: the identifiers and the fields
-// [fingerprintOf] and [Bubble.HasContent] read, and nothing else the bubble
-// carries. Every field is nullable because SQLite reports an absent JSON member
-// as NULL, which is how a bubble that has no tool call, no thinking, or no
-// timestamp arrives here.
+// bubbleProjection is a row from the digest pass that contains only the
+// identifiers and fields [fingerprintOf] and [Bubble.HasContent] read. Its
+// nullable fields represent missing JSON members, which SQLite reports as NULL
+// when a bubble lacks a tool call, thinking, or timestamp.
 type bubbleProjection struct {
 	RowID          int64
 	Key            string
@@ -255,6 +255,8 @@ type bubbleProjection struct {
 	ToolRawArgs      sql.NullString
 	ToolResult       sql.NullString
 	ToolStatus       sql.NullString
+	ToolCallBinary   sql.NullString
+	RequestID        sql.NullString
 }
 
 // bubble rebuilds the part of a [Bubble] the digest is derived from, so the
@@ -262,16 +264,14 @@ type bubbleProjection struct {
 // path rather than a second one written in SQL.
 func (row bubbleProjection) bubble() Bubble {
 	bubble := Bubble{
-		BubbleID:      "",
-		Type:          int(row.Type.Int64),
-		SchemaVersion: 0,
-		Text:          row.Text.String,
-		Thinking:      BubbleThinking{Text: row.Thinking.String},
-		ToolCall:      nil,
-		CreatedAt:     row.CreatedAt.String,
-		// RequestID is not projected. Nothing about ordering or supersession reads
-		// it, and the lookup that does have a use for it reads the row itself.
-		RequestID:      "",
+		BubbleID:       "",
+		Type:           int(row.Type.Int64),
+		SchemaVersion:  0,
+		Text:           row.Text.String,
+		Thinking:       BubbleThinking{Text: row.Thinking.String},
+		ToolCall:       nil,
+		CreatedAt:      row.CreatedAt.String,
+		RequestID:      row.RequestID.String,
 		ServerBubbleID: row.ServerBubbleID.String,
 	}
 	// `json_type` answers the string "null" for a member explicitly set to JSON
@@ -280,11 +280,12 @@ func (row bubbleProjection) bubble() Bubble {
 	// chat is admitted for content it does not have and then streams nothing.
 	if row.ToolCallJSONType.Valid && row.ToolCallJSONType.String != jsonNullType {
 		bubble.ToolCall = &BubbleToolCall{
-			Name:       row.ToolName.String,
-			RawArgs:    row.ToolRawArgs.String,
-			Result:     BubbleToolResult(row.ToolResult.String),
-			Status:     row.ToolStatus.String,
-			ToolCallID: row.ToolCallID.String,
+			Name:           row.ToolName.String,
+			RawArgs:        row.ToolRawArgs.String,
+			Result:         BubbleToolResult(row.ToolResult.String),
+			Status:         row.ToolStatus.String,
+			ToolCallID:     row.ToolCallID.String,
+			ToolCallBinary: row.ToolCallBinary.String,
 		}
 	}
 	return bubble
@@ -311,18 +312,9 @@ const (
 // composerBubbleProjectionColumns are the JSON members the digest pass reads. The
 // [decodableValueSQL] predicate keeps every one of them off a value SQLite cannot
 // parse, which would otherwise abort the whole range read.
-const composerBubbleProjectionColumns = "rowid, key," +
-	" json_extract(value, '$.serverBubbleId')," +
-	" json_extract(value, '$.createdAt')," +
-	" json_extract(value, '$.type')," +
-	" json_extract(value, '$.text')," +
-	" CASE json_type(value, '$.thinking') WHEN 'text' THEN json_extract(value, '$.thinking') ELSE json_extract(value, '$.thinking.text') END," +
-	" json_type(value, '$.toolFormerData')," +
-	" json_extract(value, '$.toolFormerData.toolCallId')," +
-	" json_extract(value, '$.toolFormerData.name')," +
-	" json_extract(value, '$.toolFormerData.rawArgs')," +
-	" json_extract(value, '$.toolFormerData.result')," +
-	" json_extract(value, '$.toolFormerData.status')"
+//
+//go:embed composer_bubble_projection_columns.sql
+var composerBubbleProjectionColumns string
 
 func forEachComposerBubbleProjection(
 	ctx context.Context,
@@ -359,7 +351,7 @@ func forEachComposerBubbleProjection(
 			&row.RowID, &row.Key,
 			&row.ServerBubbleID, &row.CreatedAt, &row.Type, &row.Text, &row.Thinking,
 			&row.ToolCallJSONType, &row.ToolCallID, &row.ToolName, &row.ToolRawArgs,
-			&row.ToolResult, &row.ToolStatus,
+			&row.ToolResult, &row.ToolStatus, &row.ToolCallBinary, &row.RequestID,
 		); err != nil {
 			logger := discoveryReadLogger(ctx)
 			logger.WarnContext(ctx, "providers.cursor.store.bubble_projection_scan_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)

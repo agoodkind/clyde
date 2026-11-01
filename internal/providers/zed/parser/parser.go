@@ -687,14 +687,16 @@ func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) 
 			input := transcript.ToolInputJSON{Raw: append([]byte(nil), part.ToolUse.Input...)}
 			display, displayLang := toolDisplayText(part.ToolUse.Name, input)
 			tools = append(tools, transcript.ToolCall{
-				ID:          part.ToolUse.ID,
-				Name:        part.ToolUse.Name,
-				Input:       input,
-				Display:     display,
-				DisplayLang: displayLang,
-				Output:      output,
-				IsError:     isError,
-				Attachments: nil,
+				ID:               part.ToolUse.ID,
+				Name:             part.ToolUse.Name,
+				Input:            input,
+				Display:          display,
+				DisplayLang:      displayLang,
+				Output:           output,
+				IsError:          isError,
+				Attachments:      nil,
+				Timestamp:        nil,
+				TimestampUnknown: false,
 			})
 		}
 	}

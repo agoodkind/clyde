@@ -45,6 +45,11 @@ func SemanticProjectionHash(docs []semsearch.SemDoc) string {
 			writeField(tool.LangHint)
 			writeField(tool.Output)
 			writeField(strconv.FormatBool(tool.IsError))
+			writeField(strconv.FormatBool(tool.TimestampUnix != nil))
+			if tool.TimestampUnix != nil {
+				writeField(strconv.FormatInt(*tool.TimestampUnix, 10))
+			}
+			writeField(strconv.FormatBool(tool.TimestampUnknown))
 		}
 	}
 	return hex.EncodeToString(hasher.Sum(nil))
@@ -201,11 +206,17 @@ func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKi
 	out := make([]semsearch.SemToolCall, 0, len(tools))
 	for _, tool := range tools {
 		projected := semsearch.SemToolCall{
-			Name:     tool.Name,
-			Display:  "",
-			LangHint: "",
-			Output:   "",
-			IsError:  tool.IsError,
+			Name:             tool.Name,
+			Display:          "",
+			LangHint:         "",
+			Output:           "",
+			IsError:          tool.IsError,
+			TimestampUnix:    nil,
+			TimestampUnknown: tool.TimestampUnknown,
+		}
+		if tool.Timestamp != nil && !tool.Timestamp.IsZero() {
+			stamp := tool.Timestamp.Unix()
+			projected.TimestampUnix = &stamp
 		}
 		if withArguments || withOutput {
 			// The provider's parser rendered what the user saw and named the

@@ -244,14 +244,16 @@ func toolCallHistoryMessage(callID, name, raw string, timestamp time.Time) (Hist
 	input := toolInputJSON(raw)
 	display, displayLang := toolDisplayText(name, input)
 	message.Tools = []transcript.ToolCall{{
-		ID:          callID,
-		Name:        name,
-		Input:       input,
-		Display:     display,
-		DisplayLang: displayLang,
-		Output:      "",
-		IsError:     false,
-		Attachments: nil,
+		ID:               callID,
+		Name:             name,
+		Input:            input,
+		Display:          display,
+		DisplayLang:      displayLang,
+		Output:           "",
+		IsError:          false,
+		Attachments:      nil,
+		Timestamp:        nil,
+		TimestampUnknown: false,
 	}}
 	message.HasTools = true
 	return message, true
