@@ -254,7 +254,6 @@ func ReadComposerNativeToolCalls(ctx context.Context, db *sql.DB, composerID str
 	return result, true, nil
 }
 
-// readNativeMessage reads a referenced blob and extracts its role and tool calls.
 func readNativeMessage(ctx context.Context, db *sql.DB, composerID string, reference nativeReference, seen map[string]bool) (NativeMessage, error) {
 	key := hex.EncodeToString(reference.digest)
 	message := NativeMessage{Source: reference.source, Archive: reference.archive, Index: reference.index, BlobRef: key, Role: "", Duplicate: seen[key], Missing: false, RealUser: false, Text: "", RequestID: "", ContentHash: "", Calls: nil}
@@ -285,8 +284,6 @@ func readNativeMessage(ctx context.Context, db *sql.DB, composerID string, refer
 	return message, nil
 }
 
-// nativeMessageReferences collects message references from archives and root state.
-// It counts missing archive blobs in result.
 func nativeMessageReferences(ctx context.Context, db *sql.DB, composerID string, top []protobufField, result *NativeToolCalls) ([]nativeReference, error) {
 	references := make([]nativeReference, 0)
 	archiveOrdinal := 0
@@ -327,7 +324,6 @@ func nativeMessageReferences(ctx context.Context, db *sql.DB, composerID string,
 	return references, nil
 }
 
-// readNativeState reads and decodes the composer's conversation state.
 func readNativeState(ctx context.Context, db *sql.DB, composerID string) ([]byte, bool, error) {
 	value, found, err := ReadKVValue(ctx, db, KVTableCursorDiskKV, composerDataKeyPrefix+composerID)
 	if err != nil {
@@ -362,8 +358,6 @@ func readNativeBlob(ctx context.Context, db *sql.DB, reference []byte) ([]byte, 
 	return ReadKVValue(ctx, db, KVTableCursorDiskKV, nativeBlobKeyPrefix+hex.EncodeToString(reference))
 }
 
-// unmarshalNativeMessage decodes the role, request ID, text, and tool calls.
-// It hashes the raw content JSON and detects real user text.
 func unmarshalNativeMessage(data []byte) (nativeMessageFields, error) {
 	fields := nativeMessageFields{role: "", realUser: false, text: "", requestID: "", contentHash: "", calls: nil}
 	var message nativeMessage
@@ -445,7 +439,6 @@ func RealUserText(text string) bool {
 	return trimmed != "" && !strings.HasPrefix(trimmed, "<")
 }
 
-// unmarshalProtobufFields reads protobuf field numbers, wire types, and byte values.
 func unmarshalProtobufFields(data []byte) ([]protobufField, error) {
 	fields := make([]protobufField, 0)
 	for len(data) > 0 {

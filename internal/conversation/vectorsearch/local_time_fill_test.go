@@ -35,7 +35,6 @@ func localFillDoc(timestampUnix int64) semsearch.SemDoc {
 	}
 }
 
-// localFillUpsert upserts a document, searches for it, and reads stored row hashes.
 func localFillUpsert(t *testing.T, root string, timestampUnix int64) localFillState {
 	t.Helper()
 	ctx := context.Background()
@@ -75,8 +74,6 @@ func localFillUpsert(t *testing.T, root string, timestampUnix int64) localFillSt
 	return localFillState{hit: hits[0], rows: len(rows), hashes: hashes}
 }
 
-// TestLocalUpsertFillsAnUnknownTimeWithoutChangingTheRow checks timestamp fills
-// and preserves row hashes, search content, and score.
 func TestLocalUpsertFillsAnUnknownTimeWithoutChangingTheRow(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "local")
 	unknown := time.Time{}.Unix()

@@ -31,8 +31,7 @@ type TimestampSourceRepairSource struct {
 	// CopyDocuments contains stored copies outside the ordered conversation.
 	CopyDocuments []semsearch.SemDoc
 	// ToolCalls contains native tool calls in source order.
-	ToolCalls []SourceToolTime
-	// ToolCallsComplete reports whether the native tool call state is complete.
+	ToolCalls         []SourceToolTime
 	ToolCallsComplete bool
 	// GroupedUsers records user turns under the message numbering that combines
 	// consecutive native assistant messages.

@@ -22,8 +22,7 @@ type storedFamilyRow struct {
 	content           string
 	splitPart         int32
 	splitPartRecorded bool
-	// timeKnown reports whether the stored row has a nonzero timestamp.
-	timeKnown bool
+	timeKnown         bool
 }
 
 func (row storedFamilyRow) hasCurrentKey() bool {

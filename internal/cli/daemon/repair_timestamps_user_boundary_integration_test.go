@@ -89,7 +89,6 @@ type userBoundaryLine struct {
 	} `json:"message"`
 }
 
-// writeUserBoundaryStore writes native messages and timestamped bubbles to a SQLite store.
 func writeUserBoundaryStore(t *testing.T, dataRoot string, commandArgs func(string) json.RawMessage) {
 	t.Helper()
 	native := []userBoundaryNativeMessage{

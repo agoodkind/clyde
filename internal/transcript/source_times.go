@@ -42,8 +42,7 @@ type sourceText struct {
 
 // SourceTimeIndex indexes consecutive source text entries by role.
 type SourceTimeIndex struct {
-	runs map[string][][]sourceText
-	// copies indexes individual stored copies by role and text.
+	runs   map[string][][]sourceText
 	copies map[string][]time.Time
 }
 
