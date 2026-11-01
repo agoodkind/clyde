@@ -41,8 +41,6 @@ func resolveFramedTranscriptSpans(content transcript.CompactedMessageContentItem
 	return reorienttag.ParseTranscriptSpans(content.Text)
 }
 
-// resolveParsedTranscriptSpans returns the spans that the provider parser
-// attached to the content item.
 func resolveParsedTranscriptSpans(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan {
 	return content.TranscriptSpans
 }
