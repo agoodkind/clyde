@@ -9,8 +9,6 @@ import (
 	"io"
 	"iter"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -99,7 +97,7 @@ const headerLineCap = 64
 // ReadHeader returns a Codex rollout thread summary from the header JSONL
 // entries without reading message history.
 func ReadHeader(path string, archived bool) (ThreadSummary, error) {
-	f, err := os.Open(filepath.Clean(path))
+	f, err := openRollout(path)
 	if err != nil {
 		slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
 		return ThreadSummary{}, fmt.Errorf("open codex rollout %s: %w", path, err)
@@ -130,6 +128,10 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 	reader := bufio.NewReader(f)
 	for range headerLineCap {
 		raw, readErr := reader.ReadBytes('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			slog.Warn("codex.store.history.read_failed", "concern", "providers.codex.store", "path", path, "err", readErr)
+			return ThreadSummary{}, fmt.Errorf("read codex rollout %s: %w", path, readErr)
+		}
 		line := bytes.TrimRight(raw, "\r\n")
 		var envelope historyLine
 		if len(line) > 0 && json.Unmarshal(line, &envelope) == nil {
@@ -188,7 +190,7 @@ type HistoryOptions struct {
 // before decoding so replacement_history stays untouched.
 func StreamMessages(path string, opts HistoryOptions) iter.Seq2[HistoryMessage, error] {
 	return func(yield func(HistoryMessage, error) bool) {
-		f, err := os.Open(filepath.Clean(path))
+		f, err := openRollout(path)
 		if err != nil {
 			slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
 			yield(emptyHistoryMessage(), fmt.Errorf("open codex rollout %s: %w", path, err))
