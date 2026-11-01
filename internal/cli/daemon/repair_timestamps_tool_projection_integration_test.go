@@ -533,3 +533,56 @@ func TestSourceRepairDatesAnOlderRunOnlyFromOneNativeOccurrence(t *testing.T) {
 		})
 	}
 }
+
+func setProjectionUnknownMarker(t *testing.T, ctx context.Context, address string, id string, row sharedStoredRow) {
+	t.Helper()
+	marker := time.Time{}.Unix()
+	metadata := strings.Replace(row.metadata, `"timestamp_unix":0`, fmt.Sprintf(`"timestamp_unix":%d`, marker), 1)
+	if metadata == row.metadata {
+		t.Fatalf("the test cannot replace the unix zero metadata timestamp with the unknown marker: %q", row.metadata)
+	}
+	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: "default"})
+	if err != nil {
+		t.Fatalf("failed to connect to Milvus: %v", err)
+	}
+	defer func() { _ = client.Close(ctx) }()
+	option := milvusclient.NewColumnBasedInsertOption(vectorsearch.CollectionName(repairCollectionID)).
+		WithVarcharColumn("id", []string{id}).
+		WithVarcharColumn("relativePath", []string{row.relativePath}).
+		WithVarcharColumn("metadata", []string{metadata}).
+		WithInt64Column("timestampUnix", []int64{marker}).
+		WithPartialUpdate(true)
+	if _, err := client.Upsert(ctx, option); err != nil {
+		t.Fatalf("the test cannot write the unknown marker to a stored row %s: %v", row.relativePath, err)
+	}
+}
+
+func TestSourceRepairNormalizesUnknownMarkersAndKeepsUnixZero(t *testing.T) {
+	address, home, conversationID := projectionHome(t, twoCallMessages(userBoundaryGit, userBoundaryTest))
+	ctx := context.Background()
+	bound := "convtool/" + conversationID + "/1/0"
+	unrecoverable := "convtool/" + conversationID + "/9/0"
+	unixZero := "convtool/" + conversationID + "/9/1"
+	otherBase := projectionShellName + "\nmake\nmake lint"
+	seedProjectionRowsAt(t, ctx, address, conversationID, []projectionRow{
+		{path: bound, content: projectionGitBase, role: "assistant"},
+		{path: unrecoverable, content: otherBase, role: "assistant"},
+		{path: unixZero, content: otherBase + " again", role: "assistant"},
+	}, 0)
+	seeded, _ := sharedSnapshot(t, address)
+	for id, row := range seeded {
+		if row.relativePath != unixZero {
+			setProjectionUnknownMarker(t, ctx, address, id, row)
+		}
+	}
+	time.Sleep(repairVisibilityWait)
+	rows := runProjectionRepair(t, ctx, address, home)
+	requireProjectionDate(t, rows, bound, projectionFirstDate)
+	requireProjectionUndated(t, rows, unrecoverable)
+	if !strings.Contains(rows[unrecoverable].metadata, `"timestamp_unix":null`) {
+		t.Fatalf("the unrecoverable row does not have a null metadata timestamp: %q", rows[unrecoverable].metadata)
+	}
+	if row := rows[unixZero]; row.timestampNull || row.timestampUnix != 0 || !strings.Contains(row.metadata, `"timestamp_unix":0`) {
+		t.Fatalf("the row with unix timestamp zero changed: %+v", row)
+	}
+}

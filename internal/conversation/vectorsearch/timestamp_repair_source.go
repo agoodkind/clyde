@@ -625,6 +625,9 @@ func tallyFamily(family pendingFamily, matched map[string]matchedRow, report *Ti
 		report.Outcomes = map[string]int{}
 	}
 	report.Outcomes[family.evidence.Outcome] += count
+	if family.evidence.Outcome != SourceOutcomeMatched {
+		normalizeUnknownMarkers(family.rows, matched)
+	}
 	switch family.evidence.Outcome {
 	case SourceOutcomeMatched:
 		for _, row := range family.rows {
@@ -640,6 +643,17 @@ func tallyFamily(family pendingFamily, matched map[string]matchedRow, report *Ti
 		report.RowsIncomplete += count
 	default:
 		report.RowsUnmatched += count
+	}
+}
+
+// normalizeUnknownMarkers selects rows that store the Go zero time marker for a
+// NULL timestamp write. It leaves a row with Unix timestamp zero unchanged.
+func normalizeUnknownMarkers(rows []collection.StoredRow, matched map[string]matchedRow) {
+	for _, row := range rows {
+		cell, found := row.Scalars[timestampUnixColumn]
+		if found && cell.State == collection.ScalarCellValue && cell.Value.Int64 == missingTimestampUnix {
+			matched[row.ID] = matchedRow{relativePath: row.RelativePath, timestampUnix: missingTimestampUnix}
+		}
 	}
 }
 
