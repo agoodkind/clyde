@@ -255,9 +255,13 @@ func (resolver chronologyResolver) requestUser(index int) bool {
 	return !message.Missing && message.Role == "user" && message.RequestID != ""
 }
 
-// linkedUser finds exactly one available user in the adjacent sequence with
-// the shared user's request ID and content hash.
+// linkedUser finds a user in the adjacent sequence only when exactly one
+// available user matches the shared user's request ID and content hash. It does
+// not find a user when the shared user's content hash is empty.
 func (resolver chronologyResolver) linkedUser(shared int, first int, last int) (int, bool) {
+	if resolver.messages[shared].ContentHash == "" {
+		return 0, false
+	}
 	linked := -1
 	for index := first; index <= last; index++ {
 		message := resolver.messages[index]

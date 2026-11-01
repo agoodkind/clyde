@@ -59,7 +59,6 @@ type conversationState struct {
 	families map[string][]storedFamilyRow
 }
 
-// hasUnknownTimeRow reports whether the family contains the row with an unknown time.
 func (state *conversationState) hasUnknownTimeRow(familyKey string, id string) bool {
 	if state == nil {
 		return false
