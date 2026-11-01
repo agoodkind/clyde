@@ -23,7 +23,6 @@ func newToolIdentityDates() *toolIdentityDates {
 	return &toolIdentityDates{outer: map[string][]toolIdentityDate{}, typed: map[string][]toolIdentityDate{}}
 }
 
-// add indexes a bubble's tool call identifiers using a positive start timestamp when available and the bubble creation time otherwise.
 func (dates *toolIdentityDates) add(bubble cursorstore.Bubble) error {
 	if bubble.ToolCall == nil {
 		return nil

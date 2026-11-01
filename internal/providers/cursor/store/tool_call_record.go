@@ -20,18 +20,15 @@ const (
 
 // ToolCallRecord contains tool call identifiers, timestamps, and timestamp presence flags from Cursor protobuf data.
 type ToolCallRecord struct {
-	// ID identifies the tool call in the decoded record.
 	ID string
 	// ShellArgsID identifies the tool call in nested shell arguments.
 	ShellArgsID string
 	// StartedAtMs records the start time in milliseconds since the Unix epoch.
 	StartedAtMs int64
-	// HasStart reports whether the record contains a start timestamp.
-	HasStart bool
+	HasStart    bool
 	// CompletedAtMs records the completion time in milliseconds since the Unix epoch.
 	CompletedAtMs int64
-	// HasCompleted reports whether the record contains a completion timestamp.
-	HasCompleted bool
+	HasCompleted  bool
 }
 
 // DecodeToolCallBinary decodes tool call identifiers and timestamps from a base64 protobuf record. It accepts an empty input without an error.

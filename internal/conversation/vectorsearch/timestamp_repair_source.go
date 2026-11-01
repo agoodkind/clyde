@@ -474,8 +474,7 @@ type SourceRepairEvidence struct {
 	Candidates     []int64  `json:"candidates,omitempty"`
 	Chosen         int64    `json:"chosen,omitempty"`
 	// Match records the matching method when fragment matching is used.
-	Match string `json:"match,omitempty"`
-	// ToolCallID records the chosen native call ID.
+	Match          string `json:"match,omitempty"`
 	ToolCallID     string `json:"tool_call_id,omitempty"`
 	ToolProjection string `json:"tool_projection,omitempty"`
 }

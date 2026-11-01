@@ -194,8 +194,6 @@ type nativeCursorOptions struct {
 	RequestID string `json:"requestId"`
 }
 
-// nativeMessageFields records the role, real user flag, matching text, request ID,
-// content hash, and tool calls from a native message.
 type nativeMessageFields struct {
 	role        string
 	realUser    bool
@@ -486,7 +484,6 @@ func unmarshalProtobufFields(data []byte) ([]protobufField, error) {
 	return fields, nil
 }
 
-// protobufParseError wraps a protowire parse error for the given error code.
 func protobufParseError(code int) error {
 	err := protowire.ParseError(code)
 	slog.Warn("providers.cursor.store.protobuf_parse_failed", "concern", concern, "err", err)
