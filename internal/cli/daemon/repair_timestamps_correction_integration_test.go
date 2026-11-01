@@ -136,6 +136,13 @@ func correctionRowByContent(t *testing.T, rows map[string]sharedStoredRow, conte
 
 func correctionEnvironment(t *testing.T) (string, string) {
 	t.Helper()
+	address, home := correctionHome(t)
+	writeCorrectionSources(t, filepath.Join(home, "cursor-data"), filepath.Join(home, "cursor-projects"))
+	return address, home
+}
+
+func correctionHome(t *testing.T) (string, string) {
+	t.Helper()
 	milvustest.RequireEnabled(t)
 	address := milvustest.Start(t)
 	home := t.TempDir()
@@ -147,7 +154,6 @@ func correctionEnvironment(t *testing.T) (string, string) {
 	projects := filepath.Join(home, "cursor-projects")
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
-	writeCorrectionSources(t, dataRoot, projects)
 	return address, home
 }
 

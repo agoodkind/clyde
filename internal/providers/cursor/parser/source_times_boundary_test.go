@@ -178,6 +178,74 @@ func TestTranscriptToolCallsCountARepeatedUserReference(t *testing.T) {
 	requireToolTimes(t, boundaryToolTimes(t, transcriptPath), [][]time.Time{{minuteAfterTen(1)}, {minuteAfterTen(3)}})
 }
 
+func TestTranscriptToolCallStaysUndatedWhenAnIdenticalCallHasAnotherDate(t *testing.T) {
+	rootDir, transcriptPath := boundaryRoots(t, []string{
+		userLine(t, boundarySecondRequest),
+		toolLine(t, commandArgs(t, nativeGitCommand, "")),
+	})
+	writeBoundaryStore(t, rootDir, []fixtureNativeMessage{
+		userMessage(boundaryFirstRequest),
+		assistantMessage(callPart("call_a", commandArgs(t, nativeGitCommand, ""))),
+		userMessage(boundarySecondRequest),
+		assistantMessage(callPart("call_b", commandArgs(t, nativeGitCommand, ""))),
+	}, nil, boundaryBubbles())
+	requireToolTimes(t, boundaryToolTimes(t, transcriptPath), [][]time.Time{{{}}})
+}
+
+// TestTranscriptToolCallTakesTheDateOfItsProvenNativeCall checks that a saved
+// call takes its proven native call's date after the transcript omits an
+// earlier call, whether both native calls share a message or occupy separate
+// messages.
+func TestTranscriptToolCallTakesTheDateOfItsProvenNativeCall(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		messages func(t *testing.T) []fixtureNativeMessage
+	}{
+		{name: "separate native messages", messages: func(t *testing.T) []fixtureNativeMessage {
+			t.Helper()
+			return []fixtureNativeMessage{
+				userMessage(boundaryFirstRequest),
+				assistantMessage(callPart("call_a", commandArgs(t, nativeGitCommand, ""))),
+				assistantMessage(callPart("call_b", commandArgs(t, nativeTestCommand, ""))),
+			}
+		}},
+		{name: "one native message", messages: func(t *testing.T) []fixtureNativeMessage {
+			t.Helper()
+			return []fixtureNativeMessage{
+				userMessage(boundaryFirstRequest),
+				assistantMessage(callPart("call_a", commandArgs(t, nativeGitCommand, "")), callPart("call_b", commandArgs(t, nativeTestCommand, ""))),
+			}
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			rootDir, transcriptPath := boundaryRoots(t, []string{
+				userLine(t, boundaryFirstRequest),
+				toolLine(t, commandArgs(t, nativeTestCommand, "")),
+			})
+			writeBoundaryStore(t, rootDir, testCase.messages(t), nil, boundaryBubbles())
+			requireToolTimes(t, boundaryToolTimes(t, transcriptPath), [][]time.Time{{minuteAfterTen(3)}})
+		})
+	}
+}
+
+// TestTranscriptToolCallStaysUndatedAcrossAnOmittedUserTurn checks that the
+// parser leaves a saved call undated when the transcript omits a native user
+// turn and the intervening tool call.
+func TestTranscriptToolCallStaysUndatedAcrossAnOmittedUserTurn(t *testing.T) {
+	rootDir, transcriptPath := boundaryRoots(t, []string{
+		userLine(t, boundaryFirstRequest),
+		toolLine(t, commandArgs(t, nativeGitCommand, ""), commandArgs(t, nativeTestCommand, "")),
+	})
+	writeBoundaryStore(t, rootDir, []fixtureNativeMessage{
+		userMessage(boundaryFirstRequest),
+		assistantMessage(callPart("call_a", commandArgs(t, nativeGitCommand, ""))),
+		userMessage(boundarySecondRequest),
+		assistantMessage(callPart("call_c", commandArgs(t, nativeTestCommand, "other"))),
+		assistantMessage(callPart("call_b", commandArgs(t, nativeTestCommand, ""))),
+	}, nil, append(boundaryBubbles(), toolBubble("t3", "2026-05-20T10:04:00.000Z", "call_c")))
+	requireToolTimes(t, boundaryToolTimes(t, transcriptPath), [][]time.Time{{minuteAfterTen(1), {}}})
+}
+
 // escapedNativeArgs returns JSON arguments with escaped characters.
 func escapedNativeArgs(t *testing.T) json.RawMessage {
 	t.Helper()

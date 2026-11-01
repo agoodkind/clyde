@@ -280,6 +280,7 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 	}
 	toolRows := 0
 	firstUserUnknown := false
+	firstToolDate := time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC).Unix()
 	for id, after := range repaired {
 		before := seeded[id]
 		if after.content != before.content || after.vectorKey != before.vectorKey || after.others != before.others {
@@ -287,6 +288,12 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 		}
 		if strings.HasPrefix(after.relativePath, "convtool/") {
 			toolRows++
+			if strings.Contains(after.content, userBoundaryGit) {
+				if after.timestampNull || after.timestampUnix != firstToolDate {
+					t.Fatalf("failed to preserve the first tool date %s: %+v", after.relativePath, after)
+				}
+				continue
+			}
 			if !after.timestampNull || after.metadata != before.metadata {
 				t.Fatalf("tool row timestamp or metadata changed; path, timestamp: %s: %d", after.relativePath, after.timestampUnix)
 			}

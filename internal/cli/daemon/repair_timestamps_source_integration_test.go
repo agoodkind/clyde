@@ -1196,8 +1196,11 @@ func readRowTime(ctx context.Context, client *milvusclient.Client, id string) (r
 	empty := rowTimeState{known: false, timestampUnix: 0, metadata: ""}
 	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(vectorsearch.CollectionName(repairCollectionID)).
 		WithFilter(`id == "`+id+`"`).WithOutputFields("timestampUnix", "metadata").WithConsistencyLevel(entity.ClStrong))
-	if err != nil || resultSet.ResultCount != 1 {
-		return empty, fmt.Errorf("cannot read row timestamp; row ID, result count: %s %d: %w", id, resultSet.ResultCount, err)
+	if err != nil {
+		return empty, fmt.Errorf("cannot query milvus row timestamp and metadata %s: %w", id, err)
+	}
+	if resultSet.ResultCount != 1 {
+		return empty, fmt.Errorf("cannot read exactly one milvus row %s %d", id, resultSet.ResultCount)
 	}
 	isNull, err := resultSet.GetColumn("timestampUnix").IsNull(0)
 	if err != nil {

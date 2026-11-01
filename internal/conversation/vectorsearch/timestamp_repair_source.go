@@ -2,6 +2,7 @@ package vectorsearch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,12 +34,45 @@ type TimestampSourceRepairSource struct {
 	ToolCalls []SourceToolTime
 	// ToolCallsComplete reports whether the native tool call state is complete.
 	ToolCallsComplete bool
+	// GroupedUsers records user turns under the message numbering that combines
+	// consecutive native assistant messages.
+	GroupedUsers []transcript.UserTurn
+	// ActualUsers records user turns under the message numbering that counts
+	// native messages separately.
+	ActualUsers []transcript.UserTurn
+	// Transcript records tool calls and user turns at their loaded transcript
+	// positions.
+	Transcript SourceTranscript
 	// Corrections selects row IDs for correction and supplies their expected state. A nil map selects zero timestamp rows instead.
 	Corrections map[string]TimestampCorrectionGuard
 }
 
+// SourceTranscript contains tool calls and user turns under the loaded
+// transcript's message numbering.
+type SourceTranscript struct {
+	// Calls records tool names, complete arguments, and positions in transcript
+	// order.
+	Calls []SourceTranscriptCall
+	// Users records user text and message positions in the loaded transcript.
+	Users []transcript.UserTurn
+}
+
+// SourceTranscriptCall contains a transcript call's message position, tool
+// position, name, and complete arguments without a call ID.
+type SourceTranscriptCall struct {
+	Message int
+	Ordinal int
+	Name    string
+	Input   json.RawMessage
+}
+
 // SourceToolTime contains native tool content, a timestamp, and an unavailable reason.
 type SourceToolTime struct {
+	// CallID records the native call ID used to select its date.
+	CallID string
+	// Input contains the complete native arguments for comparison with
+	// transcript calls.
+	Input         json.RawMessage
 	Name          string
 	Display       string
 	LangHint      string
@@ -49,6 +83,17 @@ type SourceToolTime struct {
 	AfterUser bool
 	// Reason identifies why the native tool call timestamp is unavailable.
 	Reason string
+	// GroupedMessage records the message position when the projection joins
+	// consecutive native assistant messages.
+	GroupedMessage int
+	// GroupedOrdinal records the call position within the combined assistant
+	// message.
+	GroupedOrdinal int
+	// ActualMessage records the message position when the projection counts
+	// native messages separately.
+	ActualMessage int
+	// ActualOrdinal records the call position within its native message.
+	ActualOrdinal int
 }
 
 // TimestampSourceRepairReport records source repair counts and matching evidence.
@@ -224,22 +269,23 @@ type sourceTimeLookup struct {
 	texts    *transcript.SourceTimeIndex
 	thinking map[string][]int64
 	// fields indexes source text and thinking by role and family kind.
-	fields    map[string][]sourceField
-	matchText func(role string, text string) string
-	// toolCalls contains native calls in source order.
+	fields            map[string][]sourceField
+	matchText         func(role string, text string) string
 	toolCalls         []SourceToolTime
 	toolCallsComplete bool
-	// toolBindings associates each tool row family with a native call or failure reason.
-	toolBindings map[string]toolBinding
-	// emptySource reports whether the source contains documents, copies, or tool calls.
-	emptySource bool
-	corrections map[string]TimestampCorrectionGuard
+	groupedUsers      []transcript.UserTurn
+	actualUsers       []transcript.UserTurn
+	transcript        SourceTranscript
+	toolBindings      map[string]toolBinding
+	emptySource       bool
+	corrections       map[string]TimestampCorrectionGuard
 }
 
-// toolBinding stores a native call or the reason binding failed.
 type toolBinding struct {
-	call   SourceToolTime
-	reason string
+	call       SourceToolTime
+	reason     string
+	component  bool
+	projection string
 }
 
 // sourceField stores source text and its timestamp.
@@ -252,6 +298,7 @@ func newSourceTimeLookup(source TimestampSourceRepairSource) sourceTimeLookup {
 	lookup := sourceTimeLookup{
 		texts: nil, thinking: map[string][]int64{}, fields: map[string][]sourceField{}, matchText: source.MatchText,
 		toolCalls: source.ToolCalls, toolCallsComplete: source.ToolCallsComplete, toolBindings: map[string]toolBinding{},
+		groupedUsers: source.GroupedUsers, actualUsers: source.ActualUsers, transcript: source.Transcript,
 		emptySource: len(source.Documents) == 0 && len(source.CopyDocuments) == 0 && len(source.ToolCalls) == 0,
 		corrections: source.Corrections,
 	}
@@ -284,130 +331,6 @@ func (lookup sourceTimeLookup) indexDocuments(docs []semsearch.SemDoc) []transcr
 		}
 	}
 	return entries
-}
-
-// bindToolFamilies binds ordered tool families to native calls when the state is
-// complete and the counts and names agree.
-func (lookup sourceTimeLookup) bindToolFamilies(families map[string][]collection.StoredRow) {
-	keys := make([]string, 0)
-	for key := range families {
-		if strings.HasPrefix(key, conversationToolFamily+familyPartSeparator) {
-			keys = append(keys, key)
-		}
-	}
-	slices.SortFunc(keys, func(left string, right string) int {
-		return slices.Compare(familyOrder(left), familyOrder(right))
-	})
-	reason := ""
-	switch {
-	case !lookup.toolCallsComplete:
-		reason = SourceOutcomeIdentityUnavailable
-	case len(keys) != len(lookup.toolCalls):
-		reason = SourceOutcomeSequenceMismatch
-	}
-	if reason == "" && !storedStartsAreNativeStarts(keys, lookup.toolCalls, storedUserMessages(families)) {
-		reason = SourceOutcomeSequenceMismatch
-	}
-	if reason == "" {
-		for index, key := range keys {
-			name, _, _ := strings.Cut(families[key][0].Content, toolContinuationBreak)
-			if strings.TrimSpace(name) != strings.TrimSpace(lookup.toolCalls[index].Name) {
-				reason = SourceOutcomeSequenceMismatch
-				break
-			}
-		}
-	}
-	for index, key := range keys {
-		if reason != "" {
-			lookup.toolBindings[key] = toolBinding{call: emptySourceToolTime(), reason: reason}
-			continue
-		}
-		lookup.toolBindings[key] = toolBinding{call: lookup.toolCalls[index], reason: ""}
-	}
-}
-
-// storedStartsAreNativeStarts reports whether each stored tool message starts with
-// // the first tool call in a native message.
-// storedUserRole identifies stored text rows with the user role.
-const storedUserRole = "user"
-
-// storedUserMessages returns message positions for stored user text families.
-func storedUserMessages(families map[string][]collection.StoredRow) []int {
-	users := make([]int, 0)
-	for key, rows := range families {
-		if !strings.HasPrefix(key, conversationTextFamily+familyPartSeparator) {
-			continue
-		}
-		for _, row := range rows {
-			cell, found := row.Scalars[roleColumn]
-			if found && cell.State == collection.ScalarCellValue && strings.EqualFold(cell.Value.String, storedUserRole) {
-				users = append(users, familyOrder(key)[0])
-				break
-			}
-		}
-	}
-	return users
-}
-
-// userBetween reports whether a user message position is strictly between two positions.
-func userBetween(users []int, previous int, current int) bool {
-	for _, message := range users {
-		if previous < message && message < current {
-			return true
-		}
-	}
-	return false
-}
-
-func storedStartsAreNativeStarts(keys []string, calls []SourceToolTime, users []int) bool {
-	for index, key := range keys {
-		start := index == 0 || familyOrder(key)[0] != familyOrder(keys[index-1])[0]
-		if start && !calls[index].MessageStart {
-			return false
-		}
-		// Reject a stored user turn between tool messages when the native call lacks AfterUser.
-		if start && index > 0 && !calls[index].AfterUser && userBetween(users, familyOrder(keys[index-1])[0], familyOrder(key)[0]) {
-			return false
-		}
-		// Reject a native user turn between calls in one stored tool message.
-		if !start && calls[index].AfterUser {
-			return false
-		}
-	}
-	return true
-}
-
-func emptySourceToolTime() SourceToolTime {
-	return SourceToolTime{Name: "", Display: "", LangHint: "", TimestampUnix: missingTimestampUnix, Reason: "", MessageStart: false, AfterUser: false}
-}
-
-// toolFamilyOutcome checks a tool family's binding, content, and timestamp reason.
-func (lookup sourceTimeLookup) toolFamilyOutcome(key string, text string, evidence *SourceRepairEvidence) {
-	binding, found := lookup.toolBindings[key]
-	if !found {
-		evidence.Outcome = SourceOutcomeSequenceMismatch
-		return
-	}
-	if binding.reason != "" {
-		evidence.Outcome = binding.reason
-		return
-	}
-	rendered := toolContent(semsearch.SemToolCall{
-		Name: strings.ToValidUTF8(binding.call.Name, ""), Display: strings.ToValidUTF8(binding.call.Display, ""),
-		LangHint: strings.ToValidUTF8(binding.call.LangHint, ""), Output: "", IsError: false, TimestampUnix: nil, TimestampUnknown: false,
-	})
-	if rendered != text {
-		evidence.Outcome = SourceOutcomeContentMismatch
-		return
-	}
-	if binding.call.Reason != "" {
-		evidence.Outcome = binding.call.Reason
-		return
-	}
-	evidence.Outcome = SourceOutcomeMatched
-	evidence.Candidates = []int64{binding.call.TimestampUnix}
-	evidence.Chosen = binding.call.TimestampUnix
-	evidence.Match = sourceMatchNativeIdentity
 }
 
 func (lookup sourceTimeLookup) isTarget(row collection.StoredRow) bool {
@@ -529,6 +452,9 @@ const (
 	SourceOutcomeIdentityUnavailable = "native_identity_unavailable"
 	// SourceOutcomeSequenceMismatch indicates that tool family counts or names differ.
 	SourceOutcomeSequenceMismatch = "native_sequence_mismatch"
+	// SourceOutcomeComponentUnevaluated indicates that the stored components do
+	// not support a complete comparison with the native call.
+	SourceOutcomeComponentUnevaluated = "historical_component_unevaluated"
 	// SourceOutcomeContentMismatch indicates that tool family content differs from the call.
 	SourceOutcomeContentMismatch = "content_mismatch"
 	// SourceOutcomeIdentityAbsent indicates that a tool call lacks a dated identity bubble.
@@ -551,6 +477,10 @@ type SourceRepairEvidence struct {
 	Chosen         int64    `json:"chosen,omitempty"`
 	// Match records the matching method when fragment matching is used.
 	Match string `json:"match,omitempty"`
+	// ToolCallID records the chosen native call ID.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	// ToolProjection records the projection used to select the native call.
+	ToolProjection string `json:"tool_projection,omitempty"`
 }
 
 type pendingFamily struct {
@@ -609,8 +539,12 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 		return nil, dated
 	}
 	slices.Sort(ids)
-	evidence := &SourceRepairEvidence{ConversationID: conversationID, Family: key, Rows: ids, Outcome: "", Candidates: nil, Chosen: 0, Match: ""}
+	evidence := &SourceRepairEvidence{ConversationID: conversationID, Family: key, Rows: ids, Outcome: "", Candidates: nil, Chosen: 0, Match: "", ToolCallID: "", ToolProjection: ""}
 	family := &pendingFamily{order: familyOrder(key), rows: zeroTime, evidence: evidence}
+	if binding, found := lookup.toolBindings[key]; found && binding.component && !lookup.emptySource {
+		bindingOutcome(binding, evidence)
+		return family, dated
+	}
 	familyKind, _, _ := strings.Cut(key, familyPartSeparator)
 	text, complete := familyText(key, familyKind, members)
 	if !complete {
@@ -659,7 +593,7 @@ func fragmentFallback(conversationID string, key string, family pendingFamily, l
 	role := rowRole(family.rows)
 	split := make([]pendingFamily, 0, len(family.rows))
 	for _, row := range family.rows {
-		evidence := &SourceRepairEvidence{ConversationID: conversationID, Family: row.RelativePath, Rows: []string{row.ID}, Outcome: "", Candidates: nil, Chosen: 0, Match: sourceMatchFragment}
+		evidence := &SourceRepairEvidence{ConversationID: conversationID, Family: row.RelativePath, Rows: []string{row.ID}, Outcome: "", Candidates: nil, Chosen: 0, Match: sourceMatchFragment, ToolCallID: "", ToolProjection: ""}
 		if strings.TrimSpace(row.Content) == "" {
 			evidence.Outcome = SourceOutcomeEmpty
 			split = append(split, pendingFamily{order: family.order, rows: []collection.StoredRow{row}, evidence: evidence})

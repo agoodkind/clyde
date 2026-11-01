@@ -1,14 +1,12 @@
 package parser
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -78,7 +76,7 @@ func (p *Parser) SourceMatchText(role string, text string) string {
 }
 
 func emptySourceMessages() conversation.SourceMessages {
-	return conversation.SourceMessages{Messages: nil, Copies: nil, ToolCalls: nil, ToolCallsComplete: false, MissingNativeRecords: 0}
+	return conversation.SourceMessages{Messages: nil, Copies: nil, ToolCalls: nil, ToolCallsComplete: false, GroupedUsers: nil, ActualUsers: nil, MissingNativeRecords: 0}
 }
 
 // streamTranscript reads transcript messages, applies source times, and yields messages.
@@ -128,10 +126,19 @@ type sourceTimeResolver struct {
 	toolsBroken bool
 	// userSinceTool reports whether a real transcript user turn appeared since the last matched tool call.
 	userSinceTool bool
+	// savedTool counts saved transcript calls separately from nextTool, which
+	// tracks the next native position.
+	savedTool int
+	// provenTools stores the native position proven for each transcript call,
+	// or UnprovenToolPosition when comparison does not prove one.
+	provenTools []int
+	// provenLoaded reports whether the resolver has attempted to read and
+	// compare the transcript tool calls.
+	provenLoaded bool
 }
 
 func newSourceTimeResolver(discovered discoveredArtifact, opts conversation.LoadOptions) *sourceTimeResolver {
-	return &sourceTimeResolver{discovered: discovered, opts: opts, loaded: false, available: false, source: emptySourceMessages(), texts: nil, nextTool: 0, toolsBroken: false, userSinceTool: false}
+	return &sourceTimeResolver{discovered: discovered, opts: opts, loaded: false, available: false, source: emptySourceMessages(), texts: nil, nextTool: 0, toolsBroken: false, userSinceTool: false, savedTool: 0, provenTools: nil, provenLoaded: false}
 }
 
 // observe records a real user turn in the transcript message.
@@ -199,26 +206,29 @@ func (resolver *sourceTimeResolver) applyTools(message *transcript.Message) {
 			return
 		}
 		tool := &message.Tools[toolIndex]
-		if resolver.nextTool >= len(resolver.source.ToolCalls) {
-			resolver.breakTools("count")
+		position, proven := resolver.provenPosition()
+		if !proven {
+			resolver.breakTools("occurrence")
 			return
 		}
-		native := resolver.source.ToolCalls[resolver.nextTool]
-		if toolIndex == 0 && !native.MessageStart {
+		native := resolver.source.ToolCalls[position]
+		messageStart, nativeAfterUser := resolver.boundariesThrough(position)
+		if toolIndex == 0 && !messageStart {
 			resolver.breakTools("boundary")
 			return
 		}
 		afterUser := toolIndex == 0 && resolver.userSinceTool
-		if native.AfterUser != afterUser {
+		if nativeAfterUser != afterUser {
 			resolver.breakTools("user_boundary")
 			return
 		}
 		resolver.userSinceTool = false
-		if tool.Name != native.Tool.Name || !sameToolInput(tool.Input.Raw, native.Tool.Input.Raw) {
+		if tool.Name != native.Tool.Name || !transcript.SameToolInput(tool.Input.Raw, native.Tool.Input.Raw) {
 			resolver.breakTools("sequence")
 			return
 		}
-		resolver.nextTool++
+		resolver.savedTool++
+		resolver.nextTool = position + 1
 		if native.Timestamp.IsZero() {
 			continue
 		}
@@ -228,92 +238,60 @@ func (resolver *sourceTimeResolver) applyTools(message *transcript.Message) {
 	}
 }
 
-// sameToolInput compares two tool inputs as canonical JSON.
-func sameToolInput(left json.RawMessage, right json.RawMessage) bool {
-	leftCanonical, leftOK := canonicalToolInput(left)
-	rightCanonical, rightOK := canonicalToolInput(right)
-	return leftOK && rightOK && leftCanonical == rightCanonical
+// provenPosition returns the proven native position of the next saved
+// transcript call and reports whether that position exists.
+func (resolver *sourceTimeResolver) provenPosition() (int, bool) {
+	if !resolver.provenLoaded {
+		resolver.provenLoaded = true
+		resolver.provenTools = resolver.readProvenTools()
+	}
+	if resolver.savedTool >= len(resolver.provenTools) {
+		return transcript.UnprovenToolPosition, false
+	}
+	position := resolver.provenTools[resolver.savedTool]
+	return position, position != transcript.UnprovenToolPosition
 }
 
-// canonicalToolInput decodes a JSON input and returns its canonical encoding.
-func canonicalToolInput(raw json.RawMessage) (string, bool) {
-	var builder bytes.Buffer
-	if !writeCanonicalJSON(&builder, bytes.TrimSpace(raw)) {
-		return "", false
+// boundariesThrough combines the MessageStart and AfterUser flags from the
+// omitted native calls and the chosen native call. An omitted call can mark
+// either boundary.
+func (resolver *sourceTimeResolver) boundariesThrough(position int) (bool, bool) {
+	messageStart := false
+	afterUser := false
+	for _, call := range resolver.source.ToolCalls[resolver.nextTool : position+1] {
+		messageStart = messageStart || call.MessageStart
+		afterUser = afterUser || call.AfterUser
 	}
-	return builder.String(), true
+	return messageStart, afterUser
 }
 
-func writeCanonicalObject(builder *bytes.Buffer, raw []byte) bool {
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &object); err != nil {
-		return false
+// readProvenTools compares transcript tool calls with native calls through
+// ProvenToolPositions. It reads the transcript only when its path identifies a
+// regular file.
+func (resolver *sourceTimeResolver) readProvenTools() []int {
+	info, err := os.Stat(resolver.discovered.Path)
+	if err != nil || !info.Mode().IsRegular() {
+		slog.Warn("providers.cursor.parser.source_times_transcript_not_regular", "concern", concern, "path", resolver.discovered.Path, "err", err)
+		return nil
 	}
-	keys := make([]string, 0, len(object))
-	for key := range object {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	builder.WriteByte('{')
-	for index, key := range keys {
-		if index > 0 {
-			builder.WriteByte(',')
-		}
-		encodedKey, err := json.Marshal(key)
-		if err != nil {
-			return false
-		}
-		builder.Write(encodedKey)
-		builder.WriteByte(':')
-		if !writeCanonicalJSON(builder, bytes.TrimSpace(object[key])) {
-			return false
-		}
-	}
-	builder.WriteByte('}')
-	return true
-}
-
-// writeCanonicalJSON writes JSON with sorted object keys and compact values.
-// It preserves array order and returns false when the input is invalid.
-func writeCanonicalJSON(builder *bytes.Buffer, raw []byte) bool {
-	if len(raw) == 0 {
-		return false
-	}
-	switch raw[0] {
-	case '{':
-		return writeCanonicalObject(builder, raw)
-	case '[':
-		var items []json.RawMessage
-		if err := json.Unmarshal(raw, &items); err != nil {
-			return false
-		}
-		builder.WriteByte('[')
-		for index, item := range items {
-			if index > 0 {
-				builder.WriteByte(',')
-			}
-			if !writeCanonicalJSON(builder, bytes.TrimSpace(item)) {
-				return false
+	saved := make([]transcript.ToolIdentity, 0)
+	err = cursorjsonl.StreamMessages(resolver.discovered.Path, func(message cursorjsonl.TranscriptMessage) error {
+		for _, part := range message.Parts {
+			if part.Type == cursorjsonl.PartTypeToolUse {
+				saved = append(saved, transcript.ToolIdentity{Name: part.ToolName, Input: part.ToolInput})
 			}
 		}
-		builder.WriteByte(']')
-	case '"':
-		// Decode and re-encode strings to normalize equivalent JSON escapes.
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return false
-		}
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return false
-		}
-		builder.Write(encoded)
-	default:
-		if err := json.Compact(builder, raw); err != nil {
-			return false
-		}
+		return nil
+	})
+	if err != nil {
+		slog.Warn("providers.cursor.parser.source_times_transcript_tools_failed", "concern", concern, "path", resolver.discovered.Path, "err", err)
+		return nil
 	}
-	return true
+	native := make([]transcript.ToolIdentity, 0, len(resolver.source.ToolCalls))
+	for _, call := range resolver.source.ToolCalls {
+		native = append(native, transcript.ToolIdentity{Name: call.Tool.Name, Input: call.Tool.Input.Raw})
+	}
+	return transcript.ProvenToolPositions(saved, native)
 }
 
 func (resolver *sourceTimeResolver) breakTools(reason string) {
@@ -421,7 +399,7 @@ func sourceSignature(source conversation.SourceMessages) string {
 	fmt.Fprintf(&builder, "%s %t\n", sourceToolsMarker, source.ToolCallsComplete)
 	fmt.Fprintf(&builder, "missing %d\n", source.MissingNativeRecords)
 	for _, call := range source.ToolCalls {
-		input, _ := canonicalToolInput(call.Tool.Input.Raw)
+		input, _ := transcript.CanonicalToolInput(call.Tool.Input.Raw)
 		fields := []string{call.Tool.ID, call.Tool.Name, input, call.Tool.Display, call.Timestamp.UTC().Format(time.RFC3339Nano), call.Reason, strconv.FormatBool(call.MessageStart), strconv.FormatBool(call.AfterUser)}
 		builder.WriteString(strings.Join(fields, sourceSignatureSeparator) + "\n")
 	}
@@ -505,15 +483,29 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 	}
 	source.ToolCallsComplete = nativeFound && native.Complete
 	source.MissingNativeRecords = native.MissingBlobs
-	sequence := native.Sequence()
-	source.ToolCalls = make([]conversation.SourceToolCall, 0, len(sequence))
-	for _, entry := range sequence {
+	projection := native.Project()
+	source.GroupedUsers = sourceUserTurns(projection.GroupedUsers)
+	source.ActualUsers = sourceUserTurns(projection.ActualUsers)
+	source.ToolCalls = make([]conversation.SourceToolCall, 0, len(projection.Calls))
+	for _, entry := range projection.Calls {
 		call := nativeSourceToolCall(entry.Call, callDates[entry.Call.ID])
 		call.MessageStart = entry.MessageStart
 		call.AfterUser = entry.AfterUser
+		call.GroupedMessage = entry.GroupedMessage
+		call.GroupedOrdinal = entry.GroupedOrdinal
+		call.ActualMessage = entry.ActualMessage
+		call.ActualOrdinal = entry.ActualOrdinal
 		source.ToolCalls = append(source.ToolCalls, call)
 	}
 	return source, true, nil
+}
+
+func sourceUserTurns(turns []cursorstore.NativeUserTurn) []transcript.UserTurn {
+	converted := make([]transcript.UserTurn, 0, len(turns))
+	for _, turn := range turns {
+		converted = append(converted, transcript.UserTurn{Message: turn.Message, Text: turn.Text})
+	}
+	return converted
 }
 
 // applyChronologyTimes assigns dates, including zero dates, to matching message keys.
@@ -545,7 +537,7 @@ func nativeSourceToolCall(call cursorstore.NativeToolCall, dates []time.Time) co
 		Timestamp:        nil,
 		TimestampUnknown: false,
 	}
-	result := conversation.SourceToolCall{Tool: tool, Timestamp: time.Time{}, Reason: "", MessageStart: false, AfterUser: false}
+	result := conversation.SourceToolCall{Tool: tool, Timestamp: time.Time{}, Reason: "", MessageStart: false, AfterUser: false, GroupedMessage: 0, GroupedOrdinal: 0, ActualMessage: 0, ActualOrdinal: 0}
 	if len(dates) == 0 || dates[0].IsZero() {
 		result.Reason = SourceToolReasonIdentityAbsent
 		return result

@@ -18,6 +18,17 @@ type SourceToolCall struct {
 	MessageStart bool
 	// AfterUser reports whether a real user turn appeared since the previous call.
 	AfterUser bool
+	// GroupedMessage records the message position when the projection joins
+	// consecutive native assistant messages.
+	GroupedMessage int
+	// GroupedOrdinal records the call position within the combined assistant
+	// message.
+	GroupedOrdinal int
+	// ActualMessage records the message position when the projection counts
+	// native messages separately.
+	ActualMessage int
+	// ActualOrdinal records the call position within its native message.
+	ActualOrdinal int
 }
 
 // SourceMessages contains ordered messages, stored copies, and native tool calls.
@@ -29,6 +40,12 @@ type SourceMessages struct {
 	ToolCalls []SourceToolCall
 	// ToolCallsComplete reports whether the native tool call state is complete.
 	ToolCallsComplete bool
+	// GroupedUsers records user turns under the message numbering that combines
+	// consecutive native assistant messages.
+	GroupedUsers []transcript.UserTurn
+	// ActualUsers records user turns under the message numbering that counts
+	// native messages separately.
+	ActualUsers []transcript.UserTurn
 	// MissingNativeRecords counts referenced native records that do not exist.
 	MissingNativeRecords int
 }

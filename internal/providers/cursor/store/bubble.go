@@ -102,8 +102,7 @@ type BubbleToolCall struct {
 	// `call_eZCEfOnkc` or a `toolu_` id. Cursor writes it on 98.4% of the tool
 	// rows in a real store, and it is what separates one call from another when
 	// two rows would otherwise read identically.
-	ToolCallID string `json:"toolCallId"`
-	// ToolCallBinary stores Cursor tool call protobuf data as base64 text.
+	ToolCallID     string `json:"toolCallId"`
 	ToolCallBinary string `json:"toolCallBinary"`
 }
 

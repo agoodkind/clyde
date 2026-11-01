@@ -144,7 +144,7 @@ func writeCombinedCopyTranscript(t *testing.T, projects string) {
 }
 
 // TestIngestionAndRepairKeepACombinedMessageUndatedWhenACopyMatches checks that
-// // ingestion and source repair leave the combined message timestamp unknown.
+// ingestion and source repair leave the combined message timestamp unknown.
 func TestIngestionAndRepairKeepACombinedMessageUndatedWhenACopyMatches(t *testing.T) {
 	milvustest.RequireEnabled(t)
 	address := milvustest.Start(t)

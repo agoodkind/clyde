@@ -53,6 +53,10 @@ type TimestampCorrectionEvidence struct {
 	FromUnix       int64  `json:"from_timestamp_unix"`
 	ToUnix         int64  `json:"to_timestamp_unix"`
 	Written        bool   `json:"written"`
+	// ToolCallID records the chosen native call ID.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	// ToolProjection records the projection used to select the native call.
+	ToolProjection string `json:"tool_projection,omitempty"`
 }
 
 // TimestampCorrectionReport records correction counts and evidence for listed rows.
@@ -105,6 +109,8 @@ type correctionTarget struct {
 	outcome        string
 	desired        int64
 	evaluated      bool
+	toolCallID     string
+	toolProjection string
 }
 
 // correctionDesired uses the chosen timestamp for a match and the unknown timestamp for other evaluated outcomes. It leaves empty content, incomplete content, and missing sources unevaluated.
@@ -112,7 +118,8 @@ func correctionDesired(evidence SourceRepairEvidence) (int64, bool) {
 	switch evidence.Outcome {
 	case SourceOutcomeMatched:
 		return evidence.Chosen, true
-	case SourceOutcomeEmpty, SourceOutcomeIncomplete, SourceOutcomeMissingSource:
+	case SourceOutcomeEmpty, SourceOutcomeIncomplete, SourceOutcomeMissingSource, SourceOutcomeComponentUnevaluated,
+		SourceOutcomeSequenceMismatch, SourceOutcomeContentMismatch, SourceOutcomeIdentityUnavailable, SourceOutcomeUnmatched:
 		return 0, false
 	default:
 		return missingTimestampUnix, true
@@ -151,7 +158,7 @@ func (c *Client) CorrectTimestampsFromSource(ctx context.Context, collectionID s
 		report.RowsListed += len(source.Corrections)
 		maps.Copy(guards, source.Corrections)
 		for id, guard := range source.Corrections {
-			targets[id] = correctionTarget{conversationID: source.ConversationID, family: "", outcome: "", desired: guard.TimestampUnix, evaluated: false}
+			targets[id] = correctionTarget{conversationID: source.ConversationID, family: "", outcome: "", desired: guard.TimestampUnix, evaluated: false, toolCallID: "", toolProjection: ""}
 		}
 		evidence, readErr := c.sourceEvidence(ctx, collectionName, source)
 		if readErr != nil {
@@ -161,7 +168,7 @@ func (c *Client) CorrectTimestampsFromSource(ctx context.Context, collectionID s
 			desired, evaluated := correctionDesired(entry)
 			for _, id := range entry.Rows {
 				report.SourceOutcomes[entry.Outcome]++
-				target := correctionTarget{conversationID: source.ConversationID, family: entry.Family, outcome: entry.Outcome, desired: desired, evaluated: evaluated}
+				target := correctionTarget{conversationID: source.ConversationID, family: entry.Family, outcome: entry.Outcome, desired: desired, evaluated: evaluated, toolCallID: entry.ToolCallID, toolProjection: entry.ToolProjection}
 				if !evaluated {
 					target.desired = guards[id].TimestampUnix
 				}
@@ -211,7 +218,7 @@ func (c *Client) planCorrections(ctx context.Context, milvus *milvusBackend, col
 		guard := guards[id]
 		target := targets[id]
 		evaluated := target.evaluated
-		evidence := TimestampCorrectionEvidence{RowID: id, ConversationID: target.conversationID, Family: target.family, SourceOutcome: target.outcome, Correction: CorrectionNotEvaluated, FromUnix: guard.TimestampUnix, ToUnix: target.desired, Written: false}
+		evidence := TimestampCorrectionEvidence{RowID: id, ConversationID: target.conversationID, Family: target.family, SourceOutcome: target.outcome, Correction: CorrectionNotEvaluated, FromUnix: guard.TimestampUnix, ToUnix: target.desired, Written: false, ToolCallID: target.toolCallID, ToolProjection: target.toolProjection}
 		current, found := stored[id]
 		switch {
 		case !found:

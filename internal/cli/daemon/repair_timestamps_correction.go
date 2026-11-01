@@ -171,6 +171,7 @@ func (run repairTimestampsRun) recordCorrectionLoadFailure(conversationID string
 		evidence = append(evidence, vectorsearch.TimestampCorrectionEvidence{
 			RowID: id, ConversationID: conversationID, Family: "", SourceOutcome: vectorsearch.CorrectionSourceLoadFailed,
 			Correction: vectorsearch.CorrectionNotEvaluated, FromUnix: guard.TimestampUnix, ToUnix: guard.TimestampUnix, Written: false,
+			ToolCallID: "", ToolProjection: "",
 		})
 	}
 	return run.writeCorrectionEvidence(evidence)

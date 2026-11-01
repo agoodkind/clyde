@@ -23,6 +23,7 @@ import (
 	daemonsvc "goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/response"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 const (
@@ -34,6 +35,7 @@ const (
 	// repairTimestampsSourceStoreSuffix distinguishes source store progress files.
 	repairTimestampsSourceStoreSuffix = "-source-store"
 	repairTimestampsCorrectionSuffix  = "-correction"
+	storedUserRoleName                = "user"
 )
 
 type repairTimestampsOptions struct {
@@ -364,7 +366,7 @@ func (run repairTimestampsRun) repairSourceStoreRecord(ctx context.Context, reco
 	source, loadErr := run.loadStoreSource(ctx, record)
 	if loadErr != nil {
 		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", loadErr)
-		readError := vectorsearch.SourceRepairEvidence{ConversationID: record.ID, Family: "", Rows: nil, Outcome: vectorsearch.SourceOutcomeReadError, Candidates: nil, Chosen: 0, Match: ""}
+		readError := vectorsearch.SourceRepairEvidence{ConversationID: record.ID, Family: "", Rows: nil, Outcome: vectorsearch.SourceOutcomeReadError, Candidates: nil, Chosen: 0, Match: "", ToolCallID: "", ToolProjection: ""}
 		return empty, false, errors.Join(fmt.Errorf("load source store: %w", loadErr), run.writeEvidence([]vectorsearch.SourceRepairEvidence{readError}))
 	}
 	report, repairErr := run.client.RepairTimestampsFromSource(ctx, run.collectionID, []vectorsearch.TimestampSourceRepairSource{source}, run.options.DryRun)
@@ -439,7 +441,7 @@ func newSourceRepairTotals() *vectorsearch.TimestampSourceRepairReport {
 
 // loadStoreSource builds semantic documents from a provider's source store messages.
 func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampSourceRepairSource, error) {
-	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, CopyDocuments: nil, ToolCalls: nil, ToolCallsComplete: false, Corrections: nil}
+	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, CopyDocuments: nil, ToolCalls: nil, ToolCallsComplete: false, GroupedUsers: nil, ActualUsers: nil, Transcript: vectorsearch.SourceTranscript{Calls: nil, Users: nil}, Corrections: nil}
 	reader, found := daemonsvc.ConversationSourceStoreReader(record.Provider)
 	if !found {
 		return empty, fmt.Errorf("source store reader is unavailable for provider %q", record.Provider)
@@ -476,6 +478,8 @@ func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conve
 	}
 	empty.CopyDocuments = copies.Docs
 	empty.ToolCallsComplete = source.ToolCallsComplete
+	empty.GroupedUsers = source.GroupedUsers
+	empty.ActualUsers = source.ActualUsers
 	empty.ToolCalls = make([]vectorsearch.SourceToolTime, 0, len(source.ToolCalls))
 	for _, call := range source.ToolCalls {
 		stamp := vectorsearch.MissingTimestampUnix
@@ -483,10 +487,38 @@ func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conve
 			stamp = call.Timestamp.Unix()
 		}
 		empty.ToolCalls = append(empty.ToolCalls, vectorsearch.SourceToolTime{
-			Name: call.Tool.Name, Display: call.Tool.Display, LangHint: call.Tool.DisplayLang, TimestampUnix: stamp, Reason: call.Reason, MessageStart: call.MessageStart, AfterUser: call.AfterUser,
+			CallID: call.Tool.ID, Input: call.Tool.Input.Raw, Name: call.Tool.Name, Display: call.Tool.Display, LangHint: call.Tool.DisplayLang, TimestampUnix: stamp, Reason: call.Reason,
+			MessageStart: call.MessageStart, AfterUser: call.AfterUser, GroupedMessage: call.GroupedMessage, GroupedOrdinal: call.GroupedOrdinal,
+			ActualMessage: call.ActualMessage, ActualOrdinal: call.ActualOrdinal,
 		})
 	}
+	if stored && source.ToolCallsComplete && strings.TrimSpace(record.ArtifactPath) != "" {
+		empty.Transcript, err = run.loadSourceTranscript(ctx, record, kinds)
+		if err != nil {
+			return empty, err
+		}
+	}
 	return empty, nil
+}
+
+// loadSourceTranscript returns tool calls and user turns with their positions
+// in the loaded transcript.
+func (run repairTimestampsRun) loadSourceTranscript(ctx context.Context, record conversation.Record, kinds conversation.ContentKindSet) (vectorsearch.SourceTranscript, error) {
+	result := vectorsearch.SourceTranscript{Calls: nil, Users: nil}
+	messages, err := run.index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
+	if err != nil {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.source_transcript_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", err)
+		return result, fmt.Errorf("read source transcript: %w", err)
+	}
+	for message, loaded := range messages {
+		if loaded.Role == storedUserRoleName {
+			result.Users = append(result.Users, transcript.UserTurn{Message: message, Text: strings.ToValidUTF8(loaded.Text, "")})
+		}
+		for ordinal, tool := range loaded.Tools {
+			result.Calls = append(result.Calls, vectorsearch.SourceTranscriptCall{Message: message, Ordinal: ordinal, Name: tool.Name, Input: tool.Input.Raw})
+		}
+	}
+	return result, nil
 }
 
 func (run repairTimestampsRun) loadSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampRepairSource, error) {

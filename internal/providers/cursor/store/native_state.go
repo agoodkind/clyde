@@ -95,12 +95,47 @@ type NativeSequenceCall struct {
 	MessageStart bool
 	// AfterUser reports whether a real user turn appeared since the previous call.
 	AfterUser bool
+	// GroupedMessage records the message position when the projection joins
+	// consecutive native assistant messages.
+	GroupedMessage int
+	// GroupedOrdinal records the call position within the combined assistant
+	// message.
+	GroupedOrdinal int
+	// ActualMessage records the message position when the projection counts
+	// native messages separately.
+	ActualMessage int
+	// ActualOrdinal records the call position within its native message.
+	ActualOrdinal int
 }
 
-// Sequence returns tool calls in source order, excluding duplicate and missing messages.
-func (state NativeToolCalls) Sequence() []NativeSequenceCall {
-	sequence := make([]NativeSequenceCall, 0)
+// NativeUserTurn records a real user message position and its text.
+type NativeUserTurn struct {
+	Message int
+	Text    string
+}
+
+// NativeProjection contains native calls and user turns under both grouped and
+// actual message numbering.
+type NativeProjection struct {
+	Calls []NativeSequenceCall
+	// GroupedUsers records user turns under the message numbering that combines
+	// consecutive native assistant messages.
+	GroupedUsers []NativeUserTurn
+	// ActualUsers records user turns under the message numbering that counts
+	// native messages separately.
+	ActualUsers []NativeUserTurn
+}
+
+// Project returns calls and user turns under grouped and actual message
+// numbering. The grouped numbering joins consecutive native assistant messages,
+// and the actual numbering counts them separately.
+func (state NativeToolCalls) Project() NativeProjection {
+	projection := NativeProjection{Calls: make([]NativeSequenceCall, 0), GroupedUsers: make([]NativeUserTurn, 0), ActualUsers: make([]NativeUserTurn, 0)}
 	afterUser := false
+	actualMessage := -1
+	groupedMessage := -1
+	groupedOrdinal := 0
+	insideAssistantGroup := false
 	for messageIndex, message := range state.Messages {
 		if message.Missing {
 			continue
@@ -108,16 +143,34 @@ func (state NativeToolCalls) Sequence() []NativeSequenceCall {
 		// Count a repeated user message before skipping its duplicate tool calls.
 		if message.RealUser {
 			afterUser = true
+			actualMessage++
+			groupedMessage++
+			projection.ActualUsers = append(projection.ActualUsers, NativeUserTurn{Message: actualMessage, Text: message.Text})
+			projection.GroupedUsers = append(projection.GroupedUsers, NativeUserTurn{Message: groupedMessage, Text: message.Text})
+			groupedOrdinal = 0
+			insideAssistantGroup = false
 		}
 		if message.Duplicate {
 			continue
 		}
+		if message.Role == nativeAssistantRole {
+			actualMessage++
+			if !insideAssistantGroup {
+				groupedMessage++
+				groupedOrdinal = 0
+				insideAssistantGroup = true
+			}
+		}
 		for ordinal, call := range message.Calls {
-			sequence = append(sequence, NativeSequenceCall{Call: call, Message: messageIndex, Ordinal: ordinal, MessageStart: ordinal == 0, AfterUser: afterUser})
+			projection.Calls = append(projection.Calls, NativeSequenceCall{
+				Call: call, Message: messageIndex, Ordinal: ordinal, MessageStart: ordinal == 0, AfterUser: afterUser,
+				GroupedMessage: groupedMessage, GroupedOrdinal: groupedOrdinal, ActualMessage: actualMessage, ActualOrdinal: ordinal,
+			})
 			afterUser = false
+			groupedOrdinal++
 		}
 	}
-	return sequence
+	return projection
 }
 
 type protobufField struct {
