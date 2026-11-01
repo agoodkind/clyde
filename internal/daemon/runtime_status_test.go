@@ -10,9 +10,12 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+const statusConnectionTimeout = 30 * time.Second
 
 func TestDaemonStatusReadsExistingConnectionAndBoundListeners(t *testing.T) {
 	socket, err := net.Listen("tcp", "[::1]:0")
@@ -61,6 +64,17 @@ func TestDaemonStatusReadsExistingConnectionAndBoundListeners(t *testing.T) {
 	runtime.semantic = semantic
 	if state := runtime.statusSnapshot().Semantic.Connection; state != clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_IDLE {
 		t.Fatalf("reading an idle connection activated it: %v", state)
+	}
+	// grpc-go publishes the Ready picker before it updates the connection state.
+	// This wait delays the status assertion until GetState reports Ready because a
+	// request can finish while GetState still reports Connecting.
+	connection.Connect()
+	readyContext, cancelReady := context.WithTimeout(t.Context(), statusConnectionTimeout)
+	defer cancelReady()
+	for state := connection.GetState(); state != connectivity.Ready; state = connection.GetState() {
+		if !connection.WaitForStateChange(readyContext, state) {
+			t.Fatalf("The gRPC connection did not become ready before the timeout and last reported state %v", state)
+		}
 	}
 	client := clydev1.NewClydeServiceClient(connection)
 	response, err := client.GetDaemonStatus(t.Context(), &emptypb.Empty{})
