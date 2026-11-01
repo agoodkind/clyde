@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 const (
 	recoveryProbeSession        = "4a7c2e9b-1d3f-4b6a-8e5c-7f0d2a9b3c14"
 	recoveryProbeCorruptSession = "5b8d3f0c-2e4a-4c7b-9f6d-8a1e3b0c4d25"
+	recoveryProbeStoppedSession = "6c9e4a1d-3f5b-4d8c-a07e-9b2f4c1d5e36"
 	recoveryProbeSummaryIndex   = 20
 	recoveryProbeCutBytes       = 10
 	recoveryProbeExportFile     = "recovery-export.txt"
@@ -125,18 +127,46 @@ func TestExportRejectsLegacyInjectedClaudeTranscriptWithCorruptedProvenance(t *t
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
 	fixture := recoveryProbeTranscript(t, recoveryProbeCorruptSession, true)
-	transcriptPath := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(injectedProbeWorkspace, "/", "-"), recoveryProbeCorruptSession+".jsonl")
-	installLocalProofTranscript(t, transcriptPath, strings.Join(fixture.lines, "\n")+"\n")
+	assertRecoveryProbeFilteredExportFails(t, binaryPath, home, recoveryProbeCorruptSession, fixture.lines)
+	if !strings.Contains(fixture.wrapper, recoveryProbeSystemHook) {
+		t.Error("corrupted fixture does not contain the original system hook in the stored wrapper")
+	}
+}
+
+// TestExportRejectsLegacyClaudeTranscriptAfterReplayStops inserts an
+// api-request that omits keep between the request that produced the second
+// summary and the next request with keep 0. It verifies that CLI and MCP chat
+// exports fail without writing a file because the index discards the snapshot
+// from before replay stopped.
+func TestExportRejectsLegacyClaudeTranscriptAfterReplayStops(t *testing.T) {
+	binaryPath := buildClydeCLI(t)
+	home := t.TempDir()
+	fixture := recoveryProbeTranscript(t, recoveryProbeStoppedSession, false)
+	postRequest := slices.IndexFunc(fixture.lines, func(line string) bool {
+		return strings.Contains(line, `"id":"request-second-post"`)
+	})
+	if postRequest < 1 {
+		t.Fatal("The fixture does not contain the request that follows compaction for the second summary.")
+	}
+	stop := `{"type":"api-request","sessionId":"` + recoveryProbeStoppedSession + `","id":"request-without-keep","tail":[]}`
+	lines := slices.Insert(fixture.lines, postRequest-1, stop)
+	assertRecoveryProbeFilteredExportFails(t, binaryPath, home, recoveryProbeStoppedSession, lines)
+}
+
+func assertRecoveryProbeFilteredExportFails(t *testing.T, binaryPath string, home string, session string, lines []string) {
+	t.Helper()
+	transcriptPath := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(injectedProbeWorkspace, "/", "-"), session+".jsonl")
+	installLocalProofTranscript(t, transcriptPath, strings.Join(lines, "\n")+"\n")
 	environment := environmentWith(localProofProviderEnvironment(t, home)...)
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, recoveryProbeCorruptSession)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, session)
 
-	conversationID := injectedProbeClaude + ":" + recoveryProbeCorruptSession
+	conversationID := injectedProbeClaude + ":" + session
 	summaryUUID := injectedProbeUUID(recoveryProbeSummaryIndex)
 	cliOutput := filepath.Join(t.TempDir(), recoveryProbeExportFile)
-	filtered := injectedProbeExport{name: "corrupted chat", provider: injectedProbeClaude, session: recoveryProbeCorruptSession, only: injectedProbeChatOnly, maxTokens: "", output: cliOutput}
+	filtered := injectedProbeExport{name: "corrupted chat", provider: injectedProbeClaude, session: session, only: injectedProbeChatOnly, maxTokens: "", output: cliOutput}
 	stdout, stderr, err := runInjectedProbeCLI(t, binaryPath, environment, filtered)
 	if err == nil {
 		t.Errorf("cli chat export with corrupted provenance succeeded:\n%s", stdout)
@@ -156,9 +186,6 @@ func TestExportRejectsLegacyInjectedClaudeTranscriptWithCorruptedProvenance(t *t
 		assertLegacyProbeError(t, "mcp", response.Result.text(), conversationID, summaryUUID)
 	}
 	assertLegacyProbeNoFile(t, "mcp", mcpOutput)
-	if !strings.Contains(fixture.wrapper, recoveryProbeSystemHook) {
-		t.Error("corrupted fixture does not contain the original system hook in the stored wrapper")
-	}
 }
 
 func assertRecoveryProbeChat(t *testing.T, surface string, body string) {

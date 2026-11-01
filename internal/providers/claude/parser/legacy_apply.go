@@ -45,6 +45,8 @@ func (resolver *legacyResolver) applyToMessage(message *transcript.Message, opts
 	}
 	content, err := resolver.summaryContent(message.UUID)
 	if err != nil {
+		slog.Warn("providers.claude.parser.legacy_summary_read_failed",
+			"concern", concern, "component", "claude", "summary_uuid", message.UUID, "err", err)
 		return
 	}
 	if len(reorienttag.CompleteTranscriptSpans(content)) > 0 || !reorienttag.ContainsTranscriptWrapper(content) {

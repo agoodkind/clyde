@@ -370,6 +370,10 @@ func (resolver *legacyResolver) decomposeWith(
 	if !ok {
 		return nil, newResolutionError(subject, "exactly one wrapper body must equal the replayed rendering")
 	}
+	wrapperEnd := match.bodyEnd + 1 + len(reorienttag.PreCompactionTranscriptClose)
+	if strings.Contains(content[wrapperEnd:], reorienttag.PreCompactionTranscriptClose) {
+		return nil, newResolutionError(subject, "a transcript close tag appears after the wrapper that this request reproduces")
+	}
 	decomposition := resolver.buildDecomposition(uuid, content, match)
 	decomposition.requestID = snapshot.id
 	decomposition.positions = len(snapshot.refs)

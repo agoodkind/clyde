@@ -170,6 +170,7 @@ func (index *provenanceIndex) observe(line []byte, offset int64) {
 func (index *provenanceIndex) observeRequest(decoded provenanceLine) {
 	if decoded.Keep == nil {
 		index.replaying = false
+		index.hasLatest = false
 		return
 	}
 	keep := *decoded.Keep
