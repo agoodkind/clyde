@@ -819,8 +819,6 @@ func TestNativeCodexResponsesCompactionSplitsByTokenBudget(t *testing.T) {
 		t.Fatalf("injection dropped the retained tool call or the newest answer: %s", injected)
 	}
 	assertInjectionUnderBudget(t, injected, budget)
-	// The retained text parses as one framed transcript containing chat, tool
-	// call, and tool output segments.
 	framed := reorienttag.PreCompactionTranscriptOpen + "\n" + injected + "\n" + reorienttag.PreCompactionTranscriptClose
 	spans := reorienttag.ParseTranscriptSpans(framed)
 	if len(spans) != 1 {

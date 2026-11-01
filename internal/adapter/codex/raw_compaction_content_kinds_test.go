@@ -110,7 +110,7 @@ func rawCompactionMarkerProducers(t *testing.T) []rawCompactionMarkerProducer {
 	t.Helper()
 	split, ok := rawCompactionMarkerSplitter().Plan([]byte(rawCompactionMarkerV1Body))
 	if !ok {
-		t.Fatal("PrepareRawResponsesCompaction did not return a response transformer for the probe request.")
+		t.Fatal("The splitter did not plan a split for the probe request.")
 	}
 	v2Injection := reorienttag.WrapInjection("recovered transcript", "")
 	return []rawCompactionMarkerProducer{

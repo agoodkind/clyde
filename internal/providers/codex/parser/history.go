@@ -52,9 +52,6 @@ func codexTranscriptMessage(
 	}, true
 }
 
-// codexTextParts applies NormalizeConversationOnlyText to ordinary parts,
-// preserves injected transcript text and its spans, and omits parts with empty
-// text.
 func codexTextParts(parts []transcript.MessageTextPart) []transcript.MessageTextPart {
 	if len(parts) == 0 {
 		return nil
