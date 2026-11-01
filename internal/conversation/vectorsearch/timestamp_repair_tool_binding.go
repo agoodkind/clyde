@@ -33,10 +33,8 @@ const (
 	historicalToolSummaryBytes = 2000
 )
 
-// toolComponentSegments lists the historical path segments of one tool call.
 var toolComponentSegments = []string{toolComponentTokens, toolComponentCommand, toolComponentInput, "out"}
 
-// storedUserMessage records a stored user text family and its matching texts.
 type storedUserMessage struct {
 	message int
 	texts   []string
@@ -59,8 +57,6 @@ type toolProjection struct {
 	residual bool
 }
 
-// toolSequenceDifference records a failed check, its sequence position, and the
-// native calls used in the comparison.
 type toolSequenceDifference struct {
 	check      string
 	position   int
@@ -91,8 +87,6 @@ func (lookup sourceTimeLookup) bindUnavailable(keys []string, component bool) {
 	}
 }
 
-// toolFamilyKeys returns separate lists of base tool families and older
-// component families, each sorted by message and tool position.
 func toolFamilyKeys(families map[string][]collection.StoredRow) ([]string, []string) {
 	base := make([]string, 0)
 	components := make([]string, 0)
@@ -117,8 +111,6 @@ func toolFamilyKeys(families map[string][]collection.StoredRow) ([]string, []str
 	return base, components
 }
 
-// isToolComponentPath reports whether a row path uses a tok, cmd, in, or out
-// component beneath its tool family.
 func isToolComponentPath(key string, relativePath string) bool {
 	remainder, found := strings.CutPrefix(relativePath, key+familyPartSeparator)
 	if !found {
@@ -128,9 +120,6 @@ func isToolComponentPath(key string, relativePath string) bool {
 	return slices.Contains(toolComponentSegments, segment)
 }
 
-// toolProjections returns native call positions under grouped and actual
-// message numbering. When older component rows exist, each projection also
-// includes user turns from the other numbering for text comparison.
 func (lookup sourceTimeLookup) toolProjections(mixed bool) (toolProjection, toolProjection) {
 	grouped := make(map[[2]int]int, len(lookup.toolCalls))
 	actual := make(map[[2]int]int, len(lookup.toolCalls))
@@ -179,10 +168,6 @@ func (lookup sourceTimeLookup) transcriptProjection() toolProjection {
 	return toolProjection{name: toolProjectionTranscript, calls: lookup.toolCalls, positions: positions, users: lookup.transcript.Users, otherUsers: lookup.actualUsers, known: known, residual: false}
 }
 
-// bindBaseFamilies binds rows with transcript coordinates only through the
-// transcript projection. For other rows, it uses a grouped or actual match when
-// those projections identify exactly one call. Otherwise, it uses
-// olderRunPositions for those rows.
 func (lookup sourceTimeLookup) bindBaseFamilies(keys []string, stored toolProjection, projections []toolProjection, storedUsers []storedUserMessage, families map[string][]collection.StoredRow) {
 	storedVerified, storedDifference := stored.verifiedPrefix(keys, storedUsers, families)
 	if storedDifference.check != "" {
@@ -241,10 +226,6 @@ func (lookup sourceTimeLookup) bindBaseFamilies(keys []string, stored toolProjec
 	}
 }
 
-// olderRunPositions finds the longest suffix of rows absent from transcript
-// coordinates that has complete stored text and equals exactly one contiguous
-// run of native call content. It does not return positions if a grouped or
-// actual match selects a different position for any row in that suffix.
 func (lookup sourceTimeLookup) olderRunPositions(keys []string, candidates map[string][]int, families map[string][]collection.StoredRow) map[string]int {
 	native := make([]string, 0, len(lookup.toolCalls))
 	for _, call := range lookup.toolCalls {
@@ -284,8 +265,6 @@ func hasOlderRunPosition(positions map[string]int, key string) bool {
 	return found
 }
 
-// uniqueContiguousStart returns the starting position and true only when the
-// stored content equals exactly one contiguous run of native call content.
 func uniqueContiguousStart(stored []string, native []string) (int, bool) {
 	found := -1
 	for start := 0; start+len(stored) <= len(native); start++ {
@@ -300,8 +279,6 @@ func uniqueContiguousStart(stored []string, native []string) (int, bool) {
 	return found, found >= 0
 }
 
-// bindComponentFamilies matches older component rows against the actual
-// projection and stops after the first sequence or content difference.
 func (lookup sourceTimeLookup) bindComponentFamilies(keys []string, projection toolProjection, storedUsers []storedUserMessage, families map[string][]collection.StoredRow) {
 	stopped := false
 	previous := emptySourceToolTime()

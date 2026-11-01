@@ -110,7 +110,6 @@ type kvRow struct {
 	blob []byte
 }
 
-// mustMarshal returns a function that fails the test on a marshal error.
 func mustMarshal(t *testing.T) func([]byte, error) []byte {
 	t.Helper()
 	return func(data []byte, err error) []byte {
@@ -121,7 +120,6 @@ func mustMarshal(t *testing.T) func([]byte, error) []byte {
 	}
 }
 
-// writeKVStore creates a SQLite store and inserts the fixture rows.
 func writeKVStore(t *testing.T, dbPath string, rows []kvRow) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {

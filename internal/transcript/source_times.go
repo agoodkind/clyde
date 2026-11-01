@@ -25,8 +25,7 @@ const (
 // SourceTimeCandidate contains a matching source timestamp and its combination status.
 type SourceTimeCandidate struct {
 	Timestamp time.Time
-	// Combined reports whether the match joins multiple source entries.
-	Combined bool
+	Combined  bool
 }
 
 // SourceTimeEntry associates source text and its role with a timestamp.

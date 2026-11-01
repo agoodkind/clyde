@@ -396,7 +396,6 @@ func (run repairTimestampsRun) writeEvidence(evidence []vectorsearch.SourceRepai
 	return nil
 }
 
-// formatOutcomes sorts outcome names and formats their row counts.
 func formatOutcomes(outcomes map[string]int) string {
 	names := make([]string, 0, len(outcomes))
 	for name := range outcomes {

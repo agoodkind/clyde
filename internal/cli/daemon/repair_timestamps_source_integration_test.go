@@ -73,7 +73,6 @@ func nativeToolCall(id string, name string, args string) string {
 	return `{"type":"tool-call","toolCallId":"` + id + `","toolName":"` + name + `","args":` + args + `}`
 }
 
-// sourceRepairNative returns native messages for the source repair fixture.
 func sourceRepairNative() []string {
 	return []string{
 		`{"role":"assistant","content":[` + nativeToolCall("call_read", "read_file", `{"path":"internal/online/online.go"}`) + `]}`,
@@ -193,7 +192,6 @@ type sharedStoredRow struct {
 	content       string
 	metadata      string
 	timestampUnix int64
-	// timestampNull reports whether the timestampUnix scalar is NULL.
 	timestampNull bool
 	vectorKey     string
 	others        string
@@ -1191,7 +1189,6 @@ type rowTimeState struct {
 	metadata      string
 }
 
-// readRowTime reads the timestamp and metadata for one Milvus row.
 func readRowTime(ctx context.Context, client *milvusclient.Client, id string) (rowTimeState, error) {
 	empty := rowTimeState{known: false, timestampUnix: 0, metadata: ""}
 	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(vectorsearch.CollectionName(repairCollectionID)).

@@ -234,11 +234,10 @@ func readComposerBubbleDigestsInSnapshot(
 	return stored, nil
 }
 
-// bubbleProjection is one row of the digest pass: the identifiers and the fields
-// [fingerprintOf] and [Bubble.HasContent] read, and nothing else the bubble
-// carries. Every field is nullable because SQLite reports an absent JSON member
-// as NULL, which is how a bubble that has no tool call, no thinking, or no
-// timestamp arrives here.
+// bubbleProjection is a row from the digest pass that contains only the
+// identifiers and fields [fingerprintOf] and [Bubble.HasContent] read. Its
+// nullable fields represent missing JSON members, which SQLite reports as NULL
+// when a bubble lacks a tool call, thinking, or timestamp.
 type bubbleProjection struct {
 	RowID          int64
 	Key            string

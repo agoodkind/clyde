@@ -53,9 +53,7 @@ type TimestampCorrectionEvidence struct {
 	FromUnix       int64  `json:"from_timestamp_unix"`
 	ToUnix         int64  `json:"to_timestamp_unix"`
 	Written        bool   `json:"written"`
-	// ToolCallID records the chosen native call ID.
-	ToolCallID string `json:"tool_call_id,omitempty"`
-	// ToolProjection records the projection used to select the native call.
+	ToolCallID     string `json:"tool_call_id,omitempty"`
 	ToolProjection string `json:"tool_projection,omitempty"`
 }
 

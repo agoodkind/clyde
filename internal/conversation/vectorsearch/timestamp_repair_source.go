@@ -345,7 +345,6 @@ func sourceRepairKey(role string, content string) string {
 	return role + sourceRepairKeySeparator + strings.TrimSpace(content)
 }
 
-// familyCandidates returns single source timestamps and reports combined matches.
 func (lookup sourceTimeLookup) familyCandidates(familyKind string, role string, text string) ([]int64, bool) {
 	if familyKind == conversationThinkingFamily {
 		return lookup.thinking[sourceRepairKey(role, text)], false
@@ -399,7 +398,6 @@ func (lookup sourceTimeLookup) fragmentCandidates(familyKind string, role string
 	return candidates
 }
 
-// fragmentContained reports whether a source field contains the row content.
 func (lookup sourceTimeLookup) fragmentContained(familyKind string, role string, row collection.StoredRow) bool {
 	fragment := row.Content
 	if familyKind == conversationTextFamily && lookup.matchText != nil {
@@ -478,8 +476,7 @@ type SourceRepairEvidence struct {
 	// Match records the matching method when fragment matching is used.
 	Match string `json:"match,omitempty"`
 	// ToolCallID records the chosen native call ID.
-	ToolCallID string `json:"tool_call_id,omitempty"`
-	// ToolProjection records the projection used to select the native call.
+	ToolCallID     string `json:"tool_call_id,omitempty"`
 	ToolProjection string `json:"tool_projection,omitempty"`
 }
 

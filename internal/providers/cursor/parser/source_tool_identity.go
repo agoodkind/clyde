@@ -14,7 +14,6 @@ type toolIdentityDate struct {
 	explicit bool
 }
 
-// toolIdentityDates indexes timestamp candidates separately by bubble tool call ID and decoded record identifiers.
 type toolIdentityDates struct {
 	outer map[string][]toolIdentityDate
 	typed map[string][]toolIdentityDate

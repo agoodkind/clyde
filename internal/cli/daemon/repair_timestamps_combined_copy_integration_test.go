@@ -67,7 +67,6 @@ type combinedCopyLine struct {
 	Message combinedCopyLineMessage `json:"message"`
 }
 
-// combinedCopyJSON returns a helper that converts JSON bytes to a string or fails the test.
 func combinedCopyJSON(t *testing.T) func([]byte, error) string {
 	t.Helper()
 	return func(data []byte, err error) string {
@@ -78,7 +77,6 @@ func combinedCopyJSON(t *testing.T) func([]byte, error) string {
 	}
 }
 
-// writeCombinedCopyStore creates a Cursor SQLite store with a combined copy bubble.
 func writeCombinedCopyStore(t *testing.T, dataRoot string) {
 	t.Helper()
 	dbPath := filepath.Join(dataRoot, "globalStorage", "state.vscdb")
@@ -122,7 +120,6 @@ func writeCombinedCopyStore(t *testing.T, dataRoot string) {
 	}
 }
 
-// writeCombinedCopyTranscript writes the user and assistant transcript lines.
 func writeCombinedCopyTranscript(t *testing.T, projects string) {
 	t.Helper()
 	marshal := combinedCopyJSON(t)
