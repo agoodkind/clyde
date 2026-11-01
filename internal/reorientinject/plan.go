@@ -171,9 +171,6 @@ func finishPlan(
 	return plan{Cut: cut, Retained: retained, RetainedTokens: 0}, true
 }
 
-// retainedText encodes retained blocks from the boundary segment tail through
-// the message before the instruction region. It skips excluded kinds and blank
-// text, and records each source block's role and kind.
 func retainedText(request ParsedRequest, cut Cut, include func(SegmentKind) bool) string {
 	segments := make([]reorienttag.Segment, 0)
 	for messageIndex := cut.MessageIndex; messageIndex < request.InstructionStart; messageIndex++ {
@@ -220,9 +217,6 @@ func frameRole(role Role) reorienttag.SegmentRole {
 	return reorienttag.SegmentRoleOther
 }
 
-// frameKind maps user and assistant text to chat and system text to system. It
-// preserves thinking, tool use, and tool result kinds and maps other blocks to
-// other.
 func frameKind(role Role, kind SegmentKind) reorienttag.SegmentKind {
 	switch kind {
 	case KindText:

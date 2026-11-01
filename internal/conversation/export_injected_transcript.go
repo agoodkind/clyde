@@ -13,11 +13,14 @@ const (
 	injectedChatContentType     = "text"
 	injectedThinkingSummaryType = "thinking"
 	liveTextPartSeparator       = "\n\n"
-	// A content filtered export returns this error when a compact summary
-	// contains a transcript wrapper outside every resolved span.
+	// A content filtered export returns this error when a compact summary segment
+	// contains a transcript wrapper that export cannot resolve into typed content
+	// kinds because the wrapper appears outside every resolved span or the provider
+	// parser flagged a content item as unresolved.
 	unresolvedInjectedTranscriptError = `conversation %s: cannot filter the pre-compaction transcript in compact summary %s by content kind; export all content kinds with --only all or MCP only: ["all"]`
 	// A content filtered export returns this error when a selected live message
-	// contains an injected transcript part without usable typed spans.
+	// contains an injected transcript part that does not have usable typed spans or
+	// contains a transcript wrapper outside those spans.
 	unresolvedLiveTranscriptError = `conversation %s: cannot filter the pre-compaction transcript in live message %d by content kind; export all content kinds with --only all or MCP only: ["all"]`
 )
 
