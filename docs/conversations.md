@@ -200,7 +200,28 @@ output and conflicts with an output file path. A write failure returns an MCP
 tool error with the path. Saved compaction context follows the same content kinds
 as ordinary messages.
 
-For a compact summary containing a framed pre-compaction transcript, CLI and MCP exports include the summary prose outside the transcript and only the segments selected by the content kinds. `chat` selects chat segments, `thinking` selects thinking segments, any tool kind selects tool calls, `tool_outputs` also selects tool outputs, `system_prompts` selects system segments, and `raw_json_metadata` selects other segments. A content filtered export of a compact summary containing an unframed transcript fails with an error identifying the conversation and summary, and the export writes nothing. Selecting `all` in the CLI or `only: ["all"]` through MCP exports the summary text unchanged. Exports never read ordinary user messages as transcripts, even when those messages quote transcript tags, `### System`, or JSON.
+For a compact summary with a framed pre-compaction transcript, CLI and MCP exports include the summary prose outside the transcript. The selected content kinds control which transcript segments the export includes.
+
+Transcript selection:
+
+| Content kind | Transcript segments |
+| --- | --- |
+| `chat` | Chat segments |
+| `thinking` | Thinking segments |
+| Any tool kind | Tool calls |
+| `tool_outputs` | Tool calls and tool outputs |
+| `system_prompts` | System segments |
+| `raw_json_metadata` | Other segments |
+
+A content filtered export recovers segment kinds for an unframed transcript from recorded source evidence. For Claude transcripts, the export uses request replay. For a Codex part with the `clyde.pre_compaction_transcript.v2` marker, the export uses the original typed rollout items or a complete capture.
+
+A Codex item without this marker remains ordinary text unless a complete capture shows that Clyde appended the transcript. An exact match with rollout text does not prove that Clyde generated the text.
+
+When an export proves that Clyde generated a transcript but cannot recover its segment kinds, a content filtered export fails with an error that identifies the conversation and the summary or live message. The export does not write any output.
+
+Selecting `all` in the CLI or `only: ["all"]` through MCP exports the original text unchanged.
+
+Exports do not read ordinary user messages as transcripts, even when those messages quote transcript tags, `### System`, or JSON.
 
 `conversation export tail` is a CLI shortcut. MCP clients can request the same
 range and use the same message count by calling `clyde_export_transcript` with

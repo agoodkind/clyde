@@ -357,10 +357,6 @@ func stripUserText(text string, opts parseOptions) string {
 	return text
 }
 
-// stripSummaryText applies ordinary user text stripping to summary prose
-// outside framed transcripts and to user chat segments within them. It
-// preserves the remaining frames and applies ordinary user text stripping to
-// summaries without framed transcripts.
 func stripSummaryText(text string, opts parseOptions) string {
 	spans := reorienttag.ParseTranscriptSpans(text)
 	if len(spans) == 0 {

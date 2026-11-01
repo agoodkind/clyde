@@ -46,7 +46,29 @@ The Claude path and the native Codex path write the same retained text between t
 
 The framed format writes each retained content block as a segment. Each segment has a header line, `<segment role="..." kind="..." bytes="N">`, followed by the exact block text and a `</segment>` line. The attribute values are Go quoted strings, and `N` is the byte length of the text. A blank line separates segments.
 
-The role is `user`, `assistant`, `system`, or `other`. The kind is `chat` for user or assistant text, `thinking`, `tool_call`, `tool_output`, `system` for system message text, or `other` for any other block or role.
+Each segment role identifies the message role.
+
+Segment roles:
+
+| Role | Message role |
+| --- | --- |
+| `user` | User |
+| `assistant` | Assistant |
+| `system` | System |
+| `other` | Other |
+
+Each segment kind identifies the type of content.
+
+Segment kinds:
+
+| Kind | Content |
+| --- | --- |
+| `chat` | User or assistant text |
+| `thinking` | Model reasoning |
+| `tool_call` | Tool call input |
+| `tool_output` | Tool call results |
+| `system` | System message text |
+| `other` | Any other block or role |
 
 A reader takes exactly `N` bytes of text for each segment. Text inside a segment cannot end the segment or the transcript, even when it contains quoted frame tags, the format line, `### System`, or the transcript close tag. A reader does not treat a transcript as framed if any length or footer check fails.
 
