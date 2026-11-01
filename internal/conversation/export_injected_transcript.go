@@ -12,9 +12,13 @@ import (
 const (
 	injectedChatContentType     = "text"
 	injectedThinkingSummaryType = "thinking"
+	liveTextPartSeparator       = "\n\n"
 	// A content filtered export returns this error when a compact summary
 	// contains a transcript wrapper outside every resolved span.
 	unresolvedInjectedTranscriptError = `conversation %s: cannot filter the pre-compaction transcript in compact summary %s by content kind; export all content kinds with --only all or MCP only: ["all"]`
+	// A content filtered export returns this error when a selected live message
+	// contains an injected transcript part without usable typed spans.
+	unresolvedLiveTranscriptError = `conversation %s: cannot filter the pre-compaction transcript in live message %d by content kind; export all content kinds with --only all or MCP only: ["all"]`
 )
 
 // injectedTranscriptResolver returns typed transcript spans in one summary
@@ -39,10 +43,24 @@ func resolveParsedTranscriptSpans(content transcript.CompactedMessageContentItem
 	return content.TranscriptSpans
 }
 
+// messageTranscriptResolvers returns every resolver for a summary message,
+// including the reader that parses framed transcripts from message text. For
+// other messages, it returns only resolvers for spans that the provider parser
+// attached because user and assistant messages can quote framed transcripts.
+func messageTranscriptResolvers(message transcript.CompactedMessageItem) []injectedTranscriptResolver {
+	if message.MessageClass == transcript.CompactedMessageClassSummary {
+		return injectedTranscriptResolvers()
+	}
+	return []injectedTranscriptResolver{resolveParsedTranscriptSpans}
+}
+
 // resolveInjectedTranscriptSpans returns spans from the first resolver that
-// finds any in the content item.
-func resolveInjectedTranscriptSpans(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan {
-	for _, resolver := range injectedTranscriptResolvers() {
+// finds spans in the content item.
+func resolveInjectedTranscriptSpans(
+	content transcript.CompactedMessageContentItem,
+	resolvers []injectedTranscriptResolver,
+) []reorienttag.TranscriptSpan {
+	for _, resolver := range resolvers {
 		if spans := resolver(content); len(spans) > 0 {
 			return spans
 		}
@@ -50,21 +68,25 @@ func resolveInjectedTranscriptSpans(content transcript.CompactedMessageContentIt
 	return nil
 }
 
-// unresolvedInjectedTranscriptSummary returns the UUID of the first starting
-// summary in the selected segments that contains a transcript wrapper outside
-// every resolved span. It also reports whether it found one.
+// unresolvedInjectedTranscriptSummary checks context items in each selected
+// segment with a starting summary. A segment matches when its summary message
+// has a transcript wrapper outside every resolved span or another message has
+// an item that the provider parser flagged as unresolved. It returns the first
+// matching segment's summary UUID.
 func unresolvedInjectedTranscriptSummary(selection CompactionSegmentSelection) (string, bool) {
 	for _, segment := range selection.Segments {
 		if !segment.HasStartingSummary {
 			continue
 		}
 		for _, item := range segment.Checkpoint.ContextItems {
-			if item.Kind != transcript.CompactedContextItemKindMessage ||
-				item.Message == nil ||
-				item.Message.MessageClass != transcript.CompactedMessageClassSummary {
+			if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil {
 				continue
 			}
-			if slices.ContainsFunc(item.Message.Content, unresolvedInjectedTranscript) {
+			unresolved := unresolvedParsedTranscript
+			if item.Message.MessageClass == transcript.CompactedMessageClassSummary {
+				unresolved = unresolvedInjectedTranscript
+			}
+			if slices.ContainsFunc(item.Message.Content, unresolved) {
 				return segment.SummaryUUID, true
 			}
 		}
@@ -72,12 +94,18 @@ func unresolvedInjectedTranscriptSummary(selection CompactionSegmentSelection) (
 	return "", false
 }
 
+// unresolvedParsedTranscript reports whether the provider parser flagged the
+// content item as containing an unresolved transcript.
+func unresolvedParsedTranscript(content transcript.CompactedMessageContentItem) bool {
+	return content.UnresolvedTranscript
+}
+
 // unresolvedInjectedTranscript reports whether one summary content item's text
 // contains a transcript wrapper start after removal of the resolved spans.
 func unresolvedInjectedTranscript(content transcript.CompactedMessageContentItem) bool {
 	var outside strings.Builder
 	previousEnd := 0
-	for _, span := range resolveInjectedTranscriptSpans(content) {
+	for _, span := range resolveInjectedTranscriptSpans(content, injectedTranscriptResolvers()) {
 		outside.WriteString(content.Text[previousEnd:span.Start])
 		previousEnd = span.End
 	}
@@ -85,10 +113,75 @@ func unresolvedInjectedTranscript(content transcript.CompactedMessageContentItem
 	return reorienttag.ContainsTranscriptWrapper(outside.String())
 }
 
-// expandInjectedTranscriptItems replaces each summary containing resolved spans
-// with summary items for surrounding prose and a typed context item for each
-// segment. The content kind filter selects those items by the rules for saved
-// Codex context items.
+// liveTranscriptPartUnresolved reports whether an injected transcript part
+// lacks typed spans or has a transcript wrapper outside those spans.
+func liveTranscriptPartUnresolved(part transcript.MessageTextPart) bool {
+	if !part.InjectedTranscript {
+		return false
+	}
+	marked := transcript.CompactedMessageContentItem{
+		Type:                 injectedChatContentType,
+		Text:                 part.Text,
+		ImageURL:             "",
+		Detail:               "",
+		Raw:                  nil,
+		TranscriptSpans:      part.TranscriptSpans,
+		UnresolvedTranscript: false,
+	}
+	return len(part.TranscriptSpans) == 0 || unresolvedInjectedTranscript(marked)
+}
+
+// unresolvedLiveTranscriptIndex returns the zero-based index of the first
+// message with an unresolved injected transcript part and reports whether it
+// found one.
+func unresolvedLiveTranscriptIndex(messages []transcript.Message) (int, bool) {
+	for index, message := range messages {
+		if slices.ContainsFunc(message.TextParts, liveTranscriptPartUnresolved) {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+// filterLiveTextParts joins nonempty results from selectedLiveText in part
+// order with a blank line between results.
+func filterLiveTextParts(parts []transcript.MessageTextPart, content ContentKindSet) string {
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		text := selectedLiveText(part, content)
+		if text != "" {
+			kept = append(kept, text)
+		}
+	}
+	return strings.Join(kept, liveTextPartSeparator)
+}
+
+// selectedLiveText returns ordinary text only when the selected content kinds
+// include chat. It rebuilds injected transcript frames from segments that
+// match the selected content kinds and omits frames without selected segments.
+func selectedLiveText(part transcript.MessageTextPart, content ContentKindSet) string {
+	if !part.InjectedTranscript {
+		if content.Has(ContentKindChat) {
+			return part.Text
+		}
+		return ""
+	}
+	selected := make([]string, 0, 1)
+	for _, span := range part.TranscriptSpans {
+		segments := selectedInjectedSegments(span.Segments, content)
+		if len(segments) > 0 {
+			selected = append(selected, reorienttag.FramedTranscript(segments))
+		}
+	}
+	return strings.Join(selected, liveTextPartSeparator)
+}
+
+// expandInjectedTranscriptItems replaces each message that has resolved spans
+// with message items for surrounding text and one typed context item per
+// segment. It resolves spans for summary messages from both message text and
+// parser spans and uses only parser spans for other messages. The content kind
+// filter selects the resulting items under the rules for saved Codex context
+// items.
 func expandInjectedTranscriptItems(
 	items []transcript.CompactedContextItem,
 ) []transcript.CompactedContextItem {
@@ -102,16 +195,15 @@ func expandInjectedTranscriptItems(
 func expandInjectedTranscriptItem(
 	item transcript.CompactedContextItem,
 ) []transcript.CompactedContextItem {
-	if item.Kind != transcript.CompactedContextItemKindMessage ||
-		item.Message == nil ||
-		item.Message.MessageClass != transcript.CompactedMessageClassSummary {
+	if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil {
 		return []transcript.CompactedContextItem{item}
 	}
+	resolvers := messageTranscriptResolvers(*item.Message)
 	expanded := make([]transcript.CompactedContextItem, 0)
 	prose := make([]transcript.CompactedMessageContentItem, 0)
 	resolved := false
 	for _, contentItem := range item.Message.Content {
-		spans := resolveInjectedTranscriptSpans(contentItem)
+		spans := resolveInjectedTranscriptSpans(contentItem, resolvers)
 		if len(spans) == 0 {
 			prose = append(prose, contentItem)
 			continue
@@ -229,7 +321,7 @@ func injectedMessageItem(role string, text string) transcript.CompactedContextIt
 		Role:  role,
 		Phase: "",
 		Content: []transcript.CompactedMessageContentItem{
-			{Type: injectedChatContentType, Text: text, ImageURL: "", Detail: "", Raw: nil, TranscriptSpans: nil},
+			{Type: injectedChatContentType, Text: text, ImageURL: "", Detail: "", Raw: nil, TranscriptSpans: nil, UnresolvedTranscript: false},
 		},
 		ContentRaw:   nil,
 		MessageClass: transcript.CompactedMessageClassOrdinary,
@@ -278,7 +370,7 @@ func filterInjectedTranscriptText(
 	items []transcript.CompactedContextItem,
 	content ContentKindSet,
 ) string {
-	spans := resolveInjectedTranscriptSpans(summaryContentItemForText(text, items))
+	spans := resolveInjectedTranscriptSpans(summaryContentItemForText(text, items), injectedTranscriptResolvers())
 	if len(spans) == 0 {
 		return text
 	}
@@ -312,12 +404,13 @@ func summaryContentItemForText(
 		}
 	}
 	return transcript.CompactedMessageContentItem{
-		Type:            injectedChatContentType,
-		Text:            text,
-		ImageURL:        "",
-		Detail:          "",
-		Raw:             nil,
-		TranscriptSpans: nil,
+		Type:                 injectedChatContentType,
+		Text:                 text,
+		ImageURL:             "",
+		Detail:               "",
+		Raw:                  nil,
+		TranscriptSpans:      nil,
+		UnresolvedTranscript: false,
 	}
 }
 

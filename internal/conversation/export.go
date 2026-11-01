@@ -61,6 +61,10 @@ func exportMessages(record Record, messages []transcript.Message, options Export
 			slog.Warn("conversation.export.unresolved_injected_transcript", "concern", "conversation.export", "component", "conversation", "conversation_id", record.ID, "summary_uuid", summaryUUID)
 			return nil, fmt.Errorf(unresolvedInjectedTranscriptError, record.ID, summaryUUID)
 		}
+		if messageIndex, unresolved := unresolvedLiveTranscriptIndex(selectedCompactionSegmentMessages(messages, selection)); unresolved {
+			slog.Warn("conversation.export.unresolved_live_transcript", "concern", "conversation.export", "component", "conversation", "conversation_id", record.ID, "message_index", messageIndex)
+			return nil, fmt.Errorf(unresolvedLiveTranscriptError, record.ID, messageIndex)
+		}
 	}
 	selection = filterCompactionSelectionItems(selection, options.Content)
 	selection, err = sanitizeCompactionSelectionForExport(selection)
@@ -441,7 +445,10 @@ func filterMessages(messages []transcript.Message, options ExportOptions) []tran
 		if message.Compaction != nil && !options.Content.Has(ContentKindSystemMessages) {
 			continue
 		}
-		if !options.Content.Has(ContentKindChat) && message.Text != "" {
+		if len(message.TextParts) > 0 && !options.Content.Has(ContentKindRawJSONMetadata) {
+			message.Text = filterLiveTextParts(message.TextParts, options.Content)
+		}
+		if !options.Content.Has(ContentKindChat) && len(message.TextParts) == 0 && message.Text != "" {
 			message.Text = ""
 		}
 		if !options.Content.Has(ContentKindThinking) {
