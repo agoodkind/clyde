@@ -90,10 +90,10 @@ func TestExportRecoversLegacyInjectedClaudeTranscriptKinds(t *testing.T) {
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, recoveryProbeSession)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, recoveryProbeSession)
 
-	chat := injectedProbeExport{name: "recovery chat", session: recoveryProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: ""}
-	complete := injectedProbeExport{name: "recovery all", session: recoveryProbeSession, only: injectedProbeAll, maxTokens: "", output: ""}
+	chat := injectedProbeExport{name: "recovery chat", provider: injectedProbeClaude, session: recoveryProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: ""}
+	complete := injectedProbeExport{name: "recovery all", provider: injectedProbeClaude, session: recoveryProbeSession, only: injectedProbeAll, maxTokens: "", output: ""}
 	chatBodies := map[string]string{
 		"cli": injectedProbeCLI(t, binaryPath, environment, chat),
 		"mcp": injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, chat),
@@ -130,12 +130,12 @@ func TestExportRejectsLegacyInjectedClaudeTranscriptWithCorruptedProvenance(t *t
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, recoveryProbeCorruptSession)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, recoveryProbeCorruptSession)
 
-	conversationID := "claude:" + recoveryProbeCorruptSession
+	conversationID := injectedProbeClaude + ":" + recoveryProbeCorruptSession
 	summaryUUID := injectedProbeUUID(recoveryProbeSummaryIndex)
 	cliOutput := filepath.Join(t.TempDir(), recoveryProbeExportFile)
-	filtered := injectedProbeExport{name: "corrupted chat", session: recoveryProbeCorruptSession, only: injectedProbeChatOnly, maxTokens: "", output: cliOutput}
+	filtered := injectedProbeExport{name: "corrupted chat", provider: injectedProbeClaude, session: recoveryProbeCorruptSession, only: injectedProbeChatOnly, maxTokens: "", output: cliOutput}
 	stdout, stderr, err := runInjectedProbeCLI(t, binaryPath, environment, filtered)
 	if err == nil {
 		t.Errorf("cli chat export with corrupted provenance succeeded:\n%s", stdout)

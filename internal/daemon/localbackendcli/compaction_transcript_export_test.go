@@ -44,6 +44,7 @@ const (
 	injectedProbeOtherRole      = "developer"
 	injectedProbeRaw            = "chat,raw_json_metadata"
 	injectedProbeAll            = "all"
+	injectedProbeClaude         = "claude"
 	legacyProbeSession          = "9d1f6b3c-5e2a-4f9b-8a4d-3e7c9b2f1d66"
 	legacyProbeSystem           = "legacyprobe system hook sentinel"
 	legacyProbeExportFile       = "legacy-export.txt"
@@ -90,10 +91,12 @@ type injectedProbeRPCRequest struct {
 
 type injectedProbeExport struct {
 	name      string
+	provider  string
 	session   string
 	only      string
 	maxTokens string
 	output    string
+	lastN     int
 }
 
 // TestExportAppliesContentKindsToInjectedClaudeTranscript exports a Claude
@@ -110,13 +113,13 @@ func TestExportAppliesContentKindsToInjectedClaudeTranscript(t *testing.T) {
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeSession)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, injectedProbeSession)
 
 	exports := []injectedProbeExport{
-		{name: "chat", session: injectedProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: ""},
-		{name: "broad", session: injectedProbeSession, only: injectedProbeBroad, maxTokens: "", output: ""},
-		{name: "chat capped", session: injectedProbeSession, only: injectedProbeChatOnly, maxTokens: injectedProbeMaxTokens, output: ""},
-		{name: "raw", session: injectedProbeSession, only: injectedProbeRaw, maxTokens: "", output: ""},
+		{name: "chat", provider: injectedProbeClaude, session: injectedProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: "", lastN: injectedProbeLastN},
+		{name: "broad", provider: injectedProbeClaude, session: injectedProbeSession, only: injectedProbeBroad, maxTokens: "", output: "", lastN: injectedProbeLastN},
+		{name: "chat capped", provider: injectedProbeClaude, session: injectedProbeSession, only: injectedProbeChatOnly, maxTokens: injectedProbeMaxTokens, output: "", lastN: injectedProbeLastN},
+		{name: "raw", provider: injectedProbeClaude, session: injectedProbeSession, only: injectedProbeRaw, maxTokens: "", output: "", lastN: injectedProbeLastN},
 	}
 	for _, export := range exports {
 		bodies := map[string]string{
@@ -208,12 +211,12 @@ func TestExportRejectsFilteredLegacyInjectedClaudeTranscript(t *testing.T) {
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, legacyProbeSession)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, legacyProbeSession)
 
-	conversationID := "claude:" + legacyProbeSession
+	conversationID := injectedProbeClaude + ":" + legacyProbeSession
 	summaryUUID := injectedProbeUUID(3)
 	cliOutput := filepath.Join(t.TempDir(), legacyProbeExportFile)
-	filtered := injectedProbeExport{name: "legacy chat", session: legacyProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: cliOutput}
+	filtered := injectedProbeExport{name: "legacy chat", provider: injectedProbeClaude, session: legacyProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: cliOutput, lastN: injectedProbeLastN}
 	stdout, stderr, err := runInjectedProbeCLI(t, binaryPath, environment, filtered)
 	if err == nil {
 		t.Errorf("cli chat export of a legacy transcript succeeded:\n%s", stdout)
@@ -234,7 +237,7 @@ func TestExportRejectsFilteredLegacyInjectedClaudeTranscript(t *testing.T) {
 	}
 	assertLegacyProbeNoFile(t, "mcp", mcpOutput)
 
-	complete := injectedProbeExport{name: "legacy all", session: legacyProbeSession, only: injectedProbeAll, maxTokens: "", output: ""}
+	complete := injectedProbeExport{name: "legacy all", provider: injectedProbeClaude, session: legacyProbeSession, only: injectedProbeAll, maxTokens: "", output: "", lastN: injectedProbeLastN}
 	bodies := map[string]string{
 		"cli": injectedProbeCLI(t, binaryPath, environment, complete),
 		"mcp": injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, complete),
@@ -377,7 +380,7 @@ func runInjectedProbeCLI(t *testing.T, binaryPath string, environment []string, 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), localProofCommandTimeout)
 	defer cancel()
-	arguments := []string{"conversation", "export", "claude:" + export.session, "--only", export.only, "--last-n", strconv.Itoa(injectedProbeLastN), "--format", injectedProbeFormat}
+	arguments := []string{"conversation", "export", export.provider + ":" + export.session, "--only", export.only, "--last-n", strconv.Itoa(export.lastN), "--format", injectedProbeFormat}
 	if export.output != "" {
 		arguments = append(arguments, "--output", export.output)
 	} else {
@@ -406,10 +409,10 @@ func injectedProbeMCPBody(t *testing.T, binaryPath string, environment []string,
 	return response.Result.text()
 }
 
-func waitForInjectedProbeMCP(t *testing.T, binaryPath string, environment []string, session string) {
+func waitForInjectedProbeMCP(t *testing.T, binaryPath string, environment []string, provider string, session string) {
 	t.Helper()
 	deadline := time.Now().Add(localProofReadyTimeout)
-	export := injectedProbeExport{name: "ready", session: session, only: injectedProbeAll, maxTokens: "", output: ""}
+	export := injectedProbeExport{name: "ready", provider: provider, session: session, only: injectedProbeAll, maxTokens: "", output: "", lastN: injectedProbeLastN}
 	for {
 		response, err := callInjectedProbeMCP(binaryPath, environment, export)
 		if err == nil && response.Error == nil && response.Result != nil && !response.Result.IsError {
@@ -428,9 +431,9 @@ func waitForInjectedProbeMCP(t *testing.T, binaryPath string, environment []stri
 func callInjectedProbeMCP(binaryPath string, environment []string, export injectedProbeExport) (exportProbeRPCResponse, error) {
 	var empty exportProbeRPCResponse
 	arguments := injectedProbeArguments{
-		ConversationID: "claude:" + export.session,
+		ConversationID: export.provider + ":" + export.session,
 		Only:           strings.Split(export.only, ","),
-		LastN:          injectedProbeLastN,
+		LastN:          export.lastN,
 		MaxTokens:      export.maxTokens,
 		Format:         injectedProbeFormat,
 		Output:         export.output,
