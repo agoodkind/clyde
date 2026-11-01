@@ -691,6 +691,6 @@ func assertNativeMarkerExports(t *testing.T, home string, rolloutPath string, th
 		}
 	}
 	if after := injectedProbeDigest(t, rolloutPath); after != before {
-		t.Errorf("The export changed the native rollout %s, %s", before, after)
+		t.Errorf("The export changed the native rollout file (before digest: %s, after digest: %s).", before, after)
 	}
 }

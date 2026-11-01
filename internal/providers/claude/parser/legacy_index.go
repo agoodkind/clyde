@@ -102,8 +102,6 @@ func (content *provenanceContentTypes) UnmarshalJSON(raw []byte) error {
 	var blocks []struct {
 		Type string `json:"type"`
 	}
-	// Content that is neither a string nor an array of blocks leaves the block
-	// types empty.
 	if json.Unmarshal(raw, &blocks) == nil {
 		content.blockTypes = make([]string, 0, len(blocks))
 		for _, block := range blocks {

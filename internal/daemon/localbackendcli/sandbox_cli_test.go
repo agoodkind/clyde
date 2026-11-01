@@ -21,8 +21,6 @@ const (
 	mcpExitBudget           = 4 * time.Second
 )
 
-// The package compiles the clyde binary once, and all tests run that binary.
-// TestMain removes clydeBuildDirectory after the tests finish.
 var (
 	clydeBuildDirectory string
 	sharedClydeCLI      = sync.OnceValues(compileClydeCLI)

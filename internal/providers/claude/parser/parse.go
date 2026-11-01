@@ -11,8 +11,6 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// summaryPieceSeparator joins stripped prose and framed transcripts from one
-// compact summary.
 const summaryPieceSeparator = "\n\n"
 
 // parseOptions controls noise stripping while parsing Claude transcript lines.

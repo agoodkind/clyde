@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	// Unframed transcript text starts each message with this heading prefix and
-	// the role name, and separates segments with a blank line.
+	// Unframed transcript text starts each message with the heading prefix and
+	// role name. A blank line separates segments.
 	legacyHeadingPrefix    = "### "
 	legacySegmentSeparator = "\n\n"
 	legacySummaryClose     = "</summary>"

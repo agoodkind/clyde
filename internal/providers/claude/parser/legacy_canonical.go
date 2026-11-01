@@ -42,7 +42,7 @@ func canonicalMessageHash(message []byte) (string, bool) {
 // such as output_config, in the encoding.
 func canonicalMessage(message []byte) ([]byte, bool) {
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(message, &fields); err != nil {
+	if err := json.Unmarshal(message, &fields); err != nil || fields == nil {
 		return nil, false
 	}
 	members := make([]canonicalMember, 0, len(fields))

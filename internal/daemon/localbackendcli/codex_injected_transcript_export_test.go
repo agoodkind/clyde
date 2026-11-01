@@ -114,7 +114,7 @@ func TestExportAppliesContentKindsToInjectedCodexTranscript(t *testing.T) {
 		}
 	}
 	if after := injectedProbeDigest(t, rolloutPath); after != before {
-		t.Errorf("The export changed the rollout file %s, %s", before, after)
+		t.Errorf("The export changed the rollout file (before digest: %s, after digest: %s).", before, after)
 	}
 }
 
@@ -147,7 +147,7 @@ func TestExportRejectsFilteredLegacyInjectedCodexTranscript(t *testing.T) {
 		assertCodexProbeContains(t, surface+" legacy all", body, codexProbeItemText(t, item), injectedProbeQuotation)
 	}
 	if after := injectedProbeDigest(t, rolloutPath); after != before {
-		t.Errorf("The export changed the rollout file %s, %s", before, after)
+		t.Errorf("The export changed the rollout file (before digest: %s, after digest: %s).", before, after)
 	}
 }
 
@@ -191,7 +191,7 @@ func TestExportPreservesOrdinaryCodexQuotations(t *testing.T) {
 		}
 	}
 	if after := injectedProbeDigest(t, rolloutPath); after != before {
-		t.Errorf("The export changed the rollout file %s, %s", before, after)
+		t.Errorf("The export changed the rollout file (before digest: %s, after digest: %s).", before, after)
 	}
 }
 
@@ -261,7 +261,7 @@ func TestExportFiltersMarkedCodexLiveMessage(t *testing.T) {
 		}
 	}
 	if after := injectedProbeDigest(t, rolloutPath); after != before {
-		t.Errorf("The export changed the rollout file %s, %s", before, after)
+		t.Errorf("The export changed the rollout file (before digest: %s, after digest: %s).", before, after)
 	}
 }
 
@@ -307,7 +307,7 @@ func TestExportRejectsUnframedMarkedCodexLiveMessage(t *testing.T) {
 		assertCodexProbeContains(t, surface+" live legacy all", body, codexProbeLegacySystem)
 	}
 	if after := injectedProbeDigest(t, rolloutPath); after != before {
-		t.Errorf("The export changed the rollout file %s, %s", before, after)
+		t.Errorf("The export changed the rollout file (before digest: %s, after digest: %s).", before, after)
 	}
 }
 
