@@ -168,7 +168,7 @@ func annotateInjectedTranscript(message *transcript.CompactedMessageItem, index 
 // proves generated text.
 func annotateUnmarkedTranscript(message *transcript.CompactedMessageItem, timestamp time.Time, opts HistoryOptions) {
 	resolved, ok := resolveTranscript(message.Raw, timestamp, opts, nil, unmarkedPartIndex)
-	if !ok || resolved.PartIndex >= len(message.Content) {
+	if !ok || resolved.PartIndex < 0 || resolved.PartIndex >= len(message.Content) {
 		return
 	}
 	content := &message.Content[resolved.PartIndex]
@@ -205,7 +205,7 @@ func transcriptTextParts(raw json.RawMessage, payload responsePayload, timestamp
 		return nil
 	}
 	resolved, ok := resolveTranscript(raw, timestamp, opts, nil, unmarkedPartIndex)
-	if !ok || resolved.PartIndex >= len(payload.Content) {
+	if !ok || resolved.PartIndex < 0 || resolved.PartIndex >= len(payload.Content) {
 		return nil
 	}
 	return recoveredTextParts(payload.Content, resolved)

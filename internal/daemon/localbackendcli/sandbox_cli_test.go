@@ -28,8 +28,6 @@ var (
 	sharedClydeCLI      = sync.OnceValues(compileClydeCLI)
 )
 
-// TestMain runs the package tests, then removes the shared clyde build
-// directory.
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if clydeBuildDirectory != "" {

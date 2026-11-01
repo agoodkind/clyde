@@ -13,7 +13,6 @@ const (
 	unframedOtherHeading  = "Other"
 )
 
-// unframedHeading returns the role heading that unframed transcripts use.
 func unframedHeading(role Role) string {
 	switch role {
 	case RoleUser:

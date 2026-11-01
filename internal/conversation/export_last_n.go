@@ -2,9 +2,6 @@ package conversation
 
 import "goodkind.io/clyde/internal/transcript"
 
-// exportShapeOptions builds renderer shaping options for the requested content kinds.
-// It includes thinking when requested, omits tool turns when no tool kind is
-// requested, and selects full tool detail or tool input summaries by content kind.
 func exportShapeOptions(content ContentKindSet) transcript.ShapeOptions {
 	includeTools := hasToolContent(content)
 	shapeOptions := transcript.ShapeOptions{
