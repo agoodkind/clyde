@@ -11,12 +11,13 @@ func (w *conversationSemanticSyncWorker) runBacklog(ctx context.Context) {
 	for {
 		w.lastNeeded = 0
 		w.lastCompleted = 0
+		w.lastSliced = false
 		w.runPassAndLog(ctx)
 		needed := w.lastNeeded
 		if semanticSyncContextDone(ctx) || needed == 0 {
 			return
 		}
-		if previousNeeded >= 0 && needed >= previousNeeded && w.lastCompleted == 0 {
+		if previousNeeded >= 0 && needed >= previousNeeded && w.lastCompleted == 0 && !w.lastSliced {
 			return
 		}
 		previousNeeded = needed

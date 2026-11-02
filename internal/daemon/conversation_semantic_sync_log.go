@@ -22,6 +22,7 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 			"manifest", stats.manifest,
 			"needed", stats.needed,
 			"sent_conversations", stats.sentConversations,
+			"partial_conversations", stats.partialConversations,
 			"documents", stats.documents,
 			"deferred", stats.deferred,
 			"failed", stats.failed,

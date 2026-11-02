@@ -27,6 +27,8 @@ const (
 	milvusConnectTimeout   = 2 * time.Second
 	milvusCloseTimeout     = 5 * time.Second
 	queryVectorCacheSize   = 64
+	// defaultIngestSliceRows limits one upsert slice to about eight embedding requests.
+	defaultIngestSliceRows = 256
 )
 
 // operationError pairs a failed operation with its cause. The constructors
@@ -63,6 +65,12 @@ type Options struct {
 	// CheckpointDir is the directory of the per-conversation fingerprint
 	// records the ingest persists. Empty keeps them in memory only.
 	CheckpointDir string
+	// IngestSliceRows limits the rows of one [Client.UpsertConversationSlice] call.
+	// Zero selects defaultIngestSliceRows.
+	IngestSliceRows int
+	// IngestSlicePlanBytes limits the estimated memory of retained slice plans. Zero
+	// selects defaultSliceProgressBytes.
+	IngestSlicePlanBytes int64
 }
 
 // Client searches and ingests conversations through the selected backend.
@@ -84,6 +92,11 @@ type Client struct {
 	// pass. Zero selects the worker default.
 	deliveryBatchBytes int64
 
+	// ingestSliceRows limits the rows of one upsert slice.
+	ingestSliceRows int
+	// ingestSlicePlanBytes limits the estimated memory of retained slice plans.
+	ingestSlicePlanBytes int64
+
 	checkpoint *checkpointStore
 
 	// ingestMu guards the collections ensured in this process and the job count.
@@ -93,6 +106,9 @@ type Client struct {
 
 	// fillMu serializes unknown timestamp fills within this client.
 	fillMu sync.Mutex
+
+	// sliceProgress stores the plans of partial conversations. ingestMu guards the map.
+	sliceProgress map[string]*sliceProgress
 
 	lastUpsert      UpsertStats
 	lastUpsertKnown bool
@@ -115,6 +131,14 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	ingestSliceRows := options.IngestSliceRows
+	if ingestSliceRows <= 0 {
+		ingestSliceRows = defaultIngestSliceRows
+	}
+	ingestSlicePlanBytes := options.IngestSlicePlanBytes
+	if ingestSlicePlanBytes <= 0 {
+		ingestSlicePlanBytes = defaultSliceProgressBytes
+	}
 	return &Client{
 		store:       opened.store,
 		embedder:    opened.embedder,
@@ -129,6 +153,9 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 
 		deliveryBatchBytes: opened.deliveryBatchBytes,
 
+		ingestSliceRows:      ingestSliceRows,
+		ingestSlicePlanBytes: ingestSlicePlanBytes,
+
 		checkpoint: newCheckpointStore(options.CheckpointDir),
 		ingestMu:   sync.Mutex{},
 		ensured:    make(map[string]bool),
@@ -136,7 +163,9 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 
 		fillMu: sync.Mutex{},
 
-		lastUpsert:      UpsertStats{JobID: "", RowsWritten: 0, VectorsReused: 0, VectorsEmbedded: 0},
+		sliceProgress: make(map[string]*sliceProgress),
+
+		lastUpsert:      UpsertStats{JobID: "", RowsRead: 0, RowsWritten: 0, VectorsReused: 0, VectorsEmbedded: 0},
 		lastUpsertKnown: false,
 
 		vectorMu:    sync.Mutex{},

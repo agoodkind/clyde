@@ -236,9 +236,10 @@ func newChunk(doc semsearch.SemDoc, conversationID string, parentConversationID 
 	}
 }
 
-// documentChunks returns the rows of one message document: the message text, one
-// row group per tool call, and the thinking block, each split at budget bytes.
-func documentChunks(doc semsearch.SemDoc, budget int) ([]storedChunk, error) {
+// documentChunks returns rows for the message text, each tool call, and the thinking
+// block. It splits each at conversationChunkMaxBytes bytes.
+func documentChunks(doc semsearch.SemDoc) ([]storedChunk, error) {
+	const budget = conversationChunkMaxBytes
 	conversationID := strings.TrimSpace(doc.ConversationID)
 	if conversationID == "" {
 		return nil, errors.New("conversation id is required")

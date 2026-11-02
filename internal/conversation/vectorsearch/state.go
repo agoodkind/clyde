@@ -82,6 +82,20 @@ func (state *conversationState) hasRow(familyKey string, id string) bool {
 	return false
 }
 
+// splitRowIDs returns the IDs of the stored split rows in one family.
+func (state *conversationState) splitRowIDs(familyKey string) []string {
+	if state == nil {
+		return nil
+	}
+	ids := make([]string, 0)
+	for _, row := range state.families[familyKey] {
+		if row.splitPart > 0 {
+			ids = append(ids, row.id)
+		}
+	}
+	return ids
+}
+
 // differs skips families with missing split parts or inconsistent row IDs
 // because earlier Clyde revisions wrote those rows.
 func (state *conversationState) differs(familyKey string, generated []storedChunk) bool {
@@ -106,6 +120,49 @@ func (state *conversationState) differs(familyKey string, generated []storedChun
 		}
 	}
 	return false
+}
+
+// pathComplete reports whether stored pieces cover the generated chunk at its path.
+// Complete pieces match even when their split boundaries differ.
+func (state *conversationState) pathComplete(familyKey string, chunk storedChunk) bool {
+	if state == nil {
+		return false
+	}
+	pathRows := make([]storedFamilyRow, 0)
+	for _, row := range state.families[familyKey] {
+		if row.relativePath == chunk.RelativePath {
+			pathRows = append(pathRows, row)
+		}
+	}
+	return compareStoredContent(pathRows, chunk.Content, 0) == contentMatches
+}
+
+func (state *conversationState) hasOlderRow(familyKey string) bool {
+	if state == nil {
+		return false
+	}
+	return slices.ContainsFunc(state.families[familyKey], func(row storedFamilyRow) bool {
+		return !row.hasCurrentKey()
+	})
+}
+
+// unprovenFamilies returns stopped families with an older row and a generated chunk
+// that stored pieces do not cover. Older rows do not establish which text is missing.
+// Recording a checkpoint would remove the stopped write's only recovery record.
+func (state *conversationState) unprovenFamilies(families []chunkFamily, stopped map[string]struct{}) []string {
+	unproven := make([]string, 0)
+	for _, family := range families {
+		if _, found := stopped[family.Key]; !found || !state.hasOlderRow(family.Key) {
+			continue
+		}
+		complete := !slices.ContainsFunc(family.Chunks, func(chunk storedChunk) bool {
+			return !state.pathComplete(family.Key, chunk)
+		})
+		if !complete {
+			unproven = append(unproven, family.Key)
+		}
+	}
+	return unproven
 }
 
 // compareStoredContent treats a missing piece after offset 0 as unknown because
@@ -172,22 +229,33 @@ func embeddingModelsCompatible(stored string, current string) bool {
 type storedBatch struct {
 	conversations map[string]*conversationState
 	reuse         map[string][]float32
+	// sourceIDs maps a content key in reuse to the ID of a stored row with that content.
+	sourceIDs map[string]string
+	rowsRead  int
 }
 
 func newStoredBatch() *storedBatch {
 	return &storedBatch{
 		conversations: make(map[string]*conversationState),
 		reuse:         make(map[string][]float32),
+		sourceIDs:     make(map[string]string),
+		rowsRead:      0,
 	}
 }
 
 // add records one stored row under its conversation and adds its vector to the
 // reuse map when the row's model matches currentModel.
 func (batch *storedBatch) add(conversationID string, row collection.StoredRow, currentModel string) {
+	batch.rowsRead++
 	if len(row.Vector) > 0 && embeddingModelsCompatible(row.EmbeddingModel, currentModel) {
-		batch.reuse[contentKey(row.Content)] = row.Vector
+		key := contentKey(row.Content)
+		batch.reuse[key] = row.Vector
+		batch.sourceIDs[key] = row.ID
 	}
-	if conversationID == "" || !conversationTextIsStorable(row.Content) {
+	// The state includes whitespace-only split rows. If a retry treats one as absent,
+	// it can replace that row's vector with another vector for the same text.
+	isSplitRow := row.SplitPartRecorded && row.SplitPart > 0
+	if conversationID == "" || (!conversationTextIsStorable(row.Content) && !isSplitRow) {
 		return
 	}
 	state, found := batch.conversations[conversationID]

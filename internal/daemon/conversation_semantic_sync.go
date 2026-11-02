@@ -142,6 +142,12 @@ type conversationSemanticClient interface {
 	JobState(ctx context.Context, jobID string) (string, error)
 }
 
+// conversationSliceClient limits the rows written in one pass. A client without
+// this method writes each delivered conversation in one upsert.
+type conversationSliceClient interface {
+	UpsertConversationSlice(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
+}
+
 // conversationSemanticClientResolver resolves the current engine feeder surface.
 // It returns nil while the engine is unreachable, which the worker treats as a
 // skipped pass rather than a permanent stop. The worker calls it once per pass,
@@ -180,6 +186,10 @@ type conversationSemanticSyncWorker struct {
 	// lastCompleted counts conversations with fingerprints in the latest accepted
 	// upsert.
 	lastCompleted int
+	// lastSliced reports whether the latest pass processed a partial upsert.
+	lastSliced bool
+	// resumeConversation identifies the partial conversation for the next rotated turn.
+	resumeConversation string
 	// deliveryCursor is the last conversation id delivered; each batch resumes
 	// after it instead of restarting at the lexicographically smallest id.
 	deliveryCursor string
@@ -288,6 +298,8 @@ type conversationSemanticSyncStats struct {
 	// pass in the log can be attributed to specific conversations. The log line
 	// bounds the list; the full slice stays here for the freshness snapshot.
 	sentConversationIDs []string
+	// partialConversations counts conversations with unwritten rows after this pass.
+	partialConversations int
 	// firstListedIDs records the conversations that joined the queue in this pass.
 	firstListedIDs []string
 	// unchangedPinned counts conversations this pass recognized as touched
@@ -407,6 +419,8 @@ func newConversationSemanticSyncWorker(
 		activeJobID:        "",
 		lastNeeded:         0,
 		lastCompleted:      0,
+		lastSliced:         false,
+		resumeConversation: "",
 		deliveryCursor:     "",
 		priorityBatchNext:  false,
 		arrivalCohorts:     nil,
@@ -523,20 +537,21 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 
 	manifest, recordsByID, stampsByID, failedSuppressed := w.buildManifest(stampedRecords)
 	stats := conversationSemanticSyncStats{
-		manifest:            len(manifest),
-		needed:              0,
-		sentConversations:   0,
-		documents:           0,
-		deferred:            0,
-		failed:              0,
-		failedSuppressed:    failedSuppressed,
-		policySkipped:       0,
-		injectedStripped:    0,
-		systemStripped:      0,
-		sentConversationIDs: nil,
-		firstListedIDs:      nil,
-		unchangedPinned:     0,
-		unchangedPinnedIDs:  nil,
+		manifest:             len(manifest),
+		needed:               0,
+		sentConversations:    0,
+		documents:            0,
+		deferred:             0,
+		failed:               0,
+		failedSuppressed:     failedSuppressed,
+		policySkipped:        0,
+		injectedStripped:     0,
+		systemStripped:       0,
+		sentConversationIDs:  nil,
+		partialConversations: 0,
+		firstListedIDs:       nil,
+		unchangedPinned:      0,
+		unchangedPinnedIDs:   nil,
 	}
 	// An empty manifest still syncs when this pass omitted anything, because
 	// the engine's copy of the manifest is whatever the last sync stated.
@@ -870,80 +885,6 @@ func (w *conversationSemanticSyncWorker) recordLoadFailure(conversationID, finge
 // one minute has elapsed since modification.
 func (w *conversationSemanticSyncWorker) isActivelyGrowing(stamp conversation.FileStamp) bool {
 	return w.now().Sub(stamp.Mtime) < conversationSemanticGrowthWindow
-}
-
-// sendDocuments fires one upsert for the collected documents and the full
-// manifest. A conflicting-active-job rejection means a prior embed is still
-// running, which is expected and benign: the worker logs it and the next pass
-// retries once the engine is free. Any other failure is a real error.
-func (w *conversationSemanticSyncWorker) sendDocuments(
-	ctx context.Context,
-	client conversationSemanticClient,
-	docs []semsearch.SemDoc,
-	manifest []semsearch.Fingerprint,
-	sent []deliveredConversation,
-	stats *conversationSemanticSyncStats,
-) {
-	// The upsert can save checkpoints for earlier conversations before a later
-	// conversation fails. sendDocuments removes delivery memos before the upsert
-	// changes the checkpoint fingerprints.
-	for _, delivery := range sent {
-		delete(w.deliveredContent, delivery.id)
-	}
-	upsertStarted := clock.Now()
-	jobID, upsertErr := client.UpsertConversationDocuments(ctx, w.collectionID, docs, manifest)
-	if upsertErr != nil {
-		if isConflictingActiveJob(upsertErr) {
-			w.passBlocked = true
-			w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.engine_busy",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"conversations", len(sent),
-				"documents", len(docs),
-			)
-			return
-		}
-		stats.failed += len(sent)
-		w.freshness.recordSyncError(upsertErr)
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversations", len(sent),
-			"documents", len(docs),
-			"err", upsertErr,
-		)
-		return
-	}
-	sentIDs := make([]string, 0, len(sent))
-	for _, delivery := range sent {
-		sentIDs = append(sentIDs, delivery.id)
-		if delivery.fingerprint == "" {
-			continue
-		}
-		w.lastCompleted++
-		w.deliveredContent[delivery.id] = deliveredContentRecord{
-			fingerprint:    delivery.fingerprint,
-			projectionHash: delivery.projectionHash,
-		}
-	}
-	stats.sentConversations = len(sent)
-	stats.sentConversationIDs = sentIDs
-	stats.documents = len(docs)
-	w.activeJobID = jobID
-	w.freshness.recordUpsert(client, w.collectionID, jobID, upsertStarted, clock.Now())
-	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_started",
-		"concern", "conversation.semantic",
-		"component", "daemon",
-		"conversations", len(sent),
-		"documents", len(docs),
-		"job_id", jobID,
-	)
-}
-
-// isConflictingActiveJob reports whether an upsert error is the engine's
-// rejection of a second job while one is already running for the collection.
-func isConflictingActiveJob(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "conflicting active job")
 }
 
 func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) (SemanticConversationDocuments, error) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -135,6 +136,7 @@ func packChunks(chunks []storedChunk, reuse map[string][]float32) [][]storedChun
 
 type ingestStats struct {
 	conversations int
+	rowsRead      int
 	rowsWritten   int
 	reused        int
 	embedded      int
@@ -204,52 +206,83 @@ type rejection struct {
 	maxReported bool
 }
 
-// embedAndWrite embeds the chunks and writes their rows. A chunk with a stored
-// vector reuses it. A chunk the endpoint rejects for context length splits in
-// half, and each half is embedded again. A rejected input that cannot split
-// further is logged and skipped, and the remaining inputs continue. Any other
-// embedding failure stops the call.
+// embedAndWrite embeds chunks and writes their rows, reusing stored vectors when
+// available. If the endpoint rejects a chunk for context length, embedAndWrite splits
+// it in half and retries each half. It logs and skips rejected inputs that cannot
+// split further. Other embedding failures stop the call.
+//
+// A positive rowLimit stops processing before the first pack after the limit and
+// flushes pending rows. The call adds new vectors to reuse for later matching text.
+// It returns the processed row count and chunks without a result. When stored reports
+// that a split child exists, the call preserves its stored timestamp and vector.
 func (c *Client) embedAndWrite(
 	ctx context.Context,
 	chunks []storedChunk,
 	reuse map[string][]float32,
 	writer *rowWriter,
 	stats *ingestStats,
-) error {
+	rowLimit int,
+	stored func(storedChunk) bool,
+) (int, []storedChunk, error) {
 	queue := chunks
-	roundReuse := reuse
+	processed := 0
 	for round := 0; len(queue) > 0; round++ {
 		retry := make([]storedChunk, 0)
-		for _, pack := range packChunks(queue, roundReuse) {
+		packs := packChunks(queue, reuse)
+		for position, pack := range packs {
+			if rowLimit > 0 && processed >= rowLimit {
+				remaining := slices.Concat(slices.Concat(packs[position:]...), retry)
+				return processed, remaining, writer.flush(ctx)
+			}
 			if err := ctx.Err(); err != nil {
-				return failRead("embed conversation rows", err)
+				return processed, nil, failRead("embed conversation rows", err)
 			}
-			vectors, rejected, err := c.vectorsFor(ctx, pack, roundReuse, stats)
+			vectors, rejected, err := c.vectorsFor(ctx, pack, reuse, stats)
 			if err != nil {
-				return err
+				return processed, nil, err
 			}
-			for i, chunk := range pack {
-				if vectors[i] == nil {
-					continue
-				}
-				if err := writer.add(ctx, chunkRow(chunk, vectors[i])); err != nil {
-					return err
-				}
+			processed += len(pack)
+			if err := writePackRows(ctx, pack, vectors, reuse, writer, rowLimit); err != nil {
+				return processed, nil, err
 			}
-			for _, refusal := range rejected {
-				if c.shouldSplit(refusal) {
-					retry = append(retry, splitChunkInHalf(refusal.chunk)...)
-					stats.split++
-					continue
-				}
-				c.logDropped(ctx, refusal, round)
-				stats.dropped++
-			}
+			retry = append(retry, c.retryRejected(ctx, rejected, stored, stats, round)...)
 		}
 		queue = retry
-		roundReuse = nil
 	}
-	return writer.flush(ctx)
+	return processed, nil, writer.flush(ctx)
+}
+
+// writePackRows adds a row to writer for each chunk with a vector. It also stores each
+// vector in reuse when rowLimit is positive.
+func writePackRows(ctx context.Context, pack []storedChunk, vectors [][]float32, reuse map[string][]float32, writer *rowWriter, rowLimit int) error {
+	for i, chunk := range pack {
+		if vectors[i] == nil {
+			continue
+		}
+		if rowLimit > 0 {
+			reuse[contentKey(chunk.Content)] = vectors[i]
+		}
+		if err := writer.add(ctx, chunkRow(chunk, vectors[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// retryRejected returns split chunks that still need embedding. It logs and counts each
+// rejected input that it cannot split further.
+func (c *Client) retryRejected(ctx context.Context, rejected []rejection, stored func(storedChunk) bool, stats *ingestStats, round int) []storedChunk {
+	retry := make([]storedChunk, 0)
+	for _, refusal := range rejected {
+		if c.shouldSplit(refusal) {
+			retry = append(retry, slices.DeleteFunc(splitChunkInHalf(refusal.chunk), stored)...)
+			stats.split++
+			continue
+		}
+		c.logDropped(ctx, refusal, round)
+		stats.dropped++
+	}
+	return retry
 }
 
 // vectorsFor returns one vector per chunk of the pack, nil for a chunk the

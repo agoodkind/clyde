@@ -33,10 +33,29 @@ const (
 
 func openClient(t *testing.T, address string, layout vectorsearch.Layout) *vectorsearch.Client {
 	t.Helper()
+	return openClientWithCheckpoints(t, address, layout, t.TempDir())
+}
+
+func integrationEmbeddingBaseURL() string {
 	baseURL := os.Getenv(embeddingBaseURLEnv)
 	if baseURL == "" {
-		baseURL = defaultEmbeddingBaseURL
+		return defaultEmbeddingBaseURL
 	}
+	return baseURL
+}
+
+func openClientWithCheckpoints(t *testing.T, address string, layout vectorsearch.Layout, checkpointDir string) *vectorsearch.Client {
+	t.Helper()
+	return openClientThrough(t, address, layout, checkpointDir, integrationEmbeddingBaseURL())
+}
+
+func openClientThrough(t *testing.T, address string, layout vectorsearch.Layout, checkpointDir string, baseURL string) *vectorsearch.Client {
+	t.Helper()
+	return openModelClientThrough(t, address, layout, checkpointDir, baseURL, integrationModel)
+}
+
+func openModelClientThrough(t *testing.T, address string, layout vectorsearch.Layout, checkpointDir string, baseURL string, model string) *vectorsearch.Client {
+	t.Helper()
 	var client *vectorsearch.Client
 	var err error
 	deadline := time.Now().Add(time.Minute)
@@ -47,11 +66,11 @@ func openClient(t *testing.T, address string, layout vectorsearch.Layout) *vecto
 			MilvusDatabase:     "default",
 			MilvusLayout:       layout,
 			EmbeddingBaseURL:   baseURL,
-			EmbeddingModel:     integrationModel,
+			EmbeddingModel:     model,
 			EmbeddingDimension: integrationDimension,
 			EmbeddingAPIKey:    integrationEmbeddingKey,
 			EmbeddingTimeout:   2 * time.Minute,
-			CheckpointDir:      t.TempDir(),
+			CheckpointDir:      checkpointDir,
 		})
 		if err == nil || time.Now().After(deadline) {
 			break

@@ -107,6 +107,7 @@ func validateConversationSemanticDurations(semantic *ConversationSemanticConfig)
 func validateConversationSemanticCounts(semantic *ConversationSemanticConfig) error {
 	settings := []conversationSemanticSetting{
 		{key: "embedding_dimension", value: int64(semantic.EmbeddingDimension)},
+		{key: "ingest_slice_rows", value: int64(semantic.IngestSliceRows)},
 	}
 	return rejectNegativeConversationSemanticSettings(settings)
 }

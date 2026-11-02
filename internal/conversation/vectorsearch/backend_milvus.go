@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
+	"github.com/milvus-io/milvus/client/v3/column"
+	"github.com/milvus-io/milvus/client/v3/entity"
 	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/lm-semantic-search/collection"
@@ -122,6 +125,183 @@ func (b *milvusBackend) loadCollection(ctx context.Context, collectionName strin
 		return false, failRead("await load of Milvus collection "+collectionName, err)
 	}
 	return true, nil
+}
+
+// optionalModelAt reads the embedding model of one row. It returns an empty string
+// when the column is missing or the value is null, as QueryRows does.
+func optionalModelAt(modelColumn column.Column, rowIndex int) (string, error) {
+	if modelColumn == nil {
+		return "", nil
+	}
+	isNull, err := modelColumn.IsNull(rowIndex)
+	if err != nil {
+		return "", failRead("read embedding model null state", err)
+	}
+	if isNull {
+		return "", nil
+	}
+	model, err := modelColumn.GetAsString(rowIndex)
+	if err != nil {
+		return "", failRead("read embedding model", err)
+	}
+	return model, nil
+}
+
+// storedRowColumns stores the columns from a query for stored rows.
+type storedRowColumns struct {
+	id      column.Column
+	content column.Column
+	model   column.Column
+	value   column.Column
+}
+
+// readRowVector reads one stored row and returns the row and its ID. With the shared
+// layout, it returns the vector key separately. With the other layout, it includes the
+// vector in the row.
+func (b *milvusBackend) readRowVector(collectionName string, columns storedRowColumns, rowIndex int) (string, storedRowVector, string, error) {
+	empty := storedRowVector{content: "", embeddingModel: "", vector: nil}
+	id, err := columns.id.GetAsString(rowIndex)
+	if err != nil {
+		return "", empty, "", failRead(fmt.Sprintf("read row ID %d from %s", rowIndex, collectionName), err)
+	}
+	content, err := columns.content.GetAsString(rowIndex)
+	if err != nil {
+		return "", empty, "", failRead(fmt.Sprintf("read content of row %s from %s", id, collectionName), err)
+	}
+	model, err := optionalModelAt(columns.model, rowIndex)
+	if err != nil {
+		return "", empty, "", failRead(fmt.Sprintf("read embedding model of row %s from %s", id, collectionName), err)
+	}
+	row := storedRowVector{content: content, embeddingModel: model, vector: nil}
+	if b.shared != nil {
+		key, keyErr := columns.value.GetAsString(rowIndex)
+		if keyErr != nil {
+			return "", empty, "", failRead(fmt.Sprintf("read vector key of row %s from %s", id, collectionName), keyErr)
+		}
+		return id, row, key, nil
+	}
+	vector, err := milvusstore.VectorAt(columns.value, rowIndex)
+	if err != nil {
+		return "", empty, "", failRead(fmt.Sprintf("read vector of row %s from %s", id, collectionName), err)
+	}
+	row.vector = vector
+	return id, row, "", nil
+}
+
+// storedRowVector stores the content, embedding model, and vector of a reusable row.
+// The caller compares its content and model with the planned row.
+type storedRowVector struct {
+	content        string
+	embeddingModel string
+	vector         []float32
+}
+
+// readRowVectors returns the stored content, embedding model, and dense vector for
+// each requested row ID. It omits missing rows. For the shared layout, it reads each
+// row's vector key before reading the vector.
+func (b *milvusBackend) readRowVectors(ctx context.Context, collectionName string, ids []string) (map[string]storedRowVector, error) {
+	rows := make(map[string]storedRowVector, len(ids))
+	field := milvusstore.DenseVectorField
+	if b.shared != nil {
+		field = milvusstore.VectorKeyField
+	}
+	values := make(map[string]string, len(ids))
+	for start := 0; start < len(ids); start += conversationFilterIDBatchSize {
+		end := min(start+conversationFilterIDBatchSize, len(ids))
+		resultSet, err := b.client.Query(ctx, milvusclient.NewQueryOption(collectionName).
+			WithIDs(column.NewColumnVarChar(milvusstore.IDField, slices.Clone(ids[start:end]))).
+			WithOutputFields(milvusstore.IDField, milvusstore.ContentField, milvusstore.EmbeddingModelField, field).
+			WithConsistencyLevel(entity.ClStrong))
+		if err != nil {
+			return nil, failRead("read stored row vectors from "+collectionName, err)
+		}
+		if resultSet.ResultCount == 0 {
+			continue
+		}
+		columns := storedRowColumns{
+			id:      resultSet.GetColumn(milvusstore.IDField),
+			content: resultSet.GetColumn(milvusstore.ContentField),
+			model:   resultSet.GetColumn(milvusstore.EmbeddingModelField),
+			value:   resultSet.GetColumn(field),
+		}
+		if columns.id == nil || columns.content == nil || columns.value == nil {
+			return nil, collection.ErrSearchResultIncomplete
+		}
+		for rowIndex := range resultSet.ResultCount {
+			id, row, key, rowErr := b.readRowVector(collectionName, columns, rowIndex)
+			if rowErr != nil {
+				return nil, rowErr
+			}
+			rows[id] = row
+			if b.shared != nil {
+				values[id] = key
+			}
+		}
+	}
+	if b.shared == nil {
+		return rows, nil
+	}
+	vectors, err := b.readSharedVectors(ctx, collectionName, values)
+	if err != nil {
+		return nil, err
+	}
+	for id, row := range rows {
+		vector, found := vectors[id]
+		if !found {
+			return nil, failRead("read stored row vectors from "+collectionName, fmt.Errorf("row %s references missing vector %s", id, values[id]))
+		}
+		row.vector = vector
+		rows[id] = row
+	}
+	return rows, nil
+}
+
+// readSharedVectors uses each row's vector key to read its stored vector.
+func (b *milvusBackend) readSharedVectors(ctx context.Context, collectionName string, keyByID map[string]string) (map[string][]float32, error) {
+	vectorCollection := milvusstore.VectorCollectionName(collectionName)
+	keys := make([]string, 0, len(keyByID))
+	for _, key := range keyByID {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	keys = slices.Compact(keys)
+	vectorByKey := make(map[string][]float32, len(keys))
+	for start := 0; start < len(keys); start += conversationFilterIDBatchSize {
+		end := min(start+conversationFilterIDBatchSize, len(keys))
+		resultSet, err := b.client.Query(ctx, milvusclient.NewQueryOption(vectorCollection).
+			WithIDs(column.NewColumnVarChar(milvusstore.VectorKeyField, slices.Clone(keys[start:end]))).
+			WithOutputFields(milvusstore.VectorKeyField, milvusstore.DenseVectorField).
+			WithConsistencyLevel(entity.ClStrong))
+		if err != nil {
+			return nil, failRead("read stored vectors from "+vectorCollection, err)
+		}
+		if resultSet.ResultCount == 0 {
+			continue
+		}
+		keyColumn := resultSet.GetColumn(milvusstore.VectorKeyField)
+		vectorColumn := resultSet.GetColumn(milvusstore.DenseVectorField)
+		if keyColumn == nil || vectorColumn == nil {
+			return nil, collection.ErrSearchResultIncomplete
+		}
+		for rowIndex := range resultSet.ResultCount {
+			key, keyErr := keyColumn.GetAsString(rowIndex)
+			if keyErr != nil {
+				return nil, failRead(fmt.Sprintf("read vector key %d from %s", rowIndex, vectorCollection), keyErr)
+			}
+			vector, vectorErr := milvusstore.VectorAt(vectorColumn, rowIndex)
+			if vectorErr != nil {
+				return nil, failRead(fmt.Sprintf("read vector %s from %s", key, vectorCollection), vectorErr)
+			}
+			vectorByKey[key] = vector
+		}
+	}
+	vectors := make(map[string][]float32, len(keyByID))
+	for id, key := range keyByID {
+		if vector, found := vectorByKey[key]; found {
+			vectors[id] = vector
+		}
+	}
+	return vectors, nil
 }
 
 func (b *milvusBackend) close(ctx context.Context) error {

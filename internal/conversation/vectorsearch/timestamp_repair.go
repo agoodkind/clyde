@@ -215,7 +215,7 @@ func sourcePieces(sources []TimestampRepairSource) (map[string]map[string][]sour
 			if strings.TrimSpace(doc.ConversationID) != conversationID {
 				return nil, nil, fmt.Errorf("repair conversation timestamps: document for %q does not match conversation %s", doc.ConversationID, conversationID)
 			}
-			chunks, err := documentChunks(doc, conversationChunkMaxBytes)
+			chunks, err := documentChunks(doc)
 			if err != nil {
 				slog.Warn("conversation.vectorsearch.timestamp_repair_rows_failed",
 					"concern", "conversation.semantic",

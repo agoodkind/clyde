@@ -263,6 +263,8 @@ func OpenConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 		QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
 		DenseSearchParams:      semanticCfg.DenseSearchParams(),
 		CheckpointDir:          ConversationCheckpointDir(),
+		IngestSliceRows:        semanticCfg.IngestSliceRows,
+		IngestSlicePlanBytes:   0,
 	})
 	if err != nil {
 		return nil, semanticConnectorError{cause: err}

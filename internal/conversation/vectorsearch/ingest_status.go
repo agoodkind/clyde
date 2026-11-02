@@ -7,7 +7,9 @@ import (
 
 // UpsertStats applies to one completed upsert.
 type UpsertStats struct {
-	JobID           string
+	JobID string
+	// RowsRead counts the stored rows that the upsert read to plan its writes.
+	RowsRead        int
 	RowsWritten     int
 	VectorsReused   int
 	VectorsEmbedded int
@@ -32,7 +34,7 @@ func (c *Client) IngestStatus(collectionID string) IngestStatus {
 		CheckpointDirectory: "",
 		CheckpointCount:     0,
 		CheckpointKnown:     false,
-		LastUpsert:          UpsertStats{JobID: "", RowsWritten: 0, VectorsReused: 0, VectorsEmbedded: 0},
+		LastUpsert:          UpsertStats{JobID: "", RowsRead: 0, RowsWritten: 0, VectorsReused: 0, VectorsEmbedded: 0},
 		LastUpsertKnown:     false,
 	}
 	if c == nil {

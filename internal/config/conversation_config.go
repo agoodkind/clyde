@@ -116,6 +116,9 @@ type ConversationSemanticConfig struct {
 	// least one second.
 	SyncInterval         Duration `json:"syncInterval,omitempty" toml:"sync_interval,omitempty"`
 	IndexRefreshInterval Duration `json:"indexRefreshInterval,omitempty" toml:"index_refresh_interval,omitempty"`
+	// IngestSliceRows limits the rows that one sync pass embeds or copies.
+	// Zero selects the default. Later passes process the remaining rows.
+	IngestSliceRows int `json:"ingestSliceRows,omitempty" toml:"ingest_slice_rows,omitempty"`
 }
 
 // SyncPassInterval permits shorter sync cadences without shortening the

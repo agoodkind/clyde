@@ -16,6 +16,13 @@ import (
 // the call returns, and every job ID reads as completed.
 const jobIDPrefix = "in-process-upsert-"
 
+// ErrUnprovenStoppedWrite reports a stopped write when the stored family rows do not
+// establish which text is missing.
+var ErrUnprovenStoppedWrite = errors.New("stored rows do not prove a stopped write can resume")
+
+// errCheckpointWrite reports that rows exist but recording their checkpoint failed.
+var errCheckpointWrite = errors.New("recording the checkpoint failed")
+
 // ensureCollection creates the collection when it is absent and adds any
 // declared scalar column it lacks. It runs once per collection and process.
 func (c *Client) ensureCollection(ctx context.Context, collectionName string, dimension int) error {
@@ -63,7 +70,11 @@ func (c *Client) SyncConversationManifest(_ context.Context, collectionID string
 		ids = append(ids, fingerprint.ConversationID)
 		values = append(values, fingerprint.Value)
 	}
-	return c.checkpoint.needed(CollectionName(trimmedCollectionID), ids, values), nil
+	needed, err := c.checkpoint.needed(CollectionName(trimmedCollectionID), ids, values)
+	if err != nil {
+		return nil, failRead("sync semantic conversation manifest", err)
+	}
+	return needed, nil
 }
 
 // JobState reports a job started by UpsertConversationDocuments. An upsert
@@ -95,6 +106,32 @@ func (c *Client) UpsertConversationDocuments(
 	docs []semsearch.SemDoc,
 	manifest []semsearch.Fingerprint,
 ) (string, error) {
+	return c.upsertDocuments(ctx, collectionID, docs, manifest, 0)
+}
+
+// UpsertConversationSlice writes delivered conversations up to the slice row limit.
+// It returns a [PartialUpsertError] when rows remain unwritten. It does not record a
+// new checkpoint for a partial conversation. Later calls continue the write and
+// check the current source and stored rows before recording the checkpoint.
+func (c *Client) UpsertConversationSlice(
+	ctx context.Context,
+	collectionID string,
+	docs []semsearch.SemDoc,
+	manifest []semsearch.Fingerprint,
+) (string, error) {
+	if c == nil {
+		return "", errors.New("upsert semantic conversation slice: client is nil")
+	}
+	return c.upsertDocuments(ctx, collectionID, docs, manifest, c.ingestSliceRows)
+}
+
+func (c *Client) upsertDocuments(
+	ctx context.Context,
+	collectionID string,
+	docs []semsearch.SemDoc,
+	manifest []semsearch.Fingerprint,
+	rowLimit int,
+) (string, error) {
 	if c == nil {
 		return "", errors.New("upsert semantic conversation documents: client is nil")
 	}
@@ -111,55 +148,60 @@ func (c *Client) UpsertConversationDocuments(
 	if len(order) == 0 {
 		return jobID, nil
 	}
+	if rowLimit > 0 {
+		order = deliveredOrder(docs)
+	}
 	fingerprints := make(map[string]string, len(manifest))
 	for _, fingerprint := range manifest {
 		fingerprints[fingerprint.ConversationID] = fingerprint.Value
 	}
-	batch, err := c.loadStoredBatch(ctx, collectionName, order)
+	// partial stores conversation errors in Failures and the corresponding IDs in Failed. The
+	// client continues processing other conversations.
+	partial := PartialUpsertError{Completed: nil, Incomplete: nil, Unstarted: nil, Failed: nil, Failures: nil}
+	// The client claims each conversation before reading its stored rows. Other clients
+	// cannot write those conversations until this call releases the claims.
+	claimed, release, err := c.checkpoint.claimConversations(collectionName, order, &partial)
+	defer release()
 	if err != nil {
-		return "", err
+		return "", stopUpsert(ctx, collectionName, partial.Failures, err)
 	}
-	stats := ingestStats{conversations: len(order), rowsWritten: 0, reused: 0, embedded: 0, split: 0, dropped: 0, timesFilled: 0}
+	resuming, loading := c.splitResumingConversations(collectionName, claimed, fingerprints, rowLimit)
+	batch, err := c.loadStoredBatch(ctx, collectionName, loading)
+	if err != nil {
+		return "", stopUpsert(ctx, collectionName, partial.Failures, err)
+	}
+	stats := ingestStats{conversations: len(claimed), rowsRead: batch.rowsRead, rowsWritten: 0, reused: 0, embedded: 0, split: 0, dropped: 0, timesFilled: 0}
 	// writtenConversations lists each conversation that received rows, as
 	// "<conversation id>=<row count>", for the completion log record.
 	writtenConversations := make([]string, 0)
-	// checkpointErrors collects checkpoint write errors without stopping the batch.
-	// The caller receives these errors after the remaining conversations finish.
-	checkpointErrors := make([]error, 0)
-	for _, conversationID := range order {
-		chunks, fills, planErr := c.planConversation(conversationID, byConversation[conversationID], batch.state(conversationID))
-		if planErr != nil {
-			slog.WarnContext(ctx, "conversation.vectorsearch.plan_failed",
-				"concern", "conversation.semantic",
-				"component", "conversation",
-				"conversation_id", conversationID,
-				"err", planErr,
-			)
-			return "", errors.Join(append(checkpointErrors, planErr)...)
-		}
-		writer := newRowWriter(c, collectionName)
-		if err := c.embedAndWrite(ctx, chunks, batch.reuse, writer, &stats); err != nil {
-			return "", errors.Join(append(checkpointErrors, err)...)
-		}
-		stats.rowsWritten += writer.written
-		filled, fillErr := c.fillUnknownTimes(ctx, collectionName, fills)
-		if fillErr != nil {
-			return "", errors.Join(append(checkpointErrors, fillErr)...)
-		}
-		stats.timesFilled += filled
-		if writer.written > 0 {
-			writtenConversations = append(writtenConversations, fmt.Sprintf("%s=%d", conversationID, writer.written))
-		}
-		fingerprint, found := fingerprints[conversationID]
-		if !found {
+	remaining := rowLimit
+	for _, conversationID := range claimed {
+		if rowLimit > 0 && remaining <= 0 {
+			partial.Incomplete = append(partial.Incomplete, conversationID)
+			partial.Unstarted = append(partial.Unstarted, conversationID)
 			continue
 		}
-		if err := c.checkpoint.record(collectionName, conversationID, fingerprint); err != nil {
-			checkpointErrors = append(checkpointErrors, fmt.Errorf("recording the checkpoint for conversation %s failed: %w", conversationID, err))
+		var result conversationUpsert
+		var conversationErr error
+		if progress, resumed := resuming[conversationID]; resumed {
+			result, conversationErr = c.resumeSlice(ctx, collectionName, conversationID, byConversation[conversationID], progress, &stats, remaining)
+		} else {
+			result, conversationErr = c.upsertConversation(ctx, collectionName, conversationID, byConversation[conversationID], fingerprints, batch, &stats, remaining)
+		}
+		stats.rowsWritten += result.written
+		remaining -= result.processed
+		if result.written > 0 {
+			writtenConversations = append(writtenConversations, fmt.Sprintf("%s=%d", conversationID, result.written))
+		}
+		if err := partial.record(conversationID, result, conversationErr); err != nil {
+			return "", stopUpsert(ctx, collectionName, partial.Failures, err)
 		}
 	}
-	c.recordUpsert(UpsertStats{JobID: jobID, RowsWritten: stats.rowsWritten, VectorsReused: stats.reused, VectorsEmbedded: stats.embedded})
-	if err := errors.Join(checkpointErrors...); err != nil {
+	c.recordUpsert(UpsertStats{JobID: jobID, RowsRead: stats.rowsRead, RowsWritten: stats.rowsWritten, VectorsReused: stats.reused, VectorsEmbedded: stats.embedded})
+	if len(partial.Incomplete) > 0 {
+		return "", &partial
+	}
+	if err := errors.Join(partial.Failures...); err != nil {
 		return "", err
 	}
 	slog.InfoContext(ctx, "conversation.vectorsearch.upsert_completed",
@@ -176,6 +218,195 @@ func (c *Client) UpsertConversationDocuments(
 		"times_filled", stats.timesFilled,
 	)
 	return jobID, nil
+}
+
+// stopUpsert logs the failure that stops an upsert and returns that failure
+// joined with the earlier conversation failures.
+func stopUpsert(ctx context.Context, collectionName string, failures []error, err error) error {
+	joined := errors.Join(append(failures, err)...)
+	slog.WarnContext(ctx, "conversation.vectorsearch.upsert_stopped",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"collection", collectionName,
+		"err", joined,
+	)
+	return joined
+}
+
+// claimConversations claims each available conversation in order and adds busy
+// conversations to partial. It returns the claimed IDs and a release function. The caller
+// must run the release function even when claimConversations returns an error.
+func (store *checkpointStore) claimConversations(collectionName string, order []string, partial *PartialUpsertError) ([]string, func(), error) {
+	claimed := make([]string, 0, len(order))
+	claims := make([]*conversationClaim, 0, len(order))
+	release := func() {
+		for _, claim := range claims {
+			claim.release()
+		}
+	}
+	for _, conversationID := range order {
+		claim, err := store.claimConversation(collectionName, conversationID)
+		if errors.Is(err, ErrConversationWriteBusy) {
+			partial.Failed = append(partial.Failed, conversationID)
+			partial.Failures = append(partial.Failures, fmt.Errorf("conversation %s: %w", conversationID, err))
+			continue
+		}
+		if err != nil {
+			return claimed, release, failWrite("claim conversation "+conversationID, err)
+		}
+		claims = append(claims, claim)
+		claimed = append(claimed, conversationID)
+	}
+	return claimed, release, nil
+}
+
+// splitResumingConversations returns current plans and the IDs of conversations that must
+// read their stored rows. It returns plans only when rowLimit is positive. Each plan
+// selects the next rows without loading all stored rows.
+func (c *Client) splitResumingConversations(collectionName string, claimed []string, fingerprints map[string]string, rowLimit int) (map[string]*sliceProgress, []string) {
+	resuming := make(map[string]*sliceProgress)
+	loading := make([]string, 0, len(claimed))
+	for _, conversationID := range claimed {
+		if rowLimit > 0 {
+			if progress := c.currentSliceProgress(collectionName, conversationID, fingerprints[conversationID]); progress != nil {
+				resuming[conversationID] = progress
+				continue
+			}
+		}
+		loading = append(loading, conversationID)
+	}
+	return resuming, loading
+}
+
+// conversationUpsert reports the write result for one conversation. A complete
+// result does not have unwritten rows. An incomplete result does not have a new
+// checkpoint.
+type conversationUpsert struct {
+	written   int
+	processed int
+	complete  bool
+}
+
+// PartialUpsertError reports an upsert that used its row limit. Completed lists
+// conversations with a checkpoint or without a manifest entry. Incomplete lists
+// conversations with rows for a later upsert. Unstarted lists the Incomplete
+// conversations that this upsert did not process. Failed lists conversations that
+// failed for another reason. Failures lists their errors in the same order.
+type PartialUpsertError struct {
+	Completed  []string
+	Incomplete []string
+	Unstarted  []string
+	Failed     []string
+	Failures   []error
+}
+
+// record adds a conversation result to the matching list. It returns errors that stop the
+// upsert.
+func (e *PartialUpsertError) record(conversationID string, result conversationUpsert, err error) error {
+	if errors.Is(err, ErrUnprovenStoppedWrite) || errors.Is(err, errCheckpointWrite) {
+		e.Failed = append(e.Failed, conversationID)
+		e.Failures = append(e.Failures, err)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if result.complete {
+		e.Completed = append(e.Completed, conversationID)
+		return nil
+	}
+	e.Incomplete = append(e.Incomplete, conversationID)
+	return nil
+}
+
+// Error reports the conversation counts and each failure.
+func (e *PartialUpsertError) Error() string {
+	summary := fmt.Sprintf("upsert used its row limit with %d incomplete and %d failed conversations", len(e.Incomplete), len(e.Failed))
+	if len(e.Failures) == 0 {
+		return summary
+	}
+	return summary + ": " + errors.Join(e.Failures...).Error()
+}
+
+// Unwrap returns the errors of the failed conversations.
+func (e *PartialUpsertError) Unwrap() []error {
+	return e.Failures
+}
+
+// upsertConversation writes rows for one claimed conversation. It creates a write
+// record before writing the first row. The checkpoint completes the write. If the
+// manifest omits the conversation, the record remains. A positive rowLimit can stop
+// the write before the checkpoint.
+func (c *Client) upsertConversation(
+	ctx context.Context,
+	collectionName string,
+	conversationID string,
+	docs []semsearch.SemDoc,
+	fingerprints map[string]string,
+	batch *storedBatch,
+	stats *ingestStats,
+	rowLimit int,
+) (conversationUpsert, error) {
+	result := conversationUpsert{written: 0, processed: 0, complete: false}
+	families, err := conversationFamilies(conversationID, docs)
+	if err != nil {
+		slog.WarnContext(ctx, "conversation.vectorsearch.plan_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"conversation_id", conversationID,
+			"err", err,
+		)
+		return result, err
+	}
+	proofs := familyProofs(families, c.embeddingModel)
+	stopped, err := c.checkpoint.stoppedWrites(collectionName, conversationID)
+	if err != nil {
+		return result, fmt.Errorf("conversation %s: %w: %w", conversationID, ErrUnprovenStoppedWrite, err)
+	}
+	stoppedKeys := stoppedFamilies(stopped, proofs)
+	state := batch.state(conversationID)
+	if unproven := state.unprovenFamilies(families, stoppedKeys); len(unproven) > 0 {
+		return result, fmt.Errorf("conversation %s families %v: %w", conversationID, unproven, ErrUnprovenStoppedWrite)
+	}
+	chunks, fills := c.planConversation(families, state, markedFamilies(stopped))
+	fingerprint, inManifest := fingerprints[conversationID]
+	var active *storedWrite
+	if len(chunks) > 0 {
+		started, beginErr := c.checkpoint.beginWrite(collectionName, conversationID, fingerprint, plannedFamilyProofs(conversationID, chunks, proofs))
+		if beginErr != nil {
+			return result, fmt.Errorf("record the write of %s: %w", conversationID, beginErr)
+		}
+		active = &started
+	}
+	writer := newRowWriter(c, collectionName)
+	storedChild := func(chunk storedChunk) bool {
+		return state.hasRow(chunkFamilyKey(conversationID, chunk.RelativePath), chunkID(chunk))
+	}
+	processed, unwritten, err := c.embedAndWrite(ctx, chunks, batch.reuse, writer, stats, rowLimit, storedChild)
+	result.written = writer.written
+	result.processed = processed
+	if err != nil {
+		return result, err
+	}
+	filled, err := c.fillUnknownTimes(ctx, collectionName, fills)
+	if err != nil {
+		return result, err
+	}
+	stats.timesFilled += filled
+	if len(unwritten) > 0 {
+		// The record of this slice lists each family with unwritten rows.
+		c.checkpoint.supersedeStoppedWrites(collectionName, conversationID, active, stopped, proofs)
+		c.saveSliceProgress(collectionName, conversationID, docs, fingerprint, chunks[:min(processed, len(chunks))], unwritten, batch)
+		return result, nil
+	}
+	result.complete = true
+	if !inManifest {
+		return result, nil
+	}
+	if err := c.checkpoint.commitWrite(collectionName, conversationID, fingerprint, active, stopped, proofs); err != nil {
+		return result, fmt.Errorf("conversation %s: %w: %w", conversationID, errCheckpointWrite, err)
+	}
+	return result, nil
 }
 
 func (c *Client) nextJobID() string {
@@ -202,41 +433,69 @@ func groupDocuments(docs []semsearch.SemDoc) (map[string][]semsearch.SemDoc, []s
 	return byConversation, order, nil
 }
 
-// planConversation includes edited text because a stored row does not prove
-// that the current message text has been ingested.
-func (c *Client) planConversation(conversationID string, docs []semsearch.SemDoc, state *conversationState) ([]storedChunk, map[string]matchedRow, error) {
-	generated := make([]storedChunk, 0)
-	fills := make(map[string]matchedRow)
+// deliveredOrder lists conversation IDs in the order of their first documents.
+// A row limit can stop a batch early. The worker orders delivery to select the next
+// conversation first.
+func deliveredOrder(docs []semsearch.SemDoc) []string {
+	order := make([]string, 0)
 	for _, doc := range docs {
-		documentRows, err := documentChunks(doc, conversationChunkMaxBytes)
+		conversationID := strings.TrimSpace(doc.ConversationID)
+		if !slices.Contains(order, conversationID) {
+			order = append(order, conversationID)
+		}
+	}
+	return order
+}
+
+// conversationFamilies returns the message families that the documents generate.
+func conversationFamilies(conversationID string, docs []semsearch.SemDoc) ([]chunkFamily, error) {
+	generated := make([]storedChunk, 0)
+	for _, doc := range docs {
+		documentRows, err := documentChunks(doc)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		generated = append(generated, documentRows...)
 	}
-	chunks := make([]storedChunk, 0, len(generated))
+	return groupFamilies(conversationID, generated), nil
+}
+
+// planConversation includes edited text when stored rows do not prove that ingestion
+// has stored the current message. The interrupted set lists families with unfinished
+// writes. Without that evidence, a stored prefix can represent a complete older
+// version, and the plan preserves that family. The plan does not add rows for a path
+// with complete stored pieces, even when the split boundaries differ.
+func (c *Client) planConversation(families []chunkFamily, state *conversationState, interrupted map[string]struct{}) ([]storedChunk, map[string]matchedRow) {
+	chunks := make([]storedChunk, 0)
+	fills := make(map[string]matchedRow)
 	seen := make(map[string]struct{})
-	for _, family := range groupFamilies(conversationID, generated) {
+	for _, family := range families {
 		unchanged := state.present(family.Key) && !state.differs(family.Key, family.Chunks)
-		for _, chunk := range expandOverBudget(family.Chunks, c.byteBudget) {
-			id := chunkID(chunk)
-			if chunk.TimestampUnix != missingTimestampUnix && state.hasUnknownTimeRow(family.Key, id) {
-				fills[id] = matchedRow{relativePath: chunk.RelativePath, timestampUnix: chunk.TimestampUnix}
+		if _, stopped := interrupted[family.Key]; stopped && !state.hasOlderRow(family.Key) {
+			unchanged = false
+		}
+		for _, generated := range family.Chunks {
+			skipRows := unchanged || state.pathComplete(family.Key, generated)
+			for _, chunk := range expandOverBudget([]storedChunk{generated}, c.byteBudget) {
+				id := chunkID(chunk)
+				if chunk.TimestampUnix != missingTimestampUnix && state.hasUnknownTimeRow(family.Key, id) {
+					fills[id] = matchedRow{relativePath: chunk.RelativePath, timestampUnix: chunk.TimestampUnix}
+				}
+				if skipRows {
+					continue
+				}
+				if _, duplicate := seen[id]; duplicate {
+					continue
+				}
+				if state.hasRow(family.Key, id) {
+					continue
+				}
+				seen[id] = struct{}{}
+				chunks = append(chunks, chunk)
 			}
-			if unchanged {
-				continue
-			}
-			if _, duplicate := seen[id]; duplicate {
-				continue
-			}
-			if state.hasRow(family.Key, id) {
-				continue
-			}
-			seen[id] = struct{}{}
-			chunks = append(chunks, chunk)
 		}
 	}
-	return chunks, fills, nil
+	return chunks, fills
 }
 
 // fillUnknownTimes writes known timestamps to matching stored rows after checking metadata.
