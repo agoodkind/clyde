@@ -62,8 +62,6 @@ func backlogFailureCheckpointFolder(t *testing.T, daemon *localProofDaemon, sess
 	return filepath.Dir(matches[0])
 }
 
-// daemonLogLines returns complete log lines containing event from both daemon
-// state roots and removes duplicate lines.
 func daemonLogLines(t *testing.T, home string, daemon *localProofDaemon, event string) []string {
 	t.Helper()
 	lines := []string{}
