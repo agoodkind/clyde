@@ -286,11 +286,15 @@ func (c *Client) WriteTimestampSourcePlans(ctx context.Context, collectionID str
 	if !isMilvus {
 		return 0, ErrTimestampRepairUnsupported
 	}
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+	if trimmedCollectionID == "" {
+		return 0, errors.New("collection ID is empty")
+	}
 	updates := make([]timestampUpdate, 0)
 	for _, plan := range plans {
 		updates = append(updates, plan.updates...)
 	}
-	collectionName := CollectionName(strings.TrimSpace(collectionID))
+	collectionName := CollectionName(trimmedCollectionID)
 	report := TimestampRepairReport{Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0, RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0}
 	if milvus.shared == nil {
 		err := writeSourceTimestamps(ctx, c, milvus, collectionName, updates, &report)
