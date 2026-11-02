@@ -334,16 +334,12 @@ func TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait(t *testi
 	if err := syscall.Mkfifo(pipePath, 0o600); err != nil {
 		t.Fatalf("The test could not create the named pipe: %v.", err)
 	}
-	// A nonblocking open succeeds before a writer exists. Later reads block until the
-	// request writes data or closes the pipe.
+	// A nonblocking open succeeds before a writer exists.
 	pipe, err := os.OpenFile(pipePath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		t.Fatalf("The test could not open the named pipe: %v.", err)
 	}
 	defer func() { _ = pipe.Close() }()
-	if err := syscall.SetNonblock(int(pipe.Fd()), false); err != nil {
-		t.Fatalf("The test could not enable blocking reads on the named pipe: %v.", err)
-	}
 	otherEnsure := collection.EnsureRequest{
 		Collection: otherCreationCollection,
 		Declaration: collection.Declaration{
@@ -354,7 +350,7 @@ func TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait(t *testi
 	}
 	otherFinished := make(chan error, 1)
 	go func() { otherFinished <- store.EnsureCollection(context.Background(), otherEnsure) }()
-	waitForOtherCreationFiles(t, otherDirectory)
+	waitForPipeWriter(t, pipe)
 
 	if err := lock.Close(); err != nil {
 		t.Fatalf("The test could not release the exclusive kernel lock: %v.", err)
@@ -407,23 +403,33 @@ func finishOtherCreation(t *testing.T, directory string, finished <-chan error) 
 	}
 }
 
-// waitForOtherCreationFiles waits until the other request creates its row log. That
-// request owns the store mutex from this point until the test reads the named pipe.
-func waitForOtherCreationFiles(t *testing.T, directory string) {
+// waitForPipeWriter reads the first header byte before enabling blocking reads.
+// The other request owns the store mutex while it writes the header. Before the
+// writer opens the pipe, reads return end of file. Reading until end of file then
+// would stop before the writer starts. The writer would block when the pipe fills.
+func waitForPipeWriter(t *testing.T, pipe *os.File) {
 	t.Helper()
+	descriptor := int(pipe.Fd())
+	if err := syscall.SetNonblock(descriptor, true); err != nil {
+		t.Fatalf("The test could not enable nonblocking reads on the named pipe: %v.", err)
+	}
+	firstByte := make([]byte, 1)
 	deadline := time.Now().Add(lockTestResumeLimit)
 	for {
-		matches, err := filepath.Glob(filepath.Join(directory, "rows*.log"))
-		if err != nil {
-			t.Fatalf("The test could not list the other collection files: %v.", err)
+		count, err := syscall.Read(descriptor, firstByte)
+		if count > 0 {
+			break
 		}
-		if len(matches) > 0 {
-			return
+		if err != nil && !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EINTR) {
+			t.Fatalf("The test could not read the named pipe: %v.", err)
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("The other request did not create a row log within %v.", lockTestResumeLimit)
+			t.Fatalf("The test did not read the first header byte within %v.", lockTestResumeLimit)
 		}
 		time.Sleep(lockPollDelay)
+	}
+	if err := syscall.SetNonblock(descriptor, false); err != nil {
+		t.Fatalf("The test could not enable blocking reads on the named pipe: %v.", err)
 	}
 }
 
