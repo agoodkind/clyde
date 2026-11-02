@@ -54,10 +54,8 @@ func (stored *codeCollection) compact() error {
 	stored.dataFile = dataOut
 	stored.dataSize = dataSize
 	stored.logSize = rowsInfo.Size()
-	// compact has published the new header and must keep the new generation's files.
-	// If recordHeaderIdentity fails, compact finishes switching its state to those
-	// files and removes the previous generation before returning the error.
-	// When headerInfo is nil, the next operation rebuilds the state from the files.
+	// After header replacement, the header selects the new generation. Keep its files
+	// even if recordHeaderIdentity fails.
 	identityErr := stored.recordHeaderIdentity()
 	for position, offset := range offsets {
 		stored.rows[position].dataOffset = offset
