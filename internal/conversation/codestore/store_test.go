@@ -130,7 +130,7 @@ func TestReopenedStoreRanksSavedRowsAndDropsAnInterruptedWrite(t *testing.T) {
 	if err := recovered.Upsert(ctx, testCollection, declaration(), rows[1:2]); err != nil {
 		t.Fatalf("Upsert after interrupted write: %v", err)
 	}
-	if count, err := recovered.Load(testCollection); err != nil || count != 3 {
+	if count, err := recovered.Load(ctx, testCollection); err != nil || count != 3 {
 		t.Fatalf("Load = %d, %v; want 3 rows", count, err)
 	}
 }

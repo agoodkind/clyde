@@ -19,12 +19,11 @@ func (store *Store) UpdateRows(ctx context.Context, name string, ids []string, c
 	if err := ctx.Err(); err != nil {
 		return 0, failed("update rows of "+name, err)
 	}
-	stored, err := store.collection(name)
+	stored, unlock, err := store.lockedCollection(ctx, name)
 	if err != nil {
 		return 0, err
 	}
-	stored.mutex.Lock()
-	defer stored.mutex.Unlock()
+	defer unlock()
 	records := make([]rowRecord, 0, len(ids))
 	blobs := make([][]byte, 0, len(ids))
 	for _, id := range ids {

@@ -1,6 +1,7 @@
 package codestore_test
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -39,6 +40,13 @@ func writeLegacyHeader(t *testing.T, root string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "collection.json"), encoded, 0o600); err != nil {
 		t.Fatalf("write legacy header: %v", err)
+	}
+	// The earlier EnsureCollection created both empty generation files in the same
+	// operation as the header write. This loop reproduces those empty files.
+	for _, name := range []string{"rows.log", "data.log"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatalf("The test could not create the legacy generation file: %v.", err)
+		}
 	}
 }
 
@@ -147,7 +155,7 @@ func TestStoreRefusesRowLogWithCorruptFirstRecordLength(t *testing.T) {
 
 	corrupted := openStore(t, root)
 	defer corrupted.Close()
-	if count, err := corrupted.Load(testCollection); err == nil {
+	if count, err := corrupted.Load(context.Background(), testCollection); err == nil {
 		t.Fatalf("Load = %d rows, want an error for a corrupt first record length", count)
 	}
 	if got := fileSize(t, path); got != sizeBefore {
@@ -192,7 +200,7 @@ func TestStoreTruncatesZeroFilledRowLogTail(t *testing.T) {
 
 			reopened := openStore(t, root)
 			defer reopened.Close()
-			if count, err := reopened.Load(testCollection); err != nil || count != 2 {
+			if count, err := reopened.Load(context.Background(), testCollection); err != nil || count != 2 {
 				t.Fatalf("Load = %d, %v; want 2 rows", count, err)
 			}
 			got := contents(t, reopened)
@@ -232,7 +240,7 @@ func TestLegacyFrameCollectionAppendsAndCompactsToLengthCheckedFrames(t *testing
 	}
 
 	reopened := openStore(t, root)
-	if count, err := reopened.Load(testCollection); err != nil || count != rowCount {
+	if count, err := reopened.Load(context.Background(), testCollection); err != nil || count != rowCount {
 		t.Fatalf("Load = %d, %v; want %d rows", count, err, rowCount)
 	}
 	for round := 1; round < rounds; round++ {
