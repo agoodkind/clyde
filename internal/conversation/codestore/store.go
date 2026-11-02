@@ -196,12 +196,12 @@ func (store *Store) createCollection(ctx context.Context, request collection.Ens
 	if err != nil {
 		return err
 	}
-	// createCollection has the exclusive kernel lock and the store mutex while it
-	// checks whether Close ran, checks the header, and creates the collection directory,
-	// generation files, and header if the header is missing. Close has the store mutex
-	// while it marks the store closed. If Close has marked the store closed,
-	// createCollection returns ErrStoreClosed without creating collection files.
-	// Otherwise, creation finishes before Close returns.
+	// createCollection acquires the exclusive kernel lock, then the store mutex.
+	// If Close has marked the store closed, createCollection returns ErrStoreClosed
+	// without creating collection files. If the request context ended during either
+	// wait, createCollection returns an error without creating collection files.
+	// Otherwise, creation finishes before Close returns because Close needs the store
+	// mutex to mark the store closed.
 	lock, err := lockCollectionDirectory(ctx, dir)
 	if err != nil {
 		return err
@@ -211,6 +211,9 @@ func (store *Store) createCollection(ctx context.Context, request collection.Ens
 	defer store.mutex.Unlock()
 	if store.closed {
 		return ErrStoreClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return failed("create collection "+request.Collection, err)
 	}
 	_, _, err = readHeader(dir)
 	if !errors.Is(err, collection.ErrCollectionMissing) {

@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -23,6 +25,10 @@ const (
 	twoStoresCompactRows = 10002
 	readWaitObservation  = 300 * time.Millisecond
 	lockTestResumeLimit  = 30 * time.Second
+	lockPollDelay        = 5 * time.Millisecond
+	// fullPipeHeaderBytes makes a header larger than any pipe buffer on macOS or Linux.
+	fullPipeHeaderBytes     = 1 << 20
+	otherCreationCollection = "other_creation_collection"
 )
 
 // TestTwoStoresKeepEachOthersRows alternates writes between two stores on one root.
@@ -293,6 +299,165 @@ func TestEnsureCollectionCreatesNothingAfterCancellation(t *testing.T) {
 		t.Fatalf("EnsureCollection did not end within %v after cancellation.", lockTestResumeLimit)
 	}
 	requireNoCollection(t, root)
+}
+
+// TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait blocks a second
+// collection's header write with a full named pipe while that request owns the store
+// mutex. The first request owns its kernel lock and waits for the store mutex when
+// the test cancels its context. The test checks that EnsureCollection returns an error
+// matching context.Canceled and does not create collection files.
+func TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait(t *testing.T) {
+	root := t.TempDir()
+	store, err := codestore.Open(root, staticembed.ModelName)
+	if err != nil {
+		t.Fatalf("codestore.Open failed to open the store: %v.", err)
+	}
+	defer store.Close()
+	lock := createCollectionLock(t, root)
+	defer func() { _ = lock.Close() }()
+	waiting, cancelWait := context.WithCancel(context.Background())
+	defer cancelWait()
+	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
+	finished := make(chan error, 1)
+	go func() { finished <- store.EnsureCollection(waiting, ensure) }()
+	select {
+	case err := <-finished:
+		t.Fatalf("EnsureCollection returned %v before the test released the exclusive kernel lock.", err)
+	case <-time.After(readWaitObservation):
+	}
+
+	otherDirectory := filepath.Join(root, otherCreationCollection)
+	if err := os.Mkdir(otherDirectory, 0o700); err != nil {
+		t.Fatalf("The test could not create the other collection directory: %v.", err)
+	}
+	pipePath := filepath.Join(otherDirectory, "collection.json.tmp")
+	if err := syscall.Mkfifo(pipePath, 0o600); err != nil {
+		t.Fatalf("The test could not create the named pipe: %v.", err)
+	}
+	// A nonblocking open succeeds before a writer exists. Later reads block until the
+	// request writes data or closes the pipe.
+	pipe, err := os.OpenFile(pipePath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatalf("The test could not open the named pipe: %v.", err)
+	}
+	defer func() { _ = pipe.Close() }()
+	if err := syscall.SetNonblock(int(pipe.Fd()), false); err != nil {
+		t.Fatalf("The test could not enable blocking reads on the named pipe: %v.", err)
+	}
+	otherEnsure := collection.EnsureRequest{
+		Collection: otherCreationCollection,
+		Declaration: collection.Declaration{
+			ItemIDColumn: "",
+			Scalars:      []collection.ScalarColumn{{Name: strings.Repeat("c", fullPipeHeaderBytes), Type: collection.ScalarTypeString, Nullable: true, MaxLength: 0}},
+		},
+		Dimension: staticembed.Dimensions,
+	}
+	otherFinished := make(chan error, 1)
+	go func() { otherFinished <- store.EnsureCollection(context.Background(), otherEnsure) }()
+	waitForOtherCreationFiles(t, otherDirectory)
+
+	if err := lock.Close(); err != nil {
+		t.Fatalf("The test could not release the exclusive kernel lock: %v.", err)
+	}
+	waitForHeldCollectionLock(t, root)
+	cancelWait()
+	drained := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, pipe)
+		drained <- err
+	}()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("EnsureCollection returned %v; the test expected an error matching context.Canceled.", err)
+		}
+	case <-time.After(lockTestResumeLimit):
+		t.Fatalf("EnsureCollection did not end within %v after cancellation.", lockTestResumeLimit)
+	}
+	requireNoCollection(t, root)
+	if err := <-drained; err != nil {
+		t.Fatalf("The test could not read the named pipe: %v.", err)
+	}
+	if err := pipe.Close(); err != nil {
+		t.Fatalf("The test could not close the named pipe: %v.", err)
+	}
+	finishOtherCreation(t, otherDirectory, otherFinished)
+}
+
+// finishOtherCreation ends the other request. On macOS, fsync accepts the named pipe and
+// the request renames the pipe to the header. The test opens and closes that pipe to give
+// a waiting reader an end of file.
+func finishOtherCreation(t *testing.T, directory string, finished <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(lockTestResumeLimit)
+	for {
+		select {
+		case <-finished:
+			return
+		default:
+		}
+		// The header can be absent because the request can fail before renaming the pipe.
+		if header, err := os.OpenFile(filepath.Join(directory, "collection.json"), os.O_RDWR, 0); err == nil {
+			_ = header.Close()
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("The other request did not end within %v.", lockTestResumeLimit)
+		}
+		time.Sleep(lockPollDelay)
+	}
+}
+
+// waitForOtherCreationFiles waits until the other request creates its row log. That
+// request owns the store mutex from this point until the test reads the named pipe.
+func waitForOtherCreationFiles(t *testing.T, directory string) {
+	t.Helper()
+	deadline := time.Now().Add(lockTestResumeLimit)
+	for {
+		matches, err := filepath.Glob(filepath.Join(directory, "rows*.log"))
+		if err != nil {
+			t.Fatalf("The test could not list the other collection files: %v.", err)
+		}
+		if len(matches) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("The other request did not create a row log within %v.", lockTestResumeLimit)
+		}
+		time.Sleep(lockPollDelay)
+	}
+}
+
+// waitForHeldCollectionLock waits until another request keeps the collection lock for
+// readWaitObservation. A request keeps that lock while it waits for the store mutex.
+func waitForHeldCollectionLock(t *testing.T, root string) {
+	t.Helper()
+	probe, err := os.OpenFile(filepath.Join(root, testCollection+".lock"), os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("The test could not open the collection lock file: %v.", err)
+	}
+	defer func() { _ = probe.Close() }()
+	deadline := time.Now().Add(lockTestResumeLimit)
+	heldSince := time.Time{}
+	for {
+		lockErr := syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		switch {
+		case lockErr == nil:
+			heldSince = time.Time{}
+			if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_UN); err != nil {
+				t.Fatalf("The test could not release its lock probe: %v.", err)
+			}
+		case !errors.Is(lockErr, syscall.EWOULDBLOCK):
+			t.Fatalf("The test could not probe the collection lock: %v.", lockErr)
+		case heldSince.IsZero():
+			heldSince = time.Now()
+		case time.Since(heldSince) >= readWaitObservation:
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("The request did not keep the collection lock within %v.", lockTestResumeLimit)
+		}
+		time.Sleep(lockPollDelay)
+	}
 }
 
 // TestEnsureCollectionCreatesNothingAfterClose starts EnsureCollection while the test
