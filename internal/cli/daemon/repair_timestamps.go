@@ -420,7 +420,7 @@ func newSourceRepairTotals() *vectorsearch.TimestampSourceRepairReport {
 
 // loadStoreSource builds semantic documents from a provider's source store messages.
 func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampSourceRepairSource, error) {
-	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, CopyDocuments: nil, ToolCalls: nil, ToolCallsComplete: false, GroupedUsers: nil, ActualUsers: nil, Transcript: vectorsearch.SourceTranscript{Calls: nil, Users: nil}, Corrections: nil}
+	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, CopyDocuments: nil, ToolCalls: nil, ToolCallsComplete: false, MissingNativeRecords: 0, GroupedUsers: nil, ActualUsers: nil, Transcript: vectorsearch.SourceTranscript{Calls: nil, Users: nil}, Corrections: nil}
 	reader, found := daemonsvc.ConversationSourceStoreReader(record.Provider)
 	if !found {
 		return empty, fmt.Errorf("source store reader is unavailable for provider %q", record.Provider)
@@ -431,6 +431,10 @@ func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conve
 	if err != nil {
 		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.source_store_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "err", err)
 		return empty, fmt.Errorf("read source store messages: %w", err)
+	}
+	if run.correction != nil && source.MissingNativeRecords > 0 {
+		slog.WarnContext(ctx, "cli.daemon.repair_timestamps.correction_native_records_missing", "concern", "cli.daemon", "component", "cli", "conversation_id", record.ID, "missing", source.MissingNativeRecords)
+		return empty, fmt.Errorf("cannot correct timestamps with missing native records: %d", source.MissingNativeRecords)
 	}
 	messages := source.Messages
 	if !stored {
@@ -456,6 +460,7 @@ func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conve
 	}
 	empty.CopyDocuments = copies.Docs
 	empty.ToolCallsComplete = source.ToolCallsComplete
+	empty.MissingNativeRecords = source.MissingNativeRecords
 	empty.GroupedUsers = source.GroupedUsers
 	empty.ActualUsers = source.ActualUsers
 	empty.ToolCalls = make([]vectorsearch.SourceToolTime, 0, len(source.ToolCalls))

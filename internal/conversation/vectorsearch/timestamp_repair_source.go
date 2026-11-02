@@ -33,6 +33,8 @@ type TimestampSourceRepairSource struct {
 	// ToolCalls contains native tool calls in source order.
 	ToolCalls         []SourceToolTime
 	ToolCallsComplete bool
+	// MissingNativeRecords counts native records that the source store references but does not contain.
+	MissingNativeRecords int
 	// GroupedUsers records user turns under the message numbering that combines
 	// consecutive native assistant messages.
 	GroupedUsers []transcript.UserTurn
@@ -368,16 +370,17 @@ type sourceTimeLookup struct {
 	texts    *transcript.SourceTimeIndex
 	thinking map[string][]int64
 	// fields indexes source text and thinking by role and family kind.
-	fields            map[string][]sourceField
-	matchText         func(role string, text string) string
-	toolCalls         []SourceToolTime
-	toolCallsComplete bool
-	groupedUsers      []transcript.UserTurn
-	actualUsers       []transcript.UserTurn
-	transcript        SourceTranscript
-	toolBindings      map[string]toolBinding
-	emptySource       bool
-	corrections       map[string]TimestampCorrectionGuard
+	fields               map[string][]sourceField
+	matchText            func(role string, text string) string
+	toolCalls            []SourceToolTime
+	toolCallsComplete    bool
+	missingNativeRecords int
+	groupedUsers         []transcript.UserTurn
+	actualUsers          []transcript.UserTurn
+	transcript           SourceTranscript
+	toolBindings         map[string]toolBinding
+	emptySource          bool
+	corrections          map[string]TimestampCorrectionGuard
 }
 
 type toolBinding struct {
@@ -396,7 +399,7 @@ type sourceField struct {
 func newSourceTimeLookup(source TimestampSourceRepairSource) sourceTimeLookup {
 	lookup := sourceTimeLookup{
 		texts: nil, thinking: map[string][]int64{}, fields: map[string][]sourceField{}, matchText: source.MatchText,
-		toolCalls: source.ToolCalls, toolCallsComplete: source.ToolCallsComplete, toolBindings: map[string]toolBinding{},
+		toolCalls: source.ToolCalls, toolCallsComplete: source.ToolCallsComplete, missingNativeRecords: source.MissingNativeRecords, toolBindings: map[string]toolBinding{},
 		groupedUsers: source.GroupedUsers, actualUsers: source.ActualUsers, transcript: source.Transcript,
 		emptySource: len(source.Documents) == 0 && len(source.CopyDocuments) == 0 && len(source.ToolCalls) == 0,
 		corrections: source.Corrections,
@@ -545,6 +548,8 @@ const (
 	SourceOutcomeSourceFragment = "source_fragment"
 	// SourceOutcomeMissingSource indicates that the source contains no matching material.
 	SourceOutcomeMissingSource = "missing_source"
+	// SourceOutcomeNativeGap reports that missing native records prevent timestamp repair for a family.
+	SourceOutcomeNativeGap = "native_gap_unproven"
 	// SourceOutcomeIdentityUnavailable indicates that native tool state is incomplete.
 	SourceOutcomeIdentityUnavailable = "native_identity_unavailable"
 	// SourceOutcomeSequenceMismatch indicates that tool family counts or names differ.
@@ -636,6 +641,10 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 	slices.Sort(ids)
 	evidence := &SourceRepairEvidence{ConversationID: conversationID, Family: key, Rows: ids, Outcome: "", Candidates: nil, Chosen: 0, Match: "", ToolCallID: "", ToolProjection: ""}
 	family := &pendingFamily{order: familyOrder(key), rows: zeroTime, evidence: evidence}
+	if lookup.missingNativeRecords > 0 {
+		evidence.Outcome = SourceOutcomeNativeGap
+		return family, dated
+	}
 	if binding, found := lookup.toolBindings[key]; found && binding.component && !lookup.emptySource {
 		bindingOutcome(binding, evidence)
 		return family, dated

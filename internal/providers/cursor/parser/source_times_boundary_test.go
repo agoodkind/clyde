@@ -317,8 +317,7 @@ func TestTranscriptToolCallsStayUndatedWhenRootsDifferInFullInput(t *testing.T) 
 	requireToolTimes(t, boundaryToolTimes(t, transcriptPath), [][]time.Time{{minuteAfterTen(1)}})
 }
 
-// TestSourceStoreMessagesReportsAMissingNativeRecord checks the error for a missing
-// native record and the timestamps returned by transcript streaming.
+// TestSourceStoreMessagesReportsAMissingNativeRecord checks that source reads return the missing native record count without an error and transcript streaming leaves the tool call undated.
 func TestSourceStoreMessagesReportsAMissingNativeRecord(t *testing.T) {
 	rootDir, transcriptPath := boundaryRoots(t, []string{
 		userLine(t, boundaryFirstRequest),
@@ -333,8 +332,12 @@ func TestSourceStoreMessagesReportsAMissingNativeRecord(t *testing.T) {
 		Lineage: nil, Origin: conversation.OriginUnspecified, Title: "", TitleUncertain: false, WorkspaceRoot: "",
 		ArtifactPath: "", ArtifactKind: "", Model: "", CreatedAt: time.Time{}, UpdatedAt: time.Time{}, SizeBytes: 0, Archived: false, LatestRequestID: "",
 	}
-	if _, found, err := parser.New().SourceStoreMessages(t.Context(), record, sourceRootLoadOptions()); err == nil {
-		t.Fatalf("source store did not report a missing native record; found: %v", found)
+	source, found, err := parser.New().SourceStoreMessages(t.Context(), record, sourceRootLoadOptions())
+	if err != nil || !found {
+		t.Fatalf("cannot read source store with a missing native record; found, error: %v, %v", found, err)
+	}
+	if source.MissingNativeRecords != 1 || source.ToolCallsComplete {
+		t.Fatalf("native record gap differs; missing records, complete: %d, %v", source.MissingNativeRecords, source.ToolCallsComplete)
 	}
 	messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
 	if err != nil {
