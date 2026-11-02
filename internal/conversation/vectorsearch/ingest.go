@@ -85,8 +85,10 @@ func (c *Client) JobState(_ context.Context, jobID string) (string, error) {
 // no stored row. A stored vector with the same content and embedding model is
 // reused, and only content without a stored vector is embedded. After a
 // conversation's rows are written, its manifest fingerprint is recorded on disk.
-// If a checkpoint write fails, the call preserves written rows, processes the other
-// conversations, and returns the checkpoint errors after the batch finishes.
+// If a checkpoint write fails, the call keeps written rows and continues with the
+// other conversations. It returns the joined checkpoint errors when the batch ends.
+// If a later conversation fails during planning, row writing, embedding, or timestamp
+// repair, the call stops and returns that failure joined with earlier checkpoint errors.
 func (c *Client) UpsertConversationDocuments(
 	ctx context.Context,
 	collectionID string,
@@ -127,16 +129,22 @@ func (c *Client) UpsertConversationDocuments(
 	for _, conversationID := range order {
 		chunks, fills, planErr := c.planConversation(conversationID, byConversation[conversationID], batch.state(conversationID))
 		if planErr != nil {
-			return "", planErr
+			slog.WarnContext(ctx, "conversation.vectorsearch.plan_failed",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"conversation_id", conversationID,
+				"err", planErr,
+			)
+			return "", errors.Join(append(checkpointErrors, planErr)...)
 		}
 		writer := newRowWriter(c, collectionName)
 		if err := c.embedAndWrite(ctx, chunks, batch.reuse, writer, &stats); err != nil {
-			return "", err
+			return "", errors.Join(append(checkpointErrors, err)...)
 		}
 		stats.rowsWritten += writer.written
 		filled, fillErr := c.fillUnknownTimes(ctx, collectionName, fills)
 		if fillErr != nil {
-			return "", fillErr
+			return "", errors.Join(append(checkpointErrors, fillErr)...)
 		}
 		stats.timesFilled += filled
 		if writer.written > 0 {

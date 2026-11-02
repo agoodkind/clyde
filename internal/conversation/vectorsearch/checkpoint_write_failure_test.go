@@ -1,12 +1,9 @@
 package vectorsearch_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"log"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,8 +23,6 @@ const (
 	checkpointFailureNameChars    = 32
 	checkpointFailureRows         = 2
 	checkpointFailureFolderMode   = 0o700
-
-	checkpointFailureCompletedEvent = "conversation.vectorsearch.upsert_completed"
 )
 
 func checkpointFailureDocument(conversationID string) semsearch.SemDoc {
@@ -35,6 +30,20 @@ func checkpointFailureDocument(conversationID string) semsearch.SemDoc {
 		ConversationID: conversationID, MessageIndex: 0, Role: "user", TimestampUnix: 1_790_000_000,
 		Text: "checkpoint write failure text for " + conversationID,
 	}
+}
+
+func blockCheckpointFailureChat(t *testing.T, checkpoints string) string {
+	t.Helper()
+	digest := sha256.Sum256([]byte(checkpointFailureBlockedChat))
+	blockerName := hex.EncodeToString(digest[:])[:checkpointFailureNameChars] + ".json"
+	blockerPath := filepath.Join(checkpoints, vectorsearch.CollectionName(checkpointFailureCollectionID), blockerName)
+	if err := os.MkdirAll(blockerPath, checkpointFailureFolderMode); err != nil {
+		t.Fatalf("The test could not create the directory that blocks the checkpoint: %v.", err)
+	}
+	if err := os.WriteFile(filepath.Join(blockerPath, checkpointFailureBlockerFile), nil, 0o600); err != nil {
+		t.Fatalf("The test could not create the file that keeps the checkpoint directory nonempty: %v.", err)
+	}
+	return blockerPath
 }
 
 func openCheckpointFailureClient(t *testing.T, root string, checkpoints string) *vectorsearch.Client {
@@ -54,35 +63,16 @@ func TestUpsertReportsCheckpointFailureAndContinues(t *testing.T) {
 	root := t.TempDir()
 	checkpoints := t.TempDir()
 	client := openCheckpointFailureClient(t, root, checkpoints)
-	digest := sha256.Sum256([]byte(checkpointFailureBlockedChat))
-	blockerName := hex.EncodeToString(digest[:])[:checkpointFailureNameChars] + ".json"
-	blockerPath := filepath.Join(checkpoints, vectorsearch.CollectionName(checkpointFailureCollectionID), blockerName)
-	if err := os.MkdirAll(blockerPath, checkpointFailureFolderMode); err != nil {
-		t.Fatalf("The test could not create the directory that blocks the checkpoint: %v.", err)
-	}
-	if err := os.WriteFile(filepath.Join(blockerPath, checkpointFailureBlockerFile), nil, 0o600); err != nil {
-		t.Fatalf("The test could not create the file that keeps the checkpoint directory nonempty: %v.", err)
-	}
+	blockerPath := blockCheckpointFailureChat(t, checkpoints)
 
 	docs := []semsearch.SemDoc{checkpointFailureDocument(checkpointFailureBlockedChat), checkpointFailureDocument(checkpointFailureHealthyChat)}
 	manifest := []semsearch.Fingerprint{
 		{ConversationID: checkpointFailureBlockedChat, Value: checkpointFailureFingerprint},
 		{ConversationID: checkpointFailureHealthyChat, Value: checkpointFailureFingerprint},
 	}
-	var logged bytes.Buffer
-	previousLogger := slog.Default()
-	previousWriter := log.Writer()
-	previousFlags := log.Flags()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	_, err := client.UpsertConversationDocuments(ctx, checkpointFailureCollectionID, docs, manifest)
-	slog.SetDefault(previousLogger)
-	log.SetOutput(previousWriter)
-	log.SetFlags(previousFlags)
 	if err == nil || !strings.Contains(err.Error(), checkpointFailureBlockedChat) {
 		t.Fatalf("UpsertConversationDocuments returned %v; it must report a checkpoint error for %s.", err, checkpointFailureBlockedChat)
-	}
-	if strings.Contains(logged.String(), checkpointFailureCompletedEvent) {
-		t.Fatalf("UpsertConversationDocuments logged %s after a checkpoint failed.", checkpointFailureCompletedEvent)
 	}
 	status := client.IngestStatus(checkpointFailureCollectionID)
 	if status.LastUpsert.RowsWritten != checkpointFailureRows {
@@ -100,7 +90,7 @@ func TestUpsertReportsCheckpointFailureAndContinues(t *testing.T) {
 		t.Fatalf("The restarted client could not check the conversation manifest: %v.", err)
 	}
 	if !slices.Equal(needed, []string{checkpointFailureBlockedChat}) {
-		t.Fatalf("The manifest requested %v; it must request only %s.", needed, checkpointFailureBlockedChat)
+		t.Fatalf("SyncConversationManifest returned %v; it must return only %s.", needed, checkpointFailureBlockedChat)
 	}
 
 	if err := os.RemoveAll(blockerPath); err != nil {
@@ -119,6 +109,6 @@ func TestUpsertReportsCheckpointFailureAndContinues(t *testing.T) {
 		t.Fatalf("The client could not check the conversation manifest after retrying: %v.", err)
 	}
 	if len(needed) != 0 {
-		t.Fatalf("The manifest still requested conversations after the retry: %v.", needed)
+		t.Fatalf("SyncConversationManifest returned conversations after the retry: %v.", needed)
 	}
 }

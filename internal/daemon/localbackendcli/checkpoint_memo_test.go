@@ -1,5 +1,3 @@
-//go:build milvusintegration
-
 package localbackendcli_test
 
 import (
@@ -17,8 +15,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"goodkind.io/clyde/internal/conversation/vectorsearch/milvustest"
 )
 
 const (
@@ -28,8 +24,9 @@ const (
 	memoBatchFolderMode      = 0o700
 	memoBatchCheckpointChars = 32
 	memoBatchPollDelay       = 100 * time.Millisecond
-	memoBatchWaitLimit       = 10 * time.Minute
+	memoBatchWaitLimit       = 5 * time.Minute
 	memoBatchPassEvent       = "daemon.conversation_semantic_sync.pass_completed"
+	memoBatchMessageTime     = "2026-05-02T10:00:00Z"
 	memoBatchFirstAge        = 6 * time.Hour
 	memoBatchSecondAge       = 5 * time.Hour
 	memoBatchThirdAge        = 4 * time.Hour
@@ -46,54 +43,34 @@ type memoBatchPassRecord struct {
 }
 
 type memoBatchFixture struct {
-	t              *testing.T
-	home           string
-	daemon         *localProofDaemon
-	collectionName string
-	version        int
+	t      *testing.T
+	home   string
+	daemon *localProofDaemon
 }
 
-func memoBatchLine(session string, text string, modified time.Time) string {
+func memoBatchLine(session string, text string) string {
 	return fmt.Sprintf(`{"type":"user","message":{"role":"user","content":%q},"sessionId":%q,"cwd":%q,"uuid":"00000000-0000-4000-8000-%012x","timestamp":%q}`+"\n",
-		text, session, memoBatchWorkspace, len(session), modified.Format(time.RFC3339))
+		text, session, memoBatchWorkspace, len(session), memoBatchMessageTime)
 }
 
-func (f *memoBatchFixture) projectFolder() string {
-	return filepath.Join(f.home, ".claude", "projects", strings.ReplaceAll(memoBatchWorkspace, "/", "-"))
-}
-
-// install replaces the project folder so a scan can read both conversations.
-func (f *memoBatchFixture) install(changedText string, otherText string, changedAge time.Duration, otherAge time.Duration) {
+// install writes a temporary transcript and renames it to the project transcript path.
+// It preserves the project folder and the other transcript.
+func (f *memoBatchFixture) install(session string, text string, age time.Duration) {
 	f.t.Helper()
-	f.version++
-	temporary := filepath.Join(f.home, fmt.Sprintf("memo-batch-%d", f.version))
-	if err := os.MkdirAll(temporary, memoBatchFolderMode); err != nil {
+	project := filepath.Join(f.home, ".claude", "projects", strings.ReplaceAll(memoBatchWorkspace, "/", "-"))
+	if err := os.MkdirAll(project, memoBatchFolderMode); err != nil {
 		f.t.Fatalf("The test could not create the transcript folder: %v.", err)
 	}
-	f.writeChat(temporary, memoBatchChangedSession, changedText, changedAge)
-	f.writeChat(temporary, memoBatchBlockedSession, otherText, otherAge)
-	project := f.projectFolder()
-	if err := os.MkdirAll(filepath.Dir(project), memoBatchFolderMode); err != nil {
-		f.t.Fatalf("The test could not create the parent projects folder: %v.", err)
-	}
-	previous := fmt.Sprintf("%s-previous-%d", temporary, f.version)
-	if err := os.Rename(project, previous); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		f.t.Fatalf("The test could not rename the existing transcript folder: %v.", err)
-	}
-	if err := os.Rename(temporary, project); err != nil {
-		f.t.Fatalf("The test could not rename the replacement transcript folder into place: %v.", err)
-	}
-}
-
-func (f *memoBatchFixture) writeChat(folder string, session string, text string, age time.Duration) {
-	f.t.Helper()
 	modified := time.Now().Add(-age)
-	path := filepath.Join(folder, session+".jsonl")
-	if err := os.WriteFile(path, []byte(memoBatchLine(session, text, modified)), 0o600); err != nil {
+	temporary := filepath.Join(f.home, session+".tmp")
+	if err := os.WriteFile(temporary, []byte(memoBatchLine(session, text)), 0o600); err != nil {
 		f.t.Fatalf("The test could not write the conversation transcript: %v.", err)
 	}
-	if err := os.Chtimes(path, modified, modified); err != nil {
+	if err := os.Chtimes(temporary, modified, modified); err != nil {
 		f.t.Fatalf("The test could not set the transcript file times: %v.", err)
+	}
+	if err := os.Rename(temporary, filepath.Join(project, session+".jsonl")); err != nil {
+		f.t.Fatalf("The test could not replace the project transcript with the temporary file: %v.", err)
 	}
 }
 
@@ -129,14 +106,31 @@ func (f *memoBatchFixture) waitFor(description string, check func() bool) {
 	}
 }
 
-func (f *memoBatchFixture) checkpointPath(session string) string {
+func memoBatchCheckpointName(session string) string {
 	digest := sha256.Sum256([]byte(localProofProviderClaude + ":" + session))
-	name := hex.EncodeToString(digest[:])[:memoBatchCheckpointChars] + ".json"
-	return filepath.Join(f.daemon.roots.State, "clyde", "conversation-semantic", "checkpoints", f.collectionName, name)
+	return hex.EncodeToString(digest[:])[:memoBatchCheckpointChars] + ".json"
+}
+
+func (f *memoBatchFixture) checkpointPath(session string) string {
+	f.t.Helper()
+	pattern := filepath.Join(f.daemon.roots.State, "clyde", "conversation-semantic", "checkpoints", "*", memoBatchCheckpointName(session))
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		f.t.Fatalf("The test could not search for the checkpoint: %v.", err)
+	}
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
 }
 
 func (f *memoBatchFixture) checkpoint(session string) string {
-	content, err := os.ReadFile(f.checkpointPath(session))
+	f.t.Helper()
+	path := f.checkpointPath(session)
+	if path == "" {
+		return ""
+	}
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
@@ -190,28 +184,33 @@ func (f *memoBatchFixture) passRecords() []memoBatchPassRecord {
 	return records
 }
 
-// TestMilvusFeederResendsChatAfterBatchFailureAfterCheckpoint checks retries with Milvus.
-// The first conversation has a delivery memo for content A. A batch saves its checkpoint
-// for content B before the second checkpoint fails. The conversation then returns to
-// content A with a new file time, and the daemon must send content A again.
-func TestMilvusFeederResendsChatAfterBatchFailureAfterCheckpoint(t *testing.T) {
-	milvustest.RequireEnabled(t)
-	address := milvustest.Start(t)
-	baseURL := os.Getenv(deletedSourceEmbeddingEnv)
-	if baseURL == "" {
-		baseURL = deletedSourceEmbeddingDefault
+func (f *memoBatchFixture) failedPassCount() int {
+	f.t.Helper()
+	count := 0
+	for _, record := range f.passRecords() {
+		if record.Failed > 0 {
+			count++
+		}
 	}
-	fixture := &memoBatchFixture{t: t, home: t.TempDir(), daemon: nil, collectionName: "", version: 0}
-	fixture.install(memoBatchContentA, memoBatchOtherContent, memoBatchFirstAge, memoBatchFirstAge)
+	return count
+}
+
+// TestLocalFeederResendsChatAfterBatchFailureAfterCheckpoint checks retries with a local
+// backend daemon running through the sandbox command. The first conversation has a
+// deliveredContent memo for content A. A batch saves its checkpoint for content B,
+// then fails at the second conversation's checkpoint. The first conversation then
+// returns to content A with a new file time. The test checks the daemon log for the
+// failed batch and the resend of content A.
+// It rejects conversation.vectorsearch.upsert_completed records that list rows from
+// the failed batch.
+func TestLocalFeederResendsChatAfterBatchFailureAfterCheckpoint(t *testing.T) {
+	fixture := &memoBatchFixture{t: t, home: t.TempDir(), daemon: nil}
+	fixture.install(memoBatchBlockedSession, memoBatchOtherContent, memoBatchFirstAge)
+	fixture.install(memoBatchChangedSession, memoBatchContentA, memoBatchFirstAge)
 	settingsPath := filepath.Join(t.TempDir(), "semantic-settings.toml")
-	settings := sandboxFastIntervals + fmt.Sprintf(withheldSettings, address, baseURL, deletedSourceEmbeddingModel, deletedSourceEmbeddingDim)
-	writeLocalProofFile(t, settingsPath, settings)
-	fixture.daemon = startLocalProofDaemon(t, buildClydeCLI(t), fixture.home, "--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath)
-	fixture.waitFor("the collection name", func() bool {
-		name, isText := fixture.statusCounter("semantic_settings.collection_name").(string)
-		fixture.collectionName = name
-		return isText && name != ""
-	})
+	writeLocalProofFile(t, settingsPath, sandboxFastIntervals)
+	localRoot := filepath.Join(t.TempDir(), "local-index")
+	fixture.daemon = startLocalProofDaemon(t, buildClydeCLI(t), fixture.home, "--local", "--local-root", localRoot, "--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath)
 	fixture.waitFor("the first delivery", func() bool {
 		return fixture.checkpoint(memoBatchChangedSession) != "" && fixture.checkpoint(memoBatchBlockedSession) != "" && fixture.noChatsNeeded()
 	})
@@ -225,18 +224,39 @@ func TestMilvusFeederResendsChatAfterBatchFailureAfterCheckpoint(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(blockerPath, "blocker"), memoBatchFolderMode); err != nil {
 		t.Fatalf("The test could not create the directory that blocks the checkpoint: %v.", err)
 	}
-	fixture.install(memoBatchContentB, memoBatchOtherChanged, memoBatchSecondAge, memoBatchSecondAge)
+	// The daemon keeps retrying the blocked conversation.
+	// A later edit adds the first conversation to a batch with that retry.
+	failedBatchStart := time.Now()
+	fixture.install(memoBatchBlockedSession, memoBatchOtherChanged, memoBatchSecondAge)
+	fixture.waitFor("the failed batch", func() bool {
+		return fixture.failedPassCount() > 0
+	})
+	// The failed batch writes rows for the blocked conversation. A completion record with
+	// those rows would report success for a batch that failed.
+	blockedRows := localProofProviderClaude + ":" + memoBatchBlockedSession + "="
+	for _, record := range readLocalProofUpserts(t, fixture.home, fixture.daemon.roots, failedBatchStart) {
+		listsBlockedRows := slices.ContainsFunc(record.WrittenConversations, func(written string) bool { return strings.HasPrefix(written, blockedRows) })
+		if listsBlockedRows {
+			t.Fatalf("The daemon log reports %s for a batch that failed at its checkpoint: %v.", localProofUpsertEvent, record.WrittenConversations)
+		}
+	}
+	fixture.install(memoBatchChangedSession, memoBatchContentB, memoBatchSecondAge)
 	checkpointB := ""
-	fixture.waitFor("the checkpoint of content B and the failed batch", func() bool {
+	fixture.waitFor("the checkpoint of content B", func() bool {
 		checkpointB = fixture.checkpoint(memoBatchChangedSession)
-		failed := slices.ContainsFunc(fixture.passRecords(), func(record memoBatchPassRecord) bool { return record.Failed > 0 })
-		return checkpointB != checkpointA && failed
+		return checkpointB != checkpointA
+	})
+	// The batch saves checkpoint B before the blocked conversation attempts its checkpoint.
+	// A new failed pass proves that the blocked checkpoint failed after checkpoint B.
+	failedPassCount := fixture.failedPassCount()
+	fixture.waitFor("a failed pass after the checkpoint of content B", func() bool {
+		return fixture.failedPassCount() > failedPassCount
 	})
 
 	if err := os.RemoveAll(blockerPath); err != nil {
 		t.Fatalf("The test could not remove the directory that blocks the checkpoint: %v.", err)
 	}
-	fixture.install(memoBatchContentA, memoBatchOtherChanged, memoBatchThirdAge, memoBatchSecondAge)
+	fixture.install(memoBatchChangedSession, memoBatchContentA, memoBatchThirdAge)
 	fixture.waitFor("the delivery of content A", func() bool {
 		if slices.ContainsFunc(fixture.passRecords(), func(record memoBatchPassRecord) bool { return record.UnchangedPinned > 0 }) {
 			t.Fatalf("The worker skipped the first conversation at content A while its checkpoint recorded content B.")
