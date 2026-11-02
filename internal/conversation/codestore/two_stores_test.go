@@ -679,7 +679,7 @@ func directoryNames(t *testing.T, directory string) []string {
 func requireStoreContents(t *testing.T, store *codestore.Store, want map[string]string) {
 	t.Helper()
 	got := contents(t, store)
-	if fmt.Sprint(got) != fmt.Sprint(want) {
+	if !maps.Equal(got, want) {
 		t.Fatalf("The store returned rows %v; the test expected %v.", got, want)
 	}
 }
