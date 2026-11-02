@@ -1,6 +1,7 @@
 package localbackendcli_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -80,9 +81,11 @@ func (f *memoBatchFixture) statusCounter(name string) any {
 	defer cancel()
 	command := exec.CommandContext(ctx, f.daemon.binaryPath, "status", "--output-format", "json")
 	command.Env = f.daemon.environment
+	var commandStderr bytes.Buffer
+	command.Stderr = &commandStderr
 	output, err := command.Output()
 	if err != nil {
-		return nil
+		f.t.Fatalf("The daemon status command failed: %v. The command wrote this stderr output: %s", err, commandStderr.String())
 	}
 	var status struct {
 		Counters map[string]struct {
