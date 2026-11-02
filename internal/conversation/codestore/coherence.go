@@ -150,12 +150,16 @@ func (stored *codeCollection) diskChanged() (bool, error) {
 	if err != nil {
 		return false, failed("inspect the row log in "+stored.dir, err)
 	}
-	return info.Size() != stored.logSize, nil
+	data, err := stored.dataFile.Stat()
+	if err != nil {
+		return false, failed("inspect the data file in "+stored.dir, err)
+	}
+	return info.Size() != stored.logSize || data.Size() < stored.dataSize, nil
 }
 
-// filesReplaced reports whether another file replaced the header or row log,
-// or whether the row log path is missing. A header replacement can change the
-// generation or declared columns.
+// filesReplaced reports whether another file replaced the header, row log, or data file.
+// It also reports whether the row log or data file path is missing. A replacement
+// header can change the generation or declared columns.
 func (stored *codeCollection) filesReplaced() (bool, error) {
 	header, err := os.Stat(filepath.Join(stored.dir, headerFileName))
 	if err != nil {
@@ -164,24 +168,34 @@ func (stored *codeCollection) filesReplaced() (bool, error) {
 	if !os.SameFile(stored.headerInfo, header) || !stored.headerInfo.ModTime().Equal(header.ModTime()) {
 		return true, nil
 	}
-	current, err := os.Stat(stored.rowsPath(stored.header.Generation))
+	rowsReplaced, err := pathReplaced(stored.rowsPath(stored.header.Generation), stored.rowsFile)
+	if err != nil || rowsReplaced {
+		return rowsReplaced, err
+	}
+	return pathReplaced(stored.dataPath(stored.header.Generation), stored.dataFile)
+}
+
+// pathReplaced reports whether path is missing or identifies a file other than
+// the open file.
+func pathReplaced(path string, opened *os.File) (bool, error) {
+	current, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
 	}
 	if err != nil {
-		return false, failed("inspect the row log in "+stored.dir, err)
+		return false, failed("inspect "+path, err)
 	}
-	opened, err := stored.rowsFile.Stat()
+	openedInfo, err := opened.Stat()
 	if err != nil {
-		return false, failed("inspect the row log in "+stored.dir, err)
+		return false, failed("the store could not inspect the open file for "+path, err)
 	}
-	return !os.SameFile(opened, current), nil
+	return !os.SameFile(openedInfo, current), nil
 }
 
 // syncWithDisk applies changes from other stores. The caller owns the collection
 // mutex and kernel lock. syncWithDisk applies new row log records in order.
-// If another file replaced the header or row log, or the row log became shorter,
-// syncWithDisk rebuilds the collection state from the files.
+// syncWithDisk rebuilds the collection state from disk when another file replaces
+// the header, row log, or data file, or when the row log or data file shrinks.
 func (stored *codeCollection) syncWithDisk() error {
 	if stored.headerInfo == nil {
 		return stored.reload()
@@ -197,12 +211,12 @@ func (stored *codeCollection) syncWithDisk() error {
 	if err != nil {
 		return failed("inspect the row log in "+stored.dir, err)
 	}
-	if info.Size() < stored.logSize {
-		return stored.reload()
-	}
 	data, err := stored.dataFile.Stat()
 	if err != nil {
 		return failed("inspect the data file in "+stored.dir, err)
+	}
+	if info.Size() < stored.logSize || data.Size() < stored.dataSize {
+		return stored.reload()
 	}
 	stored.dataSize = data.Size()
 	if info.Size() == stored.logSize {

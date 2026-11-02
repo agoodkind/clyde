@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"goodkind.io/clyde/internal/conversation/staticembed"
@@ -30,6 +31,15 @@ const (
 	compactMinimumDead = 10000
 	bufferBytes        = 1 << 20
 )
+
+// errGenerationWithoutHeader indicates that a generation file exists without a header.
+// Its message instructs the reader to restore the collection header from a backup.
+var errGenerationWithoutHeader = errors.New("a generation file exists but the collection header is missing; restore the header from a backup")
+
+// errDataFileTooShort is the error for a valid row record that references bytes
+// beyond the end of the data file. Recovery requires restoring the data file from
+// a backup.
+var errDataFileTooShort = errors.New("a row references bytes beyond the end of the data file; restore the data file from a backup")
 
 func failed(operation string, err error) error {
 	slog.Warn("conversation.codestore.operation_failed",
@@ -202,6 +212,9 @@ func readHeader(dir string) (collectionHeader, os.FileInfo, error) {
 	var header collectionHeader
 	file, err := os.Open(filepath.Join(dir, headerFileName))
 	if errors.Is(err, os.ErrNotExist) {
+		if storedErr := requireNoStoredGenerations(dir); storedErr != nil {
+			return header, nil, storedErr
+		}
 		return header, nil, collection.ErrCollectionMissing
 	}
 	if err != nil {
@@ -223,6 +236,39 @@ func readHeader(dir string) (collectionHeader, os.FileInfo, error) {
 		return header, nil, failed("parse the collection header in "+dir, fmt.Errorf("the code store does not support frame format %d", header.FrameFormat))
 	}
 	return header, info, nil
+}
+
+// requireNoStoredGenerations returns an error when a generation file exists
+// without a header. It allows empty generation 0 row and data files because
+// collection creation writes them before the header.
+func requireNoStoredGenerations(dir string) error {
+	emptyInitialFiles := map[string]bool{
+		generationFileName(rowsFilePrefix, 0): true,
+		generationFileName(dataFilePrefix, 0): true,
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return failed("the store could not list generation files in "+dir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		isGenerationFile := strings.HasPrefix(name, rowsFilePrefix) || strings.HasPrefix(name, dataFilePrefix)
+		if !isGenerationFile || !strings.HasSuffix(name, logFileSuffix) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		info, err := entry.Info()
+		if err != nil {
+			return failed("inspect "+path, err)
+		}
+		if !emptyInitialFiles[name] || info.Size() > 0 {
+			return failed("the store found a generation file without a header in "+dir, fmt.Errorf("%w: %s", errGenerationWithoutHeader, path))
+		}
+	}
+	return nil
 }
 
 // openCollection takes the collection's kernel lock before reading its header
@@ -412,9 +458,11 @@ func (stored *codeCollection) checkRecord(offset int64, end int64, logSize int64
 		// Replay returns decode failures without truncating the row log. A checksum match does not prove that the payload is decodable.
 		return record, true, failed(fmt.Sprintf("decode row log in %s at offset %d", stored.dir, offset), err)
 	}
+	// checkRecord relies on write syncing data before appending each row record.
+	// A valid record that references bytes beyond the end of the data file indicates
+	// missing data bytes. checkRecord returns an error without truncating the row log.
 	if record.kind == recordUpsert && record.dataOffset+record.dataLength > stored.dataSize {
-		pastEnd := errors.New("row names data past the end of the data file")
-		return record, true, stored.rejectRecord(offset, end, logSize, "check row log", pastEnd)
+		return record, true, failed(fmt.Sprintf("The store could not validate the row log in %s at offset %d", stored.dir, offset), errDataFileTooShort)
 	}
 	return record, false, nil
 }

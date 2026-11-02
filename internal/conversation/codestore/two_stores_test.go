@@ -1,10 +1,12 @@
 package codestore_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -207,7 +209,7 @@ func TestStoreCloseEndsRequestsWaitingForCollectionLock(t *testing.T) {
 					store.Close()
 					reopened, err := codestore.Open(root, staticembed.ModelName)
 					if err != nil {
-						t.Fatalf("codestore.Open could not open the store: %v.", err)
+						t.Fatalf("codestore.Open failed to open the store: %v.", err)
 					}
 					store = reopened
 				}
@@ -255,7 +257,7 @@ func TestEnsureCollectionCreatesNothingAfterCancellation(t *testing.T) {
 	root := t.TempDir()
 	store, err := codestore.Open(root, staticembed.ModelName)
 	if err != nil {
-		t.Fatalf("codestore.Open could not open the store: %v.", err)
+		t.Fatalf("codestore.Open failed to open the store: %v.", err)
 	}
 	defer store.Close()
 	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
@@ -301,7 +303,7 @@ func TestEnsureCollectionCreatesNothingAfterClose(t *testing.T) {
 	root := t.TempDir()
 	store, err := codestore.Open(root, staticembed.ModelName)
 	if err != nil {
-		t.Fatalf("codestore.Open could not open the store: %v.", err)
+		t.Fatalf("codestore.Open failed to open the store: %v.", err)
 	}
 	lock := createCollectionLock(t, root)
 	defer func() { _ = lock.Close() }()
@@ -377,7 +379,7 @@ func TestStoreFailsWhenCurrentGenerationFilesAreMissing(t *testing.T) {
 
 	reopened, err := codestore.Open(root, staticembed.ModelName)
 	if err != nil {
-		t.Fatalf("codestore.Open could not open the store: %v.", err)
+		t.Fatalf("codestore.Open failed to open the store: %v.", err)
 	}
 	defer reopened.Close()
 	if _, err := reopened.Load(context.Background(), testCollection); !errors.Is(err, os.ErrNotExist) {
@@ -403,14 +405,14 @@ func TestStoreKeepsFilesWhenGenerationZeroIsIncomplete(t *testing.T) {
 		"the data file does not exist": func(t *testing.T, directory string) {
 			t.Helper()
 			if err := os.Remove(filepath.Join(directory, "data.log")); err != nil {
-				t.Fatalf("The test could not remove the data file: %v.", err)
+				t.Fatalf("The test failed to remove the data file: %v.", err)
 			}
 		},
 		"only generation 3 files exist": func(t *testing.T, directory string) {
 			t.Helper()
 			for _, prefix := range []string{"rows", "data"} {
 				if err := os.Rename(filepath.Join(directory, prefix+".log"), filepath.Join(directory, prefix+".3.log")); err != nil {
-					t.Fatalf("The test could not rename the generation file: %v.", err)
+					t.Fatalf("The test failed to rename the generation file: %v.", err)
 				}
 			}
 		},
@@ -427,7 +429,7 @@ func TestStoreKeepsFilesWhenGenerationZeroIsIncomplete(t *testing.T) {
 
 			reopened, err := codestore.Open(root, staticembed.ModelName)
 			if err != nil {
-				t.Fatalf("codestore.Open could not open the store: %v.", err)
+				t.Fatalf("codestore.Open failed to open the store: %v.", err)
 			}
 			defer reopened.Close()
 			if _, err := reopened.Load(context.Background(), testCollection); !errors.Is(err, os.ErrNotExist) {
@@ -438,6 +440,215 @@ func TestStoreKeepsFilesWhenGenerationZeroIsIncomplete(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEnsureCollectionKeepsGenerationFilesWithoutHeader removes the collection header
+// after storing a row. It checks that Load and EnsureCollection return errors other
+// than ErrCollectionMissing and preserve every remaining file.
+func TestEnsureCollectionKeepsGenerationFilesWithoutHeader(t *testing.T) {
+	cases := map[string]func(t *testing.T, directory string){
+		"generation 0 files exist": func(_ *testing.T, _ string) {},
+		"only generation 3 files exist": func(t *testing.T, directory string) {
+			t.Helper()
+			for _, prefix := range []string{"rows", "data"} {
+				if err := os.Rename(filepath.Join(directory, prefix+".log"), filepath.Join(directory, prefix+".3.log")); err != nil {
+					t.Fatalf("The test failed to rename the generation file: %v.", err)
+				}
+			}
+		},
+	}
+	for name, arrange := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			store, model := openCollection(t, root)
+			upsert(t, store, testRow(t, model, "kept", "claude:first", "row before the header removal"))
+			store.Close()
+			directory := filepath.Join(root, testCollection)
+			if err := os.Remove(filepath.Join(directory, "collection.json")); err != nil {
+				t.Fatalf("The test failed to remove the collection header: %v.", err)
+			}
+			arrange(t, directory)
+			filesBefore := directoryContents(t, directory)
+
+			reopened, err := codestore.Open(root, staticembed.ModelName)
+			if err != nil {
+				t.Fatalf("codestore.Open failed to open the store: %v.", err)
+			}
+			defer reopened.Close()
+			ctx := context.Background()
+			if _, err := reopened.Load(ctx, testCollection); err == nil || errors.Is(err, collection.ErrCollectionMissing) {
+				t.Errorf("Load returned %v instead of an error that does not match ErrCollectionMissing.", err)
+			}
+			ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
+			if err := reopened.EnsureCollection(ctx, ensure); err == nil || errors.Is(err, collection.ErrCollectionMissing) {
+				t.Errorf("EnsureCollection returned %v instead of an error that does not match ErrCollectionMissing.", err)
+			}
+			if !maps.EqualFunc(directoryContents(t, directory), filesBefore, bytes.Equal) {
+				t.Fatalf("EnsureCollection changed a file name or file contents in the collection directory.")
+			}
+		})
+	}
+}
+
+// TestEnsureCollectionFinishesInterruptedCreation creates empty generation 0 files
+// without a header. It checks that EnsureCollection creates the header and that
+// the collection accepts and returns a row.
+func TestEnsureCollectionFinishesInterruptedCreation(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, testCollection)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatalf("The test failed to create the collection directory: %v.", err)
+	}
+	for _, name := range []string{"rows.log", "data.log"} {
+		if err := os.WriteFile(filepath.Join(directory, name), nil, 0o600); err != nil {
+			t.Fatalf("The test failed to create the generation file: %v.", err)
+		}
+	}
+	store, model := openCollection(t, root)
+	defer store.Close()
+	upsert(t, store, testRow(t, model, "kept", "claude:first", "row after the interrupted creation"))
+	requireStoreContents(t, store, map[string]string{"kept": "row after the interrupted creation"})
+}
+
+// TestStoreRejectsWriteAfterDataFileIsRemoved deletes the data file while the store
+// has it open. It checks that Upsert returns an error matching os.ErrNotExist
+// and does not change the row log size.
+func TestStoreRejectsWriteAfterDataFileIsRemoved(t *testing.T) {
+	root := t.TempDir()
+	store, model := openCollection(t, root)
+	defer store.Close()
+	upsert(t, store, testRow(t, model, "kept", "claude:first", "row before the removal"))
+	directory := filepath.Join(root, testCollection)
+	if err := os.Remove(filepath.Join(directory, "data.log")); err != nil {
+		t.Fatalf("The test failed to remove the data file: %v.", err)
+	}
+	rowLogSize := fileSize(t, rowLogPath(root))
+
+	row := testRow(t, model, "later", "claude:first", "row after the removal")
+	err := store.Upsert(context.Background(), testCollection, declaration(), []collection.Row{row})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Upsert returned %v instead of an error matching os.ErrNotExist.", err)
+	}
+	if got := fileSize(t, rowLogPath(root)); got != rowLogSize {
+		t.Fatalf("The row log contains %d bytes after Upsert failed; the test expected %d bytes.", got, rowLogSize)
+	}
+}
+
+// TestStoreWritesToReplacementDataFile replaces the data file with a copy while
+// the store has the original open. It checks that a new store reads the original
+// row and a row that the first store writes after the replacement.
+func TestStoreWritesToReplacementDataFile(t *testing.T) {
+	root := t.TempDir()
+	store, model := openCollection(t, root)
+	defer store.Close()
+	upsert(t, store, testRow(t, model, "kept", "claude:first", "row before the replacement"))
+	dataPath := filepath.Join(root, testCollection, "data.log")
+	content, err := os.ReadFile(dataPath)
+	if err != nil {
+		t.Fatalf("The test failed to read the data file: %v.", err)
+	}
+	replacementPath := dataPath + ".replacement"
+	if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
+		t.Fatalf("The test failed to write the replacement data file: %v.", err)
+	}
+	if err := os.Rename(replacementPath, dataPath); err != nil {
+		t.Fatalf("The test failed to replace the original data file with the copy: %v.", err)
+	}
+
+	upsert(t, store, testRow(t, model, "later", "claude:first", "row after the replacement"))
+	reopened, err := codestore.Open(root, staticembed.ModelName)
+	if err != nil {
+		t.Fatalf("codestore.Open failed to open the store: %v.", err)
+	}
+	defer reopened.Close()
+	requireStoreContents(t, reopened, map[string]string{"kept": "row before the replacement", "later": "row after the replacement"})
+}
+
+// TestStoreKeepsRowLogWhenDataFileIsShorter shortens the data file by one byte.
+// The test checks that Query, Upsert, and Load return errors and preserve every
+// file when the last row references bytes beyond the end of the file. After the
+// test restores the original data file, a new store must read every original row.
+func TestStoreKeepsRowLogWhenDataFileIsShorter(t *testing.T) {
+	cases := map[string]func(t *testing.T, path string, shorter []byte){
+		"another file replaces the data file": func(t *testing.T, path string, shorter []byte) {
+			t.Helper()
+			replacement := path + ".replacement"
+			if err := os.WriteFile(replacement, shorter, 0o600); err != nil {
+				t.Fatalf("os.WriteFile failed to write the shorter data file: %v.", err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatalf("os.Rename failed to replace the data file: %v.", err)
+			}
+		},
+		"the data file becomes shorter in place": func(t *testing.T, path string, shorter []byte) {
+			t.Helper()
+			if err := os.Truncate(path, int64(len(shorter))); err != nil {
+				t.Fatalf("os.Truncate failed to shorten the data file: %v.", err)
+			}
+		},
+	}
+	for name, shorten := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			store, model := openCollection(t, root)
+			defer store.Close()
+			want := map[string]string{"kept": "row before the shorter file", "last": "last row before the shorter file"}
+			upsert(t, store, testRow(t, model, "kept", "claude:first", want["kept"]))
+			upsert(t, store, testRow(t, model, "last", "claude:first", want["last"]))
+			directory := filepath.Join(root, testCollection)
+			dataPath := filepath.Join(directory, "data.log")
+			original, err := os.ReadFile(dataPath)
+			if err != nil {
+				t.Fatalf("os.ReadFile failed to read the data file: %v.", err)
+			}
+			shorten(t, dataPath, original[:len(original)-1])
+			filesBefore := directoryContents(t, directory)
+
+			ctx := context.Background()
+			query := collection.QueryRequest{Collection: testCollection, Declaration: declaration(), Filter: nil, Limit: 0}
+			if _, err := store.Query(ctx, query); err == nil {
+				t.Errorf("Query did not return an error after the test shortened the data file.")
+			}
+			later := testRow(t, model, "later", "claude:first", "row after the shorter file")
+			if err := store.Upsert(ctx, testCollection, declaration(), []collection.Row{later}); err == nil {
+				t.Errorf("Upsert did not return an error after the test shortened the data file.")
+			}
+			reopened, err := codestore.Open(root, staticembed.ModelName)
+			if err != nil {
+				t.Fatalf("codestore.Open failed to open the store: %v.", err)
+			}
+			defer reopened.Close()
+			if _, err := reopened.Load(ctx, testCollection); err == nil {
+				t.Errorf("Load did not return an error after the test shortened the data file.")
+			}
+			if !maps.EqualFunc(directoryContents(t, directory), filesBefore, bytes.Equal) {
+				t.Fatalf("A request changed a file name or file contents in the collection directory.")
+			}
+
+			if err := os.WriteFile(dataPath, original, 0o600); err != nil {
+				t.Fatalf("os.WriteFile failed to restore the data file: %v.", err)
+			}
+			restored, err := codestore.Open(root, staticembed.ModelName)
+			if err != nil {
+				t.Fatalf("codestore.Open failed to open the store: %v.", err)
+			}
+			defer restored.Close()
+			requireStoreContents(t, restored, want)
+		})
+	}
+}
+
+func directoryContents(t *testing.T, directory string) map[string][]byte {
+	t.Helper()
+	contents := make(map[string][]byte)
+	for _, name := range directoryNames(t, directory) {
+		content, err := os.ReadFile(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatalf("The test failed to read a collection file: %v.", err)
+		}
+		contents[name] = content
+	}
+	return contents
 }
 
 func takeCollectionLock(t *testing.T, root string) *os.File {
