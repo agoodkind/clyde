@@ -52,7 +52,7 @@ func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
 				}
 				return err
 			}
-			if d.IsDir() || !isRolloutFilename(d.Name()) {
+			if d.IsDir() || !isRolloutFilename(d.Name()) || shadowedByPlainRollout(path) {
 				return nil
 			}
 			info, infoErr := d.Info()
@@ -79,7 +79,8 @@ func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
 }
 
 func isRolloutFilename(name string) bool {
-	return strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, ".jsonl")
+	_, ok := rolloutFilenameStem(name)
+	return ok
 }
 
 // RolloutIdentityFromFilename derives the thread id and created time encoded in
@@ -91,10 +92,10 @@ func RolloutIdentityFromFilename(name string) (string, time.Time, bool) {
 }
 
 func rolloutIdentityFromFilename(name string) (string, time.Time, bool) {
-	if !isRolloutFilename(name) {
+	base, ok := rolloutFilenameStem(name)
+	if !ok {
 		return "", time.Time{}, false
 	}
-	base := strings.TrimSuffix(strings.TrimPrefix(name, "rollout-"), ".jsonl")
 	if len(base) < len("2006-01-02T15-04-05-")+1 {
 		return "", time.Time{}, false
 	}
