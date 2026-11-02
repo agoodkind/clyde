@@ -36,11 +36,9 @@ func (rollout compressedRollout) Close() error {
 
 // openRollout opens a rollout for reading and decodes zstd compression when needed.
 func openRollout(path string) (io.ReadCloser, error) {
-	resolved := resolveRolloutPath(path)
-	file, err := os.Open(resolved)
+	file, resolved, err := openRolloutFile(path)
 	if err != nil {
-		slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
-		return nil, fmt.Errorf("open codex rollout %s: %w", path, err)
+		return nil, err
 	}
 	if !strings.HasSuffix(resolved, rolloutCompressedSuffix) {
 		return file, nil
@@ -53,20 +51,31 @@ func openRollout(path string) (io.ReadCloser, error) {
 	return compressedRollout{Decoder: decoder, file: file}, nil
 }
 
-// resolveRolloutPath returns the cleaned path, substituting an existing plain or compressed sibling only when the requested path does not exist.
-func resolveRolloutPath(path string) string {
+// openRolloutFile opens the requested rollout path and tries its plain or compressed sibling only when the requested file does not exist.
+func openRolloutFile(path string) (*os.File, string, error) {
 	cleaned := filepath.Clean(path)
-	if _, err := os.Stat(cleaned); !errors.Is(err, os.ErrNotExist) {
-		return cleaned
+	candidates := []string{cleaned}
+	if sibling, found := rolloutSiblingPath(cleaned); found {
+		candidates = append(candidates, sibling)
 	}
-	sibling, found := rolloutSiblingPath(cleaned)
-	if !found {
-		return cleaned
+	failedPath := cleaned
+	var failure error
+	for _, candidate := range candidates {
+		file, err := os.Open(candidate)
+		if err == nil {
+			return file, candidate, nil
+		}
+		missing := errors.Is(err, os.ErrNotExist)
+		if failure == nil || !missing {
+			failedPath = candidate
+			failure = err
+		}
+		if !missing {
+			break
+		}
 	}
-	if _, err := os.Stat(sibling); err != nil {
-		return cleaned
-	}
-	return sibling
+	slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", failedPath, "err", failure)
+	return nil, "", fmt.Errorf("open codex rollout %s: %w", failedPath, failure)
 }
 
 // rolloutSiblingPath returns the corresponding plain or compressed path and reports whether the input has a supported rollout suffix.
