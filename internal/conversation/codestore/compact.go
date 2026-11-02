@@ -32,6 +32,11 @@ func (stored *codeCollection) compact() error {
 		abandon()
 		return err
 	}
+	rowsInfo, err := rowsOut.Stat()
+	if err != nil {
+		abandon()
+		return failed("inspect the compacted row log in "+stored.dir, err)
+	}
 	// The generation and frame format must change in the same header replacement.
 	// Sync both new logs before replacing the header.
 	header := stored.header
@@ -48,6 +53,10 @@ func (stored *codeCollection) compact() error {
 	stored.rowsFile = rowsOut
 	stored.dataFile = dataOut
 	stored.dataSize = dataSize
+	stored.logSize = rowsInfo.Size()
+	// After header replacement, the header selects the new generation. Keep its files
+	// even if recordHeaderIdentity fails.
+	identityErr := stored.recordHeaderIdentity()
 	for position, offset := range offsets {
 		stored.rows[position].dataOffset = offset
 	}
@@ -64,12 +73,12 @@ func (stored *codeCollection) compact() error {
 		"generation", next,
 	)
 	if err := syncDirectory(stored.dir); err != nil {
-		return err
+		return failed("sync the compacted generation in "+stored.dir, errors.Join(identityErr, err))
 	}
 	if err := errors.Join(os.Remove(stored.rowsPath(previous)), os.Remove(stored.dataPath(previous))); err != nil {
-		return failed("remove compacted generation in "+stored.dir, err)
+		return failed("remove the previous generation files in "+stored.dir, errors.Join(identityErr, err))
 	}
-	return nil
+	return identityErr
 }
 
 func (stored *codeCollection) writeCompacted(rowsOut *os.File, dataOut *os.File) ([]int64, int64, error) {

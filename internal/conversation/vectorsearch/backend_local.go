@@ -88,8 +88,8 @@ func openLocalBackend(_ context.Context, options Options) (openedBackend, error)
 	}, nil
 }
 
-func (b *localBackend) collectionPresent(_ context.Context, collectionName string) (bool, error) {
-	_, err := b.Load(collectionName)
+func (b *localBackend) collectionPresent(ctx context.Context, collectionName string) (bool, error) {
+	_, err := b.Load(ctx, collectionName)
 	if errors.Is(err, collection.ErrCollectionMissing) {
 		return false, nil
 	}

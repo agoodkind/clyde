@@ -1,6 +1,7 @@
 package codestore_test
 
 import (
+	"context"
 	"encoding/binary"
 	"os"
 	"testing"
@@ -102,7 +103,7 @@ func TestStoreTruncatesTornFinalFrameBeforeZeroTail(t *testing.T) {
 
 			reopened := openStore(t, root)
 			defer reopened.Close()
-			if count, err := reopened.Load(testCollection); err != nil || count != 2 {
+			if count, err := reopened.Load(context.Background(), testCollection); err != nil || count != 2 {
 				t.Fatalf("Load = %d, %v; want 2 rows", count, err)
 			}
 			got := contents(t, reopened)
@@ -141,7 +142,7 @@ func TestPayloadChecksumStoreRefusesCorruptFirstRecordBeforeValidRecords(t *test
 
 			corrupted := openStore(t, root)
 			defer corrupted.Close()
-			if count, err := corrupted.Load(testCollection); err == nil {
+			if count, err := corrupted.Load(context.Background(), testCollection); err == nil {
 				t.Fatalf("Load = %d rows, want an error for a corrupt first record", count)
 			}
 			if got := fileSize(t, path); got != sizeBefore {

@@ -2,6 +2,7 @@ package codestore
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"goodkind.io/clyde/internal/conversation/staticembed"
@@ -29,6 +31,15 @@ const (
 	compactMinimumDead = 10000
 	bufferBytes        = 1 << 20
 )
+
+// errGenerationWithoutHeader indicates that a generation file exists without a header.
+// Its message instructs the reader to restore the collection header from a backup.
+var errGenerationWithoutHeader = errors.New("a generation file exists but the collection header is missing; restore the header from a backup")
+
+// errDataFileTooShort is the error for a valid row record that references bytes
+// beyond the end of the data file. Recovery requires restoring the data file from
+// a backup.
+var errDataFileTooShort = errors.New("a row references bytes beyond the end of the data file; restore the data file from a backup")
 
 func failed(operation string, err error) error {
 	slog.Warn("conversation.codestore.operation_failed",
@@ -111,7 +122,14 @@ type codeCollection struct {
 	rowsFile     *os.File
 	dataFile     *os.File
 	dataSize     int64
-	dead         int
+	// logSize stores the row log size that the state in memory includes.
+	logSize int64
+	// headerInfo stores the header file identity that the state in memory includes.
+	headerInfo os.FileInfo
+	dead       int
+	// closed records whether Store.Close has closed this collection handle.
+	// The collection mutex protects this field. A closed handle cannot reopen its files.
+	closed bool
 }
 
 func (stored *codeCollection) setDeclaration(declaration collection.Declaration) {
@@ -130,6 +148,21 @@ func writeHeader(dir string, header collectionHeader) error {
 		return err
 	}
 	return syncDirectory(dir)
+}
+
+// initializeGenerationFiles does not change existing bytes.
+func initializeGenerationFiles(dir string, generation int64) error {
+	for _, prefix := range []string{rowsFilePrefix, dataFilePrefix} {
+		path := filepath.Join(dir, generationFileName(prefix, generation))
+		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, fileMode)
+		if err != nil {
+			return failed("create a generation file in "+dir, err)
+		}
+		if err := errors.Join(file.Sync(), file.Close()); err != nil {
+			return failed("sync the generation file in "+dir, err)
+		}
+	}
+	return nil
 }
 
 func replaceHeader(dir string, header collectionHeader) error {
@@ -172,20 +205,85 @@ func syncDirectory(dir string) error {
 	return nil
 }
 
-func openCollection(dir string) (*codeCollection, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, headerFileName))
+// readHeader reads and validates the collection header and returns its file identity.
+func readHeader(dir string) (collectionHeader, os.FileInfo, error) {
+	var header collectionHeader
+	file, err := os.Open(filepath.Join(dir, headerFileName))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, collection.ErrCollectionMissing
+		if storedErr := requireNoStoredGenerations(dir); storedErr != nil {
+			return header, nil, storedErr
+		}
+		return header, nil, collection.ErrCollectionMissing
 	}
 	if err != nil {
-		return nil, failed("read collection header in "+dir, err)
+		return header, nil, failed("read the collection header in "+dir, err)
 	}
-	var header collectionHeader
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return header, nil, failed("inspect the collection header in "+dir, err)
+	}
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		return header, nil, failed("read the collection header in "+dir, err)
+	}
 	if err := json.Unmarshal(raw, &header); err != nil {
-		return nil, failed("parse collection header in "+dir, err)
+		return header, nil, failed("parse the collection header in "+dir, err)
 	}
 	if header.FrameFormat != frameFormatPayloadCRC && header.FrameFormat != frameFormatLengthCRC {
-		return nil, failed("parse collection header in "+dir, fmt.Errorf("unsupported frame format %d", header.FrameFormat))
+		return header, nil, failed("parse the collection header in "+dir, fmt.Errorf("the code store does not support frame format %d", header.FrameFormat))
+	}
+	return header, info, nil
+}
+
+// requireNoStoredGenerations returns an error for nonempty or later generation files
+// without a header. It does not return an error for empty generation 0 row and data
+// files because collection creation writes them before the header.
+func requireNoStoredGenerations(dir string) error {
+	emptyInitialFiles := map[string]bool{
+		generationFileName(rowsFilePrefix, 0): true,
+		generationFileName(dataFilePrefix, 0): true,
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return failed("the store could not list generation files in "+dir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		isGenerationFile := strings.HasPrefix(name, rowsFilePrefix) || strings.HasPrefix(name, dataFilePrefix)
+		if !isGenerationFile || !strings.HasSuffix(name, logFileSuffix) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		info, err := entry.Info()
+		if err != nil {
+			return failed("inspect "+path, err)
+		}
+		if !emptyInitialFiles[name] || info.Size() > 0 {
+			return failed("the store found a generation file without a header in "+dir, fmt.Errorf("%w: %s", errGenerationWithoutHeader, path))
+		}
+	}
+	return nil
+}
+
+// openCollection takes the collection's kernel lock before reading its header
+// and rebuilding the collection state from the files.
+func openCollection(ctx context.Context, dir string) (*codeCollection, error) {
+	lock, err := lockCollectionDirectory(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Close() }()
+	return loadCollection(dir)
+}
+
+func loadCollection(dir string) (*codeCollection, error) {
+	header, headerInfo, err := readHeader(dir)
+	if err != nil {
+		return nil, err
 	}
 	stored := &codeCollection{
 		mutex:        sync.RWMutex{},
@@ -199,7 +297,10 @@ func openCollection(dir string) (*codeCollection, error) {
 		rowsFile:     nil,
 		dataFile:     nil,
 		dataSize:     0,
+		logSize:      0,
+		headerInfo:   headerInfo,
 		dead:         0,
+		closed:       false,
 	}
 	stored.setDeclaration(header.Declaration)
 	if err := stored.openFiles(); err != nil {
@@ -239,15 +340,18 @@ func (stored *codeCollection) removeOtherGenerations() {
 	}
 }
 
+// openFiles opens the existing row and data files for the header's generation.
+// If either file is missing, it returns an error. loadCollection then returns
+// without removing older generations.
 func (stored *codeCollection) openFiles() error {
-	rowsFile, err := os.OpenFile(stored.rowsPath(stored.header.Generation), os.O_RDWR|os.O_CREATE, fileMode)
+	rowsFile, err := stored.openGenerationFile(stored.rowsPath(stored.header.Generation))
 	if err != nil {
-		return failed("open row log in "+stored.dir, err)
+		return err
 	}
-	dataFile, err := os.OpenFile(stored.dataPath(stored.header.Generation), os.O_RDWR|os.O_CREATE, fileMode)
+	dataFile, err := stored.openGenerationFile(stored.dataPath(stored.header.Generation))
 	if err != nil {
 		_ = rowsFile.Close()
-		return failed("open data file in "+stored.dir, err)
+		return err
 	}
 	info, err := dataFile.Stat()
 	if err != nil {
@@ -259,6 +363,21 @@ func (stored *codeCollection) openFiles() error {
 	stored.dataFile = dataFile
 	stored.dataSize = info.Size()
 	return nil
+}
+
+// openGenerationFile opens one existing generation file. If the file does not
+// exist, it returns an error with the generation, file path, and instruction to
+// restore the file from a backup. The store does not create a missing file because
+// a header without generation files does not prove that the collection was empty.
+func (stored *codeCollection) openGenerationFile(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_RDWR, fileMode)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, failed(fmt.Sprintf("The collection header selects generation %d, but %s does not exist. Restore the file from a backup.", stored.header.Generation, path), err)
+	}
+	if err != nil {
+		return nil, failed("open the generation file "+path, err)
+	}
+	return file, nil
 }
 
 func (stored *codeCollection) closeFiles() {
@@ -278,11 +397,11 @@ func (stored *codeCollection) replay() error {
 		return failed("inspect row log in "+stored.dir, err)
 	}
 	logSize := info.Size()
-	if _, err := stored.rowsFile.Seek(0, io.SeekStart); err != nil {
+	offset := stored.logSize
+	if _, err := stored.rowsFile.Seek(offset, io.SeekStart); err != nil {
 		return failed("seek row log in "+stored.dir, err)
 	}
 	reader := bufio.NewReaderSize(stored.rowsFile, bufferBytes)
-	var offset int64
 	headerBytes := frameHeaderSize(stored.header.FrameFormat)
 	header := make([]byte, headerBytes)
 	for {
@@ -313,6 +432,7 @@ func (stored *codeCollection) replay() error {
 			return err
 		}
 		offset = end
+		stored.logSize = end
 	}
 }
 
@@ -336,9 +456,11 @@ func (stored *codeCollection) checkRecord(offset int64, end int64, logSize int64
 		// Replay returns decode failures without truncating the row log. A checksum match does not prove that the payload is decodable.
 		return record, true, failed(fmt.Sprintf("decode row log in %s at offset %d", stored.dir, offset), err)
 	}
+	// checkRecord relies on write syncing data before appending each row record.
+	// A valid record that references bytes beyond the end of the data file indicates
+	// missing data bytes. checkRecord returns an error without truncating the row log.
 	if record.kind == recordUpsert && record.dataOffset+record.dataLength > stored.dataSize {
-		pastEnd := errors.New("row names data past the end of the data file")
-		return record, true, stored.rejectRecord(offset, end, logSize, "check row log", pastEnd)
+		return record, true, failed(fmt.Sprintf("The store could not validate the row log in %s at offset %d", stored.dir, offset), errDataFileTooShort)
 	}
 	return record, false, nil
 }
@@ -436,6 +558,7 @@ func (stored *codeCollection) truncateRows(offset int64, cause error) error {
 	if err := stored.rowsFile.Truncate(offset); err != nil {
 		return failed("truncate row log in "+stored.dir, err)
 	}
+	stored.logSize = offset
 	return nil
 }
 
@@ -534,6 +657,7 @@ func (stored *codeCollection) write(records []rowRecord, blobs [][]byte) error {
 		truncateErr := stored.rowsFile.Truncate(logEnd)
 		return failed("append row log in "+stored.dir, errors.Join(writeErr, truncateErr))
 	}
+	stored.logSize = logEnd + int64(len(rowBuffer))
 	for _, record := range records {
 		if err := stored.apply(record); err != nil {
 			return err

@@ -21,11 +21,16 @@ import (
 
 const defaultSearchLimit = 10
 
+// ErrStoreClosed reports an attempt to use a store or collection handle after
+// Store.Close.
+var ErrStoreClosed = errors.New("the code store is closed")
+
 // Store loads collection indexes on demand and protects each with a read/write lock.
 type Store struct {
 	root        string
 	model       string
 	mutex       sync.Mutex
+	closed      bool
 	collections map[string]*codeCollection
 }
 
@@ -40,15 +45,19 @@ func Open(root string, model string) (*Store, error) {
 	if err := os.MkdirAll(root, directoryMode); err != nil {
 		return nil, failed("create code store root "+root, err)
 	}
-	return &Store{root: root, model: model, mutex: sync.Mutex{}, collections: make(map[string]*codeCollection)}, nil
+	return &Store{root: root, model: model, mutex: sync.Mutex{}, closed: false, collections: make(map[string]*codeCollection)}, nil
 }
 
-// Close closes every loaded collection and removes it from the store's cache.
+// Close marks the store and each cached collection handle closed. It closes each
+// handle's files and clears the cache. Later requests that pass earlier context and
+// argument checks return ErrStoreClosed and cannot reopen collection files.
 func (store *Store) Close() {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
+	store.closed = true
 	for name, stored := range store.collections {
 		stored.mutex.Lock()
+		stored.closed = true
 		stored.closeFiles()
 		stored.mutex.Unlock()
 		delete(store.collections, name)
@@ -63,33 +72,81 @@ func (store *Store) directory(name string) (string, error) {
 	return filepath.Join(store.root, trimmed), nil
 }
 
-func (store *Store) collection(name string) (*codeCollection, error) {
+func (store *Store) readLockedCollection(ctx context.Context, name string) (*codeCollection, func(), error) {
+	stored, err := store.openedCollection(ctx, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	unlock, err := stored.lockForRead(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stored, unlock, nil
+}
+
+func (store *Store) lockedCollection(ctx context.Context, name string) (*codeCollection, func(), error) {
+	stored, err := store.openedCollection(ctx, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	unlock, err := stored.lockForWrite(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stored, unlock, nil
+}
+
+func (store *Store) cachedCollection(name string) (*codeCollection, error) {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
-	if stored, found := store.collections[name]; found {
-		return stored, nil
+	if store.closed {
+		return nil, ErrStoreClosed
+	}
+	return store.collections[name], nil
+}
+
+// openedCollection returns a cached collection or opens it without the store mutex.
+// After opening, it takes the store mutex and checks the store again. If Close ran
+// during the open, it closes the new handle and returns ErrStoreClosed. If another
+// request cached the collection, it closes the new handle and returns the cached one.
+func (store *Store) openedCollection(ctx context.Context, name string) (*codeCollection, error) {
+	cached, err := store.cachedCollection(name)
+	if err != nil {
+		return nil, err
+	}
+	if cached != nil {
+		return cached, nil
 	}
 	dir, err := store.directory(name)
 	if err != nil {
 		return nil, err
 	}
-	stored, err := openCollection(dir)
+	opened, err := openCollection(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
-	store.collections[name] = stored
-	return stored, nil
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	if store.closed {
+		opened.closeFiles()
+		return nil, ErrStoreClosed
+	}
+	if existing, found := store.collections[name]; found {
+		opened.closeFiles()
+		return existing, nil
+	}
+	store.collections[name] = opened
+	return opened, nil
 }
 
 // Load reads a collection into memory and returns its row count.
 // It returns [collection.ErrCollectionMissing] if the header file is absent.
-func (store *Store) Load(name string) (int, error) {
-	stored, err := store.collection(name)
+func (store *Store) Load(ctx context.Context, name string) (int, error) {
+	stored, unlock, err := store.readLockedCollection(ctx, name)
 	if err != nil {
 		return 0, err
 	}
-	stored.mutex.RLock()
-	defer stored.mutex.RUnlock()
+	defer unlock()
 	return len(stored.rows), nil
 }
 
@@ -99,27 +156,17 @@ func (store *Store) EnsureCollection(ctx context.Context, request collection.Ens
 	if request.Dimension != staticembed.Dimensions {
 		return fmt.Errorf("ensure %s: dimension %d, the code store needs %d", request.Collection, request.Dimension, staticembed.Dimensions)
 	}
-	stored, err := store.collection(request.Collection)
+	stored, unlock, err := store.lockedCollection(ctx, request.Collection)
 	if errors.Is(err, collection.ErrCollectionMissing) {
-		dir, dirErr := store.directory(request.Collection)
-		if dirErr != nil {
-			return dirErr
-		}
-		if err := os.MkdirAll(dir, directoryMode); err != nil {
-			return failed("create collection "+request.Collection, err)
-		}
-		header := collectionHeader{Declaration: request.Declaration, Dimension: request.Dimension, Model: store.model, Generation: 0, FrameFormat: frameFormatLengthCRC}
-		if err := writeHeader(dir, header); err != nil {
+		if err := store.createCollection(ctx, request); err != nil {
 			return err
 		}
-		_, err = store.collection(request.Collection)
-		return err
+		stored, unlock, err = store.lockedCollection(ctx, request.Collection)
 	}
 	if err != nil {
 		return err
 	}
-	stored.mutex.Lock()
-	defer stored.mutex.Unlock()
+	defer unlock()
 	declaration := stored.header.Declaration
 	added := false
 	for _, column := range request.Declaration.Scalars {
@@ -141,7 +188,45 @@ func (store *Store) EnsureCollection(ctx context.Context, request collection.Ens
 		missing := len(declaration.Scalars) - len(stored.rows[position].cells)
 		stored.rows[position].cells = append(stored.rows[position].cells, make([]uint32, missing)...)
 	}
-	return nil
+	return stored.recordHeaderIdentity()
+}
+
+func (store *Store) createCollection(ctx context.Context, request collection.EnsureRequest) error {
+	dir, err := store.directory(request.Collection)
+	if err != nil {
+		return err
+	}
+	// createCollection acquires the exclusive kernel lock, then the store mutex.
+	// If Close has marked the store closed, createCollection returns ErrStoreClosed
+	// without creating collection files. If the request context ended during either
+	// wait, createCollection returns an error without creating collection files.
+	// Otherwise, creation finishes before Close returns because Close needs the store
+	// mutex to mark the store closed.
+	lock, err := lockCollectionDirectory(ctx, dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	if store.closed {
+		return ErrStoreClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return failed("create collection "+request.Collection, err)
+	}
+	_, _, err = readHeader(dir)
+	if !errors.Is(err, collection.ErrCollectionMissing) {
+		return err
+	}
+	if err := os.MkdirAll(dir, directoryMode); err != nil {
+		return failed("create collection "+request.Collection, err)
+	}
+	if err := initializeGenerationFiles(dir, 0); err != nil {
+		return err
+	}
+	header := collectionHeader{Declaration: request.Declaration, Dimension: request.Dimension, Model: store.model, Generation: 0, FrameFormat: frameFormatLengthCRC}
+	return writeHeader(dir, header)
 }
 
 // Upsert replaces rows by ID and stores their vector sign bits.
@@ -151,12 +236,11 @@ func (store *Store) Upsert(ctx context.Context, name string, _ collection.Declar
 	if err := ctx.Err(); err != nil {
 		return failed("upsert "+name, err)
 	}
-	stored, err := store.collection(name)
+	stored, unlock, err := store.lockedCollection(ctx, name)
 	if err != nil {
 		return err
 	}
-	stored.mutex.Lock()
-	defer stored.mutex.Unlock()
+	defer unlock()
 	records := make([]rowRecord, 0, len(rows))
 	blobs := make([][]byte, 0, len(rows))
 	for _, candidate := range rows {
@@ -200,12 +284,11 @@ func (store *Store) Delete(ctx context.Context, name string, filter collection.F
 	if err := ctx.Err(); err != nil {
 		return 0, failed("delete from "+name, err)
 	}
-	stored, err := store.collection(name)
+	stored, unlock, err := store.lockedCollection(ctx, name)
 	if err != nil {
 		return 0, err
 	}
-	stored.mutex.Lock()
-	defer stored.mutex.Unlock()
+	defer unlock()
 	matches, err := stored.compileFilter(&filter)
 	if err != nil {
 		return 0, err
@@ -256,12 +339,11 @@ func (store *Store) Query(ctx context.Context, request collection.QueryRequest) 
 	if err := ctx.Err(); err != nil {
 		return nil, failed("query "+request.Collection, err)
 	}
-	stored, err := store.collection(request.Collection)
+	stored, unlock, err := store.readLockedCollection(ctx, request.Collection)
 	if err != nil {
 		return nil, err
 	}
-	stored.mutex.RLock()
-	defer stored.mutex.RUnlock()
+	defer unlock()
 	matches, err := stored.compileFilter(request.Filter)
 	if err != nil {
 		return nil, err
@@ -323,12 +405,11 @@ func (store *Store) QueryRows(ctx context.Context, request collection.RowsReques
 	if err := ctx.Err(); err != nil {
 		return nil, failed("query rows of "+request.Collection, err)
 	}
-	stored, err := store.collection(request.Collection)
+	stored, unlock, err := store.readLockedCollection(ctx, request.Collection)
 	if err != nil {
 		return nil, err
 	}
-	stored.mutex.RLock()
-	defer stored.mutex.RUnlock()
+	defer unlock()
 	positions := stored.selectSorted(stored.itemSelector(request.Declaration.ItemIDColumn, request.ItemIDs, request.PathPrefixes))
 	rows := make([]collection.StoredRow, 0, len(positions))
 	for _, position := range positions {
@@ -358,12 +439,11 @@ func (store *Store) DeleteItems(ctx context.Context, request collection.DeleteIt
 	if err := ctx.Err(); err != nil {
 		return 0, failed("delete items from "+request.Collection, err)
 	}
-	stored, err := store.collection(request.Collection)
+	stored, unlock, err := store.lockedCollection(ctx, request.Collection)
 	if err != nil {
 		return 0, err
 	}
-	stored.mutex.Lock()
-	defer stored.mutex.Unlock()
+	defer unlock()
 	return stored.deleteWhere(stored.itemSelector(request.Declaration.ItemIDColumn, request.ItemIDs, request.PathPrefixes))
 }
 
@@ -373,12 +453,11 @@ func (store *Store) BackfillScalars(ctx context.Context, name string, backfill c
 	if err := ctx.Err(); err != nil {
 		return 0, 0, failed("backfill "+name, err)
 	}
-	stored, err := store.collection(name)
+	stored, unlock, err := store.lockedCollection(ctx, name)
 	if err != nil {
 		return 0, 0, err
 	}
-	stored.mutex.Lock()
-	defer stored.mutex.Unlock()
+	defer unlock()
 	for _, column := range backfill.Columns {
 		if _, declared := stored.columnIndex[column.Name]; !declared {
 			return 0, 0, fmt.Errorf("backfill %s: column %q is not declared", name, column.Name)
@@ -473,12 +552,11 @@ func (store *Store) Search(ctx context.Context, request collection.SearchRequest
 	if len(request.Vector) != staticembed.Dimensions {
 		return nil, fmt.Errorf("search %s: query has %d dimensions, want %d", request.Collection, len(request.Vector), staticembed.Dimensions)
 	}
-	stored, err := store.collection(request.Collection)
+	stored, unlock, err := store.readLockedCollection(ctx, request.Collection)
 	if err != nil {
 		return nil, err
 	}
-	stored.mutex.RLock()
-	defer stored.mutex.RUnlock()
+	defer unlock()
 	matches, err := stored.compileFilter(request.Filter)
 	if err != nil {
 		return nil, err

@@ -89,7 +89,7 @@ func TestStoreRefusesRowLogWithCorruptMiddleRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := corrupted.Load(testCollection); err == nil {
+	if _, err := corrupted.Load(context.Background(), testCollection); err == nil {
 		t.Fatal("Load succeeded on a row log with a corrupt middle record")
 	}
 	corrupted.Close()
@@ -106,7 +106,7 @@ func TestStoreRefusesRowLogWithCorruptMiddleRecord(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer repaired.Close()
-	if count, err := repaired.Load(testCollection); err != nil || count != 3 {
+	if count, err := repaired.Load(context.Background(), testCollection); err != nil || count != 3 {
 		t.Fatalf("Load = %d, %v; want 3 rows", count, err)
 	}
 }
@@ -140,7 +140,7 @@ func TestStoreRefusesRowLogEndingWithUndecodableRecord(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer reopened.Close()
-	if _, err := reopened.Load(testCollection); err == nil {
+	if _, err := reopened.Load(context.Background(), testCollection); err == nil {
 		t.Fatal("Load succeeded on a row log ending with a checksummed record that does not decode")
 	}
 	if got := fileSize(t, path); got != sizeBefore {
