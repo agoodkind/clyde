@@ -447,7 +447,6 @@ func deliveredOrder(docs []semsearch.SemDoc) []string {
 	return order
 }
 
-// conversationFamilies returns the message families that the documents generate.
 func conversationFamilies(conversationID string, docs []semsearch.SemDoc) ([]chunkFamily, error) {
 	generated := make([]storedChunk, 0)
 	for _, doc := range docs {
