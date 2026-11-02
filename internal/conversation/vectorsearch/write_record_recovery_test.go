@@ -555,7 +555,6 @@ func TestUpsertReportsStoppedWriteWithOlderRowsAndContinues(t *testing.T) {
 	}
 }
 
-// recoveryRowID returns the stored row ID of one piece of a split message.
 func recoveryRowID(path string, splitPart int32, content string) string {
 	digest := sha256.Sum256(fmt.Appendf(nil, "%s:0:0:%d:%s", path, splitPart, content))
 	return "chunk_" + hex.EncodeToString(digest[:])[:16]

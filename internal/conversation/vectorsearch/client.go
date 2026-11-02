@@ -95,9 +95,7 @@ type Client struct {
 	// pass. Zero selects the worker default.
 	deliveryBatchBytes int64
 
-	// ingestSliceRows limits the rows of one upsert slice.
-	ingestSliceRows int
-	// ingestSlicePlanBytes limits the estimated memory of retained slice plans.
+	ingestSliceRows      int
 	ingestSlicePlanBytes int64
 
 	checkpoint *checkpointStore
@@ -110,7 +108,7 @@ type Client struct {
 	// fillMu serializes unknown timestamp fills within this client.
 	fillMu sync.Mutex
 
-	// sliceProgress stores the plans of partial conversations. ingestMu guards the map.
+	// ingestMu guards the sliceProgress map.
 	sliceProgress map[string]*sliceProgress
 
 	lastUpsert      UpsertStats

@@ -220,8 +220,6 @@ func (c *Client) upsertDocuments(
 	return jobID, nil
 }
 
-// stopUpsert logs the failure that stops an upsert and returns that failure
-// joined with the earlier conversation failures.
 func stopUpsert(ctx context.Context, collectionName string, failures []error, err error) error {
 	joined := errors.Join(append(failures, err)...)
 	slog.WarnContext(ctx, "conversation.vectorsearch.upsert_stopped",
@@ -233,9 +231,7 @@ func stopUpsert(ctx context.Context, collectionName string, failures []error, er
 	return joined
 }
 
-// claimConversations claims each available conversation in order and adds busy
-// conversations to partial. It returns the claimed IDs and a release function. The caller
-// must run the release function even when claimConversations returns an error.
+// The caller must run the release function even if claimConversations returns an error.
 func (store *checkpointStore) claimConversations(collectionName string, order []string, partial *PartialUpsertError) ([]string, func(), error) {
 	claimed := make([]string, 0, len(order))
 	claims := make([]*conversationClaim, 0, len(order))
@@ -394,7 +390,6 @@ func (c *Client) upsertConversation(
 	}
 	stats.timesFilled += filled
 	if len(unwritten) > 0 {
-		// The record of this slice lists each family with unwritten rows.
 		c.checkpoint.supersedeStoppedWrites(collectionName, conversationID, active, stopped, proofs)
 		c.saveSliceProgress(collectionName, conversationID, docs, fingerprint, chunks[:min(processed, len(chunks))], unwritten, batch)
 		return result, nil

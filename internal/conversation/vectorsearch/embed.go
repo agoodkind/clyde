@@ -213,8 +213,9 @@ type rejection struct {
 //
 // A positive rowLimit stops processing before the first pack after the limit and
 // flushes pending rows. The call adds new vectors to reuse for later matching text.
-// It returns the processed row count and chunks without a result. When stored reports
-// that a split child exists, the call preserves its stored timestamp and vector.
+// It returns the processed row count and chunks without a result.
+// When the stored callback reports that a split child exists, the call preserves
+// that child's stored timestamp and vector.
 func (c *Client) embedAndWrite(
 	ctx context.Context,
 	chunks []storedChunk,
@@ -252,8 +253,6 @@ func (c *Client) embedAndWrite(
 	return processed, nil, writer.flush(ctx)
 }
 
-// writePackRows adds a row to writer for each chunk with a vector. It also stores each
-// vector in reuse when rowLimit is positive.
 func writePackRows(ctx context.Context, pack []storedChunk, vectors [][]float32, reuse map[string][]float32, writer *rowWriter, rowLimit int) error {
 	for i, chunk := range pack {
 		if vectors[i] == nil {
@@ -269,8 +268,6 @@ func writePackRows(ctx context.Context, pack []storedChunk, vectors [][]float32,
 	return nil
 }
 
-// retryRejected returns split chunks that still need embedding. It logs and counts each
-// rejected input that it cannot split further.
 func (c *Client) retryRejected(ctx context.Context, rejected []rejection, stored func(storedChunk) bool, stats *ingestStats, round int) []storedChunk {
 	retry := make([]storedChunk, 0)
 	for _, refusal := range rejected {

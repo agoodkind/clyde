@@ -82,7 +82,6 @@ func (state *conversationState) hasRow(familyKey string, id string) bool {
 	return false
 }
 
-// splitRowIDs returns the IDs of the stored split rows in one family.
 func (state *conversationState) splitRowIDs(familyKey string) []string {
 	if state == nil {
 		return nil
@@ -122,7 +121,6 @@ func (state *conversationState) differs(familyKey string, generated []storedChun
 	return false
 }
 
-// pathComplete reports whether stored pieces cover the generated chunk at its path.
 // Complete pieces match even when their split boundaries differ.
 func (state *conversationState) pathComplete(familyKey string, chunk storedChunk) bool {
 	if state == nil {

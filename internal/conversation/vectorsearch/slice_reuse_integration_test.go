@@ -98,7 +98,6 @@ func runSliceToCheckpoint(t *testing.T, client *vectorsearch.Client, docs []sems
 	t.Fatal("the conversation did not finish in the expected slice count")
 }
 
-// rowTimestamps reads the stored timestamp of each row of the test conversation.
 func rowTimestamps(t *testing.T, fixture *splitRecoveryFixture) map[string]int64 {
 	t.Helper()
 	result, err := fixture.reader.Query(context.Background(), milvusclient.NewQueryOption(fixture.collectionName).
@@ -269,7 +268,6 @@ func TestSharedLayoutSliceKeepsVectorBytesForEditedMessage(t *testing.T) {
 	}
 }
 
-// splitMessagePieces counts the stored rows with text from the split message.
 func splitMessagePieces(rows map[string]splitRecoveryRow, text string) int {
 	pieces := 0
 	for _, row := range rows {

@@ -638,8 +638,6 @@ func TestSharedLayoutRetryKeepsVectorOfWhitespacePiece(t *testing.T) {
 	}
 }
 
-// startSplitRecoveryUpsert runs an upsert through a client and waits until the upsert
-// sends its first embedding request. The returned channel receives the upsert result.
 func startSplitRecoveryUpsert(ctx context.Context, t *testing.T, client *vectorsearch.Client, gate *splitRecoveryGate, collectionID string, docs []semsearch.SemDoc, manifest []semsearch.Fingerprint) chan error {
 	t.Helper()
 	finished := make(chan error, 1)
@@ -725,7 +723,6 @@ func TestSharedLayoutCommittedWriteIDSurvivesStatFailure(t *testing.T) {
 	}
 }
 
-// committedWrites returns the finished write IDs in the test conversation's checkpoint.
 func (f *splitRecoveryFixture) committedWrites() []string {
 	f.t.Helper()
 	digest := sha256.Sum256([]byte(splitRecoveryConversationID))
