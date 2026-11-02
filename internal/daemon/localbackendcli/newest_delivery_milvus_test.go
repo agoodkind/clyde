@@ -185,25 +185,37 @@ func installNewestTranscript(home string, session string, body string, modified 
 	return nil
 }
 
-func newestStatusCounter(t *testing.T, daemon *localProofDaemon, name string) any {
+// newestStatusCounter decodes the named daemon status counter as type T.
+// It returns false when the status command fails, the counter is missing or null,
+// or JSON decoding fails for T.
+func newestStatusCounter[T any](t *testing.T, daemon *localProofDaemon, name string) (T, bool) {
 	t.Helper()
+	var zero T
 	ctx, cancel := context.WithTimeout(t.Context(), localProofCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, daemon.binaryPath, "status", "--output-format", "json")
 	command.Env = daemon.environment
 	output, err := command.Output()
 	if err != nil {
-		return nil
+		return zero, false
 	}
 	var status struct {
 		Counters map[string]struct {
-			Value any `json:"value"`
+			Value json.RawMessage `json:"value"`
 		} `json:"counters"`
 	}
 	if err := json.Unmarshal(output, &status); err != nil {
 		t.Fatalf("The test could not decode daemon status: %v", err)
 	}
-	return status.Counters[name].Value
+	counter, found := status.Counters[name]
+	if !found {
+		return zero, false
+	}
+	var value *T
+	if err := json.Unmarshal(counter.Value, &value); err != nil || value == nil {
+		return zero, false
+	}
+	return *value, true
 }
 
 func (f *newestFixture) rowsFor(conversationID string) (int64, error) {
@@ -213,7 +225,11 @@ func (f *newestFixture) rowsFor(conversationID string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("query Milvus row count: %w", err)
 	}
-	return result.GetColumn(newestCountField).GetAsInt64(0)
+	counts := result.GetColumn(newestCountField)
+	if counts == nil {
+		return 0, fmt.Errorf("the Milvus query result does not include the %s column", newestCountField)
+	}
+	return counts.GetAsInt64(0)
 }
 
 func (f *newestFixture) rows(session string) (int64, error) {
@@ -263,9 +279,9 @@ func (f *newestFixture) waitFor(description string, check func() bool) {
 func (f *newestFixture) waitForCollection() {
 	f.t.Helper()
 	f.waitFor("a collection name in daemon status", func() bool {
-		name, isText := newestStatusCounter(f.t, f.daemon, "semantic_settings.collection_name").(string)
+		name, found := newestStatusCounter[string](f.t, f.daemon, "semantic_settings.collection_name")
 		f.collectionName = name
-		return isText && name != ""
+		return found && name != ""
 	})
 }
 
@@ -381,8 +397,8 @@ func newestSentBefore(records []newestPassRecord, sessions []string, pass int) i
 func (f *newestFixture) waitForNoNeededChats() {
 	f.t.Helper()
 	f.waitFor("an empty needed listing", func() bool {
-		needed, isNumber := newestStatusCounter(f.t, f.daemon, "semantic_freshness.needed").(float64)
-		return isNumber && needed == 0
+		needed, found := newestStatusCounter[float64](f.t, f.daemon, "semantic_freshness.needed")
+		return found && needed == 0
 	})
 }
 
