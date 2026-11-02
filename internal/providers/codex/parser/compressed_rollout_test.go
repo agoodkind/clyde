@@ -133,6 +133,10 @@ func removeRollout(t *testing.T, path string) {
 	}
 }
 
+func compressedRolloutReadError(compressedRolloutFixture) string {
+	return "read codex rollout"
+}
+
 func compressedRolloutExportOptions() conversation.ExportOptions {
 	return conversation.ExportOptions{
 		Format:       conversation.ExportFormatPlainText,
@@ -239,22 +243,25 @@ func TestIndexReportsUnreadableCompressedCodexRollouts(t *testing.T) {
 	tests := []struct {
 		name    string
 		replace func(compressedRolloutFixture, *testing.T)
-		wantErr string
+		wantErr func(compressedRolloutFixture) string
 	}{
 		{
 			name:    "corrupt compressed rollout",
 			replace: compressedRolloutFixture.writeCorrupt,
-			wantErr: "read codex rollout",
+			wantErr: compressedRolloutReadError,
 		},
 		{
 			name:    "truncated compressed rollout",
 			replace: compressedRolloutFixture.writeTruncated,
-			wantErr: "read codex rollout",
+			wantErr: compressedRolloutReadError,
 		},
 		{
 			name:    "missing plain and compressed rollout",
 			replace: func(compressedRolloutFixture, *testing.T) {},
-			wantErr: "no such file",
+			wantErr: func(fixture compressedRolloutFixture) string {
+				plainPath := fixture.plainPath()
+				return "open codex rollout " + plainPath + ": open " + plainPath + ": no such file"
+			},
 		},
 	}
 	for _, testCase := range tests {
@@ -262,10 +269,11 @@ func TestIndexReportsUnreadableCompressedCodexRollouts(t *testing.T) {
 			fixture := newCompressedRolloutFixture(t)
 			record := fixture.recordWithRemovedPlainPath(t)
 			testCase.replace(fixture, t)
-			if _, err := fixture.index.HitContextWindow(record, compressedRolloutCenter, 1, 1, ""); err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+			wantErr := testCase.wantErr(fixture)
+			if _, err := fixture.index.HitContextWindow(record, compressedRolloutCenter, 1, 1, ""); err == nil || !strings.Contains(err.Error(), wantErr) {
 				t.Fatalf("reading the context window did not return the expected error: %v", err)
 			}
-			if _, err := fixture.index.Export(record, compressedRolloutExportOptions()); err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+			if _, err := fixture.index.Export(record, compressedRolloutExportOptions()); err == nil || !strings.Contains(err.Error(), wantErr) {
 				t.Fatalf("exporting the conversation did not return the expected error: %v", err)
 			}
 		})

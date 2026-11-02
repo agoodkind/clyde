@@ -52,8 +52,13 @@ func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
 				}
 				return err
 			}
-			if d.IsDir() || !isRolloutFilename(d.Name()) || shadowedByPlainRollout(path) {
+			if d.IsDir() || !isRolloutFilename(d.Name()) {
 				return nil
+			}
+			if plain, compressed := strings.CutSuffix(path, rolloutCompressedSuffix); compressed {
+				if _, statErr := os.Stat(plain + rolloutPlainSuffix); statErr == nil {
+					return nil
+				}
 			}
 			info, infoErr := d.Info()
 			if infoErr != nil {

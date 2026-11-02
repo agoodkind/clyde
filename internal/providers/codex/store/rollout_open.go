@@ -100,13 +100,3 @@ func rolloutFilenameStem(name string) (string, bool) {
 	}
 	return strings.CutSuffix(stem, rolloutPlainSuffix)
 }
-
-// shadowedByPlainRollout reports whether a compressed rollout has an existing plain sibling.
-func shadowedByPlainRollout(path string) bool {
-	plain, compressed := strings.CutSuffix(path, rolloutCompressedSuffix)
-	if !compressed {
-		return false
-	}
-	_, err := os.Stat(plain + rolloutPlainSuffix)
-	return err == nil
-}
