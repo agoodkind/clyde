@@ -85,7 +85,8 @@ func (c *Client) JobState(_ context.Context, jobID string) (string, error) {
 // no stored row. A stored vector with the same content and embedding model is
 // reused, and only content without a stored vector is embedded. After a
 // conversation's rows are written, its manifest fingerprint is recorded on disk.
-// The call returns after the work finishes.
+// If a checkpoint write fails, the call preserves written rows, processes the other
+// conversations, and returns the checkpoint errors after the batch finishes.
 func (c *Client) UpsertConversationDocuments(
 	ctx context.Context,
 	collectionID string,
@@ -120,6 +121,9 @@ func (c *Client) UpsertConversationDocuments(
 	// writtenConversations lists each conversation that received rows, as
 	// "<conversation id>=<row count>", for the completion log record.
 	writtenConversations := make([]string, 0)
+	// checkpointErrors collects checkpoint write errors without stopping the batch.
+	// The caller receives these errors after the remaining conversations finish.
+	checkpointErrors := make([]error, 0)
 	for _, conversationID := range order {
 		chunks, fills, planErr := c.planConversation(conversationID, byConversation[conversationID], batch.state(conversationID))
 		if planErr != nil {
@@ -142,7 +146,13 @@ func (c *Client) UpsertConversationDocuments(
 		if !found {
 			continue
 		}
-		c.checkpoint.record(collectionName, conversationID, fingerprint)
+		if err := c.checkpoint.record(collectionName, conversationID, fingerprint); err != nil {
+			checkpointErrors = append(checkpointErrors, fmt.Errorf("recording the checkpoint for conversation %s failed: %w", conversationID, err))
+		}
+	}
+	c.recordUpsert(UpsertStats{JobID: jobID, RowsWritten: stats.rowsWritten, VectorsReused: stats.reused, VectorsEmbedded: stats.embedded})
+	if err := errors.Join(checkpointErrors...); err != nil {
+		return "", err
 	}
 	slog.InfoContext(ctx, "conversation.vectorsearch.upsert_completed",
 		"concern", "conversation.semantic",
@@ -157,7 +167,6 @@ func (c *Client) UpsertConversationDocuments(
 		"inputs_skipped", stats.dropped,
 		"times_filled", stats.timesFilled,
 	)
-	c.recordUpsert(UpsertStats{JobID: jobID, RowsWritten: stats.rowsWritten, VectorsReused: stats.reused, VectorsEmbedded: stats.embedded})
 	return jobID, nil
 }
 

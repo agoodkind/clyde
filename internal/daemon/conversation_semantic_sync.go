@@ -856,6 +856,11 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 	sent []deliveredConversation,
 	stats *conversationSemanticSyncStats,
 ) {
+	// An upsert can update one checkpoint before another checkpoint write fails.
+	// Remove earlier delivery memos before the upsert can make them stale.
+	for _, delivery := range sent {
+		delete(w.deliveredContent, delivery.id)
+	}
 	upsertStarted := clock.Now()
 	jobID, upsertErr := client.UpsertConversationDocuments(ctx, w.collectionID, docs, manifest)
 	if upsertErr != nil {

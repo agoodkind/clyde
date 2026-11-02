@@ -119,16 +119,17 @@ func (store *checkpointStore) needed(collectionName string, ids []string, finger
 // record writes the file before it updates the memory copy. After a failed
 // write the memory copy is unchanged, and the conversation stays needed after a
 // restart.
-func (store *checkpointStore) record(collectionName string, conversationID string, fingerprint string) {
+func (store *checkpointStore) record(collectionName string, conversationID string, fingerprint string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	recorded := store.records(collectionName)
 	if store.root != "" {
 		if err := writeCheckpointFile(filepath.Join(store.root, collectionName), conversationID, fingerprint); err != nil {
-			return
+			return err
 		}
 	}
 	recorded[conversationID] = fingerprint
+	return nil
 }
 
 // checkpointFileName returns the first 32 hex characters of the conversation
