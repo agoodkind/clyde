@@ -236,9 +236,9 @@ func readHeader(dir string) (collectionHeader, os.FileInfo, error) {
 	return header, info, nil
 }
 
-// requireNoStoredGenerations returns an error when a generation file exists
-// without a header. It allows empty generation 0 row and data files because
-// collection creation writes them before the header.
+// requireNoStoredGenerations returns an error for nonempty or later generation files
+// without a header. It does not return an error for empty generation 0 row and data
+// files because collection creation writes them before the header.
 func requireNoStoredGenerations(dir string) error {
 	emptyInitialFiles := map[string]bool{
 		generationFileName(rowsFilePrefix, 0): true,

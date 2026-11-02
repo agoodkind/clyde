@@ -15,7 +15,6 @@ const (
 	lockPollMaximum = 20 * time.Millisecond
 )
 
-// collectionLockPath returns the kernel lock file path beside the collection directory.
 func collectionLockPath(dir string) string {
 	return dir + lockFileSuffix
 }
@@ -225,7 +224,6 @@ func (stored *codeCollection) syncWithDisk() error {
 	return stored.replay()
 }
 
-// reload rebuilds the collection state from the current header and generation files.
 func (stored *codeCollection) reload() error {
 	fresh, err := loadCollection(stored.dir)
 	if err != nil {
