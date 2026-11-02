@@ -41,9 +41,10 @@ func checkpointFailureNextManifest() []semsearch.Fingerprint {
 
 // TestUpsertAtFileSizeLimitInChildProcess runs the second upsert with a file size limit.
 // TestUpsertReturnsCheckpointFailureWithLaterFailure starts this test in a child
-// process. The child lowers RLIMIT_FSIZE, and the limit ends when the child exits.
-// The parent test process keeps its original limit. The go command writes its test
-// log from the parent test process.
+// process. The child lowers RLIMIT_FSIZE and immediately registers a defer to
+// restore the original limit when the test returns, including after a failure.
+// The Go test binary needs the restored limit to write coverage data when the
+// child exits. The go command writes its test log from the parent test process.
 func TestUpsertAtFileSizeLimitInChildProcess(t *testing.T) {
 	root := os.Getenv(checkpointFailureChildRootEnv)
 	if root == "" {
@@ -63,6 +64,11 @@ func TestUpsertAtFileSizeLimitInChildProcess(t *testing.T) {
 	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &lowered); err != nil {
 		t.Fatalf("The test could not lower the file size limit: %v.", err)
 	}
+	defer func() {
+		if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &original); err != nil {
+			t.Fatalf("The test could not restore the file size limit: %v.", err)
+		}
+	}()
 	docs := []semsearch.SemDoc{checkpointFailureDocument(checkpointFailureBlockedChat), checkpointFailureDocument(checkpointFailureHealthyChat)}
 	_, upsertErr := client.UpsertConversationDocuments(context.Background(), checkpointFailureCollectionID, docs, checkpointFailureNextManifest())
 	if upsertErr == nil || !strings.Contains(upsertErr.Error(), checkpointFailureBlockedChat) {

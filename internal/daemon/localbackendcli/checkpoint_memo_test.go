@@ -27,6 +27,7 @@ const (
 	memoBatchPollDelay       = 100 * time.Millisecond
 	memoBatchWaitLimit       = 5 * time.Minute
 	memoBatchPassEvent       = "daemon.conversation_semantic_sync.pass_completed"
+	memoBatchFreshnessError  = "semantic_freshness.error"
 	memoBatchMessageTime     = "2026-05-02T10:00:00Z"
 	memoBatchFirstAge        = 6 * time.Hour
 	memoBatchSecondAge       = 5 * time.Hour
@@ -94,6 +95,9 @@ func (f *memoBatchFixture) statusCounter(name string) any {
 	}
 	if err := json.Unmarshal(output, &status); err != nil {
 		f.t.Fatalf("The test could not decode the daemon status: %v.", err)
+	}
+	if failure, failed := status.Counters[memoBatchFreshnessError]; failed {
+		f.t.Fatalf("The daemon reported %s in its status output: %v.", memoBatchFreshnessError, failure.Value)
 	}
 	return status.Counters[name].Value
 }
