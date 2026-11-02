@@ -51,7 +51,6 @@ func (*Parser) SourceStoreMessages(ctx context.Context, record conversation.Reco
 	}
 	if source.MissingNativeRecords > 0 {
 		slog.WarnContext(ctx, "providers.cursor.parser.source_times_native_records_missing", "concern", concern, "composer_id", composerID, "missing", source.MissingNativeRecords)
-		return emptySourceMessages(), false, fmt.Errorf("missing native records for composer %q: %d", composerID, source.MissingNativeRecords)
 	}
 	return source, found, nil
 }

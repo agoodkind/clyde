@@ -1,6 +1,7 @@
 package cursorstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -355,7 +356,24 @@ func readNativeState(ctx context.Context, db *sql.DB, composerID string) ([]byte
 }
 
 func readNativeBlob(ctx context.Context, db *sql.DB, reference []byte) ([]byte, bool, error) {
-	return ReadKVValue(ctx, db, KVTableCursorDiskKV, nativeBlobKeyPrefix+hex.EncodeToString(reference))
+	value, found, err := ReadKVValue(ctx, db, KVTableCursorDiskKV, nativeBlobKeyPrefix+hex.EncodeToString(reference))
+	if err != nil || !found {
+		return value, found, err
+	}
+	return hexDecodedNativeBlob(value, reference), true, nil
+}
+
+// hexDecodedNativeBlob decodes hexadecimal text only when the decoded bytes match the SHA-256 reference.
+func hexDecodedNativeBlob(value []byte, reference []byte) []byte {
+	decoded := make([]byte, hex.DecodedLen(len(value)))
+	if _, err := hex.Decode(decoded, value); err != nil {
+		return value
+	}
+	digest := sha256.Sum256(decoded)
+	if !bytes.Equal(digest[:], reference) {
+		return value
+	}
+	return decoded
 }
 
 func unmarshalNativeMessage(data []byte) (nativeMessageFields, error) {

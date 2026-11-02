@@ -106,6 +106,11 @@ func writeUserBoundaryStore(t *testing.T, dataRoot string, commandArgs func(stri
 
 func writeNativeComposerStore(t *testing.T, dataRoot string, composerID string, native []userBoundaryNativeMessage, bubbles []userBoundaryBubble, unreferenced []userBoundaryBubble) {
 	t.Helper()
+	writeNativeComposerStoreOmitting(t, dataRoot, composerID, native, nil, bubbles, unreferenced)
+}
+
+func writeNativeComposerStoreOmitting(t *testing.T, dataRoot string, composerID string, native []userBoundaryNativeMessage, omitted map[int]bool, bubbles []userBoundaryBubble, unreferenced []userBoundaryBubble) {
+	t.Helper()
 	marshal := combinedCopyJSON(t)
 	dbPath := filepath.Join(dataRoot, "globalStorage", "state.vscdb")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
@@ -133,12 +138,17 @@ func writeNativeComposerStore(t *testing.T, dataRoot string, composerID string, 
 		}
 	}
 	var state []byte
-	for _, message := range native {
+	written := map[string]bool{}
+	for index, message := range native {
 		data := []byte(marshal(json.Marshal(message)))
 		digest := sha256.Sum256(data)
 		state = append(state, 0x0a, byte(len(digest)))
 		state = append(state, digest[:]...)
-		exec("agentKv:blob:"+hex.EncodeToString(digest[:]), data)
+		key := "agentKv:blob:" + hex.EncodeToString(digest[:])
+		if !omitted[index] && !written[key] {
+			written[key] = true
+			exec(key, data)
+		}
 	}
 	composer := userBoundaryComposer{
 		ComposerID: composerID, Name: "User boundary", CreatedAt: 1779267600000, LastUpdatedAt: 1779268000000,

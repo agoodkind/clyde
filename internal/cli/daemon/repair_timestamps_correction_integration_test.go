@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,6 +38,11 @@ const (
 
 func writeCorrectionSources(t *testing.T, dataRoot string, projects string) {
 	t.Helper()
+	writeCorrectionSourcesOmitting(t, dataRoot, projects, nil)
+}
+
+func writeCorrectionSourcesOmitting(t *testing.T, dataRoot string, projects string, omitted map[int]bool) {
+	t.Helper()
 	marshal := combinedCopyJSON(t)
 	commandArgs := func(command string) json.RawMessage {
 		return json.RawMessage(marshal(json.Marshal(userBoundaryArgs{Command: command})))
@@ -44,12 +50,12 @@ func writeCorrectionSources(t *testing.T, dataRoot string, projects string) {
 	toolFormer := func(callID string) *userBoundaryToolFormer {
 		return &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: callID}
 	}
-	writeNativeComposerStore(t, dataRoot, correctionComposerID, []userBoundaryNativeMessage{
+	writeNativeComposerStoreOmitting(t, dataRoot, correctionComposerID, []userBoundaryNativeMessage{
 		{Role: "user", Content: []userBoundaryNativePart{{Type: "text", Text: correctionQuestion, ToolCallID: "", ToolName: "", Args: nil}}},
 		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_a", ToolName: "Shell", Args: commandArgs(userBoundaryGit)}}},
 		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "text", Text: correctionReply, ToolCallID: "", ToolName: "", Args: nil}}},
 		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_b", ToolName: "Shell", Args: commandArgs(userBoundaryTest)}}},
-	}, []userBoundaryBubble{
+	}, omitted, []userBoundaryBubble{
 		{Version: 3, Type: 1, BubbleID: "u1", Text: correctionQuestion, CreatedAt: "2026-05-20T10:00:00.000Z", ToolFormerData: nil},
 		{Version: 3, Type: 2, BubbleID: "t1", Text: "", CreatedAt: "2026-05-20T10:01:00.000Z", ToolFormerData: toolFormer("call_a")},
 		{Version: 3, Type: 2, BubbleID: "a1", Text: correctionReply, CreatedAt: "2026-05-20T10:02:00.000Z", ToolFormerData: nil},
@@ -225,6 +231,47 @@ func runCorrectionCommand(t *testing.T, ctx context.Context, address string, arg
 	command.SetArgs(append([]string{"--source-store"}, arguments...))
 	err := command.ExecuteContext(ctx)
 	return output.String(), err
+}
+
+// TestTimestampCorrectionReportsAMissingNativeRecordAsALoadFailure checks that timestamp correction reports a source load failure when the native store does not contain a required record.
+func TestTimestampCorrectionReportsAMissingNativeRecordAsALoadFailure(t *testing.T) {
+	address, home := correctionHome(t)
+	writeCorrectionSourcesOmitting(t, filepath.Join(home, "cursor-data"), filepath.Join(home, "cursor-projects"), map[int]bool{3: true})
+	ctx := context.Background()
+	conversationID, built := correctionDocuments(t, ctx)
+	seedCorrectionDocuments(t, ctx, address, conversationID, wrongDateDocuments(built))
+	seeded, seededVectors := sharedSnapshot(t, address)
+	manifestPath := filepath.Join(home, "manifest.jsonl")
+	writeCorrectionManifest(t, manifestPath, conversationID, seeded)
+	evidencePath := filepath.Join(home, "evidence.jsonl")
+	progressPath := filepath.Join(home, "progress.json")
+	output, err := runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--evidence-file", evidencePath, "--execute", "--limit", "1", "--progress-file", progressPath)
+	if err != nil {
+		t.Fatalf("timestamp correction command failed while checking a missing native record: %v", err)
+	}
+	requireCommandOutput(t, output, "1 conversations that failed to load", vectorsearch.CorrectionSourceLoadFailed+"=", "written=0")
+	progress := readProgress(t, progressPath)
+	if progress.Complete || !slices.Equal(progress.Failed, []string{conversationID}) {
+		t.Fatalf("progress must remain incomplete and record only the conversation that failed to load; progress: %+v", progress)
+	}
+	evidence, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatalf("cannot read correction evidence: %v", err)
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(string(evidence)), "\n") {
+		var entry vectorsearch.TimestampCorrectionEvidence
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("cannot decode correction evidence %q: %v", line, err)
+		}
+		if entry.SourceOutcome != vectorsearch.CorrectionSourceLoadFailed || entry.Correction != vectorsearch.CorrectionNotEvaluated || entry.Written {
+			t.Fatalf("correction evidence must report a source load failure and indicate that correction did not evaluate or write the row; evidence: %+v", entry)
+		}
+	}
+	time.Sleep(repairVisibilityWait)
+	after, afterVectors := sharedSnapshot(t, address)
+	if !maps.Equal(seeded, after) || !maps.EqualFunc(seededVectors, afterVectors, slices.Equal[[]uint32]) {
+		t.Fatal("timestamp correction changed stored rows or vector bytes after a source load failure")
+	}
 }
 
 func requireCommandOutput(t *testing.T, output string, wants ...string) {
