@@ -26,10 +26,6 @@ func longPathRow(t *testing.T, model *staticembed.Model, id string) collection.R
 	return row
 }
 
-// TestStoreKeepsFilesWhenDirectoryIsUnreadableWithoutHeader removes the header
-// and denies permission to list the collection directory. The test checks that
-// Load and EnsureCollection return errors matching os.ErrPermission and preserve
-// all file names and contents.
 func TestStoreKeepsFilesWhenDirectoryIsUnreadableWithoutHeader(t *testing.T) {
 	const (
 		searchWithoutListing = 0o300
