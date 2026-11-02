@@ -1205,11 +1205,22 @@ func TestMilvusFeederQueuesChangedChatAfterZeroDocumentListing(t *testing.T) {
 	if err := installNewestTranscript(fixture.home, newestChangedSession, body, firstModified); err != nil {
 		t.Fatalf("The test could not install the transcript: %v", err)
 	}
+	// The worker does not create the Milvus collection for a chat without documents.
+	// The test waits for the existing chat's rows before counting the empty chat's rows.
+	existing := newestTranscript(newestExistingSession, newestWaitingMessages, 0, firstModified)
+	if err := installNewestTranscript(fixture.home, newestExistingSession, existing, firstModified); err != nil {
+		t.Fatalf("The test could not install the existing chat's transcript: %v", err)
+	}
 	fixture.startDaemon(settings)
 	fixture.waitFor("a sync pass with a policy_skipped count above zero", func() bool {
 		return slices.ContainsFunc(fixture.passRecords(), func(record newestPassRecord) bool { return record.PolicySkipped > 0 })
 	})
-	if count, err := fixture.rows(newestChangedSession); err == nil && count != 0 {
+	fixture.waitForRows(newestExistingSession, newestWaitingMessages)
+	count, err := fixture.rows(newestChangedSession)
+	if err != nil {
+		t.Fatalf("The test could not count Milvus rows for the chat without documents: %v", err)
+	}
+	if count != 0 {
 		t.Fatalf("The control record has %d Milvus rows; the test expected zero.", count)
 	}
 	checkChangedChatJoinsQueue(t, fixture, gate)
