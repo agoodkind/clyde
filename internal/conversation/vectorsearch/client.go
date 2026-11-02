@@ -27,7 +27,10 @@ const (
 	milvusConnectTimeout   = 2 * time.Second
 	milvusCloseTimeout     = 5 * time.Second
 	queryVectorCacheSize   = 64
-	// defaultIngestSliceRows limits one upsert slice to about eight embedding requests.
+	// defaultIngestSliceRows sets the default row limit for one upsert slice.
+	// embedAndWrite checks the processed row count before each pack and stops
+	// when it meets or exceeds the limit. Token packing and vector reuse change
+	// the number of embedding requests.
 	defaultIngestSliceRows = 256
 )
 
