@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -178,9 +177,25 @@ type conversationSemanticSyncWorker struct {
 	// lastNeeded is the count of conversations the engine reported as needed
 	// in the latest pass. A pass that ends before the manifest sync sets zero.
 	lastNeeded int
+	// lastCompleted counts conversations with fingerprints in the latest accepted
+	// upsert.
+	lastCompleted int
 	// deliveryCursor is the last conversation id delivered; each batch resumes
 	// after it instead of restarting at the lexicographically smallest id.
 	deliveryCursor string
+	// priorityBatchNext selects arrival cohort order when true and rotated order
+	// when false.
+	priorityBatchNext bool
+	// arrivalCohorts groups needed conversations by the pass that first queued them.
+	arrivalCohorts []arrivalCohort
+	// nextCohortSequence records the sequence number of the newest arrival cohort.
+	nextCohortSequence int
+	// lastCohortServed records the cohort sequence of the first conversation selected
+	// for the latest nonempty batch in arrival cohort order.
+	lastCohortServed int
+	// roundLastSequence limits the cohort sequences that can start a batch in the
+	// current arrival cohort round.
+	roundLastSequence int
 	// emptyDelivered maps a conversation id to the fingerprint at which it
 	// rendered zero deliverable documents. The engine only marks a conversation
 	// satisfied once it receives a document, so a zero-document conversation
@@ -273,11 +288,15 @@ type conversationSemanticSyncStats struct {
 	// pass in the log can be attributed to specific conversations. The log line
 	// bounds the list; the full slice stays here for the freshness snapshot.
 	sentConversationIDs []string
+	// firstListedIDs records the conversations that joined the queue in this pass.
+	firstListedIDs []string
 	// unchangedPinned counts conversations this pass recognized as touched
 	// without a content change: their stamp moved, their projected bytes did
 	// not, so nothing was delivered and the manifest pins the checkpointed
 	// fingerprint from the next pass on.
 	unchangedPinned int
+	// unchangedPinnedIDs records the IDs of conversations that this pass pins.
+	unchangedPinnedIDs []string
 }
 
 // installConversationSemanticSyncStop creates the feeder's worker context and
@@ -387,7 +406,13 @@ func newConversationSemanticSyncWorker(
 		interval:           conversationSemanticSyncInterval,
 		activeJobID:        "",
 		lastNeeded:         0,
+		lastCompleted:      0,
 		deliveryCursor:     "",
+		priorityBatchNext:  false,
+		arrivalCohorts:     nil,
+		nextCohortSequence: 0,
+		lastCohortServed:   0,
+		roundLastSequence:  0,
 		emptyDelivered:     make(map[string]string),
 		failedLoad:         make(map[string]failedLoadRecord),
 		deliveredContent:   make(map[string]deliveredContentRecord),
@@ -509,7 +534,9 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		injectedStripped:    0,
 		systemStripped:      0,
 		sentConversationIDs: nil,
+		firstListedIDs:      nil,
 		unchangedPinned:     0,
+		unchangedPinnedIDs:  nil,
 	}
 	// An empty manifest still syncs when this pass omitted anything, because
 	// the engine's copy of the manifest is whatever the last sync stated.
@@ -521,6 +548,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	// the store. Only a corpus with nothing to state at all skips the round
 	// trip.
 	if len(manifest) == 0 && failedSuppressed == 0 && len(w.emptyDelivered) == 0 {
+		stats.firstListedIDs = w.reconcileNeeded(nil, stampsByID)
 		w.logPass(ctx, stats)
 		return nil
 	}
@@ -531,6 +559,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	}
 	stats.needed = len(needed)
 	w.lastNeeded = len(needed)
+	stats.firstListedIDs = w.reconcileNeeded(needed, stampsByID)
 	if len(needed) == 0 {
 		w.logPass(ctx, stats)
 		return nil
@@ -722,10 +751,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	stampsByID map[string]conversation.FileStamp,
 	stats *conversationSemanticSyncStats,
 ) ([]semsearch.SemDoc, []deliveredConversation) {
-	ordered := make([]string, len(needed))
-	copy(ordered, needed)
-	sort.Strings(ordered)
-	ordered = rotateAfter(ordered, w.deliveryCursor)
+	ordered, rotated := w.deliveryOrder(needed, stampsByID)
 
 	prefetched := w.prefetchNeededDocuments(ctx, ordered, recordsByID, stampsByID)
 	docs := make([]semsearch.SemDoc, 0)
@@ -810,7 +836,8 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 				advertise: memo.fingerprint,
 			}
 			stats.unchangedPinned++
-			w.deliveryCursor = conversationID
+			stats.unchangedPinnedIDs = append(stats.unchangedPinnedIDs, conversationID)
+			w.advanceDeliveryCursor(rotated, conversationID)
 			continue
 		}
 		docs = append(docs, built.Docs...)
@@ -820,11 +847,12 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			fingerprint:    fingerprint,
 			projectionHash: projectionHash,
 		})
-		w.deliveryCursor = conversationID
+		w.advanceDeliveryCursor(rotated, conversationID)
 		if artifactBytes >= w.batchBytes {
 			break
 		}
 	}
+	w.markBatchServed(rotated, sent)
 	return docs, sent
 }
 
@@ -856,8 +884,9 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 	sent []deliveredConversation,
 	stats *conversationSemanticSyncStats,
 ) {
-	// An upsert can update one checkpoint before another checkpoint write fails.
-	// Remove earlier delivery memos before the upsert can make them stale.
+	// The upsert can save checkpoints for earlier conversations before a later
+	// conversation fails. sendDocuments removes delivery memos before the upsert
+	// changes the checkpoint fingerprints.
 	for _, delivery := range sent {
 		delete(w.deliveredContent, delivery.id)
 	}
@@ -891,6 +920,7 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 		if delivery.fingerprint == "" {
 			continue
 		}
+		w.lastCompleted++
 		w.deliveredContent[delivery.id] = deliveredContentRecord{
 			fingerprint:    delivery.fingerprint,
 			projectionHash: delivery.projectionHash,
@@ -914,44 +944,6 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 // rejection of a second job while one is already running for the collection.
 func isConflictingActiveJob(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "conflicting active job")
-}
-
-// logPass records one pass. policy_skipped and failed_suppressed are reported
-// beside failed rather than folded into it, and a pass that withheld anything is
-// logged at Info, so a feeder skipping most of a corpus is visible rather than
-// buried at Debug.
-//
-// failed_suppressed keeps a shrinking manifest honest. A conversation left out
-// because it failed earlier is content the store does not hold, so a pass that
-// suppresses any is reported at Info even when it did nothing else.
-func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conversationSemanticSyncStats) {
-	w.freshness.publish(stats)
-	if stats.sentConversations > 0 || stats.failed > 0 || stats.policySkipped > 0 || stats.failedSuppressed > 0 || stats.unchangedPinned > 0 {
-		w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"manifest", stats.manifest,
-			"needed", stats.needed,
-			"sent_conversations", stats.sentConversations,
-			"documents", stats.documents,
-			"deferred", stats.deferred,
-			"failed", stats.failed,
-			"failed_suppressed", stats.failedSuppressed,
-			"policy_skipped", stats.policySkipped,
-			"injected_stripped", stats.injectedStripped,
-			"system_stripped", stats.systemStripped,
-			"sent_conversation_ids", boundedConversationIDs(stats.sentConversationIDs),
-			"unchanged_pinned", stats.unchangedPinned,
-		)
-		return
-	}
-	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
-		"concern", "conversation.semantic",
-		"component", "daemon",
-		"manifest", stats.manifest,
-		"needed", stats.needed,
-		"deferred", stats.deferred,
-	)
 }
 
 func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) (SemanticConversationDocuments, error) {
