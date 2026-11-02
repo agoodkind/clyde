@@ -150,9 +150,7 @@ func writeHeader(dir string, header collectionHeader) error {
 	return syncDirectory(dir)
 }
 
-// initializeGenerationFiles creates missing row and data files for one generation.
-// New files start empty. It does not change existing bytes. createCollection
-// uses this function for generation 0 before it publishes the header.
+// initializeGenerationFiles does not change existing bytes.
 func initializeGenerationFiles(dir string, generation int64) error {
 	for _, prefix := range []string{rowsFilePrefix, dataFilePrefix} {
 		path := filepath.Join(dir, generationFileName(prefix, generation))

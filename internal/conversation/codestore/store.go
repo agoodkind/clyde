@@ -96,9 +96,6 @@ func (store *Store) lockedCollection(ctx context.Context, name string) (*codeCol
 	return stored, unlock, nil
 }
 
-// cachedCollection reads the collection cache under the store mutex.
-// It returns ErrStoreClosed after Close. If the cache does not contain the
-// collection, it returns nil without an error.
 func (store *Store) cachedCollection(name string) (*codeCollection, error) {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
