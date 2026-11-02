@@ -49,8 +49,8 @@ func Open(root string, model string) (*Store, error) {
 }
 
 // Close marks the store and each cached collection handle closed. It closes each
-// handle's files and clears the cache. Later requests return ErrStoreClosed and
-// cannot reopen collection files.
+// handle's files and clears the cache. Later requests that pass earlier context and
+// argument checks return ErrStoreClosed and cannot reopen collection files.
 func (store *Store) Close() {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
