@@ -109,7 +109,6 @@ func splitRecoveryLongText() string {
 	return builder.String()
 }
 
-// splitRecoveryDocuments places the first piece of the long message at row 256.
 func splitRecoveryDocuments() []semsearch.SemDoc {
 	docs := make([]semsearch.SemDoc, 0, splitRecoveryWriteBatch+1)
 	for position := range splitRecoveryWriteBatch - 1 {
@@ -366,7 +365,6 @@ func TestSharedLayoutRetryWritesPiecesAfterStoppedOccurrenceWrite(t *testing.T) 
 	moved := slices.Clone(fixture.docs)
 	moved[splitRecoveryWriteBatch-1].WorkspaceRoot = splitRecoveryMovedRoot
 	fixture.retry(moved, splitRecoveryMovedPrint)
-	// requireKept compares the stored workspace root and metadata of each earlier row.
 	withMove := fixture.requireKept(stopped, stoppedBits)
 	fixture.requireComplete(withMove, complete)
 	movedPieces := 0
@@ -795,7 +793,6 @@ func TestSharedLayoutInMemoryCheckpointKeepsRunningWriteDistinct(t *testing.T) {
 	}
 }
 
-// recordedModelProof returns the family proof that a running upsert stores for model.
 func recordedModelProof(t *testing.T, address string, model string) string {
 	t.Helper()
 	const conversationID = "codex:proof"

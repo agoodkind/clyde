@@ -121,7 +121,8 @@ func (state *conversationState) differs(familyKey string, generated []storedChun
 	return false
 }
 
-// Complete pieces match even when their split boundaries differ.
+// pathComplete reports whether stored pieces for the same path cover the generated chunk
+// with matching content, even if their split boundaries differ.
 func (state *conversationState) pathComplete(familyKey string, chunk storedChunk) bool {
 	if state == nil {
 		return false

@@ -231,7 +231,8 @@ func stopUpsert(ctx context.Context, collectionName string, failures []error, er
 	return joined
 }
 
-// The caller must run the release function even if claimConversations returns an error.
+// claimConversations returns a callable release function on every return, including errors.
+// The caller must run it.
 func (store *checkpointStore) claimConversations(collectionName string, order []string, partial *PartialUpsertError) ([]string, func(), error) {
 	claimed := make([]string, 0, len(order))
 	claims := make([]*conversationClaim, 0, len(order))
@@ -457,8 +458,9 @@ func conversationFamilies(conversationID string, docs []semsearch.SemDoc) ([]chu
 // planConversation includes edited text when stored rows do not prove that ingestion
 // has stored the current message. The interrupted set lists families with unfinished
 // writes. Without that evidence, a stored prefix can represent a complete older
-// version, and the plan preserves that family. The plan does not add rows for a path
-// with complete stored pieces, even when the split boundaries differ.
+// version, and the plan preserves that family. The plan skips rows when stored pieces for
+// the same path match the generated chunk's full content, even if their split boundaries
+// differ.
 func (c *Client) planConversation(families []chunkFamily, state *conversationState, interrupted map[string]struct{}) ([]storedChunk, map[string]matchedRow) {
 	chunks := make([]storedChunk, 0)
 	fills := make(map[string]matchedRow)

@@ -564,7 +564,6 @@ func markedFamilies(stopped []storedWrite) map[string]struct{} {
 	return families
 }
 
-// plannedFamilyProofs returns one entry for each family with planned chunks.
 func plannedFamilyProofs(conversationID string, chunks []storedChunk, proofs map[string]string) []familyProof {
 	families := groupFamilies(conversationID, chunks)
 	planned := make([]familyProof, 0, len(families))

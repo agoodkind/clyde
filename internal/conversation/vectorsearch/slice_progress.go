@@ -50,7 +50,6 @@ type sliceProgress struct {
 	bytes        int64
 }
 
-// measure updates the plan's estimated memory use.
 func (progress *sliceProgress) measure() {
 	total := int64(len(progress.ids)+len(progress.repeated)+len(progress.sources)+len(progress.storedSplits)) * sliceKeyEntryBytes
 	for _, chunk := range progress.extra {

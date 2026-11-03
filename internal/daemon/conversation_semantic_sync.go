@@ -142,8 +142,6 @@ type conversationSemanticClient interface {
 	JobState(ctx context.Context, jobID string) (string, error)
 }
 
-// conversationSliceClient limits the rows written in one pass. A client without
-// this method writes each delivered conversation in one upsert.
 type conversationSliceClient interface {
 	UpsertConversationSlice(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
 }
