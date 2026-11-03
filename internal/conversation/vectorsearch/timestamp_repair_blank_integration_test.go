@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ const (
 	blankRepairFirstText      = "Inspect the tree."
 	blankRepairOtherFirstText = "Inspect a different tree."
 	blankRepairLastText       = "The tree is clean."
+	blankRepairOtherLastText  = "The tree has changes."
 	blankRepairCommand        = "git status --short"
 	blankRepairOtherCommand   = "git log --oneline"
 	blankRepairToolName       = "Shell"
@@ -86,7 +88,23 @@ func blankRepairDocuments(firstText string, toolDate int64, command string) []se
 	}
 }
 
-func blankRowDate(t *testing.T, address string, collectionID string) (int64, bool) {
+// blankRepairChangedSource returns source documents that differ from the matching
+// source documents in one way.
+func blankRepairChangedSource(position int, change func(doc *semsearch.SemDoc)) []semsearch.SemDoc {
+	docs := blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand)
+	change(&docs[position])
+	return docs
+}
+
+// blankRepairRow is one stored row at the blank message path.
+type blankRepairRow struct {
+	role      string
+	content   string
+	splitPart int32
+}
+
+// blankRowDates returns the known dates of the stored rows at the blank message path.
+func blankRowDates(t *testing.T, address string, collectionID string, wantRows int) []int64 {
 	t.Helper()
 	ctx := context.Background()
 	reader, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address})
@@ -102,28 +120,37 @@ func blankRowDate(t *testing.T, address string, collectionID string) (int64, boo
 	if err != nil {
 		t.Fatalf("Query failed: %v.", err)
 	}
-	if result.ResultCount != 1 {
-		t.Fatalf("The query found %d blank rows instead of 1.", result.ResultCount)
+	if result.ResultCount != wantRows {
+		t.Fatalf("The query found %d blank rows instead of %d.", result.ResultCount, wantRows)
 	}
 	column := result.GetColumn("timestampUnix")
-	isNull, err := column.IsNull(0)
-	if err != nil {
-		t.Fatalf("IsNull failed: %v.", err)
+	dates := make([]int64, 0, wantRows)
+	unknownDate := time.Time{}.Unix()
+	for position := range result.ResultCount {
+		isNull, err := column.IsNull(position)
+		if err != nil {
+			t.Fatalf("IsNull failed: %v.", err)
+		}
+		if isNull {
+			continue
+		}
+		stamp, err := column.GetAsInt64(position)
+		if err != nil {
+			t.Fatalf("GetAsInt64 failed: %v.", err)
+		}
+		if stamp != unknownDate {
+			dates = append(dates, stamp)
+		}
 	}
-	if isNull {
-		return 0, false
-	}
-	stamp, err := column.GetAsInt64(0)
-	if err != nil {
-		t.Fatalf("GetAsInt64 failed: %v.", err)
-	}
-	return stamp, stamp != time.Time{}.Unix()
+	return dates
 }
 
-// TestRepairDatesBlankRowOnlyWithExactStoredRows checks that source repair dates a blank
-// text row when its stored tool row and nearest text rows match the source and its
-// stored tool date equals the source date. It also checks that repair leaves the row
-// without a date when any match fails or the stored tool row does not exist.
+// TestRepairDatesBlankRowOnlyWithExactStoredRows checks that source repair assigns
+// a date to a blank text row when its stored tool row and nearest text rows match
+// the source and its stored tool date equals the source date.
+// It checks that repair does not assign a date when any match fails, the stored
+// tool row does not exist, the source message has another role or has text, or
+// the blank family has two whole rows or split rows.
 func TestRepairDatesBlankRowOnlyWithExactStoredRows(t *testing.T) {
 	milvustest.RequireEnabled(t)
 	address := milvustest.Start(t)
@@ -131,13 +158,53 @@ func TestRepairDatesBlankRowOnlyWithExactStoredRows(t *testing.T) {
 	t.Cleanup(server.Close)
 	t.Setenv(embeddingBaseURLEnv, server.URL+"/v1")
 	client := openClient(t, address, vectorsearch.LayoutShared)
+	oneBlankRow := []blankRepairRow{{role: blankRepairAssistant, content: " ", splitPart: 0}}
 	testCases := []struct {
 		name       string
 		stored     []semsearch.SemDoc
 		source     []semsearch.SemDoc
+		blankRows  []blankRepairRow
 		wantMatch  bool
 		wantReason string
 	}{
+		{
+			name:       "the following text row differs from the source",
+			stored:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source:     blankRepairChangedSource(2, func(doc *semsearch.SemDoc) { doc.Text = blankRepairOtherLastText }),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:       "the source message has another role",
+			stored:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source:     blankRepairChangedSource(blankRepairBlankMessage, func(doc *semsearch.SemDoc) { doc.Role = blankRepairUser }),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:       "the source message has text",
+			stored:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source:     blankRepairChangedSource(blankRepairBlankMessage, func(doc *semsearch.SemDoc) { doc.Text = blankRepairOtherLastText }),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:   "the blank family has two whole rows",
+			stored: blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source: blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			blankRows: []blankRepairRow{
+				{role: blankRepairAssistant, content: " ", splitPart: 0},
+				{role: blankRepairUser, content: "\t", splitPart: 0},
+			},
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:   "the blank family has split rows",
+			stored: blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source: blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			blankRows: []blankRepairRow{
+				{role: blankRepairAssistant, content: " ", splitPart: 1},
+				{role: blankRepairAssistant, content: "\t", splitPart: 2},
+			},
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
 		{
 			name:      "the stored rows match the source",
 			stored:    blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
@@ -177,26 +244,32 @@ func TestRepairDatesBlankRowOnlyWithExactStoredRows(t *testing.T) {
 			if _, err := client.UpsertConversationDocuments(ctx, collectionID, testCase.stored, manifest); err != nil {
 				t.Fatalf("UpsertConversationDocuments failed: %v.", err)
 			}
-			if err := vectorsearch.WriteBlankRowForTest(ctx, client, collectionID, blankRepairConversationID, blankRepairBlankMessage, blankRepairAssistant); err != nil {
-				t.Fatalf("WriteBlankRowForTest failed: %v.", err)
+			blankRows := testCase.blankRows
+			if blankRows == nil {
+				blankRows = oneBlankRow
+			}
+			for _, row := range blankRows {
+				if err := vectorsearch.WriteBlankRowForTest(ctx, client, collectionID, blankRepairConversationID, blankRepairBlankMessage, row.role, row.content, row.splitPart); err != nil {
+					t.Fatalf("WriteBlankRowForTest failed: %v.", err)
+				}
 			}
 			source := vectorsearch.TimestampSourceRepairSource{ConversationID: blankRepairConversationID, Documents: testCase.source}
 			report, err := client.RepairTimestampsFromSource(ctx, collectionID, []vectorsearch.TimestampSourceRepairSource{source}, false)
 			if err != nil {
 				t.Fatalf("RepairTimestampsFromSource failed: %v.", err)
 			}
-			stamp, dated := blankRowDate(t, address, collectionID)
+			dates := blankRowDates(t, address, collectionID, len(blankRows))
 			if testCase.wantMatch {
-				if !dated || stamp != blankRepairToolDate {
-					t.Fatalf("The blank row has timestamp %d with dated=%t; it must have timestamp %d with dated=true.", stamp, dated, blankRepairToolDate)
+				if !slices.Equal(dates, []int64{blankRepairToolDate}) {
+					t.Fatalf("The blank row has dates %v instead of %d.", dates, blankRepairToolDate)
 				}
 				return
 			}
-			if dated {
-				t.Fatalf("The repair dated the blank row with %d.", stamp)
+			if len(dates) != 0 {
+				t.Fatalf("The repair dated the blank rows with %v.", dates)
 			}
-			if report.Outcomes[testCase.wantReason] != 1 {
-				t.Fatalf("The repair returned outcomes %v; the expected count for %s is 1.", report.Outcomes, testCase.wantReason)
+			if report.Outcomes[testCase.wantReason] != len(blankRows) {
+				t.Fatalf("The repair returned outcomes %v; the expected count for %s is %d.", report.Outcomes, testCase.wantReason, len(blankRows))
 			}
 		})
 	}

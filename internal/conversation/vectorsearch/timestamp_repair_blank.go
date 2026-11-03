@@ -37,7 +37,7 @@ func (lookup sourceTimeLookup) bindBlankFamilies(families map[string][]collectio
 	for key, members := range families {
 		familyKind, _, _ := strings.Cut(key, familyPartSeparator)
 		message, parsed := familyMessage(key)
-		if familyKind != conversationTextFamily || !parsed || !familyIsBlank(members) {
+		if familyKind != conversationTextFamily || !parsed || !familyIsOneBlankRow(key, members) {
 			continue
 		}
 		if stamp, verified := lookup.verifyBlankFamily(index, message, rowRole(members)); verified {
@@ -169,6 +169,16 @@ func rowsEqualGenerated(members []collection.StoredRow, generated map[string]str
 		}
 	}
 	return true
+}
+
+// familyIsOneBlankRow reports whether a family contains exactly one row and
+// that row is blank, uses the family path, and does not have a split part.
+func familyIsOneBlankRow(key string, members []collection.StoredRow) bool {
+	if len(members) != 1 || !familyIsBlank(members) {
+		return false
+	}
+	row := members[0]
+	return row.RelativePath == key && (!row.SplitPartRecorded || row.SplitPart == 0)
 }
 
 func familyIsBlank(members []collection.StoredRow) bool {
