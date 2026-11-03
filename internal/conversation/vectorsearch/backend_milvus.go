@@ -255,7 +255,6 @@ func (b *milvusBackend) readRowVectors(ctx context.Context, collectionName strin
 	return rows, nil
 }
 
-// readSharedVectors uses each row's vector key to read its stored vector.
 func (b *milvusBackend) readSharedVectors(ctx context.Context, collectionName string, keyByID map[string]string) (map[string][]float32, error) {
 	vectorCollection := milvusstore.VectorCollectionName(collectionName)
 	keys := make([]string, 0, len(keyByID))

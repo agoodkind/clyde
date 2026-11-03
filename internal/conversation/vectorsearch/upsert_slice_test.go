@@ -1,6 +1,7 @@
 package vectorsearch_test
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -164,6 +165,9 @@ func sliceStoredContents(t *testing.T, root string) []string {
 	if err != nil {
 		t.Fatalf("read stored rows: %v", err)
 	}
+	slices.SortFunc(rows, func(left collection.StoredRow, right collection.StoredRow) int {
+		return cmp.Or(cmp.Compare(left.RelativePath, right.RelativePath), cmp.Compare(left.SplitPart, right.SplitPart))
+	})
 	contents := make([]string, 0, len(rows))
 	for _, row := range rows {
 		contents = append(contents, row.Content)
@@ -482,8 +486,8 @@ func TestUpsertConversationSliceBoundsOneSplitMessage(t *testing.T) {
 		t.Fatalf("The message finished in %d slices; the test expected at least 3.", slicesRun)
 	}
 	stored := strings.Join(sliceStoredContents(t, root), "")
-	if len(stored) != len(doc.Text) {
-		t.Fatalf("The stored parts contain %d bytes; the test expected %d.", len(stored), len(doc.Text))
+	if stored != doc.Text {
+		t.Fatalf("The stored pieces rebuild a different message with %d bytes. The expected message has %d bytes.", len(stored), len(doc.Text))
 	}
 }
 

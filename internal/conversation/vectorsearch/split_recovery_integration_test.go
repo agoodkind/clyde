@@ -279,7 +279,6 @@ func (f *splitRecoveryFixture) requireLaterPiecesAbsent(rows map[string]splitRec
 	}
 }
 
-// requireKept fails if the retry changes any previously stored row or vector.
 func (f *splitRecoveryFixture) requireKept(kept map[string]splitRecoveryRow, keptBits map[string][]uint32) map[string]splitRecoveryRow {
 	f.t.Helper()
 	current := f.rows()
@@ -434,7 +433,6 @@ func (g *splitRecoveryGate) open() {
 	}
 }
 
-// pause makes later embedding requests wait and resets the request count.
 func (g *splitRecoveryGate) pause() {
 	g.mutex.Lock()
 	defer g.mutex.Unlock()

@@ -538,7 +538,6 @@ func changedFamilies(families []familyProof, proofs map[string]string) []familyP
 	return changed
 }
 
-// stoppedFamilies returns the families with a stopped write of their current projection.
 func stoppedFamilies(stopped []storedWrite, proofs map[string]string) map[string]struct{} {
 	families := make(map[string]struct{})
 	for _, write := range stopped {
@@ -573,7 +572,6 @@ func plannedFamilyProofs(conversationID string, chunks []storedChunk, proofs map
 	return planned
 }
 
-// writeProofField writes the field name, value length, and value to delimit each field.
 func writeProofField(digest hash.Hash, name string, value string) {
 	_, _ = digest.Write([]byte(name + "=" + strconv.Itoa(len(value)) + ":" + value + "\n"))
 }
