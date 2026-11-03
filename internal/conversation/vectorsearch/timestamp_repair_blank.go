@@ -35,7 +35,7 @@ func (lookup sourceTimeLookup) bindBlankFamilies(conversationID string, families
 	if len(lookup.documents) == 0 {
 		return
 	}
-	index := newBlankFamilyIndex(families)
+	index := lookup.newBlankFamilyIndex(families)
 	textPrefix := conversationRelativePathPrefix(conversationID)
 	for key, members := range families {
 		message, parsed := familyMessage(key)
@@ -48,7 +48,7 @@ func (lookup sourceTimeLookup) bindBlankFamilies(conversationID string, families
 	}
 }
 
-func newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamilyIndex {
+func (lookup sourceTimeLookup) newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamilyIndex {
 	index := blankFamilyIndex{families: families, texts: nil, textKeys: map[int]string{}, siblings: map[int][]string{}, paths: map[string][]collection.StoredRow{}}
 	for key, members := range families {
 		for _, row := range members {
@@ -62,7 +62,7 @@ func newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamily
 		switch {
 		case familyKind != conversationTextFamily:
 			index.siblings[message] = append(index.siblings[message], key)
-		case !familyIsBlank(members):
+		case lookup.familyHasText(members):
 			index.texts = append(index.texts, message)
 			index.textKeys[message] = key
 		}
@@ -79,15 +79,16 @@ func newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamily
 //     stored path. Stored rows include every row the source generates for that message.
 //   - At least one stored tool or thinking row has a known date, and every such
 //     row with a known date has the source message's date.
-//   - The nearest stored text family on each side contains text. Each family matches
-//     the generated text at its position, and each row stores the source date at
-//     that position.
+//   - The nearest stored text family on each side contains text after matchText.
+//     Each family matches the source role and text at its position. Each row stores
+//     the source date for that position.
 //   - The preceding source date is on or before the blank message date, and the
 //     following source date is on or after it.
-//   - Each other source message between those two text families generates at least one
-//     row. Stored rows at each path include every row that source message generates
-//     for the path. Each generated row has text that differs from every stored tool or
-//     thinking row from this message.
+//   - Each source message between those two text families generates at least one row.
+//     Stored rows at each path include every row that the source message generates
+//     for that path. If another source message generates a row with the text of a
+//     stored tool or thinking row of the blank message under verification,
+//     repeatedRowIsPinned must return true for that other message and generated path.
 func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message int, role string) (int64, bool) {
 	doc, found := lookup.documents[message]
 	if !found || strings.TrimSpace(doc.Text) != "" || !strings.EqualFold(doc.Role, role) || doc.TimestampUnix == missingTimestampUnix {
@@ -135,9 +136,9 @@ func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message
 }
 
 // positionIsPinned reports whether the source message at position generates at least
-// one row, the stored rows include every generated row at its path, and each generated
-// row has text that differs from every given sibling text. It returns true when the
-// position does not have a source message.
+// one row and the stored rows include every generated row at its path. If a generated
+// row matches one of the given sibling texts, repeatedRowIsPinned must also return
+// true. positionIsPinned returns true when position does not have a source message.
 func (lookup sourceTimeLookup) positionIsPinned(index blankFamilyIndex, position int, siblingTexts map[string]struct{}) bool {
 	doc, present := lookup.documents[position]
 	if !present {
@@ -147,8 +148,25 @@ func (lookup sourceTimeLookup) positionIsPinned(index blankFamilyIndex, position
 	if !generatedOK || len(generated) == 0 || !index.storesGenerated(generated) {
 		return false
 	}
-	for _, text := range generated {
-		if _, repeated := siblingTexts[text]; repeated {
+	for path, text := range generated {
+		if _, repeated := siblingTexts[text]; repeated && !index.repeatedRowIsPinned(doc, position, path) {
+			return false
+		}
+	}
+	return true
+}
+
+// repeatedRowIsPinned reports whether the message at position has exactly one stored
+// blank text row with the source role and every stored row at path stores that
+// message's source date.
+func (index blankFamilyIndex) repeatedRowIsPinned(doc semsearch.SemDoc, position int, path string) bool {
+	key := conversationRelativePathPrefix(doc.ConversationID) + strconv.Itoa(position)
+	members := index.families[key]
+	if !familyIsOneBlankRow(key, members) || !strings.EqualFold(rowRole(members), doc.Role) {
+		return false
+	}
+	for _, row := range index.paths[path] {
+		if stamp, dated := rowStoredDate(row); !dated || stamp != doc.TimestampUnix {
 			return false
 		}
 	}
@@ -171,8 +189,8 @@ func (index blankFamilyIndex) storesGenerated(generated map[string]string) bool 
 	return true
 }
 
-// textRowsDate returns the source date for message when each stored text path matches
-// the generated source text and each stored row stores that date.
+// textRowsDate returns the source date for message when the stored role and text match
+// the source and each stored row stores that date.
 func (lookup sourceTimeLookup) textRowsDate(index blankFamilyIndex, message int) (int64, bool) {
 	doc, found := lookup.documents[message]
 	if !found || doc.TimestampUnix == missingTimestampUnix {
@@ -182,8 +200,12 @@ func (lookup sourceTimeLookup) textRowsDate(index blankFamilyIndex, message int)
 	if !generatedOK {
 		return 0, false
 	}
-	members := index.families[index.textKeys[message]]
-	if !rowsEqualGenerated(members, generated) {
+	key := index.textKeys[message]
+	members := index.families[key]
+	if !strings.EqualFold(rowRole(members), doc.Role) {
+		return 0, false
+	}
+	if !rowsEqualGenerated(members, generated) && !lookup.normalizedTextEqual(key, members, doc) {
 		return 0, false
 	}
 	for _, row := range members {
@@ -192,6 +214,31 @@ func (lookup sourceTimeLookup) textRowsDate(index blankFamilyIndex, message int)
 		}
 	}
 	return doc.TimestampUnix, true
+}
+
+// normalizedTextEqual reports whether a complete stored text family equals the source
+// text after matchText.
+func (lookup sourceTimeLookup) normalizedTextEqual(key string, members []collection.StoredRow, doc semsearch.SemDoc) bool {
+	joined, complete := familyText(key, conversationTextFamily, members)
+	if !complete || lookup.matchText == nil {
+		return false
+	}
+	return strings.TrimSpace(lookup.matchText(rowRole(members), joined)) == strings.TrimSpace(doc.Text)
+}
+
+// familyHasText reports whether a stored row contains text after matchText.
+func (lookup sourceTimeLookup) familyHasText(members []collection.StoredRow) bool {
+	role := rowRole(members)
+	for _, row := range members {
+		content := row.Content
+		if lookup.matchText != nil {
+			content = lookup.matchText(role, content)
+		}
+		if strings.TrimSpace(content) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // generatedRowText generates rows from doc and returns their text by relative path.
