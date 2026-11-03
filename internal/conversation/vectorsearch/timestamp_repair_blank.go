@@ -29,15 +29,15 @@ type blankFamilyIndex struct {
 
 // bindBlankFamilies records the source date of each blank text family that passes
 // verifyBlankFamily.
-func (lookup sourceTimeLookup) bindBlankFamilies(families map[string][]collection.StoredRow) {
+func (lookup sourceTimeLookup) bindBlankFamilies(conversationID string, families map[string][]collection.StoredRow) {
 	if len(lookup.documents) == 0 {
 		return
 	}
 	index := newBlankFamilyIndex(families)
+	textPrefix := conversationRelativePathPrefix(conversationID)
 	for key, members := range families {
-		familyKind, _, _ := strings.Cut(key, familyPartSeparator)
 		message, parsed := familyMessage(key)
-		if familyKind != conversationTextFamily || !parsed || !familyIsOneBlankRow(key, members) {
+		if !strings.HasPrefix(key, textPrefix) || !parsed || !familyIsOneBlankRow(key, members) {
 			continue
 		}
 		if stamp, verified := lookup.verifyBlankFamily(index, message, rowRole(members)); verified {
@@ -74,10 +74,12 @@ func newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamily
 //     stored path.
 //   - At least one stored tool or thinking row has a known date, and every such
 //     row with a known date has the source message's date.
-//   - A stored text family containing text exists on each side. The source
-//     generates rows at both positions, and each family matches that generated text.
-//   - Known dates in the nearest preceding text family do not exceed the source
-//     date. Known dates in the nearest following text family do not precede it.
+//   - The nearest stored text family on each side contains text. Each family matches
+//     the generated text at its position, and each row stores the source date at
+//     that position.
+//   - The preceding source date is on or before the blank message date, and the
+//     following source date is on or after it.
+//   - The source does not have text at any position between those two text families.
 func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message int, role string) (int64, bool) {
 	doc, found := lookup.documents[message]
 	if !found || strings.TrimSpace(doc.Text) != "" || !strings.EqualFold(doc.Role, role) || doc.TimestampUnix == missingTimestampUnix {
@@ -109,36 +111,40 @@ func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message
 		return 0, false
 	}
 	previous, next := index.texts[position-1], index.texts[position]
-	if !lookup.textRowsExact(index, previous, func(stamp int64) bool { return stamp <= doc.TimestampUnix }) {
+	previousDate, previousExact := lookup.textRowsDate(index, previous)
+	nextDate, nextExact := lookup.textRowsDate(index, next)
+	if !previousExact || !nextExact || previousDate > doc.TimestampUnix || nextDate < doc.TimestampUnix {
 		return 0, false
 	}
-	if !lookup.textRowsExact(index, next, func(stamp int64) bool { return stamp >= doc.TimestampUnix }) {
-		return 0, false
+	for between := previous + 1; between < next; between++ {
+		if other, present := lookup.documents[between]; present && strings.TrimSpace(other.Text) != "" {
+			return 0, false
+		}
 	}
 	return doc.TimestampUnix, true
 }
 
-// textRowsExact reports whether each stored text path at message matches the generated
-// source text and every known stored date passes the ordered check.
-func (lookup sourceTimeLookup) textRowsExact(index blankFamilyIndex, message int, ordered func(int64) bool) bool {
+// textRowsDate returns the source date for message when each stored text path matches
+// the generated source text and each stored row stores that date.
+func (lookup sourceTimeLookup) textRowsDate(index blankFamilyIndex, message int) (int64, bool) {
 	doc, found := lookup.documents[message]
-	if !found {
-		return false
+	if !found || doc.TimestampUnix == missingTimestampUnix {
+		return 0, false
 	}
 	generated, generatedOK := generatedRowText(doc)
 	if !generatedOK {
-		return false
+		return 0, false
 	}
 	members := index.families[index.textKeys[message]]
 	if !rowsEqualGenerated(members, generated) {
-		return false
+		return 0, false
 	}
 	for _, row := range members {
-		if stamp, dated := rowStoredDate(row); dated && !ordered(stamp) {
-			return false
+		if stamp, dated := rowStoredDate(row); !dated || stamp != doc.TimestampUnix {
+			return 0, false
 		}
 	}
-	return true
+	return doc.TimestampUnix, true
 }
 
 // generatedRowText generates rows from doc and returns their text by relative path.

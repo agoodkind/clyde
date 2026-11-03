@@ -10,13 +10,13 @@ import (
 
 // WriteBlankRowForTest stores a text row at messageIndex with an unknown date.
 // It uses the given whitespace content, role, and split part.
-func WriteBlankRowForTest(ctx context.Context, client *Client, collectionID string, conversationID string, messageIndex int32, role string, content string, splitPart int32) error {
+func WriteBlankRowForTest(ctx context.Context, client *Client, collectionID string, conversationID string, pathConversationID string, messageIndex int32, role string, content string, splitPart int32) error {
 	vector, err := client.embedder.Embed(ctx, conversationID)
 	if err != nil {
 		return err
 	}
 	chunk := storedChunk{
-		Content: content, RelativePath: conversationRelativePath(conversationID, messageIndex, 0, false),
+		Content: content, RelativePath: conversationRelativePath(pathConversationID, messageIndex, 0, false),
 		ConversationID: conversationID, ParentConversationID: "", MessageIndex: messageIndex, Role: role,
 		TimestampUnix: missingTimestampUnix, WorkspaceRoot: "", Archived: false, SplitPart: splitPart, LoadRules: "",
 	}

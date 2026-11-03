@@ -21,22 +21,23 @@ import (
 )
 
 const (
-	blankRepairConversationID = "cursor:blank-row"
-	blankRepairFirstDate      = 1_790_000_000
-	blankRepairToolDate       = 1_790_000_060
-	blankRepairLastDate       = 1_790_000_120
-	blankRepairOtherDate      = 1_790_000_061
-	blankRepairBlankMessage   = 1
-	blankRepairAssistant      = "assistant"
-	blankRepairUser           = "user"
-	blankRepairFirstText      = "Inspect the tree."
-	blankRepairOtherFirstText = "Inspect a different tree."
-	blankRepairLastText       = "The tree is clean."
-	blankRepairOtherLastText  = "The tree has changes."
-	blankRepairCommand        = "git status --short"
-	blankRepairOtherCommand   = "git log --oneline"
-	blankRepairToolName       = "Shell"
-	blankRepairInputField     = "input"
+	blankRepairConversationID    = "cursor:blank-row"
+	blankRepairOtherConversation = "cursor:other-row"
+	blankRepairFirstDate         = 1_790_000_000
+	blankRepairToolDate          = 1_790_000_060
+	blankRepairLastDate          = 1_790_000_120
+	blankRepairOtherDate         = 1_790_000_061
+	blankRepairBlankMessage      = 1
+	blankRepairAssistant         = "assistant"
+	blankRepairUser              = "user"
+	blankRepairFirstText         = "Inspect the tree."
+	blankRepairOtherFirstText    = "Inspect a different tree."
+	blankRepairLastText          = "The tree is clean."
+	blankRepairOtherLastText     = "The tree has changes."
+	blankRepairCommand           = "git status --short"
+	blankRepairOtherCommand      = "git log --oneline"
+	blankRepairToolName          = "Shell"
+	blankRepairInputField        = "input"
 )
 
 // blankRepairEndpoint returns an HTTP handler that generates one vector for each input.
@@ -98,9 +99,24 @@ func blankRepairChangedSource(position int, change func(doc *semsearch.SemDoc)) 
 
 // blankRepairRow is one stored row at the blank message path.
 type blankRepairRow struct {
-	role      string
-	content   string
-	splitPart int32
+	role             string
+	content          string
+	splitPart        int32
+	pathConversation string
+}
+
+// blankRepairMiddleDocuments returns documents with text at the first and last
+// positions and a message with blank text after the first position. With middleText,
+// the position before the last also has text.
+func blankRepairMiddleDocuments(middleText string) []semsearch.SemDoc {
+	docs := []semsearch.SemDoc{
+		blankRepairDocument(0, blankRepairUser, blankRepairFirstDate, blankRepairFirstText, ""),
+		blankRepairDocument(blankRepairBlankMessage, blankRepairAssistant, blankRepairToolDate, "", blankRepairCommand),
+	}
+	if middleText != "" {
+		docs = append(docs, blankRepairDocument(2, blankRepairAssistant, blankRepairOtherDate, middleText, ""))
+	}
+	return append(docs, blankRepairDocument(3, blankRepairAssistant, blankRepairLastDate, blankRepairLastText, ""))
 }
 
 // blankRowDates returns the known dates of the stored rows at the blank message path.
@@ -113,8 +129,9 @@ func blankRowDates(t *testing.T, address string, collectionID string, wantRows i
 	}
 	defer func() { _ = reader.Close(ctx) }()
 	path := fmt.Sprintf("conv/%s/%d", blankRepairConversationID, blankRepairBlankMessage)
+	otherPath := fmt.Sprintf("conv/%s/%d", blankRepairOtherConversation, blankRepairBlankMessage)
 	result, err := reader.Query(ctx, milvusclient.NewQueryOption(vectorsearch.CollectionName(collectionID)).
-		WithFilter(fmt.Sprintf("relativePath == %q", path)).
+		WithFilter(fmt.Sprintf("relativePath in [%q, %q]", path, otherPath)).
 		WithOutputFields("timestampUnix").
 		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
@@ -146,11 +163,19 @@ func blankRowDates(t *testing.T, address string, collectionID string, wantRows i
 }
 
 // TestRepairDatesBlankRowOnlyWithExactStoredRows checks that source repair assigns
-// a date to a blank text row when its stored tool row and nearest text rows match
-// the source and its stored tool date equals the source date.
-// It checks that repair does not assign a date when any match fails, the stored
-// tool row does not exist, the source message has another role or has text, or
-// the blank family has two whole rows or split rows.
+// a date to a blank text row only when its stored tool row and nearest text rows
+// equal the source rows and store the source dates.
+// It checks that repair does not assign a date under these conditions:
+//
+//   - A stored row differs from the source.
+//   - A nearest text row stores a date that differs from the source date at its position.
+//   - A nearest text row does not store a date.
+//   - The stored tool row does not exist.
+//   - The source message has another role or has text.
+//   - The source has text between the nearest stored text rows.
+//   - The blank family has two whole rows.
+//   - The blank row has a split part.
+//   - The blank row path contains another conversation ID.
 func TestRepairDatesBlankRowOnlyWithExactStoredRows(t *testing.T) {
 	milvustest.RequireEnabled(t)
 	address := milvustest.Start(t)
@@ -196,13 +221,45 @@ func TestRepairDatesBlankRowOnlyWithExactStoredRows(t *testing.T) {
 			wantReason: vectorsearch.SourceOutcomeEmpty,
 		},
 		{
-			name:   "the blank family has split rows",
-			stored: blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
-			source: blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
-			blankRows: []blankRepairRow{
-				{role: blankRepairAssistant, content: " ", splitPart: 1},
-				{role: blankRepairAssistant, content: "\t", splitPart: 2},
-			},
+			name:       "the blank row has a split part",
+			stored:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			blankRows:  []blankRepairRow{{role: blankRepairAssistant, content: " ", splitPart: 1}},
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:       "the blank row path contains another conversation ID",
+			stored:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			blankRows:  []blankRepairRow{{role: blankRepairAssistant, content: " ", pathConversation: blankRepairOtherConversation}},
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:       "the preceding text row stores a date that differs from the source date at its position",
+			stored:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source:     blankRepairChangedSource(0, func(doc *semsearch.SemDoc) { doc.TimestampUnix = blankRepairFirstDate + 1 }),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:       "the following text row stores a date that differs from the source date at its position",
+			stored:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source:     blankRepairChangedSource(2, func(doc *semsearch.SemDoc) { doc.TimestampUnix = blankRepairOtherDate }),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name: "a nearest text row does not store a date",
+			stored: func() []semsearch.SemDoc {
+				docs := blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand)
+				docs[0].TimestampUnix = time.Time{}.Unix()
+				return docs
+			}(),
+			source:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:       "the source has text between the nearest stored text rows",
+			stored:     blankRepairMiddleDocuments(""),
+			source:     blankRepairMiddleDocuments(blankRepairOtherLastText),
 			wantReason: vectorsearch.SourceOutcomeEmpty,
 		},
 		{
@@ -249,7 +306,11 @@ func TestRepairDatesBlankRowOnlyWithExactStoredRows(t *testing.T) {
 				blankRows = oneBlankRow
 			}
 			for _, row := range blankRows {
-				if err := vectorsearch.WriteBlankRowForTest(ctx, client, collectionID, blankRepairConversationID, blankRepairBlankMessage, row.role, row.content, row.splitPart); err != nil {
+				pathConversation := row.pathConversation
+				if pathConversation == "" {
+					pathConversation = blankRepairConversationID
+				}
+				if err := vectorsearch.WriteBlankRowForTest(ctx, client, collectionID, blankRepairConversationID, pathConversation, blankRepairBlankMessage, row.role, row.content, row.splitPart); err != nil {
 					t.Fatalf("WriteBlankRowForTest failed: %v.", err)
 				}
 			}

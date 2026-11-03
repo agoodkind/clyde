@@ -606,7 +606,7 @@ func matchSourceFamilies(conversationID string, rows []collection.StoredRow, loo
 		families[key] = append(families[key], row)
 	}
 	lookup.bindToolFamilies(families)
-	lookup.bindBlankFamilies(families)
+	lookup.bindBlankFamilies(conversationID, families)
 	ordered := make([]pendingFamily, 0, len(families))
 	for key, members := range families {
 		groups := [][]collection.StoredRow{members}
