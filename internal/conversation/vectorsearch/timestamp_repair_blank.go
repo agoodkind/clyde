@@ -79,7 +79,8 @@ func newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamily
 //     that position.
 //   - The preceding source date is on or before the blank message date, and the
 //     following source date is on or after it.
-//   - The source does not have text at any position between those two text families.
+//   - Each other source message between those two text families does not contain text and
+//     does not generate the text in any stored tool or thinking row from this message.
 func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message int, role string) (int64, bool) {
 	doc, found := lookup.documents[message]
 	if !found || strings.TrimSpace(doc.Text) != "" || !strings.EqualFold(doc.Role, role) || doc.TimestampUnix == missingTimestampUnix {
@@ -90,6 +91,7 @@ func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message
 		return 0, false
 	}
 	datedSibling := false
+	siblingTexts := make(map[string]struct{})
 	for _, key := range index.siblings[message] {
 		members := index.families[key]
 		if !rowsEqualGenerated(members, generated) {
@@ -101,6 +103,7 @@ func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message
 				return 0, false
 			}
 			datedSibling = datedSibling || dated
+			siblingTexts[generated[row.RelativePath]] = struct{}{}
 		}
 	}
 	if !datedSibling {
@@ -117,11 +120,33 @@ func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message
 		return 0, false
 	}
 	for between := previous + 1; between < next; between++ {
-		if other, present := lookup.documents[between]; present && strings.TrimSpace(other.Text) != "" {
+		if between != message && !lookup.positionIsDistinct(between, siblingTexts) {
 			return 0, false
 		}
 	}
 	return doc.TimestampUnix, true
+}
+
+// positionIsDistinct reports whether the source message at position does not contain text
+// and does not generate a row with any of the given sibling texts.
+func (lookup sourceTimeLookup) positionIsDistinct(position int, siblingTexts map[string]struct{}) bool {
+	doc, present := lookup.documents[position]
+	if !present {
+		return true
+	}
+	if strings.TrimSpace(doc.Text) != "" {
+		return false
+	}
+	generated, generatedOK := generatedRowText(doc)
+	if !generatedOK {
+		return false
+	}
+	for _, text := range generated {
+		if _, repeated := siblingTexts[text]; repeated {
+			return false
+		}
+	}
+	return true
 }
 
 // textRowsDate returns the source date for message when each stored text path matches

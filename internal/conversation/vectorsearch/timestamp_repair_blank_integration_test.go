@@ -173,6 +173,8 @@ func blankRowDates(t *testing.T, address string, collectionID string, wantRows i
 //   - The stored tool row does not exist.
 //   - The source message has another role or has text.
 //   - The source has text between the nearest stored text rows.
+//   - Another source message between the nearest stored text rows generates the text in
+//     the stored tool row.
 //   - The blank family has two whole rows.
 //   - The blank row has a split part.
 //   - The blank row path contains another conversation ID.
@@ -254,6 +256,13 @@ func TestRepairDatesBlankRowOnlyWithExactStoredRows(t *testing.T) {
 				return docs
 			}(),
 			source:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:   "another blank source message generates the text in the stored tool row",
+			stored: blankRepairMiddleDocuments(""),
+			source: append(blankRepairMiddleDocuments(""),
+				blankRepairDocument(2, blankRepairAssistant, blankRepairOtherDate, "", blankRepairCommand)),
 			wantReason: vectorsearch.SourceOutcomeEmpty,
 		},
 		{
