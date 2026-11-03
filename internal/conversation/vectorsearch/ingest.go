@@ -20,6 +20,10 @@ const jobIDPrefix = "in-process-upsert-"
 // establish which text is missing.
 var ErrUnprovenStoppedWrite = errors.New("stored rows do not prove a stopped write can resume")
 
+// ErrInputNotStored reports that the embedding endpoint rejected input that
+// the client could not store. The conversation does not receive a checkpoint.
+var ErrInputNotStored = errors.New("the embedding endpoint rejected text that the client could not store")
+
 // errCheckpointWrite reports that rows exist but recording their checkpoint failed.
 var errCheckpointWrite = errors.New("recording the checkpoint failed")
 
@@ -232,7 +236,6 @@ func stopUpsert(ctx context.Context, collectionName string, failures []error, er
 }
 
 // claimConversations returns a callable release function on every return, including errors.
-// The caller must run it.
 func (store *checkpointStore) claimConversations(collectionName string, order []string, partial *PartialUpsertError) ([]string, func(), error) {
 	claimed := make([]string, 0, len(order))
 	claims := make([]*conversationClaim, 0, len(order))
@@ -300,7 +303,7 @@ type PartialUpsertError struct {
 // record adds a conversation result to the matching list. It returns errors that stop the
 // upsert.
 func (e *PartialUpsertError) record(conversationID string, result conversationUpsert, err error) error {
-	if errors.Is(err, ErrUnprovenStoppedWrite) || errors.Is(err, errCheckpointWrite) {
+	if errors.Is(err, ErrUnprovenStoppedWrite) || errors.Is(err, errCheckpointWrite) || errors.Is(err, ErrInputNotStored) {
 		e.Failed = append(e.Failed, conversationID)
 		e.Failures = append(e.Failures, err)
 		return nil
@@ -375,7 +378,7 @@ func (c *Client) upsertConversation(
 		}
 		active = &started
 	}
-	writer := newRowWriter(c, collectionName)
+	writer := newRowWriter(c, collectionName, rowLimit)
 	storedChild := func(chunk storedChunk) bool {
 		return state.hasRow(chunkFamilyKey(conversationID, chunk.RelativePath), chunkID(chunk))
 	}
@@ -390,9 +393,12 @@ func (c *Client) upsertConversation(
 		return result, err
 	}
 	stats.timesFilled += filled
+	if err := unstoredTextError(ctx, conversationID, writer.unstoredText); err != nil {
+		return result, err
+	}
 	if len(unwritten) > 0 {
 		c.checkpoint.supersedeStoppedWrites(collectionName, conversationID, active, stopped, proofs)
-		c.saveSliceProgress(collectionName, conversationID, docs, fingerprint, chunks[:min(processed, len(chunks))], unwritten, batch)
+		c.saveSliceProgress(collectionName, conversationID, docs, fingerprint, writer.storedChunks(chunks), unwritten, batch)
 		return result, nil
 	}
 	result.complete = true
@@ -403,6 +409,20 @@ func (c *Client) upsertConversation(
 		return result, fmt.Errorf("conversation %s: %w: %w", conversationID, errCheckpointWrite, err)
 	}
 	return result, nil
+}
+
+// unstoredTextError returns ErrInputNotStored when count is positive.
+func unstoredTextError(ctx context.Context, conversationID string, count int) error {
+	if count == 0 {
+		return nil
+	}
+	slog.WarnContext(ctx, "conversation.vectorsearch.input_not_stored",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"conversation_id", conversationID,
+		"rejected_inputs", count,
+	)
+	return fmt.Errorf("conversation %s has %d rejected inputs: %w", conversationID, count, ErrInputNotStored)
 }
 
 func (c *Client) nextJobID() string {
@@ -458,9 +478,10 @@ func conversationFamilies(conversationID string, docs []semsearch.SemDoc) ([]chu
 // planConversation includes edited text when stored rows do not prove that ingestion
 // has stored the current message. The interrupted set lists families with unfinished
 // writes. Without that evidence, a stored prefix can represent a complete older
-// version, and the plan preserves that family. The plan skips rows when stored pieces for
-// the same path match the generated chunk's full content, even if their split boundaries
-// differ.
+// version, and the plan preserves that family. planConversation includes only byte ranges
+// without a matching stored piece when stored rows do not cover the generated chunk. It
+// skips a chunk when stored pieces for the same path match its full content, even if their
+// split boundaries differ.
 func (c *Client) planConversation(families []chunkFamily, state *conversationState, interrupted map[string]struct{}) ([]storedChunk, map[string]matchedRow) {
 	chunks := make([]storedChunk, 0)
 	fills := make(map[string]matchedRow)
@@ -477,9 +498,12 @@ func (c *Client) planConversation(families []chunkFamily, state *conversationSta
 				if chunk.TimestampUnix != missingTimestampUnix && state.hasUnknownTimeRow(family.Key, id) {
 					fills[id] = matchedRow{relativePath: chunk.RelativePath, timestampUnix: chunk.TimestampUnix}
 				}
-				if skipRows {
-					continue
-				}
+			}
+			if skipRows {
+				continue
+			}
+			for _, chunk := range expandOverBudget(state.missingPieces(family.Key, generated), c.byteBudget) {
+				id := chunkID(chunk)
 				if _, duplicate := seen[id]; duplicate {
 					continue
 				}

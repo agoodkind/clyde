@@ -31,11 +31,14 @@ const (
 	sliceBlockedConversationID     = "codex:a-upsert-slice-blocked"
 	sliceLaterSortedConversationID = "codex:z-upsert-slice-small"
 	sliceSplitRepeats              = 6000
-	// sliceRequestRows is the largest row count of one embedding request.
-	sliceRequestRows = 32
+	sliceOneRowMessages            = 3
 	// slicePlanFitsOne is a byte limit that permits one plan for sliceMessages short messages.
 	slicePlanFitsOne         = 8_000
 	sliceCheckpointNameChars = 32
+	sliceLocalBlankBytes     = 800_000
+	sliceLocalTextRows       = 12
+	sliceLocalSearchLimit    = 8
+	sliceLocalDefaultLimit   = 10
 	sliceEditedStart         = "edited message"
 	sliceEditedFiller        = " harbor survey words for a split message"
 	sliceEditedRepeats       = 2000
@@ -67,6 +70,63 @@ func openSliceClient(t *testing.T, root string, checkpoints string) *vectorsearc
 		t.Fatalf("open the local client: %v", err)
 	}
 	return client
+}
+
+// TestLocalSearchReturnsTextWhenBlankRowsAreNearest stores more whitespace-only rows than
+// the search limit and queries the local layout with their vector. The test checks that
+// searches with a requested limit and a limit of zero return the expected number of rows
+// with text and do not return blank rows.
+func TestLocalSearchReturnsTextWhenBlankRowsAreNearest(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	client := openSliceClient(t, root, t.TempDir())
+	defer func() { _ = client.Close(ctx) }()
+	blankDocument := sliceDocument(0)
+	blankDocument.Text = "x" + strings.Repeat(" ", sliceLocalBlankBytes)
+	docs := []semsearch.SemDoc{blankDocument}
+	for position := 1; position <= sliceLocalTextRows; position++ {
+		docs = append(docs, sliceDocument(position))
+	}
+	manifest := []semsearch.Fingerprint{{ConversationID: sliceConversationID, Value: sliceFingerprint}}
+	if _, err := client.UpsertConversationDocuments(ctx, sliceCollectionID, docs, manifest); err != nil {
+		t.Fatalf("UpsertConversationDocuments failed: %v.", err)
+	}
+	blankRows := 0
+	for _, content := range sliceStoredContents(t, root) {
+		if strings.TrimSpace(content) == "" {
+			blankRows++
+		}
+	}
+	if blankRows <= sliceLocalSearchLimit {
+		t.Fatalf("The collection contains %d blank rows instead of more than %d.", blankRows, sliceLocalSearchLimit)
+	}
+	testCases := []struct {
+		name     string
+		limit    int32
+		wantHits int
+	}{
+		{name: "requested limit", limit: sliceLocalSearchLimit, wantHits: sliceLocalSearchLimit},
+		{name: "default limit", limit: 0, wantHits: sliceLocalDefaultLimit},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			hits, err := client.SearchConversations(ctx, sliceCollectionID, vectorsearch.WhitespaceEmbeddingInput, testCase.limit, semsearch.SearchFilter{}, 0)
+			if err != nil {
+				t.Fatalf("SearchConversations failed: %v.", err)
+			}
+			textHits := 0
+			for _, hit := range hits {
+				if strings.TrimSpace(hit.Content) == "" {
+					t.Errorf("The search returned a blank row with score %f.", hit.Score)
+					continue
+				}
+				textHits++
+			}
+			if textHits != testCase.wantHits {
+				t.Errorf("The search returned %d rows with text instead of %d.", textHits, testCase.wantHits)
+			}
+		})
+	}
 }
 
 func sliceStoredVectors(t *testing.T, root string) map[string]string {
@@ -353,9 +413,44 @@ func TestUpsertConversationSliceReadsStoredRowsOnce(t *testing.T) {
 	}
 }
 
-// TestUpsertConversationSliceBoundsOneSplitMessage delivers a message that requires
-// several slices. Each slice respects the row limit plus one embedding request.
-// The test verifies that the client stores every part of the message.
+// The test sets a row limit of one, smaller than one embedding request.
+// It checks that each slice, including the first, writes at most one row
+// and that the slices store every message.
+func TestUpsertConversationSliceWritesOneRowAtALimitOfOne(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	client, err := vectorsearch.Open(ctx, vectorsearch.Options{
+		Backend: vectorsearch.BackendLocal, LocalRoot: root, CheckpointDir: t.TempDir(), IngestSliceRows: 1,
+	})
+	if err != nil {
+		t.Fatalf("open the local client: %v", err)
+	}
+	defer func() { _ = client.Close(ctx) }()
+	docs := sliceDocuments(sliceOneRowMessages)
+	manifest := []semsearch.Fingerprint{{ConversationID: sliceConversationID, Value: sliceFingerprint}}
+	for slicesRun := 0; ; slicesRun++ {
+		if slicesRun > sliceOneRowMessages*2 {
+			t.Fatal("the conversation did not finish in the expected slice count")
+		}
+		_, upsertErr := client.UpsertConversationSlice(ctx, sliceCollectionID, docs, manifest)
+		if written := client.IngestStatus(sliceCollectionID).LastUpsert.RowsWritten; written > 1 {
+			t.Fatalf("Slice %d wrote %d rows; the test expected at most 1.", slicesRun, written)
+		}
+		if upsertErr == nil {
+			break
+		}
+		var partial *vectorsearch.PartialUpsertError
+		if !errors.As(upsertErr, &partial) {
+			t.Fatalf("The slice returned error %v; the test expected a partial upsert.", upsertErr)
+		}
+	}
+	if stored := len(sliceStoredContents(t, root)); stored != sliceOneRowMessages {
+		t.Fatalf("The slices stored %d rows; the test expected %d.", stored, sliceOneRowMessages)
+	}
+}
+
+// The test uses a message that requires several slices. It checks that each
+// slice respects the row limit and that the client stores every part of the message.
 func TestUpsertConversationSliceBoundsOneSplitMessage(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -372,8 +467,8 @@ func TestUpsertConversationSliceBoundsOneSplitMessage(t *testing.T) {
 		}
 		_, err := client.UpsertConversationSlice(ctx, sliceCollectionID, docs, manifest)
 		slicesRun++
-		if written := client.IngestStatus(sliceCollectionID).LastUpsert.RowsWritten; written > sliceRows+sliceRequestRows {
-			t.Fatalf("One slice wrote %d rows; the test expected at most %d.", written, sliceRows+sliceRequestRows)
+		if written := client.IngestStatus(sliceCollectionID).LastUpsert.RowsWritten; written > sliceRows {
+			t.Fatalf("One slice wrote %d rows; the test expected at most %d.", written, sliceRows)
 		}
 		if err == nil {
 			break

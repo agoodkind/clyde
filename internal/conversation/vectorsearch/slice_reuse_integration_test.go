@@ -23,8 +23,7 @@ import (
 )
 
 const (
-	sliceReuseMessages = 600
-	// sliceReuseFirstSlice is the row count of the first slice at the default row limit.
+	sliceReuseMessages   = 600
 	sliceReuseFirstSlice = 256
 	sliceReuseMovedPrint = "moved"
 	// sliceBoundaryRow is the index of the first slice's last row at the default row limit.

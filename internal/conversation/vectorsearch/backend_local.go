@@ -120,6 +120,10 @@ func (b *localBackend) search(ctx context.Context, request collection.SearchRequ
 	return hits, timing, nil
 }
 
+func (b *localBackend) excludeBlankHits(_ context.Context, request collection.SearchRequest, _ []collection.Hit) (collection.SearchRequest, error) {
+	return widerBlankSearch(request), nil
+}
+
 func (b *localBackend) close(context.Context) error {
 	b.Close()
 	return nil

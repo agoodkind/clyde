@@ -36,6 +36,8 @@ type backend interface {
 	// collectionPresent prepares an existing collection for row queries.
 	collectionPresent(ctx context.Context, collectionName string) (bool, error)
 	search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error)
+	// excludeBlankHits returns a request to rank again past whitespace-only hits.
+	excludeBlankHits(ctx context.Context, request collection.SearchRequest, blank []collection.Hit) (collection.SearchRequest, error)
 	close(ctx context.Context) error
 }
 

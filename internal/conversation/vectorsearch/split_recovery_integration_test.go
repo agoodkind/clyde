@@ -496,9 +496,6 @@ func newSplitRecoveryFixture(t *testing.T) *splitRecoveryFixture {
 	}
 }
 
-// TestSharedLayoutInFlightUpsertStoresWriteRecord starts a forced backfill with the
-// existing checkpoint fingerprint. It observes the running upsert's write record,
-// runs a second client, cancels the upsert, and retries with a new client.
 func TestSharedLayoutInFlightUpsertStoresWriteRecord(t *testing.T) {
 	fixture := newSplitRecoveryFixture(t)
 	ctx := context.Background()
@@ -633,6 +630,9 @@ func TestSharedLayoutRetryKeepsVectorOfWhitespacePiece(t *testing.T) {
 	}
 	if _, found := after[missingID]; !found {
 		t.Fatalf("the retry did not write piece %s", missingID)
+	}
+	if len(after) != len(before)+1 {
+		t.Fatalf("The retry stored %d rows instead of %d.", len(after), len(before)+1)
 	}
 }
 

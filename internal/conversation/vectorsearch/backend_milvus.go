@@ -147,7 +147,6 @@ func optionalModelAt(modelColumn column.Column, rowIndex int) (string, error) {
 	return model, nil
 }
 
-// storedRowColumns stores the columns from a query for stored rows.
 type storedRowColumns struct {
 	id      column.Column
 	content column.Column
@@ -316,6 +315,48 @@ func (b *milvusBackend) close(ctx context.Context) error {
 		return fmt.Errorf("close Milvus connection: %w", err)
 	}
 	return nil
+}
+
+// excludeBlankHits returns a request with a larger limit. In the shared layout,
+// it also excludes vectors for whitespace-only hits because many rows can use
+// one such vector. The single layout does not store vector keys.
+func (b *milvusBackend) excludeBlankHits(ctx context.Context, request collection.SearchRequest, blank []collection.Hit) (collection.SearchRequest, error) {
+	if b.shared == nil {
+		return widerBlankSearch(request), nil
+	}
+	ids := make([]string, 0, len(blank))
+	for _, hit := range blank {
+		ids = append(ids, hit.ID)
+	}
+	keys := make([]string, 0, len(ids))
+	for start := 0; start < len(ids); start += conversationFilterIDBatchSize {
+		end := min(start+conversationFilterIDBatchSize, len(ids))
+		resultSet, err := b.client.Query(ctx, milvusclient.NewQueryOption(request.Collection).
+			WithIDs(column.NewColumnVarChar(milvusstore.IDField, slices.Clone(ids[start:end]))).
+			WithOutputFields(milvusstore.VectorKeyField).
+			WithConsistencyLevel(entity.ClStrong))
+		if err != nil {
+			return request, failRead("read vector keys of blank rows from "+request.Collection, err)
+		}
+		values := resultSet.GetColumn(milvusstore.VectorKeyField)
+		for rowIndex := range resultSet.ResultCount {
+			key, keyErr := values.GetAsString(rowIndex)
+			if keyErr != nil {
+				return request, failRead("read a vector key of a blank row from "+request.Collection, keyErr)
+			}
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return request, failRead("read vector keys of blank rows from "+request.Collection, errors.New("the rows are absent"))
+	}
+	slices.Sort(keys)
+	excluded := collection.Negate(collection.ColumnIn(milvusstore.VectorKeyField, collection.StringValues(slices.Compact(keys))))
+	if request.Filter != nil {
+		excluded = collection.AllOf(*request.Filter, excluded)
+	}
+	request.Filter = &excluded
+	return widerBlankSearch(request), nil
 }
 
 func (b *milvusBackend) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error) {

@@ -32,6 +32,13 @@ const (
 	// when it meets or exceeds the limit. Token packing and vector reuse change
 	// the number of embedding requests.
 	defaultIngestSliceRows = 256
+	// blankHitSearchAttempts limits the number of rankings for one search when
+	// whitespace-only rows fill its page. With blankHitLimitGrowth, this count allows
+	// a limit of one to grow to the ranking depth.
+	blankHitSearchAttempts = 8
+	// blankHitLimitGrowth multiplies the limit of a ranking that reads past
+	// whitespace-only rows.
+	blankHitLimitGrowth = 4
 )
 
 // operationError pairs a failed operation with its cause. The constructors
@@ -325,6 +332,66 @@ func (c *Client) embedQuery(ctx context.Context, query string) ([]float32, error
 	return vector, nil
 }
 
+// search returns ranked hits that contain text. A whitespace-only row stores
+// message bytes and can rank above text in dense search. When a page contains
+// whitespace-only rows, search asks the backend for a new request and ranks again.
+// It stops when it has a full page of text rows, when a page does not contain any
+// blank rows, or after blankHitSearchAttempts rankings. A limit of zero uses
+// defaultSearchLimit.
 func (c *Client) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error) {
-	return c.store.search(ctx, request)
+	total := searchTiming{rank: 0, load: 0, candidates: 0}
+	attempt := request
+	for remaining := blankHitSearchAttempts; ; remaining-- {
+		hits, timing, err := c.store.search(ctx, attempt)
+		total.rank += timing.rank
+		total.load += timing.load
+		total.candidates = timing.candidates
+		if err != nil {
+			return nil, total, err
+		}
+		text := make([]collection.Hit, 0, len(hits))
+		blank := make([]collection.Hit, 0)
+		for _, hit := range hits {
+			if conversationTextIsStorable(hit.Content) {
+				text = append(text, hit)
+			} else {
+				blank = append(blank, hit)
+			}
+		}
+		pageLimit := int(request.Limit)
+		if pageLimit <= 0 {
+			pageLimit = defaultSearchLimit
+		}
+		pageFull := len(text) >= pageLimit
+		if len(blank) == 0 || pageFull || remaining == 1 {
+			if len(blank) > 0 && !pageFull {
+				slog.WarnContext(ctx, "conversation.vectorsearch.blank_hits_remain",
+					"concern", "conversation.semantic",
+					"component", "conversation",
+					"collection", request.Collection,
+					"blank_hits", len(blank),
+					"text_hits", len(text),
+				)
+			}
+			if pageFull {
+				text = text[:pageLimit]
+			}
+			return text, total, nil
+		}
+		attempt, err = c.store.excludeBlankHits(ctx, attempt, blank)
+		if err != nil {
+			return nil, total, err
+		}
+	}
+}
+
+// widerBlankSearch returns request with a larger limit that does not exceed
+// the ranking depth.
+func widerBlankSearch(request collection.SearchRequest) collection.SearchRequest {
+	limit := request.Limit
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+	request.Limit = min(limit*blankHitLimitGrowth, int32(collection.RankingDepth))
+	return request
 }

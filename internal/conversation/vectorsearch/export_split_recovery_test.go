@@ -5,9 +5,17 @@ package vectorsearch
 import (
 	"context"
 	"errors"
+	"math"
+	"slices"
 
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/lm-semantic-search/collection"
+)
+
+const (
+	blankRowVectorStep   = 3
+	blankRowVectorOffset = 0.1
+	blankRowMessageStart = 1000
 )
 
 // WriteWhitespacePieceRowsForTest stores the first and whitespace-only pieces of doc.
@@ -39,6 +47,37 @@ func WriteWhitespacePieceRowsForTest(ctx context.Context, client *Client, collec
 		return "", "", err
 	}
 	return chunkID(pieces[1]), chunkID(pieces[2]), nil
+}
+
+// WriteDistinctBlankRowsForTest stores count whitespace-only rows with vectors based on query.
+// For each row, it copies the query vector, increases one component, and scales the result
+// to length one.
+func WriteDistinctBlankRowsForTest(ctx context.Context, client *Client, collectionID string, conversationID string, query string, count int) error {
+	nearest, err := client.embedder.Embed(ctx, query)
+	if err != nil {
+		return err
+	}
+	rows := make([]collection.Row, 0, count)
+	for position := range count {
+		vector := slices.Clone(nearest)
+		vector[(position*blankRowVectorStep+1)%len(vector)] += blankRowVectorOffset
+		norm := float32(0)
+		for _, value := range vector {
+			norm += value * value
+		}
+		scale := float32(1 / math.Sqrt(float64(norm)))
+		for i := range vector {
+			vector[i] *= scale
+		}
+		messageIndex := int32(blankRowMessageStart + position)
+		chunk := storedChunk{
+			Content: " ", RelativePath: conversationRelativePath(conversationID, messageIndex, 0, false),
+			ConversationID: conversationID, ParentConversationID: "", MessageIndex: messageIndex, Role: "assistant",
+			TimestampUnix: missingTimestampUnix, WorkspaceRoot: "", Archived: false, SplitPart: 0, LoadRules: "",
+		}
+		rows = append(rows, chunkRow(chunk, vector))
+	}
+	return client.store.Upsert(ctx, CollectionName(collectionID), client.declaration, rows)
 }
 
 // ByteBudgetForTest returns the client's embedding input byte limit.

@@ -334,7 +334,7 @@ func (c *Client) resumeSlice(
 		c.dropSliceProgress(collectionName, conversationID)
 		return result, err
 	}
-	writer := newRowWriter(c, collectionName)
+	writer := newRowWriter(c, collectionName, rowLimit)
 	storedChild := func(chunk storedChunk) bool {
 		_, found := progress.storedSplits[chunkID(chunk)]
 		return found
@@ -342,17 +342,20 @@ func (c *Client) resumeSlice(
 	processed, unwritten, err := c.embedAndWrite(ctx, next, reuse, writer, stats, rowLimit, storedChild)
 	result.written = writer.written
 	result.processed = processed
+	if err == nil {
+		err = unstoredTextError(ctx, conversationID, writer.unstoredText)
+	}
 	if err != nil || len(next) == 0 {
 		c.dropSliceProgress(collectionName, conversationID)
 		return result, err
 	}
 	attempted := make(map[string]bool, len(next))
-	for position, chunk := range next {
+	for _, chunk := range next {
 		id := chunkID(chunk)
 		_, planned := progress.ids[id]
 		attempted[id] = planned
 		delete(progress.ids, id)
-		if position < processed {
+		if _, stored := writer.storedIDs[id]; stored {
 			key := contentKey(chunk.Content)
 			if _, repeated := progress.repeated[key]; repeated {
 				progress.sources[key] = id

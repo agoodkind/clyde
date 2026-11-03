@@ -33,6 +33,8 @@ const (
 	// Rejection reasons the endpoint reports.
 	contextLengthExceededReason = "context_length_exceeded"
 	emptyContentReason          = "empty_content"
+	// WhitespaceEmbeddingInput is the embedding input for every whitespace-only chunk.
+	WhitespaceEmbeddingInput = "[conversation whitespace chunk]"
 )
 
 func activeTokenLimit(embeddingModel string) int {
@@ -57,6 +59,11 @@ func expandOverBudget(chunks []storedChunk, byteBudget int) []storedChunk {
 	expanded := make([]storedChunk, 0, len(chunks))
 	for _, chunk := range chunks {
 		if len(chunk.Content) <= byteBudget {
+			// conversationState includes a whitespace-only row only when it has a split part.
+			// This chunk receives split part 1.
+			if chunk.SplitPart == 0 && !conversationTextIsStorable(chunk.Content) {
+				chunk.SplitPart = 1
+			}
 			expanded = append(expanded, chunk)
 			continue
 		}
@@ -89,6 +96,17 @@ func splitChunkAtBudget(chunk storedChunk, budget int) []storedChunk {
 
 func splitChunkInHalf(chunk storedChunk) []storedChunk {
 	return splitChunkAtBudget(chunk, max(len(chunk.Content)/2, 1))
+}
+
+// embeddingInput returns the text that the embedder receives for content.
+// The embedder rejects whitespace-only text. The reuse map finds vectors by
+// content, and identical whitespace content must use one vector. A whitespace-only
+// row stores the exact whitespace bytes.
+func embeddingInput(content string) string {
+	if conversationTextIsStorable(content) {
+		return content
+	}
+	return WhitespaceEmbeddingInput
 }
 
 func safeInt32(value int) int32 {
@@ -153,10 +171,28 @@ type rowWriter struct {
 	pending        []collection.Row
 	pendingBytes   int
 	written        int
+	storedIDs      map[string]struct{}
+	unstoredText   int
 }
 
-func newRowWriter(client *Client, collectionName string) *rowWriter {
-	return &rowWriter{client: client, collectionName: collectionName, pending: nil, pendingBytes: 0, written: 0}
+func newRowWriter(client *Client, collectionName string, rowLimit int) *rowWriter {
+	writer := &rowWriter{client: client, collectionName: collectionName, pending: nil, pendingBytes: 0, written: 0, storedIDs: nil, unstoredText: 0}
+	if rowLimit > 0 {
+		writer.storedIDs = make(map[string]struct{}, rowLimit)
+	}
+	return writer
+}
+
+// storedChunks returns the input chunks with rows from this writer.
+// It excludes chunks that the endpoint rejected.
+func (writer *rowWriter) storedChunks(chunks []storedChunk) []storedChunk {
+	stored := make([]storedChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if _, found := writer.storedIDs[chunkID(chunk)]; found {
+			stored = append(stored, chunk)
+		}
+	}
+	return stored
 }
 
 func (writer *rowWriter) add(ctx context.Context, row collection.Row) error {
@@ -207,12 +243,12 @@ type rejection struct {
 }
 
 // embedAndWrite embeds chunks and writes their rows, reusing stored vectors when
-// available. If the endpoint rejects a chunk for context length, embedAndWrite splits
-// it in half and retries each half. It logs and skips rejected inputs that cannot
-// split further. Other embedding failures stop the call.
+// available. After a context length rejection, it splits the chunk in half and
+// retries each half. It logs a rejected input that it cannot split and increases
+// the writer's unstoredText count. Other embedding failures stop the call.
 //
-// A positive rowLimit stops processing before the first pack after the limit and
-// flushes pending rows. The call adds new vectors to reuse for later matching text.
+// embedAndWrite stops at a positive rowLimit, splitting a pack when needed.
+// It flushes pending rows and adds new vectors to reuse for later matching text.
 // It returns the processed row count and chunks without a result.
 // When the stored callback reports that a split child exists, the call preserves
 // that child's stored timestamp and vector.
@@ -230,10 +266,15 @@ func (c *Client) embedAndWrite(
 	for round := 0; len(queue) > 0; round++ {
 		retry := make([]storedChunk, 0)
 		packs := packChunks(queue, reuse)
-		for position, pack := range packs {
+		for position := 0; position < len(packs); position++ {
 			if rowLimit > 0 && processed >= rowLimit {
 				remaining := slices.Concat(slices.Concat(packs[position:]...), retry)
 				return processed, remaining, writer.flush(ctx)
+			}
+			pack := packs[position]
+			if allowed := rowLimit - processed; rowLimit > 0 && len(pack) > allowed {
+				packs = slices.Insert(packs, position+1, pack[allowed:])
+				pack = pack[:allowed]
 			}
 			if err := ctx.Err(); err != nil {
 				return processed, nil, failRead("embed conversation rows", err)
@@ -246,7 +287,7 @@ func (c *Client) embedAndWrite(
 			if err := writePackRows(ctx, pack, vectors, reuse, writer, rowLimit); err != nil {
 				return processed, nil, err
 			}
-			retry = append(retry, c.retryRejected(ctx, rejected, stored, stats, round)...)
+			retry = append(retry, c.retryRejected(ctx, rejected, writer, stored, stats, round)...)
 		}
 		queue = retry
 	}
@@ -264,11 +305,14 @@ func writePackRows(ctx context.Context, pack []storedChunk, vectors [][]float32,
 		if err := writer.add(ctx, chunkRow(chunk, vectors[i])); err != nil {
 			return err
 		}
+		if rowLimit > 0 {
+			writer.storedIDs[chunkID(chunk)] = struct{}{}
+		}
 	}
 	return nil
 }
 
-func (c *Client) retryRejected(ctx context.Context, rejected []rejection, stored func(storedChunk) bool, stats *ingestStats, round int) []storedChunk {
+func (c *Client) retryRejected(ctx context.Context, rejected []rejection, writer *rowWriter, stored func(storedChunk) bool, stats *ingestStats, round int) []storedChunk {
 	retry := make([]storedChunk, 0)
 	for _, refusal := range rejected {
 		if c.shouldSplit(refusal) {
@@ -278,6 +322,7 @@ func (c *Client) retryRejected(ctx context.Context, rejected []rejection, stored
 		}
 		c.logDropped(ctx, refusal, round)
 		stats.dropped++
+		writer.unstoredText++
 	}
 	return retry
 }
@@ -295,7 +340,7 @@ func (c *Client) vectorsFor(ctx context.Context, pack []storedChunk, reuse map[s
 			stats.reused++
 			continue
 		}
-		missTexts = append(missTexts, chunk.Content)
+		missTexts = append(missTexts, embeddingInput(chunk.Content))
 		missPositions = append(missPositions, i)
 	}
 	if len(missTexts) == 0 {

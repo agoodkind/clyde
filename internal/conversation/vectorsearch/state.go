@@ -1,6 +1,7 @@
 package vectorsearch
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -134,6 +135,53 @@ func (state *conversationState) pathComplete(familyKey string, chunk storedChunk
 		}
 	}
 	return compareStoredContent(pathRows, chunk.Content, 0) == contentMatches
+}
+
+// missingPieces returns chunks for byte ranges of generated without a matching
+// stored piece. A stored piece matches when its content equals generated at its
+// offset. A retry then avoids storing text that an earlier piece already stores.
+// If missingPieces cannot find a matching piece, it returns generated.
+func (state *conversationState) missingPieces(familyKey string, generated storedChunk) []storedChunk {
+	if state == nil {
+		return []storedChunk{generated}
+	}
+	rows := make([]storedFamilyRow, 0)
+	for _, row := range state.families[familyKey] {
+		start := int(row.splitPart) - 1
+		end := start + len(row.content)
+		if row.relativePath != generated.RelativePath || !row.splitPartRecorded || start < 0 || row.content == "" || end > len(generated.Content) {
+			continue
+		}
+		if generated.Content[start:end] == row.content {
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) == 0 {
+		return []storedChunk{generated}
+	}
+	slices.SortFunc(rows, func(left storedFamilyRow, right storedFamilyRow) int {
+		return cmp.Compare(left.splitPart, right.splitPart)
+	})
+	missing := make([]storedChunk, 0)
+	covered := 0
+	for _, row := range rows {
+		start := int(row.splitPart) - 1
+		if start > covered {
+			missing = append(missing, chunkRange(generated, covered, start))
+		}
+		covered = max(covered, start+len(row.content))
+	}
+	if covered < len(generated.Content) {
+		missing = append(missing, chunkRange(generated, covered, len(generated.Content)))
+	}
+	return missing
+}
+
+// chunkRange returns the part of chunk between two byte offsets in its content.
+func chunkRange(chunk storedChunk, start int, end int) storedChunk {
+	chunk.Content = chunk.Content[start:end]
+	chunk.SplitPart = safeInt32(start + 1)
+	return chunk
 }
 
 func (state *conversationState) hasOlderRow(familyKey string) bool {
