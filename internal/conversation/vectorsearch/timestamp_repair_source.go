@@ -381,6 +381,10 @@ type sourceTimeLookup struct {
 	toolBindings         map[string]toolBinding
 	emptySource          bool
 	corrections          map[string]TimestampCorrectionGuard
+	// documents maps a message position to its ordered source document.
+	documents map[int]semsearch.SemDoc
+	// blankBindings maps a blank text family to its verified source date.
+	blankBindings map[string]int64
 }
 
 type toolBinding struct {
@@ -403,6 +407,10 @@ func newSourceTimeLookup(source TimestampSourceRepairSource) sourceTimeLookup {
 		groupedUsers: source.GroupedUsers, actualUsers: source.ActualUsers, transcript: source.Transcript,
 		emptySource: len(source.Documents) == 0 && len(source.CopyDocuments) == 0 && len(source.ToolCalls) == 0,
 		corrections: source.Corrections,
+		documents:   make(map[int]semsearch.SemDoc, len(source.Documents)), blankBindings: map[string]int64{},
+	}
+	for _, doc := range source.Documents {
+		lookup.documents[int(doc.MessageIndex)] = doc
 	}
 	entries := lookup.indexDocuments(source.Documents)
 	copies := lookup.indexDocuments(source.CopyDocuments)
@@ -598,6 +606,7 @@ func matchSourceFamilies(conversationID string, rows []collection.StoredRow, loo
 		families[key] = append(families[key], row)
 	}
 	lookup.bindToolFamilies(families)
+	lookup.bindBlankFamilies(families)
 	ordered := make([]pendingFamily, 0, len(families))
 	for key, members := range families {
 		groups := [][]collection.StoredRow{members}
@@ -656,6 +665,13 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 		return family, dated
 	}
 	if strings.TrimSpace(text) == "" {
+		if stamp, verified := lookup.blankBindings[key]; verified {
+			evidence.Outcome = SourceOutcomeMatched
+			evidence.Match = sourceMatchStoredRows
+			evidence.Candidates = []int64{stamp}
+			evidence.Chosen = stamp
+			return family, dated
+		}
 		evidence.Outcome = SourceOutcomeEmpty
 		return family, dated
 	}
