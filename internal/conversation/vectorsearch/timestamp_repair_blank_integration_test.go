@@ -37,28 +37,20 @@ const (
 	blankRepairCommand           = "git status --short"
 	blankRepairOtherCommand      = "git log --oneline"
 	blankRepairToolName          = "Shell"
-	blankRepairInputField        = "input"
 )
 
 // blankRepairEndpoint returns an HTTP handler that generates one vector for each input.
 func blankRepairEndpoint() http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
-		var body map[string]json.RawMessage
+		var body struct {
+			Input []string `json:"input"`
+		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
-		var inputs []string
-		if err := json.Unmarshal(body[blankRepairInputField], &inputs); err != nil {
-			var single string
-			if singleErr := json.Unmarshal(body[blankRepairInputField], &single); singleErr != nil {
-				http.Error(writer, err.Error(), http.StatusBadRequest)
-				return
-			}
-			inputs = []string{single}
-		}
-		data := make([]map[string]any, 0, len(inputs))
-		for position, input := range inputs {
+		data := make([]map[string]any, 0, len(body.Input))
+		for position, input := range body.Input {
 			digest := fnv.New32a()
 			_, _ = digest.Write([]byte(input))
 			vector := make([]float64, integrationDimension)
