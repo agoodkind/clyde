@@ -175,6 +175,10 @@ func blankRowDates(t *testing.T, address string, collectionID string, wantRows i
 //   - The source has text between the nearest stored text rows.
 //   - Another source message between the nearest stored text rows generates the text in
 //     the stored tool row.
+//   - Another source message between the nearest stored text rows does not generate a row.
+//   - Another source message between the nearest stored text rows generates a row
+//     missing from storage.
+//   - The source message generates a tool row missing from storage.
 //   - The blank family has two whole rows.
 //   - The blank row has a split part.
 //   - The blank row path contains another conversation ID.
@@ -255,14 +259,45 @@ func TestRepairDatesBlankRowOnlyWithExactStoredRows(t *testing.T) {
 				docs[0].TimestampUnix = time.Time{}.Unix()
 				return docs
 			}(),
-			source:     blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source:     blankRepairChangedSource(0, func(doc *semsearch.SemDoc) { doc.TimestampUnix = 0 }),
 			wantReason: vectorsearch.SourceOutcomeEmpty,
 		},
 		{
-			name:   "another blank source message generates the text in the stored tool row",
-			stored: blankRepairMiddleDocuments(""),
+			name: "another blank source message generates the text in the stored tool row",
+			stored: append(blankRepairMiddleDocuments(""),
+				blankRepairDocument(2, blankRepairAssistant, blankRepairOtherDate, "", blankRepairCommand)),
 			source: append(blankRepairMiddleDocuments(""),
 				blankRepairDocument(2, blankRepairAssistant, blankRepairOtherDate, "", blankRepairCommand)),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:   "another blank source message does not generate a row",
+			stored: blankRepairMiddleDocuments(""),
+			source: append(blankRepairMiddleDocuments(""),
+				blankRepairDocument(2, blankRepairAssistant, blankRepairOtherDate, "", "")),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name:   "another blank source message generates a row missing from storage",
+			stored: blankRepairMiddleDocuments(""),
+			source: append(blankRepairMiddleDocuments(""),
+				blankRepairDocument(2, blankRepairAssistant, blankRepairOtherDate, "", blankRepairOtherCommand)),
+			wantReason: vectorsearch.SourceOutcomeEmpty,
+		},
+		{
+			name: "another blank source message has its stored row",
+			stored: append(blankRepairMiddleDocuments(""),
+				blankRepairDocument(2, blankRepairAssistant, blankRepairOtherDate, "", blankRepairOtherCommand)),
+			source: append(blankRepairMiddleDocuments(""),
+				blankRepairDocument(2, blankRepairAssistant, blankRepairOtherDate, "", blankRepairOtherCommand)),
+			wantMatch: true,
+		},
+		{
+			name:   "the source message generates a tool row missing from storage",
+			stored: blankRepairDocuments(blankRepairFirstText, blankRepairToolDate, blankRepairCommand),
+			source: blankRepairChangedSource(blankRepairBlankMessage, func(doc *semsearch.SemDoc) {
+				doc.Tools = append(doc.Tools, semsearch.SemToolCall{Name: blankRepairToolName, Display: blankRepairOtherCommand, LangHint: "", Output: "", IsError: false, TimestampUnix: nil, TimestampUnknown: false})
+			}),
 			wantReason: vectorsearch.SourceOutcomeEmpty,
 		},
 		{

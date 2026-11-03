@@ -25,6 +25,8 @@ type blankFamilyIndex struct {
 	textKeys map[int]string
 	// siblings maps a position to its stored tool and thinking family keys.
 	siblings map[int][]string
+	// paths maps each stored relative path to its rows.
+	paths map[string][]collection.StoredRow
 }
 
 // bindBlankFamilies records the source date of each blank text family that passes
@@ -47,8 +49,11 @@ func (lookup sourceTimeLookup) bindBlankFamilies(conversationID string, families
 }
 
 func newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamilyIndex {
-	index := blankFamilyIndex{families: families, texts: nil, textKeys: map[int]string{}, siblings: map[int][]string{}}
+	index := blankFamilyIndex{families: families, texts: nil, textKeys: map[int]string{}, siblings: map[int][]string{}, paths: map[string][]collection.StoredRow{}}
 	for key, members := range families {
+		for _, row := range members {
+			index.paths[row.RelativePath] = append(index.paths[row.RelativePath], row)
+		}
 		message, parsed := familyMessage(key)
 		if !parsed {
 			continue
@@ -71,7 +76,7 @@ func newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamily
 //     matches the stored role regardless of letter case, and has a known date.
 //   - The source generates rows for that message.
 //   - Every stored tool and thinking family matches the generated text for each
-//     stored path.
+//     stored path. Stored rows include every row the source generates for that message.
 //   - At least one stored tool or thinking row has a known date, and every such
 //     row with a known date has the source message's date.
 //   - The nearest stored text family on each side contains text. Each family matches
@@ -79,8 +84,10 @@ func newBlankFamilyIndex(families map[string][]collection.StoredRow) blankFamily
 //     that position.
 //   - The preceding source date is on or before the blank message date, and the
 //     following source date is on or after it.
-//   - Each other source message between those two text families does not contain text and
-//     does not generate the text in any stored tool or thinking row from this message.
+//   - Each other source message between those two text families generates at least one
+//     row. Stored rows at each path include every row that source message generates
+//     for the path. Each generated row has text that differs from every stored tool or
+//     thinking row from this message.
 func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message int, role string) (int64, bool) {
 	doc, found := lookup.documents[message]
 	if !found || strings.TrimSpace(doc.Text) != "" || !strings.EqualFold(doc.Role, role) || doc.TimestampUnix == missingTimestampUnix {
@@ -106,7 +113,7 @@ func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message
 			siblingTexts[generated[row.RelativePath]] = struct{}{}
 		}
 	}
-	if !datedSibling {
+	if !datedSibling || !index.storesGenerated(generated) {
 		return 0, false
 	}
 	position, _ := slices.BinarySearch(index.texts, message)
@@ -120,29 +127,44 @@ func (lookup sourceTimeLookup) verifyBlankFamily(index blankFamilyIndex, message
 		return 0, false
 	}
 	for between := previous + 1; between < next; between++ {
-		if between != message && !lookup.positionIsDistinct(between, siblingTexts) {
+		if between != message && !lookup.positionIsPinned(index, between, siblingTexts) {
 			return 0, false
 		}
 	}
 	return doc.TimestampUnix, true
 }
 
-// positionIsDistinct reports whether the source message at position does not contain text
-// and does not generate a row with any of the given sibling texts.
-func (lookup sourceTimeLookup) positionIsDistinct(position int, siblingTexts map[string]struct{}) bool {
+// positionIsPinned reports whether the source message at position generates at least
+// one row, the stored rows include every generated row at its path, and each generated
+// row has text that differs from every given sibling text. It returns true when the
+// position does not have a source message.
+func (lookup sourceTimeLookup) positionIsPinned(index blankFamilyIndex, position int, siblingTexts map[string]struct{}) bool {
 	doc, present := lookup.documents[position]
 	if !present {
 		return true
 	}
-	if strings.TrimSpace(doc.Text) != "" {
-		return false
-	}
 	generated, generatedOK := generatedRowText(doc)
-	if !generatedOK {
+	if !generatedOK || len(generated) == 0 || !index.storesGenerated(generated) {
 		return false
 	}
 	for _, text := range generated {
 		if _, repeated := siblingTexts[text]; repeated {
+			return false
+		}
+	}
+	return true
+}
+
+// storesGenerated reports whether each generated path has complete stored text that
+// equals the generated text.
+func (index blankFamilyIndex) storesGenerated(generated map[string]string) bool {
+	for path, want := range generated {
+		rows, found := index.paths[path]
+		if !found {
+			return false
+		}
+		text, complete := pathText(rows)
+		if !complete || text != want {
 			return false
 		}
 	}
