@@ -29,8 +29,6 @@ func (w *conversationSemanticSyncWorker) deliveryOrder(
 	copy(ordered, needed)
 	sort.Strings(ordered)
 	rotated := rotateAfter(ordered, w.deliveryCursor)
-	// The worker resumes the partial conversation on each rotated turn. Priority turns
-	// between those turns process newer conversations.
 	if position := slices.Index(rotated, w.resumeConversation); position > 0 {
 		resumed := rotated[position]
 		rotated = slices.Insert(slices.Delete(rotated, position, position+1), 0, resumed)

@@ -250,7 +250,6 @@ func (f *splitRecoveryFixture) retry(docs []semsearch.SemDoc, fingerprint string
 	}
 }
 
-// markStopped writes the record that an interrupted upsert would store.
 func (f *splitRecoveryFixture) markStopped() {
 	f.t.Helper()
 	if err := vectorsearch.WriteStoppedRecordForTest(f.checkpointDir, splitRecoveryCollectionID, splitRecoveryConversationID, splitRecoveryFingerprint, integrationModel, f.docs); err != nil {
@@ -258,7 +257,6 @@ func (f *splitRecoveryFixture) markStopped() {
 	}
 }
 
-// requireComplete fails unless the rows match the complete write.
 func (f *splitRecoveryFixture) requireComplete(rows map[string]splitRecoveryRow, complete map[string]splitRecoveryRow) {
 	f.t.Helper()
 	for id, want := range complete {
@@ -269,7 +267,6 @@ func (f *splitRecoveryFixture) requireComplete(rows map[string]splitRecoveryRow,
 	}
 }
 
-// requireLaterPiecesAbsent fails if ingestion wrote any later pieces.
 func (f *splitRecoveryFixture) requireLaterPiecesAbsent(rows map[string]splitRecoveryRow, laterPieces []string) {
 	f.t.Helper()
 	for _, id := range laterPieces {
@@ -830,8 +827,6 @@ func recordedModelProof(t *testing.T, address string, model string) string {
 	return proof
 }
 
-// TestSharedLayoutWriteRecordProofCoversEmbeddingModel verifies the first family proof
-// encoding and checks that changing the embedding model changes the proof.
 func TestSharedLayoutWriteRecordProofCoversEmbeddingModel(t *testing.T) {
 	milvustest.RequireEnabled(t)
 	address := milvustest.Start(t)

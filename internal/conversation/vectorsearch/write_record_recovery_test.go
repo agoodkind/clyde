@@ -280,7 +280,6 @@ func closeRecoveryHeader(t *testing.T, root string) *recoveryHeaderGate {
 	return gate
 }
 
-// open restores the header file and sends the header to a client that opened the pipe.
 func (gate *recoveryHeaderGate) open(t *testing.T) {
 	t.Helper()
 	if gate.pipe == nil {
@@ -485,9 +484,6 @@ func recoveryStoredRow(t *testing.T, id string, path string, content string, spl
 	}
 }
 
-// TestUpsertReportsStoppedWriteWithOlderRowsAndContinues checks a stopped write for a
-// family with an older row. The upsert cannot establish which text is missing. It
-// preserves the write record and finishes the other conversation.
 func TestUpsertReportsStoppedWriteWithOlderRowsAndContinues(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -560,8 +556,6 @@ func recoveryRowID(path string, splitPart int32, content string) string {
 	return "chunk_" + hex.EncodeToString(digest[:])[:16]
 }
 
-// writeRecoveryRecord stores a write record for family in the checkpoint store's format.
-// The proof covers earlier text and does not verify the current text.
 func writeRecoveryRecord(t *testing.T, checkpoints string, family string) {
 	t.Helper()
 	const writeID = "stopped"

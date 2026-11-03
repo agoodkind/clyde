@@ -91,10 +91,6 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 	)
 }
 
-// recordPartialDelivery records completed checkpoints and progress for the backlog
-// loop. It does not memoize partial conversations; they still need ingestion.
-// It counts other batch failures and marks the pass as blocked when another client
-// is writing a conversation.
 func (w *conversationSemanticSyncWorker) recordPartialDelivery(
 	ctx context.Context,
 	partial *vectorsearch.PartialUpsertError,

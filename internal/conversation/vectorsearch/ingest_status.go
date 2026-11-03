@@ -7,8 +7,7 @@ import (
 
 // UpsertStats applies to one completed upsert.
 type UpsertStats struct {
-	JobID string
-	// RowsRead counts the stored rows that the upsert read to plan its writes.
+	JobID           string
 	RowsRead        int
 	RowsWritten     int
 	VectorsReused   int
