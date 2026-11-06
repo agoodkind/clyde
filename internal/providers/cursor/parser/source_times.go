@@ -75,7 +75,7 @@ func (p *Parser) SourceMatchText(role string, text string) string {
 }
 
 func emptySourceMessages() conversation.SourceMessages {
-	return conversation.SourceMessages{Messages: nil, Copies: nil, ToolCalls: nil, ToolCallsComplete: false, GroupedUsers: nil, ActualUsers: nil, MissingNativeRecords: 0}
+	return conversation.SourceMessages{Messages: nil, Copies: nil, ToolCalls: nil, ToolCallsComplete: false, GroupedUsers: nil, ActualUsers: nil, MissingNativeRecords: 0, ComposerBoundedTimes: nil}
 }
 
 // streamTranscript reads transcript messages, applies source times, and yields messages.
@@ -476,7 +476,8 @@ func composerSourceMessages(ctx context.Context, db *sql.DB, composerID string, 
 	}
 	callDates := toolDates.resolve()
 	if len(chronologyKeys) > 0 {
-		governed := nativeChronologyTimes(native, callDates, candidates)
+		governed, bounded := nativeChronologyTimes(native, callDates, candidates, header)
+		source.ComposerBoundedTimes = bounded
 		applyChronologyTimes(source.Messages, messageKeys, governed)
 		applyChronologyTimes(source.Copies, copyKeys, governed)
 	}

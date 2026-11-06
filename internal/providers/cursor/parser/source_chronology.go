@@ -23,6 +23,20 @@ type chronologyCandidate struct {
 	requestID string
 }
 
+// composerCandidatesDated reports whether every candidate has a date. It skips
+// candidates with a different request ID when both request IDs are present.
+func composerCandidatesDated(requestID string, candidates []chronologyCandidate) bool {
+	for _, candidate := range candidates {
+		if requestID != "" && candidate.requestID != "" && candidate.requestID != requestID {
+			continue
+		}
+		if candidate.created.IsZero() {
+			return false
+		}
+	}
+	return true
+}
+
 // bubbleChronologyKey returns the role and trimmed text for a user or assistant bubble.
 // It rejects other bubble types and empty text.
 func bubbleChronologyKey(bubble cursorstore.Bubble) (chronologyKey, bool) {
@@ -61,23 +75,28 @@ func nativeChronologyKey(message cursorstore.NativeMessage) (chronologyKey, bool
 	return chronologyKey{role: message.Role, text: message.Text}, true
 }
 
-// nativeChronologyTimes selects dates between tool anchors in native order.
-// Repeated role and text pairs keep a date only when every occurrence agrees.
-// It returns nil when the native messages do not provide a dated tool anchor.
-func nativeChronologyTimes(native cursorstore.NativeToolCalls, callDates map[string][]time.Time, candidates map[chronologyKey][]chronologyCandidate) map[chronologyKey]time.Time {
-	resolver := chronologyResolver{messages: native.Messages, callDates: callDates}
+// nativeChronologyTimes selects dates using native message order. Repeated role and
+// text pairs retain a date only when every occurrence agrees. It returns nil when
+// the native messages do not contain a dated tool call. It also returns nonzero dates
+// that used composer times as a bound.
+func nativeChronologyTimes(native cursorstore.NativeToolCalls, callDates map[string][]time.Time, candidates map[chronologyKey][]chronologyCandidate, header cursorstore.ComposerHeader) (map[chronologyKey]time.Time, []time.Time) {
+	resolver := chronologyResolver{messages: native.Messages, callDates: callDates, composerCreated: composerMillis(header.CreatedAt), composerUpdated: composerMillis(header.LastUpdatedAt)}
 	if !resolver.hasAnchor() {
-		return nil
+		return nil, nil
 	}
 	results := make(map[chronologyKey][]time.Time)
+	composerBound := make(map[chronologyKey]bool)
 	for position, message := range native.Messages {
 		key, ok := nativeChronologyKey(message)
 		if !ok {
 			continue
 		}
-		results[key] = append(results[key], resolver.occurrenceTime(position, candidates[key]))
+		stamp, usedComposer := resolver.occurrenceTime(position, candidates[key])
+		results[key] = append(results[key], stamp)
+		composerBound[key] = composerBound[key] || usedComposer
 	}
 	governed := make(map[chronologyKey]time.Time, len(results))
+	bounded := make([]time.Time, 0)
 	for key, times := range results {
 		chosen := times[0]
 		for _, other := range times[1:] {
@@ -87,14 +106,30 @@ func nativeChronologyTimes(native cursorstore.NativeToolCalls, callDates map[str
 			}
 		}
 		governed[key] = chosen
+		if composerBound[key] && !chosen.IsZero() {
+			bounded = append(bounded, chosen)
+		}
 	}
-	return governed
+	return governed, bounded
 }
 
 // chronologyResolver searches native message sequences for dated tool calls.
 type chronologyResolver struct {
 	messages  []cursorstore.NativeMessage
 	callDates map[string][]time.Time
+	// composerCreated and composerUpdated store the composer header times. Each is
+	// zero when the header omits that time.
+	composerCreated time.Time
+	composerUpdated time.Time
+}
+
+// composerMillis converts a composer header time in milliseconds. It returns zero
+// when the value is not positive.
+func composerMillis(millis int64) time.Time {
+	if millis <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(millis).UTC()
 }
 
 func (resolver chronologyResolver) hasAnchor() bool {
@@ -132,30 +167,49 @@ func (resolver chronologyResolver) anchorTimes(message cursorstore.NativeMessage
 	return times
 }
 
-// occurrenceTime selects one distinct candidate date inside inclusive tool bounds.
-// It rejects unequal request IDs when both messages provide one.
-// It returns zero unless both bounds exist and exactly one distinct date qualifies.
-func (resolver chronologyResolver) occurrenceTime(position int, candidates []chronologyCandidate) time.Time {
+// occurrenceTime selects a distinct candidate bubble date within inclusive bounds.
+// It skips candidates with a different request ID when both IDs are present.
+// It returns zero unless a later dated tool call exists and one distinct date qualifies.
+// Without an earlier dated tool call, it uses the composer creation time as the lower
+// bound and the earlier of the next tool call or composer update plus one second as
+// the upper bound. In that case, it returns zero if a candidate lacks a date or falls
+// outside the bounds. It also reports whether it used the composer times.
+func (resolver chronologyResolver) occurrenceTime(position int, candidates []chronologyCandidate) (time.Time, bool) {
 	lower, lowerFound := resolver.search(position, -1)
 	upper, upperFound := resolver.search(position, 1)
-	if !lowerFound || !upperFound {
-		return time.Time{}
+	if !upperFound {
+		return time.Time{}, false
+	}
+	if !lowerFound {
+		if resolver.composerCreated.IsZero() || resolver.composerUpdated.IsZero() {
+			return time.Time{}, false
+		}
+		lower = resolver.composerCreated.Truncate(time.Second)
+		if latest := resolver.composerUpdated.Add(time.Second); latest.Before(upper) {
+			upper = latest
+		}
 	}
 	requestID := resolver.messages[position].RequestID
+	if !lowerFound && !composerCandidatesDated(requestID, candidates) {
+		return time.Time{}, false
+	}
 	var chosen time.Time
 	for _, candidate := range candidates {
 		if candidate.created.IsZero() || (requestID != "" && candidate.requestID != "" && candidate.requestID != requestID) {
 			continue
 		}
 		if candidate.created.Before(lower) || candidate.created.After(upper) {
+			if !lowerFound {
+				return time.Time{}, false
+			}
 			continue
 		}
 		if !chosen.IsZero() && !chosen.Equal(candidate.created) {
-			return time.Time{}
+			return time.Time{}, false
 		}
 		chosen = candidate.created
 	}
-	return chosen
+	return chosen, !lowerFound
 }
 
 func (resolver chronologyResolver) sameSequence(left int, right int) bool {
