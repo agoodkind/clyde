@@ -4,12 +4,12 @@ go 1.27.1
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
-	github.com/andybalholm/brotli v1.2.1
+	github.com/andybalholm/brotli v1.2.7
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gofrs/flock v0.13.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/klauspost/compress v1.20.1
+	github.com/klauspost/compress v1.20.2
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/milvus-io/milvus/client/v3 v3.0.0
