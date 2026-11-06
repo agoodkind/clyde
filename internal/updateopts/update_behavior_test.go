@@ -2,12 +2,10 @@ package updateopts
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -15,25 +13,12 @@ import (
 	"goodkind.io/go-makefile/selfupdate"
 )
 
-type testReleaseAsset struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-}
-
-type testRelease struct {
-	HTMLURL    string             `json:"html_url"`
-	TagName    string             `json:"tag_name"`
-	Draft      bool               `json:"draft"`
-	Prerelease bool               `json:"prerelease"`
-	Assets     []testReleaseAsset `json:"assets"`
-}
-
 func TestLocalBuildCheckAndApplyNeverDownloadRelease(t *testing.T) {
 	restoreBuildVersion := setTestBuildVersion(localBuildVersion, "false")
 	t.Cleanup(restoreBuildVersion)
 
 	var downloadCount atomic.Int32
-	server := newUpdateServer(t, "202608011200-c7-abcdef0", false, &downloadCount)
+	server := newUpdateServer(t, "202608011200-c7-abcdef0", &downloadCount)
 	t.Cleanup(server.Close)
 	options := updateTestOptions(t, server)
 
@@ -67,16 +52,14 @@ func TestLocalBuildCheckAndApplyNeverDownloadRelease(t *testing.T) {
 
 func TestCIReleaseAndPrereleaseBuildsRemainUpdateable(t *testing.T) {
 	tests := []struct {
-		name             string
-		currentVersion   string
-		latestVersion    string
-		latestPrerelease bool
+		name           string
+		currentVersion string
+		latestVersion  string
 	}{
 		{
-			name:             "release build accepts rolling prerelease",
-			currentVersion:   releaseBuildVersion,
-			latestVersion:    "202608011200-c7-abcdef0",
-			latestPrerelease: true,
+			name:           "release build accepts rolling prerelease",
+			currentVersion: releaseBuildVersion,
+			latestVersion:  "202608011200-c7-abcdef0",
 		},
 		{
 			name:           "prerelease build accepts stable release",
@@ -91,7 +74,7 @@ func TestCIReleaseAndPrereleaseBuildsRemainUpdateable(t *testing.T) {
 			t.Cleanup(restoreBuildVersion)
 
 			var downloadCount atomic.Int32
-			server := newUpdateServer(t, test.latestVersion, test.latestPrerelease, &downloadCount)
+			server := newUpdateServer(t, test.latestVersion, &downloadCount)
 			t.Cleanup(server.Close)
 
 			result, err := selfupdate.Check(context.Background(), updateTestOptions(t, server))
@@ -109,73 +92,22 @@ func TestCIReleaseAndPrereleaseBuildsRemainUpdateable(t *testing.T) {
 	}
 }
 
-func TestNetworkOptionsSendsEnvironmentTokenToReleaseAPI(t *testing.T) {
-	tests := []struct {
-		name        string
-		ghToken     string
-		githubToken string
-		wantToken   string
-	}{
-		{
-			name:      "GH_TOKEN with surrounding whitespace",
-			ghToken:   "  gh-token-value \n",
-			wantToken: "gh-token-value",
-		},
-		{
-			name:        "GITHUB_TOKEN when GH_TOKEN is empty",
-			githubToken: "github-token-value",
-			wantToken:   "github-token-value",
-		},
-		{
-			name:        "GH_TOKEN before GITHUB_TOKEN",
-			ghToken:     "gh-token-value",
-			githubToken: "github-token-value",
-			wantToken:   "gh-token-value",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			restoreBuildVersion := setTestBuildVersion(releaseBuildVersion, "false")
-			t.Cleanup(restoreBuildVersion)
-			t.Setenv("GH_TOKEN", test.ghToken)
-			t.Setenv("GITHUB_TOKEN", test.githubToken)
-
-			var downloadCount atomic.Int32
-			server := newTokenUpdateServer(t, "202608011200-c7-abcdef0", test.wantToken, &downloadCount)
-			t.Cleanup(server.Close)
-
-			result, err := selfupdate.Check(context.Background(), networkTestOptions(t, server))
-			if err != nil {
-				t.Fatalf("Check() error = %v", err)
-			}
-			if !result.UpdateAvailable {
-				t.Fatal("Check() UpdateAvailable = false, want true")
-			}
-		})
-	}
-}
-
-func TestNetworkOptionsRejectedTokenErrorOmitsToken(t *testing.T) {
+func TestNetworkOptionsDoesNotSendCredentials(t *testing.T) {
 	restoreBuildVersion := setTestBuildVersion(releaseBuildVersion, "false")
 	t.Cleanup(restoreBuildVersion)
-	rejectedToken := "rejected-token-value"
-	t.Setenv("GH_TOKEN", rejectedToken)
-	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "example-token")
+	t.Setenv("GITHUB_TOKEN", "another-token")
 
 	var downloadCount atomic.Int32
-	server := newTokenUpdateServer(t, "202608011200-c7-abcdef0", "accepted-token-value", &downloadCount)
+	server := newUpdateServer(t, "202608011200-c7-abcdef0", &downloadCount)
 	t.Cleanup(server.Close)
 
-	_, err := selfupdate.Check(context.Background(), networkTestOptions(t, server))
-	if err == nil {
-		t.Fatal("Check() error = nil, want HTTP 403 error")
+	result, err := selfupdate.Check(context.Background(), networkTestOptions(t, server))
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "403") {
-		t.Fatalf("Check() error = %q, want HTTP 403", err)
-	}
-	if strings.Contains(err.Error(), rejectedToken) {
-		t.Fatalf("Check() error = %q, want error without the token", err)
+	if !result.UpdateAvailable {
+		t.Fatal("Check() did not report the newer release")
 	}
 }
 
@@ -211,7 +143,7 @@ func networkTestOptions(t *testing.T, server *httptest.Server) selfupdate.Option
 }
 
 func withTestServerPaths(options selfupdate.Options, server *httptest.Server, stateDir string) selfupdate.Options {
-	options.Config.APIBaseURL = server.URL
+	options.Config.WebBaseURL = server.URL
 	options.StatePath = filepath.Join(stateDir, "state.json")
 	options.CacheDir = filepath.Join(stateDir, "cache")
 	return options
@@ -220,57 +152,22 @@ func withTestServerPaths(options selfupdate.Options, server *httptest.Server, st
 func newUpdateServer(
 	t *testing.T,
 	latestVersion string,
-	prerelease bool,
 	downloadCount *atomic.Int32,
 ) *httptest.Server {
 	t.Helper()
-	return newReleaseServer(t, latestVersion, prerelease, "", downloadCount)
-}
-
-func newTokenUpdateServer(
-	t *testing.T,
-	latestVersion string,
-	requiredToken string,
-	downloadCount *atomic.Int32,
-) *httptest.Server {
-	t.Helper()
-	return newReleaseServer(t, latestVersion, true, requiredToken, downloadCount)
-}
-
-func newReleaseServer(
-	t *testing.T,
-	latestVersion string,
-	prerelease bool,
-	requiredToken string,
-	downloadCount *atomic.Int32,
-) *httptest.Server {
-	t.Helper()
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if requiredToken != "" && request.Header.Get("Authorization") != "Bearer "+requiredToken {
-			http.Error(writer, `{"message":"API rate limit exceeded"}`, http.StatusForbidden)
-			return
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "" {
+			t.Error("The update request included an authorization header")
 		}
 		switch request.URL.Path {
-		case "/repos/agoodkind/clyde/releases":
-			response := []testRelease{{
-				HTMLURL:    server.URL + "/release",
-				TagName:    latestVersion,
-				Prerelease: prerelease,
-				Assets: []testReleaseAsset{{
-					Name:               "clyde_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz",
-					BrowserDownloadURL: server.URL + "/download/clyde.tar.gz",
-				}},
-			}}
-			if err := json.NewEncoder(writer).Encode(response); err != nil {
-				t.Errorf("encode release response: %v", err)
-			}
-		case "/download/clyde.tar.gz":
-			downloadCount.Add(1)
-			_, _ = writer.Write([]byte("unexpected download"))
+		case "/agoodkind/clyde/releases.atom":
+			_, _ = writer.Write([]byte("<feed><entry><id>tag:github.com,2008:Repository/1/" + latestVersion + "</id></entry></feed>"))
+		case "/agoodkind/clyde/releases/download/" + latestVersion + "/checksums.txt":
+			asset := "clyde_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+			_, _ = writer.Write([]byte("deadbeef  " + asset + "\n"))
 		default:
+			downloadCount.Add(1)
 			http.NotFound(writer, request)
 		}
 	}))
-	return server
 }
