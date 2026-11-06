@@ -46,9 +46,7 @@ type TimestampSourceRepairSource struct {
 	Transcript SourceTranscript
 	// Corrections selects row IDs for correction and supplies their expected state. A nil map selects zero timestamp rows instead.
 	Corrections map[string]TimestampCorrectionGuard
-	// ComposerBoundedDates lists source dates that used composer header times as a
-	// bound. Repair rejects a text family's date when it falls outside the stored
-	// dates at the nearest earlier and later message positions.
+	// ComposerBoundedDates lists dates that used composer times as a bound.
 	ComposerBoundedDates []int64
 }
 
@@ -385,9 +383,9 @@ type sourceTimeLookup struct {
 	toolBindings         map[string]toolBinding
 	emptySource          bool
 	corrections          map[string]TimestampCorrectionGuard
-	// storedDates lists the known dates of the stored conversation rows.
+	// storedDates lists known stored conversation row dates and their message positions.
 	storedDates []storedDate
-	// boundedDates contains the source dates that used composer header times as a bound.
+	// boundedDates stores dates that used composer times as a bound.
 	boundedDates map[int64]bool
 }
 
@@ -574,9 +572,8 @@ const (
 	SourceOutcomeIdentityAbsent = "identity_bubble_absent"
 	// SourceOutcomeIdentityConflict indicates that identity bubble dates disagree.
 	SourceOutcomeIdentityConflict = "identity_dates_conflict"
-	// SourceOutcomeDateOrderConflict reports that a text family's only source date
-	// falls outside the stored dates at the nearest earlier and later message
-	// positions.
+	// SourceOutcomeDateOrderConflict indicates that a composer bounded date falls
+	// outside the nearest stored dates.
 	SourceOutcomeDateOrderConflict = "date_order_conflict"
 	// SourceOutcomeReadError indicates that reading the source failed.
 	SourceOutcomeReadError = "read_error"
@@ -642,9 +639,9 @@ func matchSourceFamilies(conversationID string, rows []collection.StoredRow, loo
 	}
 }
 
-// separateBlankRows separates blank rows into a second family with the
-// empty_content outcome. It returns the family unchanged when the family already
-// has that outcome or does not contain any blank rows.
+// separateBlankRows moves blank rows into a second family with the empty_content
+// outcome. It returns the original family when it already has that outcome or does
+// not contain blank rows.
 func separateBlankRows(family pendingFamily) []pendingFamily {
 	kept := make([]collection.StoredRow, 0, len(family.rows))
 	blank := make([]collection.StoredRow, 0)

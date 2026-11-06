@@ -23,8 +23,8 @@ type chronologyCandidate struct {
 	requestID string
 }
 
-// composerCandidatesDated reports whether every candidate has a date, skipping a
-// candidate with a request ID that differs from the native message request ID.
+// composerCandidatesDated reports whether every candidate has a date. It skips
+// candidates with a different request ID when both request IDs are present.
 func composerCandidatesDated(requestID string, candidates []chronologyCandidate) bool {
 	for _, candidate := range candidates {
 		if requestID != "" && candidate.requestID != "" && candidate.requestID != requestID {
@@ -75,11 +75,10 @@ func nativeChronologyKey(message cursorstore.NativeMessage) (chronologyKey, bool
 	return chronologyKey{role: message.Role, text: message.Text}, true
 }
 
-// nativeChronologyTimes selects message dates using native message order.
-// It uses dated tool calls as bounds and composer header times before the first call.
-// It keeps a date for repeated role and text pairs only when every occurrence agrees.
-// It returns nil when native messages do not provide a dated tool call. It also
-// returns the nonzero dates that used composer header times as bounds.
+// nativeChronologyTimes selects dates using native message order. Repeated role and
+// text pairs retain a date only when every occurrence agrees. It returns nil when
+// the native messages do not contain a dated tool call. It also returns nonzero dates
+// that used composer times as a bound.
 func nativeChronologyTimes(native cursorstore.NativeToolCalls, callDates map[string][]time.Time, candidates map[chronologyKey][]chronologyCandidate, header cursorstore.ComposerHeader) (map[chronologyKey]time.Time, []time.Time) {
 	resolver := chronologyResolver{messages: native.Messages, callDates: callDates, composerCreated: composerMillis(header.CreatedAt), composerUpdated: composerMillis(header.LastUpdatedAt)}
 	if !resolver.hasAnchor() {
@@ -118,13 +117,14 @@ func nativeChronologyTimes(native cursorstore.NativeToolCalls, callDates map[str
 type chronologyResolver struct {
 	messages  []cursorstore.NativeMessage
 	callDates map[string][]time.Time
-	// composerCreated and composerUpdated are the composer header times. They are
-	// zero when the header omits them.
+	// composerCreated and composerUpdated store the composer header times. Each is
+	// zero when the header omits that time.
 	composerCreated time.Time
 	composerUpdated time.Time
 }
 
-// composerMillis converts a composer header time and returns zero when it is unset.
+// composerMillis converts a composer header time in milliseconds. It returns zero
+// when the value is not positive.
 func composerMillis(millis int64) time.Time {
 	if millis <= 0 {
 		return time.Time{}
@@ -167,14 +167,13 @@ func (resolver chronologyResolver) anchorTimes(message cursorstore.NativeMessage
 	return times
 }
 
-// occurrenceTime selects one distinct candidate date within inclusive time bounds.
-// It rejects different request IDs when both messages provide one.
-// It returns zero unless a later dated tool call exists and exactly one distinct
-// date qualifies. Without an earlier dated tool call, it uses composer creation as
-// the earlier bound and the earlier of composer update and the later tool call as
-// the later bound. In that case, it rejects the message if any candidate date falls
-// outside the bounds or any candidate bubble lacks a date. It also reports whether
-// it used composer header times.
+// occurrenceTime selects a distinct candidate bubble date within inclusive bounds.
+// It skips candidates with a different request ID when both IDs are present.
+// It returns zero unless a later dated tool call exists and one distinct date qualifies.
+// Without an earlier dated tool call, it uses the composer creation time as the lower
+// bound and the earlier of the next tool call or composer update plus one second as
+// the upper bound. In that case, it returns zero if a candidate lacks a date or falls
+// outside the bounds. It also reports whether it used the composer times.
 func (resolver chronologyResolver) occurrenceTime(position int, candidates []chronologyCandidate) (time.Time, bool) {
 	lower, lowerFound := resolver.search(position, -1)
 	upper, upperFound := resolver.search(position, 1)

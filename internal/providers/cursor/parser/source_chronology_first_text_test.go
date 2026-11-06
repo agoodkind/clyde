@@ -24,7 +24,7 @@ func firstTextTime(t *testing.T, value string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {
-		t.Fatalf("cannot parse fixture time: %v", err)
+		t.Fatalf("The test could not parse the fixture time: %v.", err)
 	}
 	return parsed
 }
@@ -39,18 +39,18 @@ func firstTextSourceTime(t *testing.T) time.Time {
 	}
 	source, found, err := parser.New().SourceStoreMessages(t.Context(), record, sourceRootLoadOptions())
 	if err != nil || !found {
-		t.Fatalf("cannot read source store; found, error: %v, %v", found, err)
+		t.Fatalf("The test could not read the source store; found: %v; error: %v.", found, err)
 	}
 	for _, message := range source.Messages {
 		if message.Text == firstTextValue {
 			return message.Timestamp
 		}
 	}
-	t.Fatalf("source store does not contain the fixture text; messages: %d", len(source.Messages))
+	t.Fatalf("The source store does not contain the fixture text; message count: %d.", len(source.Messages))
 	return time.Time{}
 }
 
-// TestSourceTextBeforeTheFirstToolUsesComposerBounds checks the date of a text message
+// TestSourceTextBeforeTheFirstToolUsesComposerBounds checks dates for text messages
 // without an earlier dated tool call.
 func TestSourceTextBeforeTheFirstToolUsesComposerBounds(t *testing.T) {
 	testCases := []struct {
@@ -61,14 +61,14 @@ func TestSourceTextBeforeTheFirstToolUsesComposerBounds(t *testing.T) {
 		afterTool bool
 		wantDate  string
 	}{
-		{name: "the date falls between composer creation and the next dated tool call", textDate: firstTextDate, toolDate: firstTextToolDate, wantDate: firstTextDate},
-		{name: "the date falls before composer creation", textDate: firstTextEarly, toolDate: firstTextToolDate},
-		{name: "the date falls after the next dated tool call", textDate: firstTextLate, toolDate: firstTextToolDate},
-		{name: "the date falls after the composer update time", textDate: firstTextAfterEdit, toolDate: firstTextLateTool},
-		{name: "a message stays undated when a stored copy has a different date within the bounds", textDate: firstTextDate, toolDate: firstTextToolDate, copyDate: firstTextCopyDate},
-		{name: "a message stays undated when a stored copy has a date after the next dated tool call", textDate: firstTextDate, toolDate: firstTextToolDate, copyDate: firstTextLate},
-		{name: "an undated listed bubble stays undated despite a matching dated copy within the bounds", textDate: "", toolDate: firstTextToolDate, copyDate: firstTextDate},
-		{name: "the message follows the only dated tool call", textDate: firstTextLate, toolDate: firstTextToolDate, afterTool: true},
+		{name: "date between composer creation and next tool call is selected", textDate: firstTextDate, toolDate: firstTextToolDate, wantDate: firstTextDate},
+		{name: "date before composer creation is rejected", textDate: firstTextEarly, toolDate: firstTextToolDate},
+		{name: "date after next tool call is rejected", textDate: firstTextLate, toolDate: firstTextToolDate},
+		{name: "date after composer update bound is rejected", textDate: firstTextAfterEdit, toolDate: firstTextLateTool},
+		{name: "different copy date within bounds is rejected", textDate: firstTextDate, toolDate: firstTextToolDate, copyDate: firstTextCopyDate},
+		{name: "copy date after next tool call is rejected", textDate: firstTextDate, toolDate: firstTextToolDate, copyDate: firstTextLate},
+		{name: "undated bubble with dated copy is rejected", textDate: "", toolDate: firstTextToolDate, copyDate: firstTextDate},
+		{name: "message after only dated tool call remains undated", textDate: firstTextLate, toolDate: firstTextToolDate, afterTool: true},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -94,12 +94,12 @@ func TestSourceTextBeforeTheFirstToolUsesComposerBounds(t *testing.T) {
 			got := firstTextSourceTime(t)
 			if testCase.wantDate == "" {
 				if !got.IsZero() {
-					t.Fatalf("the message has a timestamp: %v", got)
+					t.Fatalf("The message has an unexpected timestamp: %v.", got)
 				}
 				return
 			}
 			if want := firstTextTime(t, testCase.wantDate); !got.Equal(want) {
-				t.Fatalf("message timestamp differs; actual, expected: %v, %v", got, want)
+				t.Fatalf("The message timestamp is %v; the expected timestamp is %v.", got, want)
 			}
 		})
 	}

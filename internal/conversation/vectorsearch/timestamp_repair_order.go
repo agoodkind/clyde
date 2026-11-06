@@ -9,13 +9,13 @@ import (
 
 const familyMessagePart = 2
 
-// storedDate records one known stored date and its message position.
+// storedDate records a known stored date and its message position.
 type storedDate struct {
 	message int
 	stamp   int64
 }
 
-// knownStoredDates returns the known dates of the stored rows in families.
+// knownStoredDates returns the known dates of stored rows in the families.
 func knownStoredDates(families map[string][]collection.StoredRow) []storedDate {
 	dates := make([]storedDate, 0)
 	for key, members := range families {
@@ -32,11 +32,9 @@ func knownStoredDates(families map[string][]collection.StoredRow) []storedDate {
 	return dates
 }
 
-// matchedTextOutcome returns the outcome of a text family with one source date.
-// For a date that used composer header times as a bound, it returns a conflict if
-// the date falls outside the stored dates at the nearest earlier and later message
-// positions. For other dates and corrections, it returns a match without comparing
-// stored dates.
+// matchedTextOutcome checks a single composer bounded source date against the nearest
+// earlier and later stored dates. It returns date_order_conflict when that date falls
+// outside those bounds. Other dates and corrections return matched.
 func (lookup sourceTimeLookup) matchedTextOutcome(key string, stamp int64) string {
 	if lookup.corrections != nil || !lookup.boundedDates[stamp] {
 		return SourceOutcomeMatched

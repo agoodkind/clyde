@@ -39,7 +39,7 @@ const (
 	textOrderSplitSpaces    = 8
 )
 
-// textOrderEndpoint returns an HTTP handler that generates one vector for each input.
+// textOrderEndpoint returns an HTTP handler that returns one vector for each input.
 func textOrderEndpoint() http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		var body struct {
@@ -69,8 +69,8 @@ func textOrderDocument(message int32, role string, date int64, text string) sems
 	}
 }
 
-// textOrderSplitText produces 60,000 letters followed by 8 spaces. The writer
-// stores the letters as the first part and drops the part with only spaces.
+// textOrderSplitText contains 60,000 letters followed by 8 spaces. The writer
+// stores the letters as the first part and drops the part containing only spaces.
 var textOrderSplitText = strings.Repeat("a", textOrderSplitBytes) + strings.Repeat(" ", textOrderSplitSpaces)
 
 // textOrderDocuments returns dated rows before and after the target row.
@@ -110,7 +110,7 @@ func textOrderRowDate(t *testing.T, address string, collectionID string, path st
 	return first, firstDated
 }
 
-// textOrderCellDate returns the date in one timestamp cell and reports whether it is known.
+// textOrderCellDate returns the date in a timestamp cell and reports whether it is known.
 func textOrderCellDate(t *testing.T, column column.Column, position int) (int64, bool) {
 	t.Helper()
 	isNull, err := column.IsNull(position)
@@ -127,11 +127,9 @@ func textOrderCellDate(t *testing.T, column column.Column, position int) (int64,
 	return stamp, stamp != time.Time{}.Unix()
 }
 
-// TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows checks that repair dates
-// a text row that uses composer times as bounds only when its source date falls
-// within the nearest stored dates. It checks that repair dates other text rows
-// without this comparison. It also checks that repair leaves a blank row undated
-// when its stored tool row, nearest text rows, and source date all match.
+// TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows checks timestamp repair
+// against Milvus. It checks composer bounded dates against nearby stored dates and
+// verifies that blank rows and blank parts remain undated.
 func TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows(t *testing.T) {
 	milvustest.RequireEnabled(t)
 	address := milvustest.Start(t)
@@ -153,7 +151,7 @@ func TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows(t *testing.T) {
 		wantOutcome string
 	}{
 		{
-			name:        "a date selected using composer bounds falls between the nearest stored dates",
+			name:        "composer bounded date between nearest stored dates is dated",
 			stored:      textOrderDocuments(undated, textOrderTargetText),
 			source:      textOrderDocuments(textOrderMiddleDate, textOrderTargetText),
 			bounded:     []int64{textOrderMiddleDate},
@@ -161,28 +159,28 @@ func TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows(t *testing.T) {
 			wantOutcome: vectorsearch.SourceOutcomeMatched,
 		},
 		{
-			name:        "a date selected using composer bounds falls after the next stored date",
+			name:        "composer bounded date after next stored date conflicts",
 			stored:      textOrderDocuments(undated, textOrderTargetText),
 			source:      textOrderDocuments(textOrderLaterDate+1, textOrderTargetText),
 			bounded:     []int64{textOrderLaterDate + 1},
 			wantOutcome: vectorsearch.SourceOutcomeDateOrderConflict,
 		},
 		{
-			name:        "a date selected using composer bounds falls before the previous stored date",
+			name:        "composer bounded date before previous stored date conflicts",
 			stored:      textOrderDocuments(undated, textOrderTargetText),
 			source:      textOrderDocuments(textOrderEarlierDate-1, textOrderTargetText),
 			bounded:     []int64{textOrderEarlierDate - 1},
 			wantOutcome: vectorsearch.SourceOutcomeDateOrderConflict,
 		},
 		{
-			name:        "a date between tool bounds falls after the next stored date",
+			name:        "tool bounded date after next stored date is dated",
 			stored:      textOrderDocuments(undated, textOrderTargetText),
 			source:      textOrderDocuments(textOrderLaterDate+1, textOrderTargetText),
 			wantDate:    textOrderLaterDate + 1,
 			wantOutcome: vectorsearch.SourceOutcomeMatched,
 		},
 		{
-			name:        "the conversation does not have other stored dates",
+			name:        "composer bounded date without other stored dates is dated",
 			stored:      []semsearch.SemDoc{textOrderDocument(textOrderTargetMessage, textOrderAssistant, undated, textOrderTargetText)},
 			source:      []semsearch.SemDoc{textOrderDocument(textOrderTargetMessage, textOrderAssistant, textOrderMiddleDate, textOrderTargetText)},
 			bounded:     []int64{textOrderMiddleDate},
@@ -190,14 +188,14 @@ func TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows(t *testing.T) {
 			wantOutcome: vectorsearch.SourceOutcomeMatched,
 		},
 		{
-			name:        "repair leaves a blank text row undated despite a known source date and matching stored and source tool rows at the same message position",
+			name:        "blank row with matching source and tool dates stays undated",
 			stored:      blankWithTool,
 			source:      blankWithTool,
 			blank:       true,
 			wantOutcome: vectorsearch.SourceOutcomeEmpty,
 		},
 		{
-			name:        "a matched text row with a blank second part dates only the first part",
+			name:        "blank second part of matched text stays undated",
 			stored:      textOrderDocuments(undated, textOrderSplitText),
 			source:      textOrderDocuments(textOrderMiddleDate, textOrderSplitText),
 			split:       true,
