@@ -19,7 +19,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/quic-go/quic-go v0.65.0
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/tiktoken-go/tokenizer v0.10.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
@@ -126,10 +126,10 @@ require (
 	github.com/sigstore/timestamp-authority/v2 v2.2.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
-	github.com/tidwall/gjson v1.20.0 // indirect
+	github.com/tidwall/gjson v1.20.1 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.2 // indirect
-	github.com/tidwall/sjson v1.2.6 // indirect
+	github.com/tidwall/sjson v1.2.7 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0 // indirect
@@ -149,7 +149,7 @@ require (
 	github.com/tree-sitter/tree-sitter-python v0.25.0 // indirect
 	github.com/tree-sitter/tree-sitter-ruby v0.23.1 // indirect
 	github.com/tree-sitter/tree-sitter-rust v0.24.2 // indirect
-	github.com/tree-sitter/tree-sitter-scala v0.26.4 // indirect
+	github.com/tree-sitter/tree-sitter-scala v0.26.5 // indirect
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xo/terminfo v1.3.1 // indirect
