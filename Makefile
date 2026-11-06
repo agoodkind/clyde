@@ -29,23 +29,17 @@ GO_BUILD_LDFLAGS += -X goodkind.io/clyde/internal/daemonsupervisor.BuildFingerpr
 
 # Exclude protobuf-generated code under /api/ from staticcheck-extra.
 STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
-export GOVULNCHECK_INSTALL := golang.org/x/vuln/cmd/govulncheck@v1.7.0
+export GOVULNCHECK_INSTALL := golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
-# Package loading requires the generated Swift parser and embedded model files.
-# The workspace includes the gksyntax submodule because its module archive omits
-# grammar sources.
+# Package loading requires the pinned gksyntax source and embedded model files.
 GO_MK_GENERATE := gksyntax-grammars staticembed-model
 GO_MK_GENERATE_INPUTS := third_party/gksyntax internal/conversation/staticembed/model
 GO_MK_GENERATE_OUTPUTS := \
 	internal/conversation/staticembed/model/model.safetensors \
-	internal/conversation/staticembed/model/tokenizer.json \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/parser.c \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/parser.h \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/array.h \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/alloc.h
+	internal/conversation/staticembed/model/tokenizer.json
 GO_MK_WORKSPACE_USE := . third_party/gksyntax
 
 include bootstrap.mk
@@ -99,46 +93,10 @@ milvus-integration: ## Run the Milvus integration tests on throwaway Milvus stac
 deadcode: lint-deadcode ## Alias for the central deadcode gate
 
 # ---------------------------------------------------------------------------
-# gksyntax submodule grammars and embedded search native build
+# gksyntax and embedded search native build
 # ---------------------------------------------------------------------------
-# Embedded conversation search imports goodkind.io/gksyntax/shelldecomp. The
-# gksyntax repository vendors the dart and swift grammars as its own
-# submodules, and it commits only the swift grammar definition. This recipe
-# initializes the pinned recursive submodule, installs the tree-sitter CLI
-# version that gksyntax pins into .bin, and generates the swift parser inside
-# the submodule working tree. The nested dart grammar declares an SSH
-# submodule URL, which the HTTPS rewrite replaces for hosts without SSH keys.
-GKS_DIR := third_party/gksyntax
-SWIFT_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/swift/upstream
-SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
-SWIFT_GRAMMAR_PARSER := $(SWIFT_GRAMMAR_DIR)/src/parser.c
-TREE_SITTER_ABI := 14
-TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
-TREE_SITTER_BIN := $(TREE_SITTER_LOCAL_DIR)/tree-sitter
-
-gksyntax-grammars: ## Initialize the pinned gksyntax submodule and generate its Swift parser
-	@set -e; \
-	status="$$(git submodule status --recursive $(GKS_DIR))"; \
-	if printf '%s\n' "$$status" | grep -q '^U'; then \
-		echo "gksyntax-grammars: $(GKS_DIR) has unresolved submodule conflicts" >&2; \
-		exit 1; \
-	fi; \
-	if printf '%s\n' "$$status" | grep -Eq '^[+-]'; then \
-		git -c url.https://github.com/.insteadOf=git@github.com: submodule update --init --recursive $(GKS_DIR); \
-	fi
-	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
-		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DEF) is missing after submodule initialization" >&2; \
-		exit 1; \
-	fi
-	@"$(GKS_DIR)/scripts/install-tree-sitter.sh" "$(TREE_SITTER_LOCAL_DIR)"
-	@set -e; \
-	if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
-		echo "gksyntax-grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
-		( cd "$(SWIFT_GRAMMAR_DIR)" && "$(TREE_SITTER_BIN)" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
-		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- .; \
-	else \
-		echo "gksyntax-grammars: Swift parser already generated"; \
-	fi
+gksyntax-grammars: ## Initialize the pinned gksyntax submodule
+	@git submodule update --init third_party/gksyntax
 
 staticembed-model: ## Fetch and verify the pinned static embedding model files
 	GOWORK=off CGO_ENABLED=0 go run ./cmd/staticembed-model
@@ -166,7 +124,7 @@ embedded-search-bootstrap: | $(GO_MK_PREREQS) ## Compile the embedded search nat
 # ---------------------------------------------------------------------------
 
 proto: ## Regenerate protobuf/gRPC Go code from api/**/*.proto via buf
-	@command -v buf >/dev/null 2>&1 || go install github.com/bufbuild/buf/cmd/buf@v1.70.0
+	@command -v buf >/dev/null 2>&1 || go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 	@PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
 
 build: proto
