@@ -46,6 +46,8 @@ type TimestampSourceRepairSource struct {
 	Transcript SourceTranscript
 	// Corrections selects row IDs for correction and supplies their expected state. A nil map selects zero timestamp rows instead.
 	Corrections map[string]TimestampCorrectionGuard
+	// ComposerBoundedDates lists dates that used composer times as a bound.
+	ComposerBoundedDates []int64
 }
 
 // SourceTranscript contains tool calls and user turns under the loaded
@@ -381,10 +383,10 @@ type sourceTimeLookup struct {
 	toolBindings         map[string]toolBinding
 	emptySource          bool
 	corrections          map[string]TimestampCorrectionGuard
-	// documents maps a message position to its ordered source document.
-	documents map[int]semsearch.SemDoc
-	// blankBindings maps a blank text family to its verified source date.
-	blankBindings map[string]int64
+	// storedDates lists known stored conversation row dates and their message positions.
+	storedDates []storedDate
+	// boundedDates stores dates that used composer times as a bound.
+	boundedDates map[int64]bool
 }
 
 type toolBinding struct {
@@ -406,11 +408,10 @@ func newSourceTimeLookup(source TimestampSourceRepairSource) sourceTimeLookup {
 		toolCalls: source.ToolCalls, toolCallsComplete: source.ToolCallsComplete, missingNativeRecords: source.MissingNativeRecords, toolBindings: map[string]toolBinding{},
 		groupedUsers: source.GroupedUsers, actualUsers: source.ActualUsers, transcript: source.Transcript,
 		emptySource: len(source.Documents) == 0 && len(source.CopyDocuments) == 0 && len(source.ToolCalls) == 0,
-		corrections: source.Corrections,
-		documents:   make(map[int]semsearch.SemDoc, len(source.Documents)), blankBindings: map[string]int64{},
+		corrections: source.Corrections, storedDates: nil, boundedDates: make(map[int64]bool, len(source.ComposerBoundedDates)),
 	}
-	for _, doc := range source.Documents {
-		lookup.documents[int(doc.MessageIndex)] = doc
+	for _, stamp := range source.ComposerBoundedDates {
+		lookup.boundedDates[stamp] = true
 	}
 	entries := lookup.indexDocuments(source.Documents)
 	copies := lookup.indexDocuments(source.CopyDocuments)
@@ -571,6 +572,9 @@ const (
 	SourceOutcomeIdentityAbsent = "identity_bubble_absent"
 	// SourceOutcomeIdentityConflict indicates that identity bubble dates disagree.
 	SourceOutcomeIdentityConflict = "identity_dates_conflict"
+	// SourceOutcomeDateOrderConflict indicates that a composer bounded date falls
+	// outside the nearest stored dates.
+	SourceOutcomeDateOrderConflict = "date_order_conflict"
 	// SourceOutcomeReadError indicates that reading the source failed.
 	SourceOutcomeReadError = "read_error"
 	// sourceMatchNativeIdentity identifies a match using a native tool call.
@@ -606,7 +610,7 @@ func matchSourceFamilies(conversationID string, rows []collection.StoredRow, loo
 		families[key] = append(families[key], row)
 	}
 	lookup.bindToolFamilies(families)
-	lookup.bindBlankFamilies(conversationID, families)
+	lookup.storedDates = knownStoredDates(families)
 	ordered := make([]pendingFamily, 0, len(families))
 	for key, members := range families {
 		groups := [][]collection.StoredRow{members}
@@ -622,7 +626,9 @@ func matchSourceFamilies(conversationID string, rows []collection.StoredRow, loo
 			if family == nil {
 				continue
 			}
-			ordered = append(ordered, fragmentFallback(conversationID, key, *family, lookup)...)
+			for _, part := range fragmentFallback(conversationID, key, *family, lookup) {
+				ordered = append(ordered, separateBlankRows(part)...)
+			}
 		}
 	}
 	slices.SortFunc(ordered, func(left pendingFamily, right pendingFamily) int {
@@ -631,6 +637,46 @@ func matchSourceFamilies(conversationID string, rows []collection.StoredRow, loo
 	for _, family := range ordered {
 		tallyFamily(family, matched, report)
 	}
+}
+
+// separateBlankRows moves blank rows into a second family with the empty_content
+// outcome. It returns the original family when it already has that outcome or does
+// not contain blank rows.
+func separateBlankRows(family pendingFamily) []pendingFamily {
+	kept := make([]collection.StoredRow, 0, len(family.rows))
+	blank := make([]collection.StoredRow, 0)
+	for _, row := range family.rows {
+		if strings.TrimSpace(row.Content) == "" {
+			blank = append(blank, row)
+			continue
+		}
+		kept = append(kept, row)
+	}
+	if len(blank) == 0 || family.evidence.Outcome == SourceOutcomeEmpty {
+		return []pendingFamily{family}
+	}
+	blankEvidence := *family.evidence
+	blankEvidence.Rows = sortedRowIDs(blank)
+	blankEvidence.Outcome = SourceOutcomeEmpty
+	blankEvidence.Candidates = nil
+	blankEvidence.Chosen = 0
+	blankEvidence.Match = ""
+	blankFamily := pendingFamily{order: family.order, rows: blank, evidence: &blankEvidence}
+	if len(kept) == 0 {
+		return []pendingFamily{blankFamily}
+	}
+	keptEvidence := *family.evidence
+	keptEvidence.Rows = sortedRowIDs(kept)
+	return []pendingFamily{{order: family.order, rows: kept, evidence: &keptEvidence}, blankFamily}
+}
+
+func sortedRowIDs(rows []collection.StoredRow) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 // classifyFamily matches a family's zero timestamp rows and counts its dated rows.
@@ -665,13 +711,6 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 		return family, dated
 	}
 	if strings.TrimSpace(text) == "" {
-		if stamp, verified := lookup.blankBindings[key]; verified {
-			evidence.Outcome = SourceOutcomeMatched
-			evidence.Match = sourceMatchStoredRows
-			evidence.Candidates = []int64{stamp}
-			evidence.Chosen = stamp
-			return family, dated
-		}
 		evidence.Outcome = SourceOutcomeEmpty
 		return family, dated
 	}
@@ -692,7 +731,7 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 	case undated:
 		evidence.Outcome = SourceOutcomeUndated
 	case len(candidates) == 1:
-		evidence.Outcome = SourceOutcomeMatched
+		evidence.Outcome = lookup.matchedTextOutcome(key, candidates[0])
 		evidence.Chosen = candidates[0]
 	case len(candidates) > 1:
 		evidence.Outcome = SourceOutcomeAmbiguous
@@ -727,7 +766,7 @@ func fragmentFallback(conversationID string, key string, family pendingFamily, l
 		case undated:
 			evidence.Outcome = SourceOutcomeUndated
 		case len(candidates) == 1:
-			evidence.Outcome = SourceOutcomeMatched
+			evidence.Outcome = lookup.matchedTextOutcome(key, candidates[0])
 			evidence.Chosen = candidates[0]
 		case len(candidates) > 1:
 			evidence.Outcome = SourceOutcomeAmbiguous
