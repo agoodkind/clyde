@@ -32,11 +32,12 @@ func knownStoredDates(families map[string][]collection.StoredRow) []storedDate {
 	return dates
 }
 
-// matchedTextOutcome checks a single composer bounded source date against the nearest
-// earlier and later stored dates. It returns date_order_conflict when that date falls
-// outside those bounds. Other dates and corrections return matched.
-func (lookup sourceTimeLookup) matchedTextOutcome(key string, stamp int64) string {
-	if lookup.corrections != nil || !lookup.boundedDates[stamp] {
+// matchedTextOutcome returns date_order_conflict for a single source date outside
+// the stored dates at the nearest earlier and later message positions. It checks
+// that order when the date used composer header times as a bound or ordered is true.
+// Corrections and other dates return matched without that comparison.
+func (lookup sourceTimeLookup) matchedTextOutcome(key string, stamp int64, ordered bool) string {
+	if lookup.corrections != nil || (!ordered && !lookup.boundedDates[stamp]) {
 		return SourceOutcomeMatched
 	}
 	message, parsed := familyMessage(key)

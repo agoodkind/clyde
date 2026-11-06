@@ -456,13 +456,27 @@ func sourceRepairKey(role string, content string) string {
 	return role + sourceRepairKeySeparator + strings.TrimSpace(content)
 }
 
-func (lookup sourceTimeLookup) familyCandidates(familyKind string, role string, text string) ([]int64, bool) {
+// familyCandidates returns matching source dates and reports whether a match joins
+// source messages or uses text after leading context blocks. It tries the stored text,
+// then the normalized stored text, then normalized user text without leading blocks.
+func (lookup sourceTimeLookup) familyCandidates(familyKind string, role string, text string) ([]int64, bool, bool) {
 	if familyKind == conversationThinkingFamily {
-		return lookup.thinking[sourceRepairKey(role, text)], false
+		return lookup.thinking[sourceRepairKey(role, text)], false, false
 	}
 	matches := lookup.texts.TextCandidates(role, text)
+	normalized := text
+	if lookup.matchText != nil {
+		normalized = lookup.matchText(role, text)
+	}
 	if len(matches) == 0 && lookup.matchText != nil {
-		matches = lookup.texts.TextCandidates(role, lookup.matchText(role, text))
+		matches = lookup.texts.TextCandidates(role, normalized)
+	}
+	contextMatch := false
+	if len(matches) == 0 && familyKind == conversationTextFamily && strings.EqualFold(role, storedUserRole) {
+		if stripped, found := stripLeadingContextBlocks(normalized); found {
+			matches = lookup.texts.TextCandidates(role, stripped)
+			contextMatch = len(matches) > 0
+		}
 	}
 	candidates := make([]int64, 0, len(matches))
 	combined := false
@@ -477,7 +491,7 @@ func (lookup sourceTimeLookup) familyCandidates(familyKind string, role string, 
 		}
 		candidates = append(candidates, match.Timestamp.Unix())
 	}
-	return candidates, combined
+	return candidates, combined, contextMatch
 }
 
 // fragmentCandidates returns source timestamps matching a stored row fragment.
@@ -722,16 +736,19 @@ func classifyFamily(conversationID string, key string, members []collection.Stor
 		lookup.toolFamilyOutcome(key, text, evidence)
 		return family, dated
 	}
-	matches, combined := lookup.familyCandidates(familyKind, rowRole(members), text)
+	matches, combined, contextMatch := lookup.familyCandidates(familyKind, rowRole(members), text)
 	candidates, undated := distinctCandidates(matches)
 	evidence.Candidates = candidates
+	if contextMatch {
+		evidence.Match = sourceMatchContextBlocks
+	}
 	switch {
 	case combined:
 		evidence.Outcome = SourceOutcomeMixed
 	case undated:
 		evidence.Outcome = SourceOutcomeUndated
 	case len(candidates) == 1:
-		evidence.Outcome = lookup.matchedTextOutcome(key, candidates[0])
+		evidence.Outcome = lookup.matchedTextOutcome(key, candidates[0], contextMatch)
 		evidence.Chosen = candidates[0]
 	case len(candidates) > 1:
 		evidence.Outcome = SourceOutcomeAmbiguous
@@ -766,7 +783,7 @@ func fragmentFallback(conversationID string, key string, family pendingFamily, l
 		case undated:
 			evidence.Outcome = SourceOutcomeUndated
 		case len(candidates) == 1:
-			evidence.Outcome = lookup.matchedTextOutcome(key, candidates[0])
+			evidence.Outcome = lookup.matchedTextOutcome(key, candidates[0], false)
 			evidence.Chosen = candidates[0]
 		case len(candidates) > 1:
 			evidence.Outcome = SourceOutcomeAmbiguous
