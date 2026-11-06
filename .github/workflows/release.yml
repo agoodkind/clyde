@@ -55,6 +55,8 @@ jobs:
         with:
           cache: false
           go-version-file: go.mod
+      - name: Prepare embedded model
+        run: go run ./cmd/staticembed-model
       - name: Test automatic update
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
