@@ -18,8 +18,6 @@ jobs:
     with:
       golangci_lint_install_mode: goinstall
       cgo: true
-      # The gksyntax grammar sources live in recursive submodules. The build
-      # generates the Swift parser from them.
       submodules: recursive
     permissions:
       contents: read
@@ -32,15 +30,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      # The race step calls go test outside make. This step runs the gksyntax
-      # grammar generation, go.work routing, and cgo dependency preparation that
-      # make test runs before it compiles.
+      # Prepare the workspace and native dependencies before running go test.
       - name: Native build prerequisites
         run: make native-prereqs
       # The step builds clyde with the flags used by the test helpers.
