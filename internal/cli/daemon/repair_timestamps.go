@@ -420,7 +420,7 @@ func newSourceRepairTotals() *vectorsearch.TimestampSourceRepairReport {
 
 // loadStoreSource builds semantic documents from a provider's source store messages.
 func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conversation.Record) (vectorsearch.TimestampSourceRepairSource, error) {
-	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, CopyDocuments: nil, ToolCalls: nil, ToolCallsComplete: false, MissingNativeRecords: 0, GroupedUsers: nil, ActualUsers: nil, Transcript: vectorsearch.SourceTranscript{Calls: nil, Users: nil}, Corrections: nil}
+	empty := vectorsearch.TimestampSourceRepairSource{ConversationID: record.ID, Documents: nil, MatchText: nil, CopyDocuments: nil, ToolCalls: nil, ToolCallsComplete: false, MissingNativeRecords: 0, GroupedUsers: nil, ActualUsers: nil, Transcript: vectorsearch.SourceTranscript{Calls: nil, Users: nil}, Corrections: nil, ComposerBoundedDates: nil}
 	reader, found := daemonsvc.ConversationSourceStoreReader(record.Provider)
 	if !found {
 		return empty, fmt.Errorf("source store reader is unavailable for provider %q", record.Provider)
@@ -463,6 +463,9 @@ func (run repairTimestampsRun) loadStoreSource(ctx context.Context, record conve
 	empty.MissingNativeRecords = source.MissingNativeRecords
 	empty.GroupedUsers = source.GroupedUsers
 	empty.ActualUsers = source.ActualUsers
+	for _, bounded := range source.ComposerBoundedTimes {
+		empty.ComposerBoundedDates = append(empty.ComposerBoundedDates, bounded.Unix())
+	}
 	empty.ToolCalls = make([]vectorsearch.SourceToolTime, 0, len(source.ToolCalls))
 	for _, call := range source.ToolCalls {
 		stamp := vectorsearch.MissingTimestampUnix

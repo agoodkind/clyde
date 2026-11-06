@@ -48,6 +48,9 @@ type SourceMessages struct {
 	ActualUsers []transcript.UserTurn
 	// MissingNativeRecords counts referenced native records that do not exist.
 	MissingNativeRecords int
+	// ComposerBoundedTimes lists message dates that used composer header times as a
+	// bound because the message lacks an earlier dated tool call.
+	ComposerBoundedTimes []time.Time
 }
 
 // SourceStoreReader reads provider messages and prepares stored text for source matching.
