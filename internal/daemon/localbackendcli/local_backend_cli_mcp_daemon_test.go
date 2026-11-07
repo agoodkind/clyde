@@ -24,6 +24,7 @@ const localProofRefusedAddress = "[::1]:1"
 
 type localProofSearchRequest struct {
 	Query           string  `json:"query"`
+	Backend         string  `json:"backend,omitempty"`
 	Provider        string  `json:"provider,omitempty"`
 	Workspace       string  `json:"workspace,omitempty"`
 	Roles           string  `json:"roles,omitempty"`
@@ -265,6 +266,9 @@ func (d *localProofDaemon) searchCLI(request localProofSearchRequest) (localProo
 		arguments = append(arguments, request.ConversationID)
 	}
 	arguments = append(arguments, "--query", request.Query, "--limit", strconv.Itoa(request.Limit), "--offset", strconv.Itoa(request.Offset))
+	if request.Backend != "" {
+		arguments = append(arguments, "--backend", request.Backend)
+	}
 	if request.MinScore != 0 {
 		arguments = append(arguments, "--min-score", strconv.FormatFloat(request.MinScore, 'g', -1, 64))
 	}

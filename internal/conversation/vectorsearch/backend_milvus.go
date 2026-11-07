@@ -104,6 +104,10 @@ func (b *milvusBackend) collectionPresent(ctx context.Context, collectionName st
 	return true, nil
 }
 
+func (b *milvusBackend) searchCollectionPresent(ctx context.Context, collectionName string) (bool, error) {
+	return b.collectionPresent(ctx, collectionName)
+}
+
 // loadCollection loads one Milvus collection. It reports false when the
 // collection does not exist.
 func (b *milvusBackend) loadCollection(ctx context.Context, collectionName string) (bool, error) {

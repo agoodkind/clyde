@@ -35,6 +35,7 @@ type backend interface {
 	collection.Store
 	// collectionPresent prepares an existing collection for row queries.
 	collectionPresent(ctx context.Context, collectionName string) (bool, error)
+	searchCollectionPresent(ctx context.Context, collectionName string) (bool, error)
 	search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error)
 	close(ctx context.Context) error
 }

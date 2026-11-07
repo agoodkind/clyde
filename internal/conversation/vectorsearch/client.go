@@ -108,6 +108,11 @@ func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName str
 	return c.store.collectionPresent(ctx, collectionName)
 }
 
+// SearchCollectionAvailable checks whether the backend can query an existing collection.
+func (c *Client) SearchCollectionAvailable(ctx context.Context, collectionID string) (bool, error) {
+	return c.store.searchCollectionPresent(ctx, CollectionName(collectionID))
+}
+
 // Open builds the embedding provider and opens the vector store that
 // options.Backend selects.
 func Open(ctx context.Context, options Options) (*Client, error) {

@@ -24,6 +24,7 @@ import (
 // flags decide whether the operation searches, reads, windows, or browses.
 type searchInput struct {
 	Query           string
+	Backend         string
 	ConversationID  string
 	Provider        string
 	WorkspaceRoot   string
@@ -185,6 +186,8 @@ func searchParams() []Param[searchInput] {
 	return []Param[searchInput]{
 		StringParam("query", "Text or semantic query to find in transcript messages.", "", false,
 			func(in *searchInput, v string) { in.Query = v }),
+		StringParam("backend", "Search backend: milvus or local. Omit to use the configured backend.", "", false,
+			func(in *searchInput, v string) { in.Backend = v }),
 		StringParam("provider", "Provider filter: "+formatConversationProviderList(false)+".", "", false,
 			func(in *searchInput, v string) { in.Provider = v }),
 		StringParam("workspace", "Workspace root filter.", "", false,
@@ -217,6 +220,7 @@ func searchParams() []Param[searchInput] {
 func newSearchInput() searchInput {
 	return searchInput{
 		Query:           "",
+		Backend:         "",
 		ConversationID:  "",
 		Provider:        "",
 		WorkspaceRoot:   "",
@@ -294,12 +298,18 @@ func searchCommandHasNoInput(cmd *cobra.Command, args []string) bool {
 }
 
 // prepareSearch parses and validates the raw input into the single payload,
-// choosing the behavior from which inputs are set. It is pure: it reads only the
-// input and the host clock for time parsing, and rejects an around read with no
-// conversation to center on.
+// choosing the behavior from which inputs are set. It rejects an around read
+// without a conversation to center on.
 func prepareSearch(in searchInput) (searchPayload, error) {
 	query := strings.TrimSpace(in.Query)
 	conversation := strings.TrimSpace(in.ConversationID)
+	if err := conv.SearchBackend(in.Backend).Validate(); err != nil {
+		slog.Warn("clispec.search.invalid_backend", "concern", "cli.conversation", "component", "clispec", "err", err)
+		return searchPayload{}, fmt.Errorf("prepare search: %w", err)
+	}
+	if in.Backend != "" && query == "" {
+		return searchPayload{}, fmt.Errorf("backend requires a query")
+	}
 	if in.Around >= 0 && conversation == "" {
 		return searchPayload{}, fmt.Errorf("around requires a conversation to center on")
 	}
@@ -330,7 +340,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         mode,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: nil, UntilUnix: nil, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Backend: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: nil, UntilUnix: nil, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     conv.ListOptions{Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", Query: "", IncludeArchived: false, All: false},
 			Conversation: conversation,
 			Around:       in.Around,
@@ -344,7 +354,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         searchModeBrowse,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: nil, UntilUnix: nil, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Backend: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: nil, UntilUnix: nil, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     opts,
 			Conversation: "",
 			Around:       in.Around,
@@ -439,6 +449,7 @@ func searchConversationsOptionsFromInput(in searchInput) (conv.SearchConversatio
 	}
 	return conv.SearchConversationsOptions{
 		Query:                in.Query,
+		Backend:              conv.SearchBackend(in.Backend),
 		Limit:                in.Limit,
 		Offset:               in.Offset,
 		Provider:             provider,

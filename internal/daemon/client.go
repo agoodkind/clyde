@@ -228,6 +228,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	defer cancel()
 	resp, err := client.rpc.SearchConversations(rpcCtx, &clydev1.SearchConversationsRequest{
 		Query:                options.Query,
+		Backend:              string(options.Backend),
 		Limit:                int64(options.Limit),
 		Offset:               int64(options.Offset),
 		Provider:             protoProvider(options.Provider),

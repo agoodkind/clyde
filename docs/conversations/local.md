@@ -18,6 +18,21 @@ Milvus is the default conversation search store. The optional local store runs i
 
 3. Press Ctrl-C to stop the sandbox.
 
+## Select a store for one search
+
+Enable conversation search and use an existing index for the selected backend.
+
+1. Add `--backend local` or `--backend milvus` to a query.
+
+   ```sh
+   clyde conversation search --query "<text>" --backend local
+   clyde conversation search CONVERSATION_ID --query "<text>" --backend milvus
+   ```
+
+2. Set `backend` to `local` or `milvus` when calling `clyde_search` through MCP.
+
+An explicit backend applies only to that query. It uses the existing local index or the configured Milvus and embedding settings. Omitting `local_root` selects the same default directory as local ingestion. An unavailable backend returns an error. Omitting the argument preserves the configured backend and raw text fallback.
+
 ## Select the local store
 
 Switching stores copies no rows. The Milvus collection does not change while the local store is selected.
@@ -54,7 +69,7 @@ Switching stores copies no rows. The Milvus collection does not change while the
 
    The `semantic:` line prints `backend=local`. Local search reports `"source":"local"`.
 
-   Clyde never switches stores automatically. Search uses a raw text scan when the selected store is disabled, unavailable, or fails. The scan reports `"source":"raw_text"`.
+   Search without an explicit backend uses a raw text scan when the configured store is disabled, unavailable, or fails. The scan reports `"source":"raw_text"`.
 
 ## Return to Milvus
 

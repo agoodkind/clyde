@@ -46,6 +46,7 @@ type ListResult struct {
 // SearchConversationsOptions filters a bounded transcript discovery pass.
 type SearchConversationsOptions struct {
 	Query           string
+	Backend         SearchBackend
 	Limit           int
 	Offset          int
 	Provider        Provider

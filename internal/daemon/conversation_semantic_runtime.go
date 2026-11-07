@@ -237,6 +237,10 @@ func conversationEmbeddingAPIKey(envName string, filePath string) (string, error
 // OpenConversationSearchClient opens the configured local or Milvus backend.
 // Only the Milvus backend resolves the embedding API key.
 func OpenConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
+	return openConversationSearchClient(ctx, semanticCfg, ConversationCheckpointDir())
+}
+
+func openConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig, checkpointDir string) (*vectorsearch.Client, error) {
 	backend := vectorsearch.BackendMilvus
 	if semanticCfg.Backend == config.ConversationSemanticBackendLocal {
 		backend = vectorsearch.BackendLocal
@@ -262,7 +266,7 @@ func OpenConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 		EmbeddingTimeout:       semanticCfg.EmbeddingRequestTimeout.AsDuration(),
 		QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
 		DenseSearchParams:      semanticCfg.DenseSearchParams(),
-		CheckpointDir:          ConversationCheckpointDir(),
+		CheckpointDir:          checkpointDir,
 	})
 	if err != nil {
 		return nil, semanticConnectorError{cause: err}

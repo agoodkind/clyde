@@ -2248,7 +2248,9 @@ type SearchConversationsRequest struct {
 	// cursor continues a previous page from that page's next_cursor under the
 	// same query and filters. Empty starts a new search. A search source without
 	// cursor paging refuses a non-empty cursor.
-	Cursor        string `protobuf:"bytes,14,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	Cursor string `protobuf:"bytes,14,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	// backend selects milvus or local for this search. Empty uses the configured source.
+	Backend       string `protobuf:"bytes,15,opt,name=backend,proto3" json:"backend,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2377,6 +2379,13 @@ func (x *SearchConversationsRequest) GetOffset() int64 {
 func (x *SearchConversationsRequest) GetCursor() string {
 	if x != nil {
 		return x.Cursor
+	}
+	return ""
+}
+
+func (x *SearchConversationsRequest) GetBackend() string {
+	if x != nil {
+		return x.Backend
 	}
 	return ""
 }
@@ -4686,7 +4695,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x06before\x18\x04 \x01(\x03R\x06before\x12\x14\n" +
 	"\x05after\x18\x05 \x01(\x03R\x05after\x12\x1d\n" +
 	"\n" +
-	"load_rules\x18\x06 \x01(\tR\tloadRules\"\x8d\x04\n" +
+	"load_rules\x18\x06 \x01(\tR\tloadRules\"\xa7\x04\n" +
 	"\x1aSearchConversationsRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x03R\x05limit\x12.\n" +
@@ -4703,7 +4712,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x0fconversation_id\x18\v \x01(\tR\x0econversationId\x12%\n" +
 	"\x0econtext_window\x18\f \x01(\x03R\rcontextWindow\x12\x16\n" +
 	"\x06offset\x18\r \x01(\x03R\x06offset\x12\x16\n" +
-	"\x06cursor\x18\x0e \x01(\tR\x06cursorB\f\n" +
+	"\x06cursor\x18\x0e \x01(\tR\x06cursor\x12\x18\n" +
+	"\abackend\x18\x0f \x01(\tR\abackendB\f\n" +
 	"\n" +
 	"_from_unixB\r\n" +
 	"\v_until_unix\"\xf4\x02\n" +

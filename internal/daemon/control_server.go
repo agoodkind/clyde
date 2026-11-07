@@ -164,6 +164,9 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	if req.GetQuery() == "" {
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
+	if err := conversation.SearchBackend(req.GetBackend()).Validate(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	if s.searchSource == nil {
 		failure := unavailableConversationSearchSourceError(nil)
 		return nil, status.Error(failure.grpcCode(), failure.Error())
@@ -209,6 +212,7 @@ func copyBound(bound *int64) *int64 {
 func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest) conversation.SearchConversationsOptions {
 	return conversation.SearchConversationsOptions{
 		Query:                req.GetQuery(),
+		Backend:              conversation.SearchBackend(req.GetBackend()),
 		Limit:                int(req.GetLimit()),
 		Offset:               int(req.GetOffset()),
 		Provider:             providerFromProto(req.GetProvider()),

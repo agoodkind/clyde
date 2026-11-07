@@ -99,6 +99,17 @@ func (b *localBackend) collectionPresent(ctx context.Context, collectionName str
 	return true, nil
 }
 
+func (b *localBackend) searchCollectionPresent(ctx context.Context, collectionName string) (bool, error) {
+	available, err := b.CollectionAvailable(collectionName)
+	if err != nil {
+		return false, failRead("check local collection "+collectionName, err)
+	}
+	if !available {
+		return false, nil
+	}
+	return b.collectionPresent(ctx, collectionName)
+}
+
 func (b *localBackend) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error) {
 	timing := searchTiming{rank: 0, load: 0, candidates: 0}
 	started := clock.Now()
