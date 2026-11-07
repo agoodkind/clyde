@@ -22,13 +22,9 @@ func (source *backendConversationSearchSource) SearchConversations(ctx context.C
 	if options.Backend == "" {
 		result, err := source.configured.SearchConversations(ctx, options)
 		if err != nil {
-			slog.WarnContext(ctx, "daemon.search_conversations.configured_failed", "concern", "conversation.search", "component", "daemon", "err", err)
 			return result, fmt.Errorf("search configured backend: %w", err)
 		}
 		return result, nil
-	}
-	if err := options.Backend.Validate(); err != nil {
-		return conversation.SearchConversationsResult{}, refusedConversationSearchSourceError(err)
 	}
 	result, err := source.searchBackend(ctx, options)
 	if err == nil {
