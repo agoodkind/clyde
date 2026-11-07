@@ -44,7 +44,7 @@ type controlServer struct {
 	searchSource conversationSearchSource
 	// freshness reports the conversation-index sync snapshot at query time, set
 	// at construction. Nil yields the zero-value freshness.
-	freshness func() conversation.SearchFreshness
+	freshness func(conversation.SearchBackend) conversation.SearchFreshness
 	// captureStore is the daemon's shared SQLite capture store. SeedBaseline
 	// reads the deduped shape corpus from it and writes the baseline through
 	// it; nil when MITM is disabled.
@@ -197,7 +197,7 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 		failure := failedConversationSearchSourceError(err)
 		return nil, status.Error(failure.grpcCode(), failure.Error())
 	}
-	result.Freshness = s.freshnessSnapshot()
+	result.Freshness = s.freshnessSnapshot(conversation.SearchBackend(req.GetBackend()))
 	return searchConversationsResponse(ctx, s.index, result), nil
 }
 
@@ -253,17 +253,17 @@ func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.R
 // running a search.
 func (s *controlServer) GetSemanticSearchFreshness(_ context.Context, _ *clydev1.GetSemanticSearchFreshnessRequest) (*clydev1.GetSemanticSearchFreshnessResponse, error) {
 	return &clydev1.GetSemanticSearchFreshnessResponse{
-		SemanticFreshness: protoSearchFreshness(s.freshnessSnapshot()),
+		SemanticFreshness: protoSearchFreshness(s.freshnessSnapshot("")),
 	}, nil
 }
 
 // freshnessSnapshot reads the conversation-index sync snapshot, returning the
 // zero value when no freshness source is wired.
-func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
+func (s *controlServer) freshnessSnapshot(backend conversation.SearchBackend) conversation.SearchFreshness {
 	if s.freshness == nil {
 		return conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0}
 	}
-	return s.freshness()
+	return s.freshness(backend)
 }
 
 // searchFacetTopN bounds each facet dimension to its top values by count.

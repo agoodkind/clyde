@@ -58,6 +58,10 @@ func semanticSettingsMetrics(semantic config.ConversationSemanticConfig, syncSta
 		model = syncStatus.embeddingModel
 	}
 	dimension := int64(semantic.EmbeddingDimension)
+	if semantic.Backend == config.ConversationSemanticBackendLocal {
+		model = syncStatus.embeddingModel
+		dimension = int64(syncStatus.embeddingDimension)
+	}
 	if dimension == 0 {
 		dimension = int64(syncStatus.embeddingDimension)
 	}

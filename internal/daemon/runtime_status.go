@@ -22,6 +22,7 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 	}
 	syncStatus := r.semanticSync.syncStatus()
 	semantic.Detail = statusMetricsProto(semanticDetailMetrics(cfg.Conversation.Semantic, syncStatus))
+	semantic.Detail = append(semantic.Detail, statusMetricsProto(r.semanticBackendMetrics(cfg.Conversation.Semantic))...)
 	if cfg.Conversation.Semantic.UsesEngine() {
 		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_UNAVAILABLE
 		if r.semantic != nil {
@@ -80,6 +81,10 @@ func protoSemanticBackend(backend config.ConversationSemanticBackend) clydev1.Se
 
 func semanticBackendName(backend clydev1.SemanticBackend) string {
 	return strings.ToLower(strings.TrimPrefix(backend.String(), semanticBackendEnumPrefix))
+}
+
+func semanticConnectionName(connection clydev1.SemanticConnectionState) string {
+	return strings.ToLower(strings.TrimPrefix(connection.String(), "SEMANTIC_CONNECTION_STATE_"))
 }
 
 func boundListenerStatus(name string, addr net.Addr) *clydev1.BoundListenerStatus {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -77,6 +78,7 @@ type ingestionProofMessage struct {
 type ingestionProofDaemon struct {
 	projectDir string
 	stagingDir string
+	stop       func()
 }
 
 func ingestionProofTranscript(session string, number int, messages []ingestionProofMessage) string {
@@ -162,12 +164,18 @@ func startIngestionProofDaemonWithConfig(t *testing.T, daemonConfig string) inge
 		{role: "assistant", body: ingestionProofReplyText},
 	}, ingestionProofFirstAge)
 
+	proof.stop = runIngestionProofDaemon(t)
+	return proof
+}
+
+func runIngestionProofDaemon(t *testing.T) func() {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		done <- daemon.RunContext(ctx, slog.Default())
 	}()
-	t.Cleanup(func() {
+	stop := sync.OnceFunc(func() {
 		cancel()
 		select {
 		case runErr := <-done:
@@ -178,5 +186,6 @@ func startIngestionProofDaemonWithConfig(t *testing.T, daemonConfig string) inge
 			t.Errorf("operation=stop_daemon timeout=%s", ingestionProofStopTimeout)
 		}
 	})
-	return proof
+	t.Cleanup(stop)
+	return stop
 }

@@ -78,10 +78,13 @@ type ConversationSemanticConfig struct {
 	// embedding everything; `ingestion_enabled = false` is.
 	IndexedContent []string `json:"indexedContent,omitempty" toml:"indexed_content,omitempty"`
 
-	// Backend selects the store for ingestion and search. Empty, "milvus" and
-	// "lms" select Milvus. "local" selects LocalRoot and the bundled model.
-	// The loader rejects "local" with a Milvus address.
+	// Backend selects the default search store and, when Backends is omitted,
+	// the ingestion store. Empty, "milvus" and "lms" select Milvus. "local"
+	// selects LocalRoot and the bundled model. Without Backends, the loader
+	// rejects "local" with a Milvus address.
 	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
+	// Backends enables independent ingestion pipelines. Omission uses Backend alone.
+	Backends []ConversationSemanticBackend `json:"backends,omitempty" toml:"backends,omitempty"`
 	// LocalRoot applies to the local backend only. An empty value selects a
 	// directory under the Clyde state directory.
 	LocalRoot string `json:"localRoot,omitempty" toml:"local_root,omitempty"`
@@ -181,6 +184,22 @@ func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
+// DefaultBackend resolves the legacy Milvus aliases for the default search store.
+func (semantic ConversationSemanticConfig) DefaultBackend() ConversationSemanticBackend {
+	if semantic.Backend == ConversationSemanticBackendLocal {
+		return ConversationSemanticBackendLocal
+	}
+	return ConversationSemanticBackendMilvus
+}
+
+// EnabledBackends returns the configured stores in ingestion startup order.
+func (semantic ConversationSemanticConfig) EnabledBackends() []ConversationSemanticBackend {
+	if len(semantic.Backends) == 0 {
+		return []ConversationSemanticBackend{semantic.DefaultBackend()}
+	}
+	return semantic.Backends
+}
+
 // ForSearchBackend copies the settings and applies defaults for one search backend.
 func (semantic ConversationSemanticConfig) ForSearchBackend(backend ConversationSemanticBackend) ConversationSemanticConfig {
 	semantic.Backend = backend
@@ -218,6 +237,13 @@ func applyConversationSemanticSearchDefaults(semantic *ConversationSemanticConfi
 
 // Check for an explicit Milvus address before defaults populate it.
 func applyConversationSemanticBackendDefaults(semantic *ConversationSemanticConfig) error {
+	if len(semantic.Backends) > 0 {
+		applyConversationSemanticSearchDefaults(semantic)
+		if strings.TrimSpace(semantic.LocalRoot) == "" {
+			semantic.LocalRoot = filepath.Join(DefaultStateDir(), defaultConversationLocalStoreDirName)
+		}
+		return nil
+	}
 	if ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend))) != ConversationSemanticBackendLocal {
 		applyConversationSemanticSearchDefaults(semantic)
 		return nil
