@@ -274,6 +274,8 @@ message SearchConversationsRequest {
   // same query and filters. Empty starts a new search. A search source without
   // cursor paging refuses a non-empty cursor.
   string cursor = 14;
+  // backend selects milvus or local for this search. Empty uses the configured source.
+  string backend = 15;
 }
 
 // SearchContextState states whether the source verified a match's

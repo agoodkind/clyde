@@ -5,6 +5,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"goodkind.io/clyde/internal/conversation"
 )
 
 type conversationSearchFailureCode string
@@ -22,9 +24,17 @@ type conversationSearchSourceError struct {
 	code    conversationSearchFailureCode
 	rpcCode codes.Code
 	cause   error
+	backend conversation.SearchBackend
 }
 
 func (e conversationSearchSourceError) Error() string {
+	if e.backend != "" {
+		return "search backend " + string(e.backend) + ": " + e.message()
+	}
+	return e.message()
+}
+
+func (e conversationSearchSourceError) message() string {
 	switch e.code {
 	case conversationSearchDisabled:
 		return string(e.code) + ": conversation search is disabled"
@@ -55,6 +65,7 @@ func disabledConversationSearchSourceError(cause error) conversationSearchSource
 		code:    conversationSearchDisabled,
 		rpcCode: codes.FailedPrecondition,
 		cause:   cause,
+		backend: "",
 	}
 }
 
@@ -63,6 +74,7 @@ func unavailableConversationSearchSourceError(cause error) conversationSearchSou
 		code:    conversationSearchSourceUnavailable,
 		rpcCode: codes.FailedPrecondition,
 		cause:   cause,
+		backend: "",
 	}
 }
 
@@ -75,6 +87,7 @@ func refusedConversationSearchSourceError(cause error) conversationSearchSourceE
 		code:    conversationSearchSourceRefused,
 		rpcCode: rpcCode,
 		cause:   cause,
+		backend: "",
 	}
 }
 
@@ -83,6 +96,7 @@ func failedConversationSearchSourceError(cause error) conversationSearchSourceEr
 		code:    conversationSearchSourceFailed,
 		rpcCode: codes.Internal,
 		cause:   cause,
+		backend: "",
 	}
 }
 

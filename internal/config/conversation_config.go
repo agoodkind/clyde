@@ -181,6 +181,19 @@ func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
+// ForSearchBackend copies the settings and applies defaults for one search backend.
+func (semantic ConversationSemanticConfig) ForSearchBackend(backend ConversationSemanticBackend) ConversationSemanticConfig {
+	semantic.Backend = backend
+	if backend == ConversationSemanticBackendLocal {
+		if strings.TrimSpace(semantic.LocalRoot) == "" {
+			semantic.LocalRoot = filepath.Join(DefaultStateDir(), defaultConversationLocalStoreDirName)
+		}
+	} else {
+		applyConversationSemanticSearchDefaults(&semantic)
+	}
+	return semantic
+}
+
 func applyConversationSemanticSearchDefaults(semantic *ConversationSemanticConfig) {
 	if strings.TrimSpace(semantic.MilvusAddress) == "" {
 		semantic.MilvusAddress = defaultConversationSemanticMilvusAddress

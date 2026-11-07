@@ -310,7 +310,11 @@ func newControlServer(
 		rebind: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return rebindDaemonWorker(ctx, log, grpcServer, runtime)
 		},
-		searchSource:       searchSource,
+		searchSource: &backendConversationSearchSource{
+			configured: searchSource,
+			index:      index,
+			settings:   func() config.ConversationSemanticConfig { return cfg.Conversation.Semantic },
+		},
 		captureStore:       runtime.captureStore,
 		freshness:          semanticFreshness,
 		exportTokens:       exportTokens,
