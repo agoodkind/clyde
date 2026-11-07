@@ -134,7 +134,6 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	if err := runtime.startSemanticSyncBackends(ctx, log, cfg, conversationIndex); err != nil {
 		return err
 	}
-	semanticFreshness := runtime.semanticSync
 
 	// The rollup distiller starts here for the same reason the feeder does: its
 	// stop is installed on the lifecycle group inside the start call, ahead of
@@ -146,7 +145,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
 		grpc.MaxSendMsgSize(controlMaxMessageBytes),
 	)
-	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, semanticFreshness.snapshot, grpcServer, runtime, exportTokens))
+	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, runtime.searchFreshness, grpcServer, runtime, exportTokens))
 	registerConversationContextService(grpcServer, conversationIndex)
 	grpcDone := make(chan error, 1)
 	go func() {
@@ -256,7 +255,7 @@ func newControlServer(
 	log *slog.Logger,
 	stats *providerStatsRecorder,
 	index *conversation.Index,
-	semanticFreshness func() conversation.SearchFreshness,
+	semanticFreshness func(conversation.SearchBackend) conversation.SearchFreshness,
 	grpcServer *grpc.Server,
 	runtime *runtimeServices,
 	exportTokens exportTokenConfig,
@@ -304,12 +303,11 @@ func newControlServer(
 			settings:   func() config.ConversationSemanticConfig { return cfg.Conversation.Semantic },
 			client: func(backend config.ConversationSemanticBackend) (conversationSemanticSearchClient, bool) {
 				backendRuntime, enabled := runtime.semanticBackends[backend]
-				return backendRuntime.currentSearchClient(), enabled
+				return backendRuntime.runtime.currentSearchClient(), enabled
 			},
 		},
 		captureStore:       runtime.captureStore,
 		freshness:          semanticFreshness,
-		backendFreshness:   runtime.searchFreshness,
 		exportTokens:       exportTokens,
 		providerStatsNow:   nil,
 		providerStatsTicks: nil,
