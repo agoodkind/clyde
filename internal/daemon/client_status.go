@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"strings"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -58,7 +57,7 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 		Semantic: SemanticStatus{
 			IngestionEnabled: semantic.GetIngestionEnabled(), SearchEnabled: semantic.GetSearchEnabled(),
 			Backend:       SemanticBackend(semanticBackendName(semantic.GetBackend())),
-			Connection:    SemanticConnectionState(strings.ToLower(strings.TrimPrefix(semantic.GetConnection().String(), "SEMANTIC_CONNECTION_STATE_"))),
+			Connection:    SemanticConnectionState(semanticConnectionName(semantic.GetConnection())),
 			NextRetryUnix: semantic.NextRetryUnix, Attempts: semantic.GetAttempts(),
 			Detail: statusMetricsFromProto(semantic.GetDetail()),
 		},

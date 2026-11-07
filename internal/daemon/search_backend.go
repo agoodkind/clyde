@@ -16,6 +16,7 @@ type backendConversationSearchSource struct {
 	configured conversationSearchSource
 	index      conversationSearchIndex
 	settings   func() config.ConversationSemanticConfig
+	client     func(config.ConversationSemanticBackend) (conversationSemanticSearchClient, bool)
 }
 
 func (source *backendConversationSearchSource) SearchConversations(ctx context.Context, options conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error) {
@@ -46,6 +47,14 @@ func (source *backendConversationSearchSource) searchBackend(ctx context.Context
 	}
 	if options.Cursor != "" {
 		return conversation.SearchConversationsResult{}, refusedConversationSearchSourceError(errSemanticSourceCursorUnsupported)
+	}
+	if source.client != nil {
+		if client, enabled := source.client(settings.Backend); enabled {
+			if client == nil {
+				return conversation.SearchConversationsResult{}, unavailableConversationSearchSourceError(nil)
+			}
+			return semanticSearchResult(ctx, source.index, client, settings.CollectionID, searchSourceForBackend(settings.Backend), options)
+		}
 	}
 	client, err := openRequestedSearchBackend(ctx, settings)
 	if err != nil {

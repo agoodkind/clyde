@@ -41,12 +41,14 @@ type runtimeServices struct {
 	// entries. captureStore is the single SQLite capture sink shared by the
 	// adapter and every proxy; it is closed after both surfaces drain so the WAL
 	// flushes before any new generation reopens it.
-	mitmProxies     map[string]*mitm.Proxy
-	mitmListeners   map[string][]net.Listener
-	mitmPacketConns map[string][]net.PacketConn
-	captureStore    *capture.Store
-	semantic        *conversationSemanticRuntime
-	semanticSync    *conversationSemanticFreshness
+	mitmProxies          map[string]*mitm.Proxy
+	mitmListeners        map[string][]net.Listener
+	mitmPacketConns      map[string][]net.PacketConn
+	captureStore         *capture.Store
+	semantic             *conversationSemanticRuntime
+	semanticSync         *conversationSemanticFreshness
+	semanticBackends     map[config.ConversationSemanticBackend]*conversationSemanticRuntime
+	semanticSyncBackends map[config.ConversationSemanticBackend]*conversationSemanticFreshness
 	// pprofListener is the optional loopback pprof socket. It is nil when pprof
 	// is off. When set, it is inherited across reload like the adapter and MITM
 	// listeners so the debug surface survives a hot reload with no bind gap.
@@ -99,6 +101,8 @@ func startRuntime(
 		captureStore:          nil,
 		semantic:              nil,
 		semanticSync:          nil,
+		semanticBackends:      nil,
+		semanticSyncBackends:  nil,
 		pprofListener:         nil,
 		errors:                make(chan error, 3),
 		reloadMu:              sync.Mutex{},
@@ -149,7 +153,7 @@ func startRuntime(
 		runtime.shutdown(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("pprof listener inherited but pprof is disabled; full daemon restart required")
 	}
-	runtime.semantic = startConversationSemanticRuntime(ctx, cfg, log, runtime.group)
+	runtime.startSemanticBackends(ctx, cfg, log)
 	return runtime, nil
 }
 

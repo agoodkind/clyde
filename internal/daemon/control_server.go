@@ -44,7 +44,8 @@ type controlServer struct {
 	searchSource conversationSearchSource
 	// freshness reports the conversation-index sync snapshot at query time, set
 	// at construction. Nil yields the zero-value freshness.
-	freshness func() conversation.SearchFreshness
+	freshness        func() conversation.SearchFreshness
+	backendFreshness func(conversation.SearchBackend) conversation.SearchFreshness
 	// captureStore is the daemon's shared SQLite capture store. SeedBaseline
 	// reads the deduped shape corpus from it and writes the baseline through
 	// it; nil when MITM is disabled.
@@ -198,6 +199,9 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 		return nil, status.Error(failure.grpcCode(), failure.Error())
 	}
 	result.Freshness = s.freshnessSnapshot()
+	if s.backendFreshness != nil {
+		result.Freshness = s.backendFreshness(conversation.SearchBackend(req.GetBackend()))
+	}
 	return searchConversationsResponse(ctx, s.index, result), nil
 }
 

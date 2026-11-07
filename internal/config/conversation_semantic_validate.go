@@ -17,6 +17,9 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 	if err := validateConversationSemanticBackend(semantic.Backend); err != nil {
 		return err
 	}
+	if err := validateConversationSemanticBackends(semantic); err != nil {
+		return err
+	}
 	if err := validateConversationSemanticMilvusLayout(semantic); err != nil {
 		return err
 	}
@@ -45,6 +48,9 @@ func invalidConversationSemanticSetting(key string, problem string) error {
 
 func normalizeConversationSemanticStrings(semantic *ConversationSemanticConfig) {
 	semantic.Backend = ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend)))
+	for index, backend := range semantic.Backends {
+		semantic.Backends[index] = ConversationSemanticBackend(strings.TrimSpace(string(backend)))
+	}
 	semantic.LocalRoot = cleanExpandedPath(strings.TrimSpace(semantic.LocalRoot))
 	semantic.MilvusAddress = strings.TrimSpace(semantic.MilvusAddress)
 	semantic.MilvusDatabase = strings.TrimSpace(semantic.MilvusDatabase)
@@ -69,13 +75,36 @@ func validateConversationSemanticMilvusLayout(semantic *ConversationSemanticConf
 	case "", ConversationSemanticMilvusLayoutSingle:
 		return nil
 	case ConversationSemanticMilvusLayoutShared:
-		if semantic.Backend == ConversationSemanticBackendLocal {
+		if semantic.Backend == ConversationSemanticBackendLocal && len(semantic.Backends) == 0 {
 			return invalidConversationSemanticSetting("milvus_layout", fmt.Sprintf("must be unset when %sbackend = %q", conversationSemanticKey, ConversationSemanticBackendLocal))
 		}
 		return nil
 	default:
 		return invalidConversationSemanticSetting("milvus_layout", fmt.Sprintf("must be empty, %q, or %q, got %q", ConversationSemanticMilvusLayoutSingle, ConversationSemanticMilvusLayoutShared, semantic.MilvusLayout))
 	}
+}
+
+func validateConversationSemanticBackends(semantic *ConversationSemanticConfig) error {
+	if semantic.Backends == nil {
+		return nil
+	}
+	if len(semantic.Backends) == 0 {
+		return invalidConversationSemanticSetting("backends", "must contain at least one backend")
+	}
+	enabled := make(map[ConversationSemanticBackend]bool, len(semantic.Backends))
+	for _, backend := range semantic.Backends {
+		if backend != ConversationSemanticBackendMilvus && backend != ConversationSemanticBackendLocal {
+			return invalidConversationSemanticSetting("backends", fmt.Sprintf("must contain only %q or %q, got %q", ConversationSemanticBackendMilvus, ConversationSemanticBackendLocal, backend))
+		}
+		if enabled[backend] {
+			return invalidConversationSemanticSetting("backends", fmt.Sprintf("contains duplicate backend %q", backend))
+		}
+		enabled[backend] = true
+	}
+	if !enabled[semantic.DefaultBackend()] {
+		return invalidConversationSemanticSetting("backends", fmt.Sprintf("must include the default backend %q", semantic.DefaultBackend()))
+	}
+	return nil
 }
 
 // conversationSemanticSetting pairs a config key with its value for the

@@ -33,15 +33,35 @@ Enable conversation search and use an existing index for the selected backend.
 
 An explicit backend applies only to that query. It uses the existing local index or the configured Milvus and embedding settings. Omitting `local_root` selects the same default directory as local ingestion. An unavailable backend returns an error. Omitting the argument preserves the configured backend and raw text fallback.
 
+## Index both stores and keep Milvus as the default
+
+1. Add `backends` to the existing `[conversation.semantic]` section. Keep the existing Milvus and embedding settings.
+
+   ```toml
+   [conversation.semantic]
+   backend = "milvus"
+   backends = ["milvus", "local"]
+   ingestion_enabled = true
+   search_enabled = true
+   ```
+
+   Each store indexes available transcript history and then new messages with independent checkpoints and retries. An unavailable store does not stop ingestion into the other store. Clyde preserves existing Milvus records and vectors. Clyde does not copy records between stores. Records with missing source transcripts remain searchable only in stores that already contain them.
+
+2. Wait for the automatic configuration reload.
+3. Search the local store with `--backend local` or MCP `backend = "local"` while its index builds. The response reports the local worker's freshness, including pending conversations.
+4. Run `clyde status` to inspect each worker's existing progress counters under `semantic_backends.milvus` and `semantic_backends.local`.
+
+Omitting `backends` enables only the store selected by `backend`. When `backends` is present, include the default store and list each enabled store once.
+
 ## Select the local store
 
-Switching stores copies no rows. The Milvus collection does not change while the local store is selected.
+When `backends` is absent, selecting local stops Milvus ingestion. Clyde does not copy rows between stores.
 
 1. Edit `~/.config/clyde/config.toml`.
 
-   The configuration loader rejects `backend = "local"` together with `milvus_address`.
+   Without `backends`, the configuration loader rejects `backend = "local"` together with `milvus_address`.
 
-2. Remove `milvus_address` from `[conversation.semantic]` and configure local ingestion and search.
+2. Remove `backends` and `milvus_address` from `[conversation.semantic]` and configure local ingestion and search.
 
    ```toml
    [conversation.semantic]
@@ -73,7 +93,7 @@ Switching stores copies no rows. The Milvus collection does not change while the
 
 ## Return to Milvus
 
-The local store files do not change while Milvus is selected.
+When `backends` is absent, selecting Milvus stops local ingestion.
 
 1. Remove `backend` or set `backend = "milvus"`. Restore `milvus_address` if the earlier edit removed it.
 2. Wait for the reload.

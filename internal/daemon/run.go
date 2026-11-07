@@ -131,22 +131,10 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
 	startConversationIndex(ctx, log, conversationIndex, runtime.group)
-	semanticFreshness := newConversationSemanticFreshness()
-	runtime.semanticSync = semanticFreshness
-
-	// Resolve the feeder client per pass rather than once here: when the engine
-	// is down at boot the resolver returns nil, and the worker starts anyway and
-	// picks the client up once the background registration retry succeeds, with
-	// no daemon reload. A nil resolver means semantic search is not configured.
-	// A nil resolver is how the feeder is left unstarted, so offering
-	// conversations is gated here rather than inside the worker.
-	var resolveSemanticClient conversationSemanticClientResolver
-	if runtime.semantic != nil && cfg.Conversation.Semantic.FeedsEngine() {
-		resolveSemanticClient = runtime.semantic.syncClient
-	}
-	if err := startConfiguredConversationSemanticSync(ctx, log, cfg, conversationIndex, resolveSemanticClient, semanticFreshness, runtime.group); err != nil {
+	if err := runtime.startSemanticSyncBackends(ctx, log, cfg, conversationIndex); err != nil {
 		return err
 	}
+	semanticFreshness := runtime.semanticSync
 
 	// The rollup distiller starts here for the same reason the feeder does: its
 	// stop is installed on the lifecycle group inside the start call, ahead of
@@ -314,9 +302,14 @@ func newControlServer(
 			configured: searchSource,
 			index:      index,
 			settings:   func() config.ConversationSemanticConfig { return cfg.Conversation.Semantic },
+			client: func(backend config.ConversationSemanticBackend) (conversationSemanticSearchClient, bool) {
+				backendRuntime, enabled := runtime.semanticBackends[backend]
+				return backendRuntime.currentSearchClient(), enabled
+			},
 		},
 		captureStore:       runtime.captureStore,
 		freshness:          semanticFreshness,
+		backendFreshness:   runtime.searchFreshness,
 		exportTokens:       exportTokens,
 		providerStatsNow:   nil,
 		providerStatsTicks: nil,

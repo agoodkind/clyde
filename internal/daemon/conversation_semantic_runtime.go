@@ -282,7 +282,13 @@ func openConversationSearchClient(ctx context.Context, semanticCfg config.Conver
 func semanticConnectorFor(semanticCfg config.ConversationSemanticConfig) semanticConnector {
 	return func(ctx context.Context) (semanticConnection, error) {
 		failed := semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}
-		client, err := OpenConversationSearchClient(ctx, semanticCfg)
+		var client *vectorsearch.Client
+		var err error
+		if len(semanticCfg.Backends) > 0 {
+			client, err = OpenConversationIngestionClient(ctx, semanticCfg)
+		} else {
+			client, err = OpenConversationSearchClient(ctx, semanticCfg)
+		}
 		if err != nil {
 			return failed, err
 		}
@@ -332,6 +338,10 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 	}
 	meta.IsLivetrackMeta()
 	runtime := newConversationSemanticRuntime(log, semanticConnectorFor(semanticCfg), registry, meta)
+	if len(semanticCfg.Backends) > 0 {
+		runtime.startRegistrationWorker(ctx, group, true)
+		return runtime
+	}
 	if err := runtime.attemptRegister(ctx); err != nil {
 		// A boot-time failure is transient (the engine is often briefly down
 		// during a co-restart), so keep the runtime alive and retry in the
@@ -421,6 +431,10 @@ func (r *conversationSemanticRuntime) installRetryStop(ctx context.Context, grou
 // reload or rebind requests, so no drain can begin between the hook install and
 // the goroutine launch.
 func (r *conversationSemanticRuntime) startRetryWorker(ctx context.Context, group *livetrack.Group) bool {
+	return r.startRegistrationWorker(ctx, group, false)
+}
+
+func (r *conversationSemanticRuntime) startRegistrationWorker(ctx context.Context, group *livetrack.Group, initial bool) bool {
 	workerCtx, done, owned := r.installRetryStop(ctx, group)
 	if !owned {
 		r.log.WarnContext(ctx, "daemon.conversation_semantic.retry_start_skipped_unowned",
@@ -442,6 +456,13 @@ func (r *conversationSemanticRuntime) startRetryWorker(ctx context.Context, grou
 				)
 			}
 		}()
+		if initial {
+			err := r.attemptRegister(workerCtx)
+			if err == nil {
+				return
+			}
+			r.log.WarnContext(workerCtx, "daemon.conversation_semantic.initial_register_failed", "collection_id", r.meta.CollectionID, "err", err)
+		}
 		r.retryRegisterLoop(workerCtx)
 	}()
 	return true

@@ -51,6 +51,11 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 		wantKey string
 	}{
 		{name: "unknown backend", body: "backend = \"remote\"\n", wantKey: "conversation.semantic.backend"},
+		{name: "unknown enabled backend", body: "backends = [\"remote\"]\n", wantKey: "conversation.semantic.backends"},
+		{name: "duplicate enabled backend", body: "backends = [\"milvus\", \"milvus\"]\n", wantKey: "conversation.semantic.backends"},
+		{name: "missing default backend", body: "backends = [\"local\"]\n", wantKey: "conversation.semantic.backends"},
+		{name: "empty enabled backends", body: "backends = []\n", wantKey: "conversation.semantic.backends"},
+		{name: "enabled legacy alias", body: "backends = [\"lms\"]\n", wantKey: "conversation.semantic.backends"},
 		{name: "two credential references", body: "embedding_api_key_env = \"OPENAI_API_KEY\"\nembedding_api_key_file = \"/tmp/key\"\n", wantKey: "conversation.semantic.embedding_api_key_env"},
 		{name: "sync_interval_below_minimum", body: "sync_interval = \"500ms\"\n", wantKey: "conversation.semantic.sync_interval"},
 		{name: "sync_interval_negative", body: "sync_interval = \"-1s\"\n", wantKey: "conversation.semantic.sync_interval"},
@@ -66,6 +71,22 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), testCase.wantKey) {
 				t.Fatalf("error = %q, want it to contain %s", err.Error(), testCase.wantKey)
+			}
+		})
+	}
+}
+
+func TestConversationSemanticParallelBackendSettings(t *testing.T) {
+	t.Parallel()
+	for _, backend := range []string{"milvus", "local", "lms", ""} {
+		t.Run(backend, func(t *testing.T) {
+			cfg, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \""+backend+"\"\nbackends = [\"milvus\", \"local\"]\nmilvus_address = \"localhost:19530\"\n")
+			if err != nil {
+				t.Fatal(err)
+			}
+			semantic := cfg.Conversation.Semantic
+			if len(semantic.EnabledBackends()) != 2 || semantic.LocalRoot == "" || semantic.MilvusAddress != "localhost:19530" {
+				t.Fatalf("parallel settings = %+v", semantic)
 			}
 		})
 	}
