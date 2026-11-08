@@ -205,12 +205,19 @@ func TestTranscriptDatesUniqueToolCallsAfterMismatch(t *testing.T) {
 
 			for toolIndex, dated := range testCase.dated {
 				got := toolTime(t, messages, 1, toolIndex)
-				if !dated && !got.IsZero() {
-					t.Fatalf("unexpected tool timestamp; tool index, actual: %d: %v", toolIndex, got)
+				want := time.Time{}
+
+				if dated {
+					var found bool
+
+					want, found = wants[toolIndex]
+					if !found {
+						t.Fatalf("missing expected timestamp for tool index %d", toolIndex)
+					}
 				}
 
-				if dated && !got.Equal(wants[toolIndex]) {
-					t.Fatalf("unexpected tool timestamp; tool index, actual, expected: %d: %v, %v", toolIndex, got, wants[toolIndex])
+				if !got.Equal(want) {
+					t.Fatalf("unexpected tool timestamp; tool index, actual, expected: %d: %v, %v", toolIndex, got, want)
 				}
 			}
 		})

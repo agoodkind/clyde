@@ -592,8 +592,7 @@ const (
 	// SourceOutcomeReadError indicates that reading the source failed.
 	SourceOutcomeReadError = "read_error"
 	// sourceMatchNativeIdentity identifies a match using a native tool call.
-	sourceMatchNativeIdentity = "native_identity"
-	// sourceMatchUniqueToolIdentity identifies a match by unique tool identity.
+	sourceMatchNativeIdentity     = "native_identity"
 	sourceMatchUniqueToolIdentity = "unique_tool_identity"
 )
 

@@ -14,16 +14,15 @@ import (
 )
 
 const (
-	toolSequenceCheckStoredUser = "stored_user_turn"
-	toolSequenceCheckName       = "tool_name"
-	toolSequenceCheckPosition   = "tool_position"
-	toolSequenceCheckContent    = "tool_content"
-	toolSequenceCheckComponents = "tool_components"
-	toolProjectionGrouped       = "grouped"
-	toolProjectionActual        = "actual"
-	toolProjectionTranscript    = "transcript"
-	toolProjectionOlderRun      = "older_run"
-	// toolProjectionUniqueIdentity identifies a binding by unique tool identity.
+	toolSequenceCheckStoredUser  = "stored_user_turn"
+	toolSequenceCheckName        = "tool_name"
+	toolSequenceCheckPosition    = "tool_position"
+	toolSequenceCheckContent     = "tool_content"
+	toolSequenceCheckComponents  = "tool_components"
+	toolProjectionGrouped        = "grouped"
+	toolProjectionActual         = "actual"
+	toolProjectionTranscript     = "transcript"
+	toolProjectionOlderRun       = "older_run"
 	toolProjectionUniqueIdentity = "unique_identity"
 	// minimumOlderRunRows requires at least two rows for an older run because
 	// one row cannot establish order.
