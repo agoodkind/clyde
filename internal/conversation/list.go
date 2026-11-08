@@ -136,6 +136,10 @@ type SearchConversationsResult struct {
 }
 
 // ListPage returns one filtered, bounded page from the cached index.
+//
+// The method reads cached records and applies the supplied filters and limits.
+//
+//	page, err := index.ListPage(ctx, ListOptions{Limit: 20})
 func (idx *Index) ListPage(ctx context.Context, options ListOptions) (ListResult, error) {
 	records, err := idx.List(ctx)
 	if err != nil {

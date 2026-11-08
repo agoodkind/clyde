@@ -127,6 +127,11 @@ func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.List
 
 // GetConversationInfo resolves one conversation and returns static metadata
 // plus its compaction segment stack.
+//
+// Resolution failures return NotFound. A failure to load conversation metadata
+// returns Internal.
+//
+//	info, err := server.GetConversationInfo(ctx, request)
 func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.GetConversationInfoRequest) (*clydev1.GetConversationInfoResponse, error) {
 	client, _ := peer.FromContext(ctx)
 	record, err := s.index.Resolve(ctx, req.GetConversationId())

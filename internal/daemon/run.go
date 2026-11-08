@@ -100,6 +100,11 @@ func loadDaemonStartupConfig(ctx context.Context, log *slog.Logger) (*config.Con
 
 // RunContext starts the daemon worker process using ctx as the parent context
 // for shutdown and child loops.
+//
+// The worker reads global configuration and stops its child loops during
+// shutdown.
+//
+//	err := RunContext(ctx, slog.Default())
 func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	if log == nil {
 		log = slog.Default()

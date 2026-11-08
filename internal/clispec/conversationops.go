@@ -125,6 +125,10 @@ func formatEnglishList(values []string) string {
 }
 
 // ConversationGroup returns the terminal parent for conversation operations.
+//
+// Register conversation commands under this group to use the shared CLI path.
+//
+//	group := ConversationGroup()
 func ConversationGroup() *Group {
 	return conversationGroup
 }

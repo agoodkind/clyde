@@ -7,6 +7,11 @@ import (
 )
 
 // CollectionAvailable reads the collection header without creating files.
+//
+// A missing collection returns false. A closed store or an unreadable header
+// returns an error.
+//
+//	available, err := store.CollectionAvailable(name)
 func (store *Store) CollectionAvailable(name string) (bool, error) {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()

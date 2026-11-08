@@ -123,6 +123,10 @@ type ConversationSemanticConfig struct {
 
 // SyncPassInterval permits shorter sync cadences without shortening the
 // transcript growth window.
+//
+// A nonpositive SyncInterval selects the default worker interval.
+//
+//	interval := semantic.SyncPassInterval()
 func (semantic ConversationSemanticConfig) SyncPassInterval() time.Duration {
 	if semantic.SyncInterval <= 0 {
 		return defaultConversationWorkerInterval

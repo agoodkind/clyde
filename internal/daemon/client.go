@@ -103,8 +103,11 @@ func RebindDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 }
 
 // ListConversations asks the running daemon for a filtered conversation page.
+//
 // When the daemon is not reachable it returns a clear error that names the rpc
 // socket and points at `clyde daemon status`.
+//
+//	page, err := ListConversations(ctx, conversation.ListOptions{Limit: 20})
 func ListConversations(ctx context.Context, options conversation.ListOptions) (conversation.ListResult, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {

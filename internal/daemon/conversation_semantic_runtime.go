@@ -142,6 +142,10 @@ var _ livetrack.Meta = conversationSemanticConnectionMeta{
 }
 
 // IsLivetrackMeta satisfies the livetrack.Meta constraint.
+//
+// The marker lets livetrack accept connection metadata without changing it.
+//
+//	metadata.IsLivetrackMeta()
 func (conversationSemanticConnectionMeta) IsLivetrackMeta() {}
 
 type conversationSemanticConnectionCloser struct {

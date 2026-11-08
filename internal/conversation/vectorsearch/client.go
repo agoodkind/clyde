@@ -109,6 +109,10 @@ func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName str
 }
 
 // SearchCollectionAvailable checks whether the backend can query an existing collection.
+//
+// The selected backend checks the collection without creating it.
+//
+//	available, err := client.SearchCollectionAvailable(ctx, collectionID)
 func (c *Client) SearchCollectionAvailable(ctx context.Context, collectionID string) (bool, error) {
 	return c.store.searchCollectionPresent(ctx, CollectionName(collectionID))
 }

@@ -33,6 +33,10 @@ func (embedder staticEmbedder) Embed(_ context.Context, text string) ([]float32,
 }
 
 // EmbedBatch returns vectors in input order and fails if any input lacks a vector.
+//
+// Workers compute embeddings concurrently, then the method checks each result.
+//
+//	result, err := embedder.EmbedBatch(ctx, []string{"search text"})
 func (embedder staticEmbedder) EmbedBatch(ctx context.Context, texts []string) (embedding.BatchResult, error) {
 	vectors := make([][]float32, len(texts))
 	var next atomic.Int64
