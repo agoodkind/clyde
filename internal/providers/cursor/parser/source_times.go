@@ -134,13 +134,17 @@ type sourceTimeResolver struct {
 	// provenLoaded reports whether the resolver has attempted to read and
 	// compare the transcript tool calls.
 	provenLoaded bool
+	// uniqueTools maps each unique tool identity to its native call position.
+	uniqueTools map[string]int
+	// userTurns counts real transcript user turns observed so far.
+	userTurns int
 }
 
 func newSourceTimeResolver(discovered discoveredArtifact, opts conversation.LoadOptions) *sourceTimeResolver {
-	return &sourceTimeResolver{discovered: discovered, opts: opts, loaded: false, available: false, source: emptySourceMessages(), texts: nil, nextTool: 0, toolsBroken: false, userSinceTool: false, savedTool: 0, provenTools: nil, provenLoaded: false}
+	return &sourceTimeResolver{discovered: discovered, opts: opts, loaded: false, available: false, source: emptySourceMessages(), texts: nil, nextTool: 0, toolsBroken: false, userSinceTool: false, savedTool: 0, provenTools: nil, provenLoaded: false, uniqueTools: nil, userTurns: 0}
 }
 
-// observe records a real user turn in the transcript message.
+// observe records and counts a real user turn in the transcript message.
 func (resolver *sourceTimeResolver) observe(message cursorjsonl.TranscriptMessage) {
 	if message.Role != cursorjsonl.RoleUser {
 		return
@@ -148,6 +152,7 @@ func (resolver *sourceTimeResolver) observe(message cursorjsonl.TranscriptMessag
 	for _, part := range message.Parts {
 		if part.Type == cursorjsonl.PartTypeText && cursorstore.RealUserText(part.Text) {
 			resolver.userSinceTool = true
+			resolver.userTurns++
 			return
 		}
 	}
@@ -198,43 +203,83 @@ func (resolver *sourceTimeResolver) apply(message *transcript.Message, body stri
 	}
 }
 
-// applyTools matches tool calls by position, name, and display until a mismatch.
+// applyTools dates transcript tool calls using proven positions until a mismatch and
+// unique identities afterward. It does not date calls when native tool calls are incomplete.
 func (resolver *sourceTimeResolver) applyTools(message *transcript.Message) {
-	for toolIndex := range message.Tools {
-		if resolver.toolsBroken || !resolver.source.ToolCallsComplete {
-			return
-		}
-		tool := &message.Tools[toolIndex]
-		position, proven := resolver.provenPosition()
-		if !proven {
-			resolver.breakTools("occurrence")
-			return
-		}
-		native := resolver.source.ToolCalls[position]
-		messageStart, nativeAfterUser := resolver.boundariesThrough(position)
-		if toolIndex == 0 && !messageStart {
-			resolver.breakTools("boundary")
-			return
-		}
-		afterUser := toolIndex == 0 && resolver.userSinceTool
-		if nativeAfterUser != afterUser {
-			resolver.breakTools("user_boundary")
-			return
-		}
-		resolver.userSinceTool = false
-		if tool.Name != native.Tool.Name || !transcript.SameToolInput(tool.Input.Raw, native.Tool.Input.Raw) {
-			resolver.breakTools("sequence")
-			return
-		}
-		resolver.savedTool++
-		resolver.nextTool = position + 1
-		if native.Timestamp.IsZero() {
-			continue
-		}
-		stamp := native.Timestamp
-		tool.Timestamp = &stamp
-		tool.TimestampUnknown = false
+	if !resolver.source.ToolCallsComplete {
+		return
 	}
+	for toolIndex := range message.Tools {
+		tool := &message.Tools[toolIndex]
+		if !resolver.toolsBroken {
+			resolver.applyProvenTool(tool, toolIndex)
+		}
+		if resolver.toolsBroken {
+			resolver.applyUniqueTool(tool)
+		}
+	}
+}
+
+// applyProvenTool dates a tool call when its proven native position, boundaries, name,
+// and input match.
+func (resolver *sourceTimeResolver) applyProvenTool(tool *transcript.ToolCall, toolIndex int) {
+	position, proven := resolver.provenPosition()
+	if !proven {
+		resolver.breakTools("occurrence")
+		return
+	}
+	native := resolver.source.ToolCalls[position]
+	messageStart, nativeAfterUser := resolver.boundariesThrough(position)
+	if toolIndex == 0 && !messageStart {
+		resolver.breakTools("boundary")
+		return
+	}
+	afterUser := toolIndex == 0 && resolver.userSinceTool
+	if nativeAfterUser != afterUser {
+		resolver.breakTools("user_boundary")
+		return
+	}
+	resolver.userSinceTool = false
+	if tool.Name != native.Tool.Name || !transcript.SameToolInput(tool.Input.Raw, native.Tool.Input.Raw) {
+		resolver.breakTools("sequence")
+		return
+	}
+	resolver.savedTool++
+	resolver.nextTool = position + 1
+	setToolTime(tool, native.Timestamp)
+}
+
+// applyUniqueTool dates a uniquely matching tool call when the preceding transcript and
+// native user turn counts match.
+func (resolver *sourceTimeResolver) applyUniqueTool(tool *transcript.ToolCall) {
+	key, valid := transcript.UniqueToolIdentityKey(transcript.ToolIdentity{Name: tool.Name, Input: tool.Input.Raw})
+	if !valid {
+		return
+	}
+	position, found := resolver.uniqueTools[key]
+	if !found {
+		return
+	}
+	native := resolver.source.ToolCalls[position]
+	nativeTurns := 0
+	for _, user := range resolver.source.ActualUsers {
+		if user.Message < native.ActualMessage {
+			nativeTurns++
+		}
+	}
+	if nativeTurns != resolver.userTurns {
+		return
+	}
+	setToolTime(tool, native.Timestamp)
+}
+
+// setToolTime sets the tool timestamp when stamp is not zero.
+func setToolTime(tool *transcript.ToolCall, stamp time.Time) {
+	if stamp.IsZero() {
+		return
+	}
+	tool.Timestamp = &stamp
+	tool.TimestampUnknown = false
 }
 
 // provenPosition returns the proven native position of the next saved
@@ -264,9 +309,8 @@ func (resolver *sourceTimeResolver) boundariesThrough(position int) (bool, bool)
 	return messageStart, afterUser
 }
 
-// readProvenTools compares transcript tool calls with native calls through
-// ProvenToolPositions. It reads the transcript only when its path identifies a
-// regular file.
+// readProvenTools reads tool calls from a regular transcript file, builds the unique tool
+// position map, and returns the proven native positions.
 func (resolver *sourceTimeResolver) readProvenTools() []int {
 	info, err := os.Stat(resolver.discovered.Path)
 	if err != nil || !info.Mode().IsRegular() {
@@ -289,6 +333,14 @@ func (resolver *sourceTimeResolver) readProvenTools() []int {
 	native := make([]transcript.ToolIdentity, 0, len(resolver.source.ToolCalls))
 	for _, call := range resolver.source.ToolCalls {
 		native = append(native, transcript.ToolIdentity{Name: call.Tool.Name, Input: call.Tool.Input.Raw})
+	}
+	resolver.uniqueTools = make(map[string]int)
+	for index, position := range transcript.UniqueToolPositions(saved, native) {
+		if position == transcript.UnprovenToolPosition {
+			continue
+		}
+		key, _ := transcript.UniqueToolIdentityKey(saved[index])
+		resolver.uniqueTools[key] = position
 	}
 	return transcript.ProvenToolPositions(saved, native)
 }

@@ -326,32 +326,46 @@ func TestSourceRepairUsesTheStoredTranscriptPositionOfACall(t *testing.T) {
 	}
 }
 
-func TestSourceRepairStopsAtTheFirstTranscriptDifference(t *testing.T) {
+func TestRepairDatesUniqueToolCallsAfterMismatch(t *testing.T) {
 	messages := []projectionMessage{
 		{role: "user", text: projectionQuestion, callID: "", command: "", created: projectionUserDate},
 		{role: "assistant", text: "", callID: "call_a", command: userBoundaryGit, created: projectionFirstDate},
 		{role: "assistant", text: "", callID: "call_b", command: userBoundaryTest, created: projectionSecondDate},
 	}
-	transcriptMessages := []projectionMessage{
-		messages[0],
-		messages[1],
-		{role: "assistant", text: "", callID: "call_transcript", command: "go vet ./...", created: projectionNextDate},
-		messages[2],
+	omitted := projectionMessage{role: "assistant", text: "", callID: "call_transcript", command: "go vet ./...", created: projectionNextDate}
+	followUp := projectionMessage{role: "user", text: projectionFollowUp, callID: "", command: "", created: projectionNextDate}
+	for _, testCase := range []struct {
+		name       string
+		transcript []projectionMessage
+		second     string
+		third      string
+		dated      bool
+	}{
+		{name: "unique call", transcript: []projectionMessage{messages[0], messages[1], omitted, messages[2]}, second: "1/1", third: "1/2", dated: true},
+		{name: "repeated call", transcript: []projectionMessage{messages[0], messages[1], omitted, messages[2], messages[2]}, second: "1/1", third: "1/2", dated: false},
+		{name: "different user turns", transcript: []projectionMessage{messages[0], messages[1], followUp, omitted, messages[2]}, second: "3/0", third: "3/1", dated: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			address, home, conversationID := projectionHomeWithTranscript(t, messages, testCase.transcript)
+			ctx := context.Background()
+			first := "convtool/" + conversationID + "/1/0"
+			second := "convtool/" + conversationID + "/" + testCase.second
+			third := "convtool/" + conversationID + "/" + testCase.third
+			seedProjectionRows(t, ctx, address, conversationID, []projectionRow{
+				{path: first, content: projectionGitBase, role: "assistant"},
+				{path: second, content: projectionTestBase, role: "assistant"},
+				{path: third, content: projectionTestBase, role: "assistant"},
+			})
+			rows := runProjectionRepair(t, ctx, address, home)
+			requireProjectionDate(t, rows, first, projectionFirstDate)
+			requireProjectionUndated(t, rows, second)
+			if testCase.dated {
+				requireProjectionDate(t, rows, third, projectionSecondDate)
+				return
+			}
+			requireProjectionUndated(t, rows, third)
+		})
 	}
-	address, home, conversationID := projectionHomeWithTranscript(t, messages, transcriptMessages)
-	ctx := context.Background()
-	first := "convtool/" + conversationID + "/1/0"
-	second := "convtool/" + conversationID + "/1/1"
-	third := "convtool/" + conversationID + "/1/2"
-	seedProjectionRows(t, ctx, address, conversationID, []projectionRow{
-		{path: first, content: projectionGitBase, role: "assistant"},
-		{path: second, content: projectionTestBase, role: "assistant"},
-		{path: third, content: projectionTestBase, role: "assistant"},
-	})
-	rows := runProjectionRepair(t, ctx, address, home)
-	requireProjectionDate(t, rows, first, projectionFirstDate)
-	requireProjectionUndated(t, rows, second)
-	requireProjectionUndated(t, rows, third)
 }
 
 func TestSourceRepairLeavesAnAmbiguousIdenticalCallUndated(t *testing.T) {

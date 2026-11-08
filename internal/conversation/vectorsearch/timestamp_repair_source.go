@@ -593,6 +593,8 @@ const (
 	SourceOutcomeReadError = "read_error"
 	// sourceMatchNativeIdentity identifies a match using a native tool call.
 	sourceMatchNativeIdentity = "native_identity"
+	// sourceMatchUniqueToolIdentity identifies a match by unique tool identity.
+	sourceMatchUniqueToolIdentity = "unique_tool_identity"
 )
 
 // SourceRepairEvidence records the outcome and candidates for one stored row family.
