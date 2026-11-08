@@ -226,59 +226,76 @@ func (lookup sourceTimeLookup) bindBaseFamilies(keys []string, stored toolProjec
 		}
 		lookup.toolBindings[key] = binding
 	}
+
 	lookup.bindUniqueIdentities(keys, families)
 }
 
-// bindUniqueIdentities binds sequence mismatches to unique native calls when the family text
-// and preceding user turn counts match and the native call does not already have a binding.
+// bindUniqueIdentities binds sequence mismatches to unique native calls when
+// family text and preceding user turn counts match. It skips calls that already
+// have a binding.
 func (lookup sourceTimeLookup) bindUniqueIdentities(keys []string, families map[string][]collection.StoredRow) {
 	saved := make([]transcript.ToolIdentity, 0, len(lookup.transcript.Calls))
+
 	coordinates := make(map[[2]int]int, len(lookup.transcript.Calls))
 	for index, call := range lookup.transcript.Calls {
 		saved = append(saved, transcript.ToolIdentity{Name: call.Name, Input: call.Input})
 		coordinates[[2]int{call.Message, call.Ordinal}] = index
 	}
+
 	native := make([]transcript.ToolIdentity, 0, len(lookup.toolCalls))
 	for _, call := range lookup.toolCalls {
 		native = append(native, transcript.ToolIdentity{Name: call.Name, Input: call.Input})
 	}
+
 	unique := transcript.UniqueToolPositions(saved, native)
+
 	bound := make(map[string]bool, len(keys))
 	for _, key := range keys {
 		if binding := lookup.toolBindings[key]; binding.reason == "" {
 			bound[binding.call.CallID] = true
 		}
 	}
+
 	for _, key := range keys {
 		if lookup.toolBindings[key].reason != SourceOutcomeSequenceMismatch {
 			continue
 		}
+
 		order := familyOrder(key)
+
 		index, found := coordinates[[2]int{order[0], order[2]}]
 		if !found || unique[index] == transcript.UnprovenToolPosition {
 			continue
 		}
+
 		call := lookup.toolCalls[unique[index]]
+
 		text, complete := familyText(key, conversationToolFamily, families[key])
 		if bound[call.CallID] || !complete || text != toolCallContent(call) {
 			continue
 		}
+
 		if usersBefore(lookup.transcript.Users, order[0]) != usersBefore(lookup.actualUsers, call.ActualMessage) {
 			continue
 		}
+
 		bound[call.CallID] = true
-		lookup.toolBindings[key] = toolBinding{call: call, reason: "", component: false, projection: toolProjectionUniqueIdentity}
+		lookup.toolBindings[key] = toolBinding{
+			call: call, reason: "", component: false, projection: toolProjectionUniqueIdentity,
+		}
 	}
 }
 
 // usersBefore counts user turns with a message position lower than message.
 func usersBefore(users []transcript.UserTurn, message int) int {
 	count := 0
+
 	for _, user := range users {
 		if user.Message < message {
 			count++
 		}
 	}
+
 	return count
 }
 
@@ -681,6 +698,7 @@ func (lookup sourceTimeLookup) toolFamilyOutcome(key string, text string, eviden
 		return
 	}
 	bindingOutcome(binding, evidence)
+
 	if binding.projection == toolProjectionUniqueIdentity && evidence.Outcome == SourceOutcomeMatched {
 		evidence.Match = sourceMatchUniqueToolIdentity
 		evidence.Outcome = lookup.matchedTextOutcome(key, evidence.Chosen, true)

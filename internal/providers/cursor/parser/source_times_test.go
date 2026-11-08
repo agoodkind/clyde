@@ -153,10 +153,12 @@ func writeUniqueIdentityFixture(t *testing.T, commands []string) string {
 	projectsDir := t.TempDir()
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+
 	lines := []string{`{"role":"user","message":{"content":[{"type":"text","text":"check the tree"}]}}`}
 	for _, command := range commands {
 		lines = append(lines, `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"`+command+`"}}]}}`)
 	}
+
 	transcriptPath := writeSourceTimesTranscript(t, projectsDir, "Users-alice-unique", nativeComposerID, lines)
 	prefix := "bubbleId:" + nativeComposerID + ":"
 	statements := nativeStateStatements(nativeComposerID, `{"bubbleId":"u1","type":1},{"bubbleId":"u2","type":2},{"bubbleId":"u3","type":2}`, []string{
@@ -170,6 +172,7 @@ func writeUniqueIdentityFixture(t *testing.T, commands []string) string {
 		nativeToolBubble("u3", "2026-05-20T10:03:00.000Z", "call_test", "", ""),
 	)
 	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), statements)
+
 	return transcriptPath
 }
 
@@ -177,6 +180,7 @@ func writeUniqueIdentityFixture(t *testing.T, commands []string) string {
 // dates after a mismatch and repeated calls stay undated.
 func TestTranscriptDatesUniqueToolCallsAfterMismatch(t *testing.T) {
 	const omittedCommand = "go vet ./..."
+
 	testCases := []struct {
 		name     string
 		commands []string
@@ -188,19 +192,23 @@ func TestTranscriptDatesUniqueToolCallsAfterMismatch(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			transcriptPath := writeUniqueIdentityFixture(t, testCase.commands)
+
 			messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
 			if err != nil {
 				t.Fatalf("stream transcript: %v", err)
 			}
+
 			wants := map[int]time.Time{
 				0: time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC),
 				2: time.Date(2026, time.May, 20, 10, 3, 0, 0, time.UTC),
 			}
+
 			for toolIndex, dated := range testCase.dated {
 				got := toolTime(t, messages, 1, toolIndex)
 				if !dated && !got.IsZero() {
 					t.Fatalf("unexpected tool timestamp; tool index, actual: %d: %v", toolIndex, got)
 				}
+
 				if dated && !got.Equal(wants[toolIndex]) {
 					t.Fatalf("unexpected tool timestamp; tool index, actual, expected: %d: %v, %v", toolIndex, got, wants[toolIndex])
 				}
