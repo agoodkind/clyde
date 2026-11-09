@@ -22,11 +22,16 @@ func TestRawResponsesCompactionMutatesNonStreamingJSONOnce(t *testing.T) {
 	response.Header.Set("Content-Digest", "stale")
 	transformed := transformer.TransformResponse(response)
 	body := readResponseBody(t, transformed)
-	if transformed.Header.Get("X-Opaque") != "kept" || transformed.Header.Get("Content-Length") != "" ||
-		transformed.Header.Get("ETag") != "" || transformed.Header.Get("Digest") != "" || transformed.Header.Get("Content-Digest") != "" {
+	if transformed.Header.Get("X-Opaque") != "kept" ||
+		transformed.Header.Get("Content-Length") != "" ||
+		transformed.Header.Get("ETag") != "" ||
+		transformed.Header.Get("Digest") != "" ||
+		transformed.Header.Get("Content-Digest") != "" {
 		t.Fatalf("response headers = %v", transformed.Header)
 	}
-	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 || !bytes.Contains(body, []byte("recent")) {
+
+	if bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 ||
+		!bytes.Contains(body, []byte("recent")) {
 		t.Fatalf("response was not injected once: %s", body)
 	}
 
@@ -37,19 +42,36 @@ func TestRawResponsesCompactionMutatesNonStreamingJSONOnce(t *testing.T) {
 	})
 	repeatedBody := readResponseBody(t, repeated)
 	if !bytes.Equal(repeatedBody, body) {
-		t.Fatalf("repeated transformation changed response:\n got: %s\nwant: %s", repeatedBody, body)
+		t.Fatalf(
+			"repeated transformation changed response:\n got: %s\nwant: %s",
+			repeatedBody,
+			body,
+		)
 	}
 }
 
 func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T) {
-	recovery := &RawResponsesCompactionV2Recovery{injection: reorienttag.WrapInjection("recovered transcript", "")}
-	finalRequest := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}
+	recovery := &RawResponsesCompactionV2Recovery{
+		injection: reorienttag.WrapInjection("recovered transcript", ""),
+	}
+	finalRequest := RawResponsesRequest{
+		Header: http.Header{
+			CodexTurnMetadataHeader: {
+				`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			},
+		},
+	}
 	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(finalRequest, recovery)
 	if transformer == nil {
 		t.Fatal("final answer did not create transformer")
 	}
-	body := readResponseBody(t, transformer.TransformResponse(rawFinalAnswerJSONResponse(http.StatusOK, "answer")))
-	if !transformer.DidMutateResponse() || bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 {
+
+	body := readResponseBody(
+		t,
+		transformer.TransformResponse(rawFinalAnswerJSONResponse(http.StatusOK, "answer")),
+	)
+	if !transformer.DidMutateResponse() ||
+		bytes.Count(body, []byte("<pre-compaction-transcript>")) != 1 {
 		t.Fatalf("final answer mutation = %t body=%s", transformer.DidMutateResponse(), body)
 	}
 
@@ -58,38 +80,81 @@ func TestRawResponsesCompactionV2RecoveryResponseTargetsFinalAnswer(t *testing.T
 		metadata string
 		response *http.Response
 	}{
-		{name: "commentary", metadata: `{"request_kind":"turn","compaction":{"phase":"commentary"}}`, response: rawJSONResponse(http.StatusOK, "comment")},
-		{name: "tool only", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","call_id":"call"}]}`))}},
-		{name: "malformed", metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`, response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"output":[`))}},
+		{
+			name:     "commentary",
+			metadata: `{"request_kind":"turn","compaction":{"phase":"commentary"}}`,
+			response: rawJSONResponse(http.StatusOK, "comment"),
+		},
+		{
+			name:     "tool only",
+			metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body: io.NopCloser(
+					strings.NewReader(`{"output":[{"type":"function_call","call_id":"call"}]}`),
+				),
+			},
+		},
+		{
+			name:     "malformed",
+			metadata: `{"request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"output":[`)),
+			},
+		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {testCase.metadata}}}
-			candidate := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
-			if testCase.name == "commentary" {
-				if candidate != nil {
-					t.Fatal("commentary created transformer")
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				request := RawResponsesRequest{
+					Header: http.Header{CodexTurnMetadataHeader: {testCase.metadata}},
 				}
-				return
-			}
-			got := readResponseBody(t, candidate.TransformResponse(testCase.response))
-			if candidate.DidMutateResponse() || bytes.Contains(got, []byte("recovered transcript")) {
-				t.Fatalf("%s mutated: %s", testCase.name, got)
-			}
-		})
+				candidate := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
+				if testCase.name == "commentary" {
+					if candidate != nil {
+						t.Fatal("commentary created transformer")
+					}
+
+					return
+				}
+
+				got := readResponseBody(t, candidate.TransformResponse(testCase.response))
+				if candidate.DidMutateResponse() ||
+					bytes.Contains(got, []byte("recovered transcript")) {
+					t.Fatalf("%s mutated: %s", testCase.name, got)
+				}
+			},
+		)
 	}
 }
 
 func TestRawResponsesCompactionV2RecoveryAcceptsNativeTurnWithoutPhase(t *testing.T) {
-	recovery := &RawResponsesCompactionV2Recovery{injection: reorienttag.WrapInjection("recovered transcript", "")}
-	request := RawResponsesRequest{Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn"}`}}}
+	recovery := &RawResponsesCompactionV2Recovery{
+		injection: reorienttag.WrapInjection("recovered transcript", ""),
+	}
+	request := RawResponsesRequest{
+		Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn"}`}},
+	}
 	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
 	if transformer == nil {
 		t.Fatal("The native turn without a phase did not create a transformer.")
 	}
-	body := readResponseBody(t, transformer.TransformResponse(rawFinalAnswerJSONResponse(http.StatusOK, "answer")))
+
+	body := readResponseBody(
+		t,
+		transformer.TransformResponse(rawFinalAnswerJSONResponse(http.StatusOK, "answer")),
+	)
 	if !transformer.DidMutateResponse() || !bytes.Contains(body, []byte("recovered transcript")) {
-		t.Fatalf("The final answer mutation did not match the expected result: %t body=%s", transformer.DidMutateResponse(), body)
+		t.Fatalf(
+			"The final answer mutation did not match the expected result: %t body=%s",
+			transformer.DidMutateResponse(),
+			body,
+		)
 	}
+
 	for _, metadata := range []string{
 		`{"request_kind":"turn","compaction":{"implementation":"responses_compaction_v2"}}`,
 		`{"request_kind":"turn","compaction":{"strategy":"memento"}}`,
@@ -104,7 +169,12 @@ func TestRawResponsesCompactionV2RecoveryAcceptsNativeTurnWithoutPhase(t *testin
 func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
 	unknownFrame := "event: response.future\n: keep this exact comment\ndata: { \"opaque\" : [1, 2] }\n\n"
-	itemDone, completed := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`, 0, 10, 11)
+	itemDone, completed := rawCompactionSSEFramesForTest(
+		`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`,
+		0,
+		10,
+		11,
+	)
 	original := []byte(unknownFrame + itemDone + completed)
 	response := &http.Response{
 		StatusCode: http.StatusOK,
@@ -116,9 +186,12 @@ func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *
 	if !bytes.Contains(body, []byte(unknownFrame)) {
 		t.Fatalf("unknown SSE frame changed:\n%s", body)
 	}
-	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) || !bytes.Contains(body, []byte("recent")) {
+
+	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) ||
+		!bytes.Contains(body, []byte("recent")) {
 		t.Fatalf("streaming response was not injected once: %s", body)
 	}
+
 	if transformed.Header.Get("Content-Length") != "" {
 		t.Fatalf("content length survived mutation: %v", transformed.Header)
 	}
@@ -127,9 +200,15 @@ func TestRawResponsesCompactionMutatesStreamingItemAndPreservesUnknownFrames(t *
 func TestRawResponsesCompactionV2MutatesStrictFinalAnswerStream(t *testing.T) {
 	request := RawResponsesRequest{
 		Stream: true,
-		Header: http.Header{CodexTurnMetadataHeader: {`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
+		Header: http.Header{
+			CodexTurnMetadataHeader: {
+				`{"request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			},
+		},
 	}
-	recovery := &RawResponsesCompactionV2Recovery{injection: reorienttag.WrapInjection("recovered transcript", "")}
+	recovery := &RawResponsesCompactionV2Recovery{
+		injection: reorienttag.WrapInjection("recovered transcript", ""),
+	}
 	transformer := NewRawResponsesCompactionV2FinalAnswerTransformer(request, recovery)
 	item := `{"id":"msg-1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"summary"}]}`
 	stream := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"sequence_number\":10,\"item\":" + item + "}\n\n" +
@@ -140,7 +219,8 @@ func TestRawResponsesCompactionV2MutatesStrictFinalAnswerStream(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(stream)),
 	}
 	body := readResponseBody(t, transformer.TransformResponse(response))
-	if !transformer.DidMutateResponse() || !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
+	if !transformer.DidMutateResponse() ||
+		!bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
 		t.Fatalf("strict final-answer stream was not injected: %s", body)
 	}
 }
@@ -162,6 +242,7 @@ func TestRawResponsesCompactionMutatesMultilineSSEDataFrames(t *testing.T) {
 	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
 		t.Fatalf("multiline SSE transcript count was not two: %s", body)
 	}
+
 	for _, frame := range bytes.Split(bytes.TrimSpace(body), []byte("\n\n")) {
 		_, data, dataCount := rawSSEFrameDataValue(frame)
 		if dataCount != 1 || !json.Valid(data) {
@@ -172,7 +253,12 @@ func TestRawResponsesCompactionMutatesMultilineSSEDataFrames(t *testing.T) {
 
 func TestRawResponsesCompactionPreservesInterveningSSEFrames(t *testing.T) {
 	transformer := rawResponseTransformerForTest(t)
-	itemDone, completed := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`, 0, 10, 12)
+	itemDone, completed := rawCompactionSSEFramesForTest(
+		`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`,
+		0,
+		10,
+		12,
+	)
 	heartbeat := ": keepalive\n\n"
 	intervening := "event: response.future\ndata: {\"type\":\"response.future\",\"sequence_number\":11,\"opaque\":true}\n\n"
 	response := &http.Response{
@@ -184,11 +270,13 @@ func TestRawResponsesCompactionPreservesInterveningSSEFrames(t *testing.T) {
 	if !bytes.Contains(body, []byte("<pre-compaction-transcript>")) {
 		t.Fatalf("intervening SSE frames prevented transcript injection: %s", body)
 	}
+
 	itemIndex := bytes.Index(body, []byte("response.output_item.done"))
 	heartbeatIndex := bytes.Index(body, []byte(heartbeat))
 	interveningIndex := bytes.Index(body, []byte("response.future"))
 	completedIndex := bytes.Index(body, []byte("response.completed"))
-	if heartbeatIndex < 0 || itemIndex <= heartbeatIndex || interveningIndex <= itemIndex || completedIndex <= interveningIndex {
+	if heartbeatIndex < 0 || itemIndex <= heartbeatIndex || interveningIndex <= itemIndex ||
+		completedIndex <= interveningIndex {
 		t.Fatalf("intervening SSE frame order changed: %s", body)
 	}
 }
@@ -199,7 +287,11 @@ func TestRawResponsesCompactionPreservesUnknownTextSSEFrame(t *testing.T) {
 	itemDone := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n"
 	unknown := "event: extension\ndata: ping\n\n"
 	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
-	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(itemDone + unknown + completed))}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(itemDone + unknown + completed)),
+	}
 	body := readResponseBody(t, transformer.TransformResponse(response))
 	if !bytes.Equal(body, []byte(itemDone+unknown+completed)) {
 		t.Fatalf("unknown text SSE frame disrupted compaction: %s", body)
@@ -214,8 +306,16 @@ func TestRawSSEFrameEventUsesLastField(t *testing.T) {
 }
 
 func TestRawResponsesCompactionTransformsCompressedResponses(t *testing.T) {
-	jsonBody := []byte(`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`)
-	itemDone, completed := rawCompactionSSEFramesForTest(`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`, 0, 10, 11)
+	jsonBody := []byte(
+		`{"id":"resp-native","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}]}`,
+	)
+	itemDone, completed := rawCompactionSSEFramesForTest(
+		`{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"summary"}]}`,
+		0,
+		10,
+		11,
+	)
+
 	sseBody := []byte(itemDone + completed)
 	for _, testCase := range []struct {
 		name     string
@@ -228,31 +328,44 @@ func TestRawResponsesCompactionTransformsCompressedResponses(t *testing.T) {
 		{name: "gzip SSE", encoding: "gzip", body: sseBody, stream: true},
 		{name: "brotli SSE", encoding: "br", body: sseBody, stream: true},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			compressed := rawCompactionCompressedBodyForTest(t, testCase.body, testCase.encoding)
-			contentType := "application/json"
-			if testCase.stream {
-				contentType = "text/event-stream"
-			}
-			response := &http.Response{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Content-Encoding": {testCase.encoding},
-					"Content-Type":     {contentType},
-				},
-				Body: io.NopCloser(bytes.NewReader(compressed)),
-			}
-			transformer := rawResponseTransformerForTest(t)
-			transformer.stream = testCase.stream
-			transformed := transformer.TransformResponse(response)
-			if got := transformed.Header.Get("Content-Encoding"); got != testCase.encoding {
-				t.Fatalf("content encoding = %q, want %q", got, testCase.encoding)
-			}
-			decoded := rawCompactionDecompressedBodyForTest(t, readResponseBody(t, transformed), testCase.encoding)
-			if !bytes.Contains(decoded, []byte("<pre-compaction-transcript>")) {
-				t.Fatalf("compressed response lost injection: %s", decoded)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				compressed := rawCompactionCompressedBodyForTest(
+					t,
+					testCase.body,
+					testCase.encoding,
+				)
+				contentType := "application/json"
+				if testCase.stream {
+					contentType = "text/event-stream"
+				}
+
+				response := &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Encoding": {testCase.encoding},
+						"Content-Type":     {contentType},
+					},
+					Body: io.NopCloser(bytes.NewReader(compressed)),
+				}
+				transformer := rawResponseTransformerForTest(t)
+				transformer.stream = testCase.stream
+				transformed := transformer.TransformResponse(response)
+				if got := transformed.Header.Get("Content-Encoding"); got != testCase.encoding {
+					t.Fatalf("content encoding = %q, want %q", got, testCase.encoding)
+				}
+
+				decoded := rawCompactionDecompressedBodyForTest(
+					t,
+					readResponseBody(t, transformed),
+					testCase.encoding,
+				)
+				if !bytes.Contains(decoded, []byte("<pre-compaction-transcript>")) {
+					t.Fatalf("compressed response lost injection: %s", decoded)
+				}
+			},
+		)
 	}
 }
 
@@ -268,12 +381,15 @@ func rawCompactionCompressedBodyForTest(t *testing.T, body []byte, encoding stri
 	default:
 		t.Fatalf("unsupported encoding %q", encoding)
 	}
+
 	if _, err := writer.Write(body); err != nil {
 		t.Fatalf("compress %s body: %v", encoding, err)
 	}
+
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close %s writer: %v", encoding, err)
 	}
+
 	return buffer.Bytes()
 }
 
@@ -286,6 +402,7 @@ func rawCompactionDecompressedBodyForTest(t *testing.T, body []byte, encoding st
 		if err != nil {
 			t.Fatalf("open gzip body: %v", err)
 		}
+
 		t.Cleanup(func() { _ = gzipReader.Close() })
 		reader = gzipReader
 	case "br":
@@ -293,9 +410,11 @@ func rawCompactionDecompressedBodyForTest(t *testing.T, body []byte, encoding st
 	default:
 		t.Fatalf("unsupported encoding %q", encoding)
 	}
+
 	decoded, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf("decompress %s body: %v", encoding, err)
 	}
+
 	return decoded
 }

@@ -57,6 +57,7 @@ func (workspaceGitRunner) run(ctx context.Context, workdir string, args ...strin
 	if err != nil {
 		return nil, err
 	}
+
 	var cmd *exec.Cmd
 	switch workspaceGitCommand(strings.Join(args, "\x00")) {
 	case workspaceGitConfigOriginURL:
@@ -68,19 +69,32 @@ func (workspaceGitRunner) run(ctx context.Context, workdir string, args ...strin
 	default:
 		return nil, fmt.Errorf("unsupported workspace git command: %q", strings.Join(args, " "))
 	}
+
 	var stdout, stderr bytes.Buffer
 	cmd.Dir = cleanWorkdir
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		slog.WarnContext(ctx, "adapter.codex.workspace_metadata.git_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
-			"subcomponent", "codex",
-			"workdir", cleanWorkdir,
-			"args", strings.Join(args, " "),
-			"err", err,
+		slog.WarnContext(
+			ctx,
+			"adapter.codex.workspace_metadata.git_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"component",
+			"adapter",
+			"subcomponent",
+			"codex",
+			"workdir",
+			cleanWorkdir,
+			"args",
+			strings.Join(args, " "),
+			"err",
+			err,
 		)
+
 		return nil, fmt.Errorf("workspace git command %q: %w", strings.Join(args, " "), err)
 	}
+
 	return stdout.Bytes(), nil
 }
 
@@ -89,14 +103,25 @@ func cleanWorkspaceGitDir(workdir string) (string, error) {
 	if workdir == "" {
 		return "", fmt.Errorf("empty workspace git dir")
 	}
+
 	if strings.ContainsRune(workdir, 0) {
 		return "", fmt.Errorf("workspace git dir contains NUL")
 	}
+
 	clean, err := filepath.Abs(workdir)
 	if err != nil {
-		slog.Warn("adapter.codex.workspace_metadata.abs_failed", "concern", "adapter.providers.codex.request", "workdir", workdir, "err", err)
+		slog.Warn(
+			"adapter.codex.workspace_metadata.abs_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"workdir",
+			workdir,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("absolute workspace git dir: %w", err)
 	}
+
 	return clean, nil
 }
 
@@ -107,16 +132,22 @@ func NewWorkspaceProbe() *WorkspaceProbe {
 	return newWorkspaceProbeWith(workspaceGitRunner{}, defaultWorkspaceProbeTTL, time.Now)
 }
 
-func newWorkspaceProbeWith(runner workspaceCommandRunner, ttl time.Duration, now func() time.Time) *WorkspaceProbe {
+func newWorkspaceProbeWith(
+	runner workspaceCommandRunner,
+	ttl time.Duration,
+	now func() time.Time,
+) *WorkspaceProbe {
 	if now == nil {
 		now = time.Now
 	}
+
 	return &WorkspaceProbe{
 		cache:    map[string]workspaceCacheEntry{},
 		cacheTTL: ttl,
 		now:      now,
-		runner:   runner, mu: sync.
-				Mutex{},
+		runner:   runner,
+		mu: sync.
+			Mutex{},
 	}
 }
 
@@ -128,16 +159,20 @@ func (p *WorkspaceProbe) Probe(ctx context.Context, path string) TurnMetadataWor
 		return TurnMetadataWorkspace{
 			AssociatedRemoteURLs: TurnMetadataRemoteURLs{Origin: ""},
 
-			LatestGitCommitHash: "", HasChanges: false,
+			LatestGitCommitHash: "",
+			HasChanges:          false,
 		}
 	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if entry, ok := p.cache[path]; ok && p.now().Sub(entry.fetched) < p.cacheTTL {
 		return entry.value
 	}
+
 	value := p.fetch(ctx, path)
 	p.cache[path] = workspaceCacheEntry{value: value, fetched: p.now()}
+
 	return value
 }
 
@@ -145,20 +180,24 @@ func (p *WorkspaceProbe) fetch(ctx context.Context, path string) TurnMetadataWor
 	out := TurnMetadataWorkspace{
 		AssociatedRemoteURLs: TurnMetadataRemoteURLs{Origin: ""},
 
-		LatestGitCommitHash: "", HasChanges: false,
+		LatestGitCommitHash: "",
+		HasChanges:          false,
 	}
 	if origin, err := p.runner.run(ctx, path, "config", "--get", "remote.origin.url"); err == nil {
 		if v := strings.TrimSpace(string(origin)); v != "" {
 			out.AssociatedRemoteURLs.Origin = v
 		}
 	}
+
 	if head, err := p.runner.run(ctx, path, "rev-parse", "HEAD"); err == nil {
 		if v := strings.TrimSpace(string(head)); v != "" {
 			out.LatestGitCommitHash = v
 		}
 	}
+
 	if status, err := p.runner.run(ctx, path, "status", "--porcelain"); err == nil {
 		out.HasChanges = strings.TrimSpace(string(status)) != ""
 	}
+
 	return out
 }

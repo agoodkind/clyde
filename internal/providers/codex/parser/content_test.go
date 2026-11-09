@@ -32,6 +32,7 @@ func writeCodexRollout(t *testing.T) string {
 	if err := os.WriteFile(path, []byte(codexContentRollout), 0o600); err != nil {
 		t.Fatalf("write rollout fixture: %v", err)
 	}
+
 	return path
 }
 
@@ -43,13 +44,16 @@ func collectCodexMessages(t *testing.T, path string, includeToolOutputs bool) []
 		IncludeToolOutputs:    includeToolOutputs,
 	}
 	var messages []transcript.Message
+
 	p := New()
 	for message, err := range p.Stream(path, opts) {
 		if err != nil {
 			t.Fatalf("stream: %v", err)
 		}
+
 		messages = append(messages, message)
 	}
+
 	return messages
 }
 
@@ -64,6 +68,7 @@ func TestCodexParserSurfacesReasoningToolsOutputs(t *testing.T) {
 	var thinking int
 	toolOutputs := map[string]string{}
 	toolNames := map[string]bool{}
+
 	for _, message := range messages {
 		if strings.TrimSpace(message.Thinking) != "" {
 			thinking++
@@ -71,6 +76,7 @@ func TestCodexParserSurfacesReasoningToolsOutputs(t *testing.T) {
 				t.Errorf("thinking text = %q", message.Thinking)
 			}
 		}
+
 		for _, tool := range message.Tools {
 			toolNames[tool.Name] = true
 			toolOutputs[tool.ID] = tool.Output
@@ -80,12 +86,15 @@ func TestCodexParserSurfacesReasoningToolsOutputs(t *testing.T) {
 	if thinking != 1 {
 		t.Errorf("thinking messages = %d, want 1", thinking)
 	}
+
 	if !toolNames["exec_command"] || !toolNames["apply_patch"] {
 		t.Errorf("tool names = %v, want exec_command and apply_patch", toolNames)
 	}
+
 	if got := toolOutputs["call_one"]; got != "alpha.txt\nbeta.txt" {
 		t.Errorf("call_one output = %q", got)
 	}
+
 	if got := toolOutputs["call_two"]; got != "Success." {
 		t.Errorf("call_two output = %q", got)
 	}
@@ -100,6 +109,7 @@ func TestCodexParserDropsOutputsWhenNotRequested(t *testing.T) {
 	messages := collectCodexMessages(t, path, false)
 
 	toolCount := 0
+
 	for _, message := range messages {
 		for _, tool := range message.Tools {
 			toolCount++
@@ -107,10 +117,13 @@ func TestCodexParserDropsOutputsWhenNotRequested(t *testing.T) {
 				t.Errorf("tool %q has output %q without IncludeToolOutputs", tool.Name, tool.Output)
 			}
 		}
-		if strings.Contains(message.Text, "alpha.txt") || strings.Contains(message.Text, "Success.") {
+
+		if strings.Contains(message.Text, "alpha.txt") ||
+			strings.Contains(message.Text, "Success.") {
 			t.Errorf("tool output leaked into message text: %q", message.Text)
 		}
 	}
+
 	if toolCount != 2 {
 		t.Errorf("tool calls = %d, want 2", toolCount)
 	}

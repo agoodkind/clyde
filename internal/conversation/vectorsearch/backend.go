@@ -36,7 +36,10 @@ type backend interface {
 	// collectionPresent prepares an existing collection for row queries.
 	collectionPresent(ctx context.Context, collectionName string) (bool, error)
 	searchCollectionPresent(ctx context.Context, collectionName string) (bool, error)
-	search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error)
+	search(
+		ctx context.Context,
+		request collection.SearchRequest,
+	) ([]collection.Hit, searchTiming, error)
 	close(ctx context.Context) error
 }
 
@@ -66,7 +69,18 @@ func openBackend(ctx context.Context, options Options) (openedBackend, error) {
 	case BackendLocal:
 		return openLocalBackend(ctx, options)
 	default:
-		failed := openedBackend{store: nil, embedder: nil, embeddingModel: "", dimension: 0, queryPrefix: "", byteBudget: 0, deliveryBatchBytes: 0}
-		return failed, operationError{operation: "open conversation vector store", cause: fmt.Errorf("backend %q is not registered", options.Backend)}
+		failed := openedBackend{
+			store:              nil,
+			embedder:           nil,
+			embeddingModel:     "",
+			dimension:          0,
+			queryPrefix:        "",
+			byteBudget:         0,
+			deliveryBatchBytes: 0,
+		}
+		return failed, operationError{
+			operation: "open conversation vector store",
+			cause:     fmt.Errorf("backend %q is not registered", options.Backend),
+		}
 	}
 }

@@ -15,7 +15,11 @@ import (
 // failingLoadIndex omits a conversation from messagesByID, which makes the fake
 // index return an error for it. That is the same shape a real load failure has:
 // the conversation is listed and advertised, and reading its transcript fails.
-func failingLoadIndex(failingID string, healthyID string, failingStamp conversation.FileStamp) *fakeConversationSemanticIndex {
+func failingLoadIndex(
+	failingID string,
+	healthyID string,
+	failingStamp conversation.FileStamp,
+) *fakeConversationSemanticIndex {
 	return &fakeConversationSemanticIndex{
 		records: []conversation.StampedRecord{
 			{Record: semanticTestRecord(failingID), Stamp: failingStamp},
@@ -31,6 +35,7 @@ func failingLoadIndex(failingID string, healthyID string, failingStamp conversat
 // runPasses runs count passes and fails the test on the first pass error.
 func runPasses(t *testing.T, worker *conversationSemanticSyncWorker, count int) {
 	t.Helper()
+
 	for i := 0; i < count; i++ {
 		if err := worker.runPass(context.Background()); err != nil {
 			t.Fatalf("runPass %d returned error: %v", i+1, err)
@@ -54,15 +59,26 @@ func TestFailedConversationLeavesTheManifestUntilItsBytesChange(t *testing.T) {
 	failingStamp := semanticTestStamp(0, 200)
 	index := failingLoadIndex(failingID, healthyID, failingStamp)
 	client := &fakeConversationSemanticClient{needed: []string{failingID, healthyID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	// Passes one through the threshold keep advertising the conversation,
 	// because each failure alone could be transient and the next pass is its
 	// retry.
 	runPasses(t, worker, failedLoadSuppressThreshold)
+
 	for passIndex, syncCall := range client.syncCalls {
 		if len(syncCall.Manifest) != 2 {
-			t.Fatalf("pass %d manifest size = %d, want 2: below the threshold the failing conversation must stay advertised", passIndex+1, len(syncCall.Manifest))
+			t.Fatalf(
+				"pass %d manifest size = %d, want 2: below the threshold the failing conversation must stay advertised",
+				passIndex+1,
+				len(syncCall.Manifest),
+			)
 		}
 	}
 
@@ -71,7 +87,11 @@ func TestFailedConversationLeavesTheManifestUntilItsBytesChange(t *testing.T) {
 	runPasses(t, worker, 1)
 	suppressedManifest := client.syncCalls[failedLoadSuppressThreshold].Manifest
 	if len(suppressedManifest) != 1 || suppressedManifest[0].ConversationID != healthyID {
-		t.Fatalf("post-threshold manifest = %+v, want only %q; the failing conversation must not be re-advertised", suppressedManifest, healthyID)
+		t.Fatalf(
+			"post-threshold manifest = %+v, want only %q; the failing conversation must not be re-advertised",
+			suppressedManifest,
+			healthyID,
+		)
 	}
 
 	// The transcript grows, so its fingerprint changes and the reader gets
@@ -83,13 +103,19 @@ func TestFailedConversationLeavesTheManifestUntilItsBytesChange(t *testing.T) {
 	runPasses(t, worker, 1)
 	finalManifest := client.syncCalls[len(client.syncCalls)-1].Manifest
 	reincluded := false
+
 	for _, fingerprint := range finalManifest {
 		if fingerprint.ConversationID == failingID {
 			reincluded = true
 		}
 	}
+
 	if !reincluded {
-		t.Fatalf("final manifest = %+v, want %q re-included once its bytes changed", finalManifest, failingID)
+		t.Fatalf(
+			"final manifest = %+v, want %q re-included once its bytes changed",
+			finalManifest,
+			failingID,
+		)
 	}
 }
 
@@ -103,7 +129,13 @@ func TestTransientFailureRetriesAndHeals(t *testing.T) {
 	healthyID := "codex:real"
 	index := failingLoadIndex(failingID, healthyID, semanticTestStamp(0, 200))
 	client := &fakeConversationSemanticClient{needed: []string{failingID, healthyID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	// One failure, as a busy store produces.
 	runPasses(t, worker, 1)
@@ -120,17 +152,24 @@ func TestTransientFailureRetriesAndHeals(t *testing.T) {
 
 	retryManifest := client.syncCalls[1].Manifest
 	if len(retryManifest) != 2 {
-		t.Fatalf("retry manifest size = %d, want 2: one failure must not suppress", len(retryManifest))
+		t.Fatalf(
+			"retry manifest size = %d, want 2: one failure must not suppress",
+			len(retryManifest),
+		)
 	}
+
 	delivered := false
+
 	for _, doc := range client.upsertCalls[len(client.upsertCalls)-1].Docs {
 		if doc.ConversationID == failingID {
 			delivered = true
 		}
 	}
+
 	if !delivered {
 		t.Fatal("the healed conversation was not delivered on the retry pass")
 	}
+
 	if len(worker.failedLoad) != 0 {
 		t.Fatalf("failedLoad size = %d after a successful load, want 0", len(worker.failedLoad))
 	}
@@ -144,14 +183,25 @@ func TestFailedSuppressionUsesTheAdvertisedFingerprint(t *testing.T) {
 	failingStamp := semanticTestStamp(20, 200)
 	index := failingLoadIndex(failingID, "codex:real", failingStamp)
 	client := &fakeConversationSemanticClient{needed: []string{failingID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	runPasses(t, worker, 1)
 	want := conversation.ContentFingerprint(semanticTestRecord(failingID), failingStamp)
 	failureRecord := worker.failedLoad[failingID]
 	if failureRecord.fingerprint != want {
-		t.Fatalf("suppression fingerprint = %q, want the advertised %q", failureRecord.fingerprint, want)
+		t.Fatalf(
+			"suppression fingerprint = %q, want the advertised %q",
+			failureRecord.fingerprint,
+			want,
+		)
 	}
+
 	if failureRecord.failures != 1 {
 		t.Fatalf("failures = %d after one pass, want 1", failureRecord.failures)
 	}
@@ -174,18 +224,27 @@ func TestFailedAndEmptyStayInSeparateMaps(t *testing.T) {
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{failingID, emptyID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	runPasses(t, worker, 1)
 	if _, failed := worker.failedLoad[failingID]; !failed {
 		t.Fatal("the failing conversation is not in failedLoad")
 	}
+
 	if _, crossed := worker.emptyDelivered[failingID]; crossed {
 		t.Fatal("the failing conversation leaked into emptyDelivered")
 	}
+
 	if _, empty := worker.emptyDelivered[emptyID]; !empty {
 		t.Fatal("the zero-document conversation is not in emptyDelivered")
 	}
+
 	if _, crossed := worker.failedLoad[emptyID]; crossed {
 		t.Fatal("the zero-document conversation leaked into failedLoad")
 	}
@@ -201,12 +260,23 @@ func TestFailedSuppressionIsReported(t *testing.T) {
 	index := failingLoadIndex(failingID, "codex:real", semanticTestStamp(0, 200))
 	client := &fakeConversationSemanticClient{needed: []string{failingID}}
 	buffer := &bytes.Buffer{}
-	logger := slog.New(slog.NewJSONHandler(buffer, &slog.HandlerOptions{
-		AddSource:   false,
-		Level:       slog.LevelInfo,
-		ReplaceAttr: nil,
-	}))
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", logger, semanticTestContentKinds())
+	logger := slog.New(
+		slog.NewJSONHandler(
+			buffer,
+			&slog.HandlerOptions{
+				AddSource:   false,
+				Level:       slog.LevelInfo,
+				ReplaceAttr: nil,
+			},
+		),
+	)
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		logger,
+		semanticTestContentKinds(),
+	)
 	worker.freshness = newConversationSemanticFreshness()
 
 	runPasses(t, worker, failedLoadSuppressThreshold)
@@ -220,6 +290,7 @@ func TestFailedSuppressionIsReported(t *testing.T) {
 	if !strings.Contains(logs, "pass_completed") {
 		t.Fatalf("the suppressing pass logged nothing at Info: %s", logs)
 	}
+
 	if !strings.Contains(logs, `"failed_suppressed":1`) {
 		t.Fatalf("logs do not report the suppression: %s", logs)
 	}
@@ -228,10 +299,17 @@ func TestFailedSuppressionIsReported(t *testing.T) {
 	// content is still missing, so freshness must not read as fully indexed.
 	freshness := worker.freshness.snapshot()
 	if freshness.Manifest != 2 {
-		t.Fatalf("freshness manifest = %d, want 2: the suppressed conversation still exists on disk", freshness.Manifest)
+		t.Fatalf(
+			"freshness manifest = %d, want 2: the suppressed conversation still exists on disk",
+			freshness.Manifest,
+		)
 	}
+
 	if freshness.Pending != 1 {
-		t.Fatalf("freshness pending = %d, want 1: the suppressed conversation's content is still missing", freshness.Pending)
+		t.Fatalf(
+			"freshness pending = %d, want 1: the suppressed conversation's content is still missing",
+			freshness.Pending,
+		)
 	}
 }
 
@@ -242,7 +320,13 @@ func TestFailedSuppressionIsBounded(t *testing.T) {
 	failingID := "cursor:broken"
 	index := failingLoadIndex(failingID, "codex:real", semanticTestStamp(0, 200))
 	client := &fakeConversationSemanticClient{needed: []string{failingID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	runPasses(t, worker, 1)
 	if len(worker.failedLoad) != 1 {
@@ -253,7 +337,10 @@ func TestFailedSuppressionIsBounded(t *testing.T) {
 	index.records = index.records[1:]
 	runPasses(t, worker, 1)
 	if len(worker.failedLoad) != 0 {
-		t.Fatalf("failedLoad size = %d, want 0 once the conversation left the scan", len(worker.failedLoad))
+		t.Fatalf(
+			"failedLoad size = %d, want 0 once the conversation left the scan",
+			len(worker.failedLoad),
+		)
 	}
 }
 
@@ -273,17 +360,31 @@ func TestSuppressionOfWholeCorpusStillSyncsEmptyManifest(t *testing.T) {
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{failingID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	runPasses(t, worker, failedLoadSuppressThreshold)
 	runPasses(t, worker, 1)
 
 	suppressingSync := len(client.syncCalls) - 1
 	if suppressingSync != failedLoadSuppressThreshold {
-		t.Fatalf("sync calls = %d, want %d: the suppressing pass must still sync", len(client.syncCalls), failedLoadSuppressThreshold+1)
+		t.Fatalf(
+			"sync calls = %d, want %d: the suppressing pass must still sync",
+			len(client.syncCalls),
+			failedLoadSuppressThreshold+1,
+		)
 	}
+
 	if len(client.syncCalls[suppressingSync].Manifest) != 0 {
-		t.Fatalf("suppressing sync manifest = %+v, want empty", client.syncCalls[suppressingSync].Manifest)
+		t.Fatalf(
+			"suppressing sync manifest = %+v, want empty",
+			client.syncCalls[suppressingSync].Manifest,
+		)
 	}
 }
 
@@ -302,15 +403,25 @@ func TestZeroDocumentSuppressionOfWholeCorpusStillSyncsEmptyManifest(t *testing.
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{emptyID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	// Pass one advertises, delivers nothing, and records the zero-document
 	// suppression. Pass two omits the conversation, emptying the manifest.
 	runPasses(t, worker, 2)
 
 	if len(client.syncCalls) != 2 {
-		t.Fatalf("sync calls = %d, want 2: the suppressing pass must still sync", len(client.syncCalls))
+		t.Fatalf(
+			"sync calls = %d, want 2: the suppressing pass must still sync",
+			len(client.syncCalls),
+		)
 	}
+
 	if len(client.syncCalls[1].Manifest) != 0 {
 		t.Fatalf("suppressing sync manifest = %+v, want empty", client.syncCalls[1].Manifest)
 	}

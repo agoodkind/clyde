@@ -17,23 +17,34 @@ func TestSeedBaselineWritesStoredBaselineFromShapes(t *testing.T) {
 	header := http.Header{}
 	header.Set("User-Agent", "claude-cli/2.1.123 (external, sdk-cli)")
 	header.Set("Anthropic-Version", "2023-06-01")
-	proxy.recordDriftCapture(cfg, driftCaptureInput{
-		provider:    "claude",
-		method:      http.MethodPost,
-		path:        "/v1/messages",
-		upstreamURL: "https://api.anthropic.com/v1/messages",
-		header:      header,
-		body:        claudeSystemBillingBody(t, "cch-seed"),
-	})
+	proxy.recordDriftCapture(
+		cfg,
+		driftCaptureInput{
+			provider:    "claude",
+			method:      http.MethodPost,
+			path:        "/v1/messages",
+			upstreamURL: "https://api.anthropic.com/v1/messages",
+			header:      header,
+			body:        claudeSystemBillingBody(t, "cch-seed"),
+		},
+	)
 	waitForUpstreamShapes(t, store, "claude-code", 1)
 
-	result, err := SeedBaseline(context.Background(), store, "claude-code", []string{"claude-cli"}, nil)
+	result, err := SeedBaseline(
+		context.Background(),
+		store,
+		"claude-code",
+		[]string{"claude-cli"},
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("SeedBaseline: %v", err)
 	}
+
 	if result.Upstream != "claude-code" {
 		t.Fatalf("upstream=%q want claude-code", result.Upstream)
 	}
+
 	if result.Flavors < 1 {
 		t.Fatalf("flavor count=%d want at least 1", result.Flavors)
 	}
@@ -42,16 +53,20 @@ func TestSeedBaselineWritesStoredBaselineFromShapes(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("CurrentBaseline: ok=%v err=%v want a stored baseline", ok, err)
 	}
+
 	snap, err := unmarshalSnapshot(raw)
 	if err != nil {
 		t.Fatalf("decode baseline: %v", err)
 	}
+
 	if snap.Upstream.Name != "claude-code" {
 		t.Fatalf("upstream name=%q want claude-code", snap.Upstream.Name)
 	}
+
 	if len(snap.Flavors) < 1 {
 		t.Fatalf("flavor count=%d want at least 1", len(snap.Flavors))
 	}
+
 	if snap.Flavors[0].Signature.UserAgent != "claude-cli/2.1.123 (external, sdk-cli)" {
 		t.Fatalf("flavor user agent=%q", snap.Flavors[0].Signature.UserAgent)
 	}
@@ -62,6 +77,7 @@ func TestSeedBaselineRequiresUpstreamAndStore(t *testing.T) {
 	if _, err := SeedBaseline(context.Background(), store, "", nil, nil); err == nil {
 		t.Fatal("expected error when upstream is empty")
 	}
+
 	if _, err := SeedBaseline(context.Background(), nil, "claude-code", nil, nil); err == nil {
 		t.Fatal("expected error when store is nil")
 	}
@@ -87,17 +103,24 @@ func TestHardCutoverWritesNoLegacyFiles(t *testing.T) {
 	header := http.Header{}
 	header.Set("User-Agent", "claude-cli/2.1.123 (external, sdk-cli)")
 	header.Set("Anthropic-Version", "2023-06-01")
-	proxy.recordDriftCapture(cfg, driftCaptureInput{
-		provider:    "claude",
-		method:      http.MethodPost,
-		path:        "/v1/messages",
-		upstreamURL: "https://api.anthropic.com/v1/messages",
-		header:      header,
-		body:        claudeSystemBillingBody(t, "cch-cutover"),
-	})
+	proxy.recordDriftCapture(
+		cfg,
+		driftCaptureInput{
+			provider:    "claude",
+			method:      http.MethodPost,
+			path:        "/v1/messages",
+			upstreamURL: "https://api.anthropic.com/v1/messages",
+			header:      header,
+			body:        claudeSystemBillingBody(t, "cch-cutover"),
+		},
+	)
 	waitForUpstreamShapes(t, store, "claude-code", 1)
 
-	if _, err := RefreshBaseline(context.Background(), store, BaselineRefreshOptions{Upstream: "claude-code", IncludeUA: []string{"claude-cli"}}); err != nil {
+	if _, err := RefreshBaseline(
+		context.Background(),
+		store,
+		BaselineRefreshOptions{Upstream: "claude-code", IncludeUA: []string{"claude-cli"}},
+	); err != nil {
 		t.Fatalf("RefreshBaseline: %v", err)
 	}
 
@@ -110,7 +133,11 @@ func TestHardCutoverWritesNoLegacyFiles(t *testing.T) {
 		filepath.Join(stateRoot, "mitm", "drift", "claude-code.jsonl"),
 	} {
 		if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-			t.Fatalf("legacy drift/baseline path exists after cutover: %s (stat err=%v)", legacy, err)
+			t.Fatalf(
+				"legacy drift/baseline path exists after cutover: %s (stat err=%v)",
+				legacy,
+				err,
+			)
 		}
 	}
 

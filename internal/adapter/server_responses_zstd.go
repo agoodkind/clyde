@@ -23,23 +23,38 @@ func readResponsesRequestBody(body []byte, contentEncoding string) ([]byte, erro
 	if !nativeResponsesZstdEncoded(contentEncoding) {
 		return body, nil
 	}
+
 	decoder, err := zstd.NewReader(
 		bytes.NewReader(body),
 		zstd.WithDecoderMaxMemory(maxResponsesRequestBodyBytes),
 	)
 	if err != nil {
-		slog.Warn("adapter.openai.responses_zstd_decode_failed", "concern", "adapter.chat.dispatch", "err", err)
+		slog.Warn(
+			"adapter.openai.responses_zstd_decode_failed",
+			"concern",
+			"adapter.chat.dispatch",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("create zstd request decoder: %w", err)
 	}
 	defer decoder.Close()
 	decoded, err := io.ReadAll(io.LimitReader(decoder, maxResponsesRequestBodyBytes+1))
 	if err != nil {
-		slog.Warn("adapter.openai.responses_zstd_decode_failed", "concern", "adapter.chat.dispatch", "err", err)
+		slog.Warn(
+			"adapter.openai.responses_zstd_decode_failed",
+			"concern",
+			"adapter.chat.dispatch",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("decode zstd request body: %w", err)
 	}
+
 	if len(decoded) > maxResponsesRequestBodyBytes {
 		return nil, errors.New("decoded zstd request body exceeds limit")
 	}
+
 	return decoded, nil
 }
 
@@ -48,32 +63,60 @@ func prepareNativeCodexResponsesCompaction(
 	decodedBody []byte,
 	splitter adaptercodex.CompactionSplitter,
 	registry *adaptercodex.RawResponsesCompactionV2Registry,
-) (adaptercodex.RawResponsesRequest, *adaptercodex.RawResponsesCompactionTransformer, *adaptercodex.RawResponsesCompactionV2Plan, *adaptercodex.RawResponsesCompactionV2Recovery) {
+) (
+	adaptercodex.RawResponsesRequest,
+	*adaptercodex.RawResponsesCompactionTransformer,
+	*adaptercodex.RawResponsesCompactionV2Plan,
+	*adaptercodex.RawResponsesCompactionV2Recovery,
+) {
 	decodedRaw := raw
 	decodedRaw.Body = decodedBody
-	if adaptercodex.DetectRawResponsesCompactionProtocol(decodedRaw.Header) == adaptercodex.RawResponsesCompactionV2 {
-		transformed, plan := prepareNativeCodexResponsesCompactionV2(raw, decodedRaw, decodedBody, splitter)
+	if adaptercodex.DetectRawResponsesCompactionProtocol(
+		decodedRaw.Header,
+	) == adaptercodex.RawResponsesCompactionV2 {
+		transformed, plan := prepareNativeCodexResponsesCompactionV2(
+			raw,
+			decodedRaw,
+			decodedBody,
+			splitter,
+		)
 		return transformed, nil, plan, nil
 	}
-	injected, recovery, changed := adaptercodex.InjectRawResponsesCompactionV2Recovery(decodedRaw, registry)
+
+	injected, recovery, changed := adaptercodex.InjectRawResponsesCompactionV2Recovery(
+		decodedRaw,
+		registry,
+	)
 	if changed {
-		forwardBody, ok := encodeNativeResponsesBody(injected.Body, raw.Header.Get("Content-Encoding"))
+		forwardBody, ok := encodeNativeResponsesBody(
+			injected.Body,
+			raw.Header.Get("Content-Encoding"),
+		)
 		if !ok {
 			recovery.ReleaseRecovery()
 			return raw, nil, nil, nil
 		}
+
 		injected.Body = forwardBody
+
 		return injected, nil, nil, recovery
 	}
+
 	transformed, transformer := adaptercodex.PrepareRawResponsesCompaction(decodedRaw, splitter)
 	if transformer == nil {
 		return raw, nil, nil, nil
 	}
-	forwardBody, ok := encodeNativeResponsesBody(transformed.Body, raw.Header.Get("Content-Encoding"))
+
+	forwardBody, ok := encodeNativeResponsesBody(
+		transformed.Body,
+		raw.Header.Get("Content-Encoding"),
+	)
 	if !ok {
 		return raw, nil, nil, nil
 	}
+
 	transformed.Body = forwardBody
+
 	return transformed, transformer, nil, nil
 }
 
@@ -87,15 +130,22 @@ func prepareNativeCodexResponsesCompactionV2(
 	if !ok {
 		return raw, nil
 	}
+
 	if bytes.Equal(plan.Request.Body, decodedBody) {
 		plan.Request.Body = raw.Body
 		return plan.Request, &plan
 	}
-	forwardBody, ok := encodeNativeResponsesBody(plan.Request.Body, raw.Header.Get("Content-Encoding"))
+
+	forwardBody, ok := encodeNativeResponsesBody(
+		plan.Request.Body,
+		raw.Header.Get("Content-Encoding"),
+	)
 	if !ok {
 		return raw, nil
 	}
+
 	plan.Request.Body = forwardBody
+
 	return plan.Request, &plan
 }
 
@@ -103,11 +153,13 @@ func encodeNativeResponsesBody(body []byte, contentEncoding string) ([]byte, boo
 	if !nativeResponsesZstdEncoded(contentEncoding) {
 		return body, true
 	}
+
 	encoder, err := zstd.NewWriter(nil)
 	if err != nil {
 		return nil, false
 	}
 	defer encoder.Close()
+
 	return encoder.EncodeAll(body, nil), true
 }
 
@@ -119,21 +171,31 @@ func transformNativeCodexCompactionResponse(
 	if response == nil || !nativeResponsesZstdEncoded(response.Header.Get("Content-Encoding")) {
 		return transformer.TransformResponse(response)
 	}
+
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
 	if strings.Contains(contentType, "text/event-stream") ||
 		(requestStreams && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices) {
 		return transformStreamingNativeCodexCompactionResponse(response, transformer)
 	}
+
 	originalBody := response.Body
 	wireBody, err := io.ReadAll(io.LimitReader(originalBody, maxResponsesResponseBodyBytes+1))
 	if err != nil {
-		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody), source: originalBody}
+		response.Body = &nativeResponsesPassthroughBody{
+			Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody),
+			source: originalBody,
+		}
 		return response
 	}
+
 	if len(wireBody) > maxResponsesResponseBodyBytes {
-		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody), source: originalBody}
+		response.Body = &nativeResponsesPassthroughBody{
+			Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody),
+			source: originalBody,
+		}
 		return response
 	}
+
 	_ = originalBody.Close()
 	response.Body = io.NopCloser(bytes.NewReader(wireBody))
 	decoder, err := zstd.NewReader(
@@ -143,11 +205,13 @@ func transformNativeCodexCompactionResponse(
 	if err != nil {
 		return response
 	}
+
 	decodedBody, err := io.ReadAll(io.LimitReader(decoder, maxResponsesResponseBodyBytes+1))
 	decoder.Close()
 	if err != nil || len(decodedBody) > maxResponsesResponseBodyBytes {
 		return response
 	}
+
 	decodedResponse := *response
 	decodedResponse.Header = response.Header.Clone()
 	decodedResponse.Header.Del("Content-Encoding")
@@ -160,7 +224,9 @@ func transformNativeCodexCompactionResponse(
 	if err != nil || bytes.Equal(transformedBody, decodedBody) {
 		return response
 	}
+
 	transformed.Body = io.NopCloser(bytes.NewReader(transformedBody))
+
 	return transformed
 }
 
@@ -169,14 +235,22 @@ func transformStreamingNativeCodexCompactionResponse(
 	transformer *adaptercodex.RawResponsesCompactionTransformer,
 ) *http.Response {
 	if !transformer.RequiresTerminalValidation() {
-		return transformStreamingNativeCodexCompactionResponseWithoutTerminalValidation(response, transformer)
+		return transformStreamingNativeCodexCompactionResponseWithoutTerminalValidation(
+			response,
+			transformer,
+		)
 	}
+
 	originalBody := response.Body
 	wireBody, err := io.ReadAll(io.LimitReader(originalBody, maxResponsesResponseBodyBytes+1))
 	if err != nil || len(wireBody) > maxResponsesResponseBodyBytes {
-		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody), source: originalBody}
+		response.Body = &nativeResponsesPassthroughBody{
+			Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody),
+			source: originalBody,
+		}
 		return response
 	}
+
 	_ = originalBody.Close()
 	decoder, err := zstd.NewReader(
 		bytes.NewReader(wireBody),
@@ -186,12 +260,14 @@ func transformStreamingNativeCodexCompactionResponse(
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
+
 	decodedBody, err := io.ReadAll(io.LimitReader(decoder, maxResponsesResponseBodyBytes+1))
 	decoder.Close()
 	if err != nil || len(decodedBody) > maxResponsesResponseBodyBytes {
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
+
 	decodedResponse := *response
 	decodedResponse.Header = response.Header.Clone()
 	decodedResponse.Header.Del("Content-Encoding")
@@ -205,11 +281,13 @@ func transformStreamingNativeCodexCompactionResponse(
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
+
 	encoder, err := zstd.NewWriter(nil)
 	if err != nil {
 		response.Body = io.NopCloser(bytes.NewReader(wireBody))
 		return response
 	}
+
 	encodedBody := encoder.EncodeAll(transformedBody, nil)
 	encoder.Close()
 	clone := *response
@@ -217,6 +295,7 @@ func transformStreamingNativeCodexCompactionResponse(
 	clone.Header.Del("Content-Length")
 	clone.ContentLength = -1
 	clone.Body = io.NopCloser(bytes.NewReader(encodedBody))
+
 	return &clone
 }
 
@@ -225,27 +304,50 @@ func transformStreamingNativeCodexCompactionResponseWithoutTerminalValidation(
 	transformer *adaptercodex.RawResponsesCompactionTransformer,
 ) *http.Response {
 	var consumed bytes.Buffer
-	probeSource := &nativeResponsesProbeReader{source: response.Body, consumed: &consumed, probing: true}
+	probeSource := &nativeResponsesProbeReader{
+		source:   response.Body,
+		consumed: &consumed,
+		probing:  true,
+	}
 	buffered := bufio.NewReader(probeSource)
-	decoder, err := zstd.NewReader(buffered, zstd.WithDecoderMaxMemory(maxResponsesResponseBodyBytes))
+	decoder, err := zstd.NewReader(
+		buffered,
+		zstd.WithDecoderMaxMemory(maxResponsesResponseBodyBytes),
+	)
 	if err != nil {
-		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body), source: response.Body}
+		response.Body = &nativeResponsesPassthroughBody{
+			Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body),
+			source: response.Body,
+		}
 		return response
 	}
+
 	probe := make([]byte, 1)
 	count, readErr := decoder.Read(probe)
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		decoder.Close()
-		response.Body = &nativeResponsesPassthroughBody{Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body), source: response.Body}
+		response.Body = &nativeResponsesPassthroughBody{
+			Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body),
+			source: response.Body,
+		}
+
 		return response
 	}
+
 	probeSource.stop()
 	decodedResponse := *response
 	decodedResponse.Header = response.Header.Clone()
 	decodedResponse.Header.Del("Content-Encoding")
 	decodedResponse.Header.Del("Content-Length")
 	decodedResponse.ContentLength = -1
-	decodedResponse.Body = &nativeResponsesZstdBody{ReadCloser: io.NopCloser(io.MultiReader(bytes.NewReader(probe[:count]), decoder.IOReadCloser())), source: response.Body, decoder: decoder}
+	decodedResponse.Body = &nativeResponsesZstdBody{
+		ReadCloser: io.NopCloser(
+			io.MultiReader(bytes.NewReader(probe[:count]), decoder.IOReadCloser()),
+		),
+		source:  response.Body,
+		decoder: decoder,
+	}
+
 	return transformer.TransformResponse(&decodedResponse)
 }
 
@@ -260,9 +362,11 @@ func (r *nativeResponsesProbeReader) Read(p []byte) (int, error) {
 	if r.probing && count > 0 {
 		_, _ = r.consumed.Write(p[:count])
 	}
+
 	if err != nil {
 		return count, fmt.Errorf("read native Responses probe: %w", err)
 	}
+
 	return count, nil
 }
 
@@ -281,15 +385,30 @@ func (b *nativeResponsesZstdBody) Close() error {
 	if b.decoder != nil {
 		b.decoder.Close()
 	}
+
 	sourceErr := b.source.Close()
 	if decoderErr != nil {
-		slog.Warn("adapter.openai.responses_zstd_close_failed", "concern", "adapter.chat.dispatch", "err", decoderErr)
+		slog.Warn(
+			"adapter.openai.responses_zstd_close_failed",
+			"concern",
+			"adapter.chat.dispatch",
+			"err",
+			decoderErr,
+		)
 		return fmt.Errorf("close zstd decoder: %w", decoderErr)
 	}
+
 	if sourceErr != nil {
-		slog.Warn("adapter.openai.responses_zstd_close_failed", "concern", "adapter.chat.dispatch", "err", sourceErr)
+		slog.Warn(
+			"adapter.openai.responses_zstd_close_failed",
+			"concern",
+			"adapter.chat.dispatch",
+			"err",
+			sourceErr,
+		)
 		return fmt.Errorf("close encoded response body: %w", sourceErr)
 	}
+
 	return nil
 }
 
@@ -300,9 +419,16 @@ type nativeResponsesPassthroughBody struct {
 
 func (b *nativeResponsesPassthroughBody) Close() error {
 	if err := b.source.Close(); err != nil {
-		slog.Warn("adapter.openai.responses_zstd_close_failed", "concern", "adapter.chat.dispatch", "err", err)
+		slog.Warn(
+			"adapter.openai.responses_zstd_close_failed",
+			"concern",
+			"adapter.chat.dispatch",
+			"err",
+			err,
+		)
 		return fmt.Errorf("close passthrough response body: %w", err)
 	}
+
 	return nil
 }
 

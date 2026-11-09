@@ -111,10 +111,22 @@ func TestExportLastNCountsOnlyMessagesTheContentKindsRender(t *testing.T) {
 		{name: "plain text", format: lastNProbePlainText, maxTokens: ""},
 	}
 	for _, export := range exports {
-		cliArguments := []string{"conversation", "export", "claude:" + lastNProbeChatSession, "--only", lastNProbeOnlyChat, "--last-n", strconv.Itoa(lastNProbeCount), "--format", export.format, "--stdout"}
+		cliArguments := []string{
+			"conversation",
+			"export",
+			"claude:" + lastNProbeChatSession,
+			"--only",
+			lastNProbeOnlyChat,
+			"--last-n",
+			strconv.Itoa(lastNProbeCount),
+			"--format",
+			export.format,
+			"--stdout",
+		}
 		if export.maxTokens != "" {
 			cliArguments = append(cliArguments, "--max-tokens", export.maxTokens)
 		}
+
 		mcpArguments := lastNProbeArguments{
 			ConversationID:     "claude:" + lastNProbeChatSession,
 			Only:               []string{lastNProbeOnlyChat},
@@ -126,6 +138,7 @@ func TestExportLastNCountsOnlyMessagesTheContentKindsRender(t *testing.T) {
 			Whitespace:         "",
 			Stdout:             true,
 		}
+
 		bodies := map[string]string{
 			"cli": runLastNProbeCLI(t, binaryPath, environment, cliArguments),
 			"mcp": lastNProbeMCPBody(t, binaryPath, sandboxDaemon.environment, mcpArguments),
@@ -136,6 +149,7 @@ func TestExportLastNCountsOnlyMessagesTheContentKindsRender(t *testing.T) {
 			if export.maxTokens == "" {
 				assertLastNProbeContains(t, label, body, lastNProbeSummaryProse)
 			}
+
 			if export.format == lastNProbeJSON {
 				assertLastNProbeJSONTurns(t, label, body)
 			}
@@ -154,27 +168,63 @@ func TestExportTailLastNCountsChatAndToolMessages(t *testing.T) {
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
 	waitForLastNProbeMCP(t, binaryPath, sandboxDaemon.environment, lastNProbeTailSession)
 
-	cliBody := runLastNProbeCLI(t, binaryPath, environment, []string{"conversation", "export", "tail", "claude:" + lastNProbeTailSession, "--last-n", strconv.Itoa(lastNProbeCount)})
-	mcpBody := lastNProbeMCPBody(t, binaryPath, sandboxDaemon.environment, lastNProbeArguments{
-		ConversationID:     "claude:" + lastNProbeTailSession,
-		Only:               strings.Split(lastNProbeOnlyTail, ","),
-		LastN:              lastNProbeCount,
-		IncludeCompactions: lastNProbeSegment,
-		FullHistory:        false,
-		MaxTokens:          "",
-		Format:             lastNProbeMarkdown,
-		Whitespace:         lastNProbeDense,
-		Stdout:             true,
-	})
+	cliBody := runLastNProbeCLI(
+		t,
+		binaryPath,
+		environment,
+		[]string{
+			"conversation",
+			"export",
+			"tail",
+			"claude:" + lastNProbeTailSession,
+			"--last-n",
+			strconv.Itoa(lastNProbeCount),
+		},
+	)
+
+	mcpBody := lastNProbeMCPBody(
+		t,
+		binaryPath,
+		sandboxDaemon.environment,
+		lastNProbeArguments{
+			ConversationID:     "claude:" + lastNProbeTailSession,
+			Only:               strings.Split(lastNProbeOnlyTail, ","),
+			LastN:              lastNProbeCount,
+			IncludeCompactions: lastNProbeSegment,
+			FullHistory:        false,
+			MaxTokens:          "",
+			Format:             lastNProbeMarkdown,
+			Whitespace:         lastNProbeDense,
+			Stdout:             true,
+		},
+	)
 	for surface, body := range map[string]string{"cli tail": cliBody, "mcp": mcpBody} {
 		assertLastNProbeContains(t, surface, body, lastNProbeSummaryProse)
-		assertLastNProbeOrder(t, surface, body, []string{tailProbeToolEarly, tailProbeChatLate, tailProbeToolLate})
-		for _, omitted := range []string{tailProbeChatEarly, tailProbeThinkingOne, tailProbeThinkingTwo, tailProbeThinkingThree, lastNProbeBeforeQuestion, lastNProbeBeforeAnswer} {
+		assertLastNProbeOrder(
+			t,
+			surface,
+			body,
+			[]string{tailProbeToolEarly, tailProbeChatLate, tailProbeToolLate},
+		)
+
+		for _, omitted := range []string{
+			tailProbeChatEarly,
+			tailProbeThinkingOne,
+			tailProbeThinkingTwo,
+			tailProbeThinkingThree,
+			lastNProbeBeforeQuestion,
+			lastNProbeBeforeAnswer,
+		} {
 			assertLastNProbeOmits(t, surface, body, omitted)
 		}
 	}
+
 	if cliBody != mcpBody {
-		t.Errorf("cli tail body differs from the equivalent mcp export:\ncli:\n%s\nmcp:\n%s", cliBody, mcpBody)
+		t.Errorf(
+			"cli tail body differs from the equivalent mcp export:\ncli:\n%s\nmcp:\n%s",
+			cliBody,
+			mcpBody,
+		)
 	}
 }
 
@@ -190,30 +240,77 @@ func TestExportLastNWithAllSkipsCompactionMessages(t *testing.T) {
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
 	waitForLastNProbeMCP(t, binaryPath, sandboxDaemon.environment, lastNProbeAllSession)
 
-	cliBody := runLastNProbeCLI(t, binaryPath, environment, []string{"conversation", "export", "claude:" + lastNProbeAllSession, "--only", lastNProbeAll, "--full-history", "--last-n", strconv.Itoa(lastNProbeAllCount), "--format", lastNProbeMarkdown, "--stdout"})
-	mcpBody := lastNProbeMCPBody(t, binaryPath, sandboxDaemon.environment, lastNProbeArguments{
-		ConversationID:     "claude:" + lastNProbeAllSession,
-		Only:               []string{lastNProbeAll},
-		LastN:              lastNProbeAllCount,
-		IncludeCompactions: "",
-		FullHistory:        true,
-		MaxTokens:          "",
-		Format:             lastNProbeMarkdown,
-		Whitespace:         "",
-		Stdout:             true,
-	})
+	cliBody := runLastNProbeCLI(
+		t,
+		binaryPath,
+		environment,
+		[]string{
+			"conversation",
+			"export",
+			"claude:" + lastNProbeAllSession,
+			"--only",
+			lastNProbeAll,
+			"--full-history",
+			"--last-n",
+			strconv.Itoa(lastNProbeAllCount),
+			"--format",
+			lastNProbeMarkdown,
+			"--stdout",
+		},
+	)
+
+	mcpBody := lastNProbeMCPBody(
+		t,
+		binaryPath,
+		sandboxDaemon.environment,
+		lastNProbeArguments{
+			ConversationID:     "claude:" + lastNProbeAllSession,
+			Only:               []string{lastNProbeAll},
+			LastN:              lastNProbeAllCount,
+			IncludeCompactions: "",
+			FullHistory:        true,
+			MaxTokens:          "",
+			Format:             lastNProbeMarkdown,
+			Whitespace:         "",
+			Stdout:             true,
+		},
+	)
 	for surface, body := range map[string]string{"cli": cliBody, "mcp": mcpBody} {
 		label := surface + " all"
 		assertLastNProbeContains(t, label, body, lastNProbeSummaryProse)
-		assertLastNProbeOrder(t, label, body, []string{lastNProbeBeforeAnswer, lastNProbeChatOne, lastNProbeChatTwo, lastNProbeChatThree})
+		assertLastNProbeOrder(
+			t,
+			label,
+			body,
+			[]string{
+				lastNProbeBeforeAnswer,
+				lastNProbeChatOne,
+				lastNProbeChatTwo,
+				lastNProbeChatThree,
+			},
+		)
 		assertLastNProbeOmits(t, label, body, lastNProbeBeforeQuestion)
 	}
 }
 
 func assertLastNProbeChatTail(t *testing.T, label string, body string) {
 	t.Helper()
-	assertLastNProbeOrder(t, label, body, []string{lastNProbeChatThree, lastNProbeChatFour, lastNProbeChatFive})
-	for _, omitted := range []string{lastNProbeChatOne, lastNProbeChatTwo, lastNProbeBeforeQuestion, lastNProbeBeforeAnswer, lastNProbeToolCommand, lastNProbeToolOutput, lastNProbeToolName} {
+	assertLastNProbeOrder(
+		t,
+		label,
+		body,
+		[]string{lastNProbeChatThree, lastNProbeChatFour, lastNProbeChatFive},
+	)
+
+	for _, omitted := range []string{
+		lastNProbeChatOne,
+		lastNProbeChatTwo,
+		lastNProbeBeforeQuestion,
+		lastNProbeBeforeAnswer,
+		lastNProbeToolCommand,
+		lastNProbeToolOutput,
+		lastNProbeToolName,
+	} {
 		assertLastNProbeOmits(t, label, body, omitted)
 	}
 }
@@ -224,11 +321,14 @@ func assertLastNProbeJSONTurns(t *testing.T, label string, body string) {
 	if err := json.Unmarshal([]byte(body), &document); err != nil {
 		t.Fatalf("%s export is not a JSON document: %v\n%s", label, err, body)
 	}
+
 	want := []string{lastNProbeChatThree, lastNProbeChatFour, lastNProbeChatFive}
+
 	texts := make([]string, 0, len(document.Messages))
 	for _, turn := range document.Messages {
 		texts = append(texts, turn.Text)
 	}
+
 	if strings.Join(texts, "\n") != strings.Join(want, "\n") {
 		t.Errorf("%s export messages = %q, want %q", label, texts, want)
 	}
@@ -237,18 +337,22 @@ func assertLastNProbeJSONTurns(t *testing.T, label string, body string) {
 func assertLastNProbeOrder(t *testing.T, label string, body string, ordered []string) {
 	t.Helper()
 	previous := -1
+
 	for _, text := range ordered {
 		position := strings.Index(body, text)
 		if position < 0 {
 			t.Errorf("%s export does not contain %q:\n%s", label, text, body)
 			continue
 		}
+
 		if position < previous {
 			t.Errorf("%s export contains %q out of order:\n%s", label, text, body)
 		}
+
 		if count := strings.Count(body, text); count != 1 {
 			t.Errorf("%s export contains %q %d times, want once:\n%s", label, text, count, body)
 		}
+
 		previous = position
 	}
 }
@@ -272,14 +376,50 @@ func assertLastNProbeOmits(t *testing.T, label string, body string, text string)
 func lastNProbeChatRecords(t *testing.T) []string {
 	t.Helper()
 	records := lastNProbeCompactedHead(t, lastNProbeChatSession)
-	for index, text := range []string{lastNProbeChatOne, lastNProbeChatTwo, lastNProbeChatThree, lastNProbeChatFour, lastNProbeChatFive} {
-		records = append(records, lastNProbeTextRecord(t, lastNProbeChatSession, len(records), lastNProbeRole(index), text))
+
+	for index, text := range []string{
+		lastNProbeChatOne,
+		lastNProbeChatTwo,
+		lastNProbeChatThree,
+		lastNProbeChatFour,
+		lastNProbeChatFive,
+	} {
+		records = append(
+			records,
+			lastNProbeTextRecord(
+				t,
+				lastNProbeChatSession,
+				len(records),
+				lastNProbeRole(index),
+				text,
+			),
+		)
 	}
+
 	for call := range lastNProbeToolCallCount {
 		callID := fmt.Sprintf("toolu_lastnprobe_%d", call)
-		records = append(records, lastNProbeToolUseRecord(t, lastNProbeChatSession, len(records), callID, lastNProbeToolCommand))
-		records = append(records, lastNProbeToolResultRecord(t, lastNProbeChatSession, len(records), callID, lastNProbeToolOutput))
+		records = append(
+			records,
+			lastNProbeToolUseRecord(
+				t,
+				lastNProbeChatSession,
+				len(records),
+				callID,
+				lastNProbeToolCommand,
+			),
+		)
+		records = append(
+			records,
+			lastNProbeToolResultRecord(
+				t,
+				lastNProbeChatSession,
+				len(records),
+				callID,
+				lastNProbeToolOutput,
+			),
+		)
 	}
+
 	return records
 }
 
@@ -289,15 +429,67 @@ func lastNProbeTailRecords(t *testing.T) []string {
 	t.Helper()
 	session := lastNProbeTailSession
 	records := lastNProbeCompactedHead(t, session)
-	records = append(records, lastNProbeTextRecord(t, session, len(records), "user", tailProbeChatEarly))
-	records = append(records, lastNProbeToolUseRecord(t, session, len(records), "toolu_tailprobe_early", tailProbeToolEarly))
-	records = append(records, lastNProbeToolResultRecord(t, session, len(records), "toolu_tailprobe_early", lastNProbeToolOutput))
-	records = append(records, lastNProbeThinkingRecord(t, session, len(records), tailProbeThinkingOne))
-	records = append(records, lastNProbeThinkingRecord(t, session, len(records), tailProbeThinkingTwo))
-	records = append(records, lastNProbeTextRecord(t, session, len(records), "assistant", tailProbeChatLate))
-	records = append(records, lastNProbeToolUseRecord(t, session, len(records), "toolu_tailprobe_late", tailProbeToolLate))
-	records = append(records, lastNProbeToolResultRecord(t, session, len(records), "toolu_tailprobe_late", lastNProbeToolOutput))
-	records = append(records, lastNProbeThinkingRecord(t, session, len(records), tailProbeThinkingThree))
+	records = append(
+		records,
+		lastNProbeTextRecord(t, session, len(records), "user", tailProbeChatEarly),
+	)
+	records = append(
+		records,
+		lastNProbeToolUseRecord(
+			t,
+			session,
+			len(records),
+			"toolu_tailprobe_early",
+			tailProbeToolEarly,
+		),
+	)
+	records = append(
+		records,
+		lastNProbeToolResultRecord(
+			t,
+			session,
+			len(records),
+			"toolu_tailprobe_early",
+			lastNProbeToolOutput,
+		),
+	)
+	records = append(
+		records,
+		lastNProbeThinkingRecord(t, session, len(records), tailProbeThinkingOne),
+	)
+	records = append(
+		records,
+		lastNProbeThinkingRecord(t, session, len(records), tailProbeThinkingTwo),
+	)
+	records = append(
+		records,
+		lastNProbeTextRecord(t, session, len(records), "assistant", tailProbeChatLate),
+	)
+	records = append(
+		records,
+		lastNProbeToolUseRecord(
+			t,
+			session,
+			len(records),
+			"toolu_tailprobe_late",
+			tailProbeToolLate,
+		),
+	)
+	records = append(
+		records,
+		lastNProbeToolResultRecord(
+			t,
+			session,
+			len(records),
+			"toolu_tailprobe_late",
+			lastNProbeToolOutput,
+		),
+	)
+	records = append(
+		records,
+		lastNProbeThinkingRecord(t, session, len(records), tailProbeThinkingThree),
+	)
+
 	return records
 }
 
@@ -306,9 +498,20 @@ func lastNProbeTailRecords(t *testing.T) []string {
 func lastNProbeAllRecords(t *testing.T) []string {
 	t.Helper()
 	records := lastNProbeCompactedHead(t, lastNProbeAllSession)
+
 	for index, text := range []string{lastNProbeChatOne, lastNProbeChatTwo, lastNProbeChatThree} {
-		records = append(records, lastNProbeTextRecord(t, lastNProbeAllSession, len(records), lastNProbeRole(index), text))
+		records = append(
+			records,
+			lastNProbeTextRecord(
+				t,
+				lastNProbeAllSession,
+				len(records),
+				lastNProbeRole(index),
+				text,
+			),
+		)
 	}
+
 	return records
 }
 
@@ -317,11 +520,27 @@ func lastNProbeAllRecords(t *testing.T) []string {
 func lastNProbeCompactedHead(t *testing.T, session string) []string {
 	t.Helper()
 	summary := lastNProbeSummaryPreface + lastNProbeSummaryProse
+
 	return []string{
 		lastNProbeTextRecord(t, session, 0, "user", lastNProbeBeforeQuestion),
 		lastNProbeTextRecord(t, session, 1, "assistant", lastNProbeBeforeAnswer),
-		lastNProbeRecord(session, "system", 2, `"subtype":"compact_boundary","content":"Conversation compacted","logicalParentUuid":"`+lastNProbeUUID(1)+`","compactMetadata":{"trigger":"manual","preTokens":1200}`),
-		lastNProbeRecord(session, "user", 3, `"isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":`+lastNProbeJSONText(t, summary)+`}`),
+		lastNProbeRecord(
+			session,
+			"system",
+			2,
+			`"subtype":"compact_boundary","content":"Conversation compacted","logicalParentUuid":"`+lastNProbeUUID(
+				1,
+			)+`","compactMetadata":{"trigger":"manual","preTokens":1200}`,
+		),
+		lastNProbeRecord(
+			session,
+			"user",
+			3,
+			`"isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":`+lastNProbeJSONText(
+				t,
+				summary,
+			)+`}`,
+		),
 	}
 }
 
@@ -329,31 +548,89 @@ func lastNProbeRole(index int) string {
 	if index%2 == 0 {
 		return "user"
 	}
+
 	return "assistant"
 }
 
-func lastNProbeTextRecord(t *testing.T, session string, index int, role string, text string) string {
+func lastNProbeTextRecord(
+	t *testing.T,
+	session string,
+	index int,
+	role string,
+	text string,
+) string {
 	t.Helper()
 	if role == "user" {
-		return lastNProbeRecord(session, role, index, `"message":{"role":"user","content":`+lastNProbeJSONText(t, text)+`}`)
+		return lastNProbeRecord(
+			session,
+			role,
+			index,
+			`"message":{"role":"user","content":`+lastNProbeJSONText(t, text)+`}`,
+		)
 	}
-	return lastNProbeRecord(session, role, index, `"message":{"role":"assistant","content":[{"type":"text","text":`+lastNProbeJSONText(t, text)+`}]}`)
+
+	return lastNProbeRecord(
+		session,
+		role,
+		index,
+		`"message":{"role":"assistant","content":[{"type":"text","text":`+lastNProbeJSONText(
+			t,
+			text,
+		)+`}]}`,
+	)
 }
 
-func lastNProbeToolUseRecord(t *testing.T, session string, index int, callID string, command string) string {
+func lastNProbeToolUseRecord(
+	t *testing.T,
+	session string,
+	index int,
+	callID string,
+	command string,
+) string {
 	t.Helper()
-	input := `{"command":` + lastNProbeJSONText(t, command) + `,"description":` + lastNProbeJSONText(t, command) + `}`
-	return lastNProbeRecord(session, "assistant", index, `"message":{"role":"assistant","content":[{"type":"tool_use","id":"`+callID+`","name":"`+lastNProbeToolName+`","input":`+input+`}]}`)
+	input := `{"command":` + lastNProbeJSONText(
+		t,
+		command,
+	) + `,"description":` + lastNProbeJSONText(t, command) + `}`
+
+	return lastNProbeRecord(
+		session,
+		"assistant",
+		index,
+		`"message":{"role":"assistant","content":[{"type":"tool_use","id":"`+callID+`","name":"`+lastNProbeToolName+`","input":`+input+`}]}`,
+	)
 }
 
-func lastNProbeToolResultRecord(t *testing.T, session string, index int, callID string, output string) string {
+func lastNProbeToolResultRecord(
+	t *testing.T,
+	session string,
+	index int,
+	callID string,
+	output string,
+) string {
 	t.Helper()
-	return lastNProbeRecord(session, "user", index, `"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"`+callID+`","content":`+lastNProbeJSONText(t, output)+`}]}`)
+	return lastNProbeRecord(
+		session,
+		"user",
+		index,
+		`"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"`+callID+`","content":`+lastNProbeJSONText(
+			t,
+			output,
+		)+`}]}`,
+	)
 }
 
 func lastNProbeThinkingRecord(t *testing.T, session string, index int, thinking string) string {
 	t.Helper()
-	return lastNProbeRecord(session, "assistant", index, `"message":{"role":"assistant","content":[{"type":"thinking","thinking":`+lastNProbeJSONText(t, thinking)+`,"signature":"`+lastNProbeSignature+`"}]}`)
+	return lastNProbeRecord(
+		session,
+		"assistant",
+		index,
+		`"message":{"role":"assistant","content":[{"type":"thinking","thinking":`+lastNProbeJSONText(
+			t,
+			thinking,
+		)+`,"signature":"`+lastNProbeSignature+`"}]}`,
+	)
 }
 
 func lastNProbeRecord(session string, recordType string, index int, fields string) string {
@@ -361,8 +638,19 @@ func lastNProbeRecord(session string, recordType string, index int, fields strin
 	if index > 0 {
 		parentField = `"parentUuid":"` + lastNProbeUUID(index-1) + `"`
 	}
+
 	timestamp := time.Date(2026, 7, 2, 12, 0, index, 0, time.UTC).Format(time.RFC3339)
-	return fmt.Sprintf(`{"type":%q,"sessionId":%q,"cwd":%q,"uuid":%q,%s,"timestamp":%q,%s}`, recordType, session, lastNProbeWorkspace, lastNProbeUUID(index), parentField, timestamp, fields)
+
+	return fmt.Sprintf(
+		`{"type":%q,"sessionId":%q,"cwd":%q,"uuid":%q,%s,"timestamp":%q,%s}`,
+		recordType,
+		session,
+		lastNProbeWorkspace,
+		lastNProbeUUID(index),
+		parentField,
+		timestamp,
+		fields,
+	)
 }
 
 func lastNProbeUUID(index int) string {
@@ -375,16 +663,28 @@ func lastNProbeJSONText(t *testing.T, text string) string {
 	if err != nil {
 		t.Fatalf("encode probe text: %v", err)
 	}
+
 	return string(encoded)
 }
 
 func installLastNProbeTranscript(t *testing.T, home string, session string, records []string) {
 	t.Helper()
-	path := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(lastNProbeWorkspace, "/", "-"), session+".jsonl")
+	path := filepath.Join(
+		home,
+		".claude",
+		"projects",
+		strings.ReplaceAll(lastNProbeWorkspace, "/", "-"),
+		session+".jsonl",
+	)
 	installLocalProofTranscript(t, path, strings.Join(records, "\n")+"\n")
 }
 
-func runLastNProbeCLI(t *testing.T, binaryPath string, environment []string, arguments []string) string {
+func runLastNProbeCLI(
+	t *testing.T,
+	binaryPath string,
+	environment []string,
+	arguments []string,
+) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), localProofCommandTimeout)
 	defer cancel()
@@ -396,18 +696,31 @@ func runLastNProbeCLI(t *testing.T, binaryPath string, environment []string, arg
 	if err != nil {
 		t.Fatalf("clyde %s failed: %v\n%s", strings.Join(arguments, " "), err, stderr.String())
 	}
+
 	return string(output)
 }
 
-func lastNProbeMCPBody(t *testing.T, binaryPath string, environment []string, arguments lastNProbeArguments) string {
+func lastNProbeMCPBody(
+	t *testing.T,
+	binaryPath string,
+	environment []string,
+	arguments lastNProbeArguments,
+) string {
 	t.Helper()
 	response, err := callLastNProbeMCP(binaryPath, environment, arguments)
 	if err != nil {
 		t.Fatalf("clyde_export_transcript call failed %+v: %v", arguments, err)
 	}
+
 	if response.Error != nil || response.Result == nil || response.Result.IsError {
-		t.Fatalf("clyde_export_transcript returned an error %+v: %+v %+v", arguments, response.Error, response.Result)
+		t.Fatalf(
+			"clyde_export_transcript returned an error %+v: %+v %+v",
+			arguments,
+			response.Error,
+			response.Result,
+		)
 	}
+
 	return response.Result.text()
 }
 
@@ -425,26 +738,44 @@ func waitForLastNProbeMCP(t *testing.T, binaryPath string, environment []string,
 		Stdout:             true,
 	}
 	deadline := time.Now().Add(localProofReadyTimeout)
+
 	for {
 		response, err := callLastNProbeMCP(binaryPath, environment, arguments)
-		if err == nil && response.Error == nil && response.Result != nil && !response.Result.IsError {
+		if err == nil && response.Error == nil && response.Result != nil &&
+			!response.Result.IsError {
 			return
 		}
+
 		if time.Now().After(deadline) {
-			t.Fatalf("sandbox daemon did not export the probe conversation before the timeout: %v %+v", err, response)
+			t.Fatalf(
+				"sandbox daemon did not export the probe conversation before the timeout: %v %+v",
+				err,
+				response,
+			)
 		}
+
 		time.Sleep(localProofPollDelay)
 	}
 }
 
 // callLastNProbeMCP starts the MCP server, initializes a session, calls
 // clyde_export_transcript with the given arguments, and returns its JSON RPC response.
-func callLastNProbeMCP(binaryPath string, environment []string, arguments lastNProbeArguments) (exportProbeRPCResponse, error) {
+func callLastNProbeMCP(
+	binaryPath string,
+	environment []string,
+	arguments lastNProbeArguments,
+) (exportProbeRPCResponse, error) {
 	var empty exportProbeRPCResponse
-	call, err := json.Marshal(lastNProbeRPCRequest{JSONRPC: "2.0", ID: exportProbeRequestID, Method: "tools/call", Params: lastNProbeCall{Name: exportProbeToolName, Arguments: arguments}})
+	call, err := json.Marshal(lastNProbeRPCRequest{
+		JSONRPC: "2.0",
+		ID:      exportProbeRequestID,
+		Method:  "tools/call",
+		Params:  lastNProbeCall{Name: exportProbeToolName, Arguments: arguments},
+	})
 	if err != nil {
 		return empty, fmt.Errorf("encode clyde_export_transcript call: %w", err)
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), localProofCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
@@ -455,14 +786,20 @@ func callLastNProbeMCP(binaryPath string, environment []string, arguments lastNP
 	if err != nil {
 		return empty, fmt.Errorf("open clyde mcp serve stdin: %w", err)
 	}
+
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return empty, fmt.Errorf("open clyde mcp serve stdout: %w", err)
 	}
+
 	if err := command.Start(); err != nil {
 		return empty, fmt.Errorf("start clyde mcp serve: %w", err)
 	}
-	messages := strings.Join([]string{localProofInitializeRequest, localProofInitializedMessage, string(call)}, "\n") + "\n"
+
+	messages := strings.Join(
+		[]string{localProofInitializeRequest, localProofInitializedMessage, string(call)},
+		"\n",
+	) + "\n"
 	_, writeErr := stdin.Write([]byte(messages))
 	response, readErr := readExportProbeResponse(stdout)
 	closeErr := stdin.Close()
@@ -470,5 +807,6 @@ func callLastNProbeMCP(binaryPath string, environment []string, arguments lastNP
 	if failure := errors.Join(writeErr, readErr, closeErr); failure != nil {
 		return empty, fmt.Errorf("clyde mcp serve: %w (%v)\n%s", failure, waitErr, stderr.String())
 	}
+
 	return response, nil
 }

@@ -102,6 +102,7 @@ var updateGroup = &Group{
 
 func updateCheckOp() Operation[updateCheckInput, updateCheckPayload] {
 	runner := defaultUpdateRunner()
+
 	return Operation[updateCheckInput, updateCheckPayload]{
 		Name:           Name{Canonical: "update_check", CLIOverride: "check"},
 		Group:          updateGroup,
@@ -125,6 +126,7 @@ func updateCheckOp() Operation[updateCheckInput, updateCheckPayload] {
 
 func updateApplyOp() Operation[updateApplyInput, updateApplyPayload] {
 	runner := defaultUpdateRunner()
+
 	return Operation[updateApplyInput, updateApplyPayload]{
 		Name:       Name{Canonical: "update_apply", CLIOverride: "apply"},
 		Group:      updateGroup,
@@ -138,8 +140,12 @@ func updateApplyOp() Operation[updateApplyInput, updateApplyPayload] {
 		},
 		Args: nil,
 		Params: []Param[updateApplyInput]{
-			BoolParam("dry_run", "Download and verify without replacing the binary.", false,
-				func(in *updateApplyInput, v bool) { in.DryRun = v }),
+			BoolParam(
+				"dry_run",
+				"Download and verify without replacing the binary.",
+				false,
+				func(in *updateApplyInput, v bool) { in.DryRun = v },
+			),
 		},
 		New:            func() updateApplyInput { return updateApplyInput{DryRun: false} },
 		Children:       nil,
@@ -156,6 +162,7 @@ func updateApplyOp() Operation[updateApplyInput, updateApplyPayload] {
 
 func updateStatusOp() Operation[updateStatusInput, updateStatusPayload] {
 	runner := defaultUpdateRunner()
+
 	return Operation[updateStatusInput, updateStatusPayload]{
 		Name:           Name{Canonical: "update_status", CLIOverride: "status"},
 		Group:          updateGroup,
@@ -187,44 +194,93 @@ func defaultUpdateRunner() updateRunner {
 }
 
 func baseUpdateOptions(ctx context.Context, log *slog.Logger, dryRun bool) selfupdate.Options {
-	return updateopts.NetworkOptions(ctx, updateopts.Overrides{
-		Client:      nil,
-		InstallPath: "",
-		DryRun:      dryRun,
-		Log:         log,
-	})
+	return updateopts.NetworkOptions(
+		ctx,
+		updateopts.Overrides{
+			Client:      nil,
+			InstallPath: "",
+			DryRun:      dryRun,
+			Log:         log,
+		},
+	)
 }
 
 func (runner updateRunner) runCheck(ctx context.Context, _ updateCheckPayload) (Result, error) {
 	options := baseUpdateOptions(ctx, slog.Default().With("component", "update"), false)
 	result, err := runner.check(ctx, options)
 	if err != nil {
-		slog.WarnContext(ctx, "cli.update.check_failed", "concern", updateLogConcern, "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"cli.update.check_failed",
+			"concern",
+			updateLogConcern,
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("update check: %w", err)
 	}
+
 	output := checkOutput(result)
+
 	return valueResult{Payload: output, Text: formatCheckOutput(output)}, nil
 }
 
-func (runner updateRunner) runApply(ctx context.Context, payload updateApplyPayload) (Result, error) {
+func (runner updateRunner) runApply(
+	ctx context.Context,
+	payload updateApplyPayload,
+) (Result, error) {
 	options := baseUpdateOptions(ctx, slog.Default().With("component", "update"), payload.DryRun)
 	result, err := runner.apply(ctx, options)
 	if err != nil {
-		slog.WarnContext(ctx, "cli.update.apply_failed", "concern", updateLogConcern, "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"cli.update.apply_failed",
+			"concern",
+			updateLogConcern,
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("update apply: %w", err)
 	}
+
 	handoff := false
 	if result.Applied {
 		// Deploy output goes through the log, never the result stream: mixing
 		// subprocess output into stdout corrupts --output json rendering.
 		var deployOutput strings.Builder
 		if err := runner.deploy(ctx, &deployOutput, &deployOutput); err != nil {
-			slog.WarnContext(ctx, "cli.update.deploy_handoff_failed", "concern", updateLogConcern, "component", "clispec", "err", err, "deploy_output", updatehandoff.TruncateForLog(deployOutput.String()))
+			slog.WarnContext(
+				ctx,
+				"cli.update.deploy_handoff_failed",
+				"concern",
+				updateLogConcern,
+				"component",
+				"clispec",
+				"err",
+				err,
+				"deploy_output",
+				updatehandoff.TruncateForLog(deployOutput.String()),
+			)
 			return nil, fmt.Errorf("update apply deploy handoff: %w", err)
 		}
-		slog.InfoContext(ctx, "cli.update.deploy_handoff_done", "concern", updateLogConcern, "component", "clispec", "deploy_output", updatehandoff.TruncateForLog(deployOutput.String()))
+
+		slog.InfoContext(
+			ctx,
+			"cli.update.deploy_handoff_done",
+			"concern",
+			updateLogConcern,
+			"component",
+			"clispec",
+			"deploy_output",
+			updatehandoff.TruncateForLog(deployOutput.String()),
+		)
 		handoff = true
 	}
+
 	output := updateApplyOutput{
 		Check:          checkOutput(result.CheckResult),
 		Applied:        result.Applied,
@@ -232,6 +288,7 @@ func (runner updateRunner) runApply(ctx context.Context, payload updateApplyPayl
 		DeployHandoff:  handoff,
 		HandoffCommand: handoffCommand(handoff),
 	}
+
 	return valueResult{Payload: output, Text: formatApplyOutput(output)}, nil
 }
 
@@ -245,10 +302,21 @@ func (runner updateRunner) runStatus(ctx context.Context, _ updateStatusPayload)
 	resolvedOptions := resolveStatusOptions(options)
 	state, err := runner.loadState(resolvedOptions.StatePath)
 	if err != nil {
-		slog.WarnContext(ctx, "cli.update.status_failed", "concern", updateLogConcern, "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"cli.update.status_failed",
+			"concern",
+			updateLogConcern,
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("update status: %w", err)
 	}
+
 	output := statusOutput(resolvedOptions, state)
+
 	return valueResult{Payload: output, Text: formatStatusOutput(output)}, nil
 }
 
@@ -256,9 +324,11 @@ func resolveStatusOptions(options selfupdate.Options) selfupdate.Options {
 	if options.StatePath == "" {
 		options.StatePath = selfupdate.DefaultStatePath(options.Config.Binary)
 	}
+
 	if options.CacheDir == "" {
 		options.CacheDir = selfupdate.DefaultCacheDir(options.Config.Binary)
 	}
+
 	return options
 }
 
@@ -300,6 +370,7 @@ func candidateValidateArgs(cfg selfupdate.Config) string {
 	if len(cfg.ValidateArgs) == 0 {
 		return "version"
 	}
+
 	return strings.Join(cfg.ValidateArgs, " ")
 }
 
@@ -308,6 +379,7 @@ func formatCheckOutput(output updateCheckOutput) string {
 	if output.UpdateAvailable {
 		available = "yes"
 	}
+
 	return fmt.Sprintf(
 		"current version: %s\nlatest tag:      %s\nasset:           %s\nupdate available: %s\n",
 		output.CurrentVersion,
@@ -340,30 +412,39 @@ func formatStatusOutput(output updateStatusOutput) string {
 	if output.LastCheckAt != "" {
 		text += "last check:        " + output.LastCheckAt + "\n"
 	}
+
 	if output.NextCheckAt != "" {
 		text += "next check:        " + output.NextCheckAt + "\n"
 	}
+
 	if output.LatestTag != "" {
 		text += "latest tag:        " + output.LatestTag + "\n"
 	}
+
 	if output.AppliedTag != "" {
 		text += "applied tag:       " + output.AppliedTag + "\n"
 	}
+
 	if output.InstalledVersion != "" {
 		text += "installed version: " + output.InstalledVersion + "\n"
 	}
+
 	if output.InstalledCommit != "" {
 		text += "installed commit:  " + output.InstalledCommit + "\n"
 	}
+
 	if output.InstalledBuildHash != "" {
 		text += "installed build hash: " + output.InstalledBuildHash + "\n"
 	}
+
 	if output.LastResult != "" {
 		text += "last result:       " + output.LastResult + "\n"
 	}
+
 	if output.LastError != "" {
 		text += "last error:        " + output.LastError + "\n"
 	}
+
 	return text
 }
 
@@ -371,6 +452,7 @@ func formatUpdateTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
+
 	return value.Format(time.RFC3339)
 }
 
@@ -378,6 +460,7 @@ func yesNo(value bool) string {
 	if value {
 		return "yes"
 	}
+
 	return "no"
 }
 
@@ -385,5 +468,6 @@ func handoffCommand(enabled bool) string {
 	if !enabled {
 		return ""
 	}
+
 	return "clyde daemon deploy"
 }

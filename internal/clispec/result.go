@@ -69,16 +69,26 @@ func (artifactResult) isClispecResult() {}
 func (valueResult) kind() resultKind    { return resultKindValue }
 func (artifactResult) kind() resultKind { return resultKindArtifact }
 
-func renderCLIResult(ctx context.Context, out io.Writer, errOut io.Writer, format output.Format, wantKind resultKind, result Result) error {
+func renderCLIResult(
+	ctx context.Context,
+	out io.Writer,
+	errOut io.Writer,
+	format output.Format,
+	wantKind resultKind,
+	result Result,
+) error {
 	if err := requireResultKind(wantKind, result); err != nil {
 		return err
 	}
+
 	if err := renderCLIResultBody(ctx, out, format, result); err != nil {
 		return err
 	}
+
 	if copyRequested(ctx) {
 		return copyResultToClipboard(ctx, errOut, format, result)
 	}
+
 	return nil
 }
 
@@ -97,9 +107,17 @@ func renderCLIResultBody(
 		if format == output.FormatJSON {
 			return writeStructuredJSON(ctx, writer, typed.Payload)
 		}
-		if err := writeCLITextBody(ctx, writer, typed.Text, "clispec.result.write_text_failed", "write value result text"); err != nil {
+
+		if err := writeCLITextBody(
+			ctx,
+			writer,
+			typed.Text,
+			"clispec.result.write_text_failed",
+			"write value result text",
+		); err != nil {
 			return err
 		}
+
 		return nil
 	case artifactResult:
 		return renderCLIArtifactResult(ctx, writer, format, typed)
@@ -117,19 +135,30 @@ func renderCLIArtifactResult(
 	if result.Pipe {
 		return writeRawBytes(writer, result.Body)
 	}
+
 	path := result.DefaultPath
 	if path == "" {
 		return renderCLIInlineArtifactResult(ctx, writer, format, result)
 	}
+
 	if err := writeFile(path, result.Body); err != nil {
 		return err
 	}
+
 	if format == output.FormatJSON {
 		return writeStructuredJSON(ctx, writer, result.Payload)
 	}
-	if err := writeCLITextBody(ctx, writer, result.Text, "clispec.result.write_artifact_text_failed", "write artifact result text"); err != nil {
+
+	if err := writeCLITextBody(
+		ctx,
+		writer,
+		result.Text,
+		"clispec.result.write_artifact_text_failed",
+		"write artifact result text",
+	); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -143,19 +172,48 @@ var clipboardCopy = clipboard.Copy
 // format, so --format json copies the JSON a reader would see. The size
 // confirmation goes to errOut (stderr) so it never corrupts piped stdout data.
 // This is the single place copy is applied, so no command implements copy.
-func copyResultToClipboard(ctx context.Context, errOut io.Writer, format output.Format, result Result) error {
+func copyResultToClipboard(
+	ctx context.Context,
+	errOut io.Writer,
+	format output.Format,
+	result Result,
+) error {
 	body, err := resultCopyBytes(ctx, format, result)
 	if err != nil {
 		return err
 	}
+
 	if err := clipboardCopy(ctx, body); err != nil {
-		slog.WarnContext(ctx, "clispec.result.copy_failed", "concern", "cli.output", "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.result.copy_failed",
+			"concern",
+			"cli.output",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return fmt.Errorf("copy output to clipboard: %w", err)
 	}
-	if _, err := fmt.Fprint(errOut, copyConfirmation(body, tokenEstimate(result, body))); err != nil {
-		slog.WarnContext(ctx, "clispec.result.copy_confirm_failed", "concern", "cli.output", "component", "clispec", "err", err)
+
+	if _, err := fmt.Fprint(
+		errOut,
+		copyConfirmation(body, tokenEstimate(result, body)),
+	); err != nil {
+		slog.WarnContext(
+			ctx,
+			"clispec.result.copy_confirm_failed",
+			"concern",
+			"cli.output",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return fmt.Errorf("write copy confirmation: %w", err)
 	}
+
 	return nil
 }
 
@@ -169,8 +227,10 @@ func resultCopyBytes(ctx context.Context, format output.Format, result Result) (
 		if err := writeStructuredJSON(ctx, &buf, resultStructuredPayload(result)); err != nil {
 			return nil, err
 		}
+
 		return buf.Bytes(), nil
 	}
+
 	switch typed := result.(type) {
 	case artifactResult:
 		return typed.Body, nil
@@ -200,10 +260,12 @@ func copyLineCount(body []byte) int {
 	if len(body) == 0 {
 		return 0
 	}
+
 	count := bytes.Count(body, []byte("\n"))
 	if body[len(body)-1] != '\n' {
 		count++
 	}
+
 	return count
 }
 
@@ -215,6 +277,7 @@ func bodySizeSummary(body []byte) string {
 	if count == 1 {
 		unit = "line"
 	}
+
 	return fmt.Sprintf(
 		"%d %s, %d chars, %s",
 		count,
@@ -237,6 +300,7 @@ func sizeAndTokenSummary(body []byte, estimate tokencount.Estimate) string {
 	if estimate.Tokenizer == "" {
 		return summary
 	}
+
 	return fmt.Sprintf("%s, %d tokens (%s)", summary, estimate.Tokens, estimate.Tokenizer)
 }
 
@@ -245,6 +309,7 @@ func tokenEstimate(result Result, body []byte) tokencount.Estimate {
 	if !ok || typed.Tokens == nil {
 		return tokencount.Estimate{Tokenizer: "", Tokens: 0}
 	}
+
 	return typed.Tokens.Count(string(body))
 }
 
@@ -257,16 +322,29 @@ func renderCLIInlineArtifactResult(
 	if format == output.FormatJSON {
 		return writeStructuredJSON(ctx, writer, result.Payload)
 	}
-	if err := writeCLITextBody(ctx, writer, result.Text, "clispec.result.write_inline_artifact_text_failed", "write inline artifact text"); err != nil {
+
+	if err := writeCLITextBody(
+		ctx,
+		writer,
+		result.Text,
+		"clispec.result.write_inline_artifact_text_failed",
+		"write inline artifact text",
+	); err != nil {
 		return err
 	}
+
 	return nil
 }
 
-func renderMCPResult(ctx context.Context, wantKind resultKind, result Result) (*mcp.CallToolResult, error) {
+func renderMCPResult(
+	ctx context.Context,
+	wantKind resultKind,
+	result Result,
+) (*mcp.CallToolResult, error) {
 	if err := requireResultKind(wantKind, result); err != nil {
 		return nil, err
 	}
+
 	switch typed := result.(type) {
 	case valueResult:
 		return newMCPStructuredResult(ctx, typed.Payload, typed.Text)
@@ -275,13 +353,16 @@ func renderMCPResult(ctx context.Context, wantKind resultKind, result Result) (*
 			if err := writeFile(typed.DefaultPath, typed.Body); err != nil {
 				return nil, err
 			}
+
 			// Return only the receipt text and structured payload when the result wrote a file.
 			return newMCPStructuredResult(ctx, typed.Payload, typed.Text)
 		}
+
 		text := typed.InlineText
 		if text == "" {
 			text = string(typed.Body)
 		}
+
 		return newMCPStructuredResult(ctx, typed.Payload, text)
 	default:
 		return nil, fmt.Errorf("clispec: unsupported mcp result %T", result)
@@ -292,9 +373,15 @@ func requireResultKind(wantKind resultKind, result Result) error {
 	if result == nil {
 		return fmt.Errorf("clispec: nil result for %s output", wantKind)
 	}
+
 	if result.kind() != wantKind {
-		return fmt.Errorf("clispec: operation declared %s output but returned %s", wantKind, result.kind())
+		return fmt.Errorf(
+			"clispec: operation declared %s output but returned %s",
+			wantKind,
+			result.kind(),
+		)
 	}
+
 	return nil
 }
 
@@ -303,44 +390,95 @@ func writeStructuredJSON(ctx context.Context, writer io.Writer, payload Structur
 	if err != nil {
 		return err
 	}
+
 	if err := response.WriteJSON(ctx, writer, body, response.JSONCompact); err != nil {
-		slog.WarnContext(ctx, "clispec.result.write_json_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.result.write_json_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return fmt.Errorf("write structured json: %w", err)
 	}
+
 	return nil
 }
 
 func marshalStructuredPayload(payload StructuredPayload) ([]byte, error) {
 	if payload == nil {
-		slog.Warn("clispec.result.payload_missing", "concern", "cli.conversation", "component", "clispec")
+		slog.Warn(
+			"clispec.result.payload_missing",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+		)
 		return nil, fmt.Errorf("clispec: structured payload is required")
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
-		slog.Warn("clispec.result.payload_marshal_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
+		slog.Warn(
+			"clispec.result.payload_marshal_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("marshal clispec payload: %w", err)
 	}
+
 	return body, nil
 }
 
-func newMCPStructuredResult(ctx context.Context, payload StructuredPayload, text string) (*mcp.CallToolResult, error) {
+func newMCPStructuredResult(
+	ctx context.Context,
+	payload StructuredPayload,
+	text string,
+) (*mcp.CallToolResult, error) {
 	body, err := marshalStructuredPayload(payload)
 	if err != nil {
 		return nil, err
 	}
+
 	encoded, err := response.JSON(ctx, body, response.JSONCompact)
 	if err != nil {
-		slog.WarnContext(ctx, "clispec.result.encode_structured_response_failed", "concern", "mcp.server.context", "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.result.encode_structured_response_failed",
+			"concern",
+			"mcp.server.context",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("encode structured response: %w", err)
 	}
+
 	return mcp.NewToolResultStructured(json.RawMessage(encoded), text), nil
 }
 
 func writeRawBytes(writer io.Writer, body []byte) error {
 	if _, err := writer.Write(body); err != nil {
-		slog.Warn("clispec.result.raw_write_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
+		slog.Warn(
+			"clispec.result.raw_write_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return fmt.Errorf("clispec: write raw bytes: %w", err)
 	}
+
 	return nil
 }
 
@@ -352,21 +490,63 @@ func writeCLITextBody(
 	writeFailureOperation string,
 ) error {
 	if _, err := io.WriteString(writer, text); err != nil {
-		slog.WarnContext(ctx, writeFailureEvent, "concern", "cli.conversation", "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			writeFailureEvent,
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return fmt.Errorf("%s: %w", writeFailureOperation, err)
 	}
+
 	return nil
 }
 
 func writeFile(path string, body []byte) error {
-	slog.Debug("clispec.result.write_file", "concern", "cli.conversation", "component", "clispec", "path", path, "bytes", len(body))
+	slog.Debug(
+		"clispec.result.write_file",
+		"concern",
+		"cli.conversation",
+		"component",
+		"clispec",
+		"path",
+		path,
+		"bytes",
+		len(body),
+	)
 	if err := os.WriteFile(path, body, 0o600); err != nil {
-		slog.Warn("clispec.result.write_file_failed", "concern", "cli.conversation", "component", "clispec", "path", path, "err", err)
+		slog.Warn(
+			"clispec.result.write_file_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return fmt.Errorf("clispec: write file %s: %w", path, err)
 	}
+
 	if err := os.Chmod(path, 0o600); err != nil {
-		slog.Warn("clispec.result.set_file_permissions_failed", "concern", "cli.conversation", "component", "clispec", "path", path, "err", err)
+		slog.Warn(
+			"clispec.result.set_file_permissions_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return fmt.Errorf("clispec: set file permissions %s: %w", path, err)
 	}
+
 	return nil
 }

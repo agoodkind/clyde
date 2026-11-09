@@ -61,15 +61,21 @@ type BaselineRefreshOutcome struct {
 // difference matrix and writes the new authoritative baseline. Every run
 // records a drift-check outcome. The store is the single source of truth; no
 // file is read or written.
-func RefreshBaseline(ctx context.Context, store *capture.Store, opts BaselineRefreshOptions) (BaselineRefreshOutcome, error) {
+func RefreshBaseline(
+	ctx context.Context,
+	store *capture.Store,
+	opts BaselineRefreshOptions,
+) (BaselineRefreshOutcome, error) {
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
 	}
+
 	upstream := strings.TrimSpace(opts.Upstream)
 	if upstream == "" {
 		return BaselineRefreshOutcome{}, fmt.Errorf("baseline refresh: upstream is required")
 	}
+
 	if store == nil {
 		return BaselineRefreshOutcome{}, fmt.Errorf("baseline refresh: capture store is required")
 	}
@@ -93,23 +99,38 @@ func RefreshBaseline(ctx context.Context, store *capture.Store, opts BaselineRef
 	if err != nil {
 		return outcome, fmt.Errorf("baseline refresh: read shapes: %w", err)
 	}
+
 	versionTag := "live-" + startedAt.Format("20060102T150405")
-	candidate, err := ExtractSnapshotFromShapes(shapes, SnapshotOptions{
-		UpstreamName:               upstream,
-		UpstreamVersion:            versionTag,
-		IncludeUserAgentSubstrings: opts.IncludeUA,
-		ExcludeUserAgentSubstrings: opts.ExcludeUA,
-		RequireBodyKeys:            opts.RequireBodyKeys,
-		ForbidBodyKeys:             opts.ForbidBodyKeys, MaxBodyDepth: 0, EnumThreshold: 0,
-	})
+	candidate, err := ExtractSnapshotFromShapes(
+		shapes,
+		SnapshotOptions{
+			UpstreamName:               upstream,
+			UpstreamVersion:            versionTag,
+			IncludeUserAgentSubstrings: opts.IncludeUA,
+			ExcludeUserAgentSubstrings: opts.ExcludeUA,
+			RequireBodyKeys:            opts.RequireBodyKeys,
+			ForbidBodyKeys:             opts.ForbidBodyKeys,
+			MaxBodyDepth:               0,
+			EnumThreshold:              0,
+		},
+	)
 	if err != nil {
 		// A no-op refresh (empty/filtered corpus) records no check row. The
 		// periodic sweep owns steady-state cadence; the per-request refresher
 		// records only meaningful changes, so its ~2s ticks do not pile up.
-		log.WarnContext(ctx, "mitm.baseline.no_usable_shapes", "concern", "providers.mitm.wire", "component", "mitm",
-			"upstream", upstream,
-			"err", err,
+		log.WarnContext(
+			ctx,
+			"mitm.baseline.no_usable_shapes",
+			"concern",
+			"providers.mitm.wire",
+			"component",
+			"mitm",
+			"upstream",
+			upstream,
+			"err",
+			err,
 		)
+
 		return outcome, nil
 	}
 
@@ -123,6 +144,7 @@ func RefreshBaseline(ctx context.Context, store *capture.Store, opts BaselineRef
 		if err != nil {
 			return outcome, fmt.Errorf("baseline refresh: decode current baseline: %w", err)
 		}
+
 		report := DiffSnapshots(existing, candidate)
 		outcome.Report = &report
 		outcome.Diverged = report.HasDiverged()
@@ -133,33 +155,70 @@ func RefreshBaseline(ctx context.Context, store *capture.Store, opts BaselineRef
 			// recording cadence.
 			return outcome, nil
 		}
-		store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: true, Summary: outcome.Summary})
+
+		store.RecordCheck(capture.DriftCheck{
+			Timestamp: startedAt,
+			Upstream:  upstream,
+			Diverged:  true,
+			Summary:   outcome.Summary,
+		})
 		outcome.Updated = true
 		if err := putBaseline(ctx, store, upstream, candidate, report, startedAt); err != nil {
 			return outcome, err
 		}
+
 		return outcome, nil
 	}
 
 	outcome.Created = true
 	outcome.Updated = true
 	outcome.Summary = "initialized baseline for upstream=" + upstream
-	store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: false, Summary: outcome.Summary})
-	if err := putBaseline(ctx, store, upstream, candidate, DiffReport{Upstream: upstream, MissingFlavors: nil, ExtraFlavors: nil, FlavorReports: nil}, startedAt); err != nil {
+	store.RecordCheck(capture.DriftCheck{
+		Timestamp: startedAt,
+		Upstream:  upstream,
+		Diverged:  false,
+		Summary:   outcome.Summary,
+	})
+	if err := putBaseline(
+		ctx,
+		store,
+		upstream,
+		candidate,
+		DiffReport{Upstream: upstream, MissingFlavors: nil, ExtraFlavors: nil, FlavorReports: nil},
+		startedAt,
+	); err != nil {
 		return outcome, err
 	}
+
 	return outcome, nil
 }
 
 // putBaseline serializes the candidate snapshot, flattens the diff report into
 // the deduped difference matrix, and persists both through one
 // [capture.Store.PutBaseline] transaction.
-func putBaseline(ctx context.Context, store *capture.Store, upstream string, candidate Snapshot, report DiffReport, ts time.Time) error {
+func putBaseline(
+	ctx context.Context,
+	store *capture.Store,
+	upstream string,
+	candidate Snapshot,
+	report DiffReport,
+	ts time.Time,
+) error {
 	snapshotJSON, err := marshalSnapshot(candidate)
 	if err != nil {
-		slog.WarnContext(ctx, "mitm.baseline.encode_candidate_failed", "concern", "providers.mitm.wire", "upstream", upstream, "err", err)
+		slog.WarnContext(
+			ctx,
+			"mitm.baseline.encode_candidate_failed",
+			"concern",
+			"providers.mitm.wire",
+			"upstream",
+			upstream,
+			"err",
+			err,
+		)
 		return fmt.Errorf("baseline refresh: encode candidate: %w", err)
 	}
+
 	diffs := flattenDiffReport(upstream, report, ts)
 	change := capture.BaselineChange{
 		Timestamp: ts,
@@ -168,9 +227,19 @@ func putBaseline(ctx context.Context, store *capture.Store, upstream string, can
 		Diffs:     diffs,
 	}
 	if err := store.PutBaseline(ctx, change); err != nil {
-		slog.WarnContext(ctx, "mitm.baseline.put_baseline_failed", "concern", "providers.mitm.wire", "upstream", upstream, "err", err)
+		slog.WarnContext(
+			ctx,
+			"mitm.baseline.put_baseline_failed",
+			"concern",
+			"providers.mitm.wire",
+			"upstream",
+			upstream,
+			"err",
+			err,
+		)
 		return fmt.Errorf("baseline refresh: put baseline: %w", err)
 	}
+
 	return nil
 }
 
@@ -180,48 +249,138 @@ func putBaseline(ctx context.Context, store *capture.Store, upstream string, can
 // mismatch across the header, body, and signature categories becomes one row.
 func flattenDiffReport(upstream string, report DiffReport, ts time.Time) []capture.BaselineDiff {
 	var out []capture.BaselineDiff
+
 	for _, slug := range report.MissingFlavors {
-		out = append(out, fieldDiff(upstream, slug, baselineDiffFlavorMissing, slug, "flavor missing in candidate", ts))
+		out = append(
+			out,
+			fieldDiff(
+				upstream,
+				slug,
+				baselineDiffFlavorMissing,
+				slug,
+				"flavor missing in candidate",
+				ts,
+			),
+		)
 	}
+
 	for _, slug := range report.ExtraFlavors {
-		out = append(out, fieldDiff(upstream, slug, baselineDiffFlavorExtra, slug, "flavor extra in candidate", ts))
+		out = append(
+			out,
+			fieldDiff(
+				upstream,
+				slug,
+				baselineDiffFlavorExtra,
+				slug,
+				"flavor extra in candidate",
+				ts,
+			),
+		)
 	}
+
 	for _, fr := range report.FlavorReports {
 		out = append(out, flavorDiffs(upstream, fr, ts)...)
 	}
+
 	return out
 }
 
 func flavorDiffs(upstream string, fr FlavorDiffReport, ts time.Time) []capture.BaselineDiff {
 	var out []capture.BaselineDiff
 	if fr.UserAgentChange != nil {
-		out = append(out, mismatchDiff(upstream, fr.Slug, baselineDiffUserAgent, *fr.UserAgentChange, ts))
+		out = append(
+			out,
+			mismatchDiff(upstream, fr.Slug, baselineDiffUserAgent, *fr.UserAgentChange, ts),
+		)
 	}
+
 	if fr.BetaFingerprintChange != nil {
-		out = append(out, mismatchDiff(upstream, fr.Slug, baselineDiffBetaFingerprint, *fr.BetaFingerprintChange, ts))
+		out = append(
+			out,
+			mismatchDiff(
+				upstream,
+				fr.Slug,
+				baselineDiffBetaFingerprint,
+				*fr.BetaFingerprintChange,
+				ts,
+			),
+		)
 	}
+
 	for _, name := range fr.HeaderMissing {
-		out = append(out, fieldDiff(upstream, fr.Slug, baselineDiffHeaderMissing, name, "header missing in candidate", ts))
+		out = append(
+			out,
+			fieldDiff(
+				upstream,
+				fr.Slug,
+				baselineDiffHeaderMissing,
+				name,
+				"header missing in candidate",
+				ts,
+			),
+		)
 	}
+
 	for _, name := range fr.HeaderExtra {
-		out = append(out, fieldDiff(upstream, fr.Slug, baselineDiffHeaderExtra, name, "header extra in candidate", ts))
+		out = append(
+			out,
+			fieldDiff(
+				upstream,
+				fr.Slug,
+				baselineDiffHeaderExtra,
+				name,
+				"header extra in candidate",
+				ts,
+			),
+		)
 	}
+
 	for _, m := range fr.HeaderClassChanged {
 		out = append(out, mismatchDiff(upstream, fr.Slug, baselineDiffHeaderClassChanged, m, ts))
 	}
+
 	for _, m := range fr.HeaderValuesDiff {
 		out = append(out, mismatchDiff(upstream, fr.Slug, baselineDiffHeaderValuesDiff, m, ts))
 	}
+
 	for _, name := range fr.BodyMissing {
-		out = append(out, fieldDiff(upstream, fr.Slug, baselineDiffBodyMissing, name, "body field missing in candidate", ts))
+		out = append(
+			out,
+			fieldDiff(
+				upstream,
+				fr.Slug,
+				baselineDiffBodyMissing,
+				name,
+				"body field missing in candidate",
+				ts,
+			),
+		)
 	}
+
 	for _, name := range fr.BodyExtra {
-		out = append(out, fieldDiff(upstream, fr.Slug, baselineDiffBodyExtra, name, "body field extra in candidate", ts))
+		out = append(
+			out,
+			fieldDiff(
+				upstream,
+				fr.Slug,
+				baselineDiffBodyExtra,
+				name,
+				"body field extra in candidate",
+				ts,
+			),
+		)
 	}
+
 	return out
 }
 
-func mismatchDiff(upstream, flavor string, category baselineDiffCategory, m DiffMismatch, ts time.Time) capture.BaselineDiff {
+func mismatchDiff(
+	upstream string,
+	flavor string,
+	category baselineDiffCategory,
+	m DiffMismatch,
+	ts time.Time,
+) capture.BaselineDiff {
 	return capture.BaselineDiff{
 		Upstream:  upstream,
 		Flavor:    flavor,
@@ -239,7 +398,14 @@ func mismatchDiff(upstream, flavor string, category baselineDiffCategory, m Diff
 // fieldDiff builds one presence-style difference row (header/body added or
 // removed) where the before and after values are not meaningful, so both are
 // recorded empty.
-func fieldDiff(upstream, flavor string, category baselineDiffCategory, field, reason string, ts time.Time) capture.BaselineDiff {
+func fieldDiff(
+	upstream string,
+	flavor string,
+	category baselineDiffCategory,
+	field string,
+	reason string,
+	ts time.Time,
+) capture.BaselineDiff {
 	return capture.BaselineDiff{
 		Upstream:  upstream,
 		Flavor:    flavor,
@@ -264,5 +430,6 @@ func ProviderForUpstream(upstream string) string {
 	case strings.HasPrefix(name, "codex-"):
 		return "codex"
 	}
+
 	return ""
 }

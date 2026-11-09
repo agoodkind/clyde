@@ -21,10 +21,13 @@ import (
 	"goodkind.io/gklog/correlation"
 )
 
-func nativePatchRepresentationForResolvedCursorRoute(resolved adapterresolver.ResolvedRequest) adapterrender.NativePatchRepresentation {
+func nativePatchRepresentationForResolvedCursorRoute(
+	resolved adapterresolver.ResolvedRequest,
+) adapterrender.NativePatchRepresentation {
 	if strings.HasPrefix(strings.TrimSpace(resolved.Cursor.NormalizedModel), "clyde-codex-") {
 		return adapterrender.NativePatchRepresentationJSON
 	}
+
 	return adapterrender.NativePatchRepresentationRaw
 }
 
@@ -42,13 +45,18 @@ func (s *Server) codexEgressContext(
 	requestID string,
 	wsURL string,
 ) (context.Context, func(string)) {
-	egressCtx, parentSess, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindWebsocket, EgressMeta{
-		Provider:          "codex",
-		UpstreamURL:       wsURL,
-		UpstreamRequestID: "",
-		AttemptNo:         0,
-		ParentRequestID:   requestID,
-	})
+	egressCtx, parentSess, releaseEgress := registerEgress(
+		ctx,
+		s.egressRegistry,
+		egressSessionKindWebsocket,
+		EgressMeta{
+			Provider:          "codex",
+			UpstreamURL:       wsURL,
+			UpstreamRequestID: "",
+			AttemptNo:         0,
+			ParentRequestID:   requestID,
+		},
+	)
 	// BeforeAttempt hook: called by the transport's retry loop for each
 	// attempt (1-based). Registers the attempt as a nested child of the
 	// parent egress session so operators can correlate attempt spans.
@@ -66,23 +74,49 @@ func (s *Server) codexEgressContext(
 			},
 			livetrack.WithParent(parentSess),
 		)
+
 		return childCtx, releaseAttempt
 	}
 	egressCtx = adaptercodex.WithBeforeAttempt(egressCtx, hook)
+
 	return egressCtx, releaseEgress
 }
 
-func (s *Server) codexRawResponsesEgressContext(ctx context.Context, requestID string) (context.Context, func(string)) {
+func (s *Server) codexRawResponsesEgressContext(
+	ctx context.Context,
+	requestID string,
+) (context.Context, func(string)) {
 	upstreamURL := adaptercodex.ResponsesBaseURL(s.cfg.Codex.BaseURL)
-	egressCtx, parentSession, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindHTTP, EgressMeta{
-		Provider: "codex", UpstreamURL: upstreamURL, UpstreamRequestID: "", AttemptNo: 0, ParentRequestID: requestID,
-	})
+	egressCtx, parentSession, releaseEgress := registerEgress(
+		ctx,
+		s.egressRegistry,
+		egressSessionKindHTTP,
+		EgressMeta{
+			Provider:          "codex",
+			UpstreamURL:       upstreamURL,
+			UpstreamRequestID: "",
+			AttemptNo:         0,
+			ParentRequestID:   requestID,
+		},
+	)
 	hook := func(attemptCtx context.Context, attemptNumber int) (context.Context, func(string)) {
-		childCtx, _, releaseAttempt := registerEgress(attemptCtx, s.egressRegistry, egressSessionKindAttempt, EgressMeta{
-			Provider: "codex", UpstreamURL: upstreamURL, UpstreamRequestID: "", AttemptNo: attemptNumber, ParentRequestID: requestID,
-		}, livetrack.WithParent(parentSession))
+		childCtx, _, releaseAttempt := registerEgress(
+			attemptCtx,
+			s.egressRegistry,
+			egressSessionKindAttempt,
+			EgressMeta{
+				Provider:          "codex",
+				UpstreamURL:       upstreamURL,
+				UpstreamRequestID: "",
+				AttemptNo:         attemptNumber,
+				ParentRequestID:   requestID,
+			},
+			livetrack.WithParent(parentSession),
+		)
+
 		return childCtx, releaseAttempt
 	}
+
 	return adaptercodex.WithBeforeAttempt(egressCtx, hook), releaseEgress
 }
 
@@ -92,7 +126,15 @@ func (s *Server) codexRawResponsesEgressContext(ctx context.Context, requestID s
 // emit shape stays stable. Codex never reports cache_creation per the
 // upstream contract, so cache_creation_reported is hard-coded to false
 // here. See research/codex/codex-rs/codex-api/src/sse/responses.rs.
-func codexCompletedAttrs(reqID, alias string, usage adapteropenai.Usage, result adapterprovider.Result, finishReason string, durationMs int64, stream bool) []slog.Attr {
+func codexCompletedAttrs(
+	reqID string,
+	alias string,
+	usage adapteropenai.Usage,
+	result adapterprovider.Result,
+	finishReason string,
+	durationMs int64,
+	stream bool,
+) []slog.Attr {
 	return []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("model", alias),
@@ -141,12 +183,14 @@ func (s *Server) dispatchCodexProvider(
 	if adapterruntime.ExecutionIDFromContext(ctx) == "" {
 		ctx = adapterruntime.WithExecutionID(ctx, newExecutionID())
 	}
+
 	s.emitRequestStarted(ctx, &resolvedReq, "direct", reqID, alias, req.Stream)
 
 	if req.Stream {
 		s.dispatchCodexProviderStream(ctx, w, r, req, reqID, started, resolvedReq)
 		return
 	}
+
 	s.dispatchCodexProviderCollect(ctx, w, r, req, reqID, started, resolvedReq)
 }
 
@@ -160,14 +204,23 @@ func (s *Server) dispatchCodexProviderStream(
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
 	alias := resolvedRequestAlias(&resolvedReq)
-	writer, err := newProviderStreamWriterWithOptions(ctx, s, w, reqID, alias, "codex", adapterrender.EventRendererOptions{
-		ReasoningRenderMode:       "",
-		NativePatchRepresentation: nativePatchRepresentationForResolvedCursorRoute(resolvedReq),
-	})
+	writer, err := newProviderStreamWriterWithOptions(
+		ctx,
+		s,
+		w,
+		reqID,
+		alias,
+		"codex",
+		adapterrender.EventRendererOptions{
+			ReasoningRenderMode:       "",
+			NativePatchRepresentation: nativePatchRepresentationForResolvedCursorRoute(resolvedReq),
+		},
+	)
 	if err != nil {
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
 	}
+
 	writer.configureStreamUsage(req.StreamOptions != nil && req.StreamOptions.IncludeUsage)
 
 	s.emitRequestStreamOpened(ctx, &resolvedReq, "direct", reqID, alias)
@@ -182,7 +235,11 @@ func (s *Server) dispatchCodexProviderStream(
 		s.handleCodexProviderStreamError(ctx, w, r, writer, runErr, resolvedReq, reqID, started)
 		return
 	}
-	corr := clydeingress.WithUpstreamResponseID(correlation.FromContext(ctx), result.UpstreamResponseID)
+
+	corr := clydeingress.WithUpstreamResponseID(
+		correlation.FromContext(ctx),
+		result.UpstreamResponseID,
+	)
 	ctx = correlation.WithContext(ctx, corr)
 	usage := result.Usage
 	finishReason := normalizedProviderFinishReason(result)
@@ -190,44 +247,75 @@ func (s *Server) dispatchCodexProviderStream(
 	if finishReason == defaultProviderFinishReason {
 		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
+
 	result.UsageNotices = notices
 	if resolvedReq.ContextBudget.InputTokens > 0 {
 		usage.MaxTokens = resolvedReq.ContextBudget.InputTokens
 	}
+
 	result.Usage = usage
-	if err := writer.finalizeStream(ctx, result, req.StreamOptions != nil && req.StreamOptions.IncludeUsage); err != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_error", slog.String("concern", "adapter.chat.render"), slog.String("backend", "codex"),
+	if err := writer.finalizeStream(
+		ctx,
+		result,
+		req.StreamOptions != nil && req.StreamOptions.IncludeUsage,
+	); err != nil {
+		s.log.LogAttrs(
+			ctx,
+			slog.LevelWarn,
+			"adapter.chat.stream_finalize_error",
+			slog.String("concern", "adapter.chat.render"),
+			slog.String("backend", "codex"),
 			slog.String("request_id", reqID),
 			slog.String("alias", alias),
 			slog.Any("err", err),
 		)
+
 		return
 	}
 
-	completedAttrs := codexCompletedAttrs(reqID, alias, usage, result, finishReason, clock.Since(started).Milliseconds(), true)
+	completedAttrs := codexCompletedAttrs(
+		reqID,
+		alias,
+		usage,
+		result,
+		finishReason,
+		clock.Since(started).Milliseconds(),
+		true,
+	)
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...)
-	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-		Stage:                      adapterruntime.RequestStageCompleted,
-		Provider:                   "codex_direct",
-		Backend:                    resolvedReq.Provider.String(),
-		RequestID:                  reqID,
-		ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
-		Alias:                      alias,
-		ModelID:                    alias,
-		Stream:                     true,
-		FinishReason:               finishReason,
-		TokensIn:                   usage.PromptTokens,
-		TokensOut:                  usage.CompletionTokens,
-		CacheReadTokens:            usage.CachedTokens(),
-		CacheCreationTokens:        0,
-		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
-		ToolCallCount:              result.ToolCallCount,
-		ToolCallNames:              result.ToolCallNames,
-		HasSubagentToolCall:        result.HasSubagentToolCall,
-		DurationMs:                 clock.Since(started).Milliseconds(),
-		Correlation:                corr, Err: "",
-	})
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.chat.completed",
+		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...,
+	)
+	adapterruntime.LogTerminal(
+		s.log,
+		ctx,
+		s.deps.RequestEvents,
+		adapterruntime.RequestEvent{
+			Stage:                      adapterruntime.RequestStageCompleted,
+			Provider:                   "codex_direct",
+			Backend:                    resolvedReq.Provider.String(),
+			RequestID:                  reqID,
+			ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
+			Alias:                      alias,
+			ModelID:                    alias,
+			Stream:                     true,
+			FinishReason:               finishReason,
+			TokensIn:                   usage.PromptTokens,
+			TokensOut:                  usage.CompletionTokens,
+			CacheReadTokens:            usage.CachedTokens(),
+			CacheCreationTokens:        0,
+			DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
+			ToolCallCount:              result.ToolCallCount,
+			ToolCallNames:              result.ToolCallNames,
+			HasSubagentToolCall:        result.HasSubagentToolCall,
+			DurationMs:                 clock.Since(started).Milliseconds(),
+			Correlation:                corr,
+			Err:                        "",
+		},
+	)
 }
 
 func (s *Server) handleCodexProviderStreamError(
@@ -250,13 +338,20 @@ func (s *Server) handleCodexProviderStreamError(
 	s.logCodexProviderTerminalFailure(ctx, resolvedReq, reqID, started, runErr, true)
 	if writer.headersWritten {
 		if err := writer.writeStreamError(ctx, aerr); err != nil {
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("backend", "codex"),
+			s.log.LogAttrs(
+				ctx,
+				slog.LevelWarn,
+				"adapter.chat.stream_error_write_failed",
+				slog.String("concern", "adapter.chat.render"),
+				slog.String("backend", "codex"),
 				slog.String("request_id", reqID),
 				slog.Any("err", err),
 			)
 		}
+
 		return
 	}
+
 	s.respondAdapterError(w, r, aerr)
 }
 
@@ -286,15 +381,21 @@ func (s *Server) dispatchCodexProviderCollect(
 		s.logCodexProviderError(ctx, reqID, alias, aerr, false)
 		s.logCodexProviderTerminalFailure(ctx, resolvedReq, reqID, started, runErr, false)
 		s.respondAdapterError(w, r, aerr)
+
 		return
 	}
-	corr := clydeingress.WithUpstreamResponseID(correlation.FromContext(ctx), result.UpstreamResponseID)
+
+	corr := clydeingress.WithUpstreamResponseID(
+		correlation.FromContext(ctx),
+		result.UpstreamResponseID,
+	)
 	ctx = correlation.WithContext(ctx, corr)
 	finishReason := normalizedProviderFinishReason(result)
 	var notices []adapterruntime.UsageNotice
 	if finishReason == defaultProviderFinishReason {
 		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
+
 	result.UsageNotices = notices
 	runResult := adaptercodex.RunResult{
 		Usage:                      result.Usage,
@@ -304,10 +405,21 @@ func (s *Server) dispatchCodexProviderCollect(
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 		ToolCallCount:              result.ToolCallCount,
 		ToolCallNames:              result.ToolCallNames,
-		HasSubagentToolCall:        result.HasSubagentToolCall, UsageTelemetry: adaptercodex.
-						UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0},
+		HasSubagentToolCall:        result.HasSubagentToolCall,
+		UsageTelemetry: adaptercodex.
+			UsageTelemetry{
+			UsagePresent:               false,
+			InputTokens:                0,
+			OutputTokens:               0,
+			TotalTokens:                0,
+			InputTokensDetailsPresent:  false,
+			CachedTokens:               0,
+			OutputTokensDetailsPresent: false,
+			ReasoningOutputTokens:      0,
+		},
 
-		ResponseID: "", OutputItems: nil,
+		ResponseID:  "",
+		OutputItems: nil,
 	}
 	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(ctx, collector.events, notices)
 	merged := adaptercodex.MergeEventsWithNativePatchRepresentation(
@@ -322,43 +434,83 @@ func (s *Server) dispatchCodexProviderCollect(
 	if resolvedReq.ContextBudget.InputTokens > 0 {
 		usage.MaxTokens = resolvedReq.ContextBudget.InputTokens
 	}
+
 	if merged.Usage != nil {
 		merged.Usage.MaxTokens = usage.MaxTokens
 	}
+
 	mergedBody, err := marshalChatResponseForListener(ctx, merged)
 	if err != nil {
-		s.log.WarnContext(ctx, "adapter.codex.collect_marshal_failed", "concern", "adapter.providers.codex.request", "err", err)
+		s.log.WarnContext(
+			ctx,
+			"adapter.codex.collect_marshal_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"err",
+			err,
+		)
 		return
 	}
+
 	writeJSON(w, mergedBody)
-	completedAttrs := codexCompletedAttrs(reqID, alias, usage, result, finishReason, clock.Since(started).Milliseconds(), false)
+	completedAttrs := codexCompletedAttrs(
+		reqID,
+		alias,
+		usage,
+		result,
+		finishReason,
+		clock.Since(started).Milliseconds(),
+		false,
+	)
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...)
-	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-		Stage:                      adapterruntime.RequestStageCompleted,
-		Provider:                   "codex_direct",
-		Backend:                    resolvedReq.Provider.String(),
-		RequestID:                  reqID,
-		ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
-		Alias:                      alias,
-		ModelID:                    alias,
-		Stream:                     false,
-		FinishReason:               finishReason,
-		TokensIn:                   usage.PromptTokens,
-		TokensOut:                  usage.CompletionTokens,
-		CacheReadTokens:            usage.CachedTokens(),
-		CacheCreationTokens:        0,
-		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
-		ToolCallCount:              result.ToolCallCount,
-		ToolCallNames:              result.ToolCallNames,
-		HasSubagentToolCall:        result.HasSubagentToolCall,
-		DurationMs:                 clock.Since(started).Milliseconds(),
-		Correlation:                corr, Err: "",
-	})
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.chat.completed",
+		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...,
+	)
+	adapterruntime.LogTerminal(
+		s.log,
+		ctx,
+		s.deps.RequestEvents,
+		adapterruntime.RequestEvent{
+			Stage:                      adapterruntime.RequestStageCompleted,
+			Provider:                   "codex_direct",
+			Backend:                    resolvedReq.Provider.String(),
+			RequestID:                  reqID,
+			ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
+			Alias:                      alias,
+			ModelID:                    alias,
+			Stream:                     false,
+			FinishReason:               finishReason,
+			TokensIn:                   usage.PromptTokens,
+			TokensOut:                  usage.CompletionTokens,
+			CacheReadTokens:            usage.CachedTokens(),
+			CacheCreationTokens:        0,
+			DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
+			ToolCallCount:              result.ToolCallCount,
+			ToolCallNames:              result.ToolCallNames,
+			HasSubagentToolCall:        result.HasSubagentToolCall,
+			DurationMs:                 clock.Since(started).Milliseconds(),
+			Correlation:                corr,
+			Err:                        "",
+		},
+	)
 }
 
-func (s *Server) logCodexProviderError(ctx context.Context, reqID, alias string, aerr *adapterError, streamHeadersWritten bool) {
-	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped", slog.String("concern", "adapter.providers.codex.errors"), slog.String("request_id", reqID),
+func (s *Server) logCodexProviderError(
+	ctx context.Context,
+	reqID string,
+	alias string,
+	aerr *adapterError,
+	streamHeadersWritten bool,
+) {
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelWarn,
+		"adapter.codex.provider_error_mapped",
+		slog.String("concern", "adapter.providers.codex.errors"),
+		slog.String("request_id", reqID),
 		slog.String("alias", alias),
 		slog.Int("status", aerr.HTTPStatus),
 		slog.String("error_class", string(aerr.Class)),
@@ -377,45 +529,73 @@ func (s *Server) logCodexProviderTerminalFailure(
 	stream bool,
 ) {
 	alias := resolvedRequestAlias(&resolvedReq)
-	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-		Stage:       adapterruntime.RequestStageFailed,
-		Provider:    "codex_direct",
-		Backend:     resolvedReq.Provider.String(),
-		RequestID:   reqID,
-		ExecutionID: adapterruntime.ExecutionIDFromContext(ctx),
-		Alias:       alias,
-		ModelID:     alias,
-		Stream:      stream,
-		DurationMs:  clock.Since(started).Milliseconds(),
-		Err:         runErr.Error(), FinishReason:
+	adapterruntime.LogTerminal(
+		s.log,
+		ctx,
+		s.deps.RequestEvents,
+		adapterruntime.RequestEvent{
+			Stage:       adapterruntime.RequestStageFailed,
+			Provider:    "codex_direct",
+			Backend:     resolvedReq.Provider.String(),
+			RequestID:   reqID,
+			ExecutionID: adapterruntime.ExecutionIDFromContext(ctx),
+			Alias:       alias,
+			ModelID:     alias,
+			Stream:      stream,
+			DurationMs:  clock.Since(started).Milliseconds(),
+			Err:         runErr.Error(),
+			FinishReason:
 
-		// codexProviderAdapterError maps a codex provider error to the
-		// Cursor-safe adapterError shape. Codex must never surface
-		// HTTP 5xx + server_error to Cursor; all non-2xx returns flow through
-		// mapUpstreamForFamily. Schema violations are detected by message
-		// pattern (missing_required_parameter / [ObjectParam] / unknown
-		// parameter) so the operator sees a meaningful diagnostic instead of
-		// the generic upstream_failed.
-		"", TokensIn: 0, TokensOut: 0, CacheReadTokens: 0, CacheCreationTokens: 0, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Correlation: correlation.
-				Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
-	})
+			// codexProviderAdapterError maps a codex provider error to the
+			// Cursor-safe adapterError shape. Codex must never surface
+			// HTTP 5xx + server_error to Cursor; all non-2xx returns flow through
+			// mapUpstreamForFamily. Schema violations are detected by message
+			// pattern (missing_required_parameter / [ObjectParam] / unknown
+			// parameter) so the operator sees a meaningful diagnostic instead of
+			// the generic upstream_failed.
+			"",
+			TokensIn:                   0,
+			TokensOut:                  0,
+			CacheReadTokens:            0,
+			CacheCreationTokens:        0,
+			DerivedCacheCreationTokens: 0,
+			ToolCallCount:              0,
+			ToolCallNames:              nil,
+			HasSubagentToolCall:        false,
+			Correlation: correlation.
+				Context{
+				TraceID:            "",
+				SpanID:             "",
+				ParentSpanID:       "",
+				RequestID:          "",
+				IdentityAttributes: nil,
+			},
+		},
+	)
 }
 
 func codexProviderAdapterError(err error) *adapterError {
 	var contextErr *adaptercodex.ContextWindowError
 	if errors.As(err, &contextErr) {
-		aerr := newAdapterError(adapterErrorContextLengthExceeded, "This model's maximum context length was exceeded. Please reduce the length of the messages.")
+		aerr := newAdapterError(
+			adapterErrorContextLengthExceeded,
+			"This model's maximum context length was exceeded. Please reduce the length of the messages.",
+		)
 		aerr.Provider = "codex"
 		aerr.Cause = err
+
 		return aerr
 	}
+
 	var unsupportedModelErr *adaptercodex.UnsupportedModelError
 	if errors.As(err, &unsupportedModelErr) {
 		aerr := newAdapterError(adapterErrorModelNotSupported, unsupportedModelErr.Error())
 		aerr.Provider = "codex"
 		aerr.Cause = err
+
 		return aerr
 	}
+
 	// An upstream non-2xx carries its body snippet on a typed error whose
 	// Error() is snippet-free for logs; fold the snippet into the client
 	// message here, the one place that builds the Cursor-facing envelope.
@@ -426,9 +606,18 @@ func codexProviderAdapterError(err error) *adapterError {
 		message = upstreamStatusErr.ClientMessage()
 		upstreamStatus = upstreamStatusErr.Status
 	}
+
 	codeClass := codexClassifyError(message)
-	aerr := mapUpstreamForFamily(adapterRouteOpenAI, "codex", upstreamStatus, codeClass, "", message)
+	aerr := mapUpstreamForFamily(
+		adapterRouteOpenAI,
+		"codex",
+		upstreamStatus,
+		codeClass,
+		"",
+		message,
+	)
 	aerr.Cause = err
+
 	return aerr
 }
 
@@ -445,5 +634,6 @@ func codexClassifyError(message string) upstreamCodeClass {
 		strings.Contains(lowered, "unknown parameter") {
 		return upstreamClassSchemaViolation
 	}
+
 	return upstreamClassServerError
 }

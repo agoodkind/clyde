@@ -58,6 +58,7 @@ func (r *providerStatsRecorder) replacePricing(pricing adapterruntime.PricingTab
 	if r == nil {
 		return
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pricing = pricing
@@ -67,21 +68,30 @@ func (r *providerStatsRecorder) snapshot() ([]ProviderStats, time.Time) {
 	if r == nil {
 		return nil, time.Unix(0, 0)
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	out := make([]ProviderStats, 0, len(r.stats))
 	for _, stats := range r.stats {
 		out = append(out, stats)
 	}
-	slices.SortFunc(out, func(a ProviderStats, b ProviderStats) int {
-		if a.ProviderDetail < b.ProviderDetail {
-			return -1
-		}
-		if a.ProviderDetail > b.ProviderDetail {
-			return 1
-		}
-		return 0
-	})
+
+	slices.SortFunc(
+		out,
+		func(a ProviderStats, b ProviderStats) int {
+			if a.ProviderDetail < b.ProviderDetail {
+				return -1
+			}
+
+			if a.ProviderDetail > b.ProviderDetail {
+				return 1
+			}
+
+			return 0
+		},
+	)
+
 	return out, r.generationStartedAt
 }
 
@@ -90,13 +100,16 @@ func (r *providerStatsRecorder) record(ctx context.Context, ev adapterruntime.Re
 	if r == nil {
 		return
 	}
+
 	providerDetail := ev.Provider
 	if providerDetail == "" {
 		providerDetail = ev.Backend
 	}
+
 	if providerDetail == "" {
 		providerDetail = "unknown"
 	}
+
 	provider := providerid.MustParse(providerDetail)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -117,6 +130,7 @@ func (r *providerStatsRecorder) record(ctx context.Context, ev adapterruntime.Re
 		stats.Error = ev.Err
 	default:
 	}
+
 	r.stats[providerDetail] = stats
 }
 
@@ -128,26 +142,34 @@ func (r *providerStatsRecorder) record(ctx context.Context, ev adapterruntime.Re
 // from their recorded tokens, which fixes the prior codex cost=0 bug
 // where the codex dispatch path emitted CostMicrocents: 0 and the
 // daemon never counted codex spend.
-func (r *providerStatsRecorder) applyTerminalStats(stats ProviderStats, ev adapterruntime.RequestEvent) ProviderStats {
+func (r *providerStatsRecorder) applyTerminalStats(
+	stats ProviderStats,
+	ev adapterruntime.RequestEvent,
+) ProviderStats {
 	if stats.Inflight > 0 {
 		stats.Inflight--
 	}
+
 	if ev.Stream && stats.Streaming > 0 {
 		stats.Streaming--
 	}
+
 	stats.InputTokens += int64(ev.TokensIn)
 	stats.OutputTokens += int64(ev.TokensOut)
 	stats.CacheReadTokens += int64(ev.CacheReadTokens)
 	stats.CacheCreationTokens += int64(ev.CacheCreationTokens)
 	stats.DerivedCacheCreationTokens += int64(ev.DerivedCacheCreationTokens)
-	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
-		ModelID:             ev.ModelID,
-		TTL:                 "",
-		InputTokens:         ev.TokensIn,
-		OutputTokens:        ev.TokensOut,
-		CacheCreationTokens: ev.CacheCreationTokens,
-		CacheReadTokens:     ev.CacheReadTokens,
-	}, r.pricing)
+	breakdown := adapterruntime.EstimateCost(
+		adapterruntime.CostInputs{
+			ModelID:             ev.ModelID,
+			TTL:                 "",
+			InputTokens:         ev.TokensIn,
+			OutputTokens:        ev.TokensOut,
+			CacheCreationTokens: ev.CacheCreationTokens,
+			CacheReadTokens:     ev.CacheReadTokens,
+		},
+		r.pricing,
+	)
 	stats.EstimatedCostMicrocents += breakdown.TotalMicrocents
 	// TODO(prong2 rate-limit snapshot): record a per-request rate-limit
 	// snapshot here. Codex parses rate_limit windows in
@@ -161,5 +183,6 @@ func (r *providerStatsRecorder) applyTerminalStats(stats ProviderStats, ev adapt
 	if denominator > 0 {
 		stats.HitRatio = float64(stats.CacheReadTokens) / float64(denominator)
 	}
+
 	return stats
 }

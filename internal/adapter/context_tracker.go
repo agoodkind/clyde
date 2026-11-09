@@ -30,15 +30,22 @@ type contextUsageState struct {
 
 func newContextUsageTracker() *contextUsageTracker {
 	return &contextUsageTracker{
-		state: make(map[string]contextUsageState), mu: sync.
+		state: make(map[string]contextUsageState),
+		mu: sync.
 			Mutex{},
 	}
 }
 
 func (t *contextUsageTracker) Track(key string, raw Usage) trackedUsage {
 	if t == nil || strings.TrimSpace(key) == "" {
-		return trackedUsage{usage: raw, rawPrompt: raw.PromptTokens, rawTotal: raw.TotalTokens, rolledFrom: 0}
+		return trackedUsage{
+			usage:      raw,
+			rawPrompt:  raw.PromptTokens,
+			rawTotal:   raw.TotalTokens,
+			rolledFrom: 0,
+		}
 	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -70,15 +77,18 @@ func shouldResetTrackedContext(prev contextUsageState, raw Usage) bool {
 	if prev.LatestPrompt == 0 && prev.CumulativeOutput == 0 && prev.LastTotal == 0 {
 		return false
 	}
+
 	// When the prompt collapses hard relative to the previous turn, the
 	// conversation likely compacted or restarted. Keeping the old output
 	// tail would inflate the surfaced "context used" forever.
 	if raw.PromptTokens > 0 && prev.LatestPrompt > 0 && raw.PromptTokens*2 < prev.LatestPrompt {
 		return true
 	}
+
 	if raw.TotalTokens > 0 && prev.LastTotal > 0 && raw.TotalTokens*2 < prev.LastTotal {
 		return true
 	}
+
 	return false
 }
 
@@ -87,17 +97,35 @@ func requestContextTrackerKey(req ChatRequest, modelAlias string) string {
 	return requestContextTrackerKeyFromIngress(ic, req, modelAlias)
 }
 
-func requestContextTrackerKeyFromIngress(ic ingresscontract.IngressContext, req ChatRequest, modelAlias string) string {
+func requestContextTrackerKeyFromIngress(
+	ic ingresscontract.IngressContext,
+	req ChatRequest,
+	modelAlias string,
+) string {
 	if conversation := strings.TrimSpace(ic.ConversationID); conversation != "" {
 		return "cursor:" + conversation
 	}
+
 	if v := strings.TrimSpace(ic.User); v != "" {
 		return "user:" + v
 	}
-	if v := metadataString(req.Metadata, "conversation_id", "conversationId", "composerId", "composer_id", "thread_id", "threadId", "chat_id", "chatId"); v != "" {
+
+	if v := metadataString(
+		req.Metadata,
+		"conversation_id",
+		"conversationId",
+		"composerId",
+		"composer_id",
+		"thread_id",
+		"threadId",
+		"chat_id",
+		"chatId",
+	); v != "" {
 		return "meta:" + v
 	}
+
 	firstUser := ""
+
 	for _, msg := range req.Messages {
 		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
 			firstUser = strings.TrimSpace(FlattenContent(msg.Content))
@@ -106,10 +134,13 @@ func requestContextTrackerKeyFromIngress(ic ingresscontract.IngressContext, req 
 			}
 		}
 	}
+
 	if firstUser == "" {
 		return ""
 	}
+
 	sum := sha256.Sum256([]byte(modelAlias + "\n" + firstUser))
+
 	return "fingerprint:" + hex.EncodeToString(sum[:16])
 }
 
@@ -138,6 +169,7 @@ func ingressContextForRequest(req ChatRequest) ingresscontract.IngressContext {
 			MCPToolNames:      nil,
 		}
 	}
+
 	return contract.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
 }
 
@@ -145,10 +177,12 @@ func metadataString(raw json.RawMessage, keys ...string) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
+
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return ""
 	}
+
 	for _, key := range keys {
 		if v, ok := m[key]; ok {
 			var s string
@@ -157,5 +191,6 @@ func metadataString(raw json.RawMessage, keys ...string) string {
 			}
 		}
 	}
+
 	return ""
 }

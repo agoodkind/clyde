@@ -108,33 +108,53 @@ func contentShortcutBind(selector string) exportBind {
 // applies the flag. TestExportParamsMatchDeclarations fails before that.
 func exportBinds() map[string]exportBind {
 	binds := map[string]exportBind{
-		"format": stringBind(func(in *exportInput, v string) { in.Options.Format = conv.ExportFormat(v) }),
+		"format": stringBind(
+			func(in *exportInput, v string) { in.Options.Format = conv.ExportFormat(v) },
+		),
 		"whitespace": stringBind(func(in *exportInput, v string) {
 			mode := conv.WhitespaceMode(v)
 			in.Options.Whitespace = mode
 			recordWhitespaceSelection(in, mode)
 		}),
-		"history_start":       intBind(func(in *exportInput, v int) { in.Options.HistoryStart = v }),
-		"include_compactions": stringBind(func(in *exportInput, v string) { in.Options.Compaction.IncludeSelector = v }),
-		"full_history":        boolBind(func(in *exportInput, v bool) { in.Options.Compaction.FullHistory = v }),
-		"last_n":              intBind(func(in *exportInput, v int) { in.Options.LastN = v }),
-		"max_lines":           intBind(func(in *exportInput, v int) { in.Options.MaxLines = v }),
-		"max_tokens":          stringBind(func(in *exportInput, v string) { in.Options.MaxTokens = v }),
-		"token_model":         stringBind(func(in *exportInput, v string) { in.Options.TokenModel = v }),
-		"only":                strSliceBind(func(in *exportInput, v []string) { in.Kinds = append(in.Kinds, v...) }),
+		"history_start": intBind(
+			func(in *exportInput, v int) { in.Options.HistoryStart = v },
+		),
+		"include_compactions": stringBind(
+			func(in *exportInput, v string) { in.Options.Compaction.IncludeSelector = v },
+		),
+		"full_history": boolBind(
+			func(in *exportInput, v bool) { in.Options.Compaction.FullHistory = v },
+		),
+		"last_n":    intBind(func(in *exportInput, v int) { in.Options.LastN = v }),
+		"max_lines": intBind(func(in *exportInput, v int) { in.Options.MaxLines = v }),
+		"max_tokens": stringBind(
+			func(in *exportInput, v string) { in.Options.MaxTokens = v },
+		),
+		"token_model": stringBind(
+			func(in *exportInput, v string) { in.Options.TokenModel = v },
+		),
+		"only": strSliceBind(
+			func(in *exportInput, v []string) { in.Kinds = append(in.Kinds, v...) },
+		),
 	}
+
 	for _, declaration := range exportargs.Declarations() {
 		if _, ok := binds[declaration.Canonical]; ok {
 			continue
 		}
+
 		if slices.Contains(whitespaceValues, declaration.Canonical) {
-			binds[declaration.Canonical] = whitespaceShortcutBind(conv.WhitespaceMode(declaration.Canonical))
+			binds[declaration.Canonical] = whitespaceShortcutBind(
+				conv.WhitespaceMode(declaration.Canonical),
+			)
 			continue
 		}
+
 		if slices.Contains(conv.ContentKindSelectorValues(), declaration.Canonical) {
 			binds[declaration.Canonical] = contentShortcutBind(declaration.Canonical)
 		}
 	}
+
 	return binds
 }
 
@@ -142,18 +162,48 @@ func renderExportParam(declaration exportargs.Declaration, bind exportBind) Para
 	var param Param[exportInput]
 	switch declaration.Kind {
 	case exportargs.KindString:
-		param = StringParam(declaration.Canonical, declaration.Description, declaration.DefaultStr, declaration.Required, bind.str)
+		param = StringParam(
+			declaration.Canonical,
+			declaration.Description,
+			declaration.DefaultStr,
+			declaration.Required,
+			bind.str,
+		)
 	case exportargs.KindInt:
-		param = IntParam(declaration.Canonical, declaration.Description, declaration.DefaultInt, bind.integer)
+		param = IntParam(
+			declaration.Canonical,
+			declaration.Description,
+			declaration.DefaultInt,
+			bind.integer,
+		)
 	case exportargs.KindBool:
-		param = BoolParam(declaration.Canonical, declaration.Description, declaration.DefaultBool, bind.boolean)
+		param = BoolParam(
+			declaration.Canonical,
+			declaration.Description,
+			declaration.DefaultBool,
+			bind.boolean,
+		)
 	case exportargs.KindEnum:
-		param = EnumParam(declaration.Canonical, declaration.Description, declaration.DefaultStr, declaration.Values, bind.str)
+		param = EnumParam(
+			declaration.Canonical,
+			declaration.Description,
+			declaration.DefaultStr,
+			declaration.Values,
+			bind.str,
+		)
 	case exportargs.KindEnumList:
-		param = EnumListParam(declaration.Canonical, declaration.Description, declaration.Values, declaration.Required, bind.strSlice)
+		param = EnumListParam(
+			declaration.Canonical,
+			declaration.Description,
+			declaration.Values,
+			declaration.Required,
+			bind.strSlice,
+		)
 	}
+
 	param.Required = declaration.Required
 	param.CLIOnly = declaration.CLIOnly
+
 	return param
 }
 
@@ -161,18 +211,29 @@ func renderExportParam(declaration exportargs.Declaration, bind exportBind) Para
 // parameters, and declares output and stdout itself. Those two select a
 // destination file. The compaction path accepts no destination.
 func exportParams() []Param[exportInput] {
-	outputPathParam := StringParam("output", "Write the export to this path; MCP requires an absolute path. Use - for stdout on the terminal or inline output on MCP.", "", false,
-		func(in *exportInput, v string) { in.OutputPath = v })
+	outputPathParam := StringParam(
+		"output",
+		"Write the export to this path; MCP requires an absolute path. Use - for stdout on the terminal or inline output on MCP.",
+		"",
+		false,
+		func(in *exportInput, v string) { in.OutputPath = v },
+	)
 
-	stdoutParam := BoolParam("stdout", "Write the body to stdout on the terminal, equivalent to output -. On MCP, return the body inline when it is at most 32768 bytes.", false,
-		func(in *exportInput, v bool) { in.Stdout = v })
+	stdoutParam := BoolParam(
+		"stdout",
+		"Write the body to stdout on the terminal, equivalent to output -. On MCP, return the body inline when it is at most 32768 bytes.",
+		false,
+		func(in *exportInput, v bool) { in.Stdout = v },
+	)
 
 	binds := exportBinds()
 	declarations := exportargs.Declarations()
+
 	params := make([]Param[exportInput], 0, len(declarations)+2)
 	for _, declaration := range declarations {
 		params = append(params, renderExportParam(declaration, binds[declaration.Canonical]))
 	}
+
 	return append(params, outputPathParam, stdoutParam)
 }
 
@@ -194,8 +255,11 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 			"clyde conversation export claude:1a2b3c --all",
 		},
 		Args: []Arg[exportInput]{
-			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
-				func(in *exportInput, v string) { in.ConversationID = v }),
+			PositionalArg(
+				"conversation_id",
+				"Conversation id, native id, title, or artifact path.",
+				func(in *exportInput, v string) { in.ConversationID = v },
+			),
 		},
 		Params:         exportParams(),
 		New:            newExportInput,
@@ -208,12 +272,22 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 			if err != nil {
 				return exportPayload{}, err
 			}
+
 			in.Options.Whitespace = whitespace
 			content, err := conv.ResolveContentKinds(in.Kinds)
 			if err != nil {
-				slog.Warn("cli.conversation.export_content_invalid", "concern", "cli.conversation", "component", "cli", "err", err)
+				slog.Warn(
+					"cli.conversation.export_content_invalid",
+					"concern",
+					"cli.conversation",
+					"component",
+					"cli",
+					"err",
+					err,
+				)
 				return exportPayload{}, fmt.Errorf("select content kinds: %w", err)
 			}
+
 			in.Options.Content = content
 			compactionOptions, err := conv.NormalizeCompactionExportOptions(
 				in.Options.Compaction,
@@ -221,14 +295,28 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 				in.Options.LastN,
 			)
 			if err != nil {
-				slog.Warn("cli.conversation.export_compaction_invalid", "concern", "cli.conversation", "component", "cli", "err", err)
+				slog.Warn(
+					"cli.conversation.export_compaction_invalid",
+					"concern",
+					"cli.conversation",
+					"component",
+					"cli",
+					"err",
+					err,
+				)
 				return exportPayload{}, fmt.Errorf("select compaction controls: %w", err)
 			}
+
 			in.Options.Compaction = compactionOptions
 			if in.Stdout && in.OutputPath != "" && in.OutputPath != "-" {
-				return exportPayload{}, fmt.Errorf("select output destination: --stdout cannot be combined with --output %q", in.OutputPath)
+				return exportPayload{}, fmt.Errorf(
+					"select output destination: --stdout cannot be combined with --output %q",
+					in.OutputPath,
+				)
 			}
+
 			stdout := in.Stdout || in.OutputPath == "-"
+
 			return exportPayload{
 				ConversationID: in.ConversationID,
 				Options:        in.Options,
@@ -276,17 +364,22 @@ func exportDestinationPath(ctx context.Context, p exportPayload) (string, error)
 		if p.Stdout || p.OutputPath == "" {
 			return "", nil
 		}
+
 		if !filepath.IsAbs(p.OutputPath) {
 			return "", fmt.Errorf("MCP output path must be absolute")
 		}
+
 		return filepath.Clean(p.OutputPath), nil
 	}
+
 	if p.OutputPath != "" {
 		return absoluteExportPath(ctx, p.OutputPath)
 	}
+
 	if p.Stdout || copyRequested(ctx) {
 		return "", nil
 	}
+
 	return absoluteExportPath(ctx, defaultExportOutputPath(p.ConversationID, p.Options.Format))
 }
 
@@ -295,23 +388,47 @@ func absoluteExportPath(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(workingDirectory, path)
 	}
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		slog.WarnContext(ctx, "clispec.export_path_resolve_failed", "concern", "cli.conversation", "component", "clispec", "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.export_path_resolve_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("resolve export path %q: %w", path, err)
 	}
+
 	return absPath, nil
 }
 
 func exportWorkingDirectory(ctx context.Context) (string, error) {
 	directory, err := os.Getwd()
 	if err != nil {
-		slog.WarnContext(ctx, "clispec.export_cli_cwd_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.export_cli_cwd_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("get CLI working directory: %w", err)
 	}
+
 	return directory, nil
 }
 
@@ -323,25 +440,39 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 	} else {
 		body, err = daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
 	}
+
 	if err != nil {
 		return nil, logOperationError(ctx, "export transcript", err)
 	}
+
 	spec := exportTokenSpec(ctx, p.ConversationID, p.Options.TokenModel)
 	path, err := exportDestinationPath(ctx, p)
 	if err != nil {
-		slog.WarnContext(ctx, "clispec.export_destination_invalid", "concern", "cli.conversation", "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.export_destination_invalid",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("select export destination: %w", err)
 	}
+
 	if surfaceFromContext(ctx) == SurfaceMCP && path == "" && len(body) > maxInlineMCPExportBytes {
 		path, err = temporaryMCPExportPath(ctx, p)
 		if err != nil {
 			return nil, err
 		}
 	}
+
 	text := ""
 	if path != "" {
 		text = wroteConfirmation(path, body, tokenEstimateFromSpec(spec, body))
 	}
+
 	return artifactResult{
 		Payload: exportTranscriptOutput{
 			ConversationID: p.ConversationID,
@@ -371,15 +502,40 @@ const temporaryMCPExportDirPattern = "clyde-export-"
 func temporaryMCPExportPath(ctx context.Context, p exportPayload) (string, error) {
 	directory, err := os.MkdirTemp("", temporaryMCPExportDirPattern)
 	if err != nil {
-		slog.WarnContext(ctx, "clispec.export_temp_dir_failed", "concern", "mcp.server.context", "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.export_temp_dir_failed",
+			"concern",
+			"mcp.server.context",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("create temporary export directory: %w", err)
 	}
+
 	absDirectory, err := filepath.Abs(directory)
 	if err != nil {
-		slog.WarnContext(ctx, "clispec.export_temp_dir_resolve_failed", "concern", "mcp.server.context", "component", "clispec", "path", directory, "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.export_temp_dir_resolve_failed",
+			"concern",
+			"mcp.server.context",
+			"component",
+			"clispec",
+			"path",
+			directory,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("resolve temporary export directory %s: %w", directory, err)
 	}
-	return filepath.Join(absDirectory, defaultExportOutputPath(p.ConversationID, p.Options.Format)), nil
+
+	return filepath.Join(
+		absDirectory,
+		defaultExportOutputPath(p.ConversationID, p.Options.Format),
+	), nil
 }
 
 func exportTailOp() Operation[exportTailInput, exportTailPayload] {
@@ -394,12 +550,19 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 			"clyde conversation export tail claude:1a2b3c --last-n 20",
 		},
 		Args: []Arg[exportTailInput]{
-			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
-				func(in *exportTailInput, v string) { in.ConversationID = v }),
+			PositionalArg(
+				"conversation_id",
+				"Conversation id, native id, title, or artifact path.",
+				func(in *exportTailInput, v string) { in.ConversationID = v },
+			),
 		},
 		Params: []Param[exportTailInput]{
-			IntParam("last_n", "Visible message count to keep.", 0,
-				func(in *exportTailInput, v int) { in.LastN = v }),
+			IntParam(
+				"last_n",
+				"Visible message count to keep.",
+				0,
+				func(in *exportTailInput, v int) { in.LastN = v },
+			),
 		},
 		New: func() exportTailInput {
 			return exportTailInput{ConversationID: "", LastN: 0}
@@ -412,6 +575,7 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 			if in.LastN <= 0 {
 				return exportTailPayload{}, fmt.Errorf("--last-n must be greater than 0")
 			}
+
 			return exportTailPayload{
 				ConversationID: in.ConversationID,
 				Options: conv.ExportOptions{
@@ -422,7 +586,10 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 					MaxTokens:    "",
 					TokenModel:   "",
 					Whitespace:   conv.WhitespaceDense,
-					Content:      conv.NewContentKindSet(conv.ContentKindChat, conv.ContentKindToolSummaries),
+					Content: conv.NewContentKindSet(
+						conv.ContentKindChat,
+						conv.ContentKindToolSummaries,
+					),
 					Compaction: conv.CompactionExportOptions{
 						IncludeSelector: "0",
 						FullHistory:     false,
@@ -437,6 +604,7 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 				OutputPath:     "",
 				Stdout:         true,
 			}
+
 			return runExportTranscript(ctx, payload, surface, sink)
 		},
 		runResult: nil,
@@ -456,16 +624,29 @@ func runExportTranscript(
 	} else {
 		body, err = daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
 	}
+
 	if err != nil {
 		return logFail(ctx, surface, "export_failed", "export transcript", err)
 	}
+
 	if surface == SurfaceCLI {
 		return writeCLIExportBody(ctx, p, body, sink)
 	}
+
 	if err := sink.Bytes(body); err != nil {
-		slog.WarnContext(ctx, "mcp.conversation.export_write_failed", "concern", "mcp.server.context", "component", "mcpserver", "err", err)
+		slog.WarnContext(
+			ctx,
+			"mcp.conversation.export_write_failed",
+			"concern",
+			"mcp.server.context",
+			"component",
+			"mcpserver",
+			"err",
+			err,
+		)
 		return fmt.Errorf("export transcript: write MCP body: %w", err)
 	}
+
 	return nil
 }
 
@@ -477,11 +658,22 @@ func writeCLIExportBody(
 ) error {
 	if p.Stdout {
 		if err := sink.RawBytes(body); err != nil {
-			slog.WarnContext(ctx, "cli.conversation.export_stdout_write_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+			slog.WarnContext(
+				ctx,
+				"cli.conversation.export_stdout_write_failed",
+				"concern",
+				"cli.conversation",
+				"component",
+				"cli",
+				"err",
+				err,
+			)
 			return fmt.Errorf("export transcript: write stdout: %w", err)
 		}
+
 		return nil
 	}
+
 	return writeCLIExportFile(ctx, p, body, sink)
 }
 
@@ -493,17 +685,42 @@ func writeCLIExportFile(
 ) error {
 	path, err := exportDestinationPath(ctx, p)
 	if err != nil {
-		slog.WarnContext(ctx, "clispec.export_destination_invalid", "concern", "cli.conversation", "component", "clispec", "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.export_destination_invalid",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"err",
+			err,
+		)
 		return fmt.Errorf("select export destination: %w", err)
 	}
+
 	if err := sink.WriteFile(path, body); err != nil {
-		slog.WarnContext(ctx, "cli.conversation.export_write_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"cli.conversation.export_write_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"cli",
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return fmt.Errorf("export transcript: write output %s: %w", path, err)
 	}
+
 	spec := exportTokenSpec(ctx, p.ConversationID, p.Options.TokenModel)
-	if err := sink.Text(wroteConfirmation(path, body, tokenEstimateFromSpec(spec, body))); err != nil {
+	if err := sink.Text(
+		wroteConfirmation(path, body, tokenEstimateFromSpec(spec, body)),
+	); err != nil {
 		return fmt.Errorf("export transcript: write confirmation: %w", err)
 	}
+
 	return nil
 }
 
@@ -512,6 +729,7 @@ func defaultExportOutputPath(conversationID string, format conv.ExportFormat) st
 	if base == "" {
 		base = "transcript"
 	}
+
 	return base + exportExtension(format)
 }
 
@@ -520,8 +738,10 @@ func sanitizeExportBasename(raw string) string {
 	if trimmed == "" {
 		return ""
 	}
+
 	var out []rune
 	lastDash := false
+
 	for _, r := range trimmed {
 		switch {
 		case unicode.IsLetter(r), unicode.IsDigit(r):
@@ -537,10 +757,12 @@ func sanitizeExportBasename(raw string) string {
 			}
 		}
 	}
+
 	sanitized := strings.Trim(string(out), "-")
 	if sanitized == "" {
 		return ""
 	}
+
 	return filepath.Clean(sanitized)
 }
 
@@ -564,9 +786,21 @@ var lookupExportTokenSpec = daemon.ExportTokenSpec
 func exportTokenSpec(ctx context.Context, conversationID, tokenModel string) *tokencount.Spec {
 	spec, err := lookupExportTokenSpec(ctx, conversationID, tokenModel)
 	if err != nil {
-		slog.WarnContext(ctx, "clispec.export_token_spec_failed", "concern", "cli.conversation", "component", "clispec", "conversation_id", conversationID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"clispec.export_token_spec_failed",
+			"concern",
+			"cli.conversation",
+			"component",
+			"clispec",
+			"conversation_id",
+			conversationID,
+			"err",
+			err,
+		)
 		return nil
 	}
+
 	return spec
 }
 
@@ -574,5 +808,6 @@ func tokenEstimateFromSpec(spec *tokencount.Spec, body []byte) tokencount.Estima
 	if spec == nil {
 		return tokencount.Estimate{Tokenizer: "", Tokens: 0}
 	}
+
 	return spec.Count(string(body))
 }

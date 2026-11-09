@@ -40,24 +40,53 @@ type ComposerBubbleRef struct {
 
 // ReadComposerHeader reads and decodes one `composerData:<composerId>` row from
 // a Cursor global database.
-func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (ComposerHeader, bool, error) {
+func ReadComposerHeader(
+	ctx context.Context,
+	db *sql.DB,
+	composerID string,
+) (ComposerHeader, bool, error) {
 	var emptyHeader ComposerHeader
 
 	rows, err := ReadKVRowsByPrefix(ctx, db, KVTableCursorDiskKV, composerDataKey(composerID))
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_header_read_failed", "concern", concern, "composer_id", composerID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_header_read_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
 		return emptyHeader, false, fmt.Errorf("read cursor composer header %q: %w", composerID, err)
 	}
+
 	if len(rows) == 0 {
 		return emptyHeader, false, nil
 	}
+
 	value := rows[0].Value
 
 	header, err := DecodeComposerHeaderJSON(value)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_header_decode_failed", "concern", concern, "composer_id", composerID, "err", err)
-		return emptyHeader, false, fmt.Errorf("decode cursor composer header %q: %w", composerID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_header_decode_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
+		return emptyHeader, false, fmt.Errorf(
+			"decode cursor composer header %q: %w",
+			composerID,
+			err,
+		)
 	}
+
 	return header, true, nil
 }
 

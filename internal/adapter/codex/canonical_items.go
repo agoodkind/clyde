@@ -41,10 +41,13 @@ func continuationItemEqual(a, b codexwire.InputItem) bool {
 	bEvent, bOK := canonicalContinuationEvent(b)
 	if aOK && bOK {
 		if aEvent.Identity != "" || bEvent.Identity != "" {
-			return aEvent.Kind == bEvent.Kind && aEvent.Identity != "" && aEvent.Identity == bEvent.Identity
+			return aEvent.Kind == bEvent.Kind && aEvent.Identity != "" &&
+				aEvent.Identity == bEvent.Identity
 		}
+
 		return aEvent == bEvent
 	}
+
 	return jsonEqual(canonicalContinuationItem(a), canonicalContinuationItem(b))
 }
 
@@ -55,7 +58,9 @@ func canonicalContinuationEvent(item codexwire.InputItem) (continuationEvent, bo
 			Kind:     continuationKindMessage,
 			Role:     strings.ToLower(strings.TrimSpace(item.Role)),
 			Text:     continuationContentText(item.Content),
-			Identity: "", Name: "", Payload: "",
+			Identity: "",
+			Name:     "",
+			Payload:  "",
 		}, true
 	case codexwire.ItemTypeFunctionCall:
 		// The tool name and arguments are opaque content; the arguments
@@ -65,7 +70,9 @@ func canonicalContinuationEvent(item codexwire.InputItem) (continuationEvent, bo
 			Kind:     continuationKindToolCall,
 			Identity: strings.TrimSpace(item.CallID),
 			Name:     strings.TrimSpace(item.Name),
-			Payload:  canonicalContinuationString(item.Arguments), Role: "", Text: "",
+			Payload:  canonicalContinuationString(item.Arguments),
+			Role:     "",
+			Text:     "",
 		}, true
 	case codexwire.ItemTypeLocalShellCall:
 		// local_shell_call is a codex-internal item TYPE, so the canonical
@@ -74,30 +81,46 @@ func canonicalContinuationEvent(item codexwire.InputItem) (continuationEvent, bo
 			Kind:     continuationKindToolCall,
 			Identity: strings.TrimSpace(item.CallID),
 			Name:     string(codexwire.ItemTypeLocalShellCall),
-			Payload:  canonicalContinuationLocalShellAction(item.Action), Role: "", Text: "",
+			Payload:  canonicalContinuationLocalShellAction(item.Action),
+			Role:     "",
+			Text:     "",
 		}, true
 	case codexwire.ItemTypeCustomToolCall:
 		return continuationEvent{
 			Kind:     continuationKindToolCall,
 			Identity: strings.TrimSpace(item.CallID),
 			Name:     strings.TrimSpace(item.Name),
-			Payload:  item.Input, Role: "", Text: "",
+			Payload:  item.Input,
+			Role:     "",
+			Text:     "",
 		}, true
 	case codexwire.ItemTypeFunctionCallOutput, codexwire.ItemTypeCustomToolCallOutput:
 		return continuationEvent{
 			Kind:     continuationKindToolOutput,
 			Identity: strings.TrimSpace(item.CallID),
-			Text:     codexwire.OutputText(item.Output), Role: "", Name: "", Payload: "",
+			Text:     codexwire.OutputText(item.Output),
+			Role:     "",
+			Name:     "",
+			Payload:  "",
 		}, true
 	case codexwire.ItemTypeReasoning:
 		return continuationEvent{
 			Kind:     continuationKindReasoning,
 			Identity: strings.TrimSpace(item.ID),
 			Text:     continuationReasoningText(item),
-			Payload:  item.EncryptedContent, Role: "", Name: "",
+			Payload:  item.EncryptedContent,
+			Role:     "",
+			Name:     "",
 		}, true
 	default:
-		return continuationEvent{Kind: "", Identity: "", Role: "", Name: "", Text: "", Payload: ""}, false
+		return continuationEvent{
+			Kind:     "",
+			Identity: "",
+			Role:     "",
+			Name:     "",
+			Text:     "",
+			Payload:  "",
+		}, false
 	}
 }
 
@@ -166,6 +189,7 @@ func canonicalContinuationItem(item codexwire.InputItem) canonicalContinuationIt
 		// view captured here; the equality path is the event
 		// comparison above.
 	}
+
 	return out
 }
 
@@ -173,6 +197,7 @@ func continuationContentText(items codexwire.ContentItems) string {
 	if text := items.Text(); text != "" {
 		return SanitizeForUpstreamCache(text)
 	}
+
 	return ""
 }
 
@@ -180,15 +205,18 @@ func continuationReasoningText(item codexwire.InputItem) string {
 	if len(item.Summary) == 0 {
 		return ""
 	}
+
 	parts := make([]string, 0, len(item.Summary))
 	for _, summary := range item.Summary {
 		if summary.Text != "" {
 			parts = append(parts, summary.Text)
 		}
 	}
+
 	if len(parts) == 0 {
 		return ""
 	}
+
 	return SanitizeForUpstreamCache(strings.Join(parts, "\n"))
 }
 
@@ -197,14 +225,17 @@ func canonicalContinuationString(raw string) string {
 	if raw == "" {
 		return ""
 	}
+
 	var decoded json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
 		return raw
 	}
+
 	encoded, err := json.Marshal(decoded)
 	if err != nil {
 		return raw
 	}
+
 	return string(encoded)
 }
 
@@ -220,17 +251,21 @@ func canonicalContinuationLocalShellAction(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+
 	var action codexwire.LocalShellAction
 	if err := json.Unmarshal(raw, &action); err != nil {
 		return ""
 	}
+
 	view := canonicalShellArgumentsView{Command: "", Workdir: "", TimeoutMs: nil}
 	if command := CommandString(action.Command); command != "" {
 		view.Command = command
 	}
+
 	if workdir := action.WorkingDir(); workdir != "" {
 		view.Workdir = workdir
 	}
+
 	if action.TimeoutMs != nil {
 		ms := *action.TimeoutMs
 		view.TimeoutMs = &ms
@@ -238,6 +273,7 @@ func canonicalContinuationLocalShellAction(raw json.RawMessage) string {
 		ms := *action.BlockUntilMs
 		view.TimeoutMs = &ms
 	}
+
 	return canonicalContinuationJSON(view)
 }
 
@@ -245,10 +281,12 @@ func localShellCommandText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+
 	var action codexwire.LocalShellAction
 	if err := json.Unmarshal(raw, &action); err != nil {
 		return ""
 	}
+
 	return CommandString(action.Command)
 }
 
@@ -256,10 +294,12 @@ func localShellWorkdir(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+
 	var action codexwire.LocalShellAction
 	if err := json.Unmarshal(raw, &action); err != nil {
 		return ""
 	}
+
 	return action.WorkingDir()
 }
 
@@ -268,6 +308,7 @@ func canonicalContinuationJSON(value canonicalShellArgumentsView) string {
 	if err != nil {
 		return ""
 	}
+
 	return string(encoded)
 }
 
@@ -276,9 +317,11 @@ func jsonEqual(a, b canonicalContinuationItemView) bool {
 	if err != nil {
 		return false
 	}
+
 	bb, err := json.Marshal(b)
 	if err != nil {
 		return false
 	}
+
 	return string(ab) == string(bb)
 }

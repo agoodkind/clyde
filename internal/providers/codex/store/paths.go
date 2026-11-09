@@ -34,16 +34,20 @@ func ResolveStorePaths(ctx context.Context, codexHome, sqliteHome string) (Store
 	if err != nil {
 		return StorePaths{}, err
 	}
+
 	sqlite := strings.TrimSpace(sqliteHome)
 	if sqlite == "" {
 		sqlite = strings.TrimSpace(os.Getenv("CODEX_SQLITE_HOME"))
 	}
+
 	if sqlite == "" {
 		sqlite = home
 	}
+
 	if abs, err := filepath.Abs(sqlite); err == nil {
 		sqlite = abs
 	}
+
 	return StorePaths{
 		CodexHome:           home,
 		SQLiteHome:          filepath.Clean(sqlite),
@@ -64,24 +68,44 @@ func resolveCodexHome(ctx context.Context, value string) (string, error) {
 	if home == "" {
 		home = strings.TrimSpace(os.Getenv("CODEX_HOME"))
 	}
+
 	if home == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			slog.ErrorContext(ctx, "codex.store.home_resolve_failed", "concern", "providers.codex.store", "err", err)
+			slog.ErrorContext(
+				ctx,
+				"codex.store.home_resolve_failed",
+				"concern",
+				"providers.codex.store",
+				"err",
+				err,
+			)
 			return "", fmt.Errorf("resolve codex home: %w", err)
 		}
+
 		home = filepath.Join(userHome, ".codex")
 	}
+
 	if len(home) > 0 && home[0] == '~' {
 		if _, err := os.UserHomeDir(); err != nil {
-			slog.ErrorContext(ctx, "codex.store.home_expand_failed", "concern", "providers.codex.store", "err", err)
+			slog.ErrorContext(
+				ctx,
+				"codex.store.home_expand_failed",
+				"concern",
+				"providers.codex.store",
+				"err",
+				err,
+			)
 			return "", fmt.Errorf("expand codex home: %w", err)
 		}
+
 		home = homedir.Expand(home)
 	}
+
 	if abs, err := filepath.Abs(home); err == nil {
 		home = abs
 	}
+
 	return filepath.Clean(home), nil
 }
 

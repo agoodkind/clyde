@@ -54,7 +54,9 @@ const (
 
 var (
 	// ErrAudioUnsupported is returned when a message includes an input_audio part.
-	ErrAudioUnsupported = errors.New("audio content parts are not supported by the Anthropic backend")
+	ErrAudioUnsupported = errors.New(
+		"audio content parts are not supported by the Anthropic backend",
+	)
 
 	// ErrUnknownToolType is returned when tools[].type is set to a value other than "function".
 	ErrUnknownToolType = errors.New("tool.type must be \"function\"")
@@ -86,10 +88,16 @@ type (
 // default is [adapterrender.MaterializeNativeThinkingBlock]; callers that
 // pass an empty string get that default for backward compatibility with
 // existing tests.
-func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int, inboundThinkingStrategy adapterrender.MaterializationStrategy) (AnthRequest, error) {
+func TranslateRequest(
+	req OpenAIRequest,
+	systemPrefix string,
+	maxTokens int,
+	inboundThinkingStrategy adapterrender.MaterializationStrategy,
+) (AnthRequest, error) {
 	if inboundThinkingStrategy == "" {
 		inboundThinkingStrategy = adapterrender.MaterializeNativeThinkingBlock
 	}
+
 	systemPieces, out, err := translateMessages(req.Messages, inboundThinkingStrategy)
 	if err != nil {
 		return AnthRequest{}, err
@@ -132,18 +140,22 @@ func translateMessages(
 ) ([]string, []AnthMessage, error) {
 	var systemPieces []string
 	var out []AnthMessage
+
 	for msgIdx, msg := range messages {
 		piece, anthMsg, err := translateMessage(msgIdx, msg, inboundThinkingStrategy)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		if piece != "" {
 			systemPieces = append(systemPieces, piece)
 		}
+
 		if anthMsg != nil {
 			out = append(out, *anthMsg)
 		}
 	}
+
 	return systemPieces, out, nil
 }
 
@@ -161,33 +173,41 @@ func translateMessage(
 		if strings.TrimSpace(t) == "" {
 			return "", nil, nil
 		}
+
 		return t, nil, nil
 	case openAIChatRoleUser:
 		blocks, err := openAIMessageToUserBlocks(msgIdx, msg)
 		if err != nil {
 			return "", nil, err
 		}
+
 		if len(blocks) == 0 {
 			return "", nil, nil
 		}
+
 		return "", &AnthMessage{Role: "user", Content: blocks}, nil
 	case openAIChatRoleAssistant:
 		blocks, err := openAIMessageToAssistantBlocks(msgIdx, msg, inboundThinkingStrategy)
 		if err != nil {
 			return "", nil, err
 		}
+
 		if len(blocks) == 0 && len(msg.ToolCalls) == 0 {
 			return "", nil, nil
 		}
+
 		return "", &AnthMessage{Role: "assistant", Content: blocks}, nil
 	case openAIChatRoleTool, openAIChatRoleFunction:
 		result := flattenContent(msg.Content)
 		if result == "" {
 			result = " "
 		}
+
 		return "", &AnthMessage{
-			Role:    "user",
-			Content: []AnthContentBlock{ToolResultBlock{ToolUseID: msg.ToolCallID, ResultContent: result}},
+			Role: "user",
+			Content: []AnthContentBlock{
+				ToolResultBlock{ToolUseID: msg.ToolCallID, ResultContent: result},
+			},
 		}, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported message role %q", msg.Role)
@@ -201,12 +221,15 @@ func resolveToolChoice(req OpenAIRequest) (*AnthToolChoice, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if req.ParallelTools != nil && !*req.ParallelTools {
 		if toolChoice == nil {
 			toolChoice = &AnthToolChoice{Type: "auto", Name: "", DisableParallelToolUse: false}
 		}
+
 		toolChoice.DisableParallelToolUse = true
 	}
+
 	return toolChoice, nil
 }
 
@@ -223,24 +246,41 @@ func logRequestTranslated(
 	for _, t := range tools {
 		toolNames = append(toolNames, t.Name)
 	}
+
 	choiceType := ""
 	choiceName := ""
 	if toolChoice != nil {
 		choiceType = toolChoice.Type
 		choiceName = toolChoice.Name
 	}
+
 	toolUseCount, toolResultCount := countToolBlocks(out)
-	anthropicBackendLog.Logger().Info("adapter.anthropic.request.translated", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-		"model", req.Model,
-		"system_len", len(systemStr),
-		"message_count", len(out),
-		"tool_count", len(tools),
-		"tool_names", toolNames,
-		"tool_choice_type", choiceType,
-		"tool_choice_name", choiceName,
-		"tool_use_count", toolUseCount,
-		"tool_result_count", toolResultCount,
-		"stream", req.Stream,
+	anthropicBackendLog.Logger().Info(
+		"adapter.anthropic.request.translated",
+		"concern",
+		"adapter.providers.anthropic.request",
+		"subcomponent",
+		"anthropic",
+		"model",
+		req.Model,
+		"system_len",
+		len(systemStr),
+		"message_count",
+		len(out),
+		"tool_count",
+		len(tools),
+		"tool_names",
+		toolNames,
+		"tool_choice_type",
+		choiceType,
+		"tool_choice_name",
+		choiceName,
+		"tool_use_count",
+		toolUseCount,
+		"tool_result_count",
+		toolResultCount,
+		"stream",
+		req.Stream,
 	)
 }
 
@@ -250,12 +290,15 @@ func joinSystem(prefix, collected string) string {
 	if prefix == "" {
 		return collected
 	}
+
 	if collected == "" {
 		return prefix
 	}
+
 	if strings.HasPrefix(collected, prefix) {
 		return collected
 	}
+
 	return prefix + "\n\n" + collected
 }
 
@@ -263,7 +306,9 @@ func mergeConsecutiveSameRole(in []AnthMessage) []AnthMessage {
 	if len(in) <= 1 {
 		return in
 	}
+
 	out := make([]AnthMessage, 0, len(in))
+
 	cur := in[0]
 	for i := 1; i < len(in); i++ {
 		next := in[i]
@@ -271,10 +316,13 @@ func mergeConsecutiveSameRole(in []AnthMessage) []AnthMessage {
 			cur.Content = append(cur.Content, next.Content...)
 			continue
 		}
+
 		out = append(out, cur)
 		cur = next
 	}
+
 	out = append(out, cur)
+
 	return out
 }
 
@@ -285,25 +333,37 @@ func dropTrailingAssistantPrefill(in []AnthMessage) []AnthMessage {
 	if len(in) < 2 {
 		return in
 	}
+
 	last := in[len(in)-1]
 	prev := in[len(in)-2]
 	if last.Role != "assistant" || prev.Role != "user" {
 		return in
 	}
+
 	if assistantHasToolUse(last) {
 		return in
 	}
 
 	textBytes := 0
+
 	for _, block := range last.Content {
 		if tb, ok := block.(TextBlock); ok {
 			textBytes += len(tb.Text)
 		}
 	}
-	anthropicBackendLog.Logger().Info("adapter.anthropic.trailing_assistant_prefill.dropped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-		"text_bytes", textBytes,
-		"block_count", len(last.Content),
+
+	anthropicBackendLog.Logger().Info(
+		"adapter.anthropic.trailing_assistant_prefill.dropped",
+		"concern",
+		"adapter.providers.anthropic.request",
+		"subcomponent",
+		"anthropic_mapper",
+		"text_bytes",
+		textBytes,
+		"block_count",
+		len(last.Content),
 	)
+
 	return in[:len(in)-1]
 }
 
@@ -313,6 +373,7 @@ func assistantHasToolUse(msg AnthMessage) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -320,43 +381,66 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 	log := anthropicBackendLog.Logger()
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
+
 	for partIdx, p := range parts {
 		switch openAIContentPartType(p.Type) {
 		case openAIContentPartTypeText:
 			if p.Text == "" {
 				continue
 			}
+
 			blocks = append(blocks, TextBlock{Text: p.Text})
 		case openAIContentPartTypeImageURL:
 			if p.ImageURL == nil {
 				continue
 			}
+
 			src, err := imageURLToSource(p.ImageURL.URL)
 			if err != nil {
-				log.Warn("adapter.anthropic.user_part.image_rejected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-					"msg_idx", msgIdx,
-					"part_idx", partIdx,
-					"err", err.Error(),
+				log.Warn(
+					"adapter.anthropic.user_part.image_rejected",
+					"concern",
+					"adapter.providers.anthropic.request",
+					"subcomponent",
+					"anthropic_mapper",
+					"msg_idx",
+					msgIdx,
+					"part_idx",
+					partIdx,
+					"err",
+					err.Error(),
 				)
+
 				return nil, err
 			}
+
 			blocks = append(blocks, ImageBlock{Source: src})
 		case openAIContentPartTypeInputAudio:
-			log.Warn("adapter.anthropic.user_part.audio_rejected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-				"msg_idx", msgIdx,
-				"part_idx", partIdx,
+			log.Warn(
+				"adapter.anthropic.user_part.audio_rejected",
+				"concern",
+				"adapter.providers.anthropic.request",
+				"subcomponent",
+				"anthropic_mapper",
+				"msg_idx",
+				msgIdx,
+				"part_idx",
+				partIdx,
 			)
+
 			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
 		case openAIContentPartTypeRefusal:
 			if p.Refusal == "" {
 				continue
 			}
+
 			blocks = append(blocks, TextBlock{Text: p.Refusal})
 		case openAIContentPartTypeToolResult:
 			result := flattenToolResultContent(p.Content)
 			if result == "" {
 				result = " "
 			}
+
 			blocks = append(blocks, ToolResultBlock{ToolUseID: p.ToolUseID, ResultContent: result})
 		case openAIContentPartTypeToolUse, openAIContentPartTypeThinking:
 			// These part kinds only appear on assistant messages; the
@@ -364,14 +448,23 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 			// branch below to preserve any opaque text.
 			fallthrough
 		default:
-			log.Warn("adapter.anthropic.user_part.unknown_type", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-				"msg_idx", msgIdx,
-				"part_idx", partIdx,
-				"part_type", p.Type,
+			log.Warn(
+				"adapter.anthropic.user_part.unknown_type",
+				"concern",
+				"adapter.providers.anthropic.request",
+				"subcomponent",
+				"anthropic",
+				"msg_idx",
+				msgIdx,
+				"part_idx",
+				partIdx,
+				"part_type",
+				p.Type,
 			)
 			blocks = append(blocks, TextBlock{Text: "[" + p.Type + "]"})
 		}
 	}
+
 	return blocks, nil
 }
 
@@ -382,23 +475,29 @@ func flattenToolResultContent(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s
 	}
+
 	var parts []OpenAIContentPart
 	if err := json.Unmarshal(raw, &parts); err == nil {
 		var b strings.Builder
+
 		for _, p := range parts {
 			if p.Type == "text" && p.Text != "" {
 				if b.Len() > 0 {
 					b.WriteByte('\n')
 				}
+
 				b.WriteString(p.Text)
 			}
 		}
+
 		return b.String()
 	}
+
 	return string(raw)
 }
 
@@ -416,23 +515,32 @@ func countToolBlocks(out []AnthMessage) (toolUse, toolResult int) {
 			}
 		}
 	}
+
 	return toolUse, toolResult
 }
 
-func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinkingStrategy adapterrender.MaterializationStrategy) ([]AnthContentBlock, error) {
+func openAIMessageToAssistantBlocks(
+	msgIdx int,
+	msg OpenAIMessage,
+	inboundThinkingStrategy adapterrender.MaterializationStrategy,
+) ([]AnthContentBlock, error) {
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
+
 	for partIdx, p := range parts {
 		partBlocks, err := assistantPartToBlocks(msgIdx, partIdx, p, inboundThinkingStrategy)
 		if err != nil {
 			return nil, err
 		}
+
 		blocks = append(blocks, partBlocks...)
 	}
+
 	for _, tc := range msg.ToolCalls {
 		raw := toolCallArgumentsJSON(tc.Function.Arguments)
 		blocks = append(blocks, ToolUseBlock{ID: tc.ID, Name: tc.Function.Name, Input: raw})
 	}
+
 	return blocks, nil
 }
 
@@ -453,10 +561,18 @@ func assistantPartToBlocks(
 	case openAIContentPartTypeImageURL:
 		return assistantImagePart(msgIdx, partIdx, p)
 	case openAIContentPartTypeInputAudio:
-		log.Warn("adapter.anthropic.assistant_part.audio_rejected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-			"msg_idx", msgIdx,
-			"part_idx", partIdx,
+		log.Warn(
+			"adapter.anthropic.assistant_part.audio_rejected",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"subcomponent",
+			"anthropic_mapper",
+			"msg_idx",
+			msgIdx,
+			"part_idx",
+			partIdx,
 		)
+
 		return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
 	case openAIContentPartTypeRefusal:
 		// Mirror the assistant-text path: a refusal block can also
@@ -468,6 +584,7 @@ func assistantPartToBlocks(
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
 		}
+
 		return []AnthContentBlock{ToolUseBlock{ID: p.ID, Name: p.Name, Input: input}}, nil
 	case openAIContentPartTypeThinking:
 		return assistantThinkingPart(msgIdx, partIdx, p), nil
@@ -477,11 +594,20 @@ func assistantPartToBlocks(
 		// unknown-type branch and logs.
 		fallthrough
 	default:
-		log.Warn("adapter.anthropic.assistant_part.unknown_type", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-			"msg_idx", msgIdx,
-			"part_idx", partIdx,
-			"part_type", p.Type,
+		log.Warn(
+			"adapter.anthropic.assistant_part.unknown_type",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"subcomponent",
+			"anthropic",
+			"msg_idx",
+			msgIdx,
+			"part_idx",
+			partIdx,
+			"part_type",
+			p.Type,
 		)
+
 		return nil, nil
 	}
 }
@@ -492,14 +618,25 @@ func assistantThinkingPart(msgIdx int, partIdx int, p OpenAIContentPart) []AnthC
 	if signature != "" {
 		return []AnthContentBlock{ThinkingBlock{Thinking: p.Thinking, Signature: p.Signature}}
 	}
+
 	if body == "" {
 		return nil
 	}
-	anthropicBackendLog.Logger().Debug("adapter.anthropic.thinking.raw_unsigned_injected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-		"msg_idx", msgIdx,
-		"part_idx", partIdx,
-		"body_len", len(body),
+
+	anthropicBackendLog.Logger().Debug(
+		"adapter.anthropic.thinking.raw_unsigned_injected",
+		"concern",
+		"adapter.providers.anthropic.request",
+		"subcomponent",
+		"anthropic_mapper",
+		"msg_idx",
+		msgIdx,
+		"part_idx",
+		partIdx,
+		"body_len",
+		len(body),
 	)
+
 	return []AnthContentBlock{TextBlock{Text: body}}
 }
 
@@ -519,13 +656,16 @@ func materializeSyntheticAssistantText(
 	parts := adapterrender.ExtractSyntheticParts(text)
 	materialized := adapterrender.MaterializeSyntheticParts(parts, inboundThinkingStrategy)
 	var blocks []AnthContentBlock
+
 	for _, mp := range materialized {
 		block, ok := materializedPartToBlock(mp)
 		if !ok {
 			continue
 		}
+
 		blocks = append(blocks, block)
 	}
+
 	return blocks
 }
 
@@ -555,6 +695,7 @@ func materializedPartToBlock(mp adapterrender.MaterializedPart) (AnthContentBloc
 		if strings.TrimSpace(mp.Body) == "" {
 			return nil, false
 		}
+
 		return TextBlock{Text: mp.Body}, true
 	default:
 		return nil, false
@@ -566,21 +707,40 @@ func nativeThinkingBlock(mp adapterrender.MaterializedPart) (AnthContentBlock, b
 	if body == "" {
 		return nil, false
 	}
+
 	log := anthropicBackendLog.Logger()
 	if mp.Origin == adapterrender.OriginAnthropic {
 		if strings.TrimSpace(mp.Signature) == "" {
-			log.Debug("adapter.anthropic.thinking.unsigned_dropped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-				"origin", string(mp.Origin),
-				"body_len", len(body),
+			log.Debug(
+				"adapter.anthropic.thinking.unsigned_dropped",
+				"concern",
+				"adapter.providers.anthropic.request",
+				"subcomponent",
+				"anthropic_mapper",
+				"origin",
+				string(mp.Origin),
+				"body_len",
+				len(body),
 			)
+
 			return nil, false
 		}
+
 		return ThinkingBlock{Thinking: body, Signature: mp.Signature}, true
 	}
-	log.Debug("adapter.anthropic.thinking.foreign_origin_injected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-		"origin", string(mp.Origin),
-		"body_len", len(body),
+
+	log.Debug(
+		"adapter.anthropic.thinking.foreign_origin_injected",
+		"concern",
+		"adapter.providers.anthropic.request",
+		"subcomponent",
+		"anthropic_mapper",
+		"origin",
+		string(mp.Origin),
+		"body_len",
+		len(body),
 	)
+
 	return TextBlock{Text: body}, true
 }
 
@@ -589,13 +749,23 @@ func nativeRedactedThinkingBlock(mp adapterrender.MaterializedPart) (AnthContent
 	if body == "" {
 		return nil, false
 	}
+
 	if mp.Origin != adapterrender.OriginAnthropic {
-		anthropicBackendLog.Logger().Debug("adapter.anthropic.redacted_thinking.foreign_origin_dropped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-			"origin", string(mp.Origin),
-			"body_len", len(body),
+		anthropicBackendLog.Logger().Debug(
+			"adapter.anthropic.redacted_thinking.foreign_origin_dropped",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"subcomponent",
+			"anthropic_mapper",
+			"origin",
+			string(mp.Origin),
+			"body_len",
+			len(body),
 		)
+
 		return nil, false
 	}
+
 	return RedactedThinkingBlock{Data: body}, true
 }
 
@@ -607,15 +777,26 @@ func assistantImagePart(msgIdx int, partIdx int, p OpenAIContentPart) ([]AnthCon
 	if p.ImageURL == nil {
 		return nil, nil
 	}
+
 	src, err := imageURLToSource(p.ImageURL.URL)
 	if err != nil {
-		log.Warn("adapter.anthropic.assistant_part.image_rejected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
-			"msg_idx", msgIdx,
-			"part_idx", partIdx,
-			"err", err.Error(),
+		log.Warn(
+			"adapter.anthropic.assistant_part.image_rejected",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"subcomponent",
+			"anthropic_mapper",
+			"msg_idx",
+			msgIdx,
+			"part_idx",
+			partIdx,
+			"err",
+			err.Error(),
 		)
+
 		return nil, err
 	}
+
 	return []AnthContentBlock{ImageBlock{Source: src}}, nil
 }
 
@@ -623,18 +804,28 @@ func imageURLToSource(rawURL string) (*AnthImageSource, error) {
 	if strings.HasPrefix(rawURL, "data:") {
 		media, data, err := parseDataURI(rawURL)
 		if err != nil {
-			slog.Warn("adapter.anthropic.mapper.parse_data_uri_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+			slog.Warn(
+				"adapter.anthropic.mapper.parse_data_uri_failed",
+				"concern",
+				"adapter.providers.anthropic.request",
+				"err",
+				err,
+			)
 			return nil, fmt.Errorf("parse image data URI: %w", err)
 		}
+
 		return &AnthImageSource{Type: "base64", MediaType: media, Data: data, URL: ""}, nil
 	}
+
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse image URL: %w", err)
 	}
+
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported image url scheme: %q", u.Scheme)
 	}
+
 	return &AnthImageSource{Type: "url", URL: rawURL, MediaType: "", Data: ""}, nil
 }
 
@@ -643,48 +834,64 @@ func parseDataURI(s string) (mediaType string, data string, err error) {
 	if !strings.HasPrefix(s, prefix) {
 		return "", "", fmt.Errorf("not a data uri")
 	}
+
 	rest := strings.TrimPrefix(s, prefix)
 	meta, payload, ok := strings.Cut(rest, ",")
 	if !ok {
 		return "", "", fmt.Errorf("invalid data uri: missing comma")
 	}
+
 	parts := strings.Split(meta, ";")
 	if len(parts) == 0 || parts[0] == "" {
 		mediaType = "application/octet-stream"
 	} else {
 		mediaType = parts[0]
 	}
+
 	isBase64 := false
+
 	for _, p := range parts[1:] {
 		if p == "base64" {
 			isBase64 = true
 		}
 	}
+
 	if !isBase64 {
 		return "", "", fmt.Errorf("data uri must be base64-encoded for images")
 	}
+
 	return mediaType, payload, nil
 }
 
 func translateTools(req OpenAIRequest) ([]AnthTool, error) {
 	var out []AnthTool
+
 	for _, t := range req.Tools {
 		if t.Type != "" && t.Type != "function" {
 			return nil, ErrUnknownToolType
 		}
-		out = append(out, AnthTool{
-			Name:        t.Function.Name,
-			Description: t.Function.Description,
-			InputSchema: t.Function.Parameters,
-		})
+
+		out = append(
+			out,
+			AnthTool{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				InputSchema: t.Function.Parameters,
+			},
+		)
 	}
+
 	for _, f := range req.Functions {
-		out = append(out, AnthTool{
-			Name:        f.Name,
-			Description: f.Description,
-			InputSchema: f.Parameters,
-		})
+		out = append(
+			out,
+			AnthTool{
+				Name:        f.Name,
+				Description: f.Description,
+				InputSchema: f.Parameters,
+			},
+		)
 	}
+
 	return out, nil
 }
 
@@ -693,6 +900,7 @@ func toolCallArgumentsJSON(arguments string) json.RawMessage {
 	if s == "" {
 		return json.RawMessage("{}")
 	}
+
 	return json.RawMessage(arguments)
 }
 
@@ -700,16 +908,21 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
+
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		switch openAIToolChoiceString(s) {
 		case openAIToolChoiceNone:
-			return &AnthToolChoice{Type: "none", Name: "", DisableParallelToolUse:
+			return &AnthToolChoice{
+				Type: "none",
+				Name: "",
+				DisableParallelToolUse:
 
-			// claude-cli does not send tool_choice when behavior is
-			// "auto" (the Anthropic default). Returning nil omits the
-			// field on the wire. CLYDE-124 parity.
-			false}, nil
+				// claude-cli does not send tool_choice when behavior is
+				// "auto" (the Anthropic default). Returning nil omits the
+				// field on the wire. CLYDE-124 parity.
+				false,
+			}, nil
 		case openAIToolChoiceAuto:
 
 			return nil, nil
@@ -719,6 +932,7 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 			return nil, nil
 		}
 	}
+
 	var obj struct {
 		Type     string `json:"type"`
 		Function struct {
@@ -726,11 +940,23 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 		} `json:"function"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		slog.Warn("adapter.anthropic.mapper.tool_choice_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		slog.Warn(
+			"adapter.anthropic.mapper.tool_choice_unmarshal_failed",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("unmarshal Anthropic tool choice: %w", err)
 	}
+
 	if obj.Type == "function" {
-		return &AnthToolChoice{Type: "tool", Name: obj.Function.Name, DisableParallelToolUse: false}, nil
+		return &AnthToolChoice{
+			Type:                   "tool",
+			Name:                   obj.Function.Name,
+			DisableParallelToolUse: false,
+		}, nil
 	}
+
 	return nil, nil
 }

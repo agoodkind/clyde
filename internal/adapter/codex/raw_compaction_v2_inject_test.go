@@ -18,9 +18,16 @@ func TestInjectRawResponsesCompactionV2Recovery(t *testing.T) {
 	if !registry.Arm("session-1", "cipher", injection) {
 		t.Fatal("arm registry")
 	}
+
 	request := RawResponsesRequest{
-		Body:   []byte(`{"model":"gpt-native","opaque":{"keep":true},"input":[ { "type":"message","role":"user","content":[{"type":"input_text","text":"next turn"}]}, {"type":"compaction","encrypted_content":"cipher","opaque":true}, {"type":"reasoning","summary":[]} ]}`),
-		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
+		Body: []byte(
+			`{"model":"gpt-native","opaque":{"keep":true},"input":[ { "type":"message","role":"user","content":[{"type":"input_text","text":"next turn"}]}, {"type":"compaction","encrypted_content":"cipher","opaque":true}, {"type":"reasoning","summary":[]} ]}`,
+		),
+		Header: http.Header{
+			CodexTurnMetadataHeader: {
+				`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			},
+		},
 		Stream: true,
 	}
 
@@ -28,37 +35,54 @@ func TestInjectRawResponsesCompactionV2Recovery(t *testing.T) {
 	if !changed || recovery == nil {
 		t.Fatal("matching request did not inject recovery")
 	}
+
 	inputStart, inputEnd, ok := jsonObjectFieldValueRange(request.Body, "input")
 	if !ok {
 		t.Fatal("locate original input")
 	}
+
 	originalRanges, ok := jsonArrayValueRanges(request.Body[inputStart:inputEnd])
 	if !ok || len(originalRanges) < 2 {
 		t.Fatal("locate original compaction item")
 	}
-	transformedInputStart, transformedInputEnd, ok := jsonObjectFieldValueRange(transformed.Body, "input")
+
+	transformedInputStart, transformedInputEnd, ok := jsonObjectFieldValueRange(
+		transformed.Body,
+		"input",
+	)
 	if !ok {
 		t.Fatal("locate transformed input")
 	}
-	transformedRanges, ok := jsonArrayValueRanges(transformed.Body[transformedInputStart:transformedInputEnd])
+
+	transformedRanges, ok := jsonArrayValueRanges(
+		transformed.Body[transformedInputStart:transformedInputEnd],
+	)
 	if !ok || len(transformedRanges) < 3 {
 		t.Fatal("locate injected item")
 	}
+
 	compactionEnd := inputStart + originalRanges[1].end
 	injectedEnd := transformedInputStart + transformedRanges[2].end
 	if !bytes.Equal(transformed.Body[:compactionEnd], request.Body[:compactionEnd]) ||
 		!bytes.Equal(transformed.Body[injectedEnd:], request.Body[compactionEnd:]) {
-		t.Fatalf("injection rewrote unchanged request bytes:\n got: %s\nwant prefix/suffix from: %s", transformed.Body, request.Body)
+		t.Fatalf(
+			"injection rewrote unchanged request bytes:\n got: %s\nwant prefix/suffix from: %s",
+			transformed.Body,
+			request.Body,
+		)
 	}
+
 	if !bytes.Contains(transformed.Body, []byte(`"opaque":{"keep":true}`)) {
 		t.Fatalf("unrelated fields changed: %s", transformed.Body)
 	}
+
 	var body struct {
 		Input []json.RawMessage `json:"input"`
 	}
 	if err := json.Unmarshal(transformed.Body, &body); err != nil {
 		t.Fatalf("decode transformed request: %v", err)
 	}
+
 	var injected struct {
 		Role    string `json:"role"`
 		Content []struct {
@@ -68,10 +92,14 @@ func TestInjectRawResponsesCompactionV2Recovery(t *testing.T) {
 	if err := json.Unmarshal(body.Input[2], &injected); err != nil {
 		t.Fatalf("decode injected item: %v", err)
 	}
-	if len(body.Input) != 4 || injected.Role != "assistant" || len(injected.Content) != 1 || injected.Content[0].Text != injection {
+
+	if len(body.Input) != 4 || injected.Role != "assistant" || len(injected.Content) != 1 ||
+		injected.Content[0].Text != injection {
 		t.Fatalf("input = %s", transformed.Body)
 	}
-	if !bytes.Contains(body.Input[1], []byte(`"encrypted_content":"cipher"`)) || !bytes.Contains(body.Input[1], []byte(`"opaque":true`)) {
+
+	if !bytes.Contains(body.Input[1], []byte(`"encrypted_content":"cipher"`)) ||
+		!bytes.Contains(body.Input[1], []byte(`"opaque":true`)) {
 		t.Fatalf("encrypted item changed: %s", body.Input[1])
 	}
 }
@@ -82,31 +110,87 @@ func TestInjectRawResponsesCompactionV2RecoveryFailsOpen(t *testing.T) {
 	if !registry.Arm("session-1", "cipher", "recovered transcript") {
 		t.Fatal("arm registry")
 	}
+
 	base := RawResponsesRequest{
-		Body:   []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`),
-		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
+		Body: []byte(
+			`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`,
+		),
+		Header: http.Header{
+			CodexTurnMetadataHeader: {
+				`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			},
+		},
 	}
+
 	tests := []struct {
 		name    string
 		request RawResponsesRequest
 	}{
-		{name: "wrong session", request: RawResponsesRequest{Body: base.Body, Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"other","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}}}},
-		{name: "wrong digest", request: RawResponsesRequest{Body: []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`), Header: base.Header}},
-		{name: "malformed request", request: RawResponsesRequest{Body: []byte(`{"input":[`), Header: base.Header}},
-		{name: "duplicate compaction", request: RawResponsesRequest{Body: []byte(`{"input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`), Header: base.Header}},
-		{name: "matching marked transcript", request: RawResponsesRequest{Body: []byte(`{"input":[{"type":"compaction","encrypted_content":"cipher"},` + rawCompactionMarkedInputItemForTest("recovered transcript") + `]}`), Header: base.Header}},
+		{
+			name: "wrong session",
+			request: RawResponsesRequest{
+				Body: base.Body,
+				Header: http.Header{
+					CodexTurnMetadataHeader: {
+						`{"session_id":"other","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+					},
+				},
+			},
+		},
+		{
+			name: "wrong digest",
+			request: RawResponsesRequest{
+				Body: []byte(
+					`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"other"}]}`,
+				),
+				Header: base.Header,
+			},
+		},
+		{
+			name:    "malformed request",
+			request: RawResponsesRequest{Body: []byte(`{"input":[`), Header: base.Header},
+		},
+		{
+			name: "duplicate compaction",
+			request: RawResponsesRequest{
+				Body: []byte(
+					`{"input":[{"type":"compaction","encrypted_content":"cipher"},{"type":"compaction","encrypted_content":"cipher"}]}`,
+				),
+				Header: base.Header,
+			},
+		},
+		{
+			name: "matching marked transcript",
+			request: RawResponsesRequest{
+				Body: []byte(
+					`{"input":[{"type":"compaction","encrypted_content":"cipher"},` + rawCompactionMarkedInputItemForTest(
+						"recovered transcript",
+					) + `]}`,
+				),
+				Header: base.Header,
+			},
+		},
 	}
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			got, recovery, changed := InjectRawResponsesCompactionV2Recovery(testCase.request, registry)
-			if changed || recovery != nil || !bytes.Equal(got.Body, testCase.request.Body) {
-				t.Fatalf("request changed: %s", got.Body)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				got, recovery, changed := InjectRawResponsesCompactionV2Recovery(
+					testCase.request,
+					registry,
+				)
+				if changed || recovery != nil || !bytes.Equal(got.Body, testCase.request.Body) {
+					t.Fatalf("request changed: %s", got.Body)
+				}
+			},
+		)
 	}
-	if transcript, ok := registry.Match("session-1", "cipher"); !ok || transcript != "recovered transcript" {
+
+	if transcript, ok := registry.Match("session-1", "cipher"); !ok ||
+		transcript != "recovered transcript" {
 		t.Fatalf("fail-open requests consumed recovery: transcript=%q present=%t", transcript, ok)
 	}
+
 	now = now.Add(rawResponsesCompactionV2TTL)
 	got, recovery, changed := InjectRawResponsesCompactionV2Recovery(base, registry)
 	if changed || recovery != nil || !bytes.Equal(got.Body, base.Body) {
@@ -115,34 +199,48 @@ func TestInjectRawResponsesCompactionV2RecoveryFailsOpen(t *testing.T) {
 }
 
 func rawCompactionMarkedInputItemForTest(text string) string {
-	return `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"},{"type":"output_text","text":` + quotedJSONForTest(text) +
-		`}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown",` + quotedJSONForTest(codexstore.InjectedTranscriptContentKind) + `]}}`
+	return `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"},{"type":"output_text","text":` + quotedJSONForTest(
+		text,
+	) +
+		`}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown",` + quotedJSONForTest(
+		codexstore.InjectedTranscriptContentKind,
+	) + `]}}`
 }
 
 func TestInjectRawResponsesCompactionV2RecoveryIgnoresOtherTranscripts(t *testing.T) {
 	const pending = "recovered transcript"
 	metadata := `{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn"}`
+
 	for name, item := range map[string]string{
 		"older marked transcript": rawCompactionMarkedInputItemForTest("older transcript"),
-		"unmarked quotation":      `{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(pending) + `}]}`,
+		"unmarked quotation": `{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + quotedJSONForTest(
+			pending,
+		) + `}]}`,
 	} {
-		t.Run(name, func(t *testing.T) {
-			registry := NewRawResponsesCompactionV2Registry(nil)
-			if !registry.Arm("session-1", "cipher", pending) {
-				t.Fatal("The test could not arm the registry.")
-			}
-			request := RawResponsesRequest{
-				Body:   []byte(`{"input":[` + item + `,{"type":"compaction","encrypted_content":"cipher"}]}`),
-				Header: http.Header{CodexTurnMetadataHeader: {metadata}},
-			}
-			_, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
-			if !changed || recovery == nil {
-				t.Fatalf("The recovery did not inject the transcript: changed=%t", changed)
-			}
-			if _, _, reserved := registry.Reserve("session-1", "cipher"); reserved {
-				t.Fatal("The injection did not keep the recovery lease.")
-			}
-		})
+		t.Run(
+			name,
+			func(t *testing.T) {
+				registry := NewRawResponsesCompactionV2Registry(nil)
+				if !registry.Arm("session-1", "cipher", pending) {
+					t.Fatal("The test could not arm the registry.")
+				}
+
+				request := RawResponsesRequest{
+					Body: []byte(
+						`{"input":[` + item + `,{"type":"compaction","encrypted_content":"cipher"}]}`,
+					),
+					Header: http.Header{CodexTurnMetadataHeader: {metadata}},
+				}
+				_, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
+				if !changed || recovery == nil {
+					t.Fatalf("The recovery did not inject the transcript: changed=%t", changed)
+				}
+
+				if _, _, reserved := registry.Reserve("session-1", "cipher"); reserved {
+					t.Fatal("The injection did not keep the recovery lease.")
+				}
+			},
+		)
 	}
 }
 
@@ -152,56 +250,102 @@ func TestInjectRawResponsesCompactionV2RecoveryRequiresFinalAnswerTurn(t *testin
 		metadata string
 		want     bool
 	}{
-		{name: "native turn without phase", metadata: `{"session_id":"session-1","request_kind":"turn"}`, want: true},
-		{name: "non-final phase", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"phase":"mid_turn"}}`, want: false},
-		{name: "implementation without phase", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"implementation":"responses_compaction_v2"}}`, want: false},
-		{name: "strategy without phase", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"strategy":"memento"}}`, want: false},
-		{name: "final answer", metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"phase":"final_answer"}}`, want: true},
+		{
+			name:     "native turn without phase",
+			metadata: `{"session_id":"session-1","request_kind":"turn"}`,
+			want:     true,
+		},
+		{
+			name:     "non-final phase",
+			metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"phase":"mid_turn"}}`,
+			want:     false,
+		},
+		{
+			name:     "implementation without phase",
+			metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"implementation":"responses_compaction_v2"}}`,
+			want:     false,
+		},
+		{
+			name:     "strategy without phase",
+			metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"strategy":"memento"}}`,
+			want:     false,
+		},
+		{
+			name:     "final answer",
+			metadata: `{"session_id":"session-1","request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			want:     true,
+		},
 		{name: "legacy empty metadata", metadata: `{"session_id":"session-1"}`, want: true},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			registry := NewRawResponsesCompactionV2Registry(nil)
-			if !registry.Arm("session-1", "cipher", "recovered transcript") {
-				t.Fatal("arm registry")
-			}
-			request := RawResponsesRequest{
-				Body:   []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`),
-				Header: http.Header{CodexTurnMetadataHeader: {testCase.metadata}},
-			}
-			got, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
-			hasRecovery := recovery != nil
-			if changed != testCase.want || hasRecovery != testCase.want {
-				t.Fatalf("changed=%t recovery=%t want=%t body=%s", changed, hasRecovery, testCase.want, got.Body)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				registry := NewRawResponsesCompactionV2Registry(nil)
+				if !registry.Arm("session-1", "cipher", "recovered transcript") {
+					t.Fatal("arm registry")
+				}
+
+				request := RawResponsesRequest{
+					Body: []byte(
+						`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`,
+					),
+					Header: http.Header{CodexTurnMetadataHeader: {testCase.metadata}},
+				}
+				got, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
+				hasRecovery := recovery != nil
+				if changed != testCase.want || hasRecovery != testCase.want {
+					t.Fatalf(
+						"changed=%t recovery=%t want=%t body=%s",
+						changed,
+						hasRecovery,
+						testCase.want,
+						got.Body,
+					)
+				}
+			},
+		)
 	}
 }
 
 func TestInjectRawResponsesCompactionV2RecoveryCompletionCapability(t *testing.T) {
 	registry := NewRawResponsesCompactionV2Registry(nil)
-	if !registry.Arm("session-1", "cipher", "recovered transcript") || !registry.Arm("session-1", "other", "other transcript") {
+	if !registry.Arm("session-1", "cipher", "recovered transcript") ||
+		!registry.Arm("session-1", "other", "other transcript") {
 		t.Fatal("arm registry")
 	}
+
 	request := RawResponsesRequest{
-		Body:   []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`),
-		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
+		Body: []byte(
+			`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`,
+		),
+		Header: http.Header{
+			CodexTurnMetadataHeader: {
+				`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			},
+		},
 	}
 	_, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
 	if !changed || recovery == nil {
 		t.Fatal("matching request did not create recovery")
 	}
+
 	if _, ok := registry.Match("session-1", "cipher"); ok {
 		t.Fatal("injected recovery did not retain its reservation")
 	}
+
 	if !recovery.CompleteRecovery() {
 		t.Fatal("completion capability did not complete matching recovery")
 	}
+
 	if _, ok := registry.Match("session-1", "cipher"); ok {
 		t.Fatal("matching recovery remained")
 	}
-	if transcript, ok := registry.Match("session-1", "other"); !ok || transcript != "other transcript" {
+
+	if transcript, ok := registry.Match("session-1", "other"); !ok ||
+		transcript != "other transcript" {
 		t.Fatalf("completion affected another entry: %q, %t", transcript, ok)
 	}
+
 	if recovery.CompleteRecovery() {
 		t.Fatal("completion capability completed twice")
 	}
@@ -212,23 +356,35 @@ func TestInjectRawResponsesCompactionV2RecoveryReleaseCapability(t *testing.T) {
 	if !registry.Arm("session-1", "cipher", "recovered transcript") {
 		t.Fatal("arm registry")
 	}
+
 	request := RawResponsesRequest{
-		Body:   []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`),
-		Header: http.Header{CodexTurnMetadataHeader: {`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`}},
+		Body: []byte(
+			`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"cipher"}]}`,
+		),
+		Header: http.Header{
+			CodexTurnMetadataHeader: {
+				`{"session_id":"session-1","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+			},
+		},
 	}
 	_, recovery, changed := InjectRawResponsesCompactionV2Recovery(request, registry)
 	if !changed || recovery == nil {
 		t.Fatal("matching request did not create recovery")
 	}
+
 	if !recovery.ReleaseRecovery() {
 		t.Fatal("release capability did not release matching recovery")
 	}
+
 	if recovery.CompleteRecovery() {
 		t.Fatal("completion succeeded after release")
 	}
-	if transcript, ok := registry.Match("session-1", "cipher"); !ok || transcript != "recovered transcript" {
+
+	if transcript, ok := registry.Match("session-1", "cipher"); !ok ||
+		transcript != "recovered transcript" {
 		t.Fatalf("released recovery did not become available: %q, %t", transcript, ok)
 	}
+
 	_, generation, ok := registry.Reserve("session-1", "cipher")
 	if !ok || !registry.Complete("session-1", "cipher", generation) {
 		t.Fatal("complete reserved released recovery")

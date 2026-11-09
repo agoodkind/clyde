@@ -44,42 +44,77 @@ type RolloutCandidate struct {
 // [ReadThreadByRolloutPath].
 func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
 	var out []RolloutCandidate
+
 	for _, root := range rolloutRoots(s.Paths) {
-		err := filepath.WalkDir(root.Path, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		err := filepath.WalkDir(
+			root.Path,
+			func(path string, d os.DirEntry, err error) error {
+				if err != nil {
+					if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+						return nil
+					}
+
+					return err
+				}
+
+				if d.IsDir() || !isRolloutFilename(d.Name()) {
 					return nil
 				}
-				return err
-			}
-			if d.IsDir() || !isRolloutFilename(d.Name()) {
+
+				if plain, compressed := strings.CutSuffix(
+					path,
+					rolloutCompressedSuffix,
+				); compressed {
+					if _, statErr := os.Stat(plain + rolloutPlainSuffix); statErr == nil {
+						return nil
+					}
+				}
+
+				info, infoErr := d.Info()
+				if infoErr != nil {
+					if errors.Is(infoErr, os.ErrNotExist) {
+						return nil
+					}
+
+					slog.Warn(
+						"codex.store.scanner.stat_failed",
+						"concern",
+						"providers.codex.store",
+						"path",
+						path,
+						"err",
+						infoErr,
+					)
+
+					return nil
+				}
+
+				out = append(
+					out,
+					RolloutCandidate{
+						Path:     path,
+						Stamp:    RolloutStamp{Size: info.Size(), Mtime: info.ModTime()},
+						Archived: root.Archived,
+					},
+				)
+
 				return nil
-			}
-			if plain, compressed := strings.CutSuffix(path, rolloutCompressedSuffix); compressed {
-				if _, statErr := os.Stat(plain + rolloutPlainSuffix); statErr == nil {
-					return nil
-				}
-			}
-			info, infoErr := d.Info()
-			if infoErr != nil {
-				if errors.Is(infoErr, os.ErrNotExist) {
-					return nil
-				}
-				slog.Warn("codex.store.scanner.stat_failed", "concern", "providers.codex.store", "path", path, "err", infoErr)
-				return nil
-			}
-			out = append(out, RolloutCandidate{
-				Path:     path,
-				Stamp:    RolloutStamp{Size: info.Size(), Mtime: info.ModTime()},
-				Archived: root.Archived,
-			})
-			return nil
-		})
+			},
+		)
 		if err != nil {
-			slog.Warn("codex.store.scanner.walk_failed", "concern", "providers.codex.store", "root", root.Path, "err", err)
+			slog.Warn(
+				"codex.store.scanner.walk_failed",
+				"concern",
+				"providers.codex.store",
+				"root",
+				root.Path,
+				"err",
+				err,
+			)
 			return nil, fmt.Errorf("walk codex rollout tree: %w", err)
 		}
 	}
+
 	return out, nil
 }
 
@@ -101,17 +136,21 @@ func rolloutIdentityFromFilename(name string) (string, time.Time, bool) {
 	if !ok {
 		return "", time.Time{}, false
 	}
+
 	if len(base) < len("2006-01-02T15-04-05-")+1 {
 		return "", time.Time{}, false
 	}
+
 	timestampPart := base[:len("2006-01-02T15-04-05")]
 	if len(base) <= len(timestampPart)+1 {
 		return "", time.Time{}, false
 	}
+
 	threadID := base[len(timestampPart)+1:]
 	createdAt, err := time.ParseInLocation("2006-01-02T15-04-05", timestampPart, time.UTC)
 	if err != nil || strings.TrimSpace(threadID) == "" {
 		return "", time.Time{}, false
 	}
+
 	return threadID, createdAt, true
 }

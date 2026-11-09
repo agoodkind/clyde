@@ -49,8 +49,19 @@ func startConfiguredConversationSemanticSync(
 		// per failure rather than two saying the same thing.
 		return err
 	}
-	startConversationSemanticSync(ctx, log, index, resolveClient, cfg.Conversation.Semantic.CollectionID, freshness, group, kinds,
-		cfg.Conversation.Semantic.SyncPassInterval())
+
+	startConversationSemanticSync(
+		ctx,
+		log,
+		index,
+		resolveClient,
+		cfg.Conversation.Semantic.CollectionID,
+		freshness,
+		group,
+		kinds,
+		cfg.Conversation.Semantic.SyncPassInterval(),
+	)
+
 	return nil
 }
 
@@ -64,19 +75,32 @@ func startConfiguredConversationSemanticSync(
 // literal never passes through the loader at all, so reading an unset list as
 // "index nothing" would quietly empty the corpus. Turning indexing off is
 // `ingestion_enabled = false`.
-func SemanticContentKinds(semantic config.ConversationSemanticConfig) (conversation.ContentKindSet, error) {
+func SemanticContentKinds(
+	semantic config.ConversationSemanticConfig,
+) (conversation.ContentKindSet, error) {
 	if len(semantic.IndexedContent) == 0 {
 		return defaultSemanticContentKinds(), nil
 	}
+
 	kinds, err := conversation.ResolveContentKinds(semantic.IndexedContent)
 	if err != nil {
-		slog.Warn("daemon.conversation_semantic.indexed_content_invalid",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"indexed_content", strings.Join(semantic.IndexedContent, ","),
-			"err", err,
+		slog.Warn(
+			"daemon.conversation_semantic.indexed_content_invalid",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"indexed_content",
+			strings.Join(semantic.IndexedContent, ","),
+			"err",
+			err,
 		)
-		return conversation.ContentKindSet{}, fmt.Errorf("resolve conversation.semantic.indexed_content: %w", err)
+
+		return conversation.ContentKindSet{}, fmt.Errorf(
+			"resolve conversation.semantic.indexed_content: %w",
+			err,
+		)
 	}
+
 	return kinds, nil
 }

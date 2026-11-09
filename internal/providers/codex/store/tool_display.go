@@ -38,25 +38,46 @@ func (command *codexShellCommand) UnmarshalJSON(data []byte) error {
 	if len(trimmed) == 0 {
 		return nil
 	}
+
 	switch trimmed[0] {
 	case '"':
 		var line string
 		if err := json.Unmarshal(trimmed, &line); err != nil {
-			slog.Debug("codex.store.tool_display.command_line_failed", "concern", "providers.codex.store", "err", err)
+			slog.Debug(
+				"codex.store.tool_display.command_line_failed",
+				"concern",
+				"providers.codex.store",
+				"err",
+				err,
+			)
 		} else {
 			command.Text = strings.TrimSpace(line)
 		}
+
 		return nil
 	case '[':
 		var arguments []string
 		if err := json.Unmarshal(trimmed, &arguments); err != nil {
-			slog.Debug("codex.store.tool_display.command_arguments_failed", "concern", "providers.codex.store", "err", err)
+			slog.Debug(
+				"codex.store.tool_display.command_arguments_failed",
+				"concern",
+				"providers.codex.store",
+				"err",
+				err,
+			)
 		} else {
 			command.Text = strings.TrimSpace(strings.Join(arguments, " "))
 		}
+
 		return nil
 	default:
-		slog.Debug("codex.store.tool_display.command_shape_unsupported", "concern", "providers.codex.store", "shape", string(trimmed[:1]))
+		slog.Debug(
+			"codex.store.tool_display.command_shape_unsupported",
+			"concern",
+			"providers.codex.store",
+			"shape",
+			string(trimmed[:1]),
+		)
 		return nil
 	}
 }
@@ -72,24 +93,30 @@ func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) 
 	if input.Len() == 0 {
 		return "", ""
 	}
+
 	var rawText string
 	if err := json.Unmarshal(input.Raw, &rawText); err == nil {
 		return rawText, ""
 	}
+
 	var parsed codexToolDisplayInput
 	if err := json.Unmarshal(input.Raw, &parsed); err != nil {
 		return "", ""
 	}
+
 	if parsed.Command.Text != "" {
 		return parsed.Command.Text, "bash"
 	}
+
 	if command := strings.TrimSpace(parsed.Cmd); command != "" {
 		return command, "bash"
 	}
+
 	for _, candidate := range []string{parsed.Path, parsed.Pattern, parsed.Query} {
 		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
 			return trimmed, ""
 		}
 	}
+
 	return "", ""
 }

@@ -36,11 +36,14 @@ func lockCollectionFile(ctx context.Context, dir string, mode int) (*os.File, er
 	if err := ctx.Err(); err != nil {
 		return nil, failed("wait for the collection lock in "+dir, err)
 	}
+
 	file, err := os.OpenFile(collectionLockPath(dir), os.O_CREATE|os.O_RDWR, fileMode)
 	if err != nil {
 		return nil, failed("open the collection lock file for "+dir, err)
 	}
+
 	delay := lockPollMinimum
+
 	for {
 		lockErr := syscall.Flock(int(file.Fd()), mode|syscall.LOCK_NB)
 		if lockErr == nil {
@@ -48,18 +51,22 @@ func lockCollectionFile(ctx context.Context, dir string, mode int) (*os.File, er
 				_ = file.Close()
 				return nil, failed("wait for the collection lock in "+dir, err)
 			}
+
 			return file, nil
 		}
+
 		if !errors.Is(lockErr, syscall.EWOULDBLOCK) && !errors.Is(lockErr, syscall.EINTR) {
 			_ = file.Close()
 			return nil, failed("lock the collection in "+dir, lockErr)
 		}
+
 		select {
 		case <-ctx.Done():
 			_ = file.Close()
 			return nil, failed("wait for the collection lock in "+dir, ctx.Err())
 		case <-time.After(delay):
 		}
+
 		delay = min(delay*2, lockPollMaximum)
 	}
 }
@@ -72,7 +79,9 @@ func (stored *codeCollection) recordHeaderIdentity() error {
 		stored.headerInfo = nil
 		return failed("inspect the collection header in "+stored.dir, err)
 	}
+
 	stored.headerInfo = info
+
 	return nil
 }
 
@@ -87,6 +96,7 @@ func (stored *codeCollection) lockForWrite(ctx context.Context) (func(), error) 
 	if err != nil {
 		return nil, err
 	}
+
 	stored.mutex.Lock()
 	unlock := func() {
 		stored.mutex.Unlock()
@@ -96,10 +106,12 @@ func (stored *codeCollection) lockForWrite(ctx context.Context) (func(), error) 
 		unlock()
 		return nil, ErrStoreClosed
 	}
+
 	if err := stored.syncWithDisk(); err != nil {
 		unlock()
 		return nil, err
 	}
+
 	return unlock, nil
 }
 
@@ -114,6 +126,7 @@ func (stored *codeCollection) lockForRead(ctx context.Context) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+
 	stored.mutex.RLock()
 	unlock := func() {
 		stored.mutex.RUnlock()
@@ -123,15 +136,19 @@ func (stored *codeCollection) lockForRead(ctx context.Context) (func(), error) {
 		unlock()
 		return nil, ErrStoreClosed
 	}
+
 	changed, err := stored.diskChanged()
 	if err != nil {
 		unlock()
 		return nil, err
 	}
+
 	if !changed {
 		return unlock, nil
 	}
+
 	unlock()
+
 	return stored.lockForWrite(ctx)
 }
 
@@ -141,18 +158,22 @@ func (stored *codeCollection) diskChanged() (bool, error) {
 	if stored.headerInfo == nil {
 		return true, nil
 	}
+
 	replaced, err := stored.filesReplaced()
 	if err != nil || replaced {
 		return replaced, err
 	}
+
 	info, err := stored.rowsFile.Stat()
 	if err != nil {
 		return false, failed("inspect the row log in "+stored.dir, err)
 	}
+
 	data, err := stored.dataFile.Stat()
 	if err != nil {
 		return false, failed("inspect the data file in "+stored.dir, err)
 	}
+
 	return info.Size() != stored.logSize || data.Size() < stored.dataSize, nil
 }
 
@@ -164,13 +185,17 @@ func (stored *codeCollection) filesReplaced() (bool, error) {
 	if err != nil {
 		return false, failed("inspect the collection header in "+stored.dir, err)
 	}
-	if !os.SameFile(stored.headerInfo, header) || !stored.headerInfo.ModTime().Equal(header.ModTime()) {
+
+	if !os.SameFile(stored.headerInfo, header) ||
+		!stored.headerInfo.ModTime().Equal(header.ModTime()) {
 		return true, nil
 	}
+
 	rowsReplaced, err := pathReplaced(stored.rowsPath(stored.header.Generation), stored.rowsFile)
 	if err != nil || rowsReplaced {
 		return rowsReplaced, err
 	}
+
 	return pathReplaced(stored.dataPath(stored.header.Generation), stored.dataFile)
 }
 
@@ -181,13 +206,16 @@ func pathReplaced(path string, opened *os.File) (bool, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
 	}
+
 	if err != nil {
 		return false, failed("inspect "+path, err)
 	}
+
 	openedInfo, err := opened.Stat()
 	if err != nil {
 		return false, failed("the store could not inspect the open file for "+path, err)
 	}
+
 	return !os.SameFile(openedInfo, current), nil
 }
 
@@ -199,28 +227,35 @@ func (stored *codeCollection) syncWithDisk() error {
 	if stored.headerInfo == nil {
 		return stored.reload()
 	}
+
 	replaced, err := stored.filesReplaced()
 	if err != nil {
 		return err
 	}
+
 	if replaced {
 		return stored.reload()
 	}
+
 	info, err := stored.rowsFile.Stat()
 	if err != nil {
 		return failed("inspect the row log in "+stored.dir, err)
 	}
+
 	data, err := stored.dataFile.Stat()
 	if err != nil {
 		return failed("inspect the data file in "+stored.dir, err)
 	}
+
 	if info.Size() < stored.logSize || data.Size() < stored.dataSize {
 		return stored.reload()
 	}
+
 	stored.dataSize = data.Size()
 	if info.Size() == stored.logSize {
 		return nil
 	}
+
 	return stored.replay()
 }
 
@@ -229,6 +264,7 @@ func (stored *codeCollection) reload() error {
 	if err != nil {
 		return err
 	}
+
 	stored.closeFiles()
 	stored.header = fresh.header
 	stored.headerInfo = fresh.headerInfo
@@ -242,5 +278,6 @@ func (stored *codeCollection) reload() error {
 	stored.dataSize = fresh.dataSize
 	stored.logSize = fresh.logSize
 	stored.dead = fresh.dead
+
 	return nil
 }

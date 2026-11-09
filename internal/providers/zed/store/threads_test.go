@@ -13,13 +13,15 @@ func TestReadThreadRowsReturnsOrderedRowsAndEmptyWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
 
 	if rows, err := ReadThreadRows(t.Context(), db); err != nil || len(rows) != 0 {
 		t.Fatalf("ReadThreadRows on empty db = (%d, %v), want (0, nil)", len(rows), err)
 	}
 
-	_, err = db.Exec(`
+	_, err = db.Exec(
+		`
 		CREATE TABLE threads(
 			id TEXT PRIMARY KEY,
 			parent_id TEXT,
@@ -31,13 +33,18 @@ func TestReadThreadRowsReturnsOrderedRowsAndEmptyWhenMissing(t *testing.T) {
 			data BLOB NOT NULL,
 			created_at TEXT NOT NULL
 		) STRICT;
-	`)
+	`,
+	)
 	if err != nil {
 		t.Fatalf("create threads: %v", err)
 	}
 
-	newerUpdatedAt := time.Date(2026, time.June, 27, 9, 0, 0, 0, time.UTC).Format(time.RFC3339) + "\n"
-	newerCreatedAt := time.Date(2026, time.June, 26, 9, 0, 0, 0, time.UTC).Format(time.RFC3339) + " "
+	newerUpdatedAt := time.Date(2026, time.June, 27, 9, 0, 0, 0, time.UTC).Format(
+		time.RFC3339,
+	) + "\n"
+	newerCreatedAt := time.Date(2026, time.June, 26, 9, 0, 0, 0, time.UTC).Format(
+		time.RFC3339,
+	) + " "
 	_, err = db.Exec(
 		`INSERT INTO threads(id, parent_id, folder_paths, folder_paths_order, summary, updated_at, data_type, data, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -54,6 +61,7 @@ func TestReadThreadRowsReturnsOrderedRowsAndEmptyWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert threads row: %v", err)
 	}
+
 	olderUpdatedAt := time.Date(2026, time.June, 26, 9, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	olderCreatedAt := time.Date(2026, time.June, 25, 9, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	_, err = db.Exec(
@@ -77,15 +85,19 @@ func TestReadThreadRowsReturnsOrderedRowsAndEmptyWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadThreadRows returned error: %v", err)
 	}
+
 	if len(rows) != 2 {
 		t.Fatalf("rows len = %d, want 2", len(rows))
 	}
+
 	if rows[0].ThreadID != "thread-1" || rows[1].ThreadID != "thread-0" {
 		t.Fatalf("thread order = %#v", rows)
 	}
+
 	if rows[0].ParentThreadID != "parent-1" || rows[0].DataType != DataTypeZstd {
 		t.Fatalf("row = %#v", rows[0])
 	}
+
 	if rows[0].FolderPaths[0] != "/repo/b" || string(rows[0].Data) != "blob" {
 		t.Fatalf("row = %#v", rows[0])
 	}
@@ -97,9 +109,11 @@ func TestReadThreadRowsRejectsUnknownDataType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
 
-	_, err = db.Exec(`
+	_, err = db.Exec(
+		`
 		CREATE TABLE threads(
 			id TEXT PRIMARY KEY,
 			parent_id TEXT,
@@ -111,7 +125,8 @@ func TestReadThreadRowsRejectsUnknownDataType(t *testing.T) {
 			data BLOB NOT NULL,
 			created_at TEXT NOT NULL
 		) STRICT;
-	`)
+	`,
+	)
 	if err != nil {
 		t.Fatalf("create threads: %v", err)
 	}
@@ -145,9 +160,11 @@ func TestReadThreadRowsTrimsTimestampWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
 
-	_, err = db.Exec(`
+	_, err = db.Exec(
+		`
 		CREATE TABLE threads(
 			id TEXT PRIMARY KEY,
 			parent_id TEXT,
@@ -159,7 +176,8 @@ func TestReadThreadRowsTrimsTimestampWhitespace(t *testing.T) {
 			data BLOB NOT NULL,
 			created_at TEXT NOT NULL
 		) STRICT;
-	`)
+	`,
+	)
 	if err != nil {
 		t.Fatalf("create threads: %v", err)
 	}
@@ -187,12 +205,15 @@ func TestReadThreadRowsTrimsTimestampWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadThreadRows returned error: %v", err)
 	}
+
 	if len(rows) != 1 {
 		t.Fatalf("rows len = %d, want 1", len(rows))
 	}
+
 	if !rows[0].UpdatedAt.Equal(time.Date(2026, time.June, 27, 9, 0, 0, 0, time.UTC)) {
 		t.Fatalf("updated_at = %v", rows[0].UpdatedAt)
 	}
+
 	if !rows[0].CreatedAt.Equal(time.Date(2026, time.June, 26, 9, 0, 0, 0, time.UTC)) {
 		t.Fatalf("created_at = %v", rows[0].CreatedAt)
 	}

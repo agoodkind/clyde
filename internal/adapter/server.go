@@ -52,10 +52,14 @@ const DefaultHost = "::1"
 // config omits a value.
 const DefaultMaxConcurrent = 4
 
-func (s *Server) evaluateUsageNotices(ctx context.Context, windows []adapterruntime.UsageWindowNoticeInput) []adapterruntime.UsageNotice {
+func (s *Server) evaluateUsageNotices(
+	ctx context.Context,
+	windows []adapterruntime.UsageWindowNoticeInput,
+) []adapterruntime.UsageNotice {
 	if s == nil || s.usageNoticeGate == nil {
 		return nil
 	}
+
 	return s.usageNoticeGate.Evaluate(ctx, windows, s.cfg.Notices, clock.Now())
 }
 
@@ -78,11 +82,31 @@ func (s *Server) modelRegistry() *Registry {
 func (s *Server) ApplyConfig(newCfg config.AdapterConfig) error {
 	registry, err := NewRegistry(newCfg)
 	if err != nil {
-		s.log.Warn("adapter.config.apply_failed", "concern", "adapter.http.ingress", "component", "adapter", "subcomponent", "adapter", "err", err)
+		s.log.Warn(
+			"adapter.config.apply_failed",
+			"concern",
+			"adapter.http.ingress",
+			"component",
+			"adapter",
+			"subcomponent",
+			"adapter",
+			"err",
+			err,
+		)
 		return fmt.Errorf("adapter apply config: %w", err)
 	}
+
 	s.registry.Store(registry)
-	s.log.Info("adapter.config.applied", "concern", "adapter.http.ingress", "component", "adapter", "subcomponent", "adapter")
+	s.log.Info(
+		"adapter.config.applied",
+		"concern",
+		"adapter.http.ingress",
+		"component",
+		"adapter",
+		"subcomponent",
+		"adapter",
+	)
+
 	return nil
 }
 
@@ -143,30 +167,47 @@ type Server struct {
 // the registry cannot be built because the catalog, default model, or
 // required client_identity fields are invalid; the daemon refuses to start
 // the listener in that case.
-func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log *slog.Logger) (*Server, error) {
+func New(
+	ctx context.Context,
+	cfg config.AdapterConfig,
+	logging config.LoggingConfig,
+	deps Deps,
+	log *slog.Logger,
+) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+
 	baseLog := log
 	log = slogger.WithConcern(log, slogger.ConcernAdapterHTTPIngress)
-	errorLog := slogger.WithConcern(baseLog.With("subcomponent", "adapter"), slogger.ConcernAdapterHTTPErrors)
-	dispatchLog := slogger.WithConcern(baseLog.With("subcomponent", "adapter"), slogger.ConcernAdapterChatDispatch)
+	errorLog := slogger.WithConcern(
+		baseLog.With("subcomponent", "adapter"),
+		slogger.ConcernAdapterHTTPErrors,
+	)
+	dispatchLog := slogger.WithConcern(
+		baseLog.With("subcomponent", "adapter"),
+		slogger.ConcernAdapterChatDispatch,
+	)
 	runtimeLogging := deps.RuntimeLogging
 	if runtimeLogging == nil {
 		runtimeLogging = NewRuntimeLogging(logging)
 	}
+
 	maxConcurrent := cfg.MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = DefaultMaxConcurrent
 	}
+
 	token := cfg.RequireToken
 	if v := os.Getenv("CLYDE_ADAPTER_TOKEN"); v != "" {
 		token = v
 	}
+
 	registry, err := NewRegistry(cfg)
 	if err != nil {
 		return nil, err
 	}
+
 	adapterLog := log.With("subcomponent", "adapter")
 	// The daemon supplies the real lifecycle group; isolated adapter tests pass
 	// a nil Group, so fall back to a throwaway group here. This keeps Attach the
@@ -175,6 +216,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	if group == nil {
 		group = livetrack.NewGroup(livetrack.GroupOptions{Log: adapterLog})
 	}
+
 	egressReg := newEgressRegistry(group)
 	wsReg := adaptercodex.NewWsSessionRegistry(group)
 	s := &Server{
@@ -219,11 +261,19 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	probeCfg.Logging = logging
 	policies, err := logpolicy.Resolve(*probeCfg)
 	if err != nil {
-		log.LogAttrs(ctx, slog.LevelError, "adapter.logpolicy.resolve_failed", slog.String("concern", "adapter.http.errors"), slog.String("err", err.Error()))
+		log.LogAttrs(
+			ctx,
+			slog.LevelError,
+			"adapter.logpolicy.resolve_failed",
+			slog.String("concern", "adapter.http.errors"),
+			slog.String("err", err.Error()),
+		)
 		return nil, fmt.Errorf("adapter: resolve logging policy: %w", err)
 	}
+
 	s.registerProviders(ctx, cfg, deps, log, maxConcurrent, wsReg, policies)
 	s.mux = s.routes()
+
 	return s, nil
 }
 
@@ -242,26 +292,45 @@ func (s *Server) registerProviders(
 	if cfg.Codex.Enabled {
 		codexAuth := deps.authForProvider(adapterresolver.ProviderCodex)
 		if codexAuth == nil {
-			codexAuth = adaptercodex.NewAuthManager(cfg.Codex.AuthFile, adaptercodex.AuthManagerOptions{
-				HTTPClient: s.httpClient,
-				Log:        slogger.WithConcern(log.With("subcomponent", "codex_auth"), slogger.ConcernAdapterProviderCodex),
-				Now:        nil,
-				RefreshURL: "",
-			})
+			codexAuth = adaptercodex.NewAuthManager(
+				cfg.Codex.AuthFile,
+				adaptercodex.AuthManagerOptions{
+					HTTPClient: s.httpClient,
+					Log: slogger.WithConcern(
+						log.With("subcomponent", "codex_auth"),
+						slogger.ConcernAdapterProviderCodex,
+					),
+					Now:        nil,
+					RefreshURL: "",
+				},
+			)
 		}
-		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
-			Config:     cfg,
-			Auth:       codexAuth,
-			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
-			HTTPClient: s.httpClient,
-			Telemetry:  nil,
-			Now:        nil,
-		}, codexProviderOptionsWithRegistry(wsReg, policies, deps.CaptureStore))
+
+		s.codexProvider = adaptercodex.NewProvider(
+			adapterprovider.Deps{
+				Config: cfg,
+				Auth:   codexAuth,
+				Logger: slogger.WithConcern(
+					log.With("subcomponent", "codex_provider"),
+					slogger.ConcernAdapterProviderCodex,
+				),
+				HTTPClient: s.httpClient,
+				Telemetry:  nil,
+				Now:        nil,
+			},
+			codexProviderOptionsWithRegistry(wsReg, policies, deps.CaptureStore),
+		)
 		s.providerRegistry.Register(s.codexProvider)
-		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered", slog.String("concern", "adapter.http.ingress"), slog.String("provider", adapterresolver.ProviderCodex.String()),
+		log.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"adapter.provider_registry.registered",
+			slog.String("concern", "adapter.http.ingress"),
+			slog.String("provider", adapterresolver.ProviderCodex.String()),
 			slog.Int("registered_count", len(s.providerRegistry.IDs())),
 		)
 	}
+
 	if cfg.Anthropic.Enabled || cfg.DirectOAuth {
 		s.registerAnthropicProvider(ctx, cfg, deps, log, maxConcurrent, policies)
 	}
@@ -282,45 +351,67 @@ func (s *Server) registerAnthropicProvider(
 	if claudeAuth == nil {
 		claudeAuth = anthropic.NewAuthManager(cfg.Anthropic.OAuth, "")
 	}
+
 	id := cfg.ClientIdentity
 	messagesURL := cfg.Anthropic.OAuth.MessagesURL
-	s.anthr = anthropic.New(nil, claudeAuth, anthropic.Config{
-		MessagesURL:             messagesURL,
-		OAuthAnthropicVersion:   cfg.Anthropic.OAuth.AnthropicVersion,
-		BetaHeader:              id.BetaHeader,
-		UserAgent:               id.UserAgent,
-		SystemPromptPrefix:      id.SystemPromptPrefix,
-		StainlessPackageVersion: id.StainlessPackageVersion,
-		StainlessRuntime:        id.StainlessRuntime,
-		StainlessRuntimeVersion: id.StainlessRuntimeVersion,
-		CCVersion:               id.CCVersion,
-		CCEntrypoint:            id.CCEntrypoint,
-		CaptureStore:            deps.CaptureStore,
-		StripWireFlags:          cfg.StripWireFlags,
-	})
-	anthropicSidecarRotation := policies.Sinks[logpolicy.SinkAnthropicSidecar].Rotation
-	s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
-		Config:     cfg,
-		Auth:       claudeAuth,
-		Logger:     slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
-		HTTPClient: nil,
-		Telemetry:  nil,
-		Now:        nil,
-	}, anthropic.ProviderOptions{
-		Prepare:         s.prepareAnthropicProviderRequest,
-		ExecutePrepared: s.executeAnthropicPreparedRequest,
-		FileLog: anthropic.FileLogRotationConfig{
-			MaxSizeMB:  anthropicSidecarRotation.MaxSizeMB,
-			MaxBackups: anthropicSidecarRotation.MaxBackups,
-			MaxAgeDays: anthropicSidecarRotation.MaxAgeDays,
-			Compress:   boolPointer(anthropicSidecarRotation.Compress),
+	s.anthr = anthropic.New(
+		nil,
+		claudeAuth,
+		anthropic.Config{
+			MessagesURL:             messagesURL,
+			OAuthAnthropicVersion:   cfg.Anthropic.OAuth.AnthropicVersion,
+			BetaHeader:              id.BetaHeader,
+			UserAgent:               id.UserAgent,
+			SystemPromptPrefix:      id.SystemPromptPrefix,
+			StainlessPackageVersion: id.StainlessPackageVersion,
+			StainlessRuntime:        id.StainlessRuntime,
+			StainlessRuntimeVersion: id.StainlessRuntimeVersion,
+			CCVersion:               id.CCVersion,
+			CCEntrypoint:            id.CCEntrypoint,
+			CaptureStore:            deps.CaptureStore,
+			StripWireFlags:          cfg.StripWireFlags,
 		},
-	})
+	)
+	anthropicSidecarRotation := policies.Sinks[logpolicy.SinkAnthropicSidecar].Rotation
+	s.anthropicProvider = anthropic.NewProvider(
+		adapterprovider.Deps{
+			Config: cfg,
+			Auth:   claudeAuth,
+			Logger: slogger.WithConcern(
+				log.With("subcomponent", "anthropic_provider"),
+				slogger.ConcernAdapterProviderAnthReq,
+			),
+			HTTPClient: nil,
+			Telemetry:  nil,
+			Now:        nil,
+		},
+		anthropic.ProviderOptions{
+			Prepare:         s.prepareAnthropicProviderRequest,
+			ExecutePrepared: s.executeAnthropicPreparedRequest,
+			FileLog: anthropic.FileLogRotationConfig{
+				MaxSizeMB:  anthropicSidecarRotation.MaxSizeMB,
+				MaxBackups: anthropicSidecarRotation.MaxBackups,
+				MaxAgeDays: anthropicSidecarRotation.MaxAgeDays,
+				Compress:   boolPointer(anthropicSidecarRotation.Compress),
+			},
+		},
+	)
 	s.providerRegistry.Register(s.anthropicProvider)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered", slog.String("concern", "adapter.http.ingress"), slog.String("provider", adapterresolver.ProviderAnthropic.String()),
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.provider_registry.registered",
+		slog.String("concern", "adapter.http.ingress"),
+		slog.String("provider", adapterresolver.ProviderAnthropic.String()),
 		slog.Int("registered_count", len(s.providerRegistry.IDs())),
 	)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.enabled", slog.String("concern", "adapter.providers.anthropic.oauth"), slog.Int("max_concurrent", maxConcurrent))
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.oauth.enabled",
+		slog.String("concern", "adapter.providers.anthropic.oauth"),
+		slog.Int("max_concurrent", maxConcurrent),
+	)
 }
 
 // codexProviderOptionsWithRegistry builds the codex provider's startup
@@ -332,6 +423,7 @@ func codexProviderOptionsWithRegistry(
 	captureStore *capture.Store,
 ) adaptercodex.ProviderOptions {
 	codexSidecarRotation := policies.Sinks[logpolicy.SinkCodexSidecar].Rotation
+
 	return adaptercodex.ProviderOptions{
 		AccountID: "",
 		FileLog: adaptercodex.FileLogRotationConfig{
@@ -362,6 +454,7 @@ func adapterEmitterOptions(request config.LoggingRequest) []logevent.EmitterOpti
 	if !ok {
 		policy = logevent.IncompletePolicyWarn
 	}
+
 	return []logevent.EmitterOption{
 		logevent.WithIncompletePolicy(policy),
 		logevent.WithTestingTB(nil),
@@ -375,10 +468,12 @@ func (s *Server) Addr() string {
 	if host == "" {
 		host = DefaultHost
 	}
+
 	port := s.cfg.Port
 	if port <= 0 {
 		port = DefaultPort
 	}
+
 	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(port))
 }
 
@@ -389,10 +484,12 @@ func (s *Server) CursorIngressAddr() string {
 	if s.cfg.CursorIngressPort <= 0 {
 		return ""
 	}
+
 	host := s.cfg.Host
 	if host == "" {
 		host = DefaultHost
 	}
+
 	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(s.cfg.CursorIngressPort))
 }
 
@@ -404,6 +501,7 @@ func normalizeListenHost(host string) string {
 			return inner
 		}
 	}
+
 	return trimmed
 }
 
@@ -412,7 +510,14 @@ func (s *Server) acquire(ctx context.Context) error {
 	case s.sem <- struct{}{}:
 		return nil
 	case <-ctx.Done():
-		s.log.WarnContext(ctx, "adapter.acquire.ctx_done", "concern", "adapter.chat.dispatch", "err", ctx.Err())
+		s.log.WarnContext(
+			ctx,
+			"adapter.acquire.ctx_done",
+			"concern",
+			"adapter.chat.dispatch",
+			"err",
+			ctx.Err(),
+		)
 		return fmt.Errorf("adapter acquire concurrency slot: %w", ctx.Err())
 	case <-time.After(30 * time.Second):
 		return fmt.Errorf("timed out waiting for concurrency slot")
@@ -433,6 +538,7 @@ func newRequestID() string {
 	defer idLock.Unlock()
 	var b [12]byte
 	_, _ = rand.Read(b[:])
+
 	return "chatcmpl-" + hex.EncodeToString(b[:])
 }
 

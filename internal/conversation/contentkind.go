@@ -58,6 +58,7 @@ func ContentKindSelectorValues() []string {
 	for _, kind := range AllContentKinds {
 		values = append(values, string(kind))
 	}
+
 	return append(values, contentSelectorAll)
 }
 
@@ -71,11 +72,13 @@ func ExpandContentSelector(value string) (kinds []ContentKind, ok bool) {
 	case contentSelectorAll:
 		return allSelectorContentKinds(), true
 	}
+
 	for _, kind := range AllContentKinds {
 		if string(kind) == trimmed {
 			return []ContentKind{kind}, true
 		}
 	}
+
 	return nil, false
 }
 
@@ -95,6 +98,7 @@ func allSelectorContentKinds() []ContentKind {
 			values = append(values, kind)
 		}
 	}
+
 	return values
 }
 
@@ -109,7 +113,9 @@ func NewContentKindSet(kinds ...ContentKind) ContentKindSet {
 	for _, kind := range kinds {
 		members[kind] = true
 	}
+
 	collapseToolContentKinds(members)
+
 	return ContentKindSet{members: members}
 }
 
@@ -121,11 +127,13 @@ func (s ContentKindSet) Has(kind ContentKind) bool {
 // Kinds returns the members in canonical order.
 func (s ContentKindSet) Kinds() []ContentKind {
 	out := make([]ContentKind, 0, len(s.members))
+
 	for _, kind := range AllContentKinds {
 		if s.members[kind] {
 			out = append(out, kind)
 		}
 	}
+
 	return out
 }
 
@@ -139,22 +147,38 @@ func (s ContentKindSet) Empty() bool {
 // export always names at least one content kind.
 func ResolveContentKinds(values []string) (ContentKindSet, error) {
 	members := make(map[ContentKind]bool)
+
 	for _, value := range values {
 		if strings.TrimSpace(value) == "" {
 			continue
 		}
+
 		kinds, ok := ExpandContentSelector(value)
 		if !ok {
-			return ContentKindSet{members: nil}, fmt.Errorf("unknown content kind %q (allowed: %s)", value, strings.Join(ContentKindSelectorValues(), ", "))
+			return ContentKindSet{
+				members: nil,
+			}, fmt.Errorf(
+				"unknown content kind %q (allowed: %s)",
+				value,
+				strings.Join(ContentKindSelectorValues(), ", "),
+			)
 		}
+
 		for _, kind := range kinds {
 			members[kind] = true
 		}
 	}
+
 	collapseToolContentKinds(members)
 	if len(members) == 0 {
-		return ContentKindSet{members: nil}, fmt.Errorf("no content kinds selected; pass --only or a type shortcut with one or more of: %s", strings.Join(ContentKindSelectorValues(), ", "))
+		return ContentKindSet{
+			members: nil,
+		}, fmt.Errorf(
+			"no content kinds selected; pass --only or a type shortcut with one or more of: %s",
+			strings.Join(ContentKindSelectorValues(), ", "),
+		)
 	}
+
 	return ContentKindSet{members: members}, nil
 }
 
@@ -162,8 +186,10 @@ func collapseToolContentKinds(members map[ContentKind]bool) {
 	if members[ContentKindToolOutputs] {
 		delete(members, ContentKindToolCalls)
 		delete(members, ContentKindToolSummaries)
+
 		return
 	}
+
 	if members[ContentKindToolCalls] {
 		delete(members, ContentKindToolSummaries)
 	}

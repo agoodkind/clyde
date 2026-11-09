@@ -17,6 +17,7 @@ import (
 func TestSubstituteBillingAttestation(t *testing.T) {
 	t.Parallel()
 	const placeholderLine = "x-anthropic-billing-header: cc_version=2.1.123.abc; cc_entrypoint=sdk-cli; cch=00000;"
+
 	tests := []struct {
 		name string
 		line string
@@ -55,19 +56,31 @@ func TestSubstituteBillingAttestation(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := SubstituteBillingAttestation(tt.line, tt.cch); got != tt.want {
-				t.Fatalf("SubstituteBillingAttestation(%q, %q) = %q want %q", tt.line, tt.cch, got, tt.want)
-			}
-		})
+		t.Run(
+			tt.name,
+			func(t *testing.T) {
+				t.Parallel()
+				if got := SubstituteBillingAttestation(tt.line, tt.cch); got != tt.want {
+					t.Fatalf(
+						"SubstituteBillingAttestation(%q, %q) = %q want %q",
+						tt.line,
+						tt.cch,
+						got,
+						tt.want,
+					)
+				}
+			},
+		)
 	}
 }
 
 func TestApplyBillingAttestationOnlyTouchesBillingBlock(t *testing.T) {
 	t.Parallel()
 	blocks := []SystemBlock{
-		{Type: "text", Text: "x-anthropic-billing-header: cc_version=2.1.123.abc; cc_entrypoint=sdk-cli; cch=00000;"},
+		{
+			Type: "text",
+			Text: "x-anthropic-billing-header: cc_version=2.1.123.abc; cc_entrypoint=sdk-cli; cch=00000;",
+		},
 		{Type: "text", Text: "prefix block (must not change)"},
 		{Type: "text", Text: "caller system (must not change)"},
 	}
@@ -75,9 +88,11 @@ func TestApplyBillingAttestationOnlyTouchesBillingBlock(t *testing.T) {
 	if !strings.Contains(blocks[0].Text, "cch=deadbeef;") {
 		t.Fatalf("billing block cch not substituted: %q", blocks[0].Text)
 	}
+
 	if blocks[1].Text != "prefix block (must not change)" {
 		t.Fatalf("prefix block mutated: %q", blocks[1].Text)
 	}
+
 	if blocks[2].Text != "caller system (must not change)" {
 		t.Fatalf("caller block mutated: %q", blocks[2].Text)
 	}
@@ -99,7 +114,9 @@ func TestApplyBillingAttestationEmptyAttestationKeepsPlaceholder(t *testing.T) {
 func TestCheckBodyShapeFiresOnMissingRequiredField(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	slog.SetDefault(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	)
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	flavor := WireFlavor{BodyFieldsRequired: []string{"max_tokens", "messages", "model"}}
@@ -111,6 +128,7 @@ func TestCheckBodyShapeFiresOnMissingRequiredField(t *testing.T) {
 	if !strings.Contains(out, "anthropic.messages.body_shape_mismatch") {
 		t.Fatalf("expected body_shape_mismatch event, got: %s", out)
 	}
+
 	if !strings.Contains(out, `"missing":["model"]`) {
 		t.Fatalf("expected missing=[model], got: %s", out)
 	}
@@ -119,7 +137,9 @@ func TestCheckBodyShapeFiresOnMissingRequiredField(t *testing.T) {
 func TestCheckBodyShapeSilentWhenAllRequiredPresent(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	slog.SetDefault(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	)
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	flavor := WireFlavor{BodyFieldsRequired: []string{"max_tokens", "messages", "model"}}
@@ -127,7 +147,10 @@ func TestCheckBodyShapeSilentWhenAllRequiredPresent(t *testing.T) {
 	checkBodyShape(context.Background(), "claude-test", body, flavor)
 
 	if strings.Contains(buf.String(), "body_shape_mismatch") {
-		t.Fatalf("no mismatch event expected when all required fields present, got: %s", buf.String())
+		t.Fatalf(
+			"no mismatch event expected when all required fields present, got: %s",
+			buf.String(),
+		)
 	}
 }
 
@@ -138,18 +161,25 @@ func TestAnthropicVersionPrefersFlavor(t *testing.T) {
 	t.Parallel()
 
 	var captured atomic.Pointer[http.Header]
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hdr := r.Header.Clone()
-		captured.Store(&hdr)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hdr := r.Header.Clone()
+			captured.Store(&hdr)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(
+				[]byte(
+					`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
+				),
+			)
+		}),
+	)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -164,18 +194,24 @@ func TestAnthropicVersionPrefersFlavor(t *testing.T) {
 		},
 	}
 
-	_, _, err = cli.StreamEvents(context.Background(), Request{
-		Model:     "claude-test",
-		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
-		MaxTokens: 10,
-	}, func(StreamEvent) error { return nil })
+	_, _, err = cli.StreamEvents(
+		context.Background(),
+		Request{
+			Model:     "claude-test",
+			Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+			MaxTokens: 10,
+		},
+		func(StreamEvent) error { return nil },
+	)
 	if err != nil {
 		t.Fatalf("StreamEvents: %v", err)
 	}
+
 	got := captured.Load()
 	if got == nil {
 		t.Fatal("server captured no request")
 	}
+
 	if v := got.Get("Anthropic-Version"); v != "2023-06-01" {
 		t.Fatalf("Anthropic-Version = %q, want flavor value 2023-06-01 (not cfg 1999-01-01)", v)
 	}
@@ -217,18 +253,27 @@ func TestFeatureAwareFlavorSelectionIsByModel(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-			flavor, err := selectInteractiveFlavor(loaded, tc.vector)
-			if err != nil {
-				t.Fatalf("selectInteractiveFlavor: %v", err)
-			}
-			gotModelGated := betaFlagsContain(flavor, testModelGatedBeta)
-			if gotModelGated != tc.wantModelGated {
-				t.Fatalf("selected %q model-gated-beta=%v, want %v", flavor.Slug, gotModelGated, tc.wantModelGated)
-			}
-		})
+				flavor, err := selectInteractiveFlavor(loaded, tc.vector)
+				if err != nil {
+					t.Fatalf("selectInteractiveFlavor: %v", err)
+				}
+
+				gotModelGated := betaFlagsContain(flavor, testModelGatedBeta)
+				if gotModelGated != tc.wantModelGated {
+					t.Fatalf(
+						"selected %q model-gated-beta=%v, want %v",
+						flavor.Slug,
+						gotModelGated,
+						tc.wantModelGated,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -238,6 +283,7 @@ func betaFlagsContain(flavor WireFlavor, flag string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -256,10 +302,16 @@ func TestAnthropicVersionFallsBackToConfig(t *testing.T) {
 			OAuthAnthropicVersion: "2023-06-01",
 		},
 	}
-	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cli.cfg.MessagesURL, http.NoBody)
+	httpReq, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		cli.cfg.MessagesURL,
+		http.NoBody,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	flavor := WireFlavor{
 		Slug:             "test",
 		UserAgent:        "claude-cli/0 (test)",
@@ -278,18 +330,25 @@ func TestBillingAttestationReplayedIntoOutboundBody(t *testing.T) {
 	t.Parallel()
 
 	var capturedBody atomic.Pointer[[]byte]
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b := readAll(t, r)
-		capturedBody.Store(&b)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b := readAll(t, r)
+			capturedBody.Store(&b)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(
+				[]byte(
+					`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
+				),
+			)
+		}),
+	)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -303,23 +362,32 @@ func TestBillingAttestationReplayedIntoOutboundBody(t *testing.T) {
 	}
 
 	billing := "x-anthropic-billing-header: cc_version=2.1.123.abc; cc_entrypoint=sdk-cli; cch=00000;"
-	_, _, err = cli.StreamEvents(context.Background(), Request{
-		Model:        "claude-test",
-		SystemBlocks: []SystemBlock{{Type: "text", Text: billing}},
-		Messages:     []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
-		MaxTokens:    10,
-	}, func(StreamEvent) error { return nil })
+	_, _, err = cli.StreamEvents(
+		context.Background(),
+		Request{
+			Model:        "claude-test",
+			SystemBlocks: []SystemBlock{{Type: "text", Text: billing}},
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
+			MaxTokens: 10,
+		},
+		func(StreamEvent) error { return nil },
+	)
 	if err != nil {
 		t.Fatalf("StreamEvents: %v", err)
 	}
+
 	bodyPtr := capturedBody.Load()
 	if bodyPtr == nil {
 		t.Fatal("server captured no body")
 	}
+
 	body := string(*bodyPtr)
 	if !strings.Contains(body, "cch=captured-cch-7777;") {
 		t.Fatalf("captured attestation not substituted into outbound body: %s", body)
 	}
+
 	if strings.Contains(body, "cch=00000;") {
 		t.Fatalf("placeholder cch leaked onto the wire: %s", body)
 	}
@@ -332,18 +400,25 @@ func TestBillingAttestationEmptyKeepsPlaceholderOnWire(t *testing.T) {
 	t.Parallel()
 
 	var capturedBody atomic.Pointer[[]byte]
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b := readAll(t, r)
-		capturedBody.Store(&b)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b := readAll(t, r)
+			capturedBody.Store(&b)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(
+				[]byte(
+					`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
+				),
+			)
+		}),
+	)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -357,19 +432,27 @@ func TestBillingAttestationEmptyKeepsPlaceholderOnWire(t *testing.T) {
 	}
 
 	billing := "x-anthropic-billing-header: cc_version=2.1.123.abc; cc_entrypoint=sdk-cli; cch=abc99;"
-	_, _, err = cli.StreamEvents(context.Background(), Request{
-		Model:        "claude-test",
-		SystemBlocks: []SystemBlock{{Type: "text", Text: billing}},
-		Messages:     []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
-		MaxTokens:    10,
-	}, func(StreamEvent) error { return nil })
+	_, _, err = cli.StreamEvents(
+		context.Background(),
+		Request{
+			Model:        "claude-test",
+			SystemBlocks: []SystemBlock{{Type: "text", Text: billing}},
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
+			MaxTokens: 10,
+		},
+		func(StreamEvent) error { return nil },
+	)
 	if err != nil {
 		t.Fatalf("StreamEvents: %v", err)
 	}
+
 	bodyPtr := capturedBody.Load()
 	if bodyPtr == nil {
 		t.Fatal("server captured no body")
 	}
+
 	if !strings.Contains(string(*bodyPtr), "cch=abc99;") {
 		t.Fatalf("placeholder cch should survive an empty attestation: %s", string(*bodyPtr))
 	}
@@ -384,18 +467,25 @@ func TestOutboundBodyFieldSetMatchesLearnedShape(t *testing.T) {
 	t.Parallel()
 
 	var capturedBody atomic.Pointer[[]byte]
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b := readAll(t, r)
-		capturedBody.Store(&b)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b := readAll(t, r)
+			capturedBody.Store(&b)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(
+				[]byte(
+					`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
+				),
+			)
+		}),
+	)
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -408,19 +498,27 @@ func TestOutboundBodyFieldSetMatchesLearnedShape(t *testing.T) {
 		},
 	}
 
-	_, _, err = cli.StreamEvents(context.Background(), Request{
-		Model:        "claude-test",
-		SystemBlocks: []SystemBlock{{Type: "text", Text: "system text"}},
-		Messages:     []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hello"}}}},
-		MaxTokens:    10,
-	}, func(StreamEvent) error { return nil })
+	_, _, err = cli.StreamEvents(
+		context.Background(),
+		Request{
+			Model:        "claude-test",
+			SystemBlocks: []SystemBlock{{Type: "text", Text: "system text"}},
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hello"}}},
+			},
+			MaxTokens: 10,
+		},
+		func(StreamEvent) error { return nil },
+	)
 	if err != nil {
 		t.Fatalf("StreamEvents: %v", err)
 	}
+
 	bodyPtr := capturedBody.Load()
 	if bodyPtr == nil {
 		t.Fatal("server captured no body")
 	}
+
 	keys := decodedTopLevelKeyOrder(t, *bodyPtr)
 	// The Request struct declaration order mirrors claude-code:
 	// system (spliced first), then model, messages, max_tokens, stream.
@@ -428,17 +526,20 @@ func TestOutboundBodyFieldSetMatchesLearnedShape(t *testing.T) {
 	if len(keys) < len(leadingWant) {
 		t.Fatalf("outbound body has too few keys %v", keys)
 	}
+
 	for i, want := range leadingWant {
 		if keys[i] != want {
 			t.Fatalf("outbound body key[%d] = %q want %q (order %v)", i, keys[i], want, keys)
 		}
 	}
+
 	// Content preservation: the learned-required fields are present and
 	// the caller content is not dropped.
 	body := string(*bodyPtr)
 	if !strings.Contains(body, `"messages"`) || !strings.Contains(body, "hello") {
 		t.Fatalf("caller messages content dropped: %s", body)
 	}
+
 	if !strings.Contains(body, "system text") {
 		t.Fatalf("caller system content dropped: %s", body)
 	}
@@ -450,6 +551,7 @@ func readAll(t *testing.T, r *http.Request) []byte {
 	if err != nil {
 		t.Fatalf("read request body: %v", err)
 	}
+
 	return b
 }
 
@@ -461,19 +563,24 @@ func decodedTopLevelKeyOrder(t *testing.T, body []byte) []string {
 	if _, err := dec.Token(); err != nil {
 		t.Fatalf("read open token: %v", err)
 	}
+
 	var keys []string
+
 	for dec.More() {
 		tok, err := dec.Token()
 		if err != nil {
 			t.Fatalf("read key token: %v", err)
 		}
+
 		key, ok := tok.(string)
 		if !ok {
 			t.Fatalf("key token is not a string: %v", tok)
 		}
+
 		keys = append(keys, key)
 		skipOneJSONValue(t, dec)
 	}
+
 	return keys
 }
 
@@ -483,16 +590,19 @@ func skipOneJSONValue(t *testing.T, dec *json.Decoder) {
 	if err != nil {
 		t.Fatalf("read value token: %v", err)
 	}
+
 	delim, ok := tok.(json.Delim)
 	if !ok || (delim != '{' && delim != '[') {
 		return
 	}
+
 	depth := 1
 	for depth > 0 {
 		next, err := dec.Token()
 		if err != nil {
 			t.Fatalf("read nested token: %v", err)
 		}
+
 		if d, ok := next.(json.Delim); ok {
 			if d == '{' || d == '[' {
 				depth++

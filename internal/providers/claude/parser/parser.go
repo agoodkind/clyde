@@ -99,58 +99,134 @@ type claudeHeader struct {
 // Discover walks ~/.claude/projects and returns every transcript file as a scan
 // candidate. The scan driver consults the stamps to skip unchanged files. prior
 // is unused here because the walk restats every file.
-func (Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
+func (Parser) Discover(
+	ctx context.Context,
+	_ map[string]conversation.Record,
+) ([]conversation.ScanCandidate, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.WarnContext(ctx, "providers.claude.parser.home_failed", "concern", concern, "component", "claude", "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.claude.parser.home_failed",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
+
 	root := filepath.Join(home, ".claude", "projects")
 	var out []conversation.ScanCandidate
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if ctx.Err() != nil {
-			slog.WarnContext(ctx, "providers.claude.parser.canceled", "concern", concern, "component", "claude", "err", ctx.Err())
-			return fmt.Errorf("discover Claude conversations canceled: %w", ctx.Err())
-		}
-		if walkErr != nil {
-			if errors.Is(walkErr, os.ErrPermission) || errors.Is(walkErr, os.ErrNotExist) {
+	err = filepath.WalkDir(
+		root,
+		func(path string, entry os.DirEntry, walkErr error) error {
+			if ctx.Err() != nil {
+				slog.WarnContext(
+					ctx,
+					"providers.claude.parser.canceled",
+					"concern",
+					concern,
+					"component",
+					"claude",
+					"err",
+					ctx.Err(),
+				)
+				return fmt.Errorf("discover Claude conversations canceled: %w", ctx.Err())
+			}
+
+			if walkErr != nil {
+				if errors.Is(walkErr, os.ErrPermission) || errors.Is(walkErr, os.ErrNotExist) {
+					return nil
+				}
+
+				slog.WarnContext(
+					ctx,
+					"providers.claude.parser.walk_entry_failed",
+					"concern",
+					concern,
+					"component",
+					"claude",
+					"path",
+					path,
+					"err",
+					walkErr,
+				)
+
+				return fmt.Errorf("walk Claude transcript entry: %w", walkErr)
+			}
+
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
-			slog.WarnContext(ctx, "providers.claude.parser.walk_entry_failed", "concern", concern, "component", "claude", "path", path, "err", walkErr)
-			return fmt.Errorf("walk Claude transcript entry: %w", walkErr)
-		}
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			return nil
-		}
-		// A transcript under subagents/ is admitted rather than dropped here.
-		// scanHeader reads its isSidechain marker, classifies it as subagent
-		// origin, and gives it an artifact-hash identity so it cannot collide with
-		// the parent conversation whose session id it records. The one conversation
-		// setting then decides whether it is served. Dropping it here instead would
-		// be a second, always-on skip the setting could not reach.
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			if errors.Is(infoErr, os.ErrNotExist) {
+
+			// A transcript under subagents/ is admitted rather than dropped here.
+			// scanHeader reads its isSidechain marker, classifies it as subagent
+			// origin, and gives it an artifact-hash identity so it cannot collide with
+			// the parent conversation whose session id it records. The one conversation
+			// setting then decides whether it is served. Dropping it here instead would
+			// be a second, always-on skip the setting could not reach.
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				if errors.Is(infoErr, os.ErrNotExist) {
+					return nil
+				}
+
+				slog.WarnContext(
+					ctx,
+					"providers.claude.parser.stat_failed",
+					"concern",
+					concern,
+					"component",
+					"claude",
+					"path",
+					path,
+					"err",
+					infoErr,
+				)
+
 				return nil
 			}
-			slog.WarnContext(ctx, "providers.claude.parser.stat_failed", "concern", concern, "component", "claude", "path", path, "err", infoErr)
+
+			out = append(
+				out,
+				conversation.ScanCandidate{
+					MetadataChanged: false,
+					Path:            path,
+					Selector:        "",
+					Stamp: conversation.FileStamp{
+						Size:  info.Size(),
+						Mtime: info.ModTime(),
+					},
+				},
+			)
+
 			return nil
-		}
-		out = append(out, conversation.ScanCandidate{
-			MetadataChanged: false,
-			Path:            path,
-			Selector:        "",
-			Stamp:           conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
-		})
-		return nil
-	})
+		},
+	)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return out, nil
 		}
-		slog.WarnContext(ctx, "providers.claude.parser.walk_failed", "concern", concern, "component", "claude", "root", root, "err", err)
+
+		slog.WarnContext(
+			ctx,
+			"providers.claude.parser.walk_failed",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"root",
+			root,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("walk Claude transcript root: %w", err)
 	}
+
 	return out, nil
 }
 
@@ -162,7 +238,9 @@ func (Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversatio
 	if err != nil {
 		return emptyRecord(), false
 	}
+
 	defer func() { _ = file.Close() }()
+
 	return scanHeader(file, path, stamp)
 }
 
@@ -182,7 +260,11 @@ type headerFields struct {
 // session id, a title, and a created time, or after headerLineCap lines. It is
 // the reader-based core of [Parser.ScanRecord] so a test can wrap r to assert
 // the read stays bounded and never reaches EOF.
-func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (conversation.Record, bool) {
+func scanHeader(
+	r io.Reader,
+	path string,
+	stamp conversation.FileStamp,
+) (conversation.Record, bool) {
 	fields := headerFields{
 		providerID:            "",
 		title:                 "",
@@ -195,19 +277,23 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), scanBufferMax)
 	lines := 0
+
 	for scanner.Scan() {
 		lines++
 		if lines > headerLineCap {
 			break
 		}
+
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
+
 		var header claudeHeader
 		if err := json.Unmarshal(line, &header); err != nil {
 			continue
 		}
+
 		applyHeaderLine(&fields, header)
 		// Stop early once the id, a title, and a created time are filled. The
 		// first user message supplies a good title, so reading further is
@@ -216,14 +302,27 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 			break
 		}
 	}
+
 	if scanErr := scanner.Err(); scanErr != nil {
 		// A scan error (such as an over-long line) leaves the fields collected so
 		// far intact, so keep the partial record rather than dropping it.
-		slog.Warn("providers.claude.parser.scan_failed", "concern", concern, "component", "claude", "path", path, "err", scanErr)
+		slog.Warn(
+			"providers.claude.parser.scan_failed",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"path",
+			path,
+			"err",
+			scanErr,
+		)
 	}
+
 	if fields.providerID == "" {
 		return emptyRecord(), false
 	}
+
 	var lineage *conversation.Lineage
 	if fields.forkedFromSessionID != "" {
 		lineage = &conversation.Lineage{
@@ -233,6 +332,7 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 			ParentMessageUUID: fields.forkedFromMessageUUID,
 		}
 	}
+
 	// A sidechain transcript records the session id of the conversation that
 	// dispatched the agent, not one of its own, and that id is also the id of a
 	// real user conversation. Deriving claude:<session-id> from it would make the
@@ -249,6 +349,7 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 		origin = conversation.OriginSubagent
 		recordProviderID = ""
 	}
+
 	// A transcript with no title of its own falls back to its session id, which is
 	// what a person types to reach it. A sidechain transcript has no session id of
 	// its own, and Resolve matches on title as well as id, so falling back to the
@@ -258,9 +359,11 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 	if title == "" {
 		title = recordProviderID
 	}
+
 	if title == "" {
 		title = untitledSubagentTranscriptTitle
 	}
+
 	return conversation.Record{
 		ID:             conversation.DerivedID(providerid.ProviderClaude, recordProviderID, path),
 		Provider:       providerid.ProviderClaude,
@@ -295,19 +398,26 @@ func applyHeaderLine(fields *headerFields, header claudeHeader) {
 		// user's own transcript reclassify and hide the entire conversation.
 		fields.isSidechain = header.IsSidechain
 	}
-	if header.ForkedFrom != nil && header.ForkedFrom.SessionID != "" && fields.forkedFromSessionID == "" {
+
+	if header.ForkedFrom != nil && header.ForkedFrom.SessionID != "" &&
+		fields.forkedFromSessionID == "" {
 		fields.forkedFromSessionID = header.ForkedFrom.SessionID
 		fields.forkedFromMessageUUID = header.ForkedFrom.MessageUUID
 	}
+
 	if header.CWD != "" && fields.workspaceRoot == "" {
 		fields.workspaceRoot = header.CWD
 	}
+
 	if header.CustomTitle != "" {
 		fields.title = header.CustomTitle
 	}
-	if header.Type == EntryTypeUser && fields.title == "" && strings.TrimSpace(header.Content) != "" {
+
+	if header.Type == EntryTypeUser && fields.title == "" &&
+		strings.TrimSpace(header.Content) != "" {
 		fields.title = trimTitle(header.Content)
 	}
+
 	if header.Timestamp != "" && fields.createdAt.IsZero() {
 		if parsed, parseErr := time.Parse(time.RFC3339, header.Timestamp); parseErr == nil {
 			fields.createdAt = parsed
@@ -322,17 +432,33 @@ func applyHeaderLine(fields *headerFields, header claudeHeader) {
 // from later lines. With ResolveInjectedTranscripts set, Stream buffers every
 // message and attaches typed spans to unframed transcript wrappers in compact
 // summaries before yielding.
-func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+func (p Parser) Stream(
+	path string,
+	opts conversation.LoadOptions,
+) iter.Seq2[transcript.Message, error] {
 	if opts.IncludeToolOutputs || opts.ResolveInjectedTranscripts {
 		return p.streamWithToolOutputs(path, opts)
 	}
+
 	return func(yield func(transcript.Message, error) bool) {
 		file, err := os.Open(filepath.Clean(path))
 		if err != nil {
-			slog.Warn("providers.claude.parser.open_failed", "concern", concern, "component", "claude", "path", path, "err", err)
+			slog.Warn(
+				"providers.claude.parser.open_failed",
+				"concern",
+				concern,
+				"component",
+				"claude",
+				"path",
+				path,
+				"err",
+				err,
+			)
 			yield(emptyMessage(), fmt.Errorf("open transcript: %w", err))
+
 			return
 		}
+
 		defer func() { _ = file.Close() }()
 		parseOpts := parseOptions{
 			PreserveSystemPrompts: opts.IncludeSystemPrompts,
@@ -341,17 +467,31 @@ func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tra
 			Tally:                 opts.HarnessTally,
 		}
 		reader := bufio.NewReader(file)
+
 		for {
 			line, readErr := reader.ReadBytes('\n')
 			if stop := emitLine(line, parseOpts, yield); stop {
 				return
 			}
+
 			if readErr == io.EOF {
 				return
 			}
+
 			if readErr != nil {
-				slog.Warn("providers.claude.parser.read_line_failed", "concern", concern, "component", "claude", "path", path, "err", readErr)
+				slog.Warn(
+					"providers.claude.parser.read_line_failed",
+					"concern",
+					concern,
+					"component",
+					"claude",
+					"path",
+					path,
+					"err",
+					readErr,
+				)
 				yield(emptyMessage(), fmt.Errorf("read transcript line: %w", readErr))
+
 				return
 			}
 		}
@@ -368,27 +508,35 @@ func emitLine(line []byte, opts parseOptions, yield func(transcript.Message, err
 	if len(line) == 0 {
 		return false
 	}
+
 	trimmed := trimLine(line)
 	if len(trimmed) == 0 {
 		return false
 	}
+
 	msg, _, ok := parseLine(trimmed, opts)
 	if !ok {
 		return false
 	}
+
 	return !yield(msg, nil)
 }
 
-func (p Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+func (p Parser) streamWithToolOutputs(
+	path string,
+	opts conversation.LoadOptions,
+) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
 		messages, results, err := collectWithToolResults(path, opts)
 		if err != nil {
 			yield(emptyMessage(), err)
 			return
 		}
+
 		if opts.IncludeToolOutputs {
 			attachToolResults(messages, results)
 		}
+
 		for _, msg := range messages {
 			if !yield(msg, nil) {
 				return
@@ -403,12 +551,26 @@ func (p Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions
 // ResolveInjectedTranscripts set, it also indexes request provenance during
 // the read and attaches typed spans to compact summaries at the end of the
 // file.
-func collectWithToolResults(path string, opts conversation.LoadOptions) ([]transcript.Message, []claudeToolResult, error) {
+func collectWithToolResults(
+	path string,
+	opts conversation.LoadOptions,
+) ([]transcript.Message, []claudeToolResult, error) {
 	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
-		slog.Warn("providers.claude.parser.open_failed", "concern", concern, "component", "claude", "path", path, "err", err)
+		slog.Warn(
+			"providers.claude.parser.open_failed",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return nil, nil, fmt.Errorf("open transcript: %w", err)
 	}
+
 	defer func() { _ = file.Close() }()
 
 	parseOpts := parseOptions{
@@ -423,8 +585,10 @@ func collectWithToolResults(path string, opts conversation.LoadOptions) ([]trans
 	if opts.ResolveInjectedTranscripts {
 		provenance = newProvenanceIndex()
 	}
+
 	reader := bufio.NewReader(file)
 	var offset int64
+
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if trimmed := trimLine(line); len(trimmed) > 0 {
@@ -433,21 +597,40 @@ func collectWithToolResults(path string, opts conversation.LoadOptions) ([]trans
 			if ok {
 				messages = append(messages, message)
 			}
+
 			if provenance != nil {
 				provenance.observe(trimmed, offset)
 			}
 		}
+
 		offset += int64(len(line))
 		if readErr == io.EOF {
 			if provenance != nil {
-				if err := resolveLegacyTranscripts(path, provenance, messages, parseOpts); err != nil {
+				if err := resolveLegacyTranscripts(
+					path,
+					provenance,
+					messages,
+					parseOpts,
+				); err != nil {
 					return nil, nil, err
 				}
 			}
+
 			return messages, results, nil
 		}
+
 		if readErr != nil {
-			slog.Warn("providers.claude.parser.read_line_failed", "concern", concern, "component", "claude", "path", path, "err", readErr)
+			slog.Warn(
+				"providers.claude.parser.read_line_failed",
+				"concern",
+				concern,
+				"component",
+				"claude",
+				"path",
+				path,
+				"err",
+				readErr,
+			)
 			return nil, nil, fmt.Errorf("read transcript line: %w", readErr)
 		}
 	}
@@ -458,6 +641,7 @@ func trimLine(line []byte) []byte {
 	for end > 0 && (line[end-1] == '\n' || line[end-1] == '\r') {
 		end--
 	}
+
 	return line[:end]
 }
 
@@ -466,9 +650,11 @@ func trimTitle(text string) string {
 	if len(fields) == 0 {
 		return ""
 	}
+
 	title := strings.Join(fields, " ")
 	if len(title) > 80 {
 		return strings.TrimSpace(title[:80])
 	}
+
 	return title
 }

@@ -28,18 +28,35 @@ func (s *controlServer) ResolveConversationRequest(
 	if requestID == "" {
 		return nil, status.Error(codes.InvalidArgument, "request_id is required")
 	}
-	resolution, err := s.index.ResolveRequest(ctx, requestID, conversation.RequestLookupOptions{
-		AllowFullScan: req.GetAllowFullScan(),
-	})
+
+	resolution, err := s.index.ResolveRequest(
+		ctx,
+		requestID,
+		conversation.RequestLookupOptions{
+			AllowFullScan: req.GetAllowFullScan(),
+		},
+	)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.resolve_conversation_request.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"request_id", requestID,
-			"allow_full_scan", req.GetAllowFullScan(),
-			"err", err,
+		slog.WarnContext(
+			ctx,
+			"daemon.resolve_conversation_request.failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"peer",
+			peerString(client),
+			"request_id",
+			requestID,
+			"allow_full_scan",
+			req.GetAllowFullScan(),
+			"err",
+			err,
 		)
+
 		return nil, status.Errorf(codes.Internal, "resolve conversation request: %v", err)
 	}
+
 	response := &clydev1.ResolveConversationRequestResponse{
 		RequestId:      resolution.RequestID,
 		Found:          resolution.Found,
@@ -50,10 +67,13 @@ func (s *controlServer) ResolveConversationRequest(
 	if resolution.Found {
 		response.Conversation = protoConversationRecord(ctx, s.index, resolution.Record)
 	}
+
 	return response, nil
 }
 
-func protoRequestResolutionOrigin(origin conversation.RequestOrigin) clydev1.RequestResolutionOrigin {
+func protoRequestResolutionOrigin(
+	origin conversation.RequestOrigin,
+) clydev1.RequestResolutionOrigin {
 	switch origin {
 	case conversation.RequestOriginUnspecified:
 		return clydev1.RequestResolutionOrigin_REQUEST_RESOLUTION_ORIGIN_UNSPECIFIED
@@ -68,7 +88,9 @@ func protoRequestResolutionOrigin(origin conversation.RequestOrigin) clydev1.Req
 	}
 }
 
-func protoRequestNotFoundReason(reason conversation.RequestNotFoundReason) clydev1.RequestResolutionNotFoundReason {
+func protoRequestNotFoundReason(
+	reason conversation.RequestNotFoundReason,
+) clydev1.RequestResolutionNotFoundReason {
 	switch reason {
 	case conversation.RequestNotFoundReasonUnspecified:
 		return clydev1.RequestResolutionNotFoundReason_REQUEST_RESOLUTION_NOT_FOUND_REASON_UNSPECIFIED

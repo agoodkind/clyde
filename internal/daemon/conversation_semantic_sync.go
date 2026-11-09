@@ -45,10 +45,18 @@ func newConversationSemanticFreshness() *conversationSemanticFreshness {
 // from the control server while the worker publishes.
 func (f *conversationSemanticFreshness) snapshot() conversation.SearchFreshness {
 	if f == nil {
-		return conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0}
+		return conversation.SearchFreshness{
+			Manifest:     0,
+			Needed:       0,
+			Embedded:     0,
+			Pending:      0,
+			LastSyncUnix: 0,
+		}
 	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	return f.freshness
 }
 
@@ -69,6 +77,7 @@ func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncSt
 	if f == nil {
 		return
 	}
+
 	pending := max(stats.needed-stats.sentConversations, 0) + stats.failedSuppressed
 	embedded := max(stats.manifest-stats.needed, 0)
 	f.mu.Lock()
@@ -130,7 +139,10 @@ type pinnedFingerprintRecord struct {
 
 type conversationSemanticIndex interface {
 	ListWithStamps(context.Context) ([]conversation.StampedRecord, error)
-	LoadMessagesWithOptions(conversation.Record, conversation.LoadOptions) ([]transcript.Message, error)
+	LoadMessagesWithOptions(
+		conversation.Record,
+		conversation.LoadOptions,
+	) ([]transcript.Message, error)
 }
 
 // conversationSemanticClient is the feeder surface: state the full manifest,
@@ -139,7 +151,12 @@ type conversationSemanticIndex interface {
 // pass can skip its disk reads instead of being rejected after them.
 type conversationSemanticClient interface {
 	SyncConversationManifest(context.Context, string, []semsearch.Fingerprint) ([]string, error)
-	UpsertConversationDocuments(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
+	UpsertConversationDocuments(
+		context.Context,
+		string,
+		[]semsearch.SemDoc,
+		[]semsearch.Fingerprint,
+	) (string, error)
 	JobState(ctx context.Context, jobID string) (string, error)
 }
 
@@ -295,22 +312,34 @@ func installConversationSemanticSyncStop(
 	if group == nil {
 		return nil, nil, false
 	}
+
 	workerCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	group.AddHookBefore(livetrack.PhaseWorkers, conversationSemanticSyncHookName, func(stopCtx context.Context) error {
-		cancel()
-		select {
-		case <-done:
-			return nil
-		case <-stopCtx.Done():
-			log.WarnContext(stopCtx, "daemon.conversation_semantic_sync.stop_timeout",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"err", stopCtx.Err(),
-			)
-			return fmt.Errorf("wait for conversation semantic sync worker: %w", stopCtx.Err())
-		}
-	})
+	group.AddHookBefore(
+		livetrack.PhaseWorkers,
+		conversationSemanticSyncHookName,
+		func(stopCtx context.Context) error {
+			cancel()
+			select {
+			case <-done:
+				return nil
+			case <-stopCtx.Done():
+				log.WarnContext(
+					stopCtx,
+					"daemon.conversation_semantic_sync.stop_timeout",
+					"concern",
+					"conversation.semantic",
+					"component",
+					"daemon",
+					"err",
+					stopCtx.Err(),
+				)
+
+				return fmt.Errorf("wait for conversation semantic sync worker: %w", stopCtx.Err())
+			}
+		},
+	)
+
 	return workerCtx, done, true
 }
 
@@ -337,19 +366,34 @@ func startConversationSemanticSync(
 	if resolveClient == nil {
 		return false
 	}
+
 	if log == nil {
 		log = slog.Default()
 	}
+
 	workerCtx, done, owned := installConversationSemanticSyncStop(ctx, group, log)
 	if !owned {
-		log.WarnContext(ctx, "daemon.conversation_semantic_sync.start_skipped_unowned",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"collection_id", collectionID,
+		log.WarnContext(
+			ctx,
+			"daemon.conversation_semantic_sync.start_skipped_unowned",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"collection_id",
+			collectionID,
 		)
+
 		return false
 	}
-	worker := newConversationSemanticSyncWorker(index, resolveClient, collectionID, log, contentKinds)
+
+	worker := newConversationSemanticSyncWorker(
+		index,
+		resolveClient,
+		collectionID,
+		log,
+		contentKinds,
+	)
 	worker.freshness = freshness
 	worker.interval = interval
 	freshness.workerStarted()
@@ -357,15 +401,21 @@ func startConversationSemanticSync(
 		defer close(done)
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				worker.log.ErrorContext(workerCtx, "daemon.conversation_semantic_sync.panic",
-					"concern", "conversation.semantic",
-					"component", "daemon",
-					"err", fmt.Sprintf("panic: %v", recovered),
+				worker.log.ErrorContext(
+					workerCtx,
+					"daemon.conversation_semantic_sync.panic",
+					"concern",
+					"conversation.semantic",
+					"component",
+					"daemon",
+					"err",
+					fmt.Sprintf("panic: %v", recovered),
 				)
 			}
 		}()
 		worker.run(workerCtx)
 	}()
+
 	return true
 }
 
@@ -379,6 +429,7 @@ func newConversationSemanticSyncWorker(
 	if log == nil {
 		log = slog.Default()
 	}
+
 	return &conversationSemanticSyncWorker{
 		index:              index,
 		resolveClient:      resolveClient,
@@ -404,6 +455,7 @@ func (w *conversationSemanticSyncWorker) run(ctx context.Context) {
 	w.runBacklog(ctx)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -438,20 +490,32 @@ func (w *conversationSemanticSyncWorker) runPassAndLog(ctx context.Context) {
 			w.finishPassStatus(passStarted, passErr)
 			return
 		}
+
 		w.finishPassStatus(passStarted, fmt.Errorf("panic: %v", recovered))
-		w.log.ErrorContext(ctx, "daemon.conversation_semantic_sync.pass_panic",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"err", fmt.Sprintf("panic: %v", recovered),
-			"stack", string(debug.Stack()),
+		w.log.ErrorContext(
+			ctx,
+			"daemon.conversation_semantic_sync.pass_panic",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"err",
+			fmt.Sprintf("panic: %v", recovered),
+			"stack",
+			string(debug.Stack()),
 		)
 	}()
 	if err := w.runPass(ctx); err != nil && ctx.Err() == nil {
 		passErr = err
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.pass_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"err", err,
+		w.log.WarnContext(
+			ctx,
+			"daemon.conversation_semantic_sync.pass_failed",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"err",
+			err,
 		)
 	}
 }
@@ -460,39 +524,61 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	if semanticSyncContextDone(ctx) {
 		return nil
 	}
+
 	if w == nil || w.index == nil || w.resolveClient == nil {
 		return fmt.Errorf("semantic conversation sync worker is not configured")
 	}
+
 	client := w.resolveClient()
 	if client == nil {
 		// The engine is configured but not yet reachable: registration has not
 		// succeeded. Skip the pass without reading any transcript from disk and
 		// let the next pass pick the client up once the background retry lands.
-		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_skipped_engine_unavailable",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"collection_id", w.collectionID,
+		w.log.DebugContext(
+			ctx,
+			"daemon.conversation_semantic_sync.pass_skipped_engine_unavailable",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"collection_id",
+			w.collectionID,
 		)
 		w.passBlocked = true
+
 		return nil
 	}
+
 	w.batchBytes = deliveryBatchBytesFor(client)
 	if w.engineBusyWithLastJob(ctx, client) {
 		w.passBlocked = true
-		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_skipped_engine_busy",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"job_id", w.activeJobID,
+		w.log.DebugContext(
+			ctx,
+			"daemon.conversation_semantic_sync.pass_skipped_engine_busy",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"job_id",
+			w.activeJobID,
 		)
+
 		return nil
 	}
+
 	stampedRecords, err := w.index.ListWithStamps(ctx)
 	if err != nil {
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.list_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"err", err,
+		w.log.WarnContext(
+			ctx,
+			"daemon.conversation_semantic_sync.list_failed",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"err",
+			err,
 		)
+
 		return fmt.Errorf("list conversation records with stamps: %w", err)
 	}
 
@@ -529,6 +615,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sync conversation manifest: %w", err)
 	}
+
 	stats.needed = len(needed)
 	w.lastNeeded = len(needed)
 	if len(needed) == 0 {
@@ -541,12 +628,14 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		w.logPass(ctx, stats)
 		return nil
 	}
+
 	if semanticSyncContextDone(ctx) {
 		return nil
 	}
 
 	w.sendDocuments(ctx, client, docs, manifest, sent, &stats)
 	w.logPass(ctx, stats)
+
 	return nil
 }
 
@@ -556,19 +645,26 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 // worker skips the whole pass: no manifest sync and no transcript loads. A
 // terminal state or a failed lookup clears the id and lets the pass proceed;
 // the upsert path still handles a busy engine on its own.
-func (w *conversationSemanticSyncWorker) engineBusyWithLastJob(ctx context.Context, client conversationSemanticClient) bool {
+func (w *conversationSemanticSyncWorker) engineBusyWithLastJob(
+	ctx context.Context,
+	client conversationSemanticClient,
+) bool {
 	if w.activeJobID == "" {
 		return false
 	}
+
 	state, err := client.JobState(ctx, w.activeJobID)
 	if err != nil {
 		w.activeJobID = ""
 		return false
 	}
+
 	if isEngineJobActive(state) {
 		return true
 	}
+
 	w.activeJobID = ""
+
 	return false
 }
 
@@ -605,14 +701,17 @@ func (w *conversationSemanticSyncWorker) buildManifest(
 	stampsByID := make(map[string]conversation.FileStamp, len(stampedRecords))
 	seen := make(map[string]bool, len(stampedRecords))
 	suppressed := 0
+
 	for _, stampedRecord := range stampedRecords {
 		conversationID := strings.TrimSpace(stampedRecord.Record.ID)
 		if conversationID == "" {
 			continue
 		}
+
 		if seen[conversationID] {
 			continue
 		}
+
 		seen[conversationID] = true
 		// ContentFingerprint preserves any compatibility bytes already advertised
 		// for this artifact kind while changing only with its file stamp.
@@ -629,12 +728,15 @@ func (w *conversationSemanticSyncWorker) buildManifest(
 				delete(w.pinnedFingerprints, conversationID)
 			}
 		}
+
 		if priorFingerprint, delivered := w.emptyDelivered[conversationID]; delivered {
 			if priorFingerprint == fingerprint {
 				continue
 			}
+
 			delete(w.emptyDelivered, conversationID)
 		}
+
 		// A conversation whose transcript repeatedly failed to load stays out
 		// of the manifest until its bytes change, so the engine stops asking
 		// for it and the pass stops reading it. Below the threshold it stays
@@ -652,15 +754,21 @@ func (w *conversationSemanticSyncWorker) buildManifest(
 				delete(w.failedLoad, conversationID)
 			}
 		}
+
 		recordsByID[conversationID] = stampedRecord.Record
 		stampsByID[conversationID] = stampedRecord.Stamp
-		manifest = append(manifest, semsearch.Fingerprint{
-			ConversationID: conversationID,
-			Value:          fingerprint,
-		})
+		manifest = append(
+			manifest,
+			semsearch.Fingerprint{
+				ConversationID: conversationID,
+				Value:          fingerprint,
+			},
+		)
 	}
+
 	w.pruneEmptyDelivered(seen)
 	w.pruneFailedLoad(seen)
+
 	return manifest, recordsByID, stampsByID, suppressed
 }
 
@@ -684,11 +792,13 @@ func (w *conversationSemanticSyncWorker) pruneEmptyDelivered(seen map[string]boo
 			delete(w.emptyDelivered, conversationID)
 		}
 	}
+
 	for conversationID := range w.deliveredContent {
 		if !seen[conversationID] {
 			delete(w.deliveredContent, conversationID)
 		}
 	}
+
 	for conversationID := range w.pinnedFingerprints {
 		if !seen[conversationID] {
 			delete(w.pinnedFingerprints, conversationID)
@@ -731,10 +841,12 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	docs := make([]semsearch.SemDoc, 0)
 	sent := make([]deliveredConversation, 0)
 	var artifactBytes int64
+
 	for _, conversationID := range ordered {
 		if semanticSyncContextDone(ctx) {
 			break
 		}
+
 		record, found := recordsByID[conversationID]
 		if !found {
 			// The engine needs a conversation the manifest no longer lists. It will
@@ -742,14 +854,17 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			// send now.
 			continue
 		}
+
 		if stamp, stamped := stampsByID[conversationID]; stamped && w.isActivelyGrowing(stamp) {
 			stats.deferred++
 			continue
 		}
+
 		artifactSize := stampsByID[conversationID].Size
 		if len(docs) > 0 && artifactBytes+artifactSize > w.batchBytes {
 			break
 		}
+
 		built, loadErr := w.prefetchedOrLoad(ctx, prefetched, record)
 		if loadErr != nil {
 			stats.failed++
@@ -764,8 +879,10 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			if stamp, stamped := stampsByID[conversationID]; stamped {
 				w.recordLoadFailure(conversationID, conversation.ContentFingerprint(record, stamp))
 			}
+
 			continue
 		}
+
 		// A load that succeeds clears the conversation's failure history, so a
 		// transient failure such as a busy Cursor store costs the passes it
 		// spanned and nothing after.
@@ -788,12 +905,15 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			if stamp, stamped := stampsByID[conversationID]; stamped {
 				w.emptyDelivered[conversationID] = conversation.ContentFingerprint(record, stamp)
 			}
+
 			continue
 		}
+
 		fingerprint := ""
 		if stamp, stamped := stampsByID[conversationID]; stamped {
 			fingerprint = conversation.ContentFingerprint(record, stamp)
 		}
+
 		projectionHash := SemanticProjectionHash(built.Docs)
 		// The engine asked for this conversation because its stamp moved, but
 		// the projected bytes match the last accepted delivery, so nothing new
@@ -813,18 +933,23 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			w.deliveryCursor = conversationID
 			continue
 		}
+
 		docs = append(docs, built.Docs...)
 		artifactBytes += artifactSize
-		sent = append(sent, deliveredConversation{
-			id:             conversationID,
-			fingerprint:    fingerprint,
-			projectionHash: projectionHash,
-		})
+		sent = append(
+			sent,
+			deliveredConversation{
+				id:             conversationID,
+				fingerprint:    fingerprint,
+				projectionHash: projectionHash,
+			},
+		)
 		w.deliveryCursor = conversationID
 		if artifactBytes >= w.batchBytes {
 			break
 		}
 	}
+
 	return docs, sent
 }
 
@@ -835,6 +960,7 @@ func (w *conversationSemanticSyncWorker) recordLoadFailure(conversationID, finge
 	} else {
 		failureRecord = failedLoadRecord{fingerprint: fingerprint, failures: 1}
 	}
+
 	w.failedLoad[conversationID] = failureRecord
 }
 
@@ -861,47 +987,73 @@ func (w *conversationSemanticSyncWorker) sendDocuments(
 	if upsertErr != nil {
 		if isConflictingActiveJob(upsertErr) {
 			w.passBlocked = true
-			w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.engine_busy",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"conversations", len(sent),
-				"documents", len(docs),
+			w.log.DebugContext(
+				ctx,
+				"daemon.conversation_semantic_sync.engine_busy",
+				"concern",
+				"conversation.semantic",
+				"component",
+				"daemon",
+				"conversations",
+				len(sent),
+				"documents",
+				len(docs),
 			)
+
 			return
 		}
+
 		stats.failed += len(sent)
 		w.freshness.recordSyncError(upsertErr)
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversations", len(sent),
-			"documents", len(docs),
-			"err", upsertErr,
+		w.log.WarnContext(
+			ctx,
+			"daemon.conversation_semantic_sync.upsert_failed",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"conversations",
+			len(sent),
+			"documents",
+			len(docs),
+			"err",
+			upsertErr,
 		)
+
 		return
 	}
+
 	sentIDs := make([]string, 0, len(sent))
 	for _, delivery := range sent {
 		sentIDs = append(sentIDs, delivery.id)
 		if delivery.fingerprint == "" {
 			continue
 		}
+
 		w.deliveredContent[delivery.id] = deliveredContentRecord{
 			fingerprint:    delivery.fingerprint,
 			projectionHash: delivery.projectionHash,
 		}
 	}
+
 	stats.sentConversations = len(sent)
 	stats.sentConversationIDs = sentIDs
 	stats.documents = len(docs)
 	w.activeJobID = jobID
 	w.freshness.recordUpsert(client, w.collectionID, jobID, upsertStarted, clock.Now())
-	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_started",
-		"concern", "conversation.semantic",
-		"component", "daemon",
-		"conversations", len(sent),
-		"documents", len(docs),
-		"job_id", jobID,
+	w.log.DebugContext(
+		ctx,
+		"daemon.conversation_semantic_sync.upsert_started",
+		"concern",
+		"conversation.semantic",
+		"component",
+		"daemon",
+		"conversations",
+		len(sent),
+		"documents",
+		len(docs),
+		"job_id",
+		jobID,
 	)
 }
 
@@ -919,38 +1071,76 @@ func isConflictingActiveJob(err error) bool {
 // failed_suppressed keeps a shrinking manifest honest. A conversation left out
 // because it failed earlier is content the store does not hold, so a pass that
 // suppresses any is reported at Info even when it did nothing else.
-func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conversationSemanticSyncStats) {
+func (w *conversationSemanticSyncWorker) logPass(
+	ctx context.Context,
+	stats conversationSemanticSyncStats,
+) {
 	w.freshness.publish(stats)
-	if stats.sentConversations > 0 || stats.failed > 0 || stats.policySkipped > 0 || stats.failedSuppressed > 0 || stats.unchangedPinned > 0 {
-		w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"manifest", stats.manifest,
-			"needed", stats.needed,
-			"sent_conversations", stats.sentConversations,
-			"documents", stats.documents,
-			"deferred", stats.deferred,
-			"failed", stats.failed,
-			"failed_suppressed", stats.failedSuppressed,
-			"policy_skipped", stats.policySkipped,
-			"injected_stripped", stats.injectedStripped,
-			"system_stripped", stats.systemStripped,
-			"sent_conversation_ids", boundedConversationIDs(stats.sentConversationIDs),
-			"unchanged_pinned", stats.unchangedPinned,
+	if stats.sentConversations > 0 || stats.failed > 0 || stats.policySkipped > 0 ||
+		stats.failedSuppressed > 0 ||
+		stats.unchangedPinned > 0 {
+		w.log.InfoContext(
+			ctx,
+			"daemon.conversation_semantic_sync.pass_completed",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"manifest",
+			stats.manifest,
+			"needed",
+			stats.needed,
+			"sent_conversations",
+			stats.sentConversations,
+			"documents",
+			stats.documents,
+			"deferred",
+			stats.deferred,
+			"failed",
+			stats.failed,
+			"failed_suppressed",
+			stats.failedSuppressed,
+			"policy_skipped",
+			stats.policySkipped,
+			"injected_stripped",
+			stats.injectedStripped,
+			"system_stripped",
+			stats.systemStripped,
+			"sent_conversation_ids",
+			boundedConversationIDs(stats.sentConversationIDs),
+			"unchanged_pinned",
+			stats.unchangedPinned,
 		)
+
 		return
 	}
-	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
-		"concern", "conversation.semantic",
-		"component", "daemon",
-		"manifest", stats.manifest,
-		"needed", stats.needed,
-		"deferred", stats.deferred,
+
+	w.log.DebugContext(
+		ctx,
+		"daemon.conversation_semantic_sync.pass_completed",
+		"concern",
+		"conversation.semantic",
+		"component",
+		"daemon",
+		"manifest",
+		stats.manifest,
+		"needed",
+		stats.needed,
+		"deferred",
+		stats.deferred,
 	)
 }
 
-func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) (SemanticConversationDocuments, error) {
-	empty := SemanticConversationDocuments{Docs: nil, PolicySkipped: 0, InjectedStripped: 0, SystemStripped: 0}
+func (w *conversationSemanticSyncWorker) loadDocs(
+	ctx context.Context,
+	record conversation.Record,
+) (SemanticConversationDocuments, error) {
+	empty := SemanticConversationDocuments{
+		Docs:             nil,
+		PolicySkipped:    0,
+		InjectedStripped: 0,
+		SystemStripped:   0,
+	}
 	// The tally counts what the parsers removed or withheld during this load,
 	// including records dropped entirely, which per-message counting loses.
 	var tally transcript.HarnessStrips
@@ -958,21 +1148,32 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 	options.HarnessTally = &tally
 	messages, err := w.index.LoadMessagesWithOptions(record, options)
 	if err != nil {
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", record.ID,
-			"provider", record.Provider.String(),
-			"err", err,
+		w.log.WarnContext(
+			ctx,
+			"daemon.conversation_semantic_sync.load_failed",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"daemon",
+			"conversation_id",
+			record.ID,
+			"provider",
+			record.Provider.String(),
+			"err",
+			err,
 		)
+
 		return empty, fmt.Errorf("load conversation messages for %s: %w", record.ID, err)
 	}
+
 	built, err := BuildSemanticConversationDocuments(record, messages, w.contentKinds)
 	if err != nil {
 		return empty, err
 	}
+
 	built.InjectedStripped = tally.Injected
 	built.SystemStripped = tally.System
+
 	return built, nil
 }
 

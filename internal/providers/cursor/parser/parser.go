@@ -73,11 +73,21 @@ func (artifact discoveredArtifact) readTranscriptHeader() (cursorjsonl.Transcrip
 	if artifact.TranscriptHeader != nil {
 		return *artifact.TranscriptHeader, nil
 	}
+
 	header, err := cursorjsonl.ScanHeader(artifact.Path)
 	if err != nil {
-		slog.Warn("providers.cursor.parser.scan_header_failed", "concern", concern, "path", artifact.Path, "err", err)
+		slog.Warn(
+			"providers.cursor.parser.scan_header_failed",
+			"concern",
+			concern,
+			"path",
+			artifact.Path,
+			"err",
+			err,
+		)
 		return header, fmt.Errorf("scan cursor transcript header: %w", err)
 	}
+
 	return header, nil
 }
 
@@ -120,7 +130,10 @@ func (*Parser) Provider() providerid.Provider {
 
 // Discover resolves local Cursor transcript and SQLite data roots, then returns
 // scan candidates for modern JSONL transcripts, composers, and legacy chats.
-func (p *Parser) Discover(ctx context.Context, prior map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
+func (p *Parser) Discover(
+	ctx context.Context,
+	prior map[string]conversation.Record,
+) ([]conversation.ScanCandidate, error) {
 	return p.discover(ctx, prior, nil, false)
 }
 
@@ -145,16 +158,29 @@ func (p *Parser) discover(
 	discovered := make(map[string]discoveredArtifact)
 	seenConversationIDs := make(map[string]bool)
 
-	jsonlCandidates, err := p.discoverJSONL(ctx, prior, priorStamps, discovered, seenConversationIDs)
+	jsonlCandidates, err := p.discoverJSONL(
+		ctx,
+		prior,
+		priorStamps,
+		discovered,
+		seenConversationIDs,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	candidates = append(candidates, jsonlCandidates...)
 
 	if priorStamps != nil {
-		if cachedCandidates, sourceCandidates, ok := p.discoverCachedSQLite(ctx, prior, priorStamps, seenConversationIDs); ok {
+		if cachedCandidates, sourceCandidates, ok := p.discoverCachedSQLite(
+			ctx,
+			prior,
+			priorStamps,
+			seenConversationIDs,
+		); ok {
 			candidates = append(candidates, cachedCandidates...)
 			candidates = append(candidates, sourceCandidates...)
+
 			return p.finishDiscovery(candidates, prior, discovered)
 		}
 	}
@@ -162,14 +188,22 @@ func (p *Parser) discover(
 	p.mu.Lock()
 	composerStamps := p.composerStamps
 	p.mu.Unlock()
-	sqliteCandidates, err := discoverSQLite(ctx, composerStamps, prior, discovered, seenConversationIDs)
+	sqliteCandidates, err := discoverSQLite(
+		ctx,
+		composerStamps,
+		prior,
+		discovered,
+		seenConversationIDs,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	candidates = append(candidates, sqliteCandidates...)
 	if useCheckpoints {
 		candidates = append(candidates, p.sourceCheckpointCandidates(ctx)...)
 	}
+
 	return p.finishDiscovery(candidates, prior, discovered)
 }
 
@@ -203,35 +237,68 @@ func (p *Parser) discover(
 func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
 	discovered, err := p.resolveDiscovered(path)
 	if err != nil {
-		slog.Warn("providers.cursor.parser.scan_resolve_failed", "concern", concern, "path", path, "err", err)
+		slog.Warn(
+			"providers.cursor.parser.scan_resolve_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return emptyRecord(), false
 	}
+
 	switch discovered.Kind {
 	case discoveredKindCheckpoint:
 		return emptyRecord(), false
 	case discoveredKindJSONL:
 		header, err := discovered.readTranscriptHeader()
 		if err != nil {
-			slog.Warn("providers.cursor.parser.scan_header_failed", "concern", concern, "path", path, "err", err)
+			slog.Warn(
+				"providers.cursor.parser.scan_header_failed",
+				"concern",
+				concern,
+				"path",
+				path,
+				"err",
+				err,
+			)
 			return emptyRecord(), false
 		}
+
 		if header.FirstUserTextUncertain {
 			// The scan skipped a record it could not decode before settling on this
 			// text, so the title is the earliest user message Clyde could read rather
 			// than the conversation's first. The record carries that, but the daemon's
 			// wire record has no such field, so it does not currently reach CLI or MCP
 			// listings: inside the daemon and in this warning is where it is visible.
-			slog.Warn("providers.cursor.parser.title_from_incomplete_header",
-				"concern", concern, "path", path, "conversation_id", discovered.ConversationID)
+			slog.Warn(
+				"providers.cursor.parser.title_from_incomplete_header",
+				"concern",
+				concern,
+				"path",
+				path,
+				"conversation_id",
+				discovered.ConversationID,
+			)
 		}
+
 		return conversation.Record{
-			ID:             conversation.DerivedID(providerid.ProviderCursor, discovered.ConversationID, path),
-			Provider:       providerid.ProviderCursor,
-			NativeID:       discovered.ConversationID,
-			Selector:       "",
-			Lineage:        cursorSpawnLineage(discovered.ParentConversationID),
-			Origin:         discovered.Origin,
-			Title:          firstNonEmptyString(truncateTitle(header.FirstUserText), untitledCursorConversationText),
+			ID: conversation.DerivedID(
+				providerid.ProviderCursor,
+				discovered.ConversationID,
+				path,
+			),
+			Provider: providerid.ProviderCursor,
+			NativeID: discovered.ConversationID,
+			Selector: "",
+			Lineage:  cursorSpawnLineage(discovered.ParentConversationID),
+			Origin:   discovered.Origin,
+			Title: firstNonEmptyString(
+				truncateTitle(header.FirstUserText),
+				untitledCursorConversationText,
+			),
 			TitleUncertain: header.FirstUserTextUncertain,
 			WorkspaceRoot:  cursorjsonl.WorkspacePathFromProjectKey(discovered.ProjectKey),
 			ArtifactPath:   path,
@@ -254,6 +321,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			// The record already held is the better answer until the store reads.
 			return discovered.PriorRecord, true
 		}
+
 		header := discovered.ComposerHeader
 		workspaceTitle := ""
 		workspaceRoot := ""
@@ -265,14 +333,23 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			archived = discovered.ComposerInfo.Archived
 			origin = composerOrigin(discovered.ComposerInfo.Subagent)
 		}
+
 		return conversation.Record{
-			ID:             conversation.DerivedID(providerid.ProviderCursor, discovered.ComposerID, path),
-			Provider:       providerid.ProviderCursor,
-			NativeID:       discovered.ComposerID,
-			Selector:       "",
-			Lineage:        nil,
-			Origin:         origin,
-			Title:          firstNonEmptyString(header.Name, workspaceTitle, untitledCursorConversationText),
+			ID: conversation.DerivedID(
+				providerid.ProviderCursor,
+				discovered.ComposerID,
+				path,
+			),
+			Provider: providerid.ProviderCursor,
+			NativeID: discovered.ComposerID,
+			Selector: "",
+			Lineage:  nil,
+			Origin:   origin,
+			Title: firstNonEmptyString(
+				header.Name,
+				workspaceTitle,
+				untitledCursorConversationText,
+			),
 			TitleUncertain: false,
 			WorkspaceRoot:  workspaceRoot,
 			ArtifactPath:   path,
@@ -293,9 +370,15 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		if err != nil {
 			return emptyRecord(), false
 		}
+
 		legacyConversationID := virtualPath.ID
+
 		return conversation.Record{
-			ID:             conversation.DerivedID(providerid.ProviderCursor, legacyConversationID, path),
+			ID: conversation.DerivedID(
+				providerid.ProviderCursor,
+				legacyConversationID,
+				path,
+			),
 			Provider:       providerid.ProviderCursor,
 			NativeID:       legacyConversationID,
 			Selector:       "",
@@ -321,13 +404,17 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 
 // Stream lazily yields transcript-shaped messages for one discovered Cursor
 // artifact.
-func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+func (p *Parser) Stream(
+	path string,
+	opts conversation.LoadOptions,
+) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
 		discovered, err := p.resolveDiscovered(path)
 		if err != nil {
 			yield(emptyMessage(), err)
 			return
 		}
+
 		switch discovered.Kind {
 		case discoveredKindJSONL:
 			streamTranscript(discovered, opts, yield)
@@ -339,6 +426,7 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 				if !include {
 					continue
 				}
+
 				if !yield(mapped, nil) {
 					return
 				}
@@ -356,36 +444,66 @@ func (p *Parser) discoverJSONL(
 ) ([]conversation.ScanCandidate, error) {
 	roots, err := cursorjsonl.ResolveProjectRoots()
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resolve_project_roots_failed", "concern", concern, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.resolve_project_roots_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("resolve cursor project roots: %w", err)
 	}
+
 	files, err := cursorjsonl.DiscoverTranscriptFiles(roots)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.discover_transcripts_failed", "concern", concern, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.discover_transcripts_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("discover cursor transcript files: %w", err)
 	}
+
 	resumeLinks, err := p.buildResumeLinkIndex(ctx, files, prior, priorStamps)
 	if err != nil {
 		return nil, err
 	}
+
 	unexpectedResumeLinks := 0
 
 	candidates := make([]conversation.ScanCandidate, 0, len(files))
 	for _, file := range files {
 		info, err := os.Stat(file.Path)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.parser.stat_jsonl_failed", "concern", concern, "path", file.Path, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.parser.stat_jsonl_failed",
+				"concern",
+				concern,
+				"path",
+				file.Path,
+				"err",
+				err,
+			)
 			continue
 		}
-		candidates = append(candidates, conversation.ScanCandidate{
-			MetadataChanged: false,
-			Path:            file.Path,
-			Selector:        "",
-			Stamp: conversation.FileStamp{
-				Size:  info.Size(),
-				Mtime: info.ModTime(),
+
+		candidates = append(
+			candidates,
+			conversation.ScanCandidate{
+				MetadataChanged: false,
+				Path:            file.Path,
+				Selector:        "",
+				Stamp: conversation.FileStamp{
+					Size:  info.Size(),
+					Mtime: info.ModTime(),
+				},
 			},
-		})
+		)
 		// The path shape decides whether a transcript is a subagent conversation:
 		// its own place under a subagents/ directory, or a top-level twin whose
 		// uuid appears under one in the same project. The resume link corroborates
@@ -395,7 +513,10 @@ func (p *Parser) discoverJSONL(
 		// a conversation the layout says is the user's own, which is the loss this
 		// classification exists to prevent.
 		resumeParentID, resumedByAConversation := resumeLinks.parentOf(file.ConversationID)
-		parentConversationID := firstNonEmptyString(file.ParentConversationID, file.TwinSubagentParentID)
+		parentConversationID := firstNonEmptyString(
+			file.ParentConversationID,
+			file.TwinSubagentParentID,
+		)
 		origin := originFromParentConversationID(parentConversationID)
 		switch {
 		case origin == conversation.OriginSubagent && resumedByAConversation:
@@ -415,19 +536,30 @@ func (p *Parser) discoverJSONL(
 		if cached, ok := p.resumeLinks[file.Path]; ok {
 			artifact.TranscriptHeader = &cached.header
 		}
+
 		p.mu.Unlock()
 		discovered[file.Path] = artifact
 		seenConversationIDs[file.ConversationID] = true
 	}
+
 	if unexpectedResumeLinks > 0 {
 		// A resumed conversation that is not under a subagents/ directory means the
 		// path rule no longer describes where Cursor puts these, which would
 		// otherwise go unnoticed until subagent conversations quietly returned to
 		// the index. These conversations stay user origin, so this is an early
 		// warning rather than a reclassification.
-		slog.InfoContext(ctx, "providers.cursor.parser.resume_link_outside_subagents_dir",
-			"concern", concern, "component", "cursor", "count", unexpectedResumeLinks)
+		slog.InfoContext(
+			ctx,
+			"providers.cursor.parser.resume_link_outside_subagents_dir",
+			"concern",
+			concern,
+			"component",
+			"cursor",
+			"count",
+			unexpectedResumeLinks,
+		)
 	}
+
 	return candidates, nil
 }
 
@@ -439,6 +571,7 @@ func originFromParentConversationID(parentConversationID string) conversation.Or
 	if parentConversationID == "" {
 		return conversation.OriginUser
 	}
+
 	return conversation.OriginSubagent
 }
 
@@ -451,16 +584,36 @@ func discoverSQLite(
 ) ([]conversation.ScanCandidate, error) {
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.resolve_data_roots_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 
 	candidates := make([]conversation.ScanCandidate, 0)
+
 	for _, root := range roots {
 		inventory := cursorstore.ReadWorkspaceInventory(ctx, root)
-		candidates = append(candidates, discoverComposersForRoot(ctx, root, inventory, priorStamps, prior, discovered, seenConversationIDs)...)
+		candidates = append(
+			candidates,
+			discoverComposersForRoot(
+				ctx,
+				root,
+				inventory,
+				priorStamps,
+				prior,
+				discovered,
+				seenConversationIDs,
+			)...,
+		)
 		candidates = append(candidates, discoverLegacyForRoot(root, inventory, discovered)...)
 	}
+
 	return candidates, nil
 }
 
@@ -474,34 +627,47 @@ func discoverComposersForRoot(
 	seenConversationIDs map[string]bool,
 ) []conversation.ScanCandidate {
 	global := cursorstore.ReadGlobalDiscovery(ctx, root.GlobalDBPath)
+
 	composerIDs := make([]string, 0, len(global.Headers))
 	for id := range global.Headers {
 		composerIDs = append(composerIDs, id)
 	}
+
 	slices.Sort(composerIDs)
 	backgroundIDs := make(map[string]bool)
+
 	for _, composer := range global.Background {
 		backgroundIDs[composer.ComposerID] = true
 	}
-	metadataIndex := cursorstore.MergeWorkspaceComposerMetadata(ctx, root, global.Metadata, inventory)
+
+	metadataIndex := cursorstore.MergeWorkspaceComposerMetadata(
+		ctx,
+		root,
+		global.Metadata,
+		inventory,
+	)
 	rootHash := RootHash(root.RootDir)
 
 	candidates := make([]conversation.ScanCandidate, 0, len(composerIDs))
 	preserved := 0
 	omitted := 0
+
 	for _, composerID := range composerIDs {
 		if seenConversationIDs[composerID] {
 			continue
 		}
+
 		header := global.Headers[composerID]
 		path := BuildVirtualPath(rootHash, VirtualKindComposer, composerID)
 		if path == "" {
 			continue
 		}
+
 		stock, stored := global.Stocks[composerID]
 		if !stored {
 			stock.Conclusive = true
 		}
+
 		var stamp conversation.FileStamp
 		var admitted bool
 		if global.Err != nil {
@@ -512,15 +678,26 @@ func discoverComposersForRoot(
 				omitted++
 			}
 		} else {
-			stamp, admitted = composerScanStamp(ctx, root.GlobalDBPath, composerID, header, priorStamps[path], stock, nil)
+			stamp, admitted = composerScanStamp(
+				ctx,
+				root.GlobalDBPath,
+				composerID,
+				header,
+				priorStamps[path],
+				stock,
+				nil,
+			)
 		}
+
 		if !admitted {
 			continue
 		}
+
 		info, hasInfo := metadataIndex.ByComposerID[composerID]
 		if global.Err == nil && stock.Conclusive {
 			stamp = stampCoveringMetadata(stamp, info, hasInfo)
 		}
+
 		if metadataIndex.Err != nil {
 			if previous, known := priorStamps[path]; known {
 				// A partial metadata read returns the prior record below. Keep its
@@ -528,12 +705,16 @@ func discoverComposersForRoot(
 				stamp = previous
 			}
 		}
-		candidates = append(candidates, conversation.ScanCandidate{
-			MetadataChanged: false,
-			Path:            path,
-			Selector:        "",
-			Stamp:           stamp,
-		})
+
+		candidates = append(
+			candidates,
+			conversation.ScanCandidate{
+				MetadataChanged: false,
+				Path:            path,
+				Selector:        "",
+				Stamp:           stamp,
+			},
+		)
 		priorRecord, hasPriorRecord := prior[path]
 		var artifact discoveredArtifact
 		artifact.Kind = discoveredKindComposer
@@ -549,9 +730,11 @@ func discoverComposersForRoot(
 		artifact.IsBackground = backgroundIDs[composerID]
 		discovered[path] = artifact
 	}
+
 	if global.Err != nil {
 		warnGlobalComposerDiscoveryFailure(ctx, root.GlobalDBPath, global.Err, preserved, omitted)
 	}
+
 	return candidates
 }
 
@@ -562,9 +745,14 @@ func discoverLegacyForRoot(
 ) []conversation.ScanCandidate {
 	rootHash := RootHash(root.RootDir)
 	candidates := make([]conversation.ScanCandidate, 0)
+
 	for _, entry := range inventory.Entries {
-		candidates = append(candidates, discoverLegacyForEntry(rootHash, entry.Entry, entry.Data, discovered)...)
+		candidates = append(
+			candidates,
+			discoverLegacyForEntry(rootHash, entry.Entry, entry.Data, discovered)...,
+		)
 	}
+
 	return candidates
 }
 
@@ -575,22 +763,28 @@ func discoverLegacyForEntry(
 	discovered map[string]discoveredArtifact,
 ) []conversation.ScanCandidate {
 	chatData, workspaceRoot := data.Legacy, data.WorkspaceRoot
+
 	candidates := make([]conversation.ScanCandidate, 0, len(chatData.Tabs))
 	for _, tab := range chatData.Tabs {
 		if len(tab.Bubbles) == 0 {
 			continue
 		}
+
 		id := legacyID(entry.WorkspaceHash, tab.TabID)
 		path := BuildVirtualPath(rootHash, VirtualKindLegacy, id)
 		if path == "" {
 			continue
 		}
-		candidates = append(candidates, conversation.ScanCandidate{
-			MetadataChanged: false,
-			Path:            path,
-			Selector:        "",
-			Stamp:           legacyScanStamp(data),
-		})
+
+		candidates = append(
+			candidates,
+			conversation.ScanCandidate{
+				MetadataChanged: false,
+				Path:            path,
+				Selector:        "",
+				Stamp:           legacyScanStamp(data),
+			},
+		)
 		var artifact discoveredArtifact
 		artifact.Kind = discoveredKindLegacy
 		artifact.Path = path
@@ -598,6 +792,7 @@ func discoverLegacyForEntry(
 		artifact.WorkspaceRoot = workspaceRoot
 		discovered[path] = artifact
 	}
+
 	return candidates
 }
 
@@ -613,11 +808,13 @@ func streamComposer(
 		yield(emptyMessage(), err)
 		return
 	}
+
 	db, err := cursorstore.OpenReadOnlyDatabase(ctx, dbPath)
 	if err != nil {
 		yield(emptyMessage(), fmt.Errorf("open cursor global db %s: %w", dbPath, err))
 		return
 	}
+
 	defer func() { _ = db.Close() }()
 
 	// Ordering needs every stored bubble's write time before it can place any of
@@ -628,16 +825,38 @@ func streamComposer(
 	// declining a message here stops the read.
 	// The id comes from the artifact rather than the header payload, because the
 	// artifact's id is the one derived from the key the rows are stored under.
-	err = cursorstore.StreamComposerBubbles(ctx, db, discovered.ComposerID, discovered.ComposerHeader, func(bubble cursorstore.Bubble) bool {
-		mapped, include := mapComposerBubble(bubble, opts)
-		if !include {
-			return true
-		}
-		return yield(mapped, nil)
-	})
+	err = cursorstore.StreamComposerBubbles(
+		ctx,
+		db,
+		discovered.ComposerID,
+		discovered.ComposerHeader,
+		func(bubble cursorstore.Bubble) bool {
+			mapped, include := mapComposerBubble(bubble, opts)
+			if !include {
+				return true
+			}
+
+			return yield(mapped, nil)
+		},
+	)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.stream_composer_failed", "concern", concern, "path", dbPath, "composer_id", discovered.ComposerID, "err", err)
-		yield(emptyMessage(), fmt.Errorf("load cursor composer %q bubbles: %w", discovered.ComposerID, err))
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.stream_composer_failed",
+			"concern",
+			concern,
+			"path",
+			dbPath,
+			"composer_id",
+			discovered.ComposerID,
+			"err",
+			err,
+		)
+		yield(
+			emptyMessage(),
+			fmt.Errorf("load cursor composer %q bubbles: %w", discovered.ComposerID, err),
+		)
+
 		return
 	}
 }
@@ -648,6 +867,7 @@ func (p *Parser) resolveDiscovered(path string) (discoveredArtifact, error) {
 		checkpoint := emptyDiscovered
 		checkpoint.Kind = discoveredKindCheckpoint
 		checkpoint.Path = path
+
 		return checkpoint, nil
 	}
 
@@ -668,35 +888,72 @@ func (p *Parser) resolveDiscovered(path string) (discoveredArtifact, error) {
 	} else {
 		resolved, err = resolveVirtualDiscovered(ctx, path)
 	}
+
 	if err != nil {
 		return emptyDiscovered, err
 	}
+
 	p.mu.Lock()
 	p.discovered[path] = resolved
 	p.mu.Unlock()
+
 	return resolved, nil
 }
 
 func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifact, error) {
 	if _, err := os.Stat(path); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.stat_jsonl_failed", "concern", concern, "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.stat_jsonl_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return emptyDiscoveredArtifact(), fmt.Errorf("stat cursor transcript %s: %w", path, err)
 	}
+
 	file, ok, err := cursorjsonl.MatchTranscriptFile(path)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.match_transcript_failed", "concern", concern, "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.match_transcript_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return emptyDiscoveredArtifact(), fmt.Errorf("match cursor transcript file: %w", err)
 	}
+
 	if !ok {
-		slog.WarnContext(ctx, "providers.cursor.parser.jsonl_path_not_found", "concern", concern, "path", path)
-		return emptyDiscoveredArtifact(), fmt.Errorf("cursor transcript path not discovered: %s", path)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.jsonl_path_not_found",
+			"concern",
+			concern,
+			"path",
+			path,
+		)
+		return emptyDiscoveredArtifact(), fmt.Errorf(
+			"cursor transcript path not discovered: %s",
+			path,
+		)
 	}
+
 	// The direct resolve has no resume-link index, which Discover builds over
 	// every parent transcript. The path shape is the classifier either way,
 	// including the subagents/ twin of a top-level uuid, so this record carries
 	// the same origin and parent Discover would have given it rather than an
 	// unspecified origin that would bypass the setting.
-	parentConversationID := firstNonEmptyString(file.ParentConversationID, file.TwinSubagentParentID)
+	parentConversationID := firstNonEmptyString(
+		file.ParentConversationID,
+		file.TwinSubagentParentID,
+	)
 	var artifact discoveredArtifact
 	artifact.Kind = discoveredKindJSONL
 	artifact.Path = file.Path
@@ -704,24 +961,46 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 	artifact.ProjectKey = file.ProjectKey
 	artifact.Origin = originFromParentConversationID(parentConversationID)
 	artifact.ParentConversationID = parentConversationID
+
 	return artifact, nil
 }
 
 func resolveVirtualDiscovered(ctx context.Context, path string) (discoveredArtifact, error) {
 	virtualPath, err := ParseVirtualPath(path)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.virtual_path_parse_failed", "concern", concern, "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.virtual_path_parse_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return emptyDiscoveredArtifact(), fmt.Errorf("parse cursor virtual path: %w", err)
 	}
+
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.resolve_data_roots_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return emptyDiscoveredArtifact(), fmt.Errorf("resolve cursor data roots: %w", err)
 	}
+
 	for _, root := range roots {
 		if RootHash(root.RootDir) != virtualPath.RootHash {
 			continue
 		}
+
 		switch virtualPath.Kind {
 		case VirtualKindComposer:
 			return resolveComposerDiscovered(ctx, root, path, virtualPath.ID)
@@ -729,7 +1008,20 @@ func resolveVirtualDiscovered(ctx context.Context, path string) (discoveredArtif
 			return resolveLegacyDiscovered(ctx, root, path, virtualPath.ID)
 		}
 	}
-	slog.WarnContext(ctx, "providers.cursor.parser.virtual_path_not_found", "concern", concern, "path", path, "kind", virtualPath.Kind, "id", virtualPath.ID)
+
+	slog.WarnContext(
+		ctx,
+		"providers.cursor.parser.virtual_path_not_found",
+		"concern",
+		concern,
+		"path",
+		path,
+		"kind",
+		virtualPath.Kind,
+		"id",
+		virtualPath.ID,
+	)
+
 	return emptyDiscoveredArtifact(), fmt.Errorf("cursor path not discovered: %s", path)
 }
 
@@ -741,18 +1033,39 @@ func resolveComposerDiscovered(
 ) (discoveredArtifact, error) {
 	db, availability := openOptionalDatabase(ctx, root.GlobalDBPath, "global_db")
 	if availability != databaseAvailabilityOpen {
-		return emptyDiscoveredArtifact(), fmt.Errorf("cursor global db not found: %s", root.GlobalDBPath)
+		return emptyDiscoveredArtifact(), fmt.Errorf(
+			"cursor global db not found: %s",
+			root.GlobalDBPath,
+		)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	header, found, err := cursorstore.ReadComposerHeader(ctx, db, composerID)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.read_composer_header_failed", "concern", concern, "path", root.GlobalDBPath, "composer_id", composerID, "err", err)
-		return emptyDiscoveredArtifact(), fmt.Errorf("read cursor composer header %q: %w", composerID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.read_composer_header_failed",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
+		return emptyDiscoveredArtifact(), fmt.Errorf(
+			"read cursor composer header %q: %w",
+			composerID,
+			err,
+		)
 	}
+
 	if !found {
 		return emptyDiscoveredArtifact(), fmt.Errorf("cursor composer %q not found", composerID)
 	}
+
 	metadataIndex := composerMetadataIndex(ctx, db, root)
 	info, hasInfo := metadataIndex.ByComposerID[composerID]
 	backgroundIDs := backgroundComposerIDSet(ctx, db, root.GlobalDBPath)
@@ -768,6 +1081,7 @@ func resolveComposerDiscovered(
 	artifact.ComposerInfo = info
 	artifact.HasInfo = hasInfo
 	artifact.IsBackground = backgroundIDs[composerID]
+
 	return artifact, nil
 }
 
@@ -781,21 +1095,51 @@ func resolveLegacyDiscovered(
 	if !ok {
 		return emptyDiscoveredArtifact(), fmt.Errorf("invalid cursor legacy id %q", id)
 	}
+
 	listing, err := root.ListWorkspaceEntries()
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.list_workspace_entries_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.list_workspace_entries_failed",
+			"concern",
+			concern,
+			"path",
+			root.WorkspaceStorageDir,
+			"err",
+			err,
+		)
 		return emptyDiscoveredArtifact(), fmt.Errorf("list cursor workspace entries: %w", err)
 	}
+
 	for _, entry := range listing.Entries {
 		if entry.WorkspaceHash != workspaceHash {
 			continue
 		}
+
 		return resolveLegacyDiscoveredForEntry(ctx, path, tabID, entry)
 	}
+
 	if listing.Unreadable > 0 {
-		slog.WarnContext(ctx, "providers.cursor.parser.workspace_entries_partially_read", "concern", concern, "path", root.WorkspaceStorageDir, "workspace_hash", workspaceHash, "unreadable", listing.Unreadable)
-		return emptyDiscoveredArtifact(), fmt.Errorf("cursor workspace %q not found among the %d workspaces that could be read, and %d could not", workspaceHash, len(listing.Entries), listing.Unreadable)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.workspace_entries_partially_read",
+			"concern",
+			concern,
+			"path",
+			root.WorkspaceStorageDir,
+			"workspace_hash",
+			workspaceHash,
+			"unreadable",
+			listing.Unreadable,
+		)
+		return emptyDiscoveredArtifact(), fmt.Errorf(
+			"cursor workspace %q not found among the %d workspaces that could be read, and %d could not",
+			workspaceHash,
+			len(listing.Entries),
+			listing.Unreadable,
+		)
 	}
+
 	return emptyDiscoveredArtifact(), fmt.Errorf("cursor workspace %q not found", workspaceHash)
 }
 
@@ -807,29 +1151,49 @@ func resolveLegacyDiscoveredForEntry(
 ) (discoveredArtifact, error) {
 	db, availability := openOptionalDatabase(ctx, entry.StateDBPath, "workspace_db")
 	if availability != databaseAvailabilityOpen {
-		return emptyDiscoveredArtifact(), fmt.Errorf("cursor workspace db not found: %s", entry.StateDBPath)
+		return emptyDiscoveredArtifact(), fmt.Errorf(
+			"cursor workspace db not found: %s",
+			entry.StateDBPath,
+		)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	chatData, found, err := cursorstore.ReadLegacyChatData(ctx, db)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.read_legacy_chat_failed", "concern", concern, "path", entry.StateDBPath, "workspace_hash", entry.WorkspaceHash, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.read_legacy_chat_failed",
+			"concern",
+			concern,
+			"path",
+			entry.StateDBPath,
+			"workspace_hash",
+			entry.WorkspaceHash,
+			"err",
+			err,
+		)
 		return emptyDiscoveredArtifact(), fmt.Errorf("read cursor legacy chat: %w", err)
 	}
+
 	if !found {
 		return emptyDiscoveredArtifact(), fmt.Errorf("cursor legacy chat data not found")
 	}
+
 	for _, tab := range chatData.Tabs {
 		if tab.TabID != tabID || len(tab.Bubbles) == 0 {
 			continue
 		}
+
 		var artifact discoveredArtifact
 		artifact.Kind = discoveredKindLegacy
 		artifact.Path = path
 		artifact.LegacyTab = tab
 		artifact.WorkspaceRoot = readWorkspaceRoot(entry)
+
 		return artifact, nil
 	}
+
 	return emptyDiscoveredArtifact(), fmt.Errorf("cursor legacy tab %q not found", tabID)
 }
 
@@ -854,19 +1218,49 @@ const (
 	databaseAvailabilityUnreadable
 )
 
-func openOptionalDatabase(ctx context.Context, path string, component string) (*sql.DB, databaseAvailability) {
+func openOptionalDatabase(
+	ctx context.Context,
+	path string,
+	component string,
+) (*sql.DB, databaseAvailability) {
 	if _, err := os.Stat(path); err != nil {
 		if cursorstore.StatSaysAbsent(err, path) {
 			return nil, databaseAvailabilityAbsent
 		}
-		slog.WarnContext(ctx, "providers.cursor.parser.stat_db_failed", "concern", concern, "component", component, "path", path, "err", err)
+
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.stat_db_failed",
+			"concern",
+			concern,
+			"component",
+			component,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return nil, databaseAvailabilityUnreadable
 	}
+
 	db, err := cursorstore.OpenReadOnlyDatabase(ctx, path)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.open_db_failed", "concern", concern, "component", component, "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.open_db_failed",
+			"concern",
+			concern,
+			"component",
+			component,
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return nil, databaseAvailabilityUnreadable
 	}
+
 	return db, databaseAvailabilityOpen
 }
 
@@ -877,7 +1271,9 @@ func readWorkspaceRoot(entry cursorstore.WorkspaceEntry) string {
 	if entry.WorkspaceJSONPath == "" {
 		return ""
 	}
+
 	workspaceRoot, _ := cursorstore.ReadWorkspaceFolderPath(entry.WorkspaceJSONPath)
+
 	return workspaceRoot
 }
 
@@ -885,12 +1281,23 @@ func backgroundComposerIDSet(ctx context.Context, db *sql.DB, path string) map[s
 	backgroundIDs := make(map[string]bool)
 	backgroundComposers, err := cursorstore.ListBackgroundComposers(ctx, db)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.list_background_composers_failed", "concern", concern, "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.list_background_composers_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
 		return backgroundIDs
 	}
+
 	for _, backgroundComposer := range backgroundComposers {
 		backgroundIDs[backgroundComposer.ComposerID] = true
 	}
+
 	return backgroundIDs
 }
 
@@ -900,9 +1307,19 @@ func globalDBPathForDiscovered(
 ) (string, error) {
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "path", discovered.Path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.resolve_data_roots_failed",
+			"concern",
+			concern,
+			"path",
+			discovered.Path,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("resolve cursor data roots: %w", err)
 	}
+
 	if discovered.RootDir != "" {
 		for _, root := range roots {
 			if root.RootDir == discovered.RootDir {
@@ -910,17 +1327,37 @@ func globalDBPathForDiscovered(
 			}
 		}
 	}
+
 	virtualPath, err := ParseVirtualPath(discovered.Path)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.virtual_path_parse_failed", "concern", concern, "path", discovered.Path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.virtual_path_parse_failed",
+			"concern",
+			concern,
+			"path",
+			discovered.Path,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("parse cursor virtual path: %w", err)
 	}
+
 	for _, root := range roots {
 		if RootHash(root.RootDir) == virtualPath.RootHash {
 			return root.GlobalDBPath, nil
 		}
 	}
-	slog.WarnContext(ctx, "providers.cursor.parser.root_not_found", "concern", concern, "path", discovered.Path)
+
+	slog.WarnContext(
+		ctx,
+		"providers.cursor.parser.root_not_found",
+		"concern",
+		concern,
+		"path",
+		discovered.Path,
+	)
+
 	return "", fmt.Errorf("cursor root not found for %s", discovered.Path)
 }
 
@@ -928,6 +1365,7 @@ func composerArtifactKind(isBackground bool) string {
 	if isBackground {
 		return artifactKindCursorBackground
 	}
+
 	return artifactKindCursorComposer
 }
 
@@ -935,6 +1373,7 @@ func msToTime(ms int64) time.Time {
 	if ms <= 0 {
 		return time.Time{}
 	}
+
 	return time.Unix(0, ms*int64(time.Millisecond))
 }
 
@@ -947,6 +1386,7 @@ func cursorSpawnLineage(parentConversationID string) *conversation.Lineage {
 	if parentConversationID == "" {
 		return nil
 	}
+
 	return &conversation.Lineage{
 		Kind:              conversation.ConversationLineageKindSpawn,
 		ParentProvider:    providerid.ProviderCursor,
@@ -962,6 +1402,7 @@ func firstNonEmptyString(values ...string) string {
 			return trimmed
 		}
 	}
+
 	return ""
 }
 
@@ -971,6 +1412,7 @@ func truncateTitle(title string) string {
 	if len(runes) <= maxTitleRunes {
 		return trimmed
 	}
+
 	return string(runes[:maxTitleRunes])
 }
 

@@ -134,6 +134,7 @@ func echoRawOr(raw json.RawMessage, fallback json.RawMessage) json.RawMessage {
 	if trimmed == "" || trimmed == "null" {
 		return fallback
 	}
+
 	return raw
 }
 
@@ -141,6 +142,7 @@ func echoString(value *string) json.RawMessage {
 	if value == nil {
 		return jsonNull
 	}
+
 	return json.RawMessage(strconv.Quote(*value))
 }
 
@@ -148,6 +150,7 @@ func echoInt(value *int) json.RawMessage {
 	if value == nil {
 		return jsonNull
 	}
+
 	return json.RawMessage(strconv.Itoa(*value))
 }
 
@@ -156,6 +159,7 @@ func echoBool(value *bool, fallback bool) json.RawMessage {
 	if value != nil {
 		selected = *value
 	}
+
 	return json.RawMessage(strconv.FormatBool(selected))
 }
 
@@ -164,6 +168,7 @@ func echoNumber(value *float64, fallback float64) json.RawMessage {
 	if value != nil {
 		selected = *value
 	}
+
 	return json.RawMessage(strconv.FormatFloat(selected, 'f', -1, 64))
 }
 
@@ -171,11 +176,19 @@ func echoReasoning(reasoning *Reasoning) json.RawMessage {
 	if reasoning == nil {
 		return jsonNull
 	}
+
 	encoded, err := json.Marshal(reasoning)
 	if err != nil {
-		slog.Warn("adapter.openai.responses_reasoning_echo_failed", "concern", "adapter.chat.render", "err", err)
+		slog.Warn(
+			"adapter.openai.responses_reasoning_echo_failed",
+			"concern",
+			"adapter.chat.render",
+			"err",
+			err,
+		)
 		return jsonNull
 	}
+
 	return encoded
 }
 
@@ -286,33 +299,44 @@ func (i ResponsesOutputItem) MarshalJSON() ([]byte, error) {
 		if content == nil {
 			content = []ResponsesContentPart{}
 		}
-		return marshalResponsesItemWire(i.Type, responsesMessageItemWire{
-			Type:    "message",
-			ID:      i.ID,
-			Status:  i.Status,
-			Role:    i.Role,
-			Content: content,
-		})
+
+		return marshalResponsesItemWire(
+			i.Type,
+			responsesMessageItemWire{
+				Type:    "message",
+				ID:      i.ID,
+				Status:  i.Status,
+				Role:    i.Role,
+				Content: content,
+			},
+		)
 	case responsesItemReasoning:
 		summary := i.Summary
 		if summary == nil {
 			summary = []ResponsesSummaryPart{}
 		}
-		return marshalResponsesItemWire(i.Type, responsesReasoningItemWire{
-			Type:    "reasoning",
-			ID:      i.ID,
-			Status:  i.Status,
-			Summary: summary,
-		})
+
+		return marshalResponsesItemWire(
+			i.Type,
+			responsesReasoningItemWire{
+				Type:    "reasoning",
+				ID:      i.ID,
+				Status:  i.Status,
+				Summary: summary,
+			},
+		)
 	case responsesItemFunctionCall:
-		return marshalResponsesItemWire(i.Type, responsesFunctionCallItemWire{
-			Type:      "function_call",
-			ID:        i.ID,
-			CallID:    i.CallID,
-			Name:      i.Name,
-			Arguments: i.Arguments,
-			Status:    i.Status,
-		})
+		return marshalResponsesItemWire(
+			i.Type,
+			responsesFunctionCallItemWire{
+				Type:      "function_call",
+				ID:        i.ID,
+				CallID:    i.CallID,
+				Name:      i.Name,
+				Arguments: i.Arguments,
+				Status:    i.Status,
+			},
+		)
 	default:
 		return nil, fmt.Errorf("unsupported responses output item type %q", i.Type)
 	}
@@ -323,9 +347,18 @@ func (i ResponsesOutputItem) MarshalJSON() ([]byte, error) {
 func marshalResponsesItemWire(itemType string, wire responsesOutputItemWire) ([]byte, error) {
 	b, err := json.Marshal(wire)
 	if err != nil {
-		slog.Warn("adapter.openai.responses_item_marshal_failed", "concern", "adapter.chat.render", "item_type", itemType, "err", err)
+		slog.Warn(
+			"adapter.openai.responses_item_marshal_failed",
+			"concern",
+			"adapter.chat.render",
+			"item_type",
+			itemType,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("marshal responses %s item: %w", itemType, err)
 	}
+
 	return b, nil
 }
 
@@ -381,24 +414,43 @@ func (p ResponsesContentPart) MarshalJSON() ([]byte, error) {
 		if annotations == nil {
 			annotations = []ResponsesAnnotation{}
 		}
-		return marshalResponsesContentPartWire(p.Type, responsesOutputTextPartWire{
-			Type:        "output_text",
-			Text:        p.Text,
-			Annotations: annotations,
-		})
+
+		return marshalResponsesContentPartWire(
+			p.Type,
+			responsesOutputTextPartWire{
+				Type:        "output_text",
+				Text:        p.Text,
+				Annotations: annotations,
+			},
+		)
 	case responsesContentPartRefusal:
-		return marshalResponsesContentPartWire(p.Type, responsesRefusalPartWire{Type: "refusal", Refusal: p.Refusal})
+		return marshalResponsesContentPartWire(
+			p.Type,
+			responsesRefusalPartWire{Type: "refusal", Refusal: p.Refusal},
+		)
 	default:
 		return nil, fmt.Errorf("unsupported responses content part type %q", p.Type)
 	}
 }
 
-func marshalResponsesContentPartWire(partType string, wire responsesContentPartWire) ([]byte, error) {
+func marshalResponsesContentPartWire(
+	partType string,
+	wire responsesContentPartWire,
+) ([]byte, error) {
 	b, err := json.Marshal(wire)
 	if err != nil {
-		slog.Warn("adapter.openai.responses_content_part_marshal_failed", "concern", "adapter.chat.render", "part_type", partType, "err", err)
+		slog.Warn(
+			"adapter.openai.responses_content_part_marshal_failed",
+			"concern",
+			"adapter.chat.render",
+			"part_type",
+			partType,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("marshal responses %s content part: %w", partType, err)
 	}
+
 	return b, nil
 }
 
@@ -445,12 +497,15 @@ func MissingResponsesUsageDetail(usage Usage) string {
 	if usage.PromptTokensDetails == nil {
 		return "input_tokens_details"
 	}
+
 	if usage.PromptTokensDetails.CacheWriteTokens == nil {
 		return "input_tokens_details.cache_write_tokens"
 	}
+
 	if usage.CompletionTokensDetails == nil {
 		return "output_tokens_details"
 	}
+
 	return ""
 }
 
@@ -467,10 +522,14 @@ func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
 			CacheWriteTokens: usage.PromptTokensDetails.CacheWriteTokens,
 		}
 	}
+
 	var outputDetails *ResponsesOutputTokensDetails
 	if usage.CompletionTokensDetails != nil {
-		outputDetails = &ResponsesOutputTokensDetails{ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens}
+		outputDetails = &ResponsesOutputTokensDetails{
+			ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens,
+		}
 	}
+
 	return ResponsesUsage{
 		InputTokens:         usage.PromptTokens,
 		OutputTokens:        usage.CompletionTokens,
@@ -485,10 +544,13 @@ func ResponsesUsageFromChat(usage Usage) ResponsesUsage {
 // Cursor listener sends this usage.
 func CompatibilityResponsesUsage(usage Usage) ResponsesUsage {
 	return ResponsesUsage{
-		InputTokens:         usage.PromptTokens,
-		OutputTokens:        usage.CompletionTokens,
-		TotalTokens:         usage.TotalTokens,
-		InputTokensDetails:  &ResponsesInputTokensDetails{CachedTokens: usage.CachedTokens(), CacheWriteTokens: nil},
+		InputTokens:  usage.PromptTokens,
+		OutputTokens: usage.CompletionTokens,
+		TotalTokens:  usage.TotalTokens,
+		InputTokensDetails: &ResponsesInputTokensDetails{
+			CachedTokens:     usage.CachedTokens(),
+			CacheWriteTokens: nil,
+		},
 		OutputTokensDetails: &ResponsesOutputTokensDetails{ReasoningTokens: 0},
 	}
 }
@@ -532,6 +594,7 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 		if params.DocumentedUsage {
 			mapped = ResponsesUsageFromChat(*params.Usage)
 		}
+
 		usage = &mapped
 	}
 
@@ -570,6 +633,7 @@ func BuildResponsesResponse(params ResponsesResponseParams) ResponsesResponse {
 	if params.Echo != nil {
 		applyResponsesEcho(&resp, *params.Echo)
 	}
+
 	return resp
 }
 
@@ -578,62 +642,79 @@ func buildResponsesOutput(params ResponsesResponseParams) []ResponsesOutputItem 
 	itemStatus := responsesOutputItemStatus(params.Status)
 
 	if params.Reasoning != "" {
-		output = append(output, ResponsesOutputItem{
-			Type:      "reasoning",
-			ID:        responsesReasoningItemID(params.ItemIDBase),
-			Status:    itemStatus,
-			Role:      "",
-			Content:   nil,
-			Summary:   []ResponsesSummaryPart{{Type: "summary_text", Text: params.Reasoning}},
-			CallID:    "",
-			Name:      "",
-			Arguments: "",
-		})
+		output = append(
+			output,
+			ResponsesOutputItem{
+				Type:      "reasoning",
+				ID:        responsesReasoningItemID(params.ItemIDBase),
+				Status:    itemStatus,
+				Role:      "",
+				Content:   nil,
+				Summary:   []ResponsesSummaryPart{{Type: "summary_text", Text: params.Reasoning}},
+				CallID:    "",
+				Name:      "",
+				Arguments: "",
+			},
+		)
 	}
 
 	if params.Text != "" || params.Refusal != "" {
 		content := make([]ResponsesContentPart, 0, 2)
 		if params.Text != "" {
-			content = append(content, ResponsesContentPart{
-				Type:        "output_text",
-				Text:        params.Text,
-				Refusal:     "",
-				Annotations: []ResponsesAnnotation{},
-			})
+			content = append(
+				content,
+				ResponsesContentPart{
+					Type:        "output_text",
+					Text:        params.Text,
+					Refusal:     "",
+					Annotations: []ResponsesAnnotation{},
+				},
+			)
 		}
+
 		if params.Refusal != "" {
-			content = append(content, ResponsesContentPart{
-				Type:        "refusal",
-				Text:        "",
-				Refusal:     params.Refusal,
-				Annotations: nil,
-			})
+			content = append(
+				content,
+				ResponsesContentPart{
+					Type:        "refusal",
+					Text:        "",
+					Refusal:     params.Refusal,
+					Annotations: nil,
+				},
+			)
 		}
-		output = append(output, ResponsesOutputItem{
-			Type:      "message",
-			ID:        responsesMessageItemID(params.ItemIDBase),
-			Status:    itemStatus,
-			Role:      "assistant",
-			Content:   content,
-			Summary:   nil,
-			CallID:    "",
-			Name:      "",
-			Arguments: "",
-		})
+
+		output = append(
+			output,
+			ResponsesOutputItem{
+				Type:      "message",
+				ID:        responsesMessageItemID(params.ItemIDBase),
+				Status:    itemStatus,
+				Role:      "assistant",
+				Content:   content,
+				Summary:   nil,
+				CallID:    "",
+				Name:      "",
+				Arguments: "",
+			},
+		)
 	}
 
 	for _, tc := range params.ToolCalls {
-		output = append(output, ResponsesOutputItem{
-			Type:      "function_call",
-			ID:        responsesFunctionCallItemID(params.ItemIDBase, tc.Index),
-			Status:    itemStatus,
-			Role:      "",
-			Content:   nil,
-			Summary:   nil,
-			CallID:    responsesCallID(params.ItemIDBase, tc),
-			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
-		})
+		output = append(
+			output,
+			ResponsesOutputItem{
+				Type:      "function_call",
+				ID:        responsesFunctionCallItemID(params.ItemIDBase, tc.Index),
+				Status:    itemStatus,
+				Role:      "",
+				Content:   nil,
+				Summary:   nil,
+				CallID:    responsesCallID(params.ItemIDBase, tc),
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		)
 	}
 
 	return output
@@ -643,30 +724,44 @@ func responsesOutputItemStatus(status ResponsesStatus) ResponsesOutputItemStatus
 	if status == ResponsesStatusIncomplete {
 		return ResponsesOutputItemStatusIncomplete
 	}
+
 	if status == ResponsesStatusInProgress {
 		return ResponsesOutputItemStatusInProgress
 	}
+
 	return ResponsesOutputItemStatusCompleted
 }
 
 // ResponsesTerminalForFinishReason maps normalized provider finish reasons
 // to the Responses terminal status and incomplete details.
-func ResponsesTerminalForFinishReason(finishReason string) (ResponsesStatus, *ResponsesIncompleteDetails) {
+func ResponsesTerminalForFinishReason(
+	finishReason string,
+) (ResponsesStatus, *ResponsesIncompleteDetails) {
 	trimmed := strings.TrimSpace(finishReason)
 	if trimmed == "length" || trimmed == "content_filter" {
-		return ResponsesStatusIncomplete, responsesIncompleteDetails(ResponsesStatusIncomplete, trimmed)
+		return ResponsesStatusIncomplete, responsesIncompleteDetails(
+			ResponsesStatusIncomplete,
+			trimmed,
+		)
 	}
+
 	return ResponsesStatusCompleted, nil
 }
 
-func responsesIncompleteDetails(status ResponsesStatus, finishReason string) *ResponsesIncompleteDetails {
-	if status != ResponsesStatusIncomplete && finishReason != "length" && finishReason != "content_filter" {
+func responsesIncompleteDetails(
+	status ResponsesStatus,
+	finishReason string,
+) *ResponsesIncompleteDetails {
+	if status != ResponsesStatusIncomplete && finishReason != "length" &&
+		finishReason != "content_filter" {
 		return nil
 	}
+
 	reason := "max_output_tokens"
 	if strings.TrimSpace(finishReason) == "content_filter" {
 		reason = "content_filter"
 	}
+
 	return &ResponsesIncompleteDetails{Reason: reason}
 }
 

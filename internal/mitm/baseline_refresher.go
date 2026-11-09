@@ -19,7 +19,8 @@ type baselineRefresher struct {
 }
 
 var defaultBaselineRefresher = &baselineRefresher{
-	timers: map[string]*time.Timer{}, mu: sync.
+	timers: map[string]*time.Timer{},
+	mu: sync.
 		Mutex{},
 }
 
@@ -27,18 +28,27 @@ var defaultBaselineRefresher = &baselineRefresher{
 // upstream matching provider, reading the deduped shape corpus from store and
 // writing the new baseline through it. A nil store or disabled drift is a
 // no-op.
-func queueBaselineRefresh(ctx context.Context, store *capture.Store, cfg config.MITMConfig, provider string, log *slog.Logger) {
+func queueBaselineRefresh(
+	ctx context.Context,
+	store *capture.Store,
+	cfg config.MITMConfig,
+	provider string,
+	log *slog.Logger,
+) {
 	if log == nil {
 		log = slog.Default()
 	}
+
 	dcfg := cfg.Drift
 	if !dcfg.Enabled || len(dcfg.Upstreams) == 0 || store == nil {
 		return
 	}
+
 	for upstream, entry := range dcfg.Upstreams {
 		if !upstreamMatchesProvider(upstream, provider) {
 			continue
 		}
+
 		opts := BaselineRefreshOptions{
 			Upstream:        upstream,
 			IncludeUA:       entry.IncludeUA,
@@ -51,42 +61,65 @@ func queueBaselineRefresh(ctx context.Context, store *capture.Store, cfg config.
 	}
 }
 
-func (r *baselineRefresher) schedule(ctx context.Context, store *capture.Store, opts BaselineRefreshOptions) {
+func (r *baselineRefresher) schedule(
+	ctx context.Context,
+	store *capture.Store,
+	opts BaselineRefreshOptions,
+) {
 	if r == nil {
 		return
 	}
+
 	key := strings.TrimSpace(opts.Upstream)
 	if key == "" {
 		return
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if existing := r.timers[key]; existing != nil {
 		existing.Stop()
 	}
+
 	// Detach the context for the scheduled work so the timer survives
 	// the originating request. context.WithoutCancel preserves values
 	// (correlation IDs, slog handlers) without inheriting deadlines.
 	scheduledCtx := context.WithoutCancel(ctx)
-	r.timers[key] = time.AfterFunc(baselineRefreshDebounce, func() {
-		outcome, err := RefreshBaseline(scheduledCtx, store, opts)
-		if err != nil {
-			opts.Log.WarnContext(scheduledCtx, "mitm.baseline.refresh_failed", "concern", "providers.mitm.wire", "err", err)
-		} else if outcome.Updated {
-			level := slog.LevelInfo
-			if outcome.Diverged {
-				level = slog.LevelWarn
+	r.timers[key] = time.AfterFunc(
+		baselineRefreshDebounce,
+		func() {
+			outcome, err := RefreshBaseline(scheduledCtx, store, opts)
+			if err != nil {
+				opts.Log.WarnContext(
+					scheduledCtx,
+					"mitm.baseline.refresh_failed",
+					"concern",
+					"providers.mitm.wire",
+					"err",
+					err,
+				)
+			} else if outcome.Updated {
+				level := slog.LevelInfo
+				if outcome.Diverged {
+					level = slog.LevelWarn
+				}
+
+				opts.Log.LogAttrs(
+					scheduledCtx,
+					level,
+					"mitm.baseline.refreshed",
+					slog.String("concern", "providers.mitm.wire"),
+					slog.Bool("created", outcome.Created),
+					slog.Bool("diverged", outcome.Diverged),
+					slog.String("summary", outcome.Summary),
+				)
 			}
-			opts.Log.LogAttrs(scheduledCtx, level, "mitm.baseline.refreshed", slog.String("concern", "providers.mitm.wire"),
-				slog.Bool("created", outcome.Created),
-				slog.Bool("diverged", outcome.Diverged),
-				slog.String("summary", outcome.Summary),
-			)
-		}
-		r.mu.Lock()
-		delete(r.timers, key)
-		r.mu.Unlock()
-	})
+
+			r.mu.Lock()
+			delete(r.timers, key)
+			r.mu.Unlock()
+		},
+	)
 }
 
 func upstreamMatchesProvider(upstream string, provider string) bool {
@@ -94,5 +127,6 @@ func upstreamMatchesProvider(upstream string, provider string) bool {
 	if want == "" {
 		return true
 	}
+
 	return strings.EqualFold(want, strings.TrimSpace(provider))
 }

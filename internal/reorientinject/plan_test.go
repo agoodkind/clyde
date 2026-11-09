@@ -28,16 +28,25 @@ func compactedSession() ParsedRequest {
 		SessionID: "test-session",
 		Messages: []Message{
 			{Role: "user", Segments: []Segment{{Kind: KindText, Text: "start"}}},
-			{Role: "assistant", Segments: []Segment{
-				{Kind: KindText, Text: repeatedWords("prior", 4000)},
-			}},
+			{
+				Role: "assistant",
+				Segments: []Segment{
+					{Kind: KindText, Text: repeatedWords("prior", 4000)},
+				},
+			},
 			{Role: "user", Segments: []Segment{{Kind: KindText, Text: "run the tests"}}},
-			{Role: "assistant", Segments: []Segment{
-				{Kind: KindToolUse, Text: `{"command":"go test ./..."}`},
-			}},
-			{Role: "user", Segments: []Segment{
-				{Kind: KindToolResult, Text: repeatedWords("output", 200)},
-			}},
+			{
+				Role: "assistant",
+				Segments: []Segment{
+					{Kind: KindToolUse, Text: `{"command":"go test ./..."}`},
+				},
+			},
+			{
+				Role: "user",
+				Segments: []Segment{
+					{Kind: KindToolResult, Text: repeatedWords("output", 200)},
+				},
+			},
 			{Role: "assistant", Segments: []Segment{{Kind: KindText, Text: "all green"}}},
 			{Role: "user", Segments: []Segment{{Kind: KindText, Text: "compaction prompt"}}},
 		},
@@ -49,12 +58,14 @@ func compactedSession() ParsedRequest {
 func TestPlanCutRetainsStrictlyUnderTheBudget(t *testing.T) {
 	t.Parallel()
 	counter := testCounter()
+
 	for _, budget := range []int{50, 200, 1000, 5000} {
 		got, ok := planCut(compactedSession(), budget, 0, counter, everyKind)
 		if !ok {
 			t.Errorf("budget %d planned no cut", budget)
 			continue
 		}
+
 		if count := counter.Estimate(got.Retained); count >= budget {
 			t.Errorf("budget %d retained %d tokens", budget, count)
 		}
@@ -67,15 +78,22 @@ func TestPlanCutRetainsTheTailOfALargeMessage(t *testing.T) {
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
+
 	if got.Cut.MessageIndex != 1 {
 		t.Fatalf("cut message index = %d, want 1", got.Cut.MessageIndex)
 	}
+
 	if got.Cut.HeadRunes <= 0 {
-		t.Fatalf("head runes = %d, want the model to summarize part of message 1", got.Cut.HeadRunes)
+		t.Fatalf(
+			"head runes = %d, want the model to summarize part of message 1",
+			got.Cut.HeadRunes,
+		)
 	}
+
 	if !strings.Contains(got.Retained, "prior") {
 		t.Error("the retained text omits the tail of message 1")
 	}
+
 	if !strings.Contains(got.Retained, "all green") {
 		t.Error("the retained text omits the newest message")
 	}
@@ -88,9 +106,12 @@ func TestPlanCutRetainsTheTailOfALargeMessage(t *testing.T) {
 func TestPlanCutRetainsTheTailOfMessageZero(t *testing.T) {
 	t.Parallel()
 	request := compactedSession()
-	request.Messages[0] = Message{Role: RoleUser, Segments: []Segment{
-		{Kind: KindText, Text: repeatedWords("summary", 3000) + " prior-injection-tail"},
-	}}
+	request.Messages[0] = Message{
+		Role: RoleUser,
+		Segments: []Segment{
+			{Kind: KindText, Text: repeatedWords("summary", 3000) + " prior-injection-tail"},
+		},
+	}
 	// Messages 1 through 5 measure about 5,500 tokens and message 0 about
 	// 3,900, so an 8,000 budget retains every later message and then part of
 	// message 0.
@@ -98,15 +119,22 @@ func TestPlanCutRetainsTheTailOfMessageZero(t *testing.T) {
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
+
 	if got.Cut.MessageIndex != 0 {
 		t.Fatalf("cut message index = %d, want 0", got.Cut.MessageIndex)
 	}
+
 	if got.Cut.HeadRunes <= 0 {
-		t.Fatalf("head runes = %d, want the model to summarize part of message 0", got.Cut.HeadRunes)
+		t.Fatalf(
+			"head runes = %d, want the model to summarize part of message 0",
+			got.Cut.HeadRunes,
+		)
 	}
+
 	if !strings.Contains(got.Retained, "prior-injection-tail") {
 		t.Error("the retained text omits the tail of message 0")
 	}
+
 	if !strings.Contains(got.Retained, "all green") {
 		t.Error("the retained text omits the newest message")
 	}
@@ -121,9 +149,11 @@ func TestPlanCutSendsMessageZeroWholeWhenEverythingFits(t *testing.T) {
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
+
 	if got.Cut.MessageIndex != 1 || got.Cut.HeadRunes != 0 {
 		t.Fatalf("cut = %+v, want message 1 segment 0 head 0", got.Cut)
 	}
+
 	if strings.Contains(got.Retained, "start") {
 		t.Error("the retained text includes message 0")
 	}
@@ -136,9 +166,11 @@ func TestPlanCutSkipsAnExcludedKind(t *testing.T) {
 	if !ok {
 		t.Fatal("planCut planned no cut")
 	}
+
 	if strings.Contains(got.Retained, "go test") {
 		t.Error("the retained text includes a tool call the arguments excluded")
 	}
+
 	if !strings.Contains(got.Retained, "all green") {
 		t.Error("the retained text omits the newest text message")
 	}

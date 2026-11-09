@@ -35,15 +35,19 @@ func InjectIntoSummary(body []byte, injection string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if ok {
 		return buildSummarySSEBody(injected), nil
 	}
+
 	blockIndex := maxSummaryContentBlockIndex(events) + 1
 	appendEvents, err := marshalTextAppendEvents(blockIndex, injection)
 	if err != nil {
 		return nil, err
 	}
+
 	events = insertSummaryAppendEvents(events, appendEvents)
+
 	return buildSummarySSEBody(events), nil
 }
 
@@ -52,17 +56,21 @@ func ResponseText(body []byte) string {
 	events := parseSummarySSEEvents(string(body))
 	var builder strings.Builder
 	previousIndex := missingContentBlockIndex
+
 	for _, event := range events {
 		index, text, ok := summaryTextDeltaOf(event)
 		if !ok || text == "" {
 			continue
 		}
+
 		if builder.Len() > 0 && index != previousIndex {
 			builder.WriteByte('\n')
 		}
+
 		builder.WriteString(text)
 		previousIndex = index
 	}
+
 	return builder.String()
 }
 
@@ -74,7 +82,9 @@ func AppendTextBlock(body []byte, content string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	events = insertSummaryAppendEvents(events, appendEvents)
+
 	return buildSummarySSEBody(events), nil
 }
 
@@ -82,29 +92,39 @@ func AppendTextBlock(body []byte, content string) ([]byte, error) {
 // </summary> as a single delta with content inserted before that tag, and
 // leaves every other event unchanged. The second return is false when no text
 // block contains </summary>.
-func injectIntoSummaryBlock(events []summarySSEEvent, content string) ([]summarySSEEvent, bool, error) {
+func injectIntoSummaryBlock(
+	events []summarySSEEvent,
+	content string,
+) ([]summarySSEEvent, bool, error) {
 	textByIndex := map[int]string{}
 	order := make([]int, 0)
+
 	for _, event := range events {
 		index, text, ok := summaryTextDeltaOf(event)
 		if !ok {
 			continue
 		}
+
 		if _, seen := textByIndex[index]; !seen {
 			order = append(order, index)
 		}
+
 		textByIndex[index] += text
 	}
+
 	target := -1
+
 	for _, index := range order {
 		if strings.Contains(textByIndex[index], summaryCloseTag) {
 			target = index
 			break
 		}
 	}
+
 	if target == -1 {
 		return nil, false, nil
 	}
+
 	original := textByIndex[target]
 	cut := strings.Index(original, summaryCloseTag)
 	injection := escapeSummaryCloseTag(content)
@@ -112,22 +132,27 @@ func injectIntoSummaryBlock(events []summarySSEEvent, content string) ([]summary
 
 	output := make([]summarySSEEvent, 0, len(events))
 	replaced := false
+
 	for _, event := range events {
 		index, _, ok := summaryTextDeltaOf(event)
 		if ok && index == target {
 			if replaced {
 				continue
 			}
+
 			data, err := marshalSummarySSEData(newSummaryBlockDeltaPayload(target, modified))
 			if err != nil {
 				return nil, false, err
 			}
+
 			output = append(output, summarySSEEvent{Name: "content_block_delta", Data: data})
 			replaced = true
 			continue
 		}
+
 		output = append(output, event)
 	}
+
 	return output, true, nil
 }
 
@@ -137,13 +162,16 @@ func summaryTextDeltaOf(event summarySSEEvent) (int, string, bool) {
 	if event.Name != "content_block_delta" {
 		return 0, "", false
 	}
+
 	var payload summaryDeltaTextPayload
 	if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
 		return 0, "", false
 	}
+
 	if payload.Index == nil || payload.Delta.Type != "text_delta" {
 		return 0, "", false
 	}
+
 	return *payload.Index, payload.Delta.Text, true
 }
 
@@ -156,14 +184,17 @@ func escapeSummaryCloseTag(s string) string {
 
 func parseSummarySSEEvents(body string) []summarySSEEvent {
 	records := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n\n")
+
 	events := make([]summarySSEEvent, 0, len(records))
 	for _, record := range records {
 		event := parseSummarySSERecord(record)
 		if event.Name == "" && event.Data == "" {
 			continue
 		}
+
 		events = append(events, event)
 	}
+
 	return events
 }
 
@@ -171,33 +202,41 @@ func parseSummarySSERecord(record string) summarySSEEvent {
 	lines := strings.Split(record, "\n")
 	dataLines := make([]string, 0, len(lines))
 	event := summarySSEEvent{Name: "", Data: ""}
+
 	for _, line := range lines {
 		if value, ok := strings.CutPrefix(line, "event:"); ok {
 			event.Name = strings.TrimSpace(value)
 			continue
 		}
+
 		if value, ok := strings.CutPrefix(line, "data:"); ok {
 			dataLines = append(dataLines, strings.TrimPrefix(value, " "))
 		}
 	}
+
 	event.Data = strings.Join(dataLines, "\n")
+
 	return event
 }
 
 func maxSummaryContentBlockIndex(events []summarySSEEvent) int {
 	maxIndex := missingContentBlockIndex
+
 	for _, event := range events {
 		var payload summaryIndexedPayload
 		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
 			continue
 		}
+
 		if payload.Index == nil {
 			continue
 		}
+
 		if *payload.Index > maxIndex {
 			maxIndex = *payload.Index
 		}
 	}
+
 	return maxIndex
 }
 
@@ -206,14 +245,17 @@ func marshalTextAppendEvents(blockIndex int, content string) ([]summarySSEEvent,
 	if err != nil {
 		return nil, err
 	}
+
 	delta, err := marshalSummarySSEData(newSummaryBlockDeltaPayload(blockIndex, content))
 	if err != nil {
 		return nil, err
 	}
+
 	stop, err := marshalSummarySSEData(newSummaryBlockStopPayload(blockIndex))
 	if err != nil {
 		return nil, err
 	}
+
 	return []summarySSEEvent{
 		{Name: "content_block_start", Data: start},
 		{Name: "content_block_delta", Data: delta},
@@ -224,7 +266,10 @@ func marshalTextAppendEvents(blockIndex int, content string) ([]summarySSEEvent,
 // insertSummaryAppendEvents places the appended block before message_delta or
 // message_stop. Anthropic closes the message with those two events, and a
 // content block after either one is invalid.
-func insertSummaryAppendEvents(events []summarySSEEvent, appendEvents []summarySSEEvent) []summarySSEEvent {
+func insertSummaryAppendEvents(
+	events []summarySSEEvent,
+	appendEvents []summarySSEEvent,
+) []summarySSEEvent {
 	insertAt := len(events)
 	for index, event := range events {
 		if event.Name == "message_delta" || event.Name == "message_stop" {
@@ -232,24 +277,29 @@ func insertSummaryAppendEvents(events []summarySSEEvent, appendEvents []summaryS
 			break
 		}
 	}
+
 	output := make([]summarySSEEvent, 0, len(events)+len(appendEvents))
 	output = append(output, events[:insertAt]...)
 	output = append(output, appendEvents...)
 	output = append(output, events[insertAt:]...)
+
 	return output
 }
 
 func buildSummarySSEBody(events []summarySSEEvent) []byte {
 	var builder strings.Builder
+
 	for _, event := range events {
 		if event.Name != "" {
 			builder.WriteString("event: ")
 			builder.WriteString(event.Name)
 			builder.WriteByte('\n')
 		}
+
 		writeSummarySSEDataLines(&builder, event.Data)
 		builder.WriteByte('\n')
 	}
+
 	return []byte(builder.String())
 }
 
@@ -257,6 +307,7 @@ func writeSummarySSEDataLines(builder *strings.Builder, data string) {
 	if data == "" {
 		return
 	}
+
 	for line := range strings.SplitSeq(data, "\n") {
 		builder.WriteString("data: ")
 		builder.WriteString(line)
@@ -271,11 +322,15 @@ func marshalSummarySSEData[T summaryPayload](payload T) (string, error) {
 	if err := encoder.Encode(payload); err != nil {
 		slog.Warn(
 			"adapter.anthropic.summary_injection_encode_failed",
-			"concern", string(slogger.ConcernAdapterProviderAnthReq),
-			"err", err,
+			"concern",
+			string(slogger.ConcernAdapterProviderAnthReq),
+			"err",
+			err,
 		)
+
 		return "", fmt.Errorf("encode summary injection SSE JSON: %w", err)
 	}
+
 	return strings.TrimSuffix(buffer.String(), "\n"), nil
 }
 

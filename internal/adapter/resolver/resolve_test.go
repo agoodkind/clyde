@@ -21,9 +21,14 @@ type capturingRegistry struct {
 	callCount int
 }
 
-func (registry *capturingRegistry) Resolve(_ IngressSurface, _ string, effort string) (ResolvedModelView, error) {
+func (registry *capturingRegistry) Resolve(
+	_ IngressSurface,
+	_ string,
+	effort string,
+) (ResolvedModelView, error) {
 	registry.effort = effort
 	registry.callCount++
+
 	return registry.view, nil
 }
 
@@ -31,6 +36,7 @@ func (s stubRegistry) Resolve(_ IngressSurface, _ string, _ string) (ResolvedMod
 	if s.err != nil {
 		return ResolvedModelView{}, s.err
 	}
+
 	return s.view, nil
 }
 
@@ -58,39 +64,58 @@ func TestResolveCanonicalizesReasoningEffortBeforeRegistryLookup(t *testing.T) {
 	}{
 		{name: "top level", reasoningEffort: "top-tier", wantEffort: "top-tier"},
 		{name: "nested", nestedEffort: "nested-tier", wantEffort: "nested-tier"},
-		{name: "matching fields", reasoningEffort: "same-tier", nestedEffort: "same-tier", wantEffort: "same-tier"},
+		{
+			name:            "matching fields",
+			reasoningEffort: "same-tier",
+			nestedEffort:    "same-tier",
+			wantEffort:      "same-tier",
+		},
 		{name: "literal whitespace", nestedEffort: " future-tier ", wantEffort: " future-tier "},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			request := adapteropenai.ChatRequest{
-				Model:           "gpt-future",
-				ReasoningEffort: test.reasoningEffort,
-			}
-			if test.nestedEffort != "" {
-				request.Reasoning = &adapteropenai.Reasoning{Effort: test.nestedEffort}
-			}
-			registry := &capturingRegistry{view: ResolvedModelView{
-				Provider: ProviderCodex,
-				Model:    "gpt-future",
-				Effort:   Effort(test.wantEffort),
-			}}
-			_, err := Resolve(IngressOpenAI, adaptercursor.Request{OpenAI: request}, registry)
-			if err != nil {
-				t.Fatalf("Resolve: %v", err)
-			}
-			if registry.effort != test.wantEffort || registry.callCount != 1 {
-				t.Fatalf("registry effort/calls = %q/%d, want %q/1", registry.effort, registry.callCount, test.wantEffort)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				request := adapteropenai.ChatRequest{
+					Model:           "gpt-future",
+					ReasoningEffort: test.reasoningEffort,
+				}
+				if test.nestedEffort != "" {
+					request.Reasoning = &adapteropenai.Reasoning{Effort: test.nestedEffort}
+				}
+
+				registry := &capturingRegistry{
+					view: ResolvedModelView{
+						Provider: ProviderCodex,
+						Model:    "gpt-future",
+						Effort:   Effort(test.wantEffort),
+					},
+				}
+				_, err := Resolve(IngressOpenAI, adaptercursor.Request{OpenAI: request}, registry)
+				if err != nil {
+					t.Fatalf("Resolve: %v", err)
+				}
+
+				if registry.effort != test.wantEffort || registry.callCount != 1 {
+					t.Fatalf(
+						"registry effort/calls = %q/%d, want %q/1",
+						registry.effort,
+						registry.callCount,
+						test.wantEffort,
+					)
+				}
+			},
+		)
 	}
 }
 
 func TestResolveRejectsConflictingReasoningEffortFields(t *testing.T) {
-	registry := &capturingRegistry{view: ResolvedModelView{
-		Provider: ProviderCodex,
-		Model:    "gpt-future",
-	}}
+	registry := &capturingRegistry{
+		view: ResolvedModelView{
+			Provider: ProviderCodex,
+			Model:    "gpt-future",
+		},
+	}
 	request := adapteropenai.ChatRequest{
 		Model:           "gpt-future",
 		ReasoningEffort: "top-tier",
@@ -100,21 +125,29 @@ func TestResolveRejectsConflictingReasoningEffortFields(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "conflicting reasoning effort") {
 		t.Fatalf("error = %v, want conflicting reasoning effort", err)
 	}
+
 	var invalidRequestErr *InvalidRequestError
 	if !errors.As(err, &invalidRequestErr) {
 		t.Fatalf("error type = %T, want *InvalidRequestError", err)
 	}
+
 	if registry.callCount != 0 {
 		t.Fatalf("registry call count = %d, want 0", registry.callCount)
 	}
 }
 
 func TestResolveRejectsUnsupportedProvider(t *testing.T) {
-	_, err := Resolve(IngressCursor, adaptercursor.Request{}, stubRegistry{view: ResolvedModelView{
-		Provider: ProviderUnknown,
-		Family:   "claude",
-		Model:    "claude-3-5-sonnet",
-	}})
+	_, err := Resolve(
+		IngressCursor,
+		adaptercursor.Request{},
+		stubRegistry{
+			view: ResolvedModelView{
+				Provider: ProviderUnknown,
+				Family:   "claude",
+				Model:    "claude-3-5-sonnet",
+			},
+		},
+	)
 	if !errors.Is(err, ErrUnresolvedProvider) {
 		t.Fatalf("expected ErrUnresolvedProvider, got %v", err)
 	}
@@ -140,46 +173,61 @@ func TestResolveBuildsTypedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if got.Provider != ProviderCodex {
 		t.Errorf("Provider = %v, want %v", got.Provider, ProviderCodex)
 	}
+
 	if got.Family != "gpt-5" {
 		t.Errorf("Family = %q, want gpt-5", got.Family)
 	}
+
 	if got.Model != "gpt-5.3-codex" {
 		t.Errorf("Model = %q, want gpt-5.3-codex", got.Model)
 	}
+
 	if got.Effort != EffortHigh {
 		t.Errorf("Effort = %v, want %v", got.Effort, EffortHigh)
 	}
+
 	if got.ContextBudget.InputTokens != 200000 {
 		t.Errorf("ContextBudget.InputTokens = %d, want 200000", got.ContextBudget.InputTokens)
 	}
+
 	if got.ContextBudget.OutputTokens != 16384 {
 		t.Errorf("ContextBudget.OutputTokens = %d, want 16384", got.ContextBudget.OutputTokens)
 	}
+
 	if got.Cursor.ConversationID != "conv-1" {
 		t.Errorf("Cursor.ConversationID = %q, want conv-1", got.Cursor.ConversationID)
 	}
+
 	if got.OpenAI.Model != "gpt-5.3-codex" {
 		t.Errorf("OpenAI.Model = %q, want gpt-5.3-codex", got.OpenAI.Model)
 	}
+
 	if got.Instructions != "follow repo conventions" {
 		t.Errorf("Instructions = %q, want follow repo conventions", got.Instructions)
 	}
+
 	if got.Alias != "gpt-5.3-codex" {
 		t.Errorf("Alias = %q, want gpt-5.3-codex", got.Alias)
 	}
+
 	if !got.SupportsTools {
 		t.Errorf("SupportsTools = %v, want true", got.SupportsTools)
 	}
+
 	if got.SupportsVision {
 		t.Errorf("SupportsVision = %v, want false", got.SupportsVision)
 	}
+
 	if got.MaxOutputTokens != 16384 {
 		t.Errorf("MaxOutputTokens = %d, want 16384", got.MaxOutputTokens)
 	}
-	if len(got.ThinkingModes) != 2 || got.ThinkingModes[0] != "default" || got.ThinkingModes[1] != "enabled" {
+
+	if len(got.ThinkingModes) != 2 || got.ThinkingModes[0] != "default" ||
+		got.ThinkingModes[1] != "enabled" {
 		t.Errorf("ThinkingModes = %v, want [default enabled]", got.ThinkingModes)
 	}
 }
@@ -203,18 +251,27 @@ func TestResolveBuildsAnthropicRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if got.Provider != ProviderAnthropic {
 		t.Errorf("Provider = %v, want %v", got.Provider, ProviderAnthropic)
 	}
+
 	if got.Alias != "clyde-opus-4.7" {
 		t.Errorf("Alias = %q, want clyde-opus-4.7", got.Alias)
 	}
+
 	if !got.SupportsTools || !got.SupportsVision {
-		t.Errorf("SupportsTools/SupportsVision = %v/%v, want true/true", got.SupportsTools, got.SupportsVision)
+		t.Errorf(
+			"SupportsTools/SupportsVision = %v/%v, want true/true",
+			got.SupportsTools,
+			got.SupportsVision,
+		)
 	}
+
 	if got.MaxOutputTokens != 32000 {
 		t.Errorf("MaxOutputTokens = %d, want 32000", got.MaxOutputTokens)
 	}
+
 	if len(got.ThinkingModes) != 2 {
 		t.Errorf("ThinkingModes = %v, want length 2", got.ThinkingModes)
 	}
@@ -241,14 +298,21 @@ func TestResolveBuildsPassthroughRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if got.Provider != ProviderPassthrough {
 		t.Errorf("Provider = %v, want %v", got.Provider, ProviderPassthrough)
 	}
+
 	if got.PassthroughOverrideName != "vendor-x" {
 		t.Errorf("PassthroughOverrideName = %q, want vendor-x", got.PassthroughOverrideName)
 	}
+
 	if got.OpenAICompatPassthrough != passthrough {
-		t.Errorf("OpenAICompatPassthrough = %+v, want %+v", got.OpenAICompatPassthrough, passthrough)
+		t.Errorf(
+			"OpenAICompatPassthrough = %+v, want %+v",
+			got.OpenAICompatPassthrough,
+			passthrough,
+		)
 	}
 }
 
@@ -257,10 +321,12 @@ func TestResolvedRequestValid(t *testing.T) {
 	if !good.Valid() {
 		t.Errorf("expected good ResolvedRequest to be valid")
 	}
+
 	bad := ResolvedRequest{Provider: ProviderUnknown, Effort: EffortMedium, Model: "gpt-5.3-codex"}
 	if bad.Valid() {
 		t.Errorf("expected bad ResolvedRequest to be invalid")
 	}
+
 	noModel := ResolvedRequest{Provider: ProviderAnthropic, Effort: EffortHigh}
 	if noModel.Valid() {
 		t.Errorf("expected ResolvedRequest with no Model to be invalid")

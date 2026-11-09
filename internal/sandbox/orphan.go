@@ -32,8 +32,10 @@ func WatchParent(ctx context.Context, cancel context.CancelFunc) {
 		// directly by init or a service manager is meant to keep running.
 		return
 	}
+
 	ticker := time.NewTicker(orphanPollInterval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -42,11 +44,17 @@ func WatchParent(ctx context.Context, cancel context.CancelFunc) {
 			if os.Getppid() != orphanInitPID {
 				continue
 			}
-			slog.WarnContext(ctx, "sandbox.parent.exited",
-				"concern", "process.daemon.lifecycle",
-				"component", "sandbox",
+
+			slog.WarnContext(
+				ctx,
+				"sandbox.parent.exited",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"sandbox",
 			)
 			cancel()
+
 			return
 		}
 	}

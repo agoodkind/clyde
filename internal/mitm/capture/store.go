@@ -92,18 +92,23 @@ func (c Config) withDefaults() Config {
 	if c.MaxBodyBytes <= 0 {
 		c.MaxBodyBytes = DefaultMaxBodyBytes
 	}
+
 	if !c.RetentionResolved && c.RetentionMaxAge == 0 {
 		c.RetentionMaxAge = defaultRetentionMaxAge
 	}
+
 	if !c.RetentionResolved && c.RetentionMaxBytes == 0 {
 		c.RetentionMaxBytes = defaultRetentionMaxBytes
 	}
+
 	if !c.RetentionResolved && c.RetentionInterval == 0 {
 		c.RetentionInterval = defaultRetentionInterval
 	}
+
 	if c.QueueDepth <= 0 {
 		c.QueueDepth = defaultQueueDepth
 	}
+
 	return c
 }
 
@@ -210,46 +215,65 @@ type Store struct {
 func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	cfg = cfg.withDefaults()
 	if cfg.RetentionMaxAge < 0 || cfg.RetentionMaxBytes < 0 || cfg.RetentionInterval <= 0 {
-		return nil, fmt.Errorf("capture: retention limits must be non-negative and interval must be positive")
+		return nil, fmt.Errorf(
+			"capture: retention limits must be non-negative and interval must be positive",
+		)
 	}
+
 	if cfg.RetentionMaxAge == 0 && cfg.RetentionMaxBytes == 0 {
 		return nil, fmt.Errorf("capture: enable at least one retention limit")
 	}
+
 	if cfg.DBPath == "" {
 		return nil, fmt.Errorf("capture: DBPath is required")
 	}
+
 	if log == nil {
 		log = slog.Default()
 	}
+
 	dsn := "file:" + cfg.DBPath + "?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate&_synchronous=NORMAL&_auto_vacuum=incremental"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("capture: open sqlite %s: %w", cfg.DBPath, err)
 	}
+
 	db.SetMaxOpenConns(1)
 	if err := ensureRequestsIdentityColumns(ctx, db, log); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("capture: apply schema: %w", err)
 	}
+
 	if err := ensureToolEventColumns(ctx, db, log); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+
 	// Checkpoint the schema write into the main database file so it carries a
 	// valid header immediately. In WAL mode the CREATE TABLE statements
 	// otherwise live only in the -wal sidecar, leaving the main file
 	// zero-length; a concurrent reader (a query tool, the daemon after reload)
 	// that opens the empty main file would discard the WAL and see no schema.
 	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		log.WarnContext(ctx, "mitm.capture.initial_checkpoint_failed", "path", cfg.DBPath, "err", err)
+		log.WarnContext(
+			ctx,
+			"mitm.capture.initial_checkpoint_failed",
+			"path",
+			cfg.DBPath,
+			"err",
+			err,
+		)
 	}
+
 	if err := os.Chmod(cfg.DBPath, dbFileMode); err != nil {
 		log.WarnContext(ctx, "mitm.capture.chmod_failed", "path", cfg.DBPath, "err", err)
 	}
+
 	// A separate read-only handle serves the per-request adapter baseline reads
 	// (and drift/baseline queries) without contending on the single-writer
 	// connection. WAL lets readers see committed writes concurrently.
@@ -259,6 +283,7 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("capture: open read-only sqlite %s: %w", cfg.DBPath, err)
 	}
+
 	rdb.SetMaxOpenConns(readPoolMaxConns)
 	rdb.SetMaxIdleConns(readPoolMaxConns)
 	s := &Store{
@@ -277,27 +302,39 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 		lastRetentionReport:         time.Time{},
 		reclamationDeferredReported: false,
 	}
-	if err := db.QueryRowContext(ctx, retentionInitialCutoffSQL).Scan(&s.initialRequestID); err != nil {
+	if err := db.QueryRowContext(ctx, retentionInitialCutoffSQL).Scan(
+		&s.initialRequestID,
+	); err != nil {
 		_ = rdb.Close()
 		_ = db.Close()
+
 		return nil, fmt.Errorf("capture: read initial retention cutoff: %w", err)
 	}
+
 	if cfg.InitializeRetention {
 		if err := s.prepareRetention(ctx); err != nil {
 			_ = rdb.Close()
 			_ = db.Close()
+
 			return nil, err
 		}
 	}
+
 	s.wg.Add(1)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				s.log.ErrorContext(ctx, "mitm.capture.write_loop_panic", "err", fmt.Errorf("panic: %v", r))
+				s.log.ErrorContext(
+					ctx,
+					"mitm.capture.write_loop_panic",
+					"err",
+					fmt.Errorf("panic: %v", r),
+				)
 			}
 		}()
 		s.writeLoop(ctx)
 	}()
+
 	return s, nil
 }
 
@@ -313,9 +350,11 @@ func ensureToolEventColumns(ctx context.Context, db *sql.DB, log *slog.Logger) e
 		log.WarnContext(ctx, "mitm.capture.inspect_decoded_tool_event_columns_failed", "err", err)
 		return fmt.Errorf("capture: inspect decoded tool event columns: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 	hasInputEncoding := false
 	hasOrderingText := false
+
 	for rows.Next() {
 		var columnID int
 		var name string
@@ -323,57 +362,99 @@ func ensureToolEventColumns(ctx context.Context, db *sql.DB, log *slog.Logger) e
 		var notNull int
 		var defaultValue *string
 		var primaryKey int
-		if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+		if err := rows.Scan(
+			&columnID,
+			&name,
+			&columnType,
+			&notNull,
+			&defaultValue,
+			&primaryKey,
+		); err != nil {
 			log.WarnContext(ctx, "mitm.capture.scan_decoded_tool_event_column_failed", "err", err)
 			return fmt.Errorf("capture: scan decoded tool event column: %w", err)
 		}
+
 		if name == "input_encoding" {
 			hasInputEncoding = true
 		}
+
 		if name == "ordering_text" {
 			hasOrderingText = true
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		log.WarnContext(ctx, "mitm.capture.inspect_decoded_tool_event_columns_failed", "err", err)
 		return fmt.Errorf("capture: inspect decoded tool event columns: %w", err)
 	}
+
 	if !hasInputEncoding {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE decoded_tool_events ADD COLUMN input_encoding TEXT NOT NULL DEFAULT ''`); err != nil {
-			log.WarnContext(ctx, "mitm.capture.add_decoded_tool_input_encoding_column_failed", "err", err)
+		if _, err := db.ExecContext(
+			ctx,
+			`ALTER TABLE decoded_tool_events ADD COLUMN input_encoding TEXT NOT NULL DEFAULT ''`,
+		); err != nil {
+			log.WarnContext(
+				ctx,
+				"mitm.capture.add_decoded_tool_input_encoding_column_failed",
+				"err",
+				err,
+			)
 			return fmt.Errorf("capture: add decoded tool input encoding column: %w", err)
 		}
 	}
+
 	if !hasOrderingText {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE decoded_tool_events ADD COLUMN ordering_text TEXT NOT NULL DEFAULT ''`); err != nil {
-			log.WarnContext(ctx, "mitm.capture.add_decoded_tool_ordering_text_column_failed", "err", err)
+		if _, err := db.ExecContext(
+			ctx,
+			`ALTER TABLE decoded_tool_events ADD COLUMN ordering_text TEXT NOT NULL DEFAULT ''`,
+		); err != nil {
+			log.WarnContext(
+				ctx,
+				"mitm.capture.add_decoded_tool_ordering_text_column_failed",
+				"err",
+				err,
+			)
 			return fmt.Errorf("capture: add decoded tool ordering text column: %w", err)
 		}
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE decoded_tool_events SET ordering_text=CAST(ordering AS TEXT) WHERE ordering_text=''`); err != nil {
+
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE decoded_tool_events SET ordering_text=CAST(ordering AS TEXT) WHERE ordering_text=''`,
+	); err != nil {
 		log.WarnContext(ctx, "mitm.capture.backfill_decoded_tool_ordering_text_failed", "err", err)
 		return fmt.Errorf("capture: backfill decoded tool ordering text: %w", err)
 	}
+
 	return nil
 }
 
 func ensureRequestsIdentityColumns(ctx context.Context, db *sql.DB, log *slog.Logger) error {
 	var tableCount int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='requests'`).Scan(&tableCount); err != nil {
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='requests'`,
+	).Scan(
+		&tableCount,
+	); err != nil {
 		log.WarnContext(ctx, "mitm.capture.inspect_requests_table_failed", "err", err)
 		return fmt.Errorf("capture: inspect requests table: %w", err)
 	}
+
 	if tableCount == 0 {
 		return nil
 	}
+
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(requests)`)
 	if err != nil {
 		log.WarnContext(ctx, "mitm.capture.inspect_requests_identity_columns_failed", "err", err)
 		return fmt.Errorf("capture: inspect requests identity columns: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 	hasConversationID := false
 	hasConversationSource := false
+
 	for rows.Next() {
 		var columnID int
 		var name string
@@ -381,33 +462,52 @@ func ensureRequestsIdentityColumns(ctx context.Context, db *sql.DB, log *slog.Lo
 		var notNull int
 		var defaultValue *string
 		var primaryKey int
-		if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+		if err := rows.Scan(
+			&columnID,
+			&name,
+			&columnType,
+			&notNull,
+			&defaultValue,
+			&primaryKey,
+		); err != nil {
 			log.WarnContext(ctx, "mitm.capture.scan_requests_identity_column_failed", "err", err)
 			return fmt.Errorf("capture: scan requests identity column: %w", err)
 		}
+
 		if name == "conversation_id" {
 			hasConversationID = true
 		}
+
 		if name == "conversation_source" {
 			hasConversationSource = true
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		log.WarnContext(ctx, "mitm.capture.inspect_requests_identity_columns_failed", "err", err)
 		return fmt.Errorf("capture: inspect requests identity columns: %w", err)
 	}
+
 	if !hasConversationID {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE requests ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		if _, err := db.ExecContext(
+			ctx,
+			`ALTER TABLE requests ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''`,
+		); err != nil {
 			log.WarnContext(ctx, "mitm.capture.add_conversation_id_column_failed", "err", err)
 			return fmt.Errorf("capture: add conversation_id column: %w", err)
 		}
 	}
+
 	if !hasConversationSource {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE requests ADD COLUMN conversation_source TEXT NOT NULL DEFAULT ''`); err != nil {
+		if _, err := db.ExecContext(
+			ctx,
+			`ALTER TABLE requests ADD COLUMN conversation_source TEXT NOT NULL DEFAULT ''`,
+		); err != nil {
 			log.WarnContext(ctx, "mitm.capture.add_conversation_source_column_failed", "err", err)
 			return fmt.Errorf("capture: add conversation_source column: %w", err)
 		}
 	}
+
 	return nil
 }
 
@@ -427,20 +527,42 @@ type queuedRecord struct {
 	responseTruncated bool
 }
 
-func (s *Store) recordWithMetadata(rec Record, requestBytes, responseBytes int, requestTruncated, responseTruncated bool) {
+func (s *Store) recordWithMetadata(
+	rec Record,
+	requestBytes int,
+	responseBytes int,
+	requestTruncated bool,
+	responseTruncated bool,
+) {
 	if !s.RecordingEnabled() {
 		return
 	}
-	queued := queuedRecord{record: rec, requestBytes: requestBytes, responseBytes: responseBytes, requestTruncated: requestTruncated, responseTruncated: responseTruncated}
+
+	queued := queuedRecord{
+		record:            rec,
+		requestBytes:      requestBytes,
+		responseBytes:     responseBytes,
+		requestTruncated:  requestTruncated,
+		responseTruncated: responseTruncated,
+	}
 	select {
 	case s.records <- queued:
 	default:
-		s.log.Warn("mitm.capture.dropped", "reason", "queue_full", "host", rec.Host, "path", rec.Path)
+		s.log.Warn(
+			"mitm.capture.dropped",
+			"reason",
+			"queue_full",
+			"host",
+			rec.Host,
+			"path",
+			rec.Path,
+		)
 	}
 }
 
 func (s *Store) writeLoop(ctx context.Context) {
 	defer s.wg.Done()
+
 	for {
 		select {
 		case rec := <-s.records:
@@ -481,115 +603,323 @@ func (s *Store) insert(ctx context.Context, queued queuedRecord) {
 		s.log.WarnContext(ctx, "mitm.capture.tx_begin_failed", "err", err)
 		return
 	}
+
 	requestSQL, requestArgs, err := sq.Insert("requests").
-		Columns("ts", "client", "provider", "concern", "host", "method", "path", "status",
-			"request_id", "upstream_request_id", "session_id", "conversation_id", "conversation_source", "trace_id",
-			"req_headers", "resp_headers", "req_content_type", "resp_content_type",
-			"req_bytes", "resp_bytes", "duration_ms").
-		Values(rec.Timestamp.UnixNano(), rec.Client, rec.Provider, rec.Concern, rec.Host, rec.Method, rec.Path, rec.Status,
-			rec.RequestID, rec.UpstreamRequestID, rec.SessionID, rec.ConversationID, rec.ConversationSource, rec.TraceID,
-			encodeHeaders(rec.RequestHeaders), encodeHeaders(rec.ResponseHeaders), rec.RequestType, rec.ResponseType,
-			queued.requestBytes, queued.responseBytes, rec.Duration.Milliseconds()).
+		Columns(
+			"ts",
+			"client",
+			"provider",
+			"concern",
+			"host",
+			"method",
+			"path",
+			"status",
+			"request_id",
+			"upstream_request_id",
+			"session_id",
+			"conversation_id",
+			"conversation_source",
+			"trace_id",
+			"req_headers",
+			"resp_headers",
+			"req_content_type",
+			"resp_content_type",
+			"req_bytes",
+			"resp_bytes",
+			"duration_ms",
+		).
+		Values(
+			rec.Timestamp.UnixNano(),
+			rec.Client,
+			rec.Provider,
+			rec.Concern,
+			rec.Host,
+			rec.Method,
+			rec.Path,
+			rec.Status,
+			rec.RequestID,
+			rec.UpstreamRequestID,
+			rec.SessionID,
+			rec.ConversationID,
+			rec.ConversationSource,
+			rec.TraceID,
+			encodeHeaders(rec.RequestHeaders),
+			encodeHeaders(rec.ResponseHeaders),
+			rec.RequestType,
+			rec.ResponseType,
+			queued.requestBytes,
+			queued.responseBytes,
+			rec.Duration.Milliseconds(),
+		).
 		ToSql()
 	if err != nil {
 		_ = tx.Rollback()
-		s.log.WarnContext(ctx, "mitm.capture.build_request_insert_failed", "host", rec.Host, "path", rec.Path, "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.build_request_insert_failed",
+			"host",
+			rec.Host,
+			"path",
+			rec.Path,
+			"err",
+			err,
+		)
+
 		return
 	}
+
 	res, err := tx.ExecContext(ctx, requestSQL, requestArgs...)
 	if err != nil {
 		_ = tx.Rollback()
-		s.log.WarnContext(ctx, "mitm.capture.insert_request_failed", "host", rec.Host, "path", rec.Path, "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.insert_request_failed",
+			"host",
+			rec.Host,
+			"path",
+			rec.Path,
+			"err",
+			err,
+		)
+
 		return
 	}
+
 	rowID, err := res.LastInsertId()
 	if err != nil {
 		_ = tx.Rollback()
-		s.log.WarnContext(ctx, "mitm.capture.last_insert_id_failed", "host", rec.Host, "path", rec.Path, "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.last_insert_id_failed",
+			"host",
+			rec.Host,
+			"path",
+			rec.Path,
+			"err",
+			err,
+		)
+
 		return
 	}
-	if !s.insertBody(ctx, tx, rowID, BodyRequest, rec.RequestType, rec.RequestBody, queued.requestTruncated) {
+
+	if !s.insertBody(
+		ctx,
+		tx,
+		rowID,
+		BodyRequest,
+		rec.RequestType,
+		rec.RequestBody,
+		queued.requestTruncated,
+	) {
 		_ = tx.Rollback()
 		return
 	}
-	if !s.insertBody(ctx, tx, rowID, BodyResponse, rec.ResponseType, rec.ResponseBody, queued.responseTruncated) {
+
+	if !s.insertBody(
+		ctx,
+		tx,
+		rowID,
+		BodyResponse,
+		rec.ResponseType,
+		rec.ResponseBody,
+		queued.responseTruncated,
+	) {
 		_ = tx.Rollback()
 		return
 	}
+
 	if !s.insertDecodedBody(ctx, tx, rowID, BodyRequest, rec.DecodedRequest) {
 		_ = tx.Rollback()
 		return
 	}
+
 	if err := tx.Commit(); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.commit_failed", "host", rec.Host, "path", rec.Path, "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.commit_failed",
+			"host",
+			rec.Host,
+			"path",
+			rec.Path,
+			"err",
+			err,
+		)
 	}
 }
 
-func (s *Store) insertDecodedBody(ctx context.Context, tx *sql.Tx, rowID int64, which BodySide, decoded *DecodedBody) bool {
+func (s *Store) insertDecodedBody(
+	ctx context.Context,
+	tx *sql.Tx,
+	rowID int64,
+	which BodySide,
+	decoded *DecodedBody,
+) bool {
 	if decoded == nil {
 		return true
 	}
+
 	decodedSQL, decodedArgs, err := sq.Insert("decoded_bodies").
-		Columns("request_row_id", "which", "format", "status", "decode_error", "representation_json").
-		Values(rowID, string(which), decoded.Format, string(decoded.Status), decoded.Error, decoded.RepresentationJSON).
+		Columns(
+			"request_row_id",
+			"which",
+			"format",
+			"status",
+			"decode_error",
+			"representation_json",
+		).
+		Values(
+			rowID,
+			string(which),
+			decoded.Format,
+			string(decoded.Status),
+			decoded.Error,
+			decoded.RepresentationJSON,
+		).
 		ToSql()
 	if err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.build_decoded_body_insert_failed", "which", string(which), "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.build_decoded_body_insert_failed",
+			"which",
+			string(which),
+			"err",
+			err,
+		)
 		return false
 	}
+
 	result, err := tx.ExecContext(ctx, decodedSQL, decodedArgs...)
 	if err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.insert_decoded_body_failed", "which", string(which), "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.insert_decoded_body_failed",
+			"which",
+			string(which),
+			"err",
+			err,
+		)
 		return false
 	}
+
 	decodedBodyID, err := result.LastInsertId()
 	if err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.decoded_body_last_insert_id_failed", "which", string(which), "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.decoded_body_last_insert_id_failed",
+			"which",
+			string(which),
+			"err",
+			err,
+		)
 		return false
 	}
+
 	for _, event := range decoded.ToolEvents {
 		legacyOrdering := int64(0)
 		if event.Ordering <= uint64(1<<63-1) {
 			legacyOrdering = int64(event.Ordering)
 		}
+
 		orderingText := strconv.FormatUint(event.Ordering, 10)
 		eventSQL, eventArgs, buildErr := sq.Insert("decoded_tool_events").
-			Columns("decoded_body_id", "ordering", "ordering_text", "call_id", "tool_name", "input_representation", "input_encoding").
-			Values(decodedBodyID, legacyOrdering, orderingText, event.CallID, event.ToolName, event.InputRepresentation, string(event.InputEncoding)).
+			Columns(
+				"decoded_body_id",
+				"ordering",
+				"ordering_text",
+				"call_id",
+				"tool_name",
+				"input_representation",
+				"input_encoding",
+			).
+			Values(
+				decodedBodyID,
+				legacyOrdering,
+				orderingText,
+				event.CallID,
+				event.ToolName,
+				event.InputRepresentation,
+				string(event.InputEncoding),
+			).
 			ToSql()
 		if buildErr != nil {
-			s.log.WarnContext(ctx, "mitm.capture.build_decoded_tool_event_insert_failed", "err", buildErr)
+			s.log.WarnContext(
+				ctx,
+				"mitm.capture.build_decoded_tool_event_insert_failed",
+				"err",
+				buildErr,
+			)
 			return false
 		}
+
 		if _, execErr := tx.ExecContext(ctx, eventSQL, eventArgs...); execErr != nil {
 			s.log.WarnContext(ctx, "mitm.capture.insert_decoded_tool_event_failed", "err", execErr)
 			return false
 		}
 	}
+
 	return true
 }
 
 // insertBody writes one body row, returning false (after logging) on failure so
 // the caller can roll back. An empty body is a no-op success.
-func (s *Store) insertBody(ctx context.Context, tx *sql.Tx, rowID int64, which BodySide, contentType string, body []byte, alreadyTruncated bool) bool {
+func (s *Store) insertBody(
+	ctx context.Context,
+	tx *sql.Tx,
+	rowID int64,
+	which BodySide,
+	contentType string,
+	body []byte,
+	alreadyTruncated bool,
+) bool {
 	if len(body) == 0 {
 		return true
 	}
+
 	stored, truncated := s.capBody(body)
 	truncated = truncated || alreadyTruncated
 	isText := utf8.Valid(stored)
 	bodySQL, bodyArgs, err := sq.Insert("bodies").
-		Columns("request_row_id", "which", "content_type", "is_text", "truncated", "data").
-		Values(rowID, string(which), contentType, boolToInt(isText), boolToInt(truncated), stored).
+		Columns(
+			"request_row_id",
+			"which",
+			"content_type",
+			"is_text",
+			"truncated",
+			"data",
+		).
+		Values(
+			rowID,
+			string(which),
+			contentType,
+			boolToInt(isText),
+			boolToInt(truncated),
+			stored,
+		).
 		ToSql()
 	if err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.build_body_insert_failed", "which", string(which), "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.build_body_insert_failed",
+			"which",
+			string(which),
+			"err",
+			err,
+		)
 		return false
 	}
+
 	if _, err := tx.ExecContext(ctx, bodySQL, bodyArgs...); err != nil {
-		s.log.WarnContext(ctx, "mitm.capture.insert_body_failed", "which", string(which), "err", err)
+		s.log.WarnContext(
+			ctx,
+			"mitm.capture.insert_body_failed",
+			"which",
+			string(which),
+			"err",
+			err,
+		)
 		return false
 	}
+
 	return true
 }
 
@@ -597,6 +927,7 @@ func (s *Store) capBody(body []byte) (stored []byte, truncated bool) {
 	if len(body) <= s.cfg.MaxBodyBytes {
 		return body, false
 	}
+
 	return body[:s.cfg.MaxBodyBytes], true
 }
 
@@ -607,6 +938,7 @@ func (s *Store) Close(ctx context.Context, reason string) error {
 	if s == nil || !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+
 	close(s.done)
 	s.wg.Wait()
 	// Flush the WAL into the main database file so a freshly opened connection
@@ -617,15 +949,26 @@ func (s *Store) Close(ctx context.Context, reason string) error {
 	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.checkpoint_failed", "reason", reason, "err", err)
 	}
+
 	if s.rdb != nil {
 		if err := s.rdb.Close(); err != nil {
-			s.log.WarnContext(ctx, "mitm.capture.read_handle_close_failed", "reason", reason, "err", err)
+			s.log.WarnContext(
+				ctx,
+				"mitm.capture.read_handle_close_failed",
+				"reason",
+				reason,
+				"err",
+				err,
+			)
 		}
 	}
+
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("capture: close db: %w", err)
 	}
+
 	s.log.InfoContext(ctx, "mitm.capture.closed", "reason", reason)
+
 	return nil
 }
 
@@ -633,10 +976,12 @@ func encodeHeaders(h http.Header) string {
 	if len(h) == 0 {
 		return ""
 	}
+
 	raw, err := json.Marshal(h)
 	if err != nil {
 		return ""
 	}
+
 	return string(raw)
 }
 
@@ -644,5 +989,6 @@ func boolToInt(v bool) int {
 	if v {
 		return 1
 	}
+
 	return 0
 }

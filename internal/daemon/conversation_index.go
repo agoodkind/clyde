@@ -22,40 +22,81 @@ import (
 // provider refresh worker. Semantic configuration does not control this cache.
 // The raw index refresh period defaults to one minute if global config loading
 // fails.
-func startConversationIndex(ctx context.Context, log *slog.Logger, index *conversation.Index, group *livetrack.Group) {
+func startConversationIndex(
+	ctx context.Context,
+	log *slog.Logger,
+	index *conversation.Index,
+	group *livetrack.Group,
+) {
 	interval := config.NewConfigWithDefaults().Conversation.Semantic.IndexRefreshPeriod()
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
-		log.WarnContext(ctx, "daemon.conversation_index.interval_config_load_failed", "concern", "conversation.index", "component", "daemon", "path", config.GlobalConfigPath(), "err", err)
+		log.WarnContext(
+			ctx,
+			"daemon.conversation_index.interval_config_load_failed",
+			"concern",
+			"conversation.index",
+			"component",
+			"daemon",
+			"path",
+			config.GlobalConfigPath(),
+			"err",
+			err,
+		)
 	} else {
 		interval = cfg.Conversation.Semantic.IndexRefreshPeriod()
 	}
-	startConversationIndexWorker(ctx, log, group, func(workerCtx context.Context) {
-		index.Start(workerCtx, interval)
-	})
+
+	startConversationIndexWorker(
+		ctx,
+		log,
+		group,
+		func(workerCtx context.Context) {
+			index.Start(workerCtx, interval)
+		},
+	)
 }
 
-func startConversationIndexWorker(ctx context.Context, log *slog.Logger, group *livetrack.Group, run func(context.Context)) {
+func startConversationIndexWorker(
+	ctx context.Context,
+	log *slog.Logger,
+	group *livetrack.Group,
+	run func(context.Context),
+) {
 	if group == nil {
 		return
 	}
+
 	workerCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	group.AddHookBefore(livetrack.PhaseWorkers, "conversation.index", func(stopCtx context.Context) error {
-		cancel()
-		select {
-		case <-done:
-			return nil
-		case <-stopCtx.Done():
-			return fmt.Errorf("wait for conversation index worker: %w", stopCtx.Err())
-		}
-	})
+	group.AddHookBefore(
+		livetrack.PhaseWorkers,
+		"conversation.index",
+		func(stopCtx context.Context) error {
+			cancel()
+			select {
+			case <-done:
+				return nil
+			case <-stopCtx.Done():
+				return fmt.Errorf("wait for conversation index worker: %w", stopCtx.Err())
+			}
+		},
+	)
 	go func() {
 		defer close(done)
 		defer cancel()
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.ErrorContext(ctx, "daemon.conversation_index.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
+				log.ErrorContext(
+					ctx,
+					"daemon.conversation_index.panic",
+					"concern",
+					"process.daemon.lifecycle",
+					"component",
+					"daemon",
+					"err",
+					fmt.Sprintf("panic: %v", recovered),
+				)
 			}
 		}()
 		run(workerCtx)
@@ -73,18 +114,23 @@ func newConversationRegistry() *conversation.Registry {
 	registry.Register(copilotparser.New())
 	registry.Register(cursorparser.New())
 	registry.Register(zedparser.New())
+
 	return registry
 }
 
 // ConversationStoredTextNormalizer returns the registered parser's normalizer
 // for the provider. It returns false if the provider does not have a registered parser or
 // the parser does not implement the contract.
-func ConversationStoredTextNormalizer(provider providerid.Provider) (conversation.StoredTextNormalizer, bool) {
+func ConversationStoredTextNormalizer(
+	provider providerid.Provider,
+) (conversation.StoredTextNormalizer, bool) {
 	return newConversationRegistry().StoredTextNormalizer(provider)
 }
 
 // ConversationSourceStoreReader returns the registered provider's source store reader.
-func ConversationSourceStoreReader(provider providerid.Provider) (conversation.SourceStoreReader, bool) {
+func ConversationSourceStoreReader(
+	provider providerid.Provider,
+) (conversation.SourceStoreReader, bool) {
 	return newConversationRegistry().SourceStoreReader(provider)
 }
 
@@ -92,9 +138,13 @@ func ConversationSourceStoreReader(provider providerid.Provider) (conversation.S
 // parser registry in display order.
 func ConversationProviders() []providerid.Provider {
 	providers := newConversationRegistry().Providers()
-	slices.SortFunc(providers, func(left, right providerid.Provider) int {
-		return strings.Compare(left.String(), right.String())
-	})
+	slices.SortFunc(
+		providers,
+		func(left, right providerid.Provider) int {
+			return strings.Compare(left.String(), right.String())
+		},
+	)
+
 	return providers
 }
 
@@ -107,9 +157,23 @@ func ConversationProviders() []providerid.Provider {
 func NewConversationIndex() *conversation.Index {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
-		slog.Warn("daemon.conversation_index.config_load_failed", "concern", "conversation.index", "component", "daemon", "path", config.GlobalConfigPath(), "err", err)
-		return conversation.NewIndex(newConversationRegistry(), config.NewConfigWithDefaults().Conversation)
+		slog.Warn(
+			"daemon.conversation_index.config_load_failed",
+			"concern",
+			"conversation.index",
+			"component",
+			"daemon",
+			"path",
+			config.GlobalConfigPath(),
+			"err",
+			err,
+		)
+		return conversation.NewIndex(
+			newConversationRegistry(),
+			config.NewConfigWithDefaults().Conversation,
+		)
 	}
+
 	return conversation.NewIndex(newConversationRegistry(), cfg.Conversation)
 }
 
@@ -117,32 +181,64 @@ var newLocalConversationIndex = NewConversationIndex
 
 // ExportTranscriptLocal resolves and exports one conversation without the
 // daemon control socket. CLI callers use this path when the daemon is stopped.
-func ExportTranscriptLocal(ctx context.Context, conversationID string, options conversation.ExportOptions) ([]byte, error) {
+func ExportTranscriptLocal(
+	ctx context.Context,
+	conversationID string,
+	options conversation.ExportOptions,
+) ([]byte, error) {
 	index := newLocalConversationIndex()
 	record, err := index.Resolve(ctx, conversationID)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_export.resolve_failed", "concern", "conversation.export", "component", "daemon", "conversation_id", conversationID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.conversation_export.resolve_failed",
+			"concern",
+			"conversation.export",
+			"component",
+			"daemon",
+			"conversation_id",
+			conversationID,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("resolve conversation: %w", err)
 	}
+
 	body, err := index.Export(record, options)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.conversation_export.export_failed", "concern", "conversation.export", "component", "daemon", "conversation_id", conversationID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.conversation_export.export_failed",
+			"concern",
+			"conversation.export",
+			"component",
+			"daemon",
+			"conversation_id",
+			conversationID,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("export transcript: %w", err)
 	}
+
 	if options.MaxTokens == "" {
 		return body, nil
 	}
+
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		return nil, fmt.Errorf("load export config: %w", err)
 	}
+
 	exportTokens, err := newExportTokenConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load export token config: %w", err)
 	}
+
 	body, err = finalizeExportBody(ctx, body, options, record, exportTokens)
 	if err != nil {
 		return nil, fmt.Errorf("cap export transcript: %w", err)
 	}
+
 	return body, nil
 }

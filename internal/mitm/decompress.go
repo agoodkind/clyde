@@ -38,17 +38,20 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 	if enc == "" || enc == "identity" {
 		return raw, false
 	}
+
 	switch mitmContentEncoding(enc) {
 	case mitmContentEncodingGzip, mitmContentEncodingXGzip:
 		gr, err := gzip.NewReader(bytes.NewReader(raw))
 		if err != nil {
 			return raw, false
 		}
+
 		defer func() { _ = gr.Close() }()
 		out, err := io.ReadAll(gr)
 		if err != nil {
 			return raw, false
 		}
+
 		return out, true
 	case mitmContentEncodingDeflate:
 		// Some servers send raw RFC 1951 deflate; others send RFC 1950 zlib.
@@ -60,25 +63,30 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 				return out, true
 			}
 		}
+
 		fr := flate.NewReader(bytes.NewReader(raw))
 		defer func() { _ = fr.Close() }()
 		out, err := io.ReadAll(fr)
 		if err != nil {
 			return raw, false
 		}
+
 		return out, true
 	case mitmContentEncodingZstd, mitmContentEncodingZstandard:
 		dec, err := zstd.NewReader(bytes.NewReader(raw))
 		if err != nil {
 			return raw, false
 		}
+
 		defer func() { dec.Close() }()
 		out, err := io.ReadAll(dec)
 		if err != nil {
 			return raw, false
 		}
+
 		return out, true
 	}
+
 	return raw, false
 }
 
@@ -103,11 +111,13 @@ func (d *decompressingReadCloser) Read(p []byte) (int, error) {
 
 func (d *decompressingReadCloser) Close() error {
 	var firstErr error
+
 	for _, closer := range d.closers {
 		if err := closer.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
+
 	return firstErr
 }
 
@@ -135,10 +145,18 @@ func (b *bufferedReadCloser) Close() error {
 	if b.closer == nil {
 		return nil
 	}
+
 	if err := b.closer.Close(); err != nil {
-		slog.Warn("mitm.decompress.buffered_body_close_failed", "concern", "providers.mitm.wire", "err", err)
+		slog.Warn(
+			"mitm.decompress.buffered_body_close_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			err,
+		)
 		return fmt.Errorf("close buffered response body: %w", err)
 	}
+
 	return nil
 }
 
@@ -156,6 +174,7 @@ func peekHasPrefix(buffered *bufio.Reader, magic []byte) bool {
 	if err != nil {
 		return false
 	}
+
 	return bytes.Equal(head, magic)
 }
 
@@ -170,11 +189,14 @@ func gzipHeaderDecodable(buffered *bufio.Reader) bool {
 	if len(head) < 2 {
 		return false
 	}
+
 	gr, err := gzip.NewReader(bytes.NewReader(head))
 	if err != nil {
 		return false
 	}
+
 	_ = gr.Close()
+
 	return true
 }
 
@@ -195,11 +217,14 @@ func zlibHeaderDecodable(buffered *bufio.Reader) bool {
 	if len(head) < 2 {
 		return false
 	}
+
 	zr, err := zlib.NewReader(bytes.NewReader(head))
 	if err != nil {
 		return false
 	}
+
 	_ = zr.Close()
+
 	return true
 }
 
@@ -214,37 +239,52 @@ func zlibHeaderDecodable(buffered *bufio.Reader) bool {
 // decodeForCapture path, which never rewrites the client stream, decodes it by
 // trial instead). An unknown or unsupported encoding (brotli) is also declined.
 // underlying is closed alongside the decoder.
-func newDecompressingReadCloser(buffered *bufio.Reader, underlying io.Closer, contentEncoding string) (io.ReadCloser, bool) {
+func newDecompressingReadCloser(
+	buffered *bufio.Reader,
+	underlying io.Closer,
+	contentEncoding string,
+) (io.ReadCloser, bool) {
 	enc := strings.TrimSpace(strings.ToLower(contentEncoding))
 	switch mitmContentEncoding(enc) {
 	case mitmContentEncodingGzip, mitmContentEncodingXGzip:
 		if !gzipHeaderDecodable(buffered) {
 			return nil, false
 		}
+
 		gr, err := gzip.NewReader(buffered)
 		if err != nil {
 			return nil, false
 		}
+
 		return &decompressingReadCloser{reader: gr, closers: []io.Closer{gr, underlying}}, true
 	case mitmContentEncodingDeflate:
 		if !zlibHeaderDecodable(buffered) {
 			return nil, false
 		}
+
 		zr, err := zlib.NewReader(buffered)
 		if err != nil {
 			return nil, false
 		}
+
 		return &decompressingReadCloser{reader: zr, closers: []io.Closer{zr, underlying}}, true
 	case mitmContentEncodingZstd, mitmContentEncodingZstandard:
 		if !peekHasPrefix(buffered, zstdMagic) {
 			return nil, false
 		}
+
 		dec, err := zstd.NewReader(buffered)
 		if err != nil {
 			return nil, false
 		}
+
 		readCloser := dec.IOReadCloser()
-		return &decompressingReadCloser{reader: readCloser, closers: []io.Closer{readCloser, underlying}}, true
+
+		return &decompressingReadCloser{
+			reader:  readCloser,
+			closers: []io.Closer{readCloser, underlying},
+		}, true
 	}
+
 	return nil, false
 }

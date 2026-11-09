@@ -131,29 +131,43 @@ type NativeProjection struct {
 // numbering. The grouped numbering joins consecutive native assistant messages,
 // and the actual numbering counts them separately.
 func (state NativeToolCalls) Project() NativeProjection {
-	projection := NativeProjection{Calls: make([]NativeSequenceCall, 0), GroupedUsers: make([]NativeUserTurn, 0), ActualUsers: make([]NativeUserTurn, 0)}
+	projection := NativeProjection{
+		Calls:        make([]NativeSequenceCall, 0),
+		GroupedUsers: make([]NativeUserTurn, 0),
+		ActualUsers:  make([]NativeUserTurn, 0),
+	}
 	afterUser := false
 	actualMessage := -1
 	groupedMessage := -1
 	groupedOrdinal := 0
 	insideAssistantGroup := false
+
 	for messageIndex, message := range state.Messages {
 		if message.Missing {
 			continue
 		}
+
 		// Count a repeated user message before skipping its duplicate tool calls.
 		if message.RealUser {
 			afterUser = true
 			actualMessage++
 			groupedMessage++
-			projection.ActualUsers = append(projection.ActualUsers, NativeUserTurn{Message: actualMessage, Text: message.Text})
-			projection.GroupedUsers = append(projection.GroupedUsers, NativeUserTurn{Message: groupedMessage, Text: message.Text})
+			projection.ActualUsers = append(
+				projection.ActualUsers,
+				NativeUserTurn{Message: actualMessage, Text: message.Text},
+			)
+			projection.GroupedUsers = append(
+				projection.GroupedUsers,
+				NativeUserTurn{Message: groupedMessage, Text: message.Text},
+			)
 			groupedOrdinal = 0
 			insideAssistantGroup = false
 		}
+
 		if message.Duplicate {
 			continue
 		}
+
 		if message.Role == nativeAssistantRole {
 			actualMessage++
 			if !insideAssistantGroup {
@@ -162,15 +176,27 @@ func (state NativeToolCalls) Project() NativeProjection {
 				insideAssistantGroup = true
 			}
 		}
+
 		for ordinal, call := range message.Calls {
-			projection.Calls = append(projection.Calls, NativeSequenceCall{
-				Call: call, Message: messageIndex, Ordinal: ordinal, MessageStart: ordinal == 0, AfterUser: afterUser,
-				GroupedMessage: groupedMessage, GroupedOrdinal: groupedOrdinal, ActualMessage: actualMessage, ActualOrdinal: ordinal,
-			})
+			projection.Calls = append(
+				projection.Calls,
+				NativeSequenceCall{
+					Call:           call,
+					Message:        messageIndex,
+					Ordinal:        ordinal,
+					MessageStart:   ordinal == 0,
+					AfterUser:      afterUser,
+					GroupedMessage: groupedMessage,
+					GroupedOrdinal: groupedOrdinal,
+					ActualMessage:  actualMessage,
+					ActualOrdinal:  ordinal,
+				},
+			)
 			afterUser = false
 			groupedOrdinal++
 		}
 	}
+
 	return projection
 }
 
@@ -221,107 +247,236 @@ type nativeReference struct {
 
 // ReadComposerNativeToolCalls reads calls from summary archives and root messages.
 // It reports whether the native state exists and whether its referenced blobs exist.
-func ReadComposerNativeToolCalls(ctx context.Context, db *sql.DB, composerID string) (NativeToolCalls, bool, error) {
-	result := NativeToolCalls{Version: NativeProjectionVersion, Messages: nil, Complete: false, MissingBlobs: 0}
+func ReadComposerNativeToolCalls(
+	ctx context.Context,
+	db *sql.DB,
+	composerID string,
+) (NativeToolCalls, bool, error) {
+	result := NativeToolCalls{
+		Version:      NativeProjectionVersion,
+		Messages:     nil,
+		Complete:     false,
+		MissingBlobs: 0,
+	}
 	raw, found, err := readNativeState(ctx, db, composerID)
 	if err != nil {
 		return result, false, err
 	}
+
 	if !found {
 		return result, false, nil
 	}
+
 	top, err := unmarshalProtobufFields(raw)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.native_state_decode_failed", "concern", concern, "composer_id", composerID, "err", err)
-		return result, false, fmt.Errorf("decode native conversation state for composer %s: %w", composerID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.native_state_decode_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
+		return result, false, fmt.Errorf(
+			"decode native conversation state for composer %s: %w",
+			composerID,
+			err,
+		)
 	}
+
 	references, err := nativeMessageReferences(ctx, db, composerID, top, &result)
 	if err != nil {
 		return result, false, err
 	}
+
 	seen := make(map[string]bool, len(references))
+
 	result.Messages = make([]NativeMessage, 0, len(references))
 	for _, reference := range references {
 		message, readErr := readNativeMessage(ctx, db, composerID, reference, seen)
 		if readErr != nil {
 			return result, false, readErr
 		}
+
 		if message.Missing {
 			result.MissingBlobs++
 		}
+
 		result.Messages = append(result.Messages, message)
 	}
+
 	result.Complete = result.MissingBlobs == 0
+
 	return result, true, nil
 }
 
-func readNativeMessage(ctx context.Context, db *sql.DB, composerID string, reference nativeReference, seen map[string]bool) (NativeMessage, error) {
+func readNativeMessage(
+	ctx context.Context,
+	db *sql.DB,
+	composerID string,
+	reference nativeReference,
+	seen map[string]bool,
+) (NativeMessage, error) {
 	key := hex.EncodeToString(reference.digest)
-	message := NativeMessage{Source: reference.source, Archive: reference.archive, Index: reference.index, BlobRef: key, Role: "", Duplicate: seen[key], Missing: false, RealUser: false, Text: "", RequestID: "", ContentHash: "", Calls: nil}
-	if len(reference.digest) != nativeBlobReferenceBytes {
-		slog.WarnContext(ctx, "providers.cursor.store.native_reference_invalid", "concern", concern, "composer_id", composerID, "length", len(reference.digest))
-		return message, fmt.Errorf("invalid native message reference length for composer %s: %d", composerID, len(reference.digest))
+	message := NativeMessage{
+		Source:      reference.source,
+		Archive:     reference.archive,
+		Index:       reference.index,
+		BlobRef:     key,
+		Role:        "",
+		Duplicate:   seen[key],
+		Missing:     false,
+		RealUser:    false,
+		Text:        "",
+		RequestID:   "",
+		ContentHash: "",
+		Calls:       nil,
 	}
+	if len(reference.digest) != nativeBlobReferenceBytes {
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.native_reference_invalid",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"length",
+			len(reference.digest),
+		)
+		return message, fmt.Errorf(
+			"invalid native message reference length for composer %s: %d",
+			composerID,
+			len(reference.digest),
+		)
+	}
+
 	seen[key] = true
 	data, blobFound, err := readNativeBlob(ctx, db, reference.digest)
 	if err != nil {
 		return message, err
 	}
+
 	if !blobFound {
 		message.Missing = true
 		return message, nil
 	}
+
 	decoded, err := unmarshalNativeMessage(data)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.native_message_decode_failed", "concern", concern, "composer_id", composerID, "blob", key, "err", err)
-		return message, fmt.Errorf("decode native message for composer and blob %s %s: %w", composerID, key, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.native_message_decode_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"blob",
+			key,
+			"err",
+			err,
+		)
+		return message, fmt.Errorf(
+			"decode native message for composer and blob %s %s: %w",
+			composerID,
+			key,
+			err,
+		)
 	}
+
 	message.Role = decoded.role
 	message.RealUser = decoded.realUser
 	message.Text = decoded.text
 	message.RequestID = decoded.requestID
 	message.ContentHash = decoded.contentHash
 	message.Calls = decoded.calls
+
 	return message, nil
 }
 
-func nativeMessageReferences(ctx context.Context, db *sql.DB, composerID string, top []protobufField, result *NativeToolCalls) ([]nativeReference, error) {
+func nativeMessageReferences(
+	ctx context.Context,
+	db *sql.DB,
+	composerID string,
+	top []protobufField,
+	result *NativeToolCalls,
+) ([]nativeReference, error) {
 	references := make([]nativeReference, 0)
 	archiveOrdinal := 0
+
 	for _, field := range top {
 		if field.number != nativeArchivesField || field.wire != protowire.BytesType {
 			continue
 		}
+
 		archive := archiveOrdinal
 		archiveOrdinal++
 		data, archiveFound, archiveErr := readNativeBlob(ctx, db, field.bytes)
 		if archiveErr != nil {
 			return nil, archiveErr
 		}
+
 		if !archiveFound {
 			result.MissingBlobs++
 			continue
 		}
+
 		archiveFields, parseErr := unmarshalProtobufFields(data)
 		if parseErr != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.native_archive_decode_failed", "concern", concern, "composer_id", composerID, "err", parseErr)
-			return nil, fmt.Errorf("decode native archive for composer %s: %w", composerID, parseErr)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.store.native_archive_decode_failed",
+				"concern",
+				concern,
+				"composer_id",
+				composerID,
+				"err",
+				parseErr,
+			)
+			return nil, fmt.Errorf(
+				"decode native archive for composer %s: %w",
+				composerID,
+				parseErr,
+			)
 		}
+
 		index := 0
+
 		for _, archiveField := range archiveFields {
-			if archiveField.number == nativeArchiveMessageField && archiveField.wire == protowire.BytesType {
-				references = append(references, nativeReference{source: NativeSourceArchive, archive: archive, index: index, digest: archiveField.bytes})
+			if archiveField.number == nativeArchiveMessageField &&
+				archiveField.wire == protowire.BytesType {
+				references = append(
+					references,
+					nativeReference{
+						source:  NativeSourceArchive,
+						archive: archive,
+						index:   index,
+						digest:  archiveField.bytes,
+					},
+				)
 				index++
 			}
 		}
 	}
+
 	index := 0
+
 	for _, field := range top {
 		if field.number == nativeRootMessagesField && field.wire == protowire.BytesType {
-			references = append(references, nativeReference{source: NativeSourceRoot, archive: nativeRootArchive, index: index, digest: field.bytes})
+			references = append(
+				references,
+				nativeReference{
+					source:  NativeSourceRoot,
+					archive: nativeRootArchive,
+					index:   index,
+					digest:  field.bytes,
+				},
+			)
 			index++
 		}
 	}
+
 	return references, nil
 }
 
@@ -330,36 +485,70 @@ func readNativeState(ctx context.Context, db *sql.DB, composerID string) ([]byte
 	if err != nil {
 		return nil, false, err
 	}
+
 	if !found {
 		return nil, false, nil
 	}
+
 	var header struct {
 		ConversationState string `json:"conversationState"`
 	}
 	if err := json.Unmarshal(value, &header); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.native_header_decode_failed", "concern", concern, "composer_id", composerID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.native_header_decode_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
 		return nil, false, fmt.Errorf("decode native header for composer %s: %w", composerID, err)
 	}
+
 	encoded, cut := strings.CutPrefix(header.ConversationState, nativeStatePrefix)
 	if !cut || encoded == "" {
 		return nil, false, nil
 	}
+
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		raw, err = base64.RawStdEncoding.DecodeString(encoded)
 	}
+
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.native_state_base64_failed", "concern", concern, "composer_id", composerID, "err", err)
-		return nil, false, fmt.Errorf("decode native state base64 for composer %s: %w", composerID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.native_state_base64_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
+		return nil, false, fmt.Errorf(
+			"decode native state base64 for composer %s: %w",
+			composerID,
+			err,
+		)
 	}
+
 	return raw, true, nil
 }
 
 func readNativeBlob(ctx context.Context, db *sql.DB, reference []byte) ([]byte, bool, error) {
-	value, found, err := ReadKVValue(ctx, db, KVTableCursorDiskKV, nativeBlobKeyPrefix+hex.EncodeToString(reference))
+	value, found, err := ReadKVValue(
+		ctx,
+		db,
+		KVTableCursorDiskKV,
+		nativeBlobKeyPrefix+hex.EncodeToString(reference),
+	)
 	if err != nil || !found {
 		return value, found, err
 	}
+
 	return hexDecodedNativeBlob(value, reference), true, nil
 }
 
@@ -369,57 +558,95 @@ func hexDecodedNativeBlob(value []byte, reference []byte) []byte {
 	if _, err := hex.Decode(decoded, value); err != nil {
 		return value
 	}
+
 	digest := sha256.Sum256(decoded)
 	if !bytes.Equal(digest[:], reference) {
 		return value
 	}
+
 	return decoded
 }
 
 func unmarshalNativeMessage(data []byte) (nativeMessageFields, error) {
-	fields := nativeMessageFields{role: "", realUser: false, text: "", requestID: "", contentHash: "", calls: nil}
+	fields := nativeMessageFields{
+		role:        "",
+		realUser:    false,
+		text:        "",
+		requestID:   "",
+		contentHash: "",
+		calls:       nil,
+	}
 	var message nativeMessage
 	if err := json.Unmarshal(data, &message); err != nil {
-		slog.Warn("providers.cursor.store.native_message_json_failed", "concern", concern, "err", err)
+		slog.Warn(
+			"providers.cursor.store.native_message_json_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
 		return fields, fmt.Errorf("decode native message JSON: %w", err)
 	}
+
 	fields.role = message.Role
 	fields.requestID = message.ProviderOptions.Cursor.RequestID
 	if len(message.Content) == 0 {
 		return fields, nil
 	}
+
 	sum := sha256.Sum256(message.Content)
 	fields.contentHash = hex.EncodeToString(sum[:])
 	texts := make([]string, 0)
 	if message.Content[0] != '[' {
 		var plain string
 		if err := json.Unmarshal(message.Content, &plain); err != nil {
-			slog.Warn("providers.cursor.store.native_message_text_failed", "concern", concern, "err", err)
+			slog.Warn(
+				"providers.cursor.store.native_message_text_failed",
+				"concern",
+				concern,
+				"err",
+				err,
+			)
 			return fields, fmt.Errorf("decode native message text: %w", err)
 		}
+
 		texts = append(texts, plain)
 	} else {
 		var parts []nativeContentPart
 		if err := json.Unmarshal(message.Content, &parts); err != nil {
-			slog.Warn("providers.cursor.store.native_message_parts_failed", "concern", concern, "err", err)
+			slog.Warn(
+				"providers.cursor.store.native_message_parts_failed",
+				"concern",
+				concern,
+				"err",
+				err,
+			)
 			return fields, fmt.Errorf("decode native message content parts: %w", err)
 		}
+
 		fields.calls = make([]NativeToolCall, 0)
+
 		for _, part := range parts {
 			switch part.Type {
 			case nativeToolCallPartType:
-				fields.calls = append(fields.calls, NativeToolCall{ID: part.ToolCallID, Name: part.ToolName, Args: part.Args})
+				fields.calls = append(
+					fields.calls,
+					NativeToolCall{ID: part.ToolCallID, Name: part.ToolName, Args: part.Args},
+				)
 			case nativeTextPartType:
 				texts = append(texts, part.Text)
 			}
 		}
 	}
+
 	for _, part := range texts {
 		if message.Role == nativeUserRole && RealUserText(part) {
 			fields.realUser = true
 		}
 	}
+
 	fields.text = nativeMatchText(message.Role, texts)
+
 	return fields, nil
 }
 
@@ -435,10 +662,13 @@ func nativeMatchText(role string, texts []string) string {
 			if match := nativeUserQueryPattern.FindStringSubmatch(part); match != nil {
 				return strings.TrimSpace(match[1])
 			}
-			if trimmed := strings.TrimSpace(part); trimmed != "" && !strings.HasPrefix(trimmed, "<") {
+
+			if trimmed := strings.TrimSpace(part); trimmed != "" &&
+				!strings.HasPrefix(trimmed, "<") {
 				plain = append(plain, part)
 			}
 		}
+
 		return strings.TrimSpace(strings.Join(plain, "\n"))
 	case nativeAssistantRole:
 		return strings.TrimSpace(nativeThinkPattern.ReplaceAllString(strings.Join(texts, ""), ""))
@@ -453,17 +683,21 @@ func RealUserText(text string) bool {
 	if strings.Contains(text, nativeUserQueryTag) {
 		return true
 	}
+
 	trimmed := strings.TrimSpace(text)
+
 	return trimmed != "" && !strings.HasPrefix(trimmed, "<")
 }
 
 func unmarshalProtobufFields(data []byte) ([]protobufField, error) {
 	fields := make([]protobufField, 0)
+
 	for len(data) > 0 {
 		number, wire, tagLength := protowire.ConsumeTag(data)
 		if tagLength < 0 {
 			return nil, protobufParseError(tagLength)
 		}
+
 		data = data[tagLength:]
 		field := protobufField{number: number, wire: wire, bytes: nil, varint: 0}
 		switch wire {
@@ -472,6 +706,7 @@ func unmarshalProtobufFields(data []byte) ([]protobufField, error) {
 			if valueLength < 0 {
 				return nil, protobufParseError(valueLength)
 			}
+
 			field.bytes = value
 			data = data[valueLength:]
 		case protowire.VarintType:
@@ -479,24 +714,32 @@ func unmarshalProtobufFields(data []byte) ([]protobufField, error) {
 			if valueLength < 0 {
 				return nil, protobufParseError(valueLength)
 			}
+
 			field.varint = value
 			data = data[valueLength:]
-		case protowire.Fixed32Type, protowire.Fixed64Type, protowire.StartGroupType, protowire.EndGroupType:
+		case protowire.Fixed32Type,
+			protowire.Fixed64Type,
+			protowire.StartGroupType,
+			protowire.EndGroupType:
 			fallthrough
 		default:
 			valueLength := protowire.ConsumeFieldValue(number, wire, data)
 			if valueLength < 0 {
 				return nil, protobufParseError(valueLength)
 			}
+
 			data = data[valueLength:]
 		}
+
 		fields = append(fields, field)
 	}
+
 	return fields, nil
 }
 
 func protobufParseError(code int) error {
 	err := protowire.ParseError(code)
 	slog.Warn("providers.cursor.store.protobuf_parse_failed", "concern", concern, "err", err)
+
 	return fmt.Errorf("parse protobuf field: %w", err)
 }

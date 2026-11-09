@@ -24,17 +24,26 @@ func (p fakeForkParentParser) Provider() conversation.Provider {
 	return p.provider
 }
 
-func (p fakeForkParentParser) Discover(context.Context, map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
+func (p fakeForkParentParser) Discover(
+	context.Context,
+	map[string]conversation.Record,
+) ([]conversation.ScanCandidate, error) {
 	return []conversation.ScanCandidate{
 		{Path: p.path, Stamp: conversation.FileStamp{Size: 1, Mtime: time.Unix(1, 0)}},
 	}, nil
 }
 
-func (p fakeForkParentParser) ScanRecord(string, conversation.FileStamp) (conversation.Record, bool) {
+func (p fakeForkParentParser) ScanRecord(
+	string,
+	conversation.FileStamp,
+) (conversation.Record, bool) {
 	return p.record, true
 }
 
-func (p fakeForkParentParser) Stream(string, conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+func (p fakeForkParentParser) Stream(
+	string,
+	conversation.LoadOptions,
+) iter.Seq2[transcript.Message, error] {
 	return func(func(transcript.Message, error) bool) {}
 }
 
@@ -71,6 +80,7 @@ func TestProtoConversationRecordSetsForkParent(t *testing.T) {
 	if err := idx.Refresh(context.Background()); err != nil {
 		t.Fatalf("seed index via refresh: %v", err)
 	}
+
 	if got, ok := idx.RecordByID(parentID); !ok || got.ID != parentID {
 		t.Fatalf("seeded parent lookup = (%q, %v), want (%q, true)", got.ID, ok, parentID)
 	}
@@ -84,7 +94,11 @@ func TestProtoConversationRecordSetsForkParent(t *testing.T) {
 	}
 	forkWire := protoConversationRecord(context.Background(), idx, forkChild)
 	if forkWire.GetParentConversationId() != parentID {
-		t.Fatalf("fork parent_conversation_id = %q, want %q", forkWire.GetParentConversationId(), parentID)
+		t.Fatalf(
+			"fork parent_conversation_id = %q, want %q",
+			forkWire.GetParentConversationId(),
+			parentID,
+		)
 	}
 
 	spawnChild := daemonTestRecord("codex:spawn-child", false)
@@ -94,8 +108,15 @@ func TestProtoConversationRecordSetsForkParent(t *testing.T) {
 		ParentNativeID:    "parent-thread",
 		ParentMessageUUID: "",
 	}
-	if spawnWire := protoConversationRecord(context.Background(), idx, spawnChild); spawnWire.GetParentConversationId() != "" {
-		t.Fatalf("spawn parent_conversation_id = %q, want empty", spawnWire.GetParentConversationId())
+	if spawnWire := protoConversationRecord(
+		context.Background(),
+		idx,
+		spawnChild,
+	); spawnWire.GetParentConversationId() != "" {
+		t.Fatalf(
+			"spawn parent_conversation_id = %q, want empty",
+			spawnWire.GetParentConversationId(),
+		)
 	}
 
 	missingChild := daemonTestRecord("codex:missing-parent", false)
@@ -105,7 +126,14 @@ func TestProtoConversationRecordSetsForkParent(t *testing.T) {
 		ParentNativeID:    "absent-thread",
 		ParentMessageUUID: "",
 	}
-	if missingWire := protoConversationRecord(context.Background(), idx, missingChild); missingWire.GetParentConversationId() != "" {
-		t.Fatalf("missing-parent parent_conversation_id = %q, want empty", missingWire.GetParentConversationId())
+	if missingWire := protoConversationRecord(
+		context.Background(),
+		idx,
+		missingChild,
+	); missingWire.GetParentConversationId() != "" {
+		t.Fatalf(
+			"missing-parent parent_conversation_id = %q, want empty",
+			missingWire.GetParentConversationId(),
+		)
 	}
 }

@@ -43,11 +43,13 @@ func codexHTTPSSEBodyForTest(t *testing.T) string {
 		},
 	}
 	var b strings.Builder
+
 	for _, event := range events {
 		raw, err := json.Marshal(event)
 		if err != nil {
 			t.Fatalf("marshal event: %v", err)
 		}
+
 		eventType, _ := event["type"].(string)
 		b.WriteString("event: ")
 		b.WriteString(eventType)
@@ -55,6 +57,7 @@ func codexHTTPSSEBodyForTest(t *testing.T) string {
 		b.Write(raw)
 		b.WriteString("\n\n")
 	}
+
 	return b.String()
 }
 
@@ -62,62 +65,82 @@ func TestRunHTTPTransportEventsParsesSSEAndCompletes(t *testing.T) {
 	t.Parallel()
 
 	var sawStreamTrue atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("method=%s want POST", r.Method)
-		}
-		if accept := r.Header.Get("Accept"); accept != "text/event-stream" {
-			t.Errorf("Accept=%q want text/event-stream", accept)
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			t.Errorf("Content-Type=%q want application/json", ct)
-		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		streamed, _ := body["stream"].(bool)
-		if !streamed {
-			t.Errorf("body.stream=%v want true", body["stream"])
-		}
-		// The HTTP body must NOT carry the websocket envelope `type`
-		// field. That field belongs to ResponseCreateWsRequest only.
-		if _, hasType := body["type"]; hasType {
-			t.Errorf("HTTP body must not include the websocket 'type' field")
-		}
-		sawStreamTrue.Store(true)
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(codexHTTPSSEBodyForTest(t)))
-	}))
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				t.Errorf("method=%s want POST", r.Method)
+			}
+
+			if accept := r.Header.Get("Accept"); accept != "text/event-stream" {
+				t.Errorf("Accept=%q want text/event-stream", accept)
+			}
+
+			if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type=%q want application/json", ct)
+			}
+
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+
+			streamed, _ := body["stream"].(bool)
+			if !streamed {
+				t.Errorf("body.stream=%v want true", body["stream"])
+			}
+
+			// The HTTP body must NOT carry the websocket envelope `type`
+			// field. That field belongs to ResponseCreateWsRequest only.
+			if _, hasType := body["type"]; hasType {
+				t.Errorf("HTTP body must not include the websocket 'type' field")
+			}
+
+			sawStreamTrue.Store(true)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(codexHTTPSSEBodyForTest(t)))
+		}),
+	)
 	defer server.Close()
 
 	var emittedCount atomic.Int32
-	result, err := runHTTPTransportEvents(context.Background(), HTTPTransportConfig{
-		URL:        server.URL,
-		HTTPClient: server.Client(),
-		Token:      "test-token",
-		RequestID:  "req-http",
-	}, HTTPTransportRequest{
-		Model: "gpt-5.4",
-		Input: []codexwire.InputItem{{
-			Type:    codexwire.ItemTypeMessage,
-			Role:    "user",
-			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hi"}},
-		}},
-	}, func(adapterrender.Event) error {
-		emittedCount.Add(1)
-		return nil
-	})
+	result, err := runHTTPTransportEvents(
+		context.Background(),
+		HTTPTransportConfig{
+			URL:        server.URL,
+			HTTPClient: server.Client(),
+			Token:      "test-token",
+			RequestID:  "req-http",
+		},
+		HTTPTransportRequest{
+			Model: "gpt-5.4",
+			Input: []codexwire.InputItem{
+				{
+					Type: codexwire.ItemTypeMessage,
+					Role: "user",
+					Content: codexwire.ContentItems{
+						{Type: codexwire.ContentItemInputText, Text: "hi"},
+					},
+				},
+			},
+		},
+		func(adapterrender.Event) error {
+			emittedCount.Add(1)
+			return nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("runHTTPTransportEvents err=%v", err)
 	}
+
 	if !sawStreamTrue.Load() {
 		t.Fatalf("server did not see stream:true in the HTTP body")
 	}
+
 	if result.ResponseID != "resp-http-1" {
 		t.Fatalf("ResponseID=%q want resp-http-1", result.ResponseID)
 	}
+
 	if emittedCount.Load() == 0 {
 		t.Fatalf("no events emitted")
 	}
@@ -132,41 +155,61 @@ func TestRunHTTPTransportEventsKeepsUpstreamBodyOutOfErrorString(t *testing.T) {
 		http.StatusServiceUnavailable,
 		http.StatusTooManyRequests,
 	} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(status)
-			_, _ = w.Write([]byte("upstream-non200-canary"))
-		}))
-		_, err := runHTTPTransportEvents(context.Background(), HTTPTransportConfig{
-			URL:        server.URL,
-			HTTPClient: server.Client(),
-			RequestID:  "req-http-err",
-		}, HTTPTransportRequest{Model: "gpt-5.4"}, func(adapterrender.Event) error {
-			return nil
-		})
+		server := httptest.NewServer(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte("upstream-non200-canary"))
+			}),
+		)
+		_, err := runHTTPTransportEvents(
+			context.Background(),
+			HTTPTransportConfig{
+				URL:        server.URL,
+				HTTPClient: server.Client(),
+				RequestID:  "req-http-err",
+			},
+			HTTPTransportRequest{Model: "gpt-5.4"},
+			func(adapterrender.Event) error {
+				return nil
+			},
+		)
 		server.Close()
 		if err == nil {
 			t.Fatalf("status=%d err=nil want error", status)
 		}
+
 		// Error() is log-safe: it carries the status but never the upstream
 		// response body, so the terminal failure log (which serializes
 		// err.Error()) cannot leak a body snippet into JSONL.
 		if !strings.Contains(err.Error(), "upstream status") {
 			t.Fatalf("status=%d err=%q missing 'upstream status' text", status, err.Error())
 		}
+
 		if strings.Contains(err.Error(), "upstream-non200-canary") {
-			t.Fatalf("status=%d err=%q leaked body canary into the log-safe error string", status, err.Error())
+			t.Fatalf(
+				"status=%d err=%q leaked body canary into the log-safe error string",
+				status,
+				err.Error(),
+			)
 		}
+
 		// The body snippet rides on the typed error and reaches the client
 		// only through ClientMessage, never err.Error().
 		var statusErr *UpstreamStatusError
 		if !errors.As(err, &statusErr) {
 			t.Fatalf("status=%d err=%q is not *UpstreamStatusError", status, err.Error())
 		}
+
 		if statusErr.Status != status {
 			t.Fatalf("status field=%d want %d", statusErr.Status, status)
 		}
+
 		if !strings.Contains(statusErr.ClientMessage(), "upstream-non200-canary") {
-			t.Fatalf("status=%d ClientMessage=%q missing body canary", status, statusErr.ClientMessage())
+			t.Fatalf(
+				"status=%d ClientMessage=%q missing body canary",
+				status,
+				statusErr.ClientMessage(),
+			)
 		}
 	}
 }
@@ -176,47 +219,63 @@ func TestRunHTTPTransportEventsRefreshesOn401AndRetriesOnce(t *testing.T) {
 
 	var requestCount atomic.Int32
 	var lastBearer atomic.Value
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		lastBearer.Store(r.Header.Get("Authorization"))
-		n := requestCount.Add(1)
-		if n == 1 {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":{"code":"invalid_token"}}`))
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(codexHTTPSSEBodyForTest(t)))
-	}))
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			lastBearer.Store(r.Header.Get("Authorization"))
+			n := requestCount.Add(1)
+			if n == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":{"code":"invalid_token"}}`))
+
+				return
+			}
+
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(codexHTTPSSEBodyForTest(t)))
+		}),
+	)
 	defer server.Close()
 
 	var refreshCalls atomic.Int32
-	_, err := runHTTPTransportEvents(context.Background(), HTTPTransportConfig{
-		URL:        server.URL,
-		HTTPClient: server.Client(),
-		Token:      "stale-token",
-		RequestID:  "req-http-401",
-		AuthRefresh: func(_ context.Context) (string, error) {
-			refreshCalls.Add(1)
-			return "fresh-token", nil
+	_, err := runHTTPTransportEvents(
+		context.Background(),
+		HTTPTransportConfig{
+			URL:        server.URL,
+			HTTPClient: server.Client(),
+			Token:      "stale-token",
+			RequestID:  "req-http-401",
+			AuthRefresh: func(_ context.Context) (string, error) {
+				refreshCalls.Add(1)
+				return "fresh-token", nil
+			},
 		},
-	}, HTTPTransportRequest{
-		Model: "gpt-5.4",
-		Input: []codexwire.InputItem{{
-			Type:    codexwire.ItemTypeMessage,
-			Role:    "user",
-			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hi"}},
-		}},
-	}, func(adapterrender.Event) error { return nil })
+		HTTPTransportRequest{
+			Model: "gpt-5.4",
+			Input: []codexwire.InputItem{
+				{
+					Type: codexwire.ItemTypeMessage,
+					Role: "user",
+					Content: codexwire.ContentItems{
+						{Type: codexwire.ContentItemInputText, Text: "hi"},
+					},
+				},
+			},
+		},
+		func(adapterrender.Event) error { return nil },
+	)
 	if err != nil {
 		t.Fatalf("runHTTPTransportEvents err=%v", err)
 	}
+
 	if refreshCalls.Load() != 1 {
 		t.Fatalf("refresh calls=%d want 1", refreshCalls.Load())
 	}
+
 	if requestCount.Load() != 2 {
 		t.Fatalf("server requests=%d want 2", requestCount.Load())
 	}
+
 	if bearer, _ := lastBearer.Load().(string); bearer != "Bearer fresh-token" {
 		t.Fatalf("last request bearer=%q want fresh-token", bearer)
 	}

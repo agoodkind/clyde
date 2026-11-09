@@ -30,8 +30,12 @@ func daemonUninstallOp() Operation[daemonUninstallInput, daemonUninstallPayload]
 		Examples:   []string{"clyde daemon uninstall --apply"},
 		Args:       nil,
 		Params: []Param[daemonUninstallInput]{
-			BoolParam("apply", "Stop the daemon and remove its native service registration.", false,
-				func(in *daemonUninstallInput, value bool) { in.Apply = value }),
+			BoolParam(
+				"apply",
+				"Stop the daemon and remove its native service registration.",
+				false,
+				func(in *daemonUninstallInput, value bool) { in.Apply = value },
+			),
 		},
 		New: func() daemonUninstallInput {
 			return daemonUninstallInput{Apply: false}
@@ -44,6 +48,7 @@ func daemonUninstallOp() Operation[daemonUninstallInput, daemonUninstallPayload]
 			if !in.Apply {
 				return daemonUninstallPayload{}, fmt.Errorf("daemon uninstall requires --apply")
 			}
+
 			return daemonUninstallPayload(in), nil
 		},
 		Run: func(ctx context.Context, payload daemonUninstallPayload, _ Surface, sink ResultSink) error {
@@ -51,6 +56,7 @@ func daemonUninstallOp() Operation[daemonUninstallInput, daemonUninstallPayload]
 			if !ok {
 				return fmt.Errorf("daemon uninstall requires terminal output")
 			}
+
 			return daemon.Uninstall(ctx, output.out)
 		},
 		runResult: nil,

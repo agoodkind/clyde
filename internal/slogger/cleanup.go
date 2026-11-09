@@ -122,22 +122,37 @@ func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (Clean
 		DurationMS:        0,
 	}
 	if !policy.Enabled {
-		slog.DebugContext(ctx, "slogger.cleanup.skipped", "component", "slogger", "reason", "disabled")
+		slog.DebugContext(
+			ctx,
+			"slogger.cleanup.skipped",
+			"component",
+			"slogger",
+			"reason",
+			"disabled",
+		)
 		return emptyResult, nil
 	}
+
 	root := strings.TrimSpace(policy.Root)
 	if root == "" && len(policy.Roots) == 0 && len(policy.Paths) == 0 {
 		return emptyResult, errors.New("cleanup requires an owned root or file path")
 	}
+
 	scannedRoots := append([]string(nil), policy.Roots...)
 	if root != "" {
 		scannedRoots = append(scannedRoots, root)
 	}
+
 	startedAt := cleanupPolicyNow()
-	slog.DebugContext(ctx, "slogger.cleanup.started",
-		"component", "slogger",
-		"root", root,
-		"scanned_roots", scannedRoots,
+	slog.DebugContext(
+		ctx,
+		"slogger.cleanup.started",
+		"component",
+		"slogger",
+		"root",
+		root,
+		"scanned_roots",
+		scannedRoots,
 	)
 	result := CleanupResult{
 		RetainedOpenBytes: policy.RetainedOpenBytes,
@@ -162,6 +177,7 @@ func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (Clean
 	if walkErr != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", root, walkErr))
 	}
+
 	retainCleanupFiles(files, policy, &result)
 	duration := max(cleanupPolicyNow().Sub(startedAt), time.Millisecond)
 	result.DurationMS = duration.Milliseconds()
@@ -169,140 +185,225 @@ func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (Clean
 	if result.Deleted > 0 || result.Trimmed > 0 || len(result.Errors) > 0 {
 		completionLevel = slog.LevelInfo
 	}
-	slog.Log(ctx, completionLevel, "slogger.cleanup.completed",
-		"component", "slogger",
-		"root", root,
-		"scanned_roots", result.ScannedRoots,
-		"candidates", result.Candidates,
-		"deleted", result.Deleted,
-		"bytes_deleted", result.BytesDeleted,
-		"bytes_before", result.BytesBefore,
-		"bytes_after", result.BytesAfter,
-		"retained_open_bytes", result.RetainedOpenBytes,
-		"retained_open_files", result.RetainedOpenFiles,
-		"protected_bytes", result.ProtectedBytes,
-		"excess_bytes", result.ExcessBytes,
-		"trimmed", result.Trimmed,
-		"bytes_trimmed", result.BytesTrimmed,
-		"trimmed_paths", result.TrimmedPaths,
-		"deleted_paths", result.DeletedPaths,
-		"skipped", result.Skipped,
-		"errors", result.Errors,
-		"duration_ms", result.DurationMS,
+
+	slog.Log(
+		ctx,
+		completionLevel,
+		"slogger.cleanup.completed",
+		"component",
+		"slogger",
+		"root",
+		root,
+		"scanned_roots",
+		result.ScannedRoots,
+		"candidates",
+		result.Candidates,
+		"deleted",
+		result.Deleted,
+		"bytes_deleted",
+		result.BytesDeleted,
+		"bytes_before",
+		result.BytesBefore,
+		"bytes_after",
+		result.BytesAfter,
+		"retained_open_bytes",
+		result.RetainedOpenBytes,
+		"retained_open_files",
+		result.RetainedOpenFiles,
+		"protected_bytes",
+		result.ProtectedBytes,
+		"excess_bytes",
+		result.ExcessBytes,
+		"trimmed",
+		result.Trimmed,
+		"bytes_trimmed",
+		result.BytesTrimmed,
+		"trimmed_paths",
+		result.TrimmedPaths,
+		"deleted_paths",
+		result.DeletedPaths,
+		"skipped",
+		result.Skipped,
+		"errors",
+		result.Errors,
+		"duration_ms",
+		result.DurationMS,
 	)
 	if walkErr != nil {
 		return result, walkErr
 	}
+
 	if len(result.Errors) > 0 {
-		return result, fmt.Errorf("cleanup encountered %d removal errors under %s", len(result.Errors), root)
+		return result, fmt.Errorf(
+			"cleanup encountered %d removal errors under %s",
+			len(result.Errors),
+			root,
+		)
 	}
+
 	return result, nil
 }
 
 func collectCleanupFiles(root string) ([]cleanupFile, error) {
 	files := make([]cleanupFile, 0)
 	var failures []error
-	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			if path == root && errors.Is(err, fs.ErrNotExist) {
+	walkErr := filepath.WalkDir(
+		root,
+		func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				if path == root && errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+
+				slog.Warn(
+					"slogger.cleanup.walk_entry_failed",
+					"component",
+					"slogger",
+					"path",
+					path,
+					"err",
+					err,
+				)
+				failures = append(failures, fmt.Errorf("walk %s: %w", path, err))
+
 				return nil
 			}
-			slog.Warn("slogger.cleanup.walk_entry_failed", "component", "slogger", "path", path, "err", err)
-			failures = append(failures, fmt.Errorf("walk %s: %w", path, err))
+
+			if entry.IsDir() {
+				return nil
+			}
+
+			if entry.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+
+			if !isCleanupLogPath(path) {
+				return nil
+			}
+
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				slog.Warn(
+					"slogger.cleanup.stat_failed",
+					"component",
+					"slogger",
+					"path",
+					path,
+					"err",
+					infoErr,
+				)
+				failures = append(failures, fmt.Errorf("stat %s: %w", path, infoErr))
+
+				return nil
+			}
+
+			if !info.Mode().IsRegular() {
+				return nil
+			}
+
+			files = append(
+				files,
+				cleanupFile{
+					path:    path,
+					group:   cleanupGroup(path),
+					size:    info.Size(),
+					modTime: info.ModTime(),
+				},
+			)
+
 			return nil
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		if !isCleanupLogPath(path) {
-			return nil
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			slog.Warn("slogger.cleanup.stat_failed", "component", "slogger", "path", path, "err", infoErr)
-			failures = append(failures, fmt.Errorf("stat %s: %w", path, infoErr))
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		files = append(files, cleanupFile{
-			path:    path,
-			group:   cleanupGroup(path),
-			size:    info.Size(),
-			modTime: info.ModTime(),
-		})
-		return nil
-	})
+		},
+	)
 	if walkErr != nil {
 		failures = append(failures, fmt.Errorf("collect cleanup files under %s: %w", root, walkErr))
 	}
+
 	return files, errors.Join(failures...)
 }
 
-func selectCleanupCandidates(files []cleanupFile, policy CleanupPolicy, now time.Time) []cleanupFile {
+func selectCleanupCandidates(
+	files []cleanupFile,
+	policy CleanupPolicy,
+	now time.Time,
+) []cleanupFile {
 	selected := make(map[string]cleanupFile)
 	if policy.MaxAgeDays > 0 {
 		cutoff := now.Add(-time.Duration(policy.MaxAgeDays) * 24 * time.Hour)
+
 		for _, file := range files {
 			if file.modTime.Before(cutoff) {
 				selected[file.path] = file
 			}
 		}
 	}
+
 	if policy.MaxBackups > 0 {
 		for _, file := range selectBackupOverflow(files, policy.MaxBackups) {
 			selected[file.path] = file
 		}
 	}
+
 	if policy.MaxTotalMB > 0 {
 		maxBytes := int64(policy.MaxTotalMB) * 1024 * 1024
 		for _, file := range selectTotalOverflow(files, maxBytes) {
 			selected[file.path] = file
 		}
 	}
+
 	out := make([]cleanupFile, 0, len(selected))
 	for _, file := range selected {
 		out = append(out, file)
 	}
+
 	sort.Slice(out, func(i int, j int) bool { return out[i].path < out[j].path })
+
 	return out
 }
 
 func selectBackupOverflow(files []cleanupFile, maxBackups int) []cleanupFile {
 	byGroup := make(map[string][]cleanupFile)
+
 	for _, file := range files {
 		byGroup[file.group] = append(byGroup[file.group], file)
 	}
+
 	selected := make([]cleanupFile, 0)
+
 	for _, groupFiles := range byGroup {
-		sort.Slice(groupFiles, func(i int, j int) bool {
-			return groupFiles[i].modTime.After(groupFiles[j].modTime)
-		})
+		sort.Slice(
+			groupFiles,
+			func(i int, j int) bool {
+				return groupFiles[i].modTime.After(groupFiles[j].modTime)
+			},
+		)
 		if len(groupFiles) <= maxBackups {
 			continue
 		}
+
 		selected = append(selected, groupFiles[maxBackups:]...)
 	}
+
 	return selected
 }
 
 func selectTotalOverflow(files []cleanupFile, maxBytes int64) []cleanupFile {
 	sortedFiles := append([]cleanupFile(nil), files...)
-	sort.Slice(sortedFiles, func(i int, j int) bool {
-		return sortedFiles[i].modTime.After(sortedFiles[j].modTime)
-	})
+	sort.Slice(
+		sortedFiles,
+		func(i int, j int) bool {
+			return sortedFiles[i].modTime.After(sortedFiles[j].modTime)
+		},
+	)
 	var total int64
 	selected := make([]cleanupFile, 0)
+
 	for _, file := range sortedFiles {
 		total += file.size
 		if total > maxBytes {
 			selected = append(selected, file)
 		}
 	}
+
 	return selected
 }
 
@@ -311,23 +412,30 @@ func isCleanupLogPath(path string) bool {
 	if strings.HasSuffix(base, ".lock") || base == "lock" {
 		return false
 	}
+
 	if _, archived := cleanupArchiveGroup(path); archived {
 		return true
 	}
-	return strings.Contains(base, ".jsonl") || strings.HasSuffix(base, ".log") || strings.HasSuffix(base, ".log.gz") || strings.HasSuffix(base, ".raw")
+
+	return strings.Contains(base, ".jsonl") || strings.HasSuffix(base, ".log") ||
+		strings.HasSuffix(base, ".log.gz") ||
+		strings.HasSuffix(base, ".raw")
 }
 
 func cleanupGroup(path string) string {
 	if group, archived := cleanupArchiveGroup(path); archived {
 		return group
 	}
+
 	base := filepath.Base(path)
 	lower := strings.ToLower(base)
+
 	for _, marker := range []string{".jsonl", ".log"} {
 		index := strings.Index(lower, marker)
 		if index >= 0 {
 			return filepath.Join(filepath.Dir(path), base[:index]+marker)
 		}
 	}
+
 	return path
 }

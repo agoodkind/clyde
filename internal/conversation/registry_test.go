@@ -40,10 +40,15 @@ func TestRegistryResolvesRegisteredProvidersAndRejectsUnknown(t *testing.T) {
 	if _, err := registry.Lookup(providerid.ProviderClaude); err != nil {
 		t.Fatalf("lookup claude: %v", err)
 	}
+
 	if _, err := registry.Lookup(providerid.ProviderCodex); err != nil {
 		t.Fatalf("lookup codex: %v", err)
 	}
-	if _, err := registry.Lookup(providerid.ProviderCursor); !errors.Is(err, ErrProviderNotRegistered) {
+
+	if _, err := registry.Lookup(providerid.ProviderCursor); !errors.Is(
+		err,
+		ErrProviderNotRegistered,
+	) {
 		t.Fatalf("lookup unregistered provider err = %v, want ErrProviderNotRegistered", err)
 	}
 }

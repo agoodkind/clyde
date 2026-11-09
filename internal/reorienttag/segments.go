@@ -85,6 +85,7 @@ func EncodeSegment(segment Segment) string {
 	builder.WriteString(segmentHeaderEnd)
 	builder.WriteString(segment.Text)
 	builder.WriteString(segmentFooter)
+
 	return builder.String()
 }
 
@@ -94,15 +95,19 @@ func EncodeTranscript(segments []Segment) string {
 	if len(segments) == 0 {
 		return ""
 	}
+
 	var builder strings.Builder
 	builder.WriteString(TranscriptFormatMarker)
 	builder.WriteByte('\n')
+
 	for index, segment := range segments {
 		if index > 0 {
 			builder.WriteString(segmentSeparator)
 		}
+
 		builder.WriteString(EncodeSegment(segment))
 	}
+
 	return builder.String()
 }
 
@@ -112,7 +117,10 @@ func FramedTranscript(segments []Segment) string {
 	if len(segments) == 0 {
 		return ""
 	}
-	return PreCompactionTranscriptOpen + "\n" + EncodeTranscript(segments) + "\n" + PreCompactionTranscriptClose
+
+	return PreCompactionTranscriptOpen + "\n" + EncodeTranscript(
+		segments,
+	) + "\n" + PreCompactionTranscriptClose
 }
 
 // ParseTranscriptSpans returns valid framed transcripts in text order. It reads
@@ -122,21 +130,25 @@ func FramedTranscript(segments []Segment) string {
 func ParseTranscriptSpans(text string) []TranscriptSpan {
 	header := PreCompactionTranscriptOpen + "\n" + TranscriptFormatMarker + "\n"
 	var spans []TranscriptSpan
+
 	position := 0
 	for position < len(text) {
 		offset := strings.Index(text[position:], header)
 		if offset < 0 {
 			break
 		}
+
 		start := position + offset
 		segments, end, ok := parseFramedBody(text, start+len(header))
 		if !ok {
 			position = start + len(header)
 			continue
 		}
+
 		spans = append(spans, TranscriptSpan{Start: start, End: end, Segments: segments})
 		position = end
 	}
+
 	return spans
 }
 
@@ -147,6 +159,7 @@ func RemoveTranscriptSpans(text string) (string, bool) {
 	if len(spans) == 0 {
 		return text, false
 	}
+
 	return textOutsideSpans(text, spans), true
 }
 
@@ -159,17 +172,21 @@ func CompleteTranscriptSpans(text string) []TranscriptSpan {
 	if ContainsTranscriptWrapper(textOutsideSpans(text, spans)) {
 		return nil
 	}
+
 	return spans
 }
 
 func textOutsideSpans(text string, spans []TranscriptSpan) string {
 	var builder strings.Builder
 	previousEnd := 0
+
 	for _, span := range spans {
 		builder.WriteString(text[previousEnd:span.Start])
 		previousEnd = span.End
 	}
+
 	builder.WriteString(text[previousEnd:])
+
 	return builder.String()
 }
 
@@ -181,30 +198,36 @@ func ContainsTranscriptWrapper(text string) bool {
 	if strings.Contains(text, PreCompactionTranscriptOpen+"\n"+TranscriptFormatMarker+"\n") {
 		return true
 	}
+
 	for _, heading := range [...]string{"User", "Assistant", "System", "Other"} {
 		if strings.Contains(text, PreCompactionTranscriptOpen+"\n### "+heading+"\n\n") {
 			return true
 		}
 	}
+
 	return false
 }
 
 func parseFramedBody(text string, position int) ([]Segment, int, bool) {
 	closing := "\n" + PreCompactionTranscriptClose
 	var segments []Segment
+
 	for {
 		segment, next, ok := parseSegment(text, position)
 		if !ok {
 			return nil, 0, false
 		}
+
 		segments = append(segments, segment)
 		position = next
 		if strings.HasPrefix(text[position:], closing) {
 			return segments, position + len(closing), true
 		}
+
 		if !strings.HasPrefix(text[position:], segmentSeparator) {
 			return nil, 0, false
 		}
+
 		position += len(segmentSeparator)
 	}
 }
@@ -215,35 +238,43 @@ func parseSegment(text string, position int) (Segment, int, bool) {
 	if !ok {
 		return noSegment, 0, false
 	}
+
 	role, position, ok := consumeQuoted(text, position)
 	if !ok || !knownRole(SegmentRole(role)) {
 		return noSegment, 0, false
 	}
+
 	position, ok = consumeLiteral(text, position, segmentKindPrefix)
 	if !ok {
 		return noSegment, 0, false
 	}
+
 	kind, position, ok := consumeQuoted(text, position)
 	if !ok || !knownKind(SegmentKind(kind)) {
 		return noSegment, 0, false
 	}
+
 	position, ok = consumeLiteral(text, position, segmentBytesPrefix)
 	if !ok {
 		return noSegment, 0, false
 	}
+
 	length, position, ok := consumeLength(text, position)
 	if !ok {
 		return noSegment, 0, false
 	}
+
 	position, ok = consumeLiteral(text, position, segmentHeaderEnd)
 	if !ok || length > len(text)-position {
 		return noSegment, 0, false
 	}
+
 	body := text[position : position+length]
 	position, ok = consumeLiteral(text, position+length, segmentFooter)
 	if !ok {
 		return noSegment, 0, false
 	}
+
 	return Segment{Role: SegmentRole(role), Kind: SegmentKind(kind), Text: body}, position, true
 }
 
@@ -251,6 +282,7 @@ func consumeLiteral(text string, position int, literal string) (int, bool) {
 	if !strings.HasPrefix(text[position:], literal) {
 		return 0, false
 	}
+
 	return position + len(literal), true
 }
 
@@ -259,10 +291,12 @@ func consumeQuoted(text string, position int) (string, int, bool) {
 	if err != nil {
 		return "", 0, false
 	}
+
 	value, err := strconv.Unquote(quoted)
 	if err != nil {
 		return "", 0, false
 	}
+
 	return value, position + len(quoted), true
 }
 
@@ -271,10 +305,12 @@ func consumeLength(text string, position int) (int, int, bool) {
 	if !ok || value == "" || value != strings.TrimLeft(value, "+-") {
 		return 0, 0, false
 	}
+
 	length, err := strconv.Atoi(value)
 	if err != nil || length < 0 || strconv.Itoa(length) != value {
 		return 0, 0, false
 	}
+
 	return length, next, true
 }
 
@@ -283,6 +319,7 @@ func knownRole(role SegmentRole) bool {
 	case SegmentRoleUser, SegmentRoleAssistant, SegmentRoleSystem, SegmentRoleOther:
 		return true
 	}
+
 	return false
 }
 
@@ -296,5 +333,6 @@ func knownKind(kind SegmentKind) bool {
 		SegmentKindOther:
 		return true
 	}
+
 	return false
 }

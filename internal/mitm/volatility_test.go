@@ -12,6 +12,7 @@ func TestHeaderValueIsVolatile(t *testing.T) {
 		value string
 		want  bool
 	}
+
 	cases := []tc{
 		{name: "content length", value: "1367204", want: true},
 		{name: "small content length", value: "11034", want: true},
@@ -25,12 +26,15 @@ func TestHeaderValueIsVolatile(t *testing.T) {
 		{name: "empty", value: "", want: false},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			if got := headerValueIsVolatile(c.value); got != c.want {
-				t.Fatalf("headerValueIsVolatile(%q) = %v, want %v", c.value, got, c.want)
-			}
-		})
+		t.Run(
+			c.name,
+			func(t *testing.T) {
+				t.Parallel()
+				if got := headerValueIsVolatile(c.value); got != c.want {
+					t.Fatalf("headerValueIsVolatile(%q) = %v, want %v", c.value, got, c.want)
+				}
+			},
+		)
 	}
 }
 
@@ -44,11 +48,20 @@ func TestTemplateChurningPath(t *testing.T) {
 		path string
 		want string
 	}
+
 	cases := []tc{
 		{name: "messages untouched", path: "/v1/messages", want: "/v1/messages"},
-		{name: "count_tokens untouched", path: "/v1/messages/count_tokens", want: "/v1/messages/count_tokens"},
+		{
+			name: "count_tokens untouched",
+			path: "/v1/messages/count_tokens",
+			want: "/v1/messages/count_tokens",
+		},
 		{name: "mcp_servers untouched", path: "/v1/mcp_servers", want: "/v1/mcp_servers"},
-		{name: "event_logging untouched", path: "/api/event_logging/v2/batch", want: "/api/event_logging/v2/batch"},
+		{
+			name: "event_logging untouched",
+			path: "/api/event_logging/v2/batch",
+			want: "/api/event_logging/v2/batch",
+		},
 		{
 			name: "prefixed session id",
 			path: "/v1/code/sessions/cse_01GCDZ4cWW1qo9SHkFuaPZhf/worker/events",
@@ -61,11 +74,14 @@ func TestTemplateChurningPath(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			if got := templateChurningPath(c.path); got != c.want {
-				t.Fatalf("templateChurningPath(%q) = %q, want %q", c.path, got, c.want)
-			}
-		})
+		t.Run(
+			c.name,
+			func(t *testing.T) {
+				t.Parallel()
+				if got := templateChurningPath(c.path); got != c.want {
+					t.Fatalf("templateChurningPath(%q) = %q, want %q", c.path, got, c.want)
+				}
+			},
+		)
 	}
 }

@@ -38,41 +38,68 @@ func TestConversationSearchCommandWithoutInputPrintsHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("conversation search without input and without a daemon: %v\n%s", err, helpOutput)
 	}
-	for _, expected := range []string{"Usage:", "clyde conversation search [CONVERSATION_ID]", "--query"} {
+
+	for _, expected := range []string{
+		"Usage:",
+		"clyde conversation search [CONVERSATION_ID]",
+		"--query",
+	} {
 		if !strings.Contains(helpOutput, expected) {
 			t.Fatalf("conversation search help missing %q:\n%s", expected, helpOutput)
 		}
 	}
+
 	if strings.Contains(helpOutput, "total_matched:") {
 		t.Fatalf("conversation search without input listed conversations:\n%s", helpOutput)
 	}
 
 	roots := startSandboxDaemon(t, binaryPath, fakeHome)
 	sandboxEnvironment := []string{"HOME=" + fakeHome}
+
 	for _, variable := range sandbox.Env(roots) {
 		sandboxEnvironment = append(sandboxEnvironment, variable.Name+"="+variable.Value)
 	}
 
 	deadline := time.Now().Add(sandboxBrowseReadyTimeout)
 	var browseOutput string
+
 	for {
-		browseCommand := exec.CommandContext(t.Context(), binaryPath, "conversation", "search", "--limit", "20")
+		browseCommand := exec.CommandContext(
+			t.Context(),
+			binaryPath,
+			"conversation",
+			"search",
+			"--limit",
+			"20",
+		)
 		browseCommand.Env = environmentWith(sandboxEnvironment...)
 		browseBytes, browseErr := browseCommand.CombinedOutput()
 		browseOutput = string(browseBytes)
 		if browseErr == nil {
 			break
 		}
+
 		if time.Now().After(deadline) {
-			t.Fatalf("conversation search --limit 20 against the sandbox daemon: %v\n%s", browseErr, browseOutput)
+			t.Fatalf(
+				"conversation search --limit 20 against the sandbox daemon: %v\n%s",
+				browseErr,
+				browseOutput,
+			)
 		}
+
 		time.Sleep(sandboxBrowseRetryDelay)
 	}
+
 	for _, expected := range []string{"total_matched:", "limit: 20"} {
 		if !strings.Contains(browseOutput, expected) {
-			t.Fatalf("conversation search --limit 20 output missing %q:\n%s", expected, browseOutput)
+			t.Fatalf(
+				"conversation search --limit 20 output missing %q:\n%s",
+				expected,
+				browseOutput,
+			)
 		}
 	}
+
 	if strings.Contains(browseOutput, "Usage:") {
 		t.Fatalf("conversation search --limit 20 printed help:\n%s", browseOutput)
 	}
@@ -88,9 +115,11 @@ func startSandboxDaemon(t *testing.T, binaryPath string, home string) sandbox.Ro
 	if err != nil {
 		t.Fatalf("open sandbox daemon stdout: %v", err)
 	}
+
 	if err := command.Start(); err != nil {
 		t.Fatalf("start sandbox daemon: %v", err)
 	}
+
 	exited := make(chan error, 1)
 	rootLine := make(chan string, 1)
 	go func() {
@@ -104,12 +133,14 @@ func startSandboxDaemon(t *testing.T, binaryPath string, home string) sandbox.Ro
 				}
 			}
 		}
+
 		exited <- command.Wait()
 	}()
 	t.Cleanup(func() {
 		if err := command.Process.Signal(os.Interrupt); err != nil {
 			t.Logf("interrupt sandbox daemon: %v", err)
 		}
+
 		select {
 		case <-exited:
 		case <-time.After(sandboxStopTimeout):
@@ -133,6 +164,7 @@ func startSandboxDaemon(t *testing.T, binaryPath string, home string) sandbox.Ro
 	case <-time.After(sandboxStartTimeout):
 		t.Fatalf("sandbox daemon did not print its root; stderr:\n%s", stderr.String())
 	}
+
 	return sandbox.Roots{Base: "", State: "", Config: "", Cache: "", Runtime: ""}
 }
 
@@ -142,16 +174,20 @@ func buildClydeCLI(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("resolve working directory: %v", err)
 	}
+
 	for {
 		if _, statErr := os.Stat(filepath.Join(directory, "go.mod")); statErr == nil {
 			break
 		}
+
 		parent := filepath.Dir(directory)
 		if parent == directory {
 			t.Fatalf("go.mod not found above the working directory")
 		}
+
 		directory = parent
 	}
+
 	binaryPath := filepath.Join(t.TempDir(), "clyde")
 	command := exec.CommandContext(t.Context(), "go", "build", "-o", binaryPath, "./cmd/clyde")
 	command.Dir = directory
@@ -159,6 +195,7 @@ func buildClydeCLI(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("build clyde CLI: %v\n%s", err, output)
 	}
+
 	return binaryPath
 }
 
@@ -170,13 +207,16 @@ func environmentWith(overrides ...string) []string {
 			overrideKeys[key] = true
 		}
 	}
+
 	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
 		key, _, found := strings.Cut(entry, "=")
 		if found && overrideKeys[key] {
 			continue
 		}
+
 		environment = append(environment, entry)
 	}
+
 	return append(environment, overrides...)
 }

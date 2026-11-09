@@ -40,6 +40,7 @@ func InspectStatus(ctx context.Context) StatusReport {
 	if err != nil {
 		daemonSocketPath = config.DaemonSocketPath()
 	}
+
 	report := StatusReport{
 		LaunchdTarget:          "",
 		LaunchdError:           "",
@@ -65,6 +66,7 @@ func InspectStatus(ctx context.Context) StatusReport {
 		report.SupervisorPID = status.PID
 		report.SupervisorFingerprint = status.Fingerprint
 	}
+
 	runtimeStatus, err := currentRuntimeStatus(ctx)
 	if err != nil {
 		report.DaemonError = err.Error()
@@ -72,9 +74,11 @@ func InspectStatus(ctx context.Context) StatusReport {
 		report.DaemonResponding = true
 		report.Runtime = runtimeStatus
 	}
+
 	if runtime.GOOS == "darwin" {
 		report.LaunchdTarget = "gui/" + strconv.Itoa(os.Getuid()) + "/io.goodkind.clyde.daemon"
 	}
+
 	if report.SupervisorPID > 0 {
 		workerPIDs, err := childProcessIDs(ctx, report.SupervisorPID)
 		if err != nil {
@@ -83,6 +87,7 @@ func InspectStatus(ctx context.Context) StatusReport {
 			report.WorkerPIDs = workerPIDs
 		}
 	}
+
 	return report
 }
 
@@ -97,10 +102,23 @@ func RunningSupervisorFingerprint(ctx context.Context) (string, error) {
 	if !socketExists(socketPath) {
 		return "", errNoSupervisorSocket(socketPath)
 	}
+
 	status, err := daemonsupervisor.RequestStatus(ctx, socketPath)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.status_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "socket_path", socketPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.status_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"socket_path",
+			socketPath,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("request supervisor status: %w", err)
 	}
+
 	return status.Fingerprint, nil
 }

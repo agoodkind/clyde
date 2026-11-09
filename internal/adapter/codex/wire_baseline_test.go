@@ -29,14 +29,21 @@ type fakeCodexBaselineStore struct {
 	updatedAt int64
 }
 
-func (f fakeCodexBaselineStore) CurrentBaseline(_ context.Context, _ string) (json.RawMessage, bool, error) {
+func (f fakeCodexBaselineStore) CurrentBaseline(
+	_ context.Context,
+	_ string,
+) (json.RawMessage, bool, error) {
 	if len(f.snapshot) == 0 {
 		return nil, false, nil
 	}
+
 	return f.snapshot, true, nil
 }
 
-func (f fakeCodexBaselineStore) CurrentBaselineUpdatedAt(_ context.Context, _ string) (int64, error) {
+func (f fakeCodexBaselineStore) CurrentBaselineUpdatedAt(
+	_ context.Context,
+	_ string,
+) (int64, error) {
 	return f.updatedAt, nil
 }
 
@@ -57,6 +64,7 @@ func newTestCodexBaselineStore(t *testing.T) fakeCodexBaselineStore {
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
+
 	return fakeCodexBaselineStore{snapshot: raw, updatedAt: 1700000000000000000}
 }
 
@@ -76,10 +84,30 @@ func testCodexFlavorShape() mitm.FlavorShape {
 		Body: mitm.Body{
 			BodyType: "object",
 			Fields: []mitm.Field{
-				{Name: "model", Kind: mitm.FieldKindString, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
-				{Name: "input", Kind: mitm.FieldKindArray, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
-				{Name: "instructions", Kind: mitm.FieldKindString, Presence: mitm.HeaderPresenceOptional, OccurrenceRate: 0.5},
-				{Name: "stream", Kind: mitm.FieldKindBool, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{
+					Name:           "model",
+					Kind:           mitm.FieldKindString,
+					Presence:       mitm.HeaderPresenceRequired,
+					OccurrenceRate: 1.0,
+				},
+				{
+					Name:           "input",
+					Kind:           mitm.FieldKindArray,
+					Presence:       mitm.HeaderPresenceRequired,
+					OccurrenceRate: 1.0,
+				},
+				{
+					Name:           "instructions",
+					Kind:           mitm.FieldKindString,
+					Presence:       mitm.HeaderPresenceOptional,
+					OccurrenceRate: 0.5,
+				},
+				{
+					Name:           "stream",
+					Kind:           mitm.FieldKindBool,
+					Presence:       mitm.HeaderPresenceRequired,
+					OccurrenceRate: 1.0,
+				},
 			},
 		},
 	}
@@ -96,6 +124,7 @@ func testCodexFlavorHeaders() []mitm.Header {
 			OccurrenceRate: 1.0,
 		}
 	}
+
 	return []mitm.Header{
 		constant("originator", learnedOriginator),
 		constant("openai-beta", learnedOpenAIBeta),
@@ -118,34 +147,43 @@ func TestCodexWireBaselineProjectsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if identity.Originator != learnedOriginator {
 		t.Errorf("Originator=%q want %q", identity.Originator, learnedOriginator)
 	}
+
 	if identity.OpenAIBeta != learnedOpenAIBeta {
 		t.Errorf("OpenAIBeta=%q want %q", identity.OpenAIBeta, learnedOpenAIBeta)
 	}
+
 	if identity.UserAgent != learnedUserAgent {
 		t.Errorf("UserAgent=%q want %q", identity.UserAgent, learnedUserAgent)
 	}
+
 	if identity.BetaFeatures != learnedBetaFeatures {
 		t.Errorf("BetaFeatures=%q want %q", identity.BetaFeatures, learnedBetaFeatures)
 	}
+
 	if identity.Attestation != learnedAttestation {
 		t.Errorf("Attestation=%q want %q", identity.Attestation, learnedAttestation)
 	}
+
 	wantBodyOrder := []string{"model", "instructions", "input", "tools", "stream"}
 	if len(identity.BodyFields) != len(wantBodyOrder) {
 		t.Fatalf("BodyFields=%v want %v", identity.BodyFields, wantBodyOrder)
 	}
+
 	for i, name := range wantBodyOrder {
 		if identity.BodyFields[i] != name {
 			t.Errorf("BodyFields[%d]=%q want %q", i, identity.BodyFields[i], name)
 		}
 	}
+
 	wantRequired := []string{"input", "model", "stream"}
 	if len(identity.BodyFieldsRequired) != len(wantRequired) {
 		t.Fatalf("BodyFieldsRequired=%v want %v", identity.BodyFieldsRequired, wantRequired)
 	}
+
 	for i, name := range wantRequired {
 		if identity.BodyFieldsRequired[i] != name {
 			t.Errorf("BodyFieldsRequired[%d]=%q want %q", i, identity.BodyFieldsRequired[i], name)
@@ -162,10 +200,12 @@ func TestCodexWireBaselineUpdatedAtCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Load: %v", err)
 	}
+
 	second, err := loader.Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("second Load: %v", err)
 	}
+
 	if first.Slug != second.Slug || first.UserAgent != second.UserAgent {
 		t.Fatalf("cached identity diverged: first=%+v second=%+v", first, second)
 	}
@@ -201,6 +241,7 @@ func TestCodexHeadersUseLearnedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	header := BuildResponsesWebsocketHeaders(ResponsesWebsocketHeaderConfig{
 		RequestID:            "req-1",
 		ConversationID:       "conv-1",
@@ -219,15 +260,19 @@ func TestCodexHeadersUseLearnedIdentity(t *testing.T) {
 	if got := header.Get(CodexOriginatorHeader); got != learnedOriginator {
 		t.Errorf("%s=%q want %q", CodexOriginatorHeader, got, learnedOriginator)
 	}
+
 	if got := header.Get(openAIBetaHeader); got != learnedOpenAIBeta {
 		t.Errorf("%s=%q want %q", openAIBetaHeader, got, learnedOpenAIBeta)
 	}
+
 	if got := header.Get("User-Agent"); got != learnedUserAgent {
 		t.Errorf("User-Agent=%q want %q", got, learnedUserAgent)
 	}
+
 	if got := header.Get(CodexBetaFeaturesHeader); got != learnedBetaFeatures {
 		t.Errorf("%s=%q want %q", CodexBetaFeaturesHeader, got, learnedBetaFeatures)
 	}
+
 	if got := header.Get(codexAttestationHeader); got != learnedAttestation {
 		t.Errorf("%s=%q want %q", codexAttestationHeader, got, learnedAttestation)
 	}
@@ -257,16 +302,29 @@ func TestCodexHeadersColdStartFallBackToConstants(t *testing.T) {
 	if got := header.Get(CodexOriginatorHeader); got != CodexOriginatorValue {
 		t.Errorf("%s=%q want fallback %q", CodexOriginatorHeader, got, CodexOriginatorValue)
 	}
+
 	if got := header.Get(openAIBetaHeader); got != responsesWebsocketsV2BetaHeaderValue {
-		t.Errorf("%s=%q want fallback %q", openAIBetaHeader, got, responsesWebsocketsV2BetaHeaderValue)
+		t.Errorf(
+			"%s=%q want fallback %q",
+			openAIBetaHeader,
+			got,
+			responsesWebsocketsV2BetaHeaderValue,
+		)
 	}
+
 	if got := header.Get("User-Agent"); got != UserAgent() {
 		t.Errorf("User-Agent=%q want fallback %q", got, UserAgent())
 	}
+
 	if got := header.Get(CodexBetaFeaturesHeader); got != "" {
 		t.Errorf("%s=%q want empty on cold start", CodexBetaFeaturesHeader, got)
 	}
+
 	if got := header.Get(codexAttestationHeader); got != "" {
-		t.Errorf("%s=%q want omitted on cold start (clyde does not mint attestation)", codexAttestationHeader, got)
+		t.Errorf(
+			"%s=%q want omitted on cold start (clyde does not mint attestation)",
+			codexAttestationHeader,
+			got,
+		)
 	}
 }

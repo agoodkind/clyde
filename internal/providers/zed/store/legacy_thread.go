@@ -47,17 +47,21 @@ func ParseThreadDocument(dataType DataType, data []byte) (ThreadDocument, error)
 	if err != nil {
 		return ThreadDocument{}, err
 	}
+
 	version, err := detectThreadVersion(jsonData)
 	if err != nil {
 		return ThreadDocument{}, err
 	}
+
 	if version == CurrentThreadVersion {
 		return ParseCurrentThreadJSON(jsonData)
 	}
+
 	legacyThread, err := parseLegacyThreadJSON(jsonData)
 	if err != nil {
 		return ThreadDocument{}, err
 	}
+
 	return upgradeLegacyThread(legacyThread), nil
 }
 
@@ -114,6 +118,7 @@ func detectThreadVersion(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return "", ThreadVersionDecodeError{Err: err}
 	}
+
 	return envelope.Version, nil
 }
 
@@ -122,11 +127,16 @@ func parseLegacyThreadJSON(data []byte) (legacyThread, error) {
 	if err := json.Unmarshal(data, &thread); err != nil {
 		return legacyThread{}, LegacyThreadDecodeError{Err: err}
 	}
+
 	for _, message := range thread.Messages {
 		if message.Role != legacyRoleUser && message.Role != legacyRoleAssistant {
-			return legacyThread{}, fmt.Errorf("decode legacy zed thread json: unsupported legacy role %q", message.Role)
+			return legacyThread{}, fmt.Errorf(
+				"decode legacy zed thread json: unsupported legacy role %q",
+				message.Role,
+			)
 		}
 	}
+
 	return thread, nil
 }
 
@@ -135,19 +145,24 @@ func upgradeLegacyThread(thread legacyThread) ThreadDocument {
 	for _, message := range thread.Messages {
 		if canAttachLegacyToolResults(message, messages) {
 			assistant := messages[len(messages)-1].Agent
+
 			for _, toolResult := range message.ToolResults {
 				assistant.ToolResults[toolResult.ToolUseID] = convertLegacyToolResult(toolResult)
 			}
+
 			if !legacyMessageHasMeaningfulText(message) {
 				continue
 			}
 		}
+
 		upgraded, ok := upgradeLegacyMessage(message)
 		if !ok {
 			continue
 		}
+
 		messages = append(messages, upgraded)
 	}
+
 	return ThreadDocument{
 		Version:         CurrentThreadVersion,
 		Title:           thread.Summary,
@@ -160,18 +175,21 @@ func upgradeLegacyThread(thread legacyThread) ThreadDocument {
 }
 
 func canAttachLegacyToolResults(message legacyMessage, messages []ThreadMessage) bool {
-	return message.Role == legacyRoleUser && len(message.ToolResults) > 0 && len(messages) > 0 && messages[len(messages)-1].Agent != nil
+	return message.Role == legacyRoleUser && len(message.ToolResults) > 0 && len(messages) > 0 &&
+		messages[len(messages)-1].Agent != nil
 }
 
 func legacyMessageHasMeaningfulText(message legacyMessage) bool {
 	if strings.TrimSpace(message.Text) != "" || strings.TrimSpace(message.Context) != "" {
 		return true
 	}
+
 	for _, segment := range message.Segments {
 		if strings.TrimSpace(segment.Text) != "" || strings.TrimSpace(segment.Data) != "" {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -179,8 +197,11 @@ func upgradeLegacyMessage(message legacyMessage) (ThreadMessage, bool) {
 	switch message.Role {
 	case legacyRoleUser:
 		return ThreadMessage{
-			Kind:       ThreadMessageKindUser,
-			User:       &UserMessage{ID: strconv.Itoa(message.ID), Content: upgradeLegacyUserContent(message)},
+			Kind: ThreadMessageKindUser,
+			User: &UserMessage{
+				ID:      strconv.Itoa(message.ID),
+				Content: upgradeLegacyUserContent(message),
+			},
 			Agent:      nil,
 			Compaction: nil,
 		}, true
@@ -190,7 +211,13 @@ func upgradeLegacyMessage(message legacyMessage) (ThreadMessage, bool) {
 			ToolResults:      make(map[string]ToolResult),
 			ReasoningDetails: nil,
 		}
-		return ThreadMessage{Kind: ThreadMessageKindAgent, User: nil, Agent: agent, Compaction: nil}, true
+
+		return ThreadMessage{
+			Kind:       ThreadMessageKindAgent,
+			User:       nil,
+			Agent:      agent,
+			Compaction: nil,
+		}, true
 	default:
 		return ThreadMessage{Kind: "", User: nil, Agent: nil, Compaction: nil}, false
 	}
@@ -198,35 +225,92 @@ func upgradeLegacyMessage(message legacyMessage) (ThreadMessage, bool) {
 
 func upgradeLegacyUserContent(message legacyMessage) []UserContentPart {
 	if len(message.Segments) == 0 {
-		return []UserContentPart{{Kind: UserContentKindText, Text: firstNonEmptyString(message.Text, message.Context), Mention: nil}}
+		return []UserContentPart{
+			{
+				Kind:    UserContentKindText,
+				Text:    firstNonEmptyString(message.Text, message.Context),
+				Mention: nil,
+			},
+		}
 	}
+
 	content := make([]UserContentPart, 0, len(message.Segments))
 	for _, segment := range message.Segments {
-		content = append(content, UserContentPart{Kind: UserContentKindText, Text: firstNonEmptyString(segment.Text, segment.Data), Mention: nil})
+		content = append(
+			content,
+			UserContentPart{
+				Kind:    UserContentKindText,
+				Text:    firstNonEmptyString(segment.Text, segment.Data),
+				Mention: nil,
+			},
+		)
 	}
+
 	return content
 }
 
 func upgradeLegacyAgentContent(message legacyMessage) []AgentContentPart {
 	content := make([]AgentContentPart, 0, len(message.Segments)+len(message.ToolUses))
 	if len(message.Segments) == 0 {
-		content = append(content, AgentContentPart{Kind: AgentContentKindText, Text: firstNonEmptyString(message.Text, message.Context), Signature: "", ToolUse: nil})
+		content = append(
+			content,
+			AgentContentPart{
+				Kind:      AgentContentKindText,
+				Text:      firstNonEmptyString(message.Text, message.Context),
+				Signature: "",
+				ToolUse:   nil,
+			},
+		)
 	} else {
 		for _, segment := range message.Segments {
 			switch segment.Type {
 			case legacySegmentTypeThinking:
-				content = append(content, AgentContentPart{Kind: AgentContentKindThinking, Text: segment.Text, Signature: segment.Signature, ToolUse: nil})
+				content = append(
+					content,
+					AgentContentPart{
+						Kind:      AgentContentKindThinking,
+						Text:      segment.Text,
+						Signature: segment.Signature,
+						ToolUse:   nil,
+					},
+				)
 			case legacySegmentTypeRedactedThinking:
-				content = append(content, AgentContentPart{Kind: AgentContentKindRedactedThinking, Text: segment.Data, Signature: "", ToolUse: nil})
+				content = append(
+					content,
+					AgentContentPart{
+						Kind:      AgentContentKindRedactedThinking,
+						Text:      segment.Data,
+						Signature: "",
+						ToolUse:   nil,
+					},
+				)
 			default:
-				content = append(content, AgentContentPart{Kind: AgentContentKindText, Text: segment.Text, Signature: "", ToolUse: nil})
+				content = append(
+					content,
+					AgentContentPart{
+						Kind:      AgentContentKindText,
+						Text:      segment.Text,
+						Signature: "",
+						ToolUse:   nil,
+					},
+				)
 			}
 		}
 	}
+
 	for i := range message.ToolUses {
 		toolUse := message.ToolUses[i]
-		content = append(content, AgentContentPart{Kind: AgentContentKindToolUse, Text: "", Signature: "", ToolUse: &toolUse})
+		content = append(
+			content,
+			AgentContentPart{
+				Kind:      AgentContentKindToolUse,
+				Text:      "",
+				Signature: "",
+				ToolUse:   &toolUse,
+			},
+		)
 	}
+
 	return content
 }
 
@@ -240,5 +324,6 @@ func firstNonEmptyString(values ...string) string {
 			return value
 		}
 	}
+
 	return ""
 }

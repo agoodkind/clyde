@@ -49,6 +49,7 @@ func (w *ingressCaptureWriter) WriteHeader(status int) {
 		w.status = status
 		w.wroteHeader = true
 	}
+
 	w.ResponseWriter.WriteHeader(status)
 }
 
@@ -56,11 +57,13 @@ func (w *ingressCaptureWriter) Write(p []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
+
 	_, _ = w.body.Write(p)
 	n, err := w.ResponseWriter.Write(p)
 	if err != nil {
 		return n, fmt.Errorf("ingress capture write: %w", err)
 	}
+
 	return n, nil
 }
 
@@ -71,6 +74,7 @@ func (w *ingressCaptureWriter) Flush() {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
+
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -86,8 +90,10 @@ func (s *Server) beginIngressCapture(hctx *handlerCtx) *ingressCaptureWriter {
 	if !s.deps.CaptureStore.RecordingEnabled() || !s.cfg.CaptureIngress {
 		return nil
 	}
+
 	capW := newIngressCaptureWriter(hctx.Writer, capture.DefaultMaxBodyBytes)
 	hctx.Writer = capW
+
 	return capW
 }
 
@@ -97,10 +103,18 @@ func (s *Server) beginIngressCapture(hctx *handlerCtx) *ingressCaptureWriter {
 // adapterError and an empty response body, because the error envelope is
 // rendered downstream on the raw writer rather than through the wrapper.
 // Credential and account values are removed from both captured stages.
-func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlation.Context, r *http.Request, body []byte, started time.Time, handlerErr error) {
+func (s *Server) finishIngressCapture(
+	capW *ingressCaptureWriter,
+	corr correlation.Context,
+	r *http.Request,
+	body []byte,
+	started time.Time,
+	handlerErr error,
+) {
 	if capW == nil || !s.deps.CaptureStore.RecordingEnabled() {
 		return
 	}
+
 	status := capW.status
 	if status == 0 && handlerErr != nil {
 		status = http.StatusInternalServerError
@@ -109,9 +123,14 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 			status = aerr.HTTPStatus
 		}
 	}
+
 	conversationID, conversationSource := ingressConversationFields(corr)
-	requestSensitiveValues, requestSensitiveValuesComplete := capture.SensitiveHTTPHeaderValuesWithStatus(r.Header)
-	bodySensitiveValues, bodySensitiveValuesComplete := capture.SensitiveHTTPBodyValuesWithStatus(body)
+	requestSensitiveValues, requestSensitiveValuesComplete := capture.SensitiveHTTPHeaderValuesWithStatus(
+		r.Header,
+	)
+	bodySensitiveValues, bodySensitiveValuesComplete := capture.SensitiveHTTPBodyValuesWithStatus(
+		body,
+	)
 	requestSensitiveValues = append(requestSensitiveValues, bodySensitiveValues...)
 	requestSensitiveValuesComplete = requestSensitiveValuesComplete && bodySensitiveValuesComplete
 	requestHeaders, requestBody := capture.RedactHTTP(r.Header, body)
@@ -121,26 +140,29 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 		requestSensitiveValues,
 		requestSensitiveValuesComplete,
 	)
-	s.deps.CaptureStore.RecordExchange(corr, capture.Exchange{
-		Client:             captureClientIngress,
-		Provider:           "",
-		Concern:            captureIngressConcern,
-		Host:               r.Host,
-		Method:             r.Method,
-		Path:               r.URL.Path,
-		Status:             status,
-		UpstreamRequestID:  "",
-		SessionID:          "",
-		ConversationID:     conversationID,
-		ConversationSource: conversationSource,
-		RequestHeaders:     requestHeaders,
-		ResponseHeaders:    responseHeaders,
-		RequestBody:        requestBody,
-		ResponseBody:       responseBody,
-		RequestType:        r.Header.Get("Content-Type"),
-		ResponseType:       capW.Header().Get("Content-Type"),
-		Started:            started,
-	})
+	s.deps.CaptureStore.RecordExchange(
+		corr,
+		capture.Exchange{
+			Client:             captureClientIngress,
+			Provider:           "",
+			Concern:            captureIngressConcern,
+			Host:               r.Host,
+			Method:             r.Method,
+			Path:               r.URL.Path,
+			Status:             status,
+			UpstreamRequestID:  "",
+			SessionID:          "",
+			ConversationID:     conversationID,
+			ConversationSource: conversationSource,
+			RequestHeaders:     requestHeaders,
+			ResponseHeaders:    responseHeaders,
+			RequestBody:        requestBody,
+			ResponseBody:       responseBody,
+			RequestType:        r.Header.Get("Content-Type"),
+			ResponseType:       capW.Header().Get("Content-Type"),
+			Started:            started,
+		},
+	)
 }
 
 // ingressConversationFields derives the capture row's conversation identity
@@ -152,15 +174,23 @@ func (s *Server) finishIngressCapture(capW *ingressCaptureWriter, corr correlati
 // here would put a value in conversation_id that
 // `clyde conversation export <id>` cannot resolve, so a derived key is left
 // out and the column keeps its single meaning.
-func ingressConversationFields(corr correlation.Context) (conversationID string, conversationSource string) {
+func ingressConversationFields(
+	corr correlation.Context,
+) (conversationID string, conversationSource string) {
 	if clydeingress.ChatKeySource(corr) != clydeingress.ChatKeySourceNative {
 		return "", ""
 	}
+
 	nativeID := strings.TrimSpace(clydeingress.ChatKey(corr))
 	if nativeID == "" {
 		return "", ""
 	}
-	return conversation.DerivedID(providerid.ProviderCursor, nativeID, ""), clydeingress.ChatKeySourceNative
+
+	return conversation.DerivedID(
+		providerid.ProviderCursor,
+		nativeID,
+		"",
+	), clydeingress.ChatKeySourceNative
 }
 
 func sanitizedCaptureResponseHeaders(headers http.Header) http.Header {
@@ -170,5 +200,6 @@ func sanitizedCaptureResponseHeaders(headers http.Header) http.Header {
 			sanitized.Del(name)
 		}
 	}
+
 	return sanitized
 }

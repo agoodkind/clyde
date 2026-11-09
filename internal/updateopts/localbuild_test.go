@@ -15,6 +15,7 @@ func TestLocalDeployIsNeverAutoReplaced(t *testing.T) {
 	if !isLocalBuild(localBuildVersion, false) {
 		t.Fatal("clean local build was treated as updateable")
 	}
+
 	if isLocalBuild(releaseBuildVersion, false) {
 		t.Fatal("release build was treated as local")
 	}
@@ -37,17 +38,30 @@ func TestIsLocalBuild(t *testing.T) {
 		{name: "semver release", version: "v1.4.2", want: false},
 		{name: "semver ahead of tag", version: "v1.4.2-3-gdeadbee", want: true},
 		{name: "trailing g without hex", version: "202607301700-b6-gzzzz", want: false},
-		{name: "trailing hex without commit count", version: "202607301700-b6-700f20b-gabc1234", want: false},
+		{
+			name:    "trailing hex without commit count",
+			version: "202607301700-b6-700f20b-gabc1234",
+			want:    false,
+		},
 		{name: "count field is not a number", version: "202607301700-b6-x-gabc1234", want: false},
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := isLocalBuild(test.version, test.dirty)
-			if got != test.want {
-				t.Fatalf("isLocalBuild(%q, %v) = %v, want %v", test.version, test.dirty, got, test.want)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				got := isLocalBuild(test.version, test.dirty)
+				if got != test.want {
+					t.Fatalf(
+						"isLocalBuild(%q, %v) = %v, want %v",
+						test.version,
+						test.dirty,
+						got,
+						test.want,
+					)
+				}
+			},
+		)
 	}
 }
 

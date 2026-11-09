@@ -14,36 +14,50 @@ func writeHarnessRollout(t *testing.T, texts ...string) string {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rollout.jsonl")
 	body := `{"timestamp":"2026-08-02T10:00:00Z","type":"session_meta","payload":{"id":"thread-1","cwd":"/repo"}}` + "\n"
+
 	for _, text := range texts {
 		encoded, err := json.Marshal(text)
 		if err != nil {
 			t.Fatalf("encode text: %v", err)
 		}
-		body += `{"timestamp":"2026-08-02T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":` + string(encoded) + `}]}}` + "\n"
+
+		body += `{"timestamp":"2026-08-02T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":` + string(
+			encoded,
+		) + `}]}}` + "\n"
 	}
+
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write rollout: %v", err)
 	}
+
 	return path
 }
 
 func collectHarnessTexts(t *testing.T, path string, opts HistoryOptions) []string {
 	t.Helper()
 	var texts []string
+
 	for message, err := range StreamMessages(path, opts) {
 		if err != nil {
 			t.Fatalf("StreamMessages returned error: %v", err)
 		}
+
 		if message.Text == "" {
 			continue
 		}
+
 		texts = append(texts, message.Text)
 	}
+
 	return texts
 }
 
 func defaultHarnessOptions() HistoryOptions {
-	return HistoryOptions{IncludeSystemMessages: false, IncludeSystemPrompts: false, IncludeInjected: false}
+	return HistoryOptions{
+		IncludeSystemMessages: false,
+		IncludeSystemPrompts:  false,
+		IncludeInjected:       false,
+	}
 }
 
 // TestStreamDropsAgentsInstructionsMessageByDefault covers the largest harness
@@ -53,7 +67,8 @@ func defaultHarnessOptions() HistoryOptions {
 // renders it as developer-role guidance beside the rest of that class.
 func TestStreamDropsAgentsInstructionsMessageByDefault(t *testing.T) {
 	t.Parallel()
-	path := writeHarnessRollout(t,
+	path := writeHarnessRollout(
+		t,
 		"# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nproject instructions\n</INSTRUCTIONS>",
 		"please fix the flaky test",
 	)
@@ -66,14 +81,17 @@ func TestStreamDropsAgentsInstructionsMessageByDefault(t *testing.T) {
 	opts := defaultHarnessOptions()
 	opts.IncludeSystemPrompts = true
 	included := false
+
 	for message, err := range StreamMessages(path, opts) {
 		if err != nil {
 			t.Fatalf("StreamMessages returned error: %v", err)
 		}
+
 		if message.Role == roleDeveloper && message.Text != "" {
 			included = true
 		}
 	}
+
 	if !included {
 		t.Fatal("IncludeSystemPrompts did not surface the AGENTS.md message as developer guidance")
 	}
@@ -85,7 +103,8 @@ func TestStreamDropsAgentsInstructionsMessageByDefault(t *testing.T) {
 // returns them.
 func TestStreamGatesHarnessFramesBehindSystemMessages(t *testing.T) {
 	t.Parallel()
-	path := writeHarnessRollout(t,
+	path := writeHarnessRollout(
+		t,
 		"<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>",
 		">>> APPROVAL REQUEST START\ncommand detail\n>>> APPROVAL REQUEST END",
 		"what does this error mean?",
@@ -108,7 +127,8 @@ func TestStreamGatesHarnessFramesBehindSystemMessages(t *testing.T) {
 // into the user role: injected internal context and automation objectives.
 func TestStreamGatesInjectedContextBehindInjected(t *testing.T) {
 	t.Parallel()
-	path := writeHarnessRollout(t,
+	path := writeHarnessRollout(
+		t,
 		`<codex_internal_context source="goal">Continue the migration</codex_internal_context>`,
 		"<objective>keep the queue drained</objective>",
 		"run the deploy",

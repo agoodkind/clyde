@@ -20,9 +20,11 @@ func requestAlias(resolved *adapterresolver.ResolvedRequest) string {
 	if resolved == nil {
 		return ""
 	}
+
 	if alias := strings.TrimSpace(resolved.Cursor.NormalizedModel); alias != "" {
 		return alias
 	}
+
 	return strings.TrimSpace(resolved.OpenAI.Model)
 }
 
@@ -55,16 +57,25 @@ type BuildRequestConfig struct {
 }
 
 // BuildRequest is part of Clyde's typed adapter surface.
-func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *adapterresolver.ResolvedRequest, effort string, cfg BuildRequestConfig, reqID string) (anthropic.Request, error) {
+func BuildRequest(
+	ctx context.Context,
+	req adapteropenai.ChatRequest,
+	resolved *adapterresolver.ResolvedRequest,
+	effort string,
+	cfg BuildRequestConfig,
+	reqID string,
+) (anthropic.Request, error) {
 	maxTok := ResolveMaxTokens(requestedOutputTokens(req), resolved)
 	strategy := cfg.InboundThinkingMaterialization
 	if strategy == "" {
 		strategy = adapterrender.MaterializeNativeThinkingBlock
 	}
+
 	tr, err := TranslateRequest(req, cfg.SystemPromptPrefix, maxTok, strategy)
 	if err != nil {
 		return anthropic.Request{}, err
 	}
+
 	callerSystem := stripSystemPrefix(tr.System, cfg.SystemPromptPrefix)
 	if instr := strings.TrimSpace(resolved.Instructions); instr != "" {
 		if callerSystem == "" {
@@ -73,6 +84,7 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 			callerSystem = instr + "\n\n" + callerSystem
 		}
 	}
+
 	if instr := strings.TrimSpace(cfg.JSONSystemPrompt); instr != "" {
 		if callerSystem == "" {
 			callerSystem = instr
@@ -85,6 +97,7 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	if cliVersion == "" {
 		cliVersion = cfg.CCVersion
 	}
+
 	billingHeader := anthropic.BuildAttributionHeader(cliVersion, cfg.CCEntrypoint)
 	billingHeader = MutateBillingForProbe(billingHeader, cliVersion, cfg.CCEntrypoint)
 
@@ -92,6 +105,7 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	if cfg.PromptCachingEnabled != nil {
 		cachingEnabled = *cfg.PromptCachingEnabled
 	}
+
 	tr.System = ""
 	sysBlocks := BuildSystemBlocks(
 		billingHeader,
@@ -109,7 +123,13 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 		if cfg.ToolResultCacheReferenceEnabled {
 			level = slog.LevelWarn
 		}
-		cfg.Logger.LogAttrs(ctx, level, "adapter.cache_breakpoints.tool_result_cache_reference", slog.String("concern", "adapter.chat.render"), slog.String("component", "adapter"),
+
+		cfg.Logger.LogAttrs(
+			ctx,
+			level,
+			"adapter.cache_breakpoints.tool_result_cache_reference",
+			slog.String("concern", "adapter.chat.render"),
+			slog.String("component", "adapter"),
 			slog.String("subcomponent", "oauth"),
 			slog.String("request_id", reqID),
 			slog.String("alias", requestAlias(resolved)),
@@ -119,6 +139,7 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 			slog.Int("tool_result_applied", cacheStats.ToolResultApplied),
 		)
 	}
+
 	out.SystemBlocks = sysBlocks
 
 	applySamplingAndStop(&out, req)
@@ -129,11 +150,13 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	if effort != "" {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
+
 	ApplyThinkingConfig(&out, resolved, strippedModel)
 	out.FeatureVector = resolvedRequestFeatureVector(out, resolved.WireProfile)
 	if userID := cfg.Identity.EncodeUserID(); userID != "" {
 		out.Metadata = &anthropic.RequestMetadata{UserID: userID}
 	}
+
 	// claude-cli sends context_management.clear_thinking when thinking
 	// is on (adaptive or enabled). The Stream flag on out is always
 	// false at this stage; response_runtime sets it on streaming
@@ -141,12 +164,15 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	// upstream cache fingerprint matches whether streamed or not.
 	if out.Thinking != nil && out.Thinking.Type != "disabled" {
 		out.ContextManagement = &anthropic.ContextManagement{
-			Edits: []anthropic.ContextManagementEdit{{
-				Type: "clear_thinking_20251015",
-				Keep: "all",
-			}},
+			Edits: []anthropic.ContextManagementEdit{
+				{
+					Type: "clear_thinking_20251015",
+					Keep: "all",
+				},
+			},
 		}
 	}
+
 	return out, nil
 }
 
@@ -170,10 +196,12 @@ func applySamplingAndStop(out *anthropic.Request, req adapteropenai.ChatRequest)
 		clamped := clampAnthropicTemperature(*req.Temperature)
 		out.Temperature = &clamped
 	}
+
 	if req.TopP != nil {
 		topP := *req.TopP
 		out.TopP = &topP
 	}
+
 	if stop := parseStopSequences(req.Stop); len(stop) > 0 {
 		out.StopSequences = stop
 	}
@@ -186,9 +214,11 @@ func clampAnthropicTemperature(v float64) float64 {
 	if v > anthropicTemperatureMax {
 		return anthropicTemperatureMax
 	}
+
 	if v < anthropicTemperatureMin {
 		return anthropicTemperatureMin
 	}
+
 	return v
 }
 
@@ -201,20 +231,25 @@ func parseStopSequences(raw json.RawMessage) []string {
 	if trimmed == "" || trimmed == "null" {
 		return nil
 	}
+
 	if trimmed[0] == '"' {
 		var single string
 		if err := json.Unmarshal(raw, &single); err != nil {
 			return nil
 		}
+
 		return []string{single}
 	}
+
 	if trimmed[0] == '[' {
 		var many []string
 		if err := json.Unmarshal(raw, &many); err != nil {
 			return nil
 		}
+
 		return many
 	}
+
 	return nil
 }
 
@@ -222,13 +257,18 @@ func requestedOutputTokens(req adapteropenai.ChatRequest) *int {
 	if req.MaxOutputTokens != nil {
 		return req.MaxOutputTokens
 	}
+
 	if req.MaxTokens != nil {
 		return req.MaxTokens
 	}
+
 	return req.MaxComplTokens
 }
 
-func resolvedRequestFeatureVector(req anthropic.Request, wireProfile string) anthropic.WireFlavorFeatureVector {
+func resolvedRequestFeatureVector(
+	req anthropic.Request,
+	wireProfile string,
+) anthropic.WireFlavorFeatureVector {
 	return anthropic.WireFlavorFeatureVector{
 		ModelID:     strings.TrimSpace(req.Model),
 		WireProfile: strings.TrimSpace(wireProfile),
@@ -239,7 +279,9 @@ func stripSystemPrefix(system, prefix string) string {
 	if prefix == "" || !strings.HasPrefix(system, prefix) {
 		return system
 	}
+
 	out := strings.TrimPrefix(system, prefix)
+
 	return strings.TrimPrefix(out, "\n\n")
 }
 
@@ -248,6 +290,7 @@ func normalizePromptCacheTTL(ttl string) string {
 	if ttl != "" && ttl != "5m" && ttl != "1h" {
 		return ""
 	}
+
 	return ttl
 }
 
@@ -256,5 +299,6 @@ func normalizePromptCacheScope(scope string) string {
 	if scope != "" && scope != "global" && scope != "org" {
 		return ""
 	}
+
 	return scope
 }

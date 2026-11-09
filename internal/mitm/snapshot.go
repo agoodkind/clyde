@@ -60,9 +60,18 @@ const (
 func marshalSnapshot(snap Snapshot) (json.RawMessage, error) {
 	raw, err := json.Marshal(snap)
 	if err != nil {
-		slog.Warn("mitm.snapshot.marshal_failed", "concern", "providers.mitm.wire", "upstream", snap.Upstream.Name, "err", err)
+		slog.Warn(
+			"mitm.snapshot.marshal_failed",
+			"concern",
+			"providers.mitm.wire",
+			"upstream",
+			snap.Upstream.Name,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("marshal snapshot json: %w", err)
 	}
+
 	return raw, nil
 }
 
@@ -82,10 +91,12 @@ func unmarshalSnapshot(raw json.RawMessage) (Snapshot, error) {
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return snap, nil
 	}
+
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		slog.Warn("mitm.snapshot.unmarshal_failed", "concern", "providers.mitm.wire", "err", err)
 		return Snapshot{}, fmt.Errorf("unmarshal snapshot json: %w", err)
 	}
+
 	return snap, nil
 }
 
@@ -115,13 +126,18 @@ type rawRequest struct {
 // flavor and builds a [Snapshot]. Each shape carries a seen_count weight so a
 // single deduped shape produces the same header classification, presence, and
 // occurrence rate as seen_count identical raw requests would.
-func ExtractSnapshotFromShapes(shapes []capture.DriftShape, opts SnapshotOptions) (Snapshot, error) {
+func ExtractSnapshotFromShapes(
+	shapes []capture.DriftShape,
+	opts SnapshotOptions,
+) (Snapshot, error) {
 	if opts.MaxBodyDepth <= 0 {
 		opts.MaxBodyDepth = defaultMaxBodyDepth
 	}
+
 	if opts.EnumThreshold <= 0 {
 		opts.EnumThreshold = defaultEnumThreshold
 	}
+
 	if len(shapes) == 0 {
 		return Snapshot{}, errNoSnapshotRecords
 	}
@@ -137,13 +153,20 @@ func ExtractSnapshotFromShapes(shapes []capture.DriftShape, opts SnapshotOptions
 		if ts > 0 && (earliest == 0 || ts < earliest) {
 			earliest = ts
 		}
+
 		sig := classifyRequest(req)
-		if !uaMatches(sig.UserAgent, opts.IncludeUserAgentSubstrings, opts.ExcludeUserAgentSubstrings) {
+		if !uaMatches(
+			sig.UserAgent,
+			opts.IncludeUserAgentSubstrings,
+			opts.ExcludeUserAgentSubstrings,
+		) {
 			continue
 		}
+
 		if !bodyKeyConstraintsMatch(sig.BodyKeys, opts.RequireBodyKeys, opts.ForbidBodyKeys) {
 			continue
 		}
+
 		slug := sig.FlavorSlug()
 		flavored[slug] = append(flavored[slug], req)
 		flavorSigs[slug] = sig
@@ -158,8 +181,10 @@ func ExtractSnapshotFromShapes(shapes []capture.DriftShape, opts SnapshotOptions
 		Upstream: Upstream{
 			Name:        opts.UpstreamName,
 			Version:     opts.UpstreamVersion,
-			RecordCount: totalWeight, CapturedAt: "",
-		}, Flavors: nil,
+			RecordCount: totalWeight,
+			CapturedAt:  "",
+		},
+		Flavors: nil,
 	}
 	if earliest > 0 {
 		snap.Upstream.CapturedAt = time.Unix(earliest, 0).UTC().Format(time.RFC3339)
@@ -169,6 +194,7 @@ func ExtractSnapshotFromShapes(shapes []capture.DriftShape, opts SnapshotOptions
 	for slug := range flavored {
 		slugs = append(slugs, slug)
 	}
+
 	sort.Strings(slugs)
 
 	for _, slug := range slugs {
@@ -204,10 +230,12 @@ func parseShapeFeatures(raw json.RawMessage) *RequestFeatures {
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil
 	}
+
 	var features RequestFeatures
 	if err := json.Unmarshal(raw, &features); err != nil {
 		return nil
 	}
+
 	return &features
 }
 
@@ -218,22 +246,27 @@ func bodyKeyConstraintsMatch(observed, require, forbid []string) bool {
 	for _, k := range observed {
 		have[k] = true
 	}
+
 	for _, k := range require {
 		if k == "" {
 			continue
 		}
+
 		if !have[k] {
 			return false
 		}
 	}
+
 	for _, k := range forbid {
 		if k == "" {
 			continue
 		}
+
 		if have[k] {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -241,25 +274,31 @@ func bodyKeyConstraintsMatch(observed, require, forbid []string) bool {
 // Empty include set means include-all. Comparisons are case-insensitive.
 func uaMatches(ua string, include, exclude []string) bool {
 	low := strings.ToLower(ua)
+
 	for _, ex := range exclude {
 		if ex == "" {
 			continue
 		}
+
 		if strings.Contains(low, strings.ToLower(ex)) {
 			return false
 		}
 	}
+
 	if len(include) == 0 {
 		return true
 	}
+
 	for _, inc := range include {
 		if inc == "" {
 			continue
 		}
+
 		if strings.Contains(low, strings.ToLower(inc)) {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -269,6 +308,7 @@ func uaMatches(ua string, include, exclude []string) bool {
 func classifyRequest(req rawRequest) FlavorSignature {
 	ua := lowerStringFromHeaders(req.headers, "user-agent")
 	beta := lowerStringFromHeaders(req.headers, "anthropic-beta")
+
 	return FlavorSignature{
 		UserAgent:       ua,
 		BetaFingerprint: betaFingerprint(beta),
@@ -280,11 +320,13 @@ func lowerStringFromHeaders(headers map[string]string, lower string) string {
 	if headers == nil {
 		return ""
 	}
+
 	for k, v := range headers {
 		if strings.ToLower(k) == lower {
 			return v
 		}
 	}
+
 	return ""
 }
 
@@ -297,6 +339,7 @@ func bodyKeysFromBody(body json.RawMessage) []string {
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil
 	}
+
 	switch trimmed[0] {
 	case '{':
 		var summary captureBodySummary
@@ -305,22 +348,28 @@ func bodyKeysFromBody(body json.RawMessage) []string {
 		// top-level "keys" field must not be read as a summary, and a summary for
 		// a non-object body (no keys) returns nil rather than its own metadata
 		// field names.
-		if err := json.Unmarshal(body, &summary); err == nil && (summary.Mode != "" || summary.BodyType != "") {
+		if err := json.Unmarshal(body, &summary); err == nil &&
+			(summary.Mode != "" || summary.BodyType != "") {
 			if len(summary.Keys) == 0 {
 				return nil
 			}
+
 			keys := append([]string(nil), summary.Keys...)
 			sort.Strings(keys)
+
 			return keys
 		}
+
 		return topLevelObjectKeys(body)
 	case '"':
 		var bodyStr string
 		if err := json.Unmarshal(body, &bodyStr); err != nil {
 			return nil
 		}
+
 		return topLevelObjectKeys(json.RawMessage(bodyStr))
 	}
+
 	return nil
 }
 
@@ -331,19 +380,31 @@ func topLevelObjectKeys(raw json.RawMessage) []string {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil
 	}
+
 	out := make([]string, 0, len(fields))
 	for k := range fields {
 		out = append(out, k)
 	}
+
 	sort.Strings(out)
+
 	return out
 }
 
-func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, opts SnapshotOptions) FlavorShape {
+func buildFlavorShape(
+	slug string,
+	sig FlavorSignature,
+	requests []rawRequest,
+	opts SnapshotOptions,
+) FlavorShape {
 	flav := FlavorShape{
-		Slug:        slug,
-		Signature:   Signature(sig),
-		RecordCount: 0, Methods: nil, Paths: nil, Headers: nil, Body: Body{BodyType: "", Fields: nil},
+		Slug:               slug,
+		Signature:          Signature(sig),
+		RecordCount:        0,
+		Methods:            nil,
+		Paths:              nil,
+		Headers:            nil,
+		Body:               Body{BodyType: "", Fields: nil},
 		FeatureVectors:     nil,
 		BillingAttestation: "",
 	}
@@ -365,27 +426,35 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 		if flav.BillingAttestation == "" && req.billing != "" {
 			flav.BillingAttestation = req.billing
 		}
+
 		if req.method != "" {
 			methodSet[req.method] = true
 		}
+
 		if req.path != "" {
 			pathSet[req.path] = true
 		}
+
 		seenInThisRecord := map[string]bool{}
+
 		for k, v := range req.headers {
 			lower := strings.ToLower(k)
 			seenInThisRecord[lower] = true
 			if headerObservations[lower] == nil {
 				headerObservations[lower] = map[string]int{}
 			}
+
 			headerObservations[lower][v] += req.weight
 		}
+
 		for h := range seenInThisRecord {
 			headerPresenceCount[h] += req.weight
 		}
+
 		if t := bodyTypeFromRaw(req.body); t != "" {
 			bodyTypeSet[t] = true
 		}
+
 		walkBodyTopLevel(req.body, fieldObservations, opts.MaxBodyDepth, req.weight)
 	}
 
@@ -395,16 +464,28 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 
 	// Headers
 	for name, values := range headerObservations {
-		flav.Headers = append(flav.Headers, classifyHeader(name, values, headerPresenceCount[name], totalWeight, opts))
+		flav.Headers = append(
+			flav.Headers,
+			classifyHeader(name, values, headerPresenceCount[name], totalWeight, opts),
+		)
 	}
-	sort.Slice(flav.Headers, func(i, j int) bool { return flav.Headers[i].Name < flav.Headers[j].Name })
+
+	sort.Slice(
+		flav.Headers,
+		func(i, j int) bool { return flav.Headers[i].Name < flav.Headers[j].Name },
+	)
 
 	// Body
 	flav.Body.BodyType = strings.Join(sortedStringSet(bodyTypeSet), ",")
+
 	for name, acc := range fieldObservations {
 		flav.Body.Fields = append(flav.Body.Fields, acc.materialize(name, totalWeight))
 	}
-	sort.Slice(flav.Body.Fields, func(i, j int) bool { return flav.Body.Fields[i].Name < flav.Body.Fields[j].Name })
+
+	sort.Slice(
+		flav.Body.Fields,
+		func(i, j int) bool { return flav.Body.Fields[i].Name < flav.Body.Fields[j].Name },
+	)
 	flav.FeatureVectors = observedRequestFeatureVectors(requests)
 
 	return flav
@@ -417,15 +498,22 @@ func observedRequestFeatureVectors(requests []rawRequest) []RequestFeatures {
 		if !ok {
 			continue
 		}
+
 		observed[features] = true
 	}
+
 	out := make([]RequestFeatures, 0, len(observed))
 	for features := range observed {
 		out = append(out, features)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return requestFeaturesLess(out[i], out[j])
-	})
+
+	sort.Slice(
+		out,
+		func(i, j int) bool {
+			return requestFeaturesLess(out[i], out[j])
+		},
+	)
+
 	return out
 }
 
@@ -434,9 +522,11 @@ func requestFeaturesFromRawRequest(req rawRequest) (RequestFeatures, bool) {
 		features := *req.features
 		return features, requestFeaturesUsable(features)
 	}
+
 	if requestBodyIsCaptureSummary(req.body) {
 		return emptyRequestFeatures(), false
 	}
+
 	features, err := ExtractRequestFeatures(CapturedRequest{
 		RequestHeaders: req.headers,
 		RequestBody:    req.body,
@@ -444,6 +534,7 @@ func requestFeaturesFromRawRequest(req rawRequest) (RequestFeatures, bool) {
 	if err != nil || !requestFeaturesUsable(features) {
 		return emptyRequestFeatures(), false
 	}
+
 	return features, true
 }
 
@@ -460,13 +551,16 @@ func requestBodyIsCaptureSummary(raw json.RawMessage) bool {
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return false
 	}
+
 	fields := rawCaptureFields{}
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return false
 	}
+
 	_, hasKeys := fields["keys"]
 	_, hasBodyType := fields["body_type"]
 	_, hasMode := fields["mode"]
+
 	return hasKeys && (hasBodyType || hasMode)
 }
 
@@ -480,10 +574,12 @@ func stringFromRaw(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return ""
 	}
+
 	return s
 }
 
@@ -494,14 +590,17 @@ func bodyTypeFromRaw(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+
 	trimmed := bytes.TrimSpace([]byte(raw))
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return ""
 	}
+
 	var fields rawCaptureFields
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return ""
 	}
+
 	return stringFromRaw(fields["body_type"])
 }
 
@@ -510,15 +609,24 @@ func sortedStringSet(set map[string]bool) []string {
 	for k := range set {
 		out = append(out, k)
 	}
+
 	sort.Strings(out)
+
 	return out
 }
 
-func classifyHeader(name string, values map[string]int, presence, total int, opts SnapshotOptions) Header {
+func classifyHeader(
+	name string,
+	values map[string]int,
+	presence int,
+	total int,
+	opts SnapshotOptions,
+) Header {
 	observed := make([]string, 0, len(values))
 	for v := range values {
 		observed = append(observed, v)
 	}
+
 	sort.Strings(observed)
 	classification := HeaderClassConstant
 	if len(observed) > 1 {
@@ -528,14 +636,17 @@ func classifyHeader(name string, values map[string]int, presence, total int, opt
 			classification = HeaderClassEnum
 		}
 	}
+
 	pres := HeaderPresenceRequired
 	if presence < total {
 		pres = HeaderPresenceOptional
 	}
+
 	rate := 0.0
 	if total > 0 {
 		rate = float64(presence) / float64(total)
 	}
+
 	// A header is volatile when its observed values are all churning-shaped
 	// (byte sizes, per-session ids, attestation blobs). The shape check, not the
 	// cardinality, decides volatility: corpus dedup may collapse many churning
@@ -547,8 +658,9 @@ func classifyHeader(name string, values map[string]int, presence, total int, opt
 		Classification: classification,
 		Presence:       pres,
 		OccurrenceRate: rate,
-		ObservedValues: observed, Pattern: "",
-		Volatile: volatile,
+		ObservedValues: observed,
+		Pattern:        "",
+		Volatile:       volatile,
 	}
 	switch {
 	case volatile:
@@ -562,6 +674,7 @@ func classifyHeader(name string, values map[string]int, presence, total int, opt
 		out.Pattern = canonicalHeaderValue(name, observed[0])
 		out.ObservedValues = nil
 	}
+
 	return out
 }
 
@@ -582,7 +695,9 @@ func newFieldAcc() *fieldAcc {
 		kindCounts:     map[FieldKind]int{},
 		subAcc:         map[string]*fieldAcc{},
 		itemKindCounts: map[FieldKind]int{},
-		itemSubAcc:     map[string]*fieldAcc{}, count: 0, sample: "",
+		itemSubAcc:     map[string]*fieldAcc{},
+		count:          0,
+		sample:         "",
 	}
 }
 
@@ -596,9 +711,11 @@ func (a *fieldAcc) observe(name string, value json.RawMessage, depth, weight int
 	if a.sample == "" {
 		a.sample = sampleValue(name, value)
 	}
+
 	if depth <= 0 {
 		return
 	}
+
 	switch kind {
 	case FieldKindObject:
 		a.observeObjectChildren(value, depth-1, weight)
@@ -616,12 +733,14 @@ func (a *fieldAcc) observeObjectChildren(value json.RawMessage, depth, weight in
 	if err := json.Unmarshal(value, &sub); err != nil {
 		return
 	}
+
 	for k, child := range sub {
 		childAcc, ok := a.subAcc[k]
 		if !ok {
 			childAcc = newFieldAcc()
 			a.subAcc[k] = childAcc
 		}
+
 		childAcc.observe(k, child, depth, weight)
 	}
 }
@@ -633,12 +752,14 @@ func (a *fieldAcc) observeArrayItems(value json.RawMessage, depth, weight int) {
 	if err := json.Unmarshal(value, &items); err != nil {
 		return
 	}
+
 	for _, item := range items {
 		itemKind := classifyKind(item)
 		a.itemKindCounts[itemKind] += weight
 		if itemKind != FieldKindObject {
 			continue
 		}
+
 		a.observeArrayObjectItem(item, depth, weight)
 	}
 }
@@ -650,43 +771,62 @@ func (a *fieldAcc) observeArrayObjectItem(item json.RawMessage, depth, weight in
 	if err := json.Unmarshal(item, &obj); err != nil {
 		return
 	}
+
 	for k, child := range obj {
 		childAcc, ok := a.itemSubAcc[k]
 		if !ok {
 			childAcc = newFieldAcc()
 			a.itemSubAcc[k] = childAcc
 		}
+
 		childAcc.observe(k, child, depth, weight)
 	}
 }
 
 func (a *fieldAcc) materialize(name string, totalRecords int) Field {
 	out := Field{
-		Name:        name,
-		Kind:        dominantKind(a.kindCounts),
-		SampleValue: a.sample, Presence: "", OccurrenceRate: 0, SubFields: nil, ItemKind: "", ItemSubFields: nil,
+		Name:           name,
+		Kind:           dominantKind(a.kindCounts),
+		SampleValue:    a.sample,
+		Presence:       "",
+		OccurrenceRate: 0,
+		SubFields:      nil,
+		ItemKind:       "",
+		ItemSubFields:  nil,
 	}
 	if a.count >= totalRecords {
 		out.Presence = HeaderPresenceRequired
 	} else {
 		out.Presence = HeaderPresenceOptional
 	}
+
 	if totalRecords > 0 {
 		out.OccurrenceRate = float64(a.count) / float64(totalRecords)
 	}
+
 	if out.Kind == FieldKindObject {
 		for sub, acc := range a.subAcc {
 			out.SubFields = append(out.SubFields, acc.materialize(sub, a.count))
 		}
-		sort.Slice(out.SubFields, func(i, j int) bool { return out.SubFields[i].Name < out.SubFields[j].Name })
+
+		sort.Slice(
+			out.SubFields,
+			func(i, j int) bool { return out.SubFields[i].Name < out.SubFields[j].Name },
+		)
 	}
+
 	if out.Kind == FieldKindArray {
 		out.ItemKind = dominantKind(a.itemKindCounts)
 		for sub, acc := range a.itemSubAcc {
 			out.ItemSubFields = append(out.ItemSubFields, acc.materialize(sub, a.count))
 		}
-		sort.Slice(out.ItemSubFields, func(i, j int) bool { return out.ItemSubFields[i].Name < out.ItemSubFields[j].Name })
+
+		sort.Slice(
+			out.ItemSubFields,
+			func(i, j int) bool { return out.ItemSubFields[i].Name < out.ItemSubFields[j].Name },
+		)
 	}
+
 	return out
 }
 
@@ -694,27 +834,36 @@ func (a *fieldAcc) materialize(name string, totalRecords int) Field {
 // accumulator with the request weight. Returns true when the body
 // matched the summary shape (and the caller should stop), false
 // otherwise.
-func absorbSummaryModeKeys(fields map[string]json.RawMessage, dst map[string]*fieldAcc, weight int) bool {
+func absorbSummaryModeKeys(
+	fields map[string]json.RawMessage,
+	dst map[string]*fieldAcc,
+	weight int,
+) bool {
 	keysRaw, ok := fields["keys"]
 	if !ok {
 		return false
 	}
+
 	var keys []string
 	if err := json.Unmarshal(keysRaw, &keys); err != nil {
 		return false
 	}
+
 	for _, name := range keys {
 		if name == "" {
 			continue
 		}
+
 		acc, ok := dst[name]
 		if !ok {
 			acc = newFieldAcc()
 			dst[name] = acc
 		}
+
 		acc.count += weight
 		acc.kindCounts[FieldKindUnknown] += weight
 	}
+
 	return true
 }
 
@@ -727,40 +876,48 @@ func walkBodyTopLevel(body json.RawMessage, dst map[string]*fieldAcc, maxDepth, 
 	if len(body) == 0 {
 		return
 	}
+
 	trimmed := bytes.TrimSpace([]byte(body))
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return
 	}
+
 	if trimmed[0] == '"' {
 		var bodyStr string
 		if err := json.Unmarshal(body, &bodyStr); err != nil {
 			return
 		}
+
 		body = json.RawMessage(bodyStr)
 		trimmed = bytes.TrimSpace([]byte(body))
 		if len(trimmed) == 0 || trimmed[0] != '{' {
 			return
 		}
 	}
+
 	if trimmed[0] != '{' {
 		return
 	}
+
 	fields := map[string]json.RawMessage{}
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return
 	}
+
 	// Special-case: summary-mode body has request_body.keys plus a
 	// few summary fields; treat each summary-key as a top-level body
 	// field with kind=unknown (we only know names, not values).
 	if absorbSummaryModeKeys(fields, dst, weight) {
 		return
 	}
+
 	for name, value := range fields {
 		acc, ok := dst[name]
 		if !ok {
 			acc = newFieldAcc()
 			dst[name] = acc
 		}
+
 		acc.observe(name, value, maxDepth-1, weight)
 	}
 }
@@ -772,6 +929,7 @@ func classifyKind(raw json.RawMessage) FieldKind {
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return FieldKindNull
 	}
+
 	switch trimmed[0] {
 	case '{':
 		return FieldKindObject
@@ -784,6 +942,7 @@ func classifyKind(raw json.RawMessage) FieldKind {
 	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 		return FieldKindNumber
 	}
+
 	return FieldKindUnknown
 }
 
@@ -795,6 +954,7 @@ func sampleValue(fieldName string, raw json.RawMessage) string {
 	if shouldRedactBodySample(fieldName) {
 		return "<redacted>"
 	}
+
 	kind := classifyKind(raw)
 	switch kind {
 	case FieldKindString:
@@ -802,48 +962,67 @@ func sampleValue(fieldName string, raw json.RawMessage) string {
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return ""
 		}
+
 		if len(s) > 200 {
 			return fmt.Sprintf("<string len=%d>", len(s))
 		}
+
 		return s
 	case FieldKindArray:
 		var items []json.RawMessage
 		if err := json.Unmarshal(raw, &items); err != nil {
 			return ""
 		}
+
 		return fmt.Sprintf("<array len=%d>", len(items))
 	case FieldKindObject:
 		var sub map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &sub); err != nil {
 			return ""
 		}
+
 		return fmt.Sprintf("<object keys=%d>", len(sub))
 	case FieldKindNull:
 		return "null"
 	case FieldKindBool, FieldKindNumber, FieldKindUnknown:
 		return string(bytes.TrimSpace([]byte(raw)))
 	}
+
 	return string(bytes.TrimSpace([]byte(raw)))
 }
 
 func shouldRedactBodySample(fieldName string) bool {
 	name := strings.ToLower(fieldName)
-	for _, marker := range []string{"api_key", "authorization", "password", "secret", "token", "account_uuid", "device_id", "session_id", "user_id"} {
+
+	for _, marker := range []string{
+		"api_key",
+		"authorization",
+		"password",
+		"secret",
+		"token",
+		"account_uuid",
+		"device_id",
+		"session_id",
+		"user_id",
+	} {
 		if strings.Contains(name, marker) {
 			return true
 		}
 	}
+
 	return false
 }
 
 func dominantKind(counts map[FieldKind]int) FieldKind {
 	best := FieldKindUnknown
 	bestCount := 0
+
 	for k, c := range counts {
 		if c > bestCount {
 			best = k
 			bestCount = c
 		}
 	}
+
 	return best
 }

@@ -36,7 +36,9 @@ func installSetupOp() Operation[installSetupInput, installSetupPayload] {
 	return installSetupOpWithDependencies(defaultInstallSetupDependencies())
 }
 
-func installSetupOpWithDependencies(dependencies installSetupDependencies) Operation[installSetupInput, installSetupPayload] {
+func installSetupOpWithDependencies(
+	dependencies installSetupDependencies,
+) Operation[installSetupInput, installSetupPayload] {
 	return Operation[installSetupInput, installSetupPayload]{
 		Name:       Name{Canonical: "install_setup", CLIOverride: "setup"},
 		Group:      installGroup,
@@ -50,14 +52,32 @@ func installSetupOpWithDependencies(dependencies installSetupDependencies) Opera
 		},
 		Args: nil,
 		Params: []Param[installSetupInput]{
-			BoolParam("daemon", "Build the initial raw conversation index and install the daemon service.", false,
-				func(input *installSetupInput, value bool) { input.Daemon = value }),
-			BoolParam("hooks", "Install Clyde hooks in supported clients.", false,
-				func(input *installSetupInput, value bool) { input.Hooks = value }),
-			BoolParam("mcp", "Register Clyde's MCP server in supported clients.", false,
-				func(input *installSetupInput, value bool) { input.MCP = value }),
+			BoolParam(
+				"daemon",
+				"Build the initial raw conversation index and install the daemon service.",
+				false,
+				func(input *installSetupInput, value bool) { input.Daemon = value },
+			),
+			BoolParam(
+				"hooks",
+				"Install Clyde hooks in supported clients.",
+				false,
+				func(input *installSetupInput, value bool) { input.Hooks = value },
+			),
+			BoolParam(
+				"mcp",
+				"Register Clyde's MCP server in supported clients.",
+				false,
+				func(input *installSetupInput, value bool) { input.MCP = value },
+			),
 		},
-		New:            func() installSetupInput { return installSetupInput{Daemon: false, Hooks: false, MCP: false} },
+		New: func() installSetupInput {
+			return installSetupInput{
+				Daemon: false,
+				Hooks:  false,
+				MCP:    false,
+			}
+		},
 		Children:       nil,
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
@@ -70,18 +90,21 @@ func installSetupOpWithDependencies(dependencies installSetupDependencies) Opera
 					return fmt.Errorf("install daemon: %w", err)
 				}
 			}
+
 			if payload.Hooks {
 				if err := dependencies.installHooks(ctx, sink); err != nil {
 					slog.WarnContext(ctx, "clispec.install_setup.hooks_failed", "err", err)
 					return fmt.Errorf("install hooks: %w", err)
 				}
 			}
+
 			if payload.MCP {
 				if err := dependencies.installMCP(ctx, sink); err != nil {
 					slog.WarnContext(ctx, "clispec.install_setup.mcp_failed", "err", err)
 					return fmt.Errorf("install MCP: %w", err)
 				}
 			}
+
 			return nil
 		},
 		runResult: nil,
@@ -90,8 +113,11 @@ func installSetupOpWithDependencies(dependencies installSetupDependencies) Opera
 
 func prepareInstallSetup(input installSetupInput) (installSetupPayload, error) {
 	if !input.Daemon && !input.Hooks && !input.MCP {
-		return installSetupPayload{}, fmt.Errorf("install setup requires at least one component flag")
+		return installSetupPayload{}, fmt.Errorf(
+			"install setup requires at least one component flag",
+		)
 	}
+
 	return installSetupPayload(input), nil
 }
 
@@ -103,19 +129,32 @@ func defaultInstallSetupDependencies() installSetupDependencies {
 		},
 		installHooks: func(ctx context.Context, sink ResultSink) error {
 			installer := hookspec.Installer{Registry: hookspec.NewRegistry()}
-			result, err := installer.Install(ctx, hookspec.InstallOptions{HomeDir: "", ClydeBin: "", Client: hookspec.ClientAll, DryRun: false})
+			result, err := installer.Install(
+				ctx,
+				hookspec.InstallOptions{
+					HomeDir:  "",
+					ClydeBin: "",
+					Client:   hookspec.ClientAll,
+					DryRun:   false,
+				},
+			)
 			if err != nil {
 				slog.WarnContext(ctx, "clispec.install_setup.hooks_failed", "err", err)
 				return fmt.Errorf("install Clyde hooks: %w", err)
 			}
+
 			return sink.Text(renderInstallHooksText(result))
 		},
 		installMCP: func(ctx context.Context, sink ResultSink) error {
-			result, err := (mcpspec.Installer{}).Install(ctx, mcpspec.InstallOptions{HomeDir: "", ClydeBin: ""})
+			result, err := (mcpspec.Installer{}).Install(
+				ctx,
+				mcpspec.InstallOptions{HomeDir: "", ClydeBin: ""},
+			)
 			if err != nil {
 				slog.WarnContext(ctx, "clispec.install_setup.mcp_failed", "err", err)
 				return fmt.Errorf("install Clyde MCP settings: %w", err)
 			}
+
 			return sink.Text(renderInstallMCPText(result))
 		},
 	}
@@ -128,8 +167,10 @@ func renderInstallMCPText(result mcpspec.InstallResult) string {
 	} else {
 		builder.WriteString("installed MCP settings already up to date\n")
 	}
+
 	for _, file := range result.Files {
 		fmt.Fprintf(&builder, "settings: %s\n", file.SettingsPath)
 	}
+
 	return builder.String()
 }

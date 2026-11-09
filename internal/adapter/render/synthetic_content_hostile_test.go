@@ -15,6 +15,7 @@ import (
 // decoration; panicking costs the pass.
 func TestExtractSyntheticPartsSurvivesHostileMarkers(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name  string
 		input string
@@ -44,33 +45,45 @@ func TestExtractSyntheticPartsSurvivesHostileMarkers(t *testing.T) {
 			"open marker inside a close attribute",
 			`<!--clyde-thinking-->body<!--/clyde-thinking data-signature="s<!--clyde-thinking-->t"-->`,
 		},
-		{"nested pairs", "<!--clyde-thinking--><!--clyde-thinking-->inner<!--/clyde-thinking--><!--/clyde-thinking-->"},
+		{
+			"nested pairs",
+			"<!--clyde-thinking--><!--clyde-thinking-->inner<!--/clyde-thinking--><!--/clyde-thinking-->",
+		},
 		{"many open markers", strings.Repeat("<!--clyde-thinking-->", 500)},
 		{"many close markers", strings.Repeat("<!--/clyde-thinking-->", 500)},
 		{"alternating markers", strings.Repeat("<!--clyde-thinking--><!--/clyde-thinking-->", 500)},
 		{"unterminated open marker", "<!--clyde-thinking data-ref=\"unclosed"},
 		{"invalid utf8 body", "<!--clyde-thinking-->\xff\xfe\x00<!--/clyde-thinking-->"},
-		{"very long body", "<!--clyde-thinking-->" + strings.Repeat("a", 100000) + "<!--/clyde-thinking-->"},
-		{"notice kind", "<!--clyde-notice data-ref=\"a<!--/clyde-notice-->b\"-->body<!--/clyde-notice-->"},
+		{
+			"very long body",
+			"<!--clyde-thinking-->" + strings.Repeat("a", 100000) + "<!--/clyde-thinking-->",
+		},
+		{
+			"notice kind",
+			"<!--clyde-notice data-ref=\"a<!--/clyde-notice-->b\"-->body<!--/clyde-notice-->",
+		},
 		{
 			"redacted thinking kind",
 			`<!--clyde-redacted-thinking data-ref="a<!--/clyde-redacted-thinking-->b"-->body<!--/clyde-redacted-thinking-->`,
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				_ = ExtractSyntheticParts(testCase.input)
-			}()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("ExtractSyntheticParts did not return within 5s")
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					_ = ExtractSyntheticParts(testCase.input)
+				}()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("ExtractSyntheticParts did not return within 5s")
+				}
+			},
+		)
 	}
 }
 
@@ -78,6 +91,7 @@ func TestExtractSyntheticPartsSurvivesHostileMarkers(t *testing.T) {
 // malformed marker from turning into more content than arrived.
 func TestExtractSyntheticPartsNeverGrowsTheText(t *testing.T) {
 	t.Parallel()
+
 	inputs := []string{
 		"",
 		"<!--clyde-thinking-->reasoning<!--/clyde-thinking-->",
@@ -87,9 +101,11 @@ func TestExtractSyntheticPartsNeverGrowsTheText(t *testing.T) {
 	}
 	for _, input := range inputs {
 		total := 0
+
 		for _, part := range ExtractSyntheticParts(input) {
 			total += len(part.Body)
 		}
+
 		if total > len(input) {
 			t.Fatalf("input %q of %d bytes yielded %d bytes of parts", input, len(input), total)
 		}

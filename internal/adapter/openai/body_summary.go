@@ -78,12 +78,21 @@ func SummarizeChatBody(raw []byte) (BodySummary, error) {
 	log := slog.Default()
 	var req ChatRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
-		log.Warn("adapter.openai.body_summary.decode_failed", "concern", "adapter.chat.preflight", "subcomponent", "openai",
-			"body_bytes", len(raw),
-			"err", err.Error(),
+		log.Warn(
+			"adapter.openai.body_summary.decode_failed",
+			"concern",
+			"adapter.chat.preflight",
+			"subcomponent",
+			"openai",
+			"body_bytes",
+			len(raw),
+			"err",
+			err.Error(),
 		)
+
 		return BodySummary{}, fmt.Errorf("invalid chat request: %w", err)
 	}
+
 	return SummarizeChatRequest(req), nil
 }
 
@@ -109,23 +118,37 @@ func SummarizeChatRequest(req ChatRequest) BodySummary {
 		ServiceTier:          req.ServiceTier,
 		HasTextControls:      len(req.Text) > 0 && string(req.Text) != "null",
 		Truncation:           req.Truncation,
-		PromptCacheRetention: req.PromptCacheRetention, MessagesChars: 0, Messages: nil, Tools: nil, ToolCount: 0,
+		PromptCacheRetention: req.PromptCacheRetention,
+		MessagesChars:        0,
+		Messages:             nil,
+		Tools:                nil,
+		ToolCount:            0,
 	}
 
 	summary.ToolCount = len(req.Tools) + len(req.Functions)
+
 	summary.Tools = make([]ToolSummary, 0, summary.ToolCount)
 	for _, tool := range req.Tools {
-		summary.Tools = append(summary.Tools, ToolSummary{Name: tool.Function.Name, ParamsChars: len(tool.Function.Parameters)})
+		summary.Tools = append(
+			summary.Tools,
+			ToolSummary{Name: tool.Function.Name, ParamsChars: len(tool.Function.Parameters)},
+		)
 	}
+
 	for _, fn := range req.Functions {
-		summary.Tools = append(summary.Tools, ToolSummary{Name: fn.Name, ParamsChars: len(fn.Parameters)})
+		summary.Tools = append(
+			summary.Tools,
+			ToolSummary{Name: fn.Name, ParamsChars: len(fn.Parameters)},
+		)
 	}
 
 	msgSummaries := summarizeMessages(req.Messages)
+
 	summary.Messages = msgSummaries
 	for _, msg := range msgSummaries {
 		summary.MessagesChars += msg.ContentChars
 	}
+
 	return summary
 }
 
@@ -134,6 +157,7 @@ func summarizeMessages(messages []ChatMessage) []MsgSummary {
 	for _, msg := range sampleMessages(messages) {
 		samples = append(samples, summarizeMessage(msg))
 	}
+
 	return samples
 }
 
@@ -141,9 +165,11 @@ func sampleMessages(messages []ChatMessage) []ChatMessage {
 	if len(messages) <= chatBodySummaryMessageLimit*2 {
 		return messages
 	}
+
 	out := make([]ChatMessage, 0, chatBodySummaryMessageLimit*2)
 	out = append(out, messages[:chatBodySummaryMessageLimit]...)
 	out = append(out, messages[len(messages)-chatBodySummaryMessageLimit:]...)
+
 	return out
 }
 
@@ -152,25 +178,36 @@ func summarizeMessage(msg ChatMessage) MsgSummary {
 	if len(content) > maxContentChars {
 		content = content[:maxContentChars]
 	}
+
 	summary := MsgSummary{
-		Role:         msg.Role,
-		ContentChars: len(content),
-		Name:         msg.Name,
-		ToolCallID:   msg.ToolCallID, HasToolCalls: false, ToolCallCount: 0, ToolCallIDs: nil, ToolCallNames: nil, ToolCallArgChars: 0, ToolCallArgKeys: nil, ToolCallPaths: nil,
+		Role:             msg.Role,
+		ContentChars:     len(content),
+		Name:             msg.Name,
+		ToolCallID:       msg.ToolCallID,
+		HasToolCalls:     false,
+		ToolCallCount:    0,
+		ToolCallIDs:      nil,
+		ToolCallNames:    nil,
+		ToolCallArgChars: 0,
+		ToolCallArgKeys:  nil,
+		ToolCallPaths:    nil,
 	}
 	if len(msg.ToolCalls) > 0 {
 		summary.HasToolCalls = true
+
 		summary.ToolCallCount = len(msg.ToolCalls)
 		for _, tc := range msg.ToolCalls {
 			if summary.ToolCallID == "" {
 				summary.ToolCallID = tc.ID
 			}
+
 			appendUniqueString(&summary.ToolCallIDs, tc.ID)
 			appendUniqueString(&summary.ToolCallNames, tc.Function.Name)
 			summary.ToolCallArgChars += len(tc.Function.Arguments)
 			summarizeToolCallArguments(tc.Function.Arguments, &summary)
 		}
 	}
+
 	return summary
 }
 
@@ -179,15 +216,25 @@ func summarizeToolCallArguments(raw string, summary *MsgSummary) {
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		return
 	}
+
 	keys := make([]string, 0, len(args))
 	for key := range args {
 		keys = append(keys, key)
 	}
+
 	sort.Strings(keys)
+
 	for _, key := range keys {
 		appendUniqueString(&summary.ToolCallArgKeys, key)
 		switch toolCallPathArgKey(key) {
-		case toolCallPathKeyPath, toolCallPathKeyFile, toolCallPathKeyFilepath, toolCallPathKeyTargetFile, toolCallPathKeyTargetDirectory, toolCallPathKeyCwd, toolCallPathKeyWorkdir, toolCallPathKeyWorkingDirectory:
+		case toolCallPathKeyPath,
+			toolCallPathKeyFile,
+			toolCallPathKeyFilepath,
+			toolCallPathKeyTargetFile,
+			toolCallPathKeyTargetDirectory,
+			toolCallPathKeyCwd,
+			toolCallPathKeyWorkdir,
+			toolCallPathKeyWorkingDirectory:
 			var value string
 			if json.Unmarshal(args[key], &value) == nil {
 				appendUniqueString(&summary.ToolCallPaths, value)
@@ -200,11 +247,14 @@ func appendUniqueString(values *[]string, value string) {
 	if len(*values) >= maxToolCallSummaryItems {
 		return
 	}
+
 	if value == "" {
 		return
 	}
+
 	if slices.Contains(*values, value) {
 		return
 	}
+
 	*values = append(*values, value)
 }

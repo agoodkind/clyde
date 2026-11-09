@@ -53,16 +53,31 @@ func (sw *SSEWriter) marshalStreamChunk(chunk StreamChunk) ([]byte, error) {
 	if !sw.explicitNullUsage {
 		encoded, err := json.Marshal(chunk)
 		if err != nil {
-			slog.Warn("adapter.openai_sse.marshal_stream_chunk_failed", "concern", "adapter.chat.render", "err", err)
+			slog.Warn(
+				"adapter.openai_sse.marshal_stream_chunk_failed",
+				"concern",
+				"adapter.chat.render",
+				"err",
+				err,
+			)
 			return nil, fmt.Errorf("marshal stream chunk: %w", err)
 		}
+
 		return encoded, nil
 	}
+
 	encoded, err := json.Marshal(streamChunkNullUsageWire(chunk))
 	if err != nil {
-		slog.Warn("adapter.openai_sse.marshal_null_usage_chunk_failed", "concern", "adapter.chat.render", "err", err)
+		slog.Warn(
+			"adapter.openai_sse.marshal_null_usage_chunk_failed",
+			"concern",
+			"adapter.chat.render",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("marshal stream chunk with null usage: %w", err)
 	}
+
 	return encoded, nil
 }
 
@@ -72,6 +87,7 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	if !ok {
 		return nil, ErrSSENoFlusher
 	}
+
 	return &SSEWriter{w: w, f: f, headersCommitted: false, explicitNullUsage: false}, nil
 }
 
@@ -80,6 +96,7 @@ func (sw *SSEWriter) WriteSSEHeaders() {
 	if sw.headersCommitted {
 		return
 	}
+
 	sw.w.Header().Set("Content-Type", "text/event-stream")
 	sw.w.Header().Set("Cache-Control", "no-cache, no-transform")
 	sw.w.Header().Set("Connection", "keep-alive")
@@ -95,14 +112,29 @@ func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk
 	chunk.SystemFingerprint = systemFingerprint
 	b, err := sw.marshalStreamChunk(chunk)
 	if err != nil {
-		slog.Warn("adapter.openai_sse.marshal_chunk_failed", "concern", "adapter.chat.render", "err", err)
+		slog.Warn(
+			"adapter.openai_sse.marshal_chunk_failed",
+			"concern",
+			"adapter.chat.render",
+			"err",
+			err,
+		)
 		return fmt.Errorf("marshal OpenAI stream chunk: %w", err)
 	}
+
 	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", b); err != nil {
-		slog.Warn("adapter.openai_sse.write_chunk_failed", "concern", "adapter.chat.render", "err", err)
+		slog.Warn(
+			"adapter.openai_sse.write_chunk_failed",
+			"concern",
+			"adapter.chat.render",
+			"err",
+			err,
+		)
 		return fmt.Errorf("write OpenAI stream chunk: %w", err)
 	}
+
 	sw.f.Flush()
+
 	return nil
 }
 
@@ -110,10 +142,18 @@ func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk
 func (sw *SSEWriter) WriteStreamEvent(payload []byte) error {
 	sw.WriteSSEHeaders()
 	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", payload); err != nil {
-		slog.Warn("adapter.openai_sse.write_event_failed", "concern", "adapter.chat.render", "err", err)
+		slog.Warn(
+			"adapter.openai_sse.write_event_failed",
+			"concern",
+			"adapter.chat.render",
+			"err",
+			err,
+		)
 		return fmt.Errorf("write OpenAI stream event: %w", err)
 	}
+
 	sw.f.Flush()
+
 	return nil
 }
 
@@ -125,20 +165,38 @@ func (sw *SSEWriter) WriteStreamEvent(payload []byte) error {
 func (sw *SSEWriter) WriteNamedEvent(name string, payload []byte) error {
 	sw.WriteSSEHeaders()
 	if _, err := fmt.Fprintf(sw.w, "event: %s\ndata: %s\n\n", name, payload); err != nil {
-		slog.Warn("adapter.openai_sse.write_named_event_failed", "concern", "adapter.chat.render", "event", name, "err", err)
+		slog.Warn(
+			"adapter.openai_sse.write_named_event_failed",
+			"concern",
+			"adapter.chat.render",
+			"event",
+			name,
+			"err",
+			err,
+		)
 		return fmt.Errorf("write OpenAI named event %q: %w", name, err)
 	}
+
 	sw.f.Flush()
+
 	return nil
 }
 
 // WriteStreamDone is part of Clyde's typed adapter surface.
 func (sw *SSEWriter) WriteStreamDone() error {
 	if _, err := io.WriteString(sw.w, "data: [DONE]\n\n"); err != nil {
-		slog.Warn("adapter.openai_sse.write_done_failed", "concern", "adapter.chat.render", "err", err)
+		slog.Warn(
+			"adapter.openai_sse.write_done_failed",
+			"concern",
+			"adapter.chat.render",
+			"err",
+			err,
+		)
 		return fmt.Errorf("write OpenAI stream done: %w", err)
 	}
+
 	sw.f.Flush()
+
 	return nil
 }
 
@@ -167,20 +225,35 @@ func NewStreamErrorRenderer() StreamErrorRenderer { return StreamErrorRenderer{}
 
 // WriteStreamError emits one native OpenAI error event followed by
 // the stream terminator.
-func (r StreamErrorRenderer) WriteStreamError(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
+func (r StreamErrorRenderer) WriteStreamError(
+	w errcontract.StreamErrorWriter,
+	info errcontract.ErrorInfo,
+) error {
 	if err := r.emitErrorEvent(w, info); err != nil {
 		return err
 	}
+
 	if err := w.WriteStreamDone(); err != nil {
-		slog.Warn("adapter.openai_stream_error_write_failed", "concern", "adapter.http.errors", "event", "write_done_failed",
-			"err", err.Error(),
+		slog.Warn(
+			"adapter.openai_stream_error_write_failed",
+			"concern",
+			"adapter.http.errors",
+			"event",
+			"write_done_failed",
+			"err",
+			err.Error(),
 		)
+
 		return fmt.Errorf("write stream done terminator: %w", err)
 	}
+
 	return nil
 }
 
-func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
+func (StreamErrorRenderer) emitErrorEvent(
+	w errcontract.StreamErrorWriter,
+	info errcontract.ErrorInfo,
+) error {
 	envelopeType := envelopeTypeFor(info.Status, info)
 	body := ErrorBody{
 		Message: info.Message,
@@ -194,12 +267,21 @@ func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info 
 	if err != nil {
 		return fmt.Errorf("marshal OpenAI stream error: %w", err)
 	}
+
 	if err := w.WriteStreamEvent(b); err != nil {
-		slog.Warn("adapter.openai_stream_error_write_failed", "concern", "adapter.http.errors", "event", "write_event_failed",
-			"err", err.Error(),
+		slog.Warn(
+			"adapter.openai_stream_error_write_failed",
+			"concern",
+			"adapter.http.errors",
+			"event",
+			"write_event_failed",
+			"err",
+			err.Error(),
 		)
+
 		return fmt.Errorf("write stream error event: %w", err)
 	}
+
 	return nil
 }
 

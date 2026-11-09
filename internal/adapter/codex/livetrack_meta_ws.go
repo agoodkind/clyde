@@ -37,19 +37,23 @@ const wsSessionKind = "adapter.codex.ws_session"
 // quiet-relevant PhaseEgress member so the reload deadline force-closes any
 // session the cache still holds and an active session holds quiet.
 func NewWsSessionRegistry(group *livetrack.Group) *livetrack.Registry[WsSessionMeta] {
-	return livetrack.Attach[WsSessionMeta](group, livetrack.MemberSpec{
-		Phase:         livetrack.PhaseEgress,
-		QuietRelevant: true,
-		CancelNoWait:  false,
-	}, livetrack.Options[WsSessionMeta]{
-		Component:     "adapter.codex",
-		Concern:       "adapter.providers.codex.session-reuse",
-		Log:           nil,
-		PollEvery:     0,
-		CloserGrace:   0,
-		ParallelClose: true,
-		Now:           nil,
-	})
+	return livetrack.Attach[WsSessionMeta](
+		group,
+		livetrack.MemberSpec{
+			Phase:         livetrack.PhaseEgress,
+			QuietRelevant: true,
+			CancelNoWait:  false,
+		},
+		livetrack.Options[WsSessionMeta]{
+			Component:     "adapter.codex",
+			Concern:       "adapter.providers.codex.session-reuse",
+			Log:           nil,
+			PollEvery:     0,
+			CloserGrace:   0,
+			ParallelClose: true,
+			Now:           nil,
+		},
+	)
 }
 
 // wsConnCloser implements [livetrack.Closer] for a gorilla websocket
@@ -65,20 +69,33 @@ func (c *wsConnCloser) Close(reason string) error {
 	if conn == nil && c.session != nil && c.session.Conn != nil {
 		conn = c.session.Conn
 	}
+
 	if conn == nil {
 		return nil
 	}
+
 	if err := conn.Close(); err != nil {
 		wrapped := fmt.Errorf("close codex websocket session (%s): %w", reason, err)
-		slog.Warn("adapter.codex.ws_session.close_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
-			"subcomponent", "codex",
-			"reason", reason,
-			"err", wrapped,
+		slog.Warn(
+			"adapter.codex.ws_session.close_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"component",
+			"adapter",
+			"subcomponent",
+			"codex",
+			"reason",
+			reason,
+			"err",
+			wrapped,
 		)
+
 		return wrapped
 	}
+
 	if c.session != nil {
 		c.session.Closed = true
 	}
+
 	return nil
 }

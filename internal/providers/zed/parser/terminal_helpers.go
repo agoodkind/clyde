@@ -119,34 +119,72 @@ func newTerminalDiscoveredThread(
 	}
 }
 
-func readTerminalMetadataForRoot(ctx context.Context, root zedstore.DataRoot) []terminalMetadataWithChannel {
+func readTerminalMetadataForRoot(
+	ctx context.Context,
+	root zedstore.DataRoot,
+) []terminalMetadataWithChannel {
 	terminalMetadata := make([]terminalMetadataWithChannel, 0)
+
 	for _, dbPath := range root.MetadataDBPaths {
 		if _, err := os.Stat(dbPath); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			slog.WarnContext(ctx, "providers.zed.parser.stat_metadata_db_failed", "concern", concern, "path", dbPath, "err", err)
+
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.stat_metadata_db_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"err",
+				err,
+			)
 			continue
 		}
 
 		db, err := zedstore.OpenReadOnlyDatabase(ctx, dbPath)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.open_metadata_db_failed", "concern", concern, "path", dbPath, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.open_metadata_db_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"err",
+				err,
+			)
 			continue
 		}
+
 		terminalRows, err := zedstore.ReadSidebarTerminalThreads(ctx, db)
 		_ = db.Close()
 		if err != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.read_terminal_metadata_failed", "concern", concern, "path", dbPath, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.read_terminal_metadata_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"err",
+				err,
+			)
 			continue
 		}
 
 		channel := filepath.Base(filepath.Dir(dbPath))
+
 		for _, row := range terminalRows {
-			terminalMetadata = append(terminalMetadata, terminalMetadataWithChannel{Metadata: row, Channel: channel})
+			terminalMetadata = append(
+				terminalMetadata,
+				terminalMetadataWithChannel{Metadata: row, Channel: channel},
+			)
 		}
 	}
+
 	return terminalMetadata
 }
 
@@ -160,9 +198,11 @@ func resolveTerminalDiscoveredThread(
 	if err != nil {
 		return emptyDiscoveredThread(), false, err
 	}
+
 	if !ok {
 		return emptyDiscoveredThread(), false, nil
 	}
+
 	return newTerminalDiscoveredThread(terminal.Metadata, root.RootDir, terminal.Channel), true, nil
 }
 
@@ -176,24 +216,46 @@ func resolveNativeDiscoveredThread(
 	if err != nil {
 		return emptyDiscoveredThread(), false, err
 	}
+
 	if !ok {
 		return emptyDiscoveredThread(), false, nil
 	}
+
 	metadata, ok, err := readSidebarThreadMetadataForRoot(ctx, root, sessionID, channel)
 	if err != nil {
 		return emptyDiscoveredThread(), false, err
 	}
+
 	// An agent-named thread resolves like any other; ScanRecord classifies its
 	// origin and the conversation setting decides whether it is served.
 	if !ok {
 		return emptyDiscoveredThread(), false, nil
 	}
+
 	thread, err := zedstore.ParseThreadDocument(row.DataType, row.Data)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.parse_thread_document_failed", "concern", concern, "path", root.ThreadsDBPath, "session_id", sessionID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.parse_thread_document_failed",
+			"concern",
+			concern,
+			"path",
+			root.ThreadsDBPath,
+			"session_id",
+			sessionID,
+			"err",
+			err,
+		)
 		return emptyDiscoveredThread(), false, fmt.Errorf("parse zed thread document: %w", err)
 	}
-	return newNativeDiscoveredThread(row, thread, metadata.Metadata, root.RootDir, metadata.Channel), true, nil
+
+	return newNativeDiscoveredThread(
+		row,
+		thread,
+		metadata.Metadata,
+		root.RootDir,
+		metadata.Channel,
+	), true, nil
 }
 
 func readSidebarTerminalMetadataForRoot(
@@ -209,29 +271,81 @@ func readSidebarTerminalMetadataForRoot(
 		if dbChannel != channel {
 			continue
 		}
+
 		if _, err := os.Stat(dbPath); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			slog.WarnContext(ctx, "providers.zed.parser.stat_terminal_metadata_db_failed", "concern", concern, "path", dbPath, "terminal_id", terminalID, "err", err)
-			return emptyMetadata, false, fmt.Errorf("stat zed terminal metadata db %s: %w", dbPath, err)
+
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.stat_terminal_metadata_db_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"terminal_id",
+				terminalID,
+				"err",
+				err,
+			)
+
+			return emptyMetadata, false, fmt.Errorf(
+				"stat zed terminal metadata db %s: %w",
+				dbPath,
+				err,
+			)
 		}
 
 		db, err := zedstore.OpenReadOnlyDatabase(ctx, dbPath)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.open_terminal_metadata_db_failed", "concern", concern, "path", dbPath, "terminal_id", terminalID, "err", err)
-			return emptyMetadata, false, fmt.Errorf("open zed terminal metadata db %s: %w", dbPath, err)
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.open_terminal_metadata_db_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"terminal_id",
+				terminalID,
+				"err",
+				err,
+			)
+			return emptyMetadata, false, fmt.Errorf(
+				"open zed terminal metadata db %s: %w",
+				dbPath,
+				err,
+			)
 		}
+
 		row, ok, err := zedstore.ReadSidebarTerminalByID(ctx, db, terminalID)
 		_ = db.Close()
 		if err != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.read_sidebar_terminal_by_id_failed", "concern", concern, "path", dbPath, "terminal_id", terminalID, "err", err)
-			return emptyMetadata, false, fmt.Errorf("read zed terminal sidebar row %q from %s: %w", terminalID, dbPath, err)
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.read_sidebar_terminal_by_id_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"terminal_id",
+				terminalID,
+				"err",
+				err,
+			)
+			return emptyMetadata, false, fmt.Errorf(
+				"read zed terminal sidebar row %q from %s: %w",
+				terminalID,
+				dbPath,
+				err,
+			)
 		}
+
 		if ok {
 			return terminalMetadataWithChannel{Metadata: row, Channel: dbChannel}, true, nil
 		}
 	}
+
 	return emptyMetadata, false, nil
 }
 
@@ -240,21 +354,30 @@ func terminalSessionID(terminalID string) string {
 	if trimmed == "" {
 		return ""
 	}
+
 	return terminalPathPrefix + trimmed
 }
 
 func terminalMetadataStamp(metadata zedstore.SidebarTerminalThreadMetadata) conversation.FileStamp {
 	hash := fnv.New64a()
-	_, _ = hash.Write([]byte(strings.Join([]string{
-		metadata.TerminalID,
-		metadata.Title,
-		metadata.CustomTitle,
-		metadata.CreatedAt.Format(time.RFC3339Nano),
-		metadata.WorkingDirectory,
-		strings.Join(metadata.FolderPaths, "\n"),
-		strings.Join(metadata.MainWorktreePaths, "\n"),
-		metadata.RemoteConnection,
-	}, "\n")))
+	_, _ = hash.Write(
+		[]byte(
+			strings.Join(
+				[]string{
+					metadata.TerminalID,
+					metadata.Title,
+					metadata.CustomTitle,
+					metadata.CreatedAt.Format(time.RFC3339Nano),
+					metadata.WorkingDirectory,
+					strings.Join(metadata.FolderPaths, "\n"),
+					strings.Join(metadata.MainWorktreePaths, "\n"),
+					metadata.RemoteConnection,
+				},
+				"\n",
+			),
+		),
+	)
+
 	return conversation.FileStamp{
 		Size:  int64(hash.Sum64() & 0x7fffffffffffffff),
 		Mtime: metadata.CreatedAt,

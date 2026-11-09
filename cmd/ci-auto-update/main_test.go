@@ -12,8 +12,14 @@ import (
 func TestSelectReleasesForBranchBuild(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
-		{TagName: "202608111500-13a-12345678", PublishedAt: time.Date(2026, time.August, 11, 15, 0, 0, 0, time.UTC)},
-		{TagName: "202608121600-13b-abcdef12", PublishedAt: time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC)},
+		{
+			TagName:     "202608111500-13a-12345678",
+			PublishedAt: time.Date(2026, time.August, 11, 15, 0, 0, 0, time.UTC),
+		},
+		{
+			TagName:     "202608121600-13b-abcdef12",
+			PublishedAt: time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC),
+		},
 	}
 	env := environment{
 		commit:  "abcdef1234567890",
@@ -25,16 +31,28 @@ func TestSelectReleasesForBranchBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
+
 	if selection.target != releases[1].TagName || selection.previous != releases[0].TagName {
-		t.Fatalf("selection = %#v, want target %q and previous %q", selection, releases[1].TagName, releases[0].TagName)
+		t.Fatalf(
+			"selection = %#v, want target %q and previous %q",
+			selection,
+			releases[1].TagName,
+			releases[0].TagName,
+		)
 	}
 }
 
 func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
-		{TagName: "202608111500-13a-12345678", PublishedAt: time.Date(2026, time.August, 11, 15, 0, 0, 0, time.UTC)},
-		{TagName: "202608121600-13b-abcdef12", PublishedAt: time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC)},
+		{
+			TagName:     "202608111500-13a-12345678",
+			PublishedAt: time.Date(2026, time.August, 11, 15, 0, 0, 0, time.UTC),
+		},
+		{
+			TagName:     "202608121600-13b-abcdef12",
+			PublishedAt: time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC),
+		},
 	}
 	env := environment{
 		commit:  "unreleased123456",
@@ -47,6 +65,7 @@ func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
+
 	if selection.target != releases[1].TagName || selection.previous != releases[0].TagName {
 		t.Fatalf("selection = %#v, want latest two releases", selection)
 	}
@@ -67,6 +86,7 @@ func TestLoadEnvironmentDetectsManualRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadEnvironment() error = %v", err)
 	}
+
 	if !env.manual {
 		t.Fatal("manual = false, want true")
 	}
@@ -89,6 +109,7 @@ func TestSelectReleasesForStableTagSkipsDrafts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
+
 	if selection.target != "v1.4.2" || selection.previous != releases[2].TagName {
 		t.Fatalf("selection = %#v, want stable target and preceding release", selection)
 	}
@@ -105,6 +126,7 @@ func TestStateReportsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stateReportsApplied() error = %v", err)
 	}
+
 	if !applied {
 		t.Fatal("stateReportsApplied() = false, want true")
 	}
@@ -129,7 +151,17 @@ func main() {
 	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if output, err := commandOutput(t.Context(), directory, nil, "go", "build", "-o", binaryPath, sourcePath); err != nil {
+
+	if output, err := commandOutput(
+		t.Context(),
+		directory,
+		nil,
+		"go",
+		"build",
+		"-o",
+		binaryPath,
+		sourcePath,
+	); err != nil {
 		t.Fatalf("go build error = %v, output = %q", err, output)
 	}
 
@@ -137,6 +169,7 @@ func main() {
 	if err != nil {
 		t.Fatalf("binaryVersion() error = %v", err)
 	}
+
 	if version != "clyde version test-release" {
 		t.Fatalf("binaryVersion() = %q, want stdout only", version)
 	}
@@ -156,9 +189,11 @@ func TestRemoveTestRootRemovesOwnedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MkdirTemp() error = %v", err)
 	}
+
 	if err := removeTestRoot(root); err != nil {
 		t.Fatalf("removeTestRoot() error = %v", err)
 	}
+
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("Stat() error = %v, want not exist", err)
 	}
@@ -166,11 +201,13 @@ func TestRemoveTestRootRemovesOwnedDirectory(t *testing.T) {
 
 func TestServiceManagerInvocation(t *testing.T) {
 	t.Parallel()
+
 	for _, path := range []string{"/tmp/launchctl", "/tmp/systemctl"} {
 		if !isServiceManagerInvocation(path) {
 			t.Fatalf("isServiceManagerInvocation(%q) = false, want true", path)
 		}
 	}
+
 	if isServiceManagerInvocation("/tmp/ci-auto-update") {
 		t.Fatal("isServiceManagerInvocation(ci-auto-update) = true, want false")
 	}

@@ -114,6 +114,7 @@ func CompiledFingerprint() string {
 	if fingerprint == "" {
 		return buildFingerprintDefault
 	}
+
 	return fingerprint
 }
 
@@ -128,17 +129,37 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 	if strings.TrimSpace(runtimeDir) == "" {
 		return fmt.Errorf("daemon supervisor runtime dir is empty")
 	}
+
 	executablePath, err := supervisorExecutablePath()
 	if err != nil {
-		log.WarnContext(ctx, "daemon.supervisor.executable_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		log.WarnContext(
+			ctx,
+			"daemon.supervisor.executable_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
 		return fmt.Errorf("resolve daemon supervisor executable: %w", err)
 	}
 
 	readyRead, readyWrite, err := os.Pipe()
 	if err != nil {
-		log.WarnContext(ctx, "daemon.supervisor.ready_pipe_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		log.WarnContext(
+			ctx,
+			"daemon.supervisor.ready_pipe_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
 		return fmt.Errorf("create daemon worker readiness pipe: %w", err)
 	}
+
 	defer func() { _ = readyRead.Close() }()
 	defer func() { _ = readyWrite.Close() }()
 
@@ -146,34 +167,69 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 	_ = os.Remove(socketPath)
 	controlListener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
-		log.WarnContext(ctx, "daemon.supervisor.reload_socket_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "socket_path", socketPath, "err", err)
+		log.WarnContext(
+			ctx,
+			"daemon.supervisor.reload_socket_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"socket_path",
+			socketPath,
+			"err",
+			err,
+		)
 		return fmt.Errorf("listen daemon supervisor reload socket %s: %w", socketPath, err)
 	}
+
 	defer func() { _ = controlListener.Close() }()
 	defer func() { _ = os.Remove(socketPath) }()
 
 	handle, err := startWorker(workerCommand(executablePath, readyWrite, 3, socketPath))
 	if err != nil {
-		log.WarnContext(ctx, "daemon.supervisor.worker_start_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		log.WarnContext(
+			ctx,
+			"daemon.supervisor.worker_start_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
 		return fmt.Errorf("start daemon worker: %w", err)
 	}
+
 	_ = readyWrite.Close()
 
 	signalCh := make(chan os.Signal, 2)
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signalCh)
 
-	log.InfoContext(ctx, "daemon.supervisor.worker_started", "concern", "process.daemon.lifecycle", "component", "daemon",
-		"pid", handle.cmd.Process.Pid,
-		"socket_path", socketPath,
-		"fingerprint", CompiledFingerprint(),
+	log.InfoContext(
+		ctx,
+		"daemon.supervisor.worker_started",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"pid",
+		handle.cmd.Process.Pid,
+		"socket_path",
+		socketPath,
+		"fingerprint",
+		CompiledFingerprint(),
 	)
 
 	readyCh := make(chan error, 1)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logSupervisorPanic(log, "daemon.supervisor.worker_ready_wait", fmt.Sprint(recovered))
+				logSupervisorPanic(
+					log,
+					"daemon.supervisor.worker_ready_wait",
+					fmt.Sprint(recovered),
+				)
 			}
 		}()
 		readyCh <- waitForWorkerReady(ctx, readyRead, handle.waitCh)
@@ -181,25 +237,43 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 
 	select {
 	case sig := <-signalCh:
-		log.InfoContext(ctx, "daemon.supervisor.signal_received", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"signal", fmt.Sprint(sig),
-			"pid", handle.cmd.Process.Pid,
+		log.InfoContext(
+			ctx,
+			"daemon.supervisor.signal_received",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"signal",
+			fmt.Sprint(sig),
+			"pid",
+			handle.cmd.Process.Pid,
 		)
 		stopWorker(log, handle.cmd, sig, handle.waitCh)
+
 		return nil
 	case err := <-readyCh:
 		if err != nil {
 			if !errors.Is(err, errWorkerExitedBeforeReady) {
 				stopWorker(log, handle.cmd, syscall.SIGTERM, handle.waitCh)
 			}
+
 			return err
 		}
 	case <-ctx.Done():
 		stopWorker(log, handle.cmd, syscall.SIGTERM, handle.waitCh)
 		return nil
 	}
-	log.InfoContext(ctx, "daemon.supervisor.worker_ready", "concern", "process.daemon.lifecycle", "component", "daemon",
-		"pid", handle.cmd.Process.Pid,
+
+	log.InfoContext(
+		ctx,
+		"daemon.supervisor.worker_ready",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"pid",
+		handle.cmd.Process.Pid,
 	)
 
 	// replacementCh is unbuffered. runSupervisorLoop stores a replacement
@@ -221,21 +295,28 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 	// A control handler that starts a worker after the loop returned stops
 	// that worker itself.
 	defer close(loopDone)
+
 	return runSupervisorLoop(ctx, log, signalCh, handle, replacementCh, abortCh, controlErrCh)
 }
 
 // RequestAbort asks the running supervisor to stop the replacement worker with
 // the given pid and to make the worker it replaced current again.
 func RequestAbort(ctx context.Context, socketPath string, pid int) error {
-	_, err := sendControlRequest(ctx, strings.TrimSpace(socketPath), controlRequest{
-		Operation:      controlOperationAbort,
-		ExecutablePath: "",
-		Arguments:      nil,
-		Environment:    nil,
-		Listeners:      nil,
-		ReadyFD:        0,
-		PID:            pid,
-	}, nil)
+	_, err := sendControlRequest(
+		ctx,
+		strings.TrimSpace(socketPath),
+		controlRequest{
+			Operation:      controlOperationAbort,
+			ExecutablePath: "",
+			Arguments:      nil,
+			Environment:    nil,
+			Listeners:      nil,
+			ReadyFD:        0,
+			PID:            pid,
+		},
+		nil,
+	)
+
 	return err
 }
 
@@ -253,19 +334,30 @@ func RequestReplacement(
 	if socketPath == "" {
 		return 0, fmt.Errorf("supervisor reload socket is empty")
 	}
+
 	specJSON, err := json.Marshal(listeners)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.reload_request.encode_listeners_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.reload_request.encode_listeners_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return 0, fmt.Errorf("encode inherited listeners: %w", err)
 	}
+
 	if environment == nil {
 		environment = os.Environ()
 	}
+
 	req := controlRequest{
 		Operation:      controlOperationReplace,
 		ExecutablePath: executablePath,
 		Arguments:      []string{executablePath, "daemon", "worker"},
-		Environment: EnvWithOverrides(environment,
+		Environment: EnvWithOverrides(
+			environment,
 			EnvReloadChild+"=1",
 			EnvInheritedListeners+"="+string(specJSON),
 			EnvReadyFD+"="+strconv.Itoa(readyFD),
@@ -278,9 +370,11 @@ func RequestReplacement(
 	if err != nil {
 		return 0, err
 	}
+
 	if resp.PID <= 0 {
 		return 0, fmt.Errorf("supervisor reload returned invalid pid %d", resp.PID)
 	}
+
 	return resp.PID, nil
 }
 
@@ -303,19 +397,30 @@ func RequestRebind(
 	if socketPath == "" {
 		return 0, fmt.Errorf("supervisor rebind socket is empty")
 	}
+
 	specJSON, err := json.Marshal(listeners)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.rebind_request.encode_listeners_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.rebind_request.encode_listeners_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return 0, fmt.Errorf("encode inherited listeners: %w", err)
 	}
+
 	if environment == nil {
 		environment = os.Environ()
 	}
+
 	req := controlRequest{
 		Operation:      controlOperationRebind,
 		ExecutablePath: executablePath,
 		Arguments:      []string{executablePath, "daemon", "worker"},
-		Environment: EnvWithOverrides(environment,
+		Environment: EnvWithOverrides(
+			environment,
 			EnvReloadChild+"=1",
 			EnvInheritedListeners+"="+string(specJSON),
 			EnvReadyFD+"="+strconv.Itoa(readyFD),
@@ -328,26 +433,34 @@ func RequestRebind(
 	if err != nil {
 		return 0, err
 	}
+
 	if resp.PID <= 0 {
 		return 0, fmt.Errorf("supervisor rebind returned invalid pid %d", resp.PID)
 	}
+
 	return resp.PID, nil
 }
 
 // RequestStatus asks the running supervisor for its fingerprint and pid.
 func RequestStatus(ctx context.Context, socketPath string) (Status, error) {
-	resp, err := sendControlRequest(ctx, socketPath, controlRequest{
-		Operation:      controlOperationStatus,
-		ExecutablePath: "",
-		Arguments:      nil,
-		Environment:    nil,
-		Listeners:      nil,
-		ReadyFD:        0,
-		PID:            0,
-	}, nil)
+	resp, err := sendControlRequest(
+		ctx,
+		socketPath,
+		controlRequest{
+			Operation:      controlOperationStatus,
+			ExecutablePath: "",
+			Arguments:      nil,
+			Environment:    nil,
+			Listeners:      nil,
+			ReadyFD:        0,
+			PID:            0,
+		},
+		nil,
+	)
 	if err != nil {
 		return Status{}, err
 	}
+
 	return Status{
 		Fingerprint: strings.TrimSpace(resp.Fingerprint),
 		PID:         resp.PID,
@@ -362,8 +475,10 @@ func EnvWithOverrides(base []string, overrides ...string) []string {
 		if !ok {
 			continue
 		}
+
 		remove[key] = true
 	}
+
 	out := make([]string, 0, len(base)+len(overrides))
 	for _, entry := range base {
 		key, ok := envKey(entry)
@@ -371,16 +486,28 @@ func EnvWithOverrides(base []string, overrides ...string) []string {
 			out = append(out, entry)
 			continue
 		}
+
 		if remove[key] {
 			continue
 		}
+
 		out = append(out, entry)
 	}
+
 	out = append(out, overrides...)
+
 	return out
 }
 
-func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os.Signal, handle workerHandle, replacementCh <-chan workerHandle, abortCh <-chan abortRequest, controlErrCh <-chan error) error {
+func runSupervisorLoop(
+	ctx context.Context,
+	log *slog.Logger,
+	signalCh <-chan os.Signal,
+	handle workerHandle,
+	replacementCh <-chan workerHandle,
+	abortCh <-chan abortRequest,
+	controlErrCh <-chan error,
+) error {
 	current := handle
 	// superseded lists the workers that a replacement took over from. A
 	// superseded worker exits after its drain, or stays in service when its
@@ -391,33 +518,62 @@ func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os
 			stopWorker(log, worker.cmd, syscall.SIGTERM, worker.waitCh)
 		}
 	}()
+
 	for {
 		select {
 		case sig := <-signalCh:
-			log.DebugContext(ctx, "daemon.supervisor.signal_received", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"signal", fmt.Sprint(sig),
-				"pid", current.cmd.Process.Pid,
+			log.DebugContext(
+				ctx,
+				"daemon.supervisor.signal_received",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"signal",
+				fmt.Sprint(sig),
+				"pid",
+				current.cmd.Process.Pid,
 			)
 			stopWorker(log, current.cmd, sig, current.waitCh)
+
 			return nil
 		case replacement := <-replacementCh:
 			superseded = append(runningWorkers(superseded), current)
 			current = replacement
-			log.DebugContext(ctx, "daemon.supervisor.worker_replaced", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"pid", current.cmd.Process.Pid,
+			log.DebugContext(
+				ctx,
+				"daemon.supervisor.worker_replaced",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"pid",
+				current.cmd.Process.Pid,
 			)
 		case request := <-abortCh:
 			superseded = runningWorkers(superseded)
 			if current.cmd.Process.Pid != request.pid || len(superseded) == 0 {
-				request.done <- fmt.Errorf("worker %d is not a replacement with a running predecessor", request.pid)
+				request.done <- fmt.Errorf(
+					"worker %d is not a replacement with a running predecessor",
+					request.pid,
+				)
 				continue
 			}
+
 			aborted := current
 			current = superseded[len(superseded)-1]
 			superseded = superseded[:len(superseded)-1]
-			log.WarnContext(ctx, "daemon.supervisor.replacement_aborted", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"pid", aborted.cmd.Process.Pid,
-				"restored_pid", current.cmd.Process.Pid,
+			log.WarnContext(
+				ctx,
+				"daemon.supervisor.replacement_aborted",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"pid",
+				aborted.cmd.Process.Pid,
+				"restored_pid",
+				current.cmd.Process.Pid,
 			)
 			stopWorker(log, aborted.cmd, syscall.SIGTERM, aborted.waitCh)
 			request.done <- nil
@@ -441,10 +597,16 @@ func runningWorkers(workers []workerHandle) []workerHandle {
 			running = append(running, worker)
 		}
 	}
+
 	return running
 }
 
-func workerCommand(executablePath string, readyWrite *os.File, readyFD int, supervisorSocketPath string) *exec.Cmd {
+func workerCommand(
+	executablePath string,
+	readyWrite *os.File,
+	readyFD int,
+	supervisorSocketPath string,
+) *exec.Cmd {
 	cmd := supervisorCommand(executablePath, "daemon", "worker")
 	// Leave cmd.Stdout and cmd.Stderr unset so the child inherits the
 	// supervisor's stdio. The supervisor's stdio is routed to the launchd
@@ -452,29 +614,43 @@ func workerCommand(executablePath string, readyWrite *os.File, readyFD int, supe
 	// there until the worker's own RedirectWorkerStdio takes over fd 1
 	// and fd 2 (CLYDE-XXX worker stdio capture).
 	cmd.ExtraFiles = []*os.File{readyWrite}
-	cmd.Env = EnvWithOverrides(os.Environ(),
+	cmd.Env = EnvWithOverrides(
+		os.Environ(),
 		EnvReloadChild+"=",
 		EnvInheritedListeners+"=",
 		EnvReadyFD+"="+strconv.Itoa(readyFD),
 		EnvSupervisorSocket+"="+supervisorSocketPath,
 	)
+
 	return cmd
 }
 
 func startWorker(cmd *exec.Cmd) (workerHandle, error) {
 	if err := cmd.Start(); err != nil {
-		slog.Warn("daemon.supervisor.worker_start_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.Warn(
+			"daemon.supervisor.worker_start_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return workerHandle{}, fmt.Errorf("start daemon worker: %w", err)
 	}
+
 	waitCh := make(chan error, 1)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logSupervisorPanic(slog.Default(), "daemon.supervisor.worker_wait", fmt.Sprint(recovered))
+				logSupervisorPanic(
+					slog.Default(),
+					"daemon.supervisor.worker_wait",
+					fmt.Sprint(recovered),
+				)
 			}
 		}()
 		waitCh <- cmd.Wait()
 	}()
+
 	return workerHandle{cmd: cmd, waitCh: waitCh}, nil
 }
 
@@ -485,7 +661,11 @@ func waitForWorkerReady(ctx context.Context, ready io.Reader, waitCh <-chan erro
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logSupervisorPanic(slog.Default(), "daemon.supervisor.ready_read", fmt.Sprint(recovered))
+				logSupervisorPanic(
+					slog.Default(),
+					"daemon.supervisor.ready_read",
+					fmt.Sprint(recovered),
+				)
 			}
 		}()
 		data, err := io.ReadAll(ready)
@@ -493,10 +673,12 @@ func waitForWorkerReady(ctx context.Context, ready io.Reader, waitCh <-chan erro
 			readyCh <- err
 			return
 		}
+
 		if string(data) != "ready\n" {
 			readyCh <- fmt.Errorf("daemon worker readiness failed: %q", string(data))
 			return
 		}
+
 		readyCh <- nil
 	}()
 
@@ -504,10 +686,24 @@ func waitForWorkerReady(ctx context.Context, ready io.Reader, waitCh <-chan erro
 	case err := <-readyCh:
 		return err
 	case err := <-waitCh:
-		slog.WarnContext(ctx, "daemon.supervisor.worker_exited_before_ready", "concern", "process.daemon.lifecycle", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.worker_exited_before_ready",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return fmt.Errorf("%w: %w", errWorkerExitedBeforeReady, workerExitError(err))
 	case <-deadlineCtx.Done():
-		slog.WarnContext(ctx, "daemon.supervisor.worker_ready_timeout", "concern", "process.daemon.lifecycle", "err", deadlineCtx.Err())
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.worker_ready_timeout",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			deadlineCtx.Err(),
+		)
 		return fmt.Errorf("daemon worker did not become ready: %w", deadlineCtx.Err())
 	}
 }
@@ -516,24 +712,47 @@ func stopWorker(log *slog.Logger, cmd *exec.Cmd, sig os.Signal, waitCh <-chan er
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
+
 	if err := cmd.Process.Signal(sig); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		log.Warn("daemon.supervisor.worker_signal_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"pid", cmd.Process.Pid,
-			"signal", fmt.Sprint(sig),
-			"err", err,
+		log.Warn(
+			"daemon.supervisor.worker_signal_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"pid",
+			cmd.Process.Pid,
+			"signal",
+			fmt.Sprint(sig),
+			"err",
+			err,
 		)
 	}
+
 	select {
 	case err := <-waitCh:
 		if err != nil {
-			log.Info("daemon.supervisor.worker_stopped", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"pid", cmd.Process.Pid,
-				"err", err,
+			log.Info(
+				"daemon.supervisor.worker_stopped",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"pid",
+				cmd.Process.Pid,
+				"err",
+				err,
 			)
 		}
 	case <-time.After(workerStopTimeout):
-		log.Warn("daemon.supervisor.worker_stop_timeout", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"pid", cmd.Process.Pid,
+		log.Warn(
+			"daemon.supervisor.worker_stop_timeout",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"pid",
+			cmd.Process.Pid,
 		)
 		_ = cmd.Process.Kill()
 		<-waitCh
@@ -544,25 +763,42 @@ func workerExitError(err error) error {
 	if err == nil {
 		return fmt.Errorf("daemon worker exited")
 	}
+
 	slog.Warn("daemon.supervisor.worker_exited", "concern", "process.daemon.lifecycle", "err", err)
+
 	return fmt.Errorf("daemon worker exited: %w", err)
 }
 
-func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh chan<- workerHandle, abortCh chan<- abortRequest, loopDone <-chan struct{}, errCh chan<- error) {
+func serveControl(
+	log *slog.Logger,
+	listener *net.UnixListener,
+	replacementCh chan<- workerHandle,
+	abortCh chan<- abortRequest,
+	loopDone <-chan struct{},
+	errCh chan<- error,
+) {
 	supervisorSocketPath := listener.Addr().String()
+
 	for {
 		conn, err := listener.AcceptUnix()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
+
 			errCh <- fmt.Errorf("accept supervisor reload control: %w", err)
+
 			return
 		}
+
 		go func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					logSupervisorPanic(log, "daemon.supervisor.reload_request", fmt.Sprint(recovered))
+					logSupervisorPanic(
+						log,
+						"daemon.supervisor.reload_request",
+						fmt.Sprint(recovered),
+					)
 				}
 			}()
 			handleControl(log, conn, replacementCh, abortCh, loopDone, supervisorSocketPath)
@@ -570,7 +806,14 @@ func serveControl(log *slog.Logger, listener *net.UnixListener, replacementCh ch
 	}
 }
 
-func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- workerHandle, abortCh chan<- abortRequest, loopDone <-chan struct{}, supervisorSocketPath string) {
+func handleControl(
+	log *slog.Logger,
+	conn *net.UnixConn,
+	replacementCh chan<- workerHandle,
+	abortCh chan<- abortRequest,
+	loopDone <-chan struct{},
+	supervisorSocketPath string,
+) {
 	defer func() { _ = conn.Close() }()
 	req, files, err := readControlRequest(conn)
 	if err != nil {
@@ -587,10 +830,17 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 			Error:       "",
 		}
 		if err := json.NewEncoder(conn).Encode(resp); err != nil {
-			log.Warn("daemon.supervisor.status_response_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"err", err,
+			log.Warn(
+				"daemon.supervisor.status_response_failed",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"err",
+				err,
 			)
 		}
+
 		return
 	case controlOperationAbort:
 		request := abortRequest{pid: req.PID, done: make(chan error, 1)}
@@ -600,17 +850,27 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 			writeControlError(conn, errSupervisorStopped)
 			return
 		}
+
 		if err := <-request.done; err != nil {
 			writeControlError(conn, err)
 			return
 		}
+
 		resp := controlResponse{PID: req.PID, Fingerprint: "", Error: ""}
 		if err := json.NewEncoder(conn).Encode(resp); err != nil {
-			log.Warn("daemon.supervisor.abort_response_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"pid", req.PID,
-				"err", err,
+			log.Warn(
+				"daemon.supervisor.abort_response_failed",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"pid",
+				req.PID,
+				"err",
+				err,
 			)
 		}
+
 		return
 	case controlOperationReplace, controlOperationRebind:
 	default:
@@ -622,11 +882,13 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 		writeControlError(conn, fmt.Errorf("supervisor reload request missing arguments"))
 		return
 	}
+
 	env, err := replacementWorkerEnvironment(req, supervisorSocketPath)
 	if err != nil {
 		writeControlError(conn, err)
 		return
 	}
+
 	cmd := supervisorCommand(req.ExecutablePath, req.Arguments[1:]...)
 	cmd.Args = append([]string{}, req.Arguments...)
 	// Leave cmd.Stdout and cmd.Stderr unset so the replacement worker
@@ -639,15 +901,24 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 		writeControlError(conn, fmt.Errorf("start replacement daemon worker: %w", err))
 		return
 	}
+
 	select {
 	case replacementCh <- handle:
 	case <-loopDone:
 		stopWorker(log, handle.cmd, syscall.SIGTERM, handle.waitCh)
 		writeControlError(conn, errSupervisorStopped)
+
 		return
 	}
-	log.Info("daemon.supervisor.reload_replacement_started", "concern", "process.daemon.lifecycle", "component", "daemon",
-		"pid", handle.cmd.Process.Pid,
+
+	log.Info(
+		"daemon.supervisor.reload_replacement_started",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"pid",
+		handle.cmd.Process.Pid,
 	)
 	resp := controlResponse{
 		PID:         handle.cmd.Process.Pid,
@@ -655,20 +926,38 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 		Error:       "",
 	}
 	if err := json.NewEncoder(conn).Encode(resp); err != nil {
-		log.Warn("daemon.supervisor.reload_response_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"pid", handle.cmd.Process.Pid,
-			"err", err,
+		log.Warn(
+			"daemon.supervisor.reload_response_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"pid",
+			handle.cmd.Process.Pid,
+			"err",
+			err,
 		)
 	}
 }
 
-func replacementWorkerEnvironment(req controlRequest, supervisorSocketPath string) ([]string, error) {
+func replacementWorkerEnvironment(
+	req controlRequest,
+	supervisorSocketPath string,
+) ([]string, error) {
 	specJSON, err := json.Marshal(req.Listeners)
 	if err != nil {
-		slog.Warn("daemon.supervisor.reload_request.encode_listeners_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.Warn(
+			"daemon.supervisor.reload_request.encode_listeners_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("encode supervisor reload listener specs: %w", err)
 	}
-	return EnvWithOverrides(req.Environment,
+
+	return EnvWithOverrides(
+		req.Environment,
 		EnvReloadChild+"=1",
 		EnvInheritedListeners+"="+string(specJSON),
 		EnvReadyFD+"="+strconv.Itoa(req.ReadyFD),
@@ -676,33 +965,65 @@ func replacementWorkerEnvironment(req controlRequest, supervisorSocketPath strin
 	), nil
 }
 
-func sendControlRequest(ctx context.Context, socketPath string, req controlRequest, files []*os.File) (controlResponse, error) {
+func sendControlRequest(
+	ctx context.Context,
+	socketPath string,
+	req controlRequest,
+	files []*os.File,
+) (controlResponse, error) {
 	deadlineCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(deadlineCtx, "unix", socketPath)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.control.connect_failed", "concern", "process.daemon.lifecycle", "socket_path", socketPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.control.connect_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"socket_path",
+			socketPath,
+			"err",
+			err,
+		)
 		return controlResponse{}, fmt.Errorf("connect supervisor: %w", err)
 	}
 	defer conn.Close()
 
 	unixConn, ok := conn.(*net.UnixConn)
 	if !ok {
-		return controlResponse{}, fmt.Errorf("supervisor connection has type %T, want *net.UnixConn", conn)
+		return controlResponse{}, fmt.Errorf(
+			"supervisor connection has type %T, want *net.UnixConn",
+			conn,
+		)
 	}
+
 	if deadline, ok := deadlineCtx.Deadline(); ok {
 		_ = unixConn.SetDeadline(deadline)
 	}
+
 	payload, err := json.Marshal(req)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.control.encode_request_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.control.encode_request_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return controlResponse{}, fmt.Errorf("encode supervisor request: %w", err)
 	}
+
 	if len(payload) > int(maxControlRequestBytes) {
-		return controlResponse{}, fmt.Errorf("supervisor request payload %d bytes exceeds limit %d", len(payload), maxControlRequestBytes)
+		return controlResponse{}, fmt.Errorf(
+			"supervisor request payload %d bytes exceeds limit %d",
+			len(payload),
+			maxControlRequestBytes,
+		)
 	}
+
 	// Frame the request as a fixed length prefix followed by the JSON body. A
 	// stream unix socket short-writes once a single message exceeds the send
 	// buffer (about 8 KiB on macOS), so the body cannot ride one WriteMsgUnix.
@@ -719,31 +1040,66 @@ func sendControlRequest(ctx context.Context, socketPath string, req controlReque
 	if len(descriptors) > 0 {
 		rights = syscall.UnixRights(descriptors...)
 	}
+
 	n, _, err := unixConn.WriteMsgUnix(header[:], rights, nil)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.control.send_request_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.control.send_request_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return controlResponse{}, fmt.Errorf("send supervisor request header: %w", err)
 	}
+
 	if n != len(header) {
-		return controlResponse{}, fmt.Errorf("send supervisor request header: short write %d of %d bytes", n, len(header))
+		return controlResponse{}, fmt.Errorf(
+			"send supervisor request header: short write %d of %d bytes",
+			n,
+			len(header),
+		)
 	}
+
 	written, err := unixConn.Write(payload)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.control.send_request_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.control.send_request_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return controlResponse{}, fmt.Errorf("send supervisor request body: %w", err)
 	}
+
 	if written != len(payload) {
-		return controlResponse{}, fmt.Errorf("send supervisor request body: short write %d of %d bytes", written, len(payload))
+		return controlResponse{}, fmt.Errorf(
+			"send supervisor request body: short write %d of %d bytes",
+			written,
+			len(payload),
+		)
 	}
 
 	var resp controlResponse
 	if err := json.NewDecoder(bufio.NewReader(unixConn)).Decode(&resp); err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.control.decode_response_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.supervisor.control.decode_response_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return controlResponse{}, fmt.Errorf("decode supervisor response: %w", err)
 	}
+
 	if resp.Error != "" {
 		return controlResponse{}, fmt.Errorf("supervisor request rejected: %s", resp.Error)
 	}
+
 	return resp, nil
 }
 
@@ -755,79 +1111,148 @@ func readControlRequest(conn *net.UnixConn) (controlRequest, []*os.File, error) 
 	oob := make([]byte, syscall.CmsgSpace(256*4))
 	headerRead, oobn, recvFlags, _, err := conn.ReadMsgUnix(header[:], oob)
 	if err != nil {
-		slog.Warn("daemon.supervisor.reload_request.read_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.Warn(
+			"daemon.supervisor.reload_request.read_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return controlRequest{}, nil, fmt.Errorf("read supervisor request header: %w", err)
 	}
+
 	if headerRead == 0 {
-		return controlRequest{}, nil, fmt.Errorf("read supervisor request header: %w", io.ErrUnexpectedEOF)
+		return controlRequest{}, nil, fmt.Errorf(
+			"read supervisor request header: %w",
+			io.ErrUnexpectedEOF,
+		)
 	}
+
 	files, err := filesFromUnixRights(oob[:oobn])
 	if err != nil {
 		return controlRequest{}, nil, err
 	}
+
 	// A truncated control message means the ancillary buffer was too small for
 	// the sender's file descriptors, so the received set is incomplete. Reject
 	// the request rather than spawn a worker missing inherited listeners.
 	if recvFlags&syscall.MSG_CTRUNC != 0 {
 		closeFiles(files)
-		slog.Warn("daemon.supervisor.reload_request.control_truncated", "concern", "process.daemon.lifecycle")
-		return controlRequest{}, nil, fmt.Errorf("read supervisor request: control message truncated")
+		slog.Warn(
+			"daemon.supervisor.reload_request.control_truncated",
+			"concern",
+			"process.daemon.lifecycle",
+		)
+
+		return controlRequest{}, nil, fmt.Errorf(
+			"read supervisor request: control message truncated",
+		)
 	}
+
 	if headerRead < len(header) {
 		if _, err := io.ReadFull(conn, header[headerRead:]); err != nil {
 			closeFiles(files)
-			slog.Warn("daemon.supervisor.reload_request.read_failed", "concern", "process.daemon.lifecycle", "err", err)
+			slog.Warn(
+				"daemon.supervisor.reload_request.read_failed",
+				"concern",
+				"process.daemon.lifecycle",
+				"err",
+				err,
+			)
+
 			return controlRequest{}, nil, fmt.Errorf("read supervisor request header: %w", err)
 		}
 	}
+
 	length := binary.BigEndian.Uint32(header[:])
 	if length == 0 {
 		closeFiles(files)
 		return controlRequest{}, nil, fmt.Errorf("read supervisor request: empty body")
 	}
+
 	if length > maxControlRequestBytes {
 		closeFiles(files)
-		return controlRequest{}, nil, fmt.Errorf("supervisor request body %d bytes exceeds limit %d", length, maxControlRequestBytes)
+		return controlRequest{}, nil, fmt.Errorf(
+			"supervisor request body %d bytes exceeds limit %d",
+			length,
+			maxControlRequestBytes,
+		)
 	}
+
 	body := make([]byte, length)
 	if _, err := io.ReadFull(conn, body); err != nil {
 		closeFiles(files)
-		slog.Warn("daemon.supervisor.reload_request.read_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.Warn(
+			"daemon.supervisor.reload_request.read_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
+
 		return controlRequest{}, nil, fmt.Errorf("read supervisor request body: %w", err)
 	}
+
 	var req controlRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		closeFiles(files)
-		slog.Warn("daemon.supervisor.reload_request.decode_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.Warn(
+			"daemon.supervisor.reload_request.decode_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
+
 		return controlRequest{}, nil, fmt.Errorf("decode supervisor request: %w", err)
 	}
+
 	return req, files, nil
 }
 
 func filesFromUnixRights(oob []byte) ([]*os.File, error) {
 	messages, err := syscall.ParseSocketControlMessage(oob)
 	if err != nil {
-		slog.Warn("daemon.supervisor.reload_request.control_messages_failed", "concern", "process.daemon.lifecycle", "err", err)
+		slog.Warn(
+			"daemon.supervisor.reload_request.control_messages_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("parse supervisor control messages: %w", err)
 	}
+
 	files := make([]*os.File, 0)
+
 	for _, message := range messages {
 		fds, err := syscall.ParseUnixRights(&message)
 		if err != nil {
 			if errors.Is(err, syscall.EINVAL) {
 				continue
 			}
+
 			closeFiles(files)
-			slog.Warn("daemon.supervisor.reload_request.file_descriptors_failed", "concern", "process.daemon.lifecycle", "err", err)
+			slog.Warn(
+				"daemon.supervisor.reload_request.file_descriptors_failed",
+				"concern",
+				"process.daemon.lifecycle",
+				"err",
+				err,
+			)
+
 			return nil, fmt.Errorf("parse supervisor file descriptors: %w", err)
 		}
+
 		for _, fd := range fds {
 			if fd < 0 {
 				continue
 			}
+
 			files = append(files, os.NewFile(uintptr(fd), "daemon-supervisor-fd"))
 		}
 	}
+
 	return files, nil
 }
 
@@ -845,16 +1270,20 @@ func writeControlError(conn *net.UnixConn, err error) {
 func fileDescriptors(files []*os.File) []int {
 	fds := make([]int, 0, len(files))
 	maxInt := uintptr(^uint(0) >> 1)
+
 	for _, file := range files {
 		if file == nil {
 			continue
 		}
+
 		fd := file.Fd()
 		if fd > maxInt {
 			continue
 		}
+
 		fds = append(fds, int(fd))
 	}
+
 	return fds
 }
 
@@ -863,6 +1292,7 @@ func envKey(entry string) (string, bool) {
 	if index <= 0 {
 		return "", false
 	}
+
 	return entry[:index], true
 }
 
@@ -875,9 +1305,13 @@ func closeFiles(files []*os.File) {
 }
 
 func logSupervisorPanic(log *slog.Logger, event string, recovered string) {
-	log.Warn(event,
-		"concern", "process.daemon.lifecycle",
-		"component", "daemon",
-		"panic", recovered,
+	log.Warn(
+		event,
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"panic",
+		recovered,
 	)
 }

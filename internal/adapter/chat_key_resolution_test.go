@@ -21,10 +21,17 @@ func TestChatKeyHeaderWinsOverBodyBackfill(t *testing.T) {
 	corr := clydeingress.FromHTTPHeader(header, "req-1")
 	ingress := adaptercursor.NewIngress()
 	ingressCtx := ingress.TranslateHeaders(header)
-	corr = clydeingress.WithChatIdentity(corr, ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")
+	corr = clydeingress.WithChatIdentity(
+		corr,
+		ingressCtx.ConversationID,
+		"native",
+		ingressCtx.ConversationID,
+		"",
+	)
 	if got := clydeingress.ChatKey(corr); got != "header-conv" {
 		t.Fatalf("header should resolve ChatKey, got %q", got)
 	}
+
 	corr = clydeingress.WithChatKey(corr, "body-conv")
 	if got := clydeingress.ChatKey(corr); got != "header-conv" {
 		t.Fatalf("body backfill must not overwrite header value, got %q", got)
@@ -42,6 +49,7 @@ func TestChatKeyBodyBackfillWhenHeaderMissing(t *testing.T) {
 	if got := clydeingress.ChatKey(corr); got != "" {
 		t.Fatalf("ChatKey should be empty before backfill, got %q", got)
 	}
+
 	corr = clydeingress.WithChatKey(corr, "body-conv")
 	if got := clydeingress.ChatKey(corr); got != "body-conv" {
 		t.Fatalf("backfill should populate ChatKey, got %q", got)

@@ -37,11 +37,15 @@ func injectedTranscriptResolvers() []injectedTranscriptResolver {
 	return []injectedTranscriptResolver{resolveParsedTranscriptSpans, resolveFramedTranscriptSpans}
 }
 
-func resolveFramedTranscriptSpans(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan {
+func resolveFramedTranscriptSpans(
+	content transcript.CompactedMessageContentItem,
+) []reorienttag.TranscriptSpan {
 	return reorienttag.ParseTranscriptSpans(content.Text)
 }
 
-func resolveParsedTranscriptSpans(content transcript.CompactedMessageContentItem) []reorienttag.TranscriptSpan {
+func resolveParsedTranscriptSpans(
+	content transcript.CompactedMessageContentItem,
+) []reorienttag.TranscriptSpan {
 	return content.TranscriptSpans
 }
 
@@ -49,10 +53,13 @@ func resolveParsedTranscriptSpans(content transcript.CompactedMessageContentItem
 // including the reader that parses framed transcripts from message text. For
 // other messages, it returns only resolvers for spans that the provider parser
 // attached because user and assistant messages can quote framed transcripts.
-func messageTranscriptResolvers(message transcript.CompactedMessageItem) []injectedTranscriptResolver {
+func messageTranscriptResolvers(
+	message transcript.CompactedMessageItem,
+) []injectedTranscriptResolver {
 	if message.MessageClass == transcript.CompactedMessageClassSummary {
 		return injectedTranscriptResolvers()
 	}
+
 	return []injectedTranscriptResolver{resolveParsedTranscriptSpans}
 }
 
@@ -67,6 +74,7 @@ func resolveInjectedTranscriptSpans(
 			return spans
 		}
 	}
+
 	return nil
 }
 
@@ -80,19 +88,23 @@ func unresolvedInjectedTranscriptSummary(selection CompactionSegmentSelection) (
 		if !segment.HasStartingSummary {
 			continue
 		}
+
 		for _, item := range segment.Checkpoint.ContextItems {
 			if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil {
 				continue
 			}
+
 			unresolved := unresolvedParsedTranscript
 			if item.Message.MessageClass == transcript.CompactedMessageClassSummary {
 				unresolved = unresolvedInjectedTranscript
 			}
+
 			if slices.ContainsFunc(item.Message.Content, unresolved) {
 				return segment.SummaryUUID, true
 			}
 		}
 	}
+
 	return "", false
 }
 
@@ -107,11 +119,14 @@ func unresolvedParsedTranscript(content transcript.CompactedMessageContentItem) 
 func unresolvedInjectedTranscript(content transcript.CompactedMessageContentItem) bool {
 	var outside strings.Builder
 	previousEnd := 0
+
 	for _, span := range resolveInjectedTranscriptSpans(content, injectedTranscriptResolvers()) {
 		outside.WriteString(content.Text[previousEnd:span.Start])
 		previousEnd = span.End
 	}
+
 	outside.WriteString(content.Text[previousEnd:])
+
 	return reorienttag.ContainsTranscriptWrapper(outside.String())
 }
 
@@ -121,6 +136,7 @@ func liveTranscriptPartUnresolved(part transcript.MessageTextPart) bool {
 	if !part.InjectedTranscript {
 		return false
 	}
+
 	marked := transcript.CompactedMessageContentItem{
 		Type:                 injectedChatContentType,
 		Text:                 part.Text,
@@ -130,6 +146,7 @@ func liveTranscriptPartUnresolved(part transcript.MessageTextPart) bool {
 		TranscriptSpans:      part.TranscriptSpans,
 		UnresolvedTranscript: false,
 	}
+
 	return len(part.TranscriptSpans) == 0 || unresolvedInjectedTranscript(marked)
 }
 
@@ -142,6 +159,7 @@ func unresolvedLiveTranscriptIndex(messages []transcript.Message) (int, bool) {
 			return index, true
 		}
 	}
+
 	return 0, false
 }
 
@@ -155,6 +173,7 @@ func filterLiveTextParts(parts []transcript.MessageTextPart, content ContentKind
 			kept = append(kept, text)
 		}
 	}
+
 	return strings.Join(kept, liveTextPartSeparator)
 }
 
@@ -166,15 +185,19 @@ func selectedLiveText(part transcript.MessageTextPart, content ContentKindSet) s
 		if content.Has(ContentKindChat) {
 			return part.Text
 		}
+
 		return ""
 	}
+
 	selected := make([]string, 0, 1)
+
 	for _, span := range part.TranscriptSpans {
 		segments := selectedInjectedSegments(span.Segments, content)
 		if len(segments) > 0 {
 			selected = append(selected, reorienttag.FramedTranscript(segments))
 		}
 	}
+
 	return strings.Join(selected, liveTextPartSeparator)
 }
 
@@ -191,6 +214,7 @@ func expandInjectedTranscriptItems(
 	for _, item := range items {
 		expanded = append(expanded, expandInjectedTranscriptItem(item)...)
 	}
+
 	return expanded
 }
 
@@ -200,32 +224,41 @@ func expandInjectedTranscriptItem(
 	if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil {
 		return []transcript.CompactedContextItem{item}
 	}
+
 	resolvers := messageTranscriptResolvers(*item.Message)
 	expanded := make([]transcript.CompactedContextItem, 0)
 	prose := make([]transcript.CompactedMessageContentItem, 0)
 	resolved := false
+
 	for _, contentItem := range item.Message.Content {
 		spans := resolveInjectedTranscriptSpans(contentItem, resolvers)
 		if len(spans) == 0 {
 			prose = append(prose, contentItem)
 			continue
 		}
+
 		resolved = true
 		previousEnd := 0
+
 		for _, span := range spans {
 			prose = appendSummaryProse(prose, contentItem, contentItem.Text[previousEnd:span.Start])
 			expanded = appendSummaryItem(expanded, *item.Message, prose)
 			prose = make([]transcript.CompactedMessageContentItem, 0)
+
 			for _, segment := range span.Segments {
 				expanded = append(expanded, injectedSegmentItem(segment))
 			}
+
 			previousEnd = span.End
 		}
+
 		prose = appendSummaryProse(prose, contentItem, contentItem.Text[previousEnd:])
 	}
+
 	if !resolved {
 		return []transcript.CompactedContextItem{item}
 	}
+
 	return appendSummaryItem(expanded, *item.Message, prose)
 }
 
@@ -237,9 +270,11 @@ func appendSummaryProse(
 	if strings.TrimSpace(text) == "" {
 		return prose
 	}
+
 	source.Text = text
 	source.Raw = nil
 	source.TranscriptSpans = nil
+
 	return append(prose, source)
 }
 
@@ -251,11 +286,13 @@ func appendSummaryItem(
 	if len(prose) == 0 {
 		return items
 	}
+
 	message.Content = prose
 	message.ContentRaw = nil
 	message.Raw = nil
 	item := emptyInjectedContextItem(transcript.CompactedContextItemKindMessage)
 	item.Message = &message
+
 	return append(items, item)
 }
 
@@ -276,6 +313,7 @@ func injectedSegmentItem(segment reorienttag.Segment) transcript.CompactedContex
 			EncryptedContent: "",
 			Raw:              nil,
 		}
+
 		return item
 	case reorienttag.SegmentKindToolCall:
 		item := emptyInjectedContextItem(transcript.CompactedContextItemKindFunctionCall)
@@ -286,6 +324,7 @@ func injectedSegmentItem(segment reorienttag.Segment) transcript.CompactedContex
 			CallID:    "",
 			Raw:       nil,
 		}
+
 		return item
 	case reorienttag.SegmentKindToolOutput:
 		item := emptyInjectedContextItem(transcript.CompactedContextItemKindFunctionCallOutput)
@@ -294,6 +333,7 @@ func injectedSegmentItem(segment reorienttag.Segment) transcript.CompactedContex
 			OutputRaw: injectedOutputRaw(segment.Text),
 			Raw:       nil,
 		}
+
 		return item
 	case reorienttag.SegmentKindSystem:
 		return injectedMessageItem(compactedRoleSystem, segment.Text)
@@ -302,6 +342,7 @@ func injectedSegmentItem(segment reorienttag.Segment) transcript.CompactedContex
 	case reorienttag.SegmentKindOther:
 		return injectedOtherItem(segment.Text)
 	}
+
 	return injectedOtherItem(segment.Text)
 }
 
@@ -314,6 +355,7 @@ func injectedOtherItem(text string) transcript.CompactedContextItem {
 		Type: string(reorienttag.SegmentKindOther),
 		Raw:  injectedOutputRaw(text),
 	}
+
 	return item
 }
 
@@ -323,12 +365,21 @@ func injectedMessageItem(role string, text string) transcript.CompactedContextIt
 		Role:  role,
 		Phase: "",
 		Content: []transcript.CompactedMessageContentItem{
-			{Type: injectedChatContentType, Text: text, ImageURL: "", Detail: "", Raw: nil, TranscriptSpans: nil, UnresolvedTranscript: false},
+			{
+				Type:                 injectedChatContentType,
+				Text:                 text,
+				ImageURL:             "",
+				Detail:               "",
+				Raw:                  nil,
+				TranscriptSpans:      nil,
+				UnresolvedTranscript: false,
+			},
 		},
 		ContentRaw:   nil,
 		MessageClass: transcript.CompactedMessageClassOrdinary,
 		Raw:          nil,
 	}
+
 	return item
 }
 
@@ -337,10 +388,13 @@ func injectedOutputRaw(text string) json.RawMessage {
 	if err != nil {
 		return nil
 	}
+
 	return encoded
 }
 
-func emptyInjectedContextItem(kind transcript.CompactedContextItemKind) transcript.CompactedContextItem {
+func emptyInjectedContextItem(
+	kind transcript.CompactedContextItemKind,
+) transcript.CompactedContextItem {
 	return transcript.CompactedContextItem{
 		Kind:                 kind,
 		Message:              nil,
@@ -371,18 +425,27 @@ func filterInjectedTranscriptText(
 	items []transcript.CompactedContextItem,
 	content ContentKindSet,
 ) string {
-	spans := resolveInjectedTranscriptSpans(summaryContentItemForText(text, items), injectedTranscriptResolvers())
+	spans := resolveInjectedTranscriptSpans(
+		summaryContentItemForText(text, items),
+		injectedTranscriptResolvers(),
+	)
 	if len(spans) == 0 {
 		return text
 	}
+
 	var builder strings.Builder
 	previousEnd := 0
+
 	for _, span := range spans {
 		builder.WriteString(text[previousEnd:span.Start])
-		builder.WriteString(reorienttag.FramedTranscript(selectedInjectedSegments(span.Segments, content)))
+		builder.WriteString(
+			reorienttag.FramedTranscript(selectedInjectedSegments(span.Segments, content)),
+		)
 		previousEnd = span.End
 	}
+
 	builder.WriteString(text[previousEnd:])
+
 	return builder.String()
 }
 
@@ -398,12 +461,14 @@ func summaryContentItemForText(
 			item.Message.MessageClass != transcript.CompactedMessageClassSummary {
 			continue
 		}
+
 		for _, contentItem := range item.Message.Content {
 			if contentItem.Text == text {
 				return contentItem
 			}
 		}
 	}
+
 	return transcript.CompactedMessageContentItem{
 		Type:                 injectedChatContentType,
 		Text:                 text,
@@ -421,14 +486,18 @@ func selectedInjectedSegments(
 ) []reorienttag.Segment {
 	kept := make([]reorienttag.Segment, 0, len(segments))
 	toolDetail := content.Has(ContentKindToolCalls) || content.Has(ContentKindToolOutputs)
+
 	for _, segment := range segments {
 		if !compactedItemSelected(injectedSegmentItem(segment), content) {
 			continue
 		}
+
 		if segment.Kind == reorienttag.SegmentKindToolCall && !toolDetail {
 			segment.Text = ""
 		}
+
 		kept = append(kept, segment)
 	}
+
 	return kept
 }

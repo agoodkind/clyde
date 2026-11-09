@@ -37,7 +37,14 @@ func (*Parser) ResolveRequestID(
 
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.resolve_data_roots_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
 		return conversation.RequestMatch{}, fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 
@@ -56,20 +63,38 @@ func (*Parser) ResolveRequestID(
 	// be in it, and abandoning the roots after it would let one unreadable directory
 	// hide an answer sitting in the next one.
 	reason := conversation.RequestNotFoundReasonUnspecified
+
 	found := make([]conversation.RequestMatch, 0, len(roots))
 	for _, root := range roots {
 		match, err := resolveRequestIDInRoot(ctx, root, requestID, opts)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.parser.data_root_lookup_failed", "concern", concern, "path", root.RootDir, "request_id", requestID, "err", err)
-			reason = conversation.MergeRequestNotFoundReason(reason, conversation.RequestNotFoundReasonInconclusive)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.parser.data_root_lookup_failed",
+				"concern",
+				concern,
+				"path",
+				root.RootDir,
+				"request_id",
+				requestID,
+				"err",
+				err,
+			)
+			reason = conversation.MergeRequestNotFoundReason(
+				reason,
+				conversation.RequestNotFoundReasonInconclusive,
+			)
 			continue
 		}
+
 		if match.Found {
 			found = append(found, match)
 			continue
 		}
+
 		reason = conversation.MergeRequestNotFoundReason(reason, match.Reason)
 	}
+
 	return matchAcrossRoots(ctx, requestID, found, reason), nil
 }
 
@@ -90,21 +115,39 @@ func matchAcrossRoots(
 	reason conversation.RequestNotFoundReason,
 ) conversation.RequestMatch {
 	distinct := make([]conversation.RequestMatch, 0, len(found))
+
 	seen := make(map[string]bool, len(found))
 	for _, match := range found {
 		if seen[match.NativeConversationID] {
 			continue
 		}
+
 		seen[match.NativeConversationID] = true
 		distinct = append(distinct, match)
 	}
 
 	switch {
 	case len(distinct) > 1:
-		slog.InfoContext(ctx, "providers.cursor.parser.request_carried_by_several_roots", "concern", concern, "request_id", requestID, "count", len(distinct))
+		slog.InfoContext(
+			ctx,
+			"providers.cursor.parser.request_carried_by_several_roots",
+			"concern",
+			concern,
+			"request_id",
+			requestID,
+			"count",
+			len(distinct),
+		)
 		return missingRequestMatch(conversation.RequestNotFoundReasonAmbiguousConversation)
 	case len(distinct) == 1 && reason == conversation.RequestNotFoundReasonInconclusive:
-		slog.WarnContext(ctx, "providers.cursor.parser.request_answered_while_a_root_went_unread", "concern", concern, "request_id", requestID)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.request_answered_while_a_root_went_unread",
+			"concern",
+			concern,
+			"request_id",
+			requestID,
+		)
 		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive)
 	case len(distinct) == 1:
 		return distinct[0]
@@ -138,26 +181,61 @@ func resolveRequestIDInRoot(
 		return resolveRequestIDWithoutChatStore(ctx, root, requestID)
 	case databaseAvailabilityOpen:
 	}
+
 	defer func() { _ = db.Close() }()
 
 	reason, match, err := resolveRequestIDFromGenerationRing(ctx, root, db, requestID)
 	if err != nil {
 		return conversation.RequestMatch{}, err
 	}
+
 	if match.Found {
 		return match, nil
 	}
+
 	if !opts.AllowFullScan {
 		return missingRequestMatch(reason), nil
 	}
 
-	slog.InfoContext(ctx, "providers.cursor.parser.request_full_scan_started", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID)
+	slog.InfoContext(
+		ctx,
+		"providers.cursor.parser.request_full_scan_started",
+		"concern",
+		concern,
+		"path",
+		root.GlobalDBPath,
+		"request_id",
+		requestID,
+	)
 	search, err := cursorstore.ScanAllBubblesForRequestID(ctx, db, requestID)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.request_full_scan_failed", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "err", err)
-		return conversation.RequestMatch{}, fmt.Errorf("scan cursor bubbles for request %q: %w", requestID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.request_full_scan_failed",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"err",
+			err,
+		)
+		return conversation.RequestMatch{}, fmt.Errorf(
+			"scan cursor bubbles for request %q: %w",
+			requestID,
+			err,
+		)
 	}
-	return matchFromCarriers(ctx, root, requestID, carriersOf(search), conversation.RequestOriginFullScan, reason), nil
+
+	return matchFromCarriers(
+		ctx,
+		root,
+		requestID,
+		carriersOf(search),
+		conversation.RequestOriginFullScan,
+		reason,
+	), nil
 }
 
 // resolveRequestIDWithoutChatStore answers for a data root whose chat database is
@@ -176,16 +254,45 @@ func resolveRequestIDWithoutChatStore(
 ) (conversation.RequestMatch, error) {
 	lookup, err := cursorstore.FindGenerationEntry(ctx, root, requestID)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.generation_lookup_failed", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "err", err)
-		return conversation.RequestMatch{}, fmt.Errorf("find cursor generation entry for request %q: %w", requestID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.generation_lookup_failed",
+			"concern",
+			concern,
+			"path",
+			root.WorkspaceStorageDir,
+			"request_id",
+			requestID,
+			"err",
+			err,
+		)
+		return conversation.RequestMatch{}, fmt.Errorf(
+			"find cursor generation entry for request %q: %w",
+			requestID,
+			err,
+		)
 	}
+
 	if lookup.Found() {
-		slog.WarnContext(ctx, "providers.cursor.parser.request_listed_without_chat_store", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "workspace_hashes", lookup.WorkspaceHashes())
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.request_listed_without_chat_store",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"workspace_hashes",
+			lookup.WorkspaceHashes(),
+		)
 		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive), nil
 	}
+
 	if lookup.UnreadableWorkspaces > 0 {
 		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive), nil
 	}
+
 	return missingRequestMatch(conversation.RequestNotFoundReasonNotRetained), nil
 }
 
@@ -202,9 +309,25 @@ func resolveRequestIDFromGenerationRing(
 ) (conversation.RequestNotFoundReason, conversation.RequestMatch, error) {
 	lookup, err := cursorstore.FindGenerationEntry(ctx, root, requestID)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.generation_lookup_failed", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "err", err)
-		return conversation.RequestNotFoundReasonUnspecified, conversation.RequestMatch{}, fmt.Errorf("find cursor generation entry for request %q: %w", requestID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.generation_lookup_failed",
+			"concern",
+			concern,
+			"path",
+			root.WorkspaceStorageDir,
+			"request_id",
+			requestID,
+			"err",
+			err,
+		)
+		return conversation.RequestNotFoundReasonUnspecified, conversation.RequestMatch{}, fmt.Errorf(
+			"find cursor generation entry for request %q: %w",
+			requestID,
+			err,
+		)
 	}
+
 	if !lookup.Found() {
 		// A miss is only meaningful when every workspace was actually readable.
 		// Cursor runs while Clyde reads, so a locked workspace reads the same as
@@ -212,9 +335,21 @@ func resolveRequestIDFromGenerationRing(
 		// asserting something this lookup did not establish.
 		reason := conversation.RequestNotFoundReasonNotRetained
 		if lookup.UnreadableWorkspaces > 0 {
-			slog.WarnContext(ctx, "providers.cursor.parser.generation_lookup_inconclusive", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "unreadable_workspaces", lookup.UnreadableWorkspaces)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.parser.generation_lookup_inconclusive",
+				"concern",
+				concern,
+				"path",
+				root.WorkspaceStorageDir,
+				"request_id",
+				requestID,
+				"unreadable_workspaces",
+				lookup.UnreadableWorkspaces,
+			)
 			reason = conversation.RequestNotFoundReasonInconclusive
 		}
+
 		return reason, missingRequestMatch(reason), nil
 	}
 
@@ -232,12 +367,21 @@ func resolveRequestIDFromGenerationRing(
 	// preference rather than a filter, since a header whose workspace disagrees
 	// with the ring must not turn a real chat into a reported miss.
 	carriers := newRequestCarriers()
+
 	for _, unixMs := range lookup.Instants() {
 		findRequestBubbleAmongCandidates(ctx, root, db, requestID, unixMs, carriers)
 	}
+
 	if len(carriers.composerIDs) > 0 {
-		match := matchFromCarriers(ctx, root, requestID, carriers, conversation.RequestOriginLive,
-			conversation.RequestNotFoundReasonNoMatchingConversation)
+		match := matchFromCarriers(
+			ctx,
+			root,
+			requestID,
+			carriers,
+			conversation.RequestOriginLive,
+			conversation.RequestNotFoundReasonNoMatchingConversation,
+		)
+
 		return match.Reason, match, nil
 	}
 
@@ -251,21 +395,72 @@ func resolveRequestIDFromGenerationRing(
 	// not evidence about the chats outside it.
 	reason := conversation.RequestNotFoundReasonNoMatchingConversation
 	if carriers.unread > 0 {
-		slog.WarnContext(ctx, "providers.cursor.parser.request_candidates_partially_read", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "unread", carriers.unread)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.request_candidates_partially_read",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"unread",
+			carriers.unread,
+		)
 		reason = conversation.RequestNotFoundReasonInconclusive
 	}
+
 	if carriers.excluded > 0 {
-		slog.DebugContext(ctx, "providers.cursor.parser.request_candidates_narrowed_past_chats", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "excluded", carriers.excluded)
+		slog.DebugContext(
+			ctx,
+			"providers.cursor.parser.request_candidates_narrowed_past_chats",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"excluded",
+			carriers.excluded,
+		)
 		reason = conversation.RequestNotFoundReasonInconclusive
 	}
+
 	coverage, err := cursorstore.ReadComposerHeaderCoverage(ctx, db)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.composer_header_coverage_failed", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.composer_header_coverage_failed",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"err",
+			err,
+		)
 		reason = conversation.RequestNotFoundReasonInconclusive
 	} else if !coverage.Complete() {
-		slog.DebugContext(ctx, "providers.cursor.parser.composer_headers_incomplete", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "stored_chats", coverage.StoredChats, "unlisted_chats", coverage.UnlistedChats, "readable", coverage.Readable)
+		slog.DebugContext(
+			ctx,
+			"providers.cursor.parser.composer_headers_incomplete",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"stored_chats",
+			coverage.StoredChats,
+			"unlisted_chats",
+			coverage.UnlistedChats,
+			"readable",
+			coverage.Readable,
+		)
 		reason = conversation.RequestNotFoundReasonInconclusive
 	}
+
 	return reason, missingRequestMatch(reason), nil
 }
 
@@ -293,6 +488,7 @@ func (carriers *requestCarriers) add(composerID string) {
 	if carriers.seen[composerID] {
 		return
 	}
+
 	carriers.seen[composerID] = true
 	carriers.composerIDs = append(carriers.composerIDs, composerID)
 }
@@ -301,10 +497,12 @@ func (carriers *requestCarriers) add(composerID string) {
 // bounded path and the exhaustive scan report a plural answer the same way.
 func carriersOf(search cursorstore.BubbleRequestSearch) *requestCarriers {
 	carriers := newRequestCarriers()
+
 	carriers.unread = search.UnreadableRows
 	for _, ref := range search.Carriers {
 		carriers.add(ref.ComposerID)
 	}
+
 	return carriers
 }
 
@@ -332,10 +530,34 @@ func matchFromCarriers(
 ) conversation.RequestMatch {
 	switch {
 	case len(carriers.composerIDs) > 1:
-		slog.InfoContext(ctx, "providers.cursor.parser.request_carried_by_several_chats", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "count", len(carriers.composerIDs))
+		slog.InfoContext(
+			ctx,
+			"providers.cursor.parser.request_carried_by_several_chats",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"count",
+			len(carriers.composerIDs),
+		)
 		return missingRequestMatch(conversation.RequestNotFoundReasonAmbiguousConversation)
 	case carriers.unread > 0:
-		slog.WarnContext(ctx, "providers.cursor.parser.request_carriers_partially_read", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "found", len(carriers.composerIDs), "unread", carriers.unread)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.request_carriers_partially_read",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"found",
+			len(carriers.composerIDs),
+			"unread",
+			carriers.unread,
+		)
 		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive)
 	case len(carriers.composerIDs) == 1:
 		return foundRequestMatch(carriers.composerIDs[0], origin)
@@ -361,27 +583,76 @@ func findRequestBubbleAmongCandidates(
 ) {
 	narrowing, err := cursorstore.ListComposerIDsCoveringTime(ctx, db, unixMs, "")
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.composer_candidates_failed", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.composer_candidates_failed",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+			"err",
+			err,
+		)
 		carriers.unread++
+
 		return
 	}
+
 	if !narrowing.Usable {
 		// The header table could not answer the predicate at all, so its empty
 		// candidate list says nothing about the id.
-		slog.WarnContext(ctx, "providers.cursor.parser.composer_narrowing_unusable", "concern", concern, "path", root.GlobalDBPath, "request_id", requestID)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.composer_narrowing_unusable",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"request_id",
+			requestID,
+		)
 		carriers.unread++
+
 		return
 	}
-	slog.DebugContext(ctx, "providers.cursor.parser.request_candidates_narrowed", "concern", concern, "request_id", requestID, "count", len(narrowing.ComposerIDs), "excluded", narrowing.ExcludedChats)
+
+	slog.DebugContext(
+		ctx,
+		"providers.cursor.parser.request_candidates_narrowed",
+		"concern",
+		concern,
+		"request_id",
+		requestID,
+		"count",
+		len(narrowing.ComposerIDs),
+		"excluded",
+		narrowing.ExcludedChats,
+	)
 	carriers.excluded += narrowing.ExcludedChats
 
 	for _, composerID := range narrowing.ComposerIDs {
 		search, err := cursorstore.FindBubbleRequestIDInComposer(ctx, db, composerID, requestID)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.parser.composer_bubble_lookup_failed", "concern", concern, "path", root.GlobalDBPath, "composer_id", composerID, "request_id", requestID, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.parser.composer_bubble_lookup_failed",
+				"concern",
+				concern,
+				"path",
+				root.GlobalDBPath,
+				"composer_id",
+				composerID,
+				"request_id",
+				requestID,
+				"err",
+				err,
+			)
 			carriers.unread++
 			continue
 		}
+
 		carriers.unread += search.UnreadableRows
 		for _, ref := range search.Carriers {
 			carriers.add(ref.ComposerID)
@@ -389,7 +660,10 @@ func findRequestBubbleAmongCandidates(
 	}
 }
 
-func foundRequestMatch(composerID string, origin conversation.RequestOrigin) conversation.RequestMatch {
+func foundRequestMatch(
+	composerID string,
+	origin conversation.RequestOrigin,
+) conversation.RequestMatch {
 	return conversation.RequestMatch{
 		Found:                true,
 		Provider:             providerid.ProviderCursor,

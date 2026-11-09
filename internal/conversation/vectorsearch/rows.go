@@ -44,11 +44,17 @@ type chunkFamily struct {
 	Chunks []storedChunk
 }
 
-func conversationRelativePath(conversationID string, messageIndex int32, partIndex int, multipart bool) string {
+func conversationRelativePath(
+	conversationID string,
+	messageIndex int32,
+	partIndex int,
+	multipart bool,
+) string {
 	basePath := fmt.Sprintf("conv/%s/%d", conversationID, messageIndex)
 	if !multipart {
 		return basePath
 	}
+
 	return fmt.Sprintf("%s/%d", basePath, partIndex)
 }
 
@@ -79,6 +85,7 @@ func providerFromConversationID(conversationID string) string {
 	if separator <= 0 {
 		return ""
 	}
+
 	return conversationID[:separator]
 }
 
@@ -94,7 +101,9 @@ func splitTextByBytes(text string, maxBytes int) []string {
 	if maxBytes <= 0 || len(text) <= maxBytes {
 		return []string{text}
 	}
+
 	pieces := make([]string, 0, (len(text)+maxBytes-1)/maxBytes)
+
 	start := 0
 	for start < len(text) {
 		end := start + maxBytes
@@ -102,16 +111,20 @@ func splitTextByBytes(text string, maxBytes int) []string {
 			pieces = append(pieces, text[start:])
 			break
 		}
+
 		for end > start && !utf8.RuneStart(text[end]) {
 			end--
 		}
+
 		if end == start {
 			_, size := utf8.DecodeRuneInString(text[start:])
 			end = start + size
 		}
+
 		pieces = append(pieces, text[start:end])
 		start = end
 	}
+
 	return pieces
 }
 
@@ -121,15 +134,23 @@ type chunkBuilder func(piece string, partIndex int, multipart bool) storedChunk
 // appends nothing when the field has no storable text. The decision covers the
 // whole field, because a message's stored text is the concatenation of its
 // pieces.
-func appendStorableField(chunks []storedChunk, content string, budget int, build chunkBuilder) []storedChunk {
+func appendStorableField(
+	chunks []storedChunk,
+	content string,
+	budget int,
+	build chunkBuilder,
+) []storedChunk {
 	if !conversationTextIsStorable(content) {
 		return chunks
 	}
+
 	pieces := splitTextByBytes(content, budget)
+
 	multipart := len(pieces) > 1
 	for partIndex, piece := range pieces {
 		chunks = append(chunks, build(piece, partIndex, multipart))
 	}
+
 	return chunks
 }
 
@@ -147,12 +168,19 @@ func appendContinuedField(
 	if continuationPrefix != "" && budget > len(continuationPrefix)+1 {
 		budget -= len(continuationPrefix) + 1
 	}
-	return appendStorableField(chunks, content, budget, func(piece string, partIndex int, multipart bool) storedChunk {
-		if partIndex > 0 && continuationPrefix != "" {
-			piece = continuationPrefix + "\n" + piece
-		}
-		return build(piece, partIndex, multipart)
-	})
+
+	return appendStorableField(
+		chunks,
+		content,
+		budget,
+		func(piece string, partIndex int, multipart bool) storedChunk {
+			if partIndex > 0 && continuationPrefix != "" {
+				piece = continuationPrefix + "\n" + piece
+			}
+
+			return build(piece, partIndex, multipart)
+		},
+	)
 }
 
 const bashLangHint = "bash"
@@ -167,7 +195,9 @@ func toolContent(tool semsearch.SemToolCall) string {
 	if display != "" && tool.LangHint == bashLangHint {
 		tokens = appendShellTokens(tokens, display)
 	}
+
 	tokens = appendToken(tokens, tool.Display)
+
 	return strings.Join(tokens, "\n")
 }
 
@@ -180,19 +210,30 @@ func appendShellTokens(tokens []string, command string) []string {
 	if decomposition == nil || decomposition.IsOpaque() {
 		return appendToken(tokens, command)
 	}
+
 	tokenCount := len(tokens)
+
 	for _, shellCommand := range decomposition.Commands() {
 		tokens = appendToken(tokens, shellCommand.Argv0)
 	}
+
 	for _, readTarget := range decomposition.ReadTargets() {
 		tokens = appendShellTarget(tokens, readTarget.Resolvable, readTarget.Path, readTarget.Raw)
 	}
+
 	for _, writeTarget := range decomposition.WriteTargets() {
-		tokens = appendShellTarget(tokens, writeTarget.Resolvable, writeTarget.Path, writeTarget.Raw)
+		tokens = appendShellTarget(
+			tokens,
+			writeTarget.Resolvable,
+			writeTarget.Path,
+			writeTarget.Raw,
+		)
 	}
+
 	if len(tokens) == tokenCount {
 		return appendToken(tokens, command)
 	}
+
 	return tokens
 }
 
@@ -204,8 +245,10 @@ func appendShellTarget(tokens []string, resolvable bool, path string, raw string
 		if strings.TrimSpace(raw) != "" && strings.TrimSpace(raw) != strings.TrimSpace(path) {
 			tokens = appendToken(tokens, raw)
 		}
+
 		return tokens
 	}
+
 	return appendToken(tokens, raw)
 }
 
@@ -214,13 +257,21 @@ func appendToken(tokens []string, value string) []string {
 	if trimmed == "" {
 		return tokens
 	}
+
 	if slices.Contains(tokens, trimmed) {
 		return tokens
 	}
+
 	return append(tokens, trimmed)
 }
 
-func newChunk(doc semsearch.SemDoc, conversationID string, parentConversationID string, relativePath string, content string) storedChunk {
+func newChunk(
+	doc semsearch.SemDoc,
+	conversationID string,
+	parentConversationID string,
+	relativePath string,
+	content string,
+) storedChunk {
 	return storedChunk{
 		Content:              content,
 		RelativePath:         relativePath,
@@ -243,11 +294,18 @@ func documentChunks(doc semsearch.SemDoc, budget int) ([]storedChunk, error) {
 	if conversationID == "" {
 		return nil, errors.New("conversation id is required")
 	}
+
 	parentConversationID := strings.TrimSpace(doc.ParentConversationID)
-	chunks := appendStorableField(nil, doc.Text, budget, func(piece string, partIndex int, multipart bool) storedChunk {
-		path := conversationRelativePath(conversationID, doc.MessageIndex, partIndex, multipart)
-		return newChunk(doc, conversationID, parentConversationID, path, piece)
-	})
+
+	chunks := appendStorableField(
+		nil,
+		doc.Text,
+		budget,
+		func(piece string, partIndex int, multipart bool) storedChunk {
+			path := conversationRelativePath(conversationID, doc.MessageIndex, partIndex, multipart)
+			return newChunk(doc, conversationID, parentConversationID, path, piece)
+		},
+	)
 	for toolIndex, tool := range doc.Tools {
 		cleaned := semsearch.SemToolCall{
 			Name:             strings.ToValidUTF8(tool.Name, ""),
@@ -265,25 +323,39 @@ func documentChunks(doc semsearch.SemDoc, budget int) ([]storedChunk, error) {
 		case tool.TimestampUnknown:
 			toolDoc.TimestampUnix = missingTimestampUnix
 		}
+
 		basePath := conversationToolCallPath(conversationID, doc.MessageIndex, toolIndex)
-		chunks = appendContinuedField(chunks, toolContent(cleaned), budget, strings.TrimSpace(cleaned.Name),
+		chunks = appendContinuedField(
+			chunks,
+			toolContent(cleaned),
+			budget,
+			strings.TrimSpace(cleaned.Name),
 			func(piece string, partIndex int, multipart bool) storedChunk {
 				path := basePath
 				if multipart {
 					path = fmt.Sprintf("%s/%d", basePath, partIndex)
 				}
+
 				return newChunk(toolDoc, conversationID, parentConversationID, path, piece)
-			})
+			},
+		)
 	}
+
 	thinkingPath := conversationThinkingPath(conversationID, doc.MessageIndex)
-	chunks = appendStorableField(chunks, strings.ToValidUTF8(doc.Thinking, ""), budget,
+	chunks = appendStorableField(
+		chunks,
+		strings.ToValidUTF8(doc.Thinking, ""),
+		budget,
 		func(piece string, partIndex int, multipart bool) storedChunk {
 			path := thinkingPath
 			if multipart {
 				path = fmt.Sprintf("%s/%d", thinkingPath, partIndex)
 			}
+
 			return newChunk(doc, conversationID, parentConversationID, path, piece)
-		})
+		},
+	)
+
 	return chunks, nil
 }
 
@@ -305,18 +377,22 @@ func chunkFamilyKey(conversationID string, relativePath string) string {
 		if !found {
 			continue
 		}
+
 		parts := strings.Split(remainder, "/")
 		if len(parts) <= family.segments {
 			return relativePath
 		}
+
 		return family.prefix + strings.Join(parts[:family.segments], "/")
 	}
+
 	return relativePath
 }
 
 func groupFamilies(conversationID string, chunks []storedChunk) []chunkFamily {
 	families := make([]chunkFamily, 0)
 	positions := make(map[string]int)
+
 	for _, chunk := range chunks {
 		key := chunkFamilyKey(conversationID, chunk.RelativePath)
 		position, found := positions[key]
@@ -325,8 +401,10 @@ func groupFamilies(conversationID string, chunks []storedChunk) []chunkFamily {
 			positions[key] = position
 			families = append(families, chunkFamily{Key: key, Chunks: nil})
 		}
+
 		families[position].Chunks = append(families[position].Chunks, chunk)
 	}
+
 	return families
 }
 
@@ -335,9 +413,18 @@ func groupFamilies(conversationID string, chunks []storedChunk) []chunkFamily {
 func chunkID(chunk storedChunk) string {
 	hashInput := fmt.Sprintf("%s:%d:%d:%s", chunk.RelativePath, 0, 0, chunk.Content)
 	if chunk.SplitPart > 0 {
-		hashInput = fmt.Sprintf("%s:%d:%d:%d:%s", chunk.RelativePath, 0, 0, chunk.SplitPart, chunk.Content)
+		hashInput = fmt.Sprintf(
+			"%s:%d:%d:%d:%s",
+			chunk.RelativePath,
+			0,
+			0,
+			chunk.SplitPart,
+			chunk.Content,
+		)
 	}
+
 	sum := sha256.Sum256([]byte(hashInput))
+
 	return "chunk_" + hex.EncodeToString(sum[:])[:16]
 }
 
@@ -361,6 +448,7 @@ func encodeChunkMetadata(chunk storedChunk) string {
 		known := chunk.TimestampUnix
 		timestampUnix = &known
 	}
+
 	metadata := chunkMetadataJSON{
 		Language:             "",
 		ConversationID:       chunk.ConversationID,
@@ -373,6 +461,7 @@ func encodeChunkMetadata(chunk storedChunk) string {
 	if err != nil {
 		return "{}"
 	}
+
 	return string(encoded)
 }
 
@@ -383,12 +472,14 @@ func chunkScalars(chunk storedChunk) map[string]collection.ScalarValue {
 		conversationIDColumn:       collection.StringScalar(chunk.ConversationID),
 		parentConversationIDColumn: collection.StringScalar(chunk.ParentConversationID),
 		roleColumn:                 collection.StringScalar(strings.ToLower(chunk.Role)),
-		providerColumn:             collection.StringScalar(providerFromConversationID(chunk.ConversationID)),
-		workspaceRootColumn:        collection.StringScalar(chunk.WorkspaceRoot),
-		archivedColumn:             collection.BoolScalar(chunk.Archived),
-		timestampUnixColumn:        timestampScalar(chunk.TimestampUnix),
-		messageIndexColumn:         collection.Int64Scalar(int64(chunk.MessageIndex)),
-		loadRulesColumn:            collection.StringScalar(chunk.LoadRules),
+		providerColumn: collection.StringScalar(
+			providerFromConversationID(chunk.ConversationID),
+		),
+		workspaceRootColumn: collection.StringScalar(chunk.WorkspaceRoot),
+		archivedColumn:      collection.BoolScalar(chunk.Archived),
+		timestampUnixColumn: timestampScalar(chunk.TimestampUnix),
+		messageIndexColumn:  collection.Int64Scalar(int64(chunk.MessageIndex)),
+		loadRulesColumn:     collection.StringScalar(chunk.LoadRules),
 	}
 }
 

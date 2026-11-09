@@ -12,17 +12,19 @@ func TestMarshalCodexHookInstalls(t *testing.T) {
 
 	body, err := marshalCodexHookInstalls(
 		nil,
-		[]RegisteredInstall{{
-			HookID: HookIDReorientBeforeCompact,
-			Spec: InstallSpec{
-				Client:         ClientCodex,
-				Event:          EventPreCompact,
-				Matcher:        "",
-				Args:           []string{"hooks", "run", "reorient", "before-compact"},
-				TimeoutSeconds: 600,
-				StatusMessage:  "Capturing Clyde reorient context",
+		[]RegisteredInstall{
+			{
+				HookID: HookIDReorientBeforeCompact,
+				Spec: InstallSpec{
+					Client:         ClientCodex,
+					Event:          EventPreCompact,
+					Matcher:        "",
+					Args:           []string{"hooks", "run", "reorient", "before-compact"},
+					TimeoutSeconds: 600,
+					StatusMessage:  "Capturing Clyde reorient context",
+				},
 			},
-		}},
+		},
 		nil,
 		"/usr/local/bin/clyde",
 		"/Users/me/.codex/config.toml",
@@ -32,6 +34,7 @@ func TestMarshalCodexHookInstalls(t *testing.T) {
 	}
 
 	text := string(body)
+
 	for _, want := range []string{
 		codexManagedBegin,
 		codexManagedEnd,
@@ -46,6 +49,7 @@ func TestMarshalCodexHookInstalls(t *testing.T) {
 			t.Fatalf("body missing %q:\n%s", want, text)
 		}
 	}
+
 	assertCodexTrustedHash(t, text)
 }
 
@@ -53,17 +57,20 @@ func TestMarshalCodexHookInstallsAvoidsDuplicateStateKeysWithExistingHooks(t *te
 	t.Parallel()
 
 	settingsPath := "/Users/me/.codex/config.toml"
-	base := strings.Join([]string{
-		"[[hooks.pre_compact]]",
-		"",
-		"[[hooks.pre_compact.hooks]]",
-		"type = \"command\"",
-		"command = \"/opt/cmux hooks feed --event PreCompact\"",
-		"",
-		"[hooks.state.\"/Users/me/.codex/config.toml:pre_compact:0:0\"]",
-		"trusted_hash = \"sha256:deadbeef\"",
-		"",
-	}, "\n")
+	base := strings.Join(
+		[]string{
+			"[[hooks.pre_compact]]",
+			"",
+			"[[hooks.pre_compact.hooks]]",
+			"type = \"command\"",
+			"command = \"/opt/cmux hooks feed --event PreCompact\"",
+			"",
+			"[hooks.state.\"/Users/me/.codex/config.toml:pre_compact:0:0\"]",
+			"trusted_hash = \"sha256:deadbeef\"",
+			"",
+		},
+		"\n",
+	)
 
 	body, err := marshalCodexHookInstalls(
 		[]byte(base),
@@ -90,6 +97,7 @@ func TestMarshalCodexHookInstallsAvoidsDuplicateStateKeysWithExistingHooks(t *te
 	if count := strings.Count(text, existingStateHeader); count != 1 {
 		t.Fatalf("state header %q count = %d, want 1:\n%s", existingStateHeader, count, text)
 	}
+
 	wantStateHeader := "[hooks.state.\"/Users/me/.codex/config.toml:pre_compact:1:0\"]"
 	if !strings.Contains(text, wantStateHeader) {
 		t.Fatalf("body missing %q:\n%s", wantStateHeader, text)
@@ -99,21 +107,25 @@ func TestMarshalCodexHookInstallsAvoidsDuplicateStateKeysWithExistingHooks(t *te
 func TestCountExistingCodexHookGroupsScansUnparseableConfig(t *testing.T) {
 	t.Parallel()
 
-	base := strings.Join([]string{
-		"[[hooks.pre_compact]]",
-		"matcher = \"compact\"",
-		"",
-		"[unclosed",
-		"value = true",
-		"",
-		"[[hooks.session_start]]",
-		"matcher = \"startup\"",
-	}, "\n")
+	base := strings.Join(
+		[]string{
+			"[[hooks.pre_compact]]",
+			"matcher = \"compact\"",
+			"",
+			"[unclosed",
+			"value = true",
+			"",
+			"[[hooks.session_start]]",
+			"matcher = \"startup\"",
+		},
+		"\n",
+	)
 
 	got := countExistingCodexHookGroups(base)
 	if got["precompact"] != 1 {
 		t.Fatalf("precompact count = %d, want 1", got["precompact"])
 	}
+
 	if got["sessionstart"] != 1 {
 		t.Fatalf("sessionstart count = %d, want 1", got["sessionstart"])
 	}
@@ -123,23 +135,31 @@ func TestRemoveCodexCommandHookGroupsMatchesInlineComments(t *testing.T) {
 	t.Parallel()
 
 	command := "/usr/local/bin/clyde hooks run reorient-before-compact"
-	body := strings.Join([]string{
-		"[[hooks.pre_compact]] # old clyde hook",
-		"",
-		"[[hooks.pre_compact.hooks]]",
-		"command = \"" + command + "\" # clyde",
-		"",
-		"[other]",
-		"value = true",
-	}, "\n")
+	body := strings.Join(
+		[]string{
+			"[[hooks.pre_compact]] # old clyde hook",
+			"",
+			"[[hooks.pre_compact.hooks]]",
+			"command = \"" + command + "\" # clyde",
+			"",
+			"[other]",
+			"value = true",
+		},
+		"\n",
+	)
 
-	got := removeCodexCommandHookGroups(body, [][]string{{"hooks", "run", string(HookIDReorientBeforeCompact)}})
+	got := removeCodexCommandHookGroups(
+		body,
+		[][]string{{"hooks", "run", string(HookIDReorientBeforeCompact)}},
+	)
 	if strings.Contains(got, command) {
 		t.Fatalf("command hook group survived:\n%s", got)
 	}
+
 	if strings.Contains(got, "[[hooks.pre_compact]]") {
 		t.Fatalf("command hook group header survived:\n%s", got)
 	}
+
 	if !strings.Contains(got, "[other]") {
 		t.Fatalf("unrelated table missing:\n%s", got)
 	}
@@ -149,20 +169,27 @@ func TestRemoveCodexCommandHookGroupsMatchesManagedArgsAcrossClydeBinChanges(t *
 	t.Parallel()
 
 	command := "/opt/old/clyde hooks run reorient-before-compact"
-	body := strings.Join([]string{
-		"[[hooks.pre_compact]]",
-		"",
-		"[[hooks.pre_compact.hooks]]",
-		"command = \"" + command + "\"",
-		"",
-		"[other]",
-		"value = true",
-	}, "\n")
+	body := strings.Join(
+		[]string{
+			"[[hooks.pre_compact]]",
+			"",
+			"[[hooks.pre_compact.hooks]]",
+			"command = \"" + command + "\"",
+			"",
+			"[other]",
+			"value = true",
+		},
+		"\n",
+	)
 
-	got := removeCodexCommandHookGroups(body, [][]string{{"hooks", "run", string(HookIDReorientBeforeCompact)}})
+	got := removeCodexCommandHookGroups(
+		body,
+		[][]string{{"hooks", "run", string(HookIDReorientBeforeCompact)}},
+	)
 	if strings.Contains(got, command) {
 		t.Fatalf("command hook group survived:\n%s", got)
 	}
+
 	if !strings.Contains(got, "[other]") {
 		t.Fatalf("unrelated table missing:\n%s", got)
 	}
@@ -172,21 +199,25 @@ func TestRemoveCodexCommandHookGroupsMatchesLegacySessionStartCommand(t *testing
 	t.Parallel()
 
 	command := "/opt/old/clyde hook sessionstart"
-	body := strings.Join([]string{
-		"[[hooks.session_start]]",
-		"matcher = \"compact\"",
-		"",
-		"[[hooks.session_start.hooks]]",
-		"command = \"" + command + "\"",
-		"",
-		"[other]",
-		"value = true",
-	}, "\n")
+	body := strings.Join(
+		[]string{
+			"[[hooks.session_start]]",
+			"matcher = \"compact\"",
+			"",
+			"[[hooks.session_start.hooks]]",
+			"command = \"" + command + "\"",
+			"",
+			"[other]",
+			"value = true",
+		},
+		"\n",
+	)
 
 	got := removeCodexCommandHookGroups(body, [][]string{{"hook", "sessionstart"}})
 	if strings.Contains(got, command) {
 		t.Fatalf("command hook group survived:\n%s", got)
 	}
+
 	if !strings.Contains(got, "[other]") {
 		t.Fatalf("unrelated table missing:\n%s", got)
 	}
@@ -195,12 +226,15 @@ func TestRemoveCodexCommandHookGroupsMatchesLegacySessionStartCommand(t *testing
 func TestRemoveCodexManagedBlockLeavesOutOfOrderMarkersAlone(t *testing.T) {
 	t.Parallel()
 
-	body := strings.Join([]string{
-		codexManagedEnd,
-		"[features]",
-		"hooks = false",
-		codexManagedBegin,
-	}, "\n")
+	body := strings.Join(
+		[]string{
+			codexManagedEnd,
+			"[features]",
+			"hooks = false",
+			codexManagedBegin,
+		},
+		"\n",
+	)
 
 	got := removeCodexManagedBlock(body)
 	if got != body {
@@ -216,11 +250,14 @@ func assertCodexTrustedHash(t *testing.T, body string) {
 		if !ok {
 			continue
 		}
+
 		value = strings.TrimSuffix(value, "\"")
 		if len(value) != 64 {
 			t.Fatalf("trusted hash hex len = %d, want 64 in line %q", len(value), line)
 		}
+
 		return
 	}
+
 	t.Fatalf("trusted hash line missing:\n%s", body)
 }

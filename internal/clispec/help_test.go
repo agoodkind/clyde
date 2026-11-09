@@ -19,9 +19,11 @@ func TestLeafHelpDocumentsArgumentsExamplesAndEnum(t *testing.T) {
 	if !strings.Contains(cmd.Long, "Arguments:") {
 		t.Errorf("long help missing Arguments section: %q", cmd.Long)
 	}
+
 	if !strings.Contains(cmd.Long, "CONVERSATION_ID") {
 		t.Errorf("long help missing positional placeholder: %q", cmd.Long)
 	}
+
 	if !strings.Contains(cmd.Example, "clyde conversation export") {
 		t.Errorf("example missing from help: %q", cmd.Example)
 	}
@@ -30,6 +32,7 @@ func TestLeafHelpDocumentsArgumentsExamplesAndEnum(t *testing.T) {
 	if !strings.Contains(usage, "markdown|html|json|plain_text") {
 		t.Errorf("flag usage missing enum accepted values: %q", usage)
 	}
+
 	if !strings.Contains(usage, "(default markdown)") {
 		t.Errorf("flag usage missing default: %q", usage)
 	}
@@ -55,9 +58,11 @@ func TestConversationHelpIncludesRegisteredProviders(t *testing.T) {
 		"search short":       search.Short,
 		"search long":        search.Long,
 	}
+
 	for _, provider := range daemon.ConversationProviders() {
 		label := provider.String()
 		displayLabel := strings.ToUpper(label[:1]) + label[1:]
+
 		for name, help := range helpSurfaces {
 			if !strings.Contains(help, displayLabel) {
 				t.Errorf("%s help missing %s: %q", name, displayLabel, help)
@@ -70,13 +75,16 @@ func TestConversationHelpIncludesRegisteredProviders(t *testing.T) {
 		if param.Canonical != "provider" {
 			continue
 		}
+
 		for _, provider := range daemon.ConversationProviders() {
 			if !strings.Contains(param.Description, provider.String()) {
 				t.Errorf("provider help missing %s: %q", provider, param.Description)
 			}
 		}
+
 		return
 	}
+
 	t.Fatal("provider parameter missing")
 }
 
@@ -85,8 +93,10 @@ func TestConversationHelpDocumentsDaemonRequirements(t *testing.T) {
 	if !strings.Contains(searchOp().Long, "daemon") {
 		t.Fatal("search help must state that search uses the daemon")
 	}
+
 	exportHelp := exportTranscriptOp().Long
-	if !strings.Contains(exportHelp, "Terminal export reads local") || !strings.Contains(exportHelp, "MCP export uses the daemon") {
+	if !strings.Contains(exportHelp, "Terminal export reads local") ||
+		!strings.Contains(exportHelp, "MCP export uses the daemon") {
 		t.Fatalf("export help does not distinguish terminal and MCP dependencies: %s", exportHelp)
 	}
 }

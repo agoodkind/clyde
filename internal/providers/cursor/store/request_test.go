@@ -12,21 +12,34 @@ func TestFindBubbleRequestIDInComposerStaysInsideTheChat(t *testing.T) {
 
 	// composer-a and composer-ab share a key prefix, so a lookup scoped to
 	// composer-a must not reach composer-ab's turn.
-	search, err := FindBubbleRequestIDInComposer(context.Background(), readonly, "composer-a", "req-neighbor")
+	search, err := FindBubbleRequestIDInComposer(
+		context.Background(),
+		readonly,
+		"composer-a",
+		"req-neighbor",
+	)
 	if err != nil {
 		t.Fatalf("FindBubbleRequestIDInComposer returned error: %v", err)
 	}
+
 	if len(search.Carriers) != 0 {
 		t.Fatalf("lookup scoped to composer-a reached %+v", search.Carriers)
 	}
 
-	search, err = FindBubbleRequestIDInComposer(context.Background(), readonly, "composer-ab", "req-neighbor")
+	search, err = FindBubbleRequestIDInComposer(
+		context.Background(),
+		readonly,
+		"composer-ab",
+		"req-neighbor",
+	)
 	if err != nil {
 		t.Fatalf("FindBubbleRequestIDInComposer returned error: %v", err)
 	}
+
 	if len(search.Carriers) != 1 {
 		t.Fatalf("carriers = %+v, want composer-ab's own turn", search.Carriers)
 	}
+
 	if search.Carriers[0].ComposerID != "composer-ab" || search.Carriers[0].BubbleID != "bubble-n" {
 		t.Fatalf("carrier = %+v, want composer-ab/bubble-n", search.Carriers[0])
 	}
@@ -37,10 +50,16 @@ func TestFindBubbleRequestIDRequiresWholeStringEquality(t *testing.T) {
 
 	// bubble-2's text quotes the id, and bubble-1's requestId has it as a prefix.
 	// Neither is a match.
-	search, err := FindBubbleRequestIDInComposer(context.Background(), readonly, "composer-a", "req-quoted")
+	search, err := FindBubbleRequestIDInComposer(
+		context.Background(),
+		readonly,
+		"composer-a",
+		"req-quoted",
+	)
 	if err != nil {
 		t.Fatalf("FindBubbleRequestIDInComposer returned error: %v", err)
 	}
+
 	if len(search.Carriers) != 0 {
 		t.Fatalf("a substring occurrence matched %+v, want whole-string equality", search.Carriers)
 	}
@@ -53,6 +72,7 @@ func TestScanAllBubblesForRequestIDCrossesChats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanAllBubblesForRequestID returned error: %v", err)
 	}
+
 	if len(search.Carriers) != 1 || search.Carriers[0].ComposerID != "composer-ab" {
 		t.Fatalf("carriers = %+v, want composer-ab", search.Carriers)
 	}
@@ -61,10 +81,17 @@ func TestScanAllBubblesForRequestIDCrossesChats(t *testing.T) {
 func TestListComposerIDsCoveringTimeNarrowsToSpanningChats(t *testing.T) {
 	readonly := openCursorRequestTestDatabase(t)
 
-	composerIDs, err := listCoveringComposerIDs(t, context.Background(), readonly, 1710000002000, "")
+	composerIDs, err := listCoveringComposerIDs(
+		t,
+		context.Background(),
+		readonly,
+		1710000002000,
+		"",
+	)
 	if err != nil {
 		t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 	}
+
 	if len(composerIDs) != 1 || composerIDs[0] != "composer-a" {
 		t.Fatalf("composer ids = %v, want [composer-a]", composerIDs)
 	}
@@ -79,6 +106,7 @@ func TestListComposerIDsCoveringTimeNarrowsByWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 	}
+
 	if len(spanning) != 2 {
 		t.Fatalf("instant-only candidates = %v, want two", spanning)
 	}
@@ -87,6 +115,7 @@ func TestListComposerIDsCoveringTimeNarrowsByWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 	}
+
 	if len(scoped) != 1 || scoped[0] != "composer-a" {
 		t.Fatalf("workspace-scoped candidates = %v, want [composer-a]", scoped)
 	}
@@ -102,10 +131,17 @@ func TestListComposerIDsCoveringTimeNarrowsByWorkspace(t *testing.T) {
 func TestListComposerIDsCoveringTimeKeepsChatsWithNoLastUpdatedAt(t *testing.T) {
 	readonly := openCursorRequestTestDatabase(t)
 
-	composerIDs, err := listCoveringComposerIDs(t, context.Background(), readonly, 1710000045000, "")
+	composerIDs, err := listCoveringComposerIDs(
+		t,
+		context.Background(),
+		readonly,
+		1710000045000,
+		"",
+	)
 	if err != nil {
 		t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 	}
+
 	if len(composerIDs) != 1 || composerIDs[0] != "composer-unstamped" {
 		t.Fatalf("composer ids = %v, want [composer-unstamped]", composerIDs)
 	}
@@ -118,10 +154,17 @@ func TestListComposerIDsCoveringTimeKeepsChatsWithNoLastUpdatedAt(t *testing.T) 
 func TestListComposerIDsCoveringTimeKeepsAChatWithNoRecordedEnd(t *testing.T) {
 	readonly := openCursorRequestTestDatabase(t)
 
-	composerIDs, err := listCoveringComposerIDs(t, context.Background(), readonly, 1710000060000, "")
+	composerIDs, err := listCoveringComposerIDs(
+		t,
+		context.Background(),
+		readonly,
+		1710000060000,
+		"",
+	)
 	if err != nil {
 		t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 	}
+
 	if len(composerIDs) != 1 || composerIDs[0] != "composer-openended" {
 		t.Fatalf("composer ids = %v, want [composer-openended]", composerIDs)
 	}
@@ -135,10 +178,17 @@ func TestListComposerIDsCoveringTimeToleratesTheStampLag(t *testing.T) {
 	readonly := openCursorRequestTestDatabase(t)
 
 	// 234ms past composer-unstamped's checkpoint, the widest lag measured.
-	composerIDs, err := listCoveringComposerIDs(t, context.Background(), readonly, 1710000050234, "")
+	composerIDs, err := listCoveringComposerIDs(
+		t,
+		context.Background(),
+		readonly,
+		1710000050234,
+		"",
+	)
 	if err != nil {
 		t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 	}
+
 	if len(composerIDs) != 1 || composerIDs[0] != "composer-unstamped" {
 		t.Fatalf("composer ids = %v, want the chat whose stamp lags its own request", composerIDs)
 	}
@@ -153,19 +203,28 @@ func TestListComposerIDsCoveringTimeToleratesTheStampLag(t *testing.T) {
 // lists three, one of which the store does not hold, so the counts match while a
 // stored chat goes unlisted. A gate comparing counts calls that complete.
 func TestReadComposerHeaderCoverageReportsChatsTheHeaderTableOmits(t *testing.T) {
-	readonly := openCoverageTestDatabase(t, []string{"chat-a", "chat-b", "chat-unlisted"},
-		[]string{"chat-a", "chat-b", "chat-the-store-does-not-hold"})
+	readonly := openCoverageTestDatabase(
+		t,
+		[]string{"chat-a", "chat-b", "chat-unlisted"},
+		[]string{"chat-a", "chat-b", "chat-the-store-does-not-hold"},
+	)
 
 	coverage, err := ReadComposerHeaderCoverage(context.Background(), readonly)
 	if err != nil {
 		t.Fatalf("ReadComposerHeaderCoverage returned error: %v", err)
 	}
+
 	if coverage.StoredChats != 3 {
 		t.Fatalf("StoredChats = %d, want 3", coverage.StoredChats)
 	}
+
 	if coverage.UnlistedChats != 1 {
-		t.Fatalf("UnlistedChats = %d, want the one stored chat the header table omits", coverage.UnlistedChats)
+		t.Fatalf(
+			"UnlistedChats = %d, want the one stored chat the header table omits",
+			coverage.UnlistedChats,
+		)
 	}
+
 	if coverage.Complete() {
 		t.Fatalf("coverage %+v reported complete while a stored chat is unlisted", coverage)
 	}
@@ -174,13 +233,17 @@ func TestReadComposerHeaderCoverageReportsChatsTheHeaderTableOmits(t *testing.T)
 // TestReadComposerHeaderCoverageIsCompleteWhenEveryStoredChatIsListed is the
 // other half, so the gate is not simply stuck reporting incomplete.
 func TestReadComposerHeaderCoverageIsCompleteWhenEveryStoredChatIsListed(t *testing.T) {
-	readonly := openCoverageTestDatabase(t, []string{"chat-a", "chat-b"},
-		[]string{"chat-a", "chat-b", "chat-the-store-does-not-hold"})
+	readonly := openCoverageTestDatabase(
+		t,
+		[]string{"chat-a", "chat-b"},
+		[]string{"chat-a", "chat-b", "chat-the-store-does-not-hold"},
+	)
 
 	coverage, err := ReadComposerHeaderCoverage(context.Background(), readonly)
 	if err != nil {
 		t.Fatalf("ReadComposerHeaderCoverage returned error: %v", err)
 	}
+
 	if !coverage.Complete() {
 		t.Fatalf("coverage %+v reported incomplete when every stored chat is listed", coverage)
 	}
@@ -196,25 +259,31 @@ func TestReadComposerHeaderCoverageIsNotCompleteWithoutAChatTable(t *testing.T) 
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	if _, err := writable.Exec("CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)"); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
+
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	coverage, err := ReadComposerHeaderCoverage(context.Background(), readonly)
 	if err != nil {
 		t.Fatalf("ReadComposerHeaderCoverage returned error: %v", err)
 	}
+
 	if coverage.Readable {
 		t.Fatalf("coverage %+v reported readable without a chat table", coverage)
 	}
+
 	if coverage.Complete() {
 		t.Fatalf("coverage %+v reported complete over a store it never read", coverage)
 	}
@@ -231,6 +300,7 @@ func TestListComposerIDsCoveringTimeReportsAnUnusableHeaderTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	for _, statement := range []string{
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
 		// A header table with no createdAt, which every version of the predicate
@@ -242,21 +312,28 @@ func TestListComposerIDsCoveringTimeReportsAnUnusableHeaderTable(t *testing.T) {
 			t.Fatalf("exec %q: %v", statement, err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
+
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	narrowing, err := ListComposerIDsCoveringTime(context.Background(), readonly, 1710000000000, "")
 	if err != nil {
 		t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 	}
+
 	if narrowing.Usable {
-		t.Fatalf("narrowing %+v reported usable against a header table missing createdAt", narrowing)
+		t.Fatalf(
+			"narrowing %+v reported usable against a header table missing createdAt",
+			narrowing,
+		)
 	}
 }
 
@@ -269,6 +346,7 @@ func TestListComposerIDsCoveringTimeWorksWithoutTheOptionalEndColumns(t *testing
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	for _, statement := range []string{
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
 		"CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, createdAt INTEGER, value TEXT)",
@@ -278,24 +356,39 @@ func TestListComposerIDsCoveringTimeWorksWithoutTheOptionalEndColumns(t *testing
 			t.Fatalf("exec %q: %v", statement, err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
+
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
-	narrowing, err := ListComposerIDsCoveringTime(context.Background(), readonly, 1710000000000, "any-workspace")
+	narrowing, err := ListComposerIDsCoveringTime(
+		context.Background(),
+		readonly,
+		1710000000000,
+		"any-workspace",
+	)
 	if err != nil {
 		t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 	}
+
 	if !narrowing.Usable {
-		t.Fatal("narrowing reported unusable against a header table carrying composerId and createdAt")
+		t.Fatal(
+			"narrowing reported unusable against a header table carrying composerId and createdAt",
+		)
 	}
+
 	if len(narrowing.ComposerIDs) != 1 || narrowing.ComposerIDs[0] != "composer-a" {
-		t.Fatalf("composer ids = %v, want [composer-a] from the columns the table has", narrowing.ComposerIDs)
+		t.Fatalf(
+			"composer ids = %v, want [composer-a] from the columns the table has",
+			narrowing.ComposerIDs,
+		)
 	}
 }
 
@@ -309,6 +402,7 @@ func TestFindBubbleRequestIDCountsARowItCannotDecode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	for _, statement := range []string{
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
 		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:composer-a:bubble-1', 'not json at all but it carries req-broken')`,
@@ -317,22 +411,32 @@ func TestFindBubbleRequestIDCountsARowItCannotDecode(t *testing.T) {
 			t.Fatalf("exec %q: %v", statement, err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
+
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
-	search, err := FindBubbleRequestIDInComposer(context.Background(), readonly, "composer-a", "req-broken")
+	search, err := FindBubbleRequestIDInComposer(
+		context.Background(),
+		readonly,
+		"composer-a",
+		"req-broken",
+	)
 	if err != nil {
 		t.Fatalf("FindBubbleRequestIDInComposer returned error: %v", err)
 	}
+
 	if len(search.Carriers) != 0 {
 		t.Fatalf("carriers = %+v, want none from a row that would not decode", search.Carriers)
 	}
+
 	if search.UnreadableRows != 1 {
 		t.Fatalf("UnreadableRows = %d, want the undecodable row counted", search.UnreadableRows)
 	}
@@ -347,6 +451,7 @@ func TestFindBubbleRequestIDReportsEveryCarrier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	for _, statement := range []string{
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
 		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:chat-original:bubble-1', '{"_v":3,"requestId":"req-copied"}')`,
@@ -356,19 +461,23 @@ func TestFindBubbleRequestIDReportsEveryCarrier(t *testing.T) {
 			t.Fatalf("exec %q: %v", statement, err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
+
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	search, err := ScanAllBubblesForRequestID(context.Background(), readonly, "req-copied")
 	if err != nil {
 		t.Fatalf("ScanAllBubblesForRequestID returned error: %v", err)
 	}
+
 	if len(search.Carriers) != 2 {
 		t.Fatalf("carriers = %+v, want both the chat and its duplicate", search.Carriers)
 	}
@@ -389,9 +498,11 @@ func listCoveringComposerIDs(
 	if err != nil {
 		return nil, err
 	}
+
 	if !narrowing.Usable {
 		t.Fatal("ListComposerIDsCoveringTime reported the header table unusable")
 	}
+
 	return narrowing.ComposerIDs, nil
 }
 
@@ -406,24 +517,33 @@ func openCoverageTestDatabase(t *testing.T, storedChats []string, listedChats []
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	statements := []string{
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
 		"CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT)",
 	}
+
 	for _, chat := range storedChats {
-		statements = append(statements,
-			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+chat+`', '{"composerId":"`+chat+`"}')`)
+		statements = append(
+			statements,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:`+chat+`', '{"composerId":"`+chat+`"}')`,
+		)
 	}
+
 	for _, chat := range listedChats {
-		statements = append(statements,
+		statements = append(
+			statements,
 			`INSERT INTO composerHeaders(composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt, value) VALUES ('`+
-				chat+`', 'ws', 1710000000000, 1710000001000, 0, 0, 0, 0, '{}')`)
+				chat+`', 'ws', 1710000000000, 1710000001000, 0, 0, 0, 0, '{}')`,
+		)
 	}
+
 	for _, statement := range statements {
 		if _, err := writable.Exec(statement); err != nil {
 			t.Fatalf("exec %q: %v", statement, err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
@@ -432,7 +552,9 @@ func openCoverageTestDatabase(t *testing.T, storedChats []string, listedChats []
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
+
 	return readonly
 }
 
@@ -443,12 +565,15 @@ func TestReadGenerationEntriesDecodesTheRecentRing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadGenerationEntries returned error: %v", err)
 	}
+
 	if !found {
 		t.Fatal("ReadGenerationEntries found = false, want true")
 	}
+
 	if len(entries) != 1 {
 		t.Fatalf("entries len = %d, want 1", len(entries))
 	}
+
 	if entries[0].GenerationUUID != "req-neighbor" || entries[0].UnixMs != 1710000000500 {
 		t.Fatalf("entry = %+v", entries[0])
 	}
@@ -459,6 +584,7 @@ func TestKeyPrefixUpperBoundStopsAtTheFirstKeyAfterThePrefix(t *testing.T) {
 	if !ok {
 		t.Fatal("keyPrefixUpperBound ok = false, want true")
 	}
+
 	if bound != "bubbleId:composer-a;" {
 		t.Fatalf("bound = %q, want the prefix with its last byte incremented", bound)
 	}
@@ -466,6 +592,7 @@ func TestKeyPrefixUpperBoundStopsAtTheFirstKeyAfterThePrefix(t *testing.T) {
 	if _, ok := keyPrefixUpperBound(""); ok {
 		t.Fatal("an empty prefix reported an upper bound, want an open-ended range")
 	}
+
 	if _, ok := keyPrefixUpperBound("\xff\xff"); ok {
 		t.Fatal("an all-0xff prefix reported an upper bound, want an open-ended range")
 	}
@@ -479,6 +606,7 @@ func openCursorRequestTestDatabase(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	statements := []string{
 		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
@@ -503,6 +631,7 @@ func openCursorRequestTestDatabase(t *testing.T) *sql.DB {
 			t.Fatalf("exec %q: %v", statement, err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
@@ -511,7 +640,9 @@ func openCursorRequestTestDatabase(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
+
 	return readonly
 }
 
@@ -526,6 +657,7 @@ func TestReadComposerHeaderCoverageCountsChatsThePredicateCannotReach(t *testing
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	statements := []string{
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
 		"CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT)",
@@ -541,13 +673,16 @@ func TestReadComposerHeaderCoverageCountsChatsThePredicateCannotReach(t *testing
 			t.Fatalf("exec %q: %v", statement, err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
+
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	// Neither unreachable chat is selected by the predicate at any instant.
@@ -556,9 +691,13 @@ func TestReadComposerHeaderCoverageCountsChatsThePredicateCannotReach(t *testing
 		if err != nil {
 			t.Fatalf("ListComposerIDsCoveringTime returned error: %v", err)
 		}
+
 		for _, composerID := range narrowing.ComposerIDs {
 			if composerID == "chat-null-created" {
-				t.Fatalf("the predicate selected chat-null-created at %d, so the fixture does not model an unreachable row", instant)
+				t.Fatalf(
+					"the predicate selected chat-null-created at %d, so the fixture does not model an unreachable row",
+					instant,
+				)
 			}
 		}
 	}
@@ -567,9 +706,14 @@ func TestReadComposerHeaderCoverageCountsChatsThePredicateCannotReach(t *testing
 	if err != nil {
 		t.Fatalf("ReadComposerHeaderCoverage returned error: %v", err)
 	}
+
 	if coverage.UnlistedChats != 2 {
-		t.Fatalf("UnlistedChats = %d, want the two chats listed under rows no predicate can select", coverage.UnlistedChats)
+		t.Fatalf(
+			"UnlistedChats = %d, want the two chats listed under rows no predicate can select",
+			coverage.UnlistedChats,
+		)
 	}
+
 	if coverage.Complete() {
 		t.Fatalf("coverage %+v reported complete while two stored chats are unreachable", coverage)
 	}

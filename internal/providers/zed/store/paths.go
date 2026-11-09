@@ -32,14 +32,19 @@ func ResolveDataRoots(ctx context.Context, dataDirs string) ([]DataRoot, error) 
 	if err != nil {
 		return nil, err
 	}
+
 	out := make([]DataRoot, 0, len(roots))
 	for _, root := range roots {
-		out = append(out, DataRoot{
-			RootDir:         root,
-			ThreadsDBPath:   filepath.Join(root, zedThreadsDBRelative),
-			MetadataDBPaths: metadataDBPaths(root),
-		})
+		out = append(
+			out,
+			DataRoot{
+				RootDir:         root,
+				ThreadsDBPath:   filepath.Join(root, zedThreadsDBRelative),
+				MetadataDBPaths: metadataDBPaths(root),
+			},
+		)
 	}
+
 	return out, nil
 }
 
@@ -54,32 +59,46 @@ func resolveDataDirList(ctx context.Context, dataDirs string) ([]string, error) 
 	if raw == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			slog.ErrorContext(ctx, "providers.zed.store.home_resolve_failed", "concern", "providers.zed.store", "err", err)
+			slog.ErrorContext(
+				ctx,
+				"providers.zed.store.home_resolve_failed",
+				"concern",
+				"providers.zed.store",
+				"err",
+				err,
+			)
 			return nil, fmt.Errorf("resolve zed home: %w", err)
 		}
+
 		raw = filepath.Join(userHome, "Library", "Application Support", "Zed")
 	}
 
 	seen := make(map[string]struct{})
 	out := make([]string, 0, 1)
+
 	for _, entry := range filepath.SplitList(raw) {
 		root := strings.TrimSpace(entry)
 		if root == "" {
 			continue
 		}
+
 		if strings.HasPrefix(root, "~") {
 			root = homedir.Expand(root)
 		}
+
 		if abs, err := filepath.Abs(root); err == nil {
 			root = abs
 		}
+
 		root = filepath.Clean(root)
 		if _, ok := seen[root]; ok {
 			continue
 		}
+
 		seen[root] = struct{}{}
 		out = append(out, root)
 	}
+
 	return out, nil
 }
 
@@ -88,5 +107,6 @@ func metadataDBPaths(root string) []string {
 	for _, channel := range zedMetadataChannels {
 		paths = append(paths, filepath.Join(root, "db", channel, "db.sqlite"))
 	}
+
 	return paths
 }

@@ -98,14 +98,17 @@ func engineSearchMatches(
 	if snapshots, exact := localSearchDispatch(idx, semantic); exact {
 		return localSearchMatches(ctx, snapshots, semantic, collectionID, options)
 	}
+
 	limit, offset, searchLimit, err := semanticSearchPageBounds(options)
 	if err != nil {
 		return emptyEngineSearchPage(), err
 	}
+
 	filter, scoped, err := engineSearchFilter(ctx, idx, options)
 	if err != nil {
 		return emptyEngineSearchPage(), err
 	}
+
 	if !scoped {
 		// The workspace matched no conversations, so the result is empty. An empty
 		// id set would otherwise read as "no scope" and match the whole corpus, so
@@ -119,7 +122,9 @@ func engineSearchMatches(
 		engineLimit = nextEngineOverfetchLimit(searchLimit)
 		firstAttempt = searchSkippedOverfetchSteps + 1
 	}
+
 	var page engineSearchPage
+
 	for attempt := firstAttempt; ; attempt++ {
 		hits, searchErr := semantic.SearchConversations(
 			ctx,
@@ -132,37 +137,68 @@ func engineSearchMatches(
 		if searchErr != nil {
 			return emptyEngineSearchPage(), engineSearchCallError(ctx, searchErr)
 		}
+
 		page = resolveEngineHits(idx, hits, limit, offset, options.IncludeArchived, engineLimit)
 		nextLimit := nextEngineOverfetchLimit(engineLimit)
 		attemptsSpent := attempt >= searchOverfetchAttempts && len(page.matches) > 0
 		if !page.needsMoreHeadroom(limit) || attemptsSpent || nextLimit == engineLimit {
 			break
 		}
+
 		engineLimit = nextLimit
 	}
+
 	if !page.needsMoreHeadroom(limit) {
 		return page, nil
 	}
+
 	if engineLimit >= maxEngineOverfetchLimit {
-		slog.WarnContext(ctx, "daemon.search_conversations.page_truncated_at_engine_window", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"offset", offset,
-			"limit", limit,
-			"returned", len(page.matches),
-			"ranked", page.ranked,
-			"withheld", page.withheld,
-			"engine_limit", engineLimit,
+		slog.WarnContext(
+			ctx,
+			"daemon.search_conversations.page_truncated_at_engine_window",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"offset",
+			offset,
+			"limit",
+			limit,
+			"returned",
+			len(page.matches),
+			"ranked",
+			page.ranked,
+			"withheld",
+			page.withheld,
+			"engine_limit",
+			engineLimit,
 		)
+
 		return page, nil
 	}
+
 	page.short = true
-	slog.WarnContext(ctx, "daemon.search_conversations.page_short_after_overfetch", "concern", "process.daemon.lifecycle", "component", "daemon",
-		"offset", offset,
-		"limit", limit,
-		"returned", len(page.matches),
-		"ranked", page.ranked,
-		"withheld", page.withheld,
-		"engine_limit", engineLimit,
+	slog.WarnContext(
+		ctx,
+		"daemon.search_conversations.page_short_after_overfetch",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"offset",
+		offset,
+		"limit",
+		limit,
+		"returned",
+		len(page.matches),
+		"ranked",
+		page.ranked,
+		"withheld",
+		page.withheld,
+		"engine_limit",
+		engineLimit,
 	)
+
 	return page, nil
 }
 
@@ -174,18 +210,26 @@ func hasDateBound(options conversation.SearchConversationsOptions) bool {
 // error the control server renders, so no engine failure can be mistaken for an
 // empty result set.
 func engineSearchCallError(ctx context.Context, err error) error {
-	slog.WarnContext(ctx, "daemon.search_conversations.source_call_failed",
-		"concern", "process.daemon.lifecycle",
-		"component", "daemon",
-		"source", conversation.SearchSourceSemantic.String(),
-		"err", err,
+	slog.WarnContext(
+		ctx,
+		"daemon.search_conversations.source_call_failed",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"source",
+		conversation.SearchSourceSemantic.String(),
+		"err",
+		err,
 	)
 	if isConversationSearchSourceUnavailable(err) {
 		return unavailableConversationSearchSourceError(err)
 	}
+
 	if sourceRPCCode(err) != codes.Unknown {
 		return refusedConversationSearchSourceError(err)
 	}
+
 	return failedConversationSearchSourceError(err)
 }
 
@@ -202,6 +246,7 @@ func engineSearchFilter(
 	if provider.Valid() {
 		providers = []string{provider.String()}
 	}
+
 	var conversationIDs []string
 	switch {
 	case options.ConversationID != "":
@@ -214,11 +259,14 @@ func engineSearchFilter(
 		if err != nil {
 			return emptySearchFilter(), false, err
 		}
+
 		if len(resolved) == 0 {
 			return emptySearchFilter(), false, nil
 		}
+
 		conversationIDs = resolved
 	}
+
 	return semsearch.SearchFilter{
 		Providers:            providers,
 		WorkspaceRoots:       nil,
@@ -240,6 +288,7 @@ func (page engineSearchPage) needsMoreHeadroom(limit int) bool {
 	if limit <= 0 || len(page.matches) >= limit {
 		return false
 	}
+
 	return page.withheld > 0 && page.truncated
 }
 
@@ -250,10 +299,12 @@ func nextEngineOverfetchLimit(engineLimit int) int {
 	if engineLimit >= maxEngineOverfetchLimit {
 		return engineLimit
 	}
+
 	grown := engineLimit * searchOverfetchFactor
 	if grown > maxEngineOverfetchLimit || grown < engineLimit {
 		return maxEngineOverfetchLimit
 	}
+
 	return grown
 }
 
@@ -272,6 +323,7 @@ func resolveEngineHits(
 	withheld := 0
 	consumed := 0
 	seenMatches := 0
+
 	for _, hit := range hits {
 		consumed++
 		record, ok := idx.RecordByID(hit.ConversationID)
@@ -281,6 +333,7 @@ func resolveEngineHits(
 			withheld++
 			continue
 		}
+
 		// provider is filtered natively by the engine; workspace is filtered via
 		// the resolved conversation-id set above, not the native workspace column,
 		// which is null on rows indexed before it existed. archived is a clyde
@@ -291,29 +344,35 @@ func resolveEngineHits(
 			withheld++
 			continue
 		}
+
 		if seenMatches < offset {
 			seenMatches++
 			continue
 		}
-		matches = append(matches, conversation.SearchMatch{
-			Record:       record,
-			MessageIndex: int(hit.MessageIndex),
-			Role:         hit.Role,
-			Timestamp:    time.Unix(hit.TimestampUnix, 0),
-			Snippet:      conversation.Snippet(hit.Content),
-			Score:        hit.Score,
-			// The excerpt is the matched passage the engine already returned,
-			// byte-bounded so the ranked list stays small. The full surrounding
-			// window is a separate windowed read; search never inlines it.
-			ContextWindow: conversation.Excerpt(hit.Content),
-			LoadRules:     hit.LoadRules,
-			ContextState:  conversation.SearchContextStateExcerptOnly,
-		})
+
+		matches = append(
+			matches,
+			conversation.SearchMatch{
+				Record:       record,
+				MessageIndex: int(hit.MessageIndex),
+				Role:         hit.Role,
+				Timestamp:    time.Unix(hit.TimestampUnix, 0),
+				Snippet:      conversation.Snippet(hit.Content),
+				Score:        hit.Score,
+				// The excerpt is the matched passage the engine already returned,
+				// byte-bounded so the ranked list stays small. The full surrounding
+				// window is a separate windowed read; search never inlines it.
+				ContextWindow: conversation.Excerpt(hit.Content),
+				LoadRules:     hit.LoadRules,
+				ContextState:  conversation.SearchContextStateExcerptOnly,
+			},
+		)
 		seenMatches++
 		if limit > 0 && len(matches) >= limit {
 			break
 		}
 	}
+
 	return engineSearchPage{
 		matches:   matches,
 		ranked:    consumed,
@@ -327,16 +386,29 @@ func resolveEngineHits(
 // set under it (prefix match, so a project root includes its subdirectories),
 // regardless of provider or archived state, which are handled separately. The
 // engine filters natively on the conversation_id column and batches a large set.
-func workspaceConversationIDs(ctx context.Context, idx conversationSearchIndex, workspace string) ([]string, error) {
+func workspaceConversationIDs(
+	ctx context.Context,
+	idx conversationSearchIndex,
+	workspace string,
+) ([]string, error) {
 	var anyProvider conversation.Provider
 	conversationIDs, err := idx.ConversationIDsMatching(ctx, anyProvider, workspace, true)
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.search_conversations.scope_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"err", err,
+		slog.WarnContext(
+			ctx,
+			"daemon.search_conversations.scope_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"err",
+			err,
 		)
+
 		return nil, failedConversationSearchSourceError(
 			fmt.Errorf("resolve workspace conversation ids for %q: %w", workspace, err),
 		)
 	}
+
 	return conversationIDs, nil
 }

@@ -55,17 +55,22 @@ func DecodeAllComposersJSON(data []byte) (AllComposersDocument, error) {
 	if err := json.Unmarshal(data, &document); err != nil {
 		return AllComposersDocument{}, CursorJSONDecodeError{Description: "all composers", Err: err}
 	}
+
 	return document, nil
 }
 
 // BuildWorkspaceComposerIndex indexes Cursor workspace composer registry rows
 // by composer id. Unreadable workspaces retain previously decoded contributions
 // and report incomplete metadata without preventing other workspaces from reading.
-func BuildWorkspaceComposerIndex(inventory WorkspaceInventory) (map[string]WorkspaceComposerInfo, error) {
+func BuildWorkspaceComposerIndex(
+	inventory WorkspaceInventory,
+) (map[string]WorkspaceComposerInfo, error) {
 	index := make(map[string]WorkspaceComposerInfo)
+
 	for _, entry := range inventory.Entries {
 		addWorkspaceComposers(index, entry.Data)
 	}
+
 	return index, inventory.Err
 }
 
@@ -94,18 +99,38 @@ func BuildComposerMetadataIndex(
 	root DataRoot,
 ) ComposerMetadataIndex {
 	globalIndex, globalErr := ReadComposerMetadataIndex(ctx, globalDB)
-	return MergeWorkspaceComposerMetadata(ctx, root, ComposerMetadataIndex{ByComposerID: globalIndex, Err: globalErr}, ReadWorkspaceInventory(ctx, root))
+	return MergeWorkspaceComposerMetadata(
+		ctx,
+		root,
+		ComposerMetadataIndex{ByComposerID: globalIndex, Err: globalErr},
+		ReadWorkspaceInventory(ctx, root),
+	)
 }
 
 // MergeWorkspaceComposerMetadata joins cached global metadata with the shared
 // workspace discovery results, preserving the established field precedence.
-func MergeWorkspaceComposerMetadata(ctx context.Context, root DataRoot, globalMetadata ComposerMetadataIndex, inventory WorkspaceInventory) ComposerMetadataIndex {
+func MergeWorkspaceComposerMetadata(
+	ctx context.Context,
+	root DataRoot,
+	globalMetadata ComposerMetadataIndex,
+	inventory WorkspaceInventory,
+) ComposerMetadataIndex {
 	index := make(map[string]ComposerMetadata)
 
 	workspaceIndex, workspaceErr := BuildWorkspaceComposerIndex(inventory)
 	if workspaceErr != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.workspace_composer_index_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", workspaceErr)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.workspace_composer_index_failed",
+			"concern",
+			concern,
+			"path",
+			root.WorkspaceStorageDir,
+			"err",
+			workspaceErr,
+		)
 	}
+
 	for composerID, info := range workspaceIndex {
 		index[composerID] = ComposerMetadata{
 			ComposerID:    composerID,
@@ -124,16 +149,28 @@ func MergeWorkspaceComposerMetadata(ctx context.Context, root DataRoot, globalMe
 
 	globalIndex, globalErr := globalMetadata.ByComposerID, globalMetadata.Err
 	if globalErr != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_metadata_index_failed", "concern", concern, "path", root.GlobalDBPath, "err", globalErr)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_metadata_index_failed",
+			"concern",
+			concern,
+			"path",
+			root.GlobalDBPath,
+			"err",
+			globalErr,
+		)
 	}
+
 	for composerID, global := range globalIndex {
 		workspace, known := index[composerID]
 		if !known {
 			index[composerID] = global
 			continue
 		}
+
 		index[composerID] = mergeComposerMetadata(workspace, global)
 	}
+
 	return ComposerMetadataIndex{ByComposerID: index, Err: errors.Join(workspaceErr, globalErr)}
 }
 
@@ -147,18 +184,23 @@ func mergeComposerMetadata(workspace ComposerMetadata, global ComposerMetadata) 
 	if merged.WorkspaceRoot == "" {
 		merged.WorkspaceRoot = workspace.WorkspaceRoot
 	}
+
 	if merged.Name == "" {
 		merged.Name = workspace.Name
 	}
+
 	if merged.Subtitle == "" {
 		merged.Subtitle = workspace.Subtitle
 	}
+
 	if merged.CreatedAt == 0 {
 		merged.CreatedAt = workspace.CreatedAt
 	}
+
 	if merged.LastUpdatedAt == 0 {
 		merged.LastUpdatedAt = workspace.LastUpdatedAt
 	}
+
 	// Archived is deliberately not filled in from the workspace registry. It is
 	// the one field a person reverses, and the global row is the store Cursor
 	// keeps current, so a workspace registry that has not caught up would
@@ -172,32 +214,60 @@ func mergeComposerMetadata(workspace ComposerMetadata, global ComposerMetadata) 
 // whichever key this Cursor build wrote it under. A key that is absent is not a
 // failure, so the search moves on to the next one and reports only whether a
 // registry was found at all.
-func readWorkspaceComposerRegistry(ctx context.Context, db *sql.DB) (AllComposersDocument, bool, error) {
+func readWorkspaceComposerRegistry(
+	ctx context.Context,
+	db *sql.DB,
+) (AllComposersDocument, bool, error) {
 	var readErr error
+
 	for _, key := range []string{workspaceComposerDataKey, legacyAllComposersKey} {
 		value, found, err := ReadKVValue(ctx, db, KVTableItemTable, key)
 		if err != nil {
 			logger := discoveryReadLogger(ctx)
-			logger.WarnContext(ctx, "providers.cursor.store.workspace_registry_read_failed", "concern", concern, "key", key, "err", err)
+			logger.WarnContext(
+				ctx,
+				"providers.cursor.store.workspace_registry_read_failed",
+				"concern",
+				concern,
+				"key",
+				key,
+				"err",
+				err,
+			)
 			readErr = errors.Join(readErr, err)
 			continue
 		}
+
 		if !found {
 			continue
 		}
+
 		document, err := DecodeAllComposersJSON(value)
 		if err != nil {
 			logger := discoveryReadLogger(ctx)
-			logger.WarnContext(ctx, "providers.cursor.store.workspace_registry_decode_failed", "concern", concern, "key", key, "err", err)
+			logger.WarnContext(
+				ctx,
+				"providers.cursor.store.workspace_registry_decode_failed",
+				"concern",
+				concern,
+				"key",
+				key,
+				"err",
+				err,
+			)
 			readErr = errors.Join(readErr, err)
 			continue
 		}
+
 		if len(document.AllComposers) == 0 {
 			continue
 		}
+
 		return document, true, readErr
 	}
+
 	var emptyDocument AllComposersDocument
+
 	return emptyDocument, false, readErr
 }
 
@@ -213,6 +283,7 @@ func addWorkspaceComposers(index map[string]WorkspaceComposerInfo, data Workspac
 		if composerCwd == "" {
 			composerCwd = index[composer.ComposerID].Cwd
 		}
+
 		index[composer.ComposerID] = WorkspaceComposerInfo{
 			ComposerID:    composer.ComposerID,
 			Cwd:           composerCwd,

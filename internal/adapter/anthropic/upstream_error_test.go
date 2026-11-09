@@ -16,6 +16,7 @@ func TestUpstreamErrorPreservesClassification(t *testing.T) {
 	if ue.Class() != ResponseClassRetryableError {
 		t.Fatalf("Class() = %s, want retryable", ue.Class())
 	}
+
 	if !ue.Retryable() {
 		t.Fatalf("Retryable() must be true for 429")
 	}
@@ -31,9 +32,11 @@ func TestUpstreamErrorAsHelper(t *testing.T) {
 	if got, ok := AsUpstreamError(wrapped); !ok || got != wrapped {
 		t.Fatalf("AsUpstreamError did not return the typed value")
 	}
+
 	if got, ok := AsUpstreamError(nil); ok || got != nil {
 		t.Fatalf("AsUpstreamError(nil) should return false, nil")
 	}
+
 	if got, ok := AsUpstreamError(errors.New("bare")); ok || got != nil {
 		t.Fatalf("AsUpstreamError must not match bare errors")
 	}
@@ -48,6 +51,7 @@ func TestUpstreamErrorTransportPathIsRetryable(t *testing.T) {
 	if ue.Class() != ResponseClassRetryableError {
 		t.Fatalf("transport-error wrapped UpstreamError must be retryable, got %s", ue.Class())
 	}
+
 	if !errors.Is(errors.Unwrap(ue), cause) {
 		t.Fatalf("Unwrap should expose the underlying transport cause")
 	}
@@ -81,10 +85,13 @@ func TestUpstreamErrorErrorString(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.ue.Error(); got != tc.want {
-				t.Fatalf("Error() = %q, want %q", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				if got := tc.ue.Error(); got != tc.want {
+					t.Fatalf("Error() = %q, want %q", got, tc.want)
+				}
+			},
+		)
 	}
 }

@@ -40,11 +40,13 @@ func TestWarnRemovedLoggingConfigWarnsOnRemovedAdapterWireCapture(t *testing.T) 
 	warnRemovedLoggingConfig([]byte(tomlData), "test.toml", logger)
 
 	gotKeys := map[string]bool{}
+
 	for _, record := range records {
 		record.Attrs(func(attr slog.Attr) bool {
 			if attr.Key == "removed_key" {
 				gotKeys[attr.Value.String()] = true
 			}
+
 			return true
 		})
 	}
@@ -66,13 +68,19 @@ func TestLoadConfigRejectsRemovedConversationSemanticEnabled(t *testing.T) {
 		"[conversation.semantic]\nenabled = \"false\"\n",
 	} {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(contents), 0o600); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(dir, "config.toml"),
+			[]byte(contents),
+			0o600,
+		); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
+
 		_, err := loadConfig(dir)
 		if err == nil {
 			t.Fatalf("loadConfig accepted removed enabled key:\n%s", contents)
 		}
+
 		for _, want := range []string{"conversation.semantic.enabled", "ingestion_enabled"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("loadConfig error = %q, want it to contain %q", err, want)

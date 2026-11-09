@@ -24,6 +24,7 @@ func TestParseRawResponsesCompactionV2CapturedLayout(t *testing.T) {
 	if !ok {
 		t.Fatal("captured v2 layout rejected")
 	}
+
 	if layout.SetupEnd != 2 || layout.TranscriptStart != 2 || layout.TriggerIndex != 7 {
 		t.Fatalf("layout = %+v, want SetupEnd=2 TranscriptStart=2 TriggerIndex=7", layout)
 	}
@@ -80,16 +81,20 @@ func TestParseRawResponsesCompactionV2RejectsInvalidLayout(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			metadata := testCase.metadata
-			if metadata == "" {
-				metadata = rawResponsesCompactionV2TestMetadata("mid_turn", "memento")
-			}
-			request := rawResponsesCompactionV2TestRequest(testCase.input, metadata)
-			if layout, ok := ParseRawResponsesCompactionV2(request); ok {
-				t.Fatalf("invalid layout accepted: %+v", layout)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				metadata := testCase.metadata
+				if metadata == "" {
+					metadata = rawResponsesCompactionV2TestMetadata("mid_turn", "memento")
+				}
+
+				request := rawResponsesCompactionV2TestRequest(testCase.input, metadata)
+				if layout, ok := ParseRawResponsesCompactionV2(request); ok {
+					t.Fatalf("invalid layout accepted: %+v", layout)
+				}
+			},
+		)
 	}
 }
 

@@ -112,10 +112,12 @@ type kvRow struct {
 
 func mustMarshal(t *testing.T) func([]byte, error) []byte {
 	t.Helper()
+
 	return func(data []byte, err error) []byte {
 		if err != nil {
 			t.Fatalf("cannot marshal fixture JSON: %v", err)
 		}
+
 		return data
 	}
 }
@@ -125,28 +127,34 @@ func writeKVStore(t *testing.T, dbPath string, rows []kvRow) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatalf("cannot create fixture store directory: %v", err)
 	}
+
 	schema, err := os.ReadFile(fixtureSchemaPath)
 	if err != nil {
 		t.Fatalf("cannot read fixture schema: %v", err)
 	}
+
 	insert, err := os.ReadFile(fixtureInsertPath)
 	if err != nil {
 		t.Fatalf("cannot read fixture insert statement: %v", err)
 	}
+
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("cannot open fixture store: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 	if _, err := db.Exec(string(schema)); err != nil {
 		t.Fatalf("cannot create fixture schema: %v", err)
 	}
+
 	for _, row := range rows {
 		if row.blob != nil {
 			_, err = db.Exec(string(insert), row.key, row.blob)
 		} else {
 			_, err = db.Exec(string(insert), row.key, row.text)
 		}
+
 		if err != nil {
 			t.Fatalf("cannot insert fixture row; key: %s: %v", row.key, err)
 		}
@@ -159,6 +167,7 @@ func writeNativeStore(t *testing.T, rootDir string, fixture nativeStoreFixture) 
 	rows := make([]kvRow, 0, len(fixture.messages)+len(fixture.bubbles)+1)
 	var state []byte
 	written := map[string]bool{}
+
 	for index, message := range fixture.messages {
 		data := mustMarshal(t)(json.Marshal(message))
 		digest := sha256.Sum256(data)
@@ -168,43 +177,93 @@ func writeNativeStore(t *testing.T, rootDir string, fixture nativeStoreFixture) 
 		if fixture.omitted[index] || written[key] {
 			continue
 		}
+
 		written[key] = true
 		rows = append(rows, kvRow{key: "agentKv:blob:" + key, text: "", blob: data})
 	}
+
 	composer := fixtureComposer{
-		ComposerID: fixture.composerID, Name: "Fixture", CreatedAt: fixtureComposerCreated, LastUpdatedAt: fixtureComposerUpdated,
-		ConversationState: "", Headers: make([]fixtureHeaderRef, 0, len(fixture.bubbles)),
+		ComposerID:        fixture.composerID,
+		Name:              "Fixture",
+		CreatedAt:         fixtureComposerCreated,
+		LastUpdatedAt:     fixtureComposerUpdated,
+		ConversationState: "",
+		Headers:           make([]fixtureHeaderRef, 0, len(fixture.bubbles)),
 	}
 	if len(fixture.messages) > 0 {
 		composer.ConversationState = fixtureStatePrefix + base64.StdEncoding.EncodeToString(state)
 	}
+
 	for _, bubble := range fixture.bubbles {
 		if !bubble.Unreferenced {
-			composer.Headers = append(composer.Headers, fixtureHeaderRef{BubbleID: bubble.BubbleID, Type: bubble.Type})
+			composer.Headers = append(
+				composer.Headers,
+				fixtureHeaderRef{BubbleID: bubble.BubbleID, Type: bubble.Type},
+			)
 		}
+
 		key := "bubbleId:" + fixture.composerID + ":" + bubble.BubbleID
-		rows = append(rows, kvRow{key: key, text: string(mustMarshal(t)(json.Marshal(bubble))), blob: nil})
+		rows = append(
+			rows,
+			kvRow{key: key, text: string(mustMarshal(t)(json.Marshal(bubble))), blob: nil},
+		)
 	}
-	rows = append(rows, kvRow{key: "composerData:" + fixture.composerID, text: string(mustMarshal(t)(json.Marshal(composer))), blob: nil})
+
+	rows = append(
+		rows,
+		kvRow{
+			key:  "composerData:" + fixture.composerID,
+			text: string(mustMarshal(t)(json.Marshal(composer))),
+			blob: nil,
+		},
+	)
 	writeKVStore(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), rows)
 }
 
 func userBubble(bubbleID string, text string, created string) fixtureBubble {
-	return fixtureBubble{Version: fixtureBubbleVersion, Type: fixtureUserType, BubbleID: bubbleID, Text: text, CreatedAt: created, ServerBubbleID: "", ToolFormerData: nil, Unreferenced: false}
+	return fixtureBubble{
+		Version:        fixtureBubbleVersion,
+		Type:           fixtureUserType,
+		BubbleID:       bubbleID,
+		Text:           text,
+		CreatedAt:      created,
+		ServerBubbleID: "",
+		ToolFormerData: nil,
+		Unreferenced:   false,
+	}
 }
 
 func assistantBubble(bubbleID string, text string, created string) fixtureBubble {
-	return fixtureBubble{Version: fixtureBubbleVersion, Type: fixtureAssistantType, BubbleID: bubbleID, Text: text, CreatedAt: created, ServerBubbleID: "", ToolFormerData: nil, Unreferenced: false}
+	return fixtureBubble{
+		Version:        fixtureBubbleVersion,
+		Type:           fixtureAssistantType,
+		BubbleID:       bubbleID,
+		Text:           text,
+		CreatedAt:      created,
+		ServerBubbleID: "",
+		ToolFormerData: nil,
+		Unreferenced:   false,
+	}
 }
 
 func toolBubble(bubbleID string, created string, callID string) fixtureBubble {
 	bubble := assistantBubble(bubbleID, "", created)
-	bubble.ToolFormerData = &fixtureToolFormer{Name: fixtureToolName, RawArgs: "", Status: fixtureToolStatus, ToolCallID: callID, ToolCallBinary: ""}
+	bubble.ToolFormerData = &fixtureToolFormer{
+		Name:           fixtureToolName,
+		RawArgs:        "",
+		Status:         fixtureToolStatus,
+		ToolCallID:     callID,
+		ToolCallBinary: "",
+	}
+
 	return bubble
 }
 
 func userMessage(text string) fixtureNativeMessage {
-	return fixtureNativeMessage{Role: "user", Content: []fixturePart{{Type: "text", Text: text, ToolCallID: "", ToolName: "", Args: nil}}}
+	return fixtureNativeMessage{
+		Role:    "user",
+		Content: []fixturePart{{Type: "text", Text: text, ToolCallID: "", ToolName: "", Args: nil}},
+	}
 }
 
 func assistantMessage(parts ...fixturePart) fixtureNativeMessage {
@@ -212,12 +271,23 @@ func assistantMessage(parts ...fixturePart) fixtureNativeMessage {
 }
 
 func callPart(callID string, args json.RawMessage) fixturePart {
-	return fixturePart{Type: "tool-call", Text: "", ToolCallID: callID, ToolName: "Shell", Args: args}
+	return fixturePart{
+		Type:       "tool-call",
+		Text:       "",
+		ToolCallID: callID,
+		ToolName:   "Shell",
+		Args:       args,
+	}
 }
 
 func commandArgs(t *testing.T, command string, workingDirectory string) json.RawMessage {
 	t.Helper()
-	return mustMarshal(t)(json.Marshal(fixtureCommandArgs{Command: command, WorkingDirectory: workingDirectory}))
+	return mustMarshal(t)(
+		json.Marshal(fixtureCommandArgs{
+			Command:          command,
+			WorkingDirectory: workingDirectory,
+		}),
+	)
 }
 
 func fixtureLineText(t *testing.T, line fixtureLine) string {
@@ -227,21 +297,45 @@ func fixtureLineText(t *testing.T, line fixtureLine) string {
 
 func userLine(t *testing.T, text string) string {
 	t.Helper()
-	return fixtureLineText(t, fixtureLine{Role: "user", Message: fixtureLineMessage{Content: []fixtureLinePart{{Type: "text", Text: text, Name: "", Input: nil}}}})
+	return fixtureLineText(
+		t,
+		fixtureLine{
+			Role: "user",
+			Message: fixtureLineMessage{
+				Content: []fixtureLinePart{{Type: "text", Text: text, Name: "", Input: nil}},
+			},
+		},
+	)
 }
 
 func assistantTextLine(t *testing.T, text string) string {
 	t.Helper()
-	return fixtureLineText(t, fixtureLine{Role: "assistant", Message: fixtureLineMessage{Content: []fixtureLinePart{{Type: "text", Text: text, Name: "", Input: nil}}}})
+	return fixtureLineText(
+		t,
+		fixtureLine{
+			Role: "assistant",
+			Message: fixtureLineMessage{
+				Content: []fixtureLinePart{{Type: "text", Text: text, Name: "", Input: nil}},
+			},
+		},
+	)
 }
 
 func toolLine(t *testing.T, inputs ...json.RawMessage) string {
 	t.Helper()
+
 	parts := make([]fixtureLinePart, 0, len(inputs))
 	for _, input := range inputs {
-		parts = append(parts, fixtureLinePart{Type: "tool_use", Text: "", Name: "Shell", Input: input})
+		parts = append(
+			parts,
+			fixtureLinePart{Type: "tool_use", Text: "", Name: "Shell", Input: input},
+		)
 	}
-	return fixtureLineText(t, fixtureLine{Role: "assistant", Message: fixtureLineMessage{Content: parts}})
+
+	return fixtureLineText(
+		t,
+		fixtureLine{Role: "assistant", Message: fixtureLineMessage{Content: parts}},
+	)
 }
 
 // jsonUnicodeEscape returns a Unicode escape for a rune.

@@ -46,22 +46,29 @@ func TestControlRecordsAreNotOffered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSemanticConversationDocuments returned error: %v", err)
 	}
+
 	if len(built.Docs) != 2 {
 		t.Fatalf("documents = %d, want 2: the control record must not be offered", len(built.Docs))
 	}
+
 	if built.PolicySkipped != 1 {
 		t.Fatalf("PolicySkipped = %d, want 1 (the control record)", built.PolicySkipped)
 	}
+
 	for _, doc := range built.Docs {
 		if doc.Text == messages[1].Text {
 			t.Fatalf("the control record reached the feed as %q", doc.Text)
 		}
 	}
+
 	// The surviving documents keep the indices they had in the conversation,
 	// so a control record between two turns does not renumber what follows and
 	// re-embed messages whose content never changed.
 	if built.Docs[0].MessageIndex != 0 || built.Docs[1].MessageIndex != 2 {
-		t.Fatalf("message indices = %d and %d, want 0 and 2",
-			built.Docs[0].MessageIndex, built.Docs[1].MessageIndex)
+		t.Fatalf(
+			"message indices = %d and %d, want 0 and 2",
+			built.Docs[0].MessageIndex,
+			built.Docs[1].MessageIndex,
+		)
 	}
 }

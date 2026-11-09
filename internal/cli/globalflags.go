@@ -20,5 +20,10 @@ var copyOutput bool
 // the Factory instead of touching package globals directly).
 func RegisterGlobalFlags(root *cobra.Command) {
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
-	root.PersistentFlags().BoolVar(&copyOutput, "copy", false, "Copy the command's output body to the clipboard (macOS only; errors on other platforms)")
+	root.PersistentFlags().BoolVar(
+		&copyOutput,
+		"copy",
+		false,
+		"Copy the command's output body to the clipboard (macOS only; errors on other platforms)",
+	)
 }

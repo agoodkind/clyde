@@ -33,7 +33,11 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 	t.Parallel()
 
 	dispatcher := &fakeResponseDispatcher{}
-	dispatcher.streamEvents = func(_ context.Context, _ anthropic.Request, sink anthropic.EventSink) (anthropic.Usage, string, error) {
+	dispatcher.streamEvents = func(_ context.Context, _ anthropic.Request, sink anthropic.EventSink) (
+		anthropic.Usage,
+		string,
+		error,
+	) {
 		emit := func(ev anthropic.StreamEvent) error {
 			return sink(ev)
 		}
@@ -41,50 +45,89 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 		if err := emit(anthropic.StreamThinkingStart{BlockIndex: 0}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamThinkingDelta{BlockIndex: 0, Text: "considering the request"}); err != nil {
+
+		if err := emit(anthropic.StreamThinkingDelta{
+			BlockIndex: 0,
+			Text:       "considering the request",
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
 
-		if err := emit(anthropic.StreamTextDelta{BlockIndex: 1, Text: "Reading the file."}); err != nil {
+		if err := emit(anthropic.StreamTextDelta{
+			BlockIndex: 1,
+			Text:       "Reading the file.",
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
 
-		if err := emit(anthropic.StreamToolUseStart{BlockIndex: 2, ToolUseID: "tu_1", ToolUseName: "Read"}); err != nil {
+		if err := emit(anthropic.StreamToolUseStart{
+			BlockIndex:  2,
+			ToolUseID:   "tu_1",
+			ToolUseName: "Read",
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
+
 		// Anthropic's first input_json_delta for a tool_use block is
 		// often empty. Forward this to exercise the wire shape Cursor
 		// sees in production. The forward fix in stream_parse.go must
 		// drop the empty delta before it reaches the renderer.
-		if err := emit(anthropic.StreamToolUseArgDelta{BlockIndex: 2, PartialJSON: ""}); err != nil {
+		if err := emit(anthropic.StreamToolUseArgDelta{
+			BlockIndex:  2,
+			PartialJSON: "",
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamToolUseArgDelta{BlockIndex: 2, PartialJSON: `{"path":"`}); err != nil {
+
+		if err := emit(anthropic.StreamToolUseArgDelta{
+			BlockIndex:  2,
+			PartialJSON: `{"path":"`,
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamToolUseArgDelta{BlockIndex: 2, PartialJSON: `/tmp/file.txt"}`}); err != nil {
+
+		if err := emit(anthropic.StreamToolUseArgDelta{
+			BlockIndex:  2,
+			PartialJSON: `/tmp/file.txt"}`,
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
+
 		if err := emit(anthropic.StreamToolUseStop{BlockIndex: 2}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
+
 		if err := emit(anthropic.StreamStop{StopReason: "tool_use"}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
+
 		return anthropic.Usage{InputTokens: 100, OutputTokens: 20}, "tool_use", nil
 	}
 
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 	req := anthropic.Request{Model: "claude-sonnet-4-6"}
-	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-sonnet-4.6-medium-thinking", WireModel: "claude-sonnet-4-6"})
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{
+		Alias:     "clyde-sonnet-4.6-medium-thinking",
+		WireModel: "claude-sonnet-4-6",
+	})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
 	}
-	_, err := RunStreamExecution(dispatcher, context.Background(), req, resolved, "req-stream-test", time.Now(), "tracker", emit)
+	_, err := RunStreamExecution(
+		dispatcher,
+		context.Background(),
+		req,
+		resolved,
+		"req-stream-test",
+		time.Now(),
+		"tracker",
+		emit,
+	)
 	if err != nil {
 		t.Fatalf("RunStreamExecution: %v", err)
 	}
+
 	if err := dispatcher.FlushEventWriter(); err != nil {
 		t.Fatalf("FlushEventWriter: %v", err)
 	}
@@ -100,24 +143,33 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 	hasThinkingClose := false
 	hasReasoningContent := false
 	emptyToolCallChunks := 0
+
 	for _, ch := range chunks {
 		for _, choice := range ch.Choices {
-			if strings.Contains(choice.Delta.Content, `<!--clyde-thinking data-origin="anthropic"-->`) {
+			if strings.Contains(
+				choice.Delta.Content,
+				`<!--clyde-thinking data-origin="anthropic"-->`,
+			) {
 				hasThinkingOpen = true
 			}
+
 			if strings.Contains(choice.Delta.Content, "<!--/clyde-thinking-->") {
 				hasThinkingClose = true
 			}
+
 			if strings.TrimSpace(choice.Delta.ReasoningContent) != "" {
 				hasReasoningContent = true
 			}
+
 			for _, tc := range choice.Delta.ToolCalls {
 				if strings.TrimSpace(tc.Function.Name) != "" {
 					hasToolName = true
 				}
+
 				if strings.TrimSpace(tc.Function.Arguments) != "" {
 					hasToolArgs = true
 				}
+
 				// Cursor's OpenAI SSE parser treats a tool_call with no
 				// function name and no arguments as a finalize/reset
 				// signal. The leading empty input_json_delta from
@@ -134,20 +186,30 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 	if !hasToolName {
 		t.Errorf("missing signal: no chunk with delta.tool_calls function name")
 	}
+
 	if !hasToolArgs {
 		t.Errorf("missing signal: no chunk with delta.tool_calls arguments")
 	}
+
 	if !hasThinkingOpen {
 		t.Errorf("missing signal: no chunk with <!--clyde-thinking--> open marker")
 	}
+
 	if !hasThinkingClose {
 		t.Errorf("missing signal: no chunk with <!--/clyde-thinking--> close marker")
 	}
+
 	if !hasReasoningContent {
-		t.Errorf("missing signal: no chunk with non-empty delta.reasoning_content (dual-emit probe for native Cursor BYOK reasoning render)")
+		t.Errorf(
+			"missing signal: no chunk with non-empty delta.reasoning_content (dual-emit probe for native Cursor BYOK reasoning render)",
+		)
 	}
+
 	if emptyToolCallChunks > 0 {
-		t.Errorf("found %d empty tool_call chunks (no name, args, or id); Cursor will drop the tool call", emptyToolCallChunks)
+		t.Errorf(
+			"found %d empty tool_call chunks (no name, args, or id); Cursor will drop the tool call",
+			emptyToolCallChunks,
+		)
 	}
 
 	if t.Failed() {
@@ -171,41 +233,73 @@ func TestRunStreamExecutionRecoversFinishReasonAfterLateError(t *testing.T) {
 	t.Parallel()
 
 	dispatcher := &fakeResponseDispatcher{}
-	dispatcher.streamEvents = func(_ context.Context, _ anthropic.Request, sink anthropic.EventSink) (anthropic.Usage, string, error) {
+	dispatcher.streamEvents = func(_ context.Context, _ anthropic.Request, sink anthropic.EventSink) (
+		anthropic.Usage,
+		string,
+		error,
+	) {
 		emit := func(ev anthropic.StreamEvent) error {
 			return sink(ev)
 		}
-		if err := emit(anthropic.StreamTextDelta{BlockIndex: 0, Text: "The capital of France is Paris."}); err != nil {
+		if err := emit(anthropic.StreamTextDelta{
+			BlockIndex: 0,
+			Text:       "The capital of France is Paris.",
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
+
 		if err := emit(anthropic.StreamStop{StopReason: "end_turn"}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
+
 		// Late error after the answer has fully streamed. Caller code
 		// must still be able to finalize the OpenAI SSE turn.
-		return anthropic.Usage{InputTokens: 10, OutputTokens: 7}, "end_turn", errors.New("simulated late stream termination")
+		return anthropic.Usage{
+			InputTokens:  10,
+			OutputTokens: 7,
+		}, "end_turn", errors.New("simulated late stream termination")
 	}
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 
 	req := anthropic.Request{Model: "claude-opus-4-7"}
-	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-opus-4-7", WireModel: "claude-opus-4-7", Context: 200_000})
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{
+		Alias:     "clyde-opus-4-7",
+		WireModel: "claude-opus-4-7",
+		Context:   200_000,
+	})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
 	}
-	result, err := RunStreamExecution(dispatcher, context.Background(), req, resolved, "req-late-err", time.Now(), "tracker", emit)
+	result, err := RunStreamExecution(
+		dispatcher,
+		context.Background(),
+		req,
+		resolved,
+		"req-late-err",
+		time.Now(),
+		"tracker",
+		emit,
+	)
 	if err == nil {
 		t.Fatalf("expected late error to propagate, got nil")
 	}
+
 	if result.FinishReason != "stop" {
-		t.Fatalf("finish_reason = %q, want \"stop\" (recovered from stop_reason=end_turn)", result.FinishReason)
+		t.Fatalf(
+			"finish_reason = %q, want \"stop\" (recovered from stop_reason=end_turn)",
+			result.FinishReason,
+		)
 	}
+
 	if result.Usage.PromptTokens != 10 {
 		t.Fatalf("prompt_tokens = %d, want 10", result.Usage.PromptTokens)
 	}
+
 	if result.Usage.CompletionTokens != 7 {
 		t.Fatalf("completion_tokens = %d, want 7", result.Usage.CompletionTokens)
 	}
+
 	if result.Usage.TotalTokens != 17 {
 		t.Fatalf("total_tokens = %d, want 17", result.Usage.TotalTokens)
 	}
@@ -220,42 +314,79 @@ func TestRunStreamExecutionRecoversFinishReasonFromToolUseStopReason(t *testing.
 	t.Parallel()
 
 	dispatcher := &fakeResponseDispatcher{}
-	dispatcher.streamEvents = func(_ context.Context, _ anthropic.Request, sink anthropic.EventSink) (anthropic.Usage, string, error) {
+	dispatcher.streamEvents = func(_ context.Context, _ anthropic.Request, sink anthropic.EventSink) (
+		anthropic.Usage,
+		string,
+		error,
+	) {
 		emit := func(ev anthropic.StreamEvent) error {
 			return sink(ev)
 		}
-		if err := emit(anthropic.StreamTextDelta{BlockIndex: 0, Text: "Calling the tool now."}); err != nil {
+		if err := emit(anthropic.StreamTextDelta{
+			BlockIndex: 0,
+			Text:       "Calling the tool now.",
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamToolUseStart{BlockIndex: 1, ToolUseID: "tu_late", ToolUseName: "Read"}); err != nil {
+
+		if err := emit(anthropic.StreamToolUseStart{
+			BlockIndex:  1,
+			ToolUseID:   "tu_late",
+			ToolUseName: "Read",
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamToolUseArgDelta{BlockIndex: 1, PartialJSON: `{"path":"/etc/hosts"}`}); err != nil {
+
+		if err := emit(anthropic.StreamToolUseArgDelta{
+			BlockIndex:  1,
+			PartialJSON: `{"path":"/etc/hosts"}`,
+		}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
+
 		if err := emit(anthropic.StreamToolUseStop{BlockIndex: 1}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
+
 		if err := emit(anthropic.StreamStop{StopReason: "tool_use"}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		return anthropic.Usage{InputTokens: 50, OutputTokens: 12}, "tool_use", errors.New("late scanner failure")
+
+		return anthropic.Usage{
+			InputTokens:  50,
+			OutputTokens: 12,
+		}, "tool_use", errors.New("late scanner failure")
 	}
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 
 	req := anthropic.Request{Model: "claude-opus-4-7"}
-	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-opus-4-7", WireModel: "claude-opus-4-7", Context: 200_000})
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{
+		Alias:     "clyde-opus-4-7",
+		WireModel: "claude-opus-4-7",
+		Context:   200_000,
+	})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
 	}
-	result, err := RunStreamExecution(dispatcher, context.Background(), req, resolved, "req-late-tool", time.Now(), "tracker", emit)
+	result, err := RunStreamExecution(
+		dispatcher,
+		context.Background(),
+		req,
+		resolved,
+		"req-late-tool",
+		time.Now(),
+		"tracker",
+		emit,
+	)
 	if err == nil {
 		t.Fatalf("expected late error to propagate, got nil")
 	}
+
 	if result.FinishReason != "tool_calls" {
 		t.Fatalf("finish_reason = %q, want \"tool_calls\"", result.FinishReason)
 	}
+
 	if result.ToolCallCount < 1 {
 		t.Fatalf("tool_call_count = %d, want >= 1", result.ToolCallCount)
 	}

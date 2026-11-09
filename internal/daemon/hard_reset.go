@@ -70,22 +70,43 @@ func readRotatedLogTargets(state string) ([]resetTarget, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
+
 	if err != nil {
-		slog.Warn("daemon.hard_reset.state_logs_read_failed", "concern", "process.daemon.lifecycle", "path", state, "err", err)
+		slog.Warn(
+			"daemon.hard_reset.state_logs_read_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"path",
+			state,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("read Clyde state logs: %w", err)
 	}
+
 	targets := make([]resetTarget, 0)
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
+
 		name := strings.ToLower(entry.Name())
-		isLog := strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, ".jsonl.gz") || strings.HasSuffix(name, ".log") || strings.HasSuffix(name, ".log.gz")
-		isClydeLog := strings.HasPrefix(name, "clyde-") || strings.HasPrefix(name, "codex") || strings.HasPrefix(name, "anthropic") || strings.HasPrefix(name, "audit") || strings.HasPrefix(name, "daemon")
+		isLog := strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, ".jsonl.gz") ||
+			strings.HasSuffix(name, ".log") ||
+			strings.HasSuffix(name, ".log.gz")
+		isClydeLog := strings.HasPrefix(name, "clyde-") || strings.HasPrefix(name, "codex") ||
+			strings.HasPrefix(name, "anthropic") ||
+			strings.HasPrefix(name, "audit") ||
+			strings.HasPrefix(name, "daemon")
 		if isLog && isClydeLog {
-			targets = append(targets, resetLogTarget(filepath.Join(state, entry.Name()), state, false))
+			targets = append(
+				targets,
+				resetLogTarget(filepath.Join(state, entry.Name()), state, false),
+			)
 		}
 	}
+
 	return targets, nil
 }
 
@@ -97,7 +118,11 @@ func HardReset(ctx context.Context, output io.Writer) (err error) {
 
 // HardResetWithOptions stops Clyde, removes the selected Clyde-owned data, and
 // reinstalls the native service. The default scope preserves configuration.
-func HardResetWithOptions(ctx context.Context, output io.Writer, options HardResetOptions) (err error) {
+func HardResetWithOptions(
+	ctx context.Context,
+	output io.Writer,
+	options HardResetOptions,
+) (err error) {
 	slog.InfoContext(ctx, "daemon.hard_reset.started", "concern", "process.daemon.lifecycle")
 	defer func() {
 		if err != nil {
@@ -111,81 +136,128 @@ func HardResetWithOptions(ctx context.Context, output io.Writer, options HardRes
 			return fmt.Errorf("validate preserved config: %w", err)
 		}
 	}
+
 	targets, err := hardResetTargetsForScope(ctx, cfg, options.Scope)
 	if err != nil {
 		return err
 	}
+
 	if err := printResetPlan(ctx, output, targets, cfg); err != nil {
 		return err
 	}
+
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve current executable: %w", err)
 	}
+
 	executable, err = filepath.EvalSymlinks(executable)
 	if err != nil {
 		return fmt.Errorf("resolve current executable symlinks: %w", err)
 	}
+
 	lookup := func(key string) (string, bool) {
 		if key == "INSTALL_BIN" {
 			return executable, true
 		}
+
 		return os.LookupEnv(key)
 	}
 	processes, err := hardResetProcesses(ctx, executable)
 	if err != nil {
 		return err
 	}
+
 	if err := deploy.RemoveFromEnv(ctx, lookup, output); err != nil {
 		return fmt.Errorf("unregister Clyde before reset: %w", err)
 	}
+
 	if err := stopResetProcesses(ctx, processes); err != nil {
 		return err
 	}
+
 	// The supervisor is now gone and cannot spawn replacements. Catch workers
 	// it created during teardown, which have reparented to init by this point.
 	remaining, err := hardResetProcesses(ctx, executable)
 	if err != nil {
 		return err
 	}
+
 	if err := stopResetProcesses(ctx, remaining); err != nil {
 		return err
 	}
+
 	for _, target := range targets {
 		// Recheck after shutdown because the old generation may have replaced a
 		// checkpoint while draining. Never follow a newly introduced symlink.
 		if err := validateResetTarget(ctx, target, cfg); err != nil {
 			return err
 		}
+
 		if target.RemoveTree {
 			err = os.RemoveAll(target.Path)
 		} else {
 			err = os.Remove(target.Path)
 		}
+
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
+
 			return fmt.Errorf("remove reset target %s: %w", target.Path, err)
 		}
+
 		_, _ = fmt.Fprintln(output, "Removed Clyde data:", target.Path)
 	}
-	if err := RunInitialConversationIndex(ctx, output, func(completed int, total int) {
-		_, _ = fmt.Fprintf(output, "Initial indexing: %d/%d conversations\n", completed, total)
-	}); err != nil {
-		slog.WarnContext(ctx, "daemon.hard_reset.initial_index_failed", "concern", "conversation.index", "component", "daemon", "err", err)
+
+	if err := RunInitialConversationIndex(
+		ctx,
+		output,
+		func(completed int, total int) {
+			_, _ = fmt.Fprintf(output, "Initial indexing: %d/%d conversations\n", completed, total)
+		},
+	); err != nil {
+		slog.WarnContext(
+			ctx,
+			"daemon.hard_reset.initial_index_failed",
+			"concern",
+			"conversation.index",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
 		return fmt.Errorf("clyde data reset; initial conversation index failed: %w", err)
 	}
-	if err := deploy.RunFromEnv(ctx, lookup, false, output, output, deploy.Fingerprints{
-		Compiled: CompiledSupervisorFingerprint, Running: RunningSupervisorFingerprint,
-	}); err != nil {
+
+	if err := deploy.RunFromEnv(
+		ctx,
+		lookup,
+		false,
+		output,
+		output,
+		deploy.Fingerprints{
+			Compiled: CompiledSupervisorFingerprint,
+			Running:  RunningSupervisorFingerprint,
+		},
+	); err != nil {
 		return fmt.Errorf("clyde data reset; native installation failed: %w", err)
 	}
-	_, _ = fmt.Fprintln(output, "Clyde data reset; native service installation and status check succeeded.")
+
+	_, _ = fmt.Fprintln(
+		output,
+		"Clyde data reset; native service installation and status check succeeded.",
+	)
+
 	return nil
 }
 
-func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope HardResetScope) (_ []resetTarget, err error) {
+func hardResetTargetsForScope(
+	ctx context.Context,
+	cfg *config.Config,
+	scope HardResetScope,
+) (_ []resetTarget, err error) {
 	defer func() {
 		if err != nil {
 			slog.Warn("daemon.hard_reset.inventory_rejected", "concern", "process.daemon.lifecycle")
@@ -196,6 +268,7 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 	if err != nil {
 		return nil, fmt.Errorf("resolve Clyde fallback log: %w", err)
 	}
+
 	fallbackLogRoot := filepath.Join(home, "Library", "Logs")
 	cacheTargets := []resetTarget{resetFileTarget(conversation.CachePath(), cache)}
 	stateTargets := []resetTarget{
@@ -225,14 +298,17 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 	if err != nil {
 		return nil, err
 	}
+
 	stateTargets = append(stateTargets, rotatedLogs...)
 	if scope == HardResetScopeAll || scope == HardResetScopeState {
 		socket, err := config.DaemonSocketPathFromGRPCAddress(cfg.Daemon.GRPCAddress)
 		if err != nil {
 			return nil, fmt.Errorf("resolve daemon reset socket: %w", err)
 		}
+
 		stateTargets = append(stateTargets, resetFileTarget(socket, runtime))
 	}
+
 	targets := make([]resetTarget, 0)
 	switch scope {
 	case HardResetScopeAll:
@@ -243,71 +319,145 @@ func hardResetTargetsForScope(ctx context.Context, cfg *config.Config, scope Har
 	case HardResetScopeState:
 		targets = append(targets, stateTargets...)
 	case HardResetScopeHooks:
-		targets = append(targets, resetTarget{Path: filepath.Join(state, "hooks"), Root: state, RemoveTree: true, AllowProtected: false})
+		targets = append(
+			targets,
+			resetTarget{
+				Path:           filepath.Join(state, "hooks"),
+				Root:           state,
+				RemoveTree:     true,
+				AllowProtected: false,
+			},
+		)
 	case HardResetScopeConfig:
 		configDir := filepath.Dir(config.GlobalConfigPath())
-		targets = append(targets, resetTarget{Path: configDir, Root: filepath.Dir(configDir), RemoveTree: true, AllowProtected: true})
+		targets = append(
+			targets,
+			resetTarget{
+				Path:           configDir,
+				Root:           filepath.Dir(configDir),
+				RemoveTree:     true,
+				AllowProtected: true,
+			},
+		)
 	case HardResetScopeDB:
 	default:
 		return nil, fmt.Errorf("unsupported hard-reset target %q", scope)
 	}
+
 	if scope != HardResetScopeAll && scope != HardResetScopeDB {
 		for _, target := range targets {
 			if err := validateResetTarget(ctx, target, cfg); err != nil {
 				return nil, err
 			}
 		}
+
 		return targets, nil
 	}
+
 	capturePath := cfg.MITM.CaptureStore.DBPath
 	root := ""
+
 	for _, candidate := range []string{state, cache, runtime} {
 		if withinResetRoot(capturePath, candidate) {
 			root = candidate
 			break
 		}
 	}
+
 	if root == "" {
 		return nil, fmt.Errorf("capture reset target %s is outside Clyde ownership", capturePath)
 	}
+
 	if scope == HardResetScopeAll || scope == HardResetScopeDB {
 		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
 			targets = append(targets, resetFileTarget(capturePath+suffix, root))
 		}
 	}
+
 	for _, target := range targets {
 		if err := validateResetTarget(ctx, target, cfg); err != nil {
 			return nil, err
 		}
 	}
+
 	return targets, nil
 }
 
-func printResetPlan(ctx context.Context, output io.Writer, targets []resetTarget, cfg *config.Config) error {
+func printResetPlan(
+	ctx context.Context,
+	output io.Writer,
+	targets []resetTarget,
+	cfg *config.Config,
+) error {
 	removals, preserved, err := resetPlanPaths(ctx, targets, cfg)
 	if err != nil {
 		return err
 	}
+
 	if _, err := fmt.Fprintln(output, "Clyde hard reset removal targets:"); err != nil {
-		slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.hard_reset.plan_write_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
 		return fmt.Errorf("print hard reset removal targets: %w", err)
 	}
+
 	for _, path := range removals {
 		if _, err := fmt.Fprintln(output, "  "+path); err != nil {
-			slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "path", path, "err", err)
+			slog.WarnContext(
+				ctx,
+				"daemon.hard_reset.plan_write_failed",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"path",
+				path,
+				"err",
+				err,
+			)
 			return fmt.Errorf("print hard reset removal target: %w", err)
 		}
 	}
+
 	if _, err := fmt.Fprintln(output, "Clyde hard reset preserved roots:"); err != nil {
-		slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		slog.WarnContext(
+			ctx,
+			"daemon.hard_reset.plan_write_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
 		return fmt.Errorf("print hard reset preserved roots: %w", err)
 	}
+
 	for _, root := range preserved {
 		if _, err := fmt.Fprintln(output, "  "+root); err != nil {
-			slog.WarnContext(ctx, "daemon.hard_reset.plan_write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "path", root, "err", err)
+			slog.WarnContext(
+				ctx,
+				"daemon.hard_reset.plan_write_failed",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"path",
+				root,
+				"err",
+				err,
+			)
 			return fmt.Errorf("print hard reset preserved root: %w", err)
 		}
 	}
+
 	return nil
 }
 
@@ -315,8 +465,11 @@ func withinResetRoot(path, root string) bool {
 	if !filepath.IsAbs(path) || !filepath.IsAbs(root) {
 		return false
 	}
+
 	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+
+	return err == nil && relative != "." && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func validateResetTarget(ctx context.Context, target resetTarget, cfg *config.Config) (err error) {
@@ -328,185 +481,249 @@ func validateResetTarget(ctx context.Context, target resetTarget, cfg *config.Co
 	if !withinResetRoot(target.Path, target.Root) {
 		return fmt.Errorf("reset target %s is outside Clyde ownership", target.Path)
 	}
-	for current := filepath.Clean(target.Path); withinResetRoot(current, target.Root); current = filepath.Dir(current) {
+
+	for current := filepath.Clean(
+		target.Path,
+	); withinResetRoot(current, target.Root); current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+
 		if err != nil {
 			return fmt.Errorf("inspect reset target %s: %w", current, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 || (current == filepath.Clean(target.Path) && info.IsDir() && !target.RemoveTree) {
+
+		if info.Mode()&os.ModeSymlink != 0 ||
+			(current == filepath.Clean(target.Path) && info.IsDir() && !target.RemoveTree) {
 			return fmt.Errorf("refuse symlink or directory reset target %s", current)
 		}
 	}
+
 	resolvedTarget, err := resolvedResetPath(target.Path)
 	if err != nil {
 		return err
 	}
+
 	if target.AllowProtected {
 		return nil
 	}
+
 	for _, path := range resetProtectedFiles(cfg) {
 		if path == "" {
 			continue
 		}
+
 		resolved, err := resolvedResetPath(homedir.Expand(path))
 		if err != nil {
 			return err
 		}
+
 		if resolved == resolvedTarget {
 			return fmt.Errorf("reset target %s overlaps protected configuration data", target.Path)
 		}
 	}
+
 	roots, err := resetProtectedDirectories(ctx, cfg)
 	if err != nil {
 		return err
 	}
+
 	for _, root := range roots {
 		resolved, err := resolvedResetPath(root)
 		if err != nil {
 			return err
 		}
+
 		if withinResetRoot(resolvedTarget, resolved) || resolvedTarget == resolved {
 			return fmt.Errorf("reset target %s overlaps protected directory %s", target.Path, root)
 		}
 	}
+
 	return nil
 }
 
 func resetProtectedFiles(cfg *config.Config) []string {
 	protected := []string{
-		config.GlobalConfigPath(), cfg.MITM.CA.CertPath, cfg.MITM.CA.KeyPath,
-		cfg.Export.AnthropicAPIKeyFile, cfg.Export.OpenAIAPIKeyFile,
-		cfg.Adapter.Codex.AuthFile, cfg.Logging.Paths.CLI, cfg.Logging.Paths.Daemon,
+		config.GlobalConfigPath(),
+		cfg.MITM.CA.CertPath,
+		cfg.MITM.CA.KeyPath,
+		cfg.Export.AnthropicAPIKeyFile,
+		cfg.Export.OpenAIAPIKeyFile,
+		cfg.Adapter.Codex.AuthFile,
+		cfg.Logging.Paths.CLI,
+		cfg.Logging.Paths.Daemon,
 		slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleCLI),
 		slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon),
-		os.Getenv("LOG_PATH"), adaptercodex.LogPath(), anthropic.LogPath(),
+		os.Getenv("LOG_PATH"),
+		adaptercodex.LogPath(),
+		anthropic.LogPath(),
 	}
 	for _, model := range cfg.Adapter.Models {
 		path := homedir.Expand(model.InstructionsFile)
 		if path != "" && !filepath.IsAbs(path) {
 			path = filepath.Join(filepath.Dir(config.GlobalConfigPath()), path)
 		}
+
 		protected = append(protected, path)
 	}
+
 	for _, spec := range config.LoggingSinkSpecs() {
 		if override, ok := cfg.Logging.Sinks.Override(spec.Name); ok {
 			protected = append(protected, override.Path)
 		}
 	}
+
 	return protected
 }
 
 func resolvedResetPath(path string) (_ string, err error) {
 	defer func() {
 		if err != nil {
-			slog.Warn("daemon.hard_reset.path_resolution_failed", "concern", "process.daemon.lifecycle")
+			slog.Warn(
+				"daemon.hard_reset.path_resolution_failed",
+				"concern",
+				"process.daemon.lifecycle",
+			)
 		}
 	}()
 	path, err = filepath.Abs(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute reset path: %w", err)
 	}
+
 	var tail []string
+
 	for {
 		resolved, err := filepath.EvalSymlinks(path)
 		if err == nil {
 			for _, part := range slices.Backward(tail) {
 				resolved = filepath.Join(resolved, part)
 			}
+
 			return resolved, nil
 		}
+
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("resolve reset boundary %s: %w", path, err)
 		}
+
 		tail = append(tail, filepath.Base(path))
 		parent := filepath.Dir(path)
 		if parent == path {
 			return "", fmt.Errorf("resolve filesystem reset root: %w", err)
 		}
+
 		path = parent
 	}
 }
 
-func resetPlanPaths(ctx context.Context, targets []resetTarget, cfg *config.Config) ([]string, []string, error) {
+func resetPlanPaths(
+	ctx context.Context,
+	targets []resetTarget,
+	cfg *config.Config,
+) ([]string, []string, error) {
 	var removals, preserved []string
 	removedTrees := make(map[string]bool)
+
 	for _, target := range targets {
 		path, err := resolvedResetPath(target.Path)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		if _, found := removedTrees[path]; !found {
 			removals = append(removals, path)
 		}
+
 		removedTrees[path] = removedTrees[path] || target.RemoveTree
 	}
+
 	if cfg == nil {
 		return removals, preserved, nil
 	}
+
 	roots, err := resetProtectedDirectories(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	for _, root := range roots {
 		path, err := resolvedResetPath(root)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		if slices.Contains(preserved, path) {
 			continue
 		}
+
 		overlaps := false
+
 		for removed, removeTree := range removedTrees {
-			if path == removed || (removeTree && withinResetRoot(path, removed)) || withinResetRoot(removed, path) {
+			if path == removed || (removeTree && withinResetRoot(path, removed)) ||
+				withinResetRoot(removed, path) {
 				overlaps = true
 				break
 			}
 		}
+
 		if !overlaps {
 			preserved = append(preserved, path)
 		}
 	}
+
 	return removals, preserved, nil
 }
 
 func resetProtectedDirectories(ctx context.Context, cfg *config.Config) (_ []string, err error) {
 	defer func() {
 		if err != nil {
-			slog.WarnContext(ctx, "daemon.hard_reset.protected_roots_failed", "concern", "process.daemon.lifecycle")
+			slog.WarnContext(
+				ctx,
+				"daemon.hard_reset.protected_roots_failed",
+				"concern",
+				"process.daemon.lifecycle",
+			)
 		}
 	}()
 	codex, err := codexstore.ResolveStorePathsFromEnv(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve protected Codex roots: %w", err)
 	}
+
 	cursor, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve protected Cursor roots: %w", err)
 	}
+
 	zed, err := zedstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve protected Zed roots: %w", err)
 	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve protected provider home: %w", err)
 	}
+
 	roots := []string{
-		codex.CodexHome, codex.SQLiteHome,
+		codex.CodexHome,
+		codex.SQLiteHome,
 		oauthcredentials.ResolveDirectory(home, ""),
 		oauthcredentials.ResolveDirectory(home, os.Getenv("CLAUDE_CONFIG_DIR")),
 		slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleCLI),
 		slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleDaemon),
 		filepath.Join(config.DefaultStateDir(), "exports"),
 	}
+
 	for _, root := range cursor {
 		roots = append(roots, root.RootDir)
 	}
+
 	for _, root := range zed {
 		roots = append(roots, root.RootDir)
 	}
+
 	return roots, nil
 }

@@ -99,6 +99,7 @@ func (content *provenanceContentTypes) UnmarshalJSON(raw []byte) error {
 		content.text = true
 		return nil
 	}
+
 	var blocks []struct {
 		Type string `json:"type"`
 	}
@@ -108,6 +109,7 @@ func (content *provenanceContentTypes) UnmarshalJSON(raw []byte) error {
 			content.blockTypes = append(content.blockTypes, block.Type)
 		}
 	}
+
 	return nil
 }
 
@@ -115,11 +117,13 @@ func (content provenanceContentTypes) toolResultsOnly() bool {
 	if content.text || len(content.blockTypes) == 0 {
 		return false
 	}
+
 	for _, blockType := range content.blockTypes {
 		if contentBlockType(blockType) != contentBlockToolResult {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -145,6 +149,7 @@ func (index *provenanceIndex) observe(line []byte, offset int64) {
 	if err := json.Unmarshal(line, &decoded); err != nil {
 		return
 	}
+
 	span := lineSpan{offset: offset, length: len(line)}
 	switch decoded.Type {
 	case provenanceTypeRequestBlob:
@@ -170,6 +175,7 @@ func (index *provenanceIndex) observeRequest(decoded provenanceLine) {
 		index.invalidateReplay()
 		return
 	}
+
 	keep := *decoded.Keep
 	if keep == 0 {
 		if index.hasLatest {
@@ -178,12 +184,15 @@ func (index *provenanceIndex) observeRequest(decoded provenanceLine) {
 				index.resets = index.resets[len(index.resets)-provenanceResetCandidates:]
 			}
 		}
+
 		index.replaying = true
 	}
+
 	if !index.replaying || keep < 0 || keep > len(index.refs) {
 		index.invalidateReplay()
 		return
 	}
+
 	refs := make([]string, 0, keep+len(decoded.Tail))
 	refs = append(refs, index.refs[:keep]...)
 	refs = append(refs, decoded.Tail...)
@@ -205,17 +214,21 @@ func (index *provenanceIndex) observeRecord(decoded provenanceLine, span lineSpa
 	if decoded.UUID == "" || decoded.Message == nil {
 		return
 	}
+
 	if _, seen := index.records[decoded.UUID]; seen {
 		return
 	}
+
 	index.records[decoded.UUID] = provenanceRecord{
-		span:            span,
-		user:            decoded.Type == string(EntryTypeUser),
-		messageID:       decoded.Message.ID,
-		toolResultsOnly: decoded.Type == string(EntryTypeUser) && decoded.Message.Content.toolResultsOnly(),
+		span:      span,
+		user:      decoded.Type == string(EntryTypeUser),
+		messageID: decoded.Message.ID,
+		toolResultsOnly: decoded.Type == string(EntryTypeUser) &&
+			decoded.Message.Content.toolResultsOnly(),
 	}
 	index.order = append(index.order, decoded.UUID)
-	if decoded.Type == string(EntryTypeUser) && decoded.IsCompactSummary && decoded.Message.Content.text {
+	if decoded.Type == string(EntryTypeUser) && decoded.IsCompactSummary &&
+		decoded.Message.Content.text {
 		candidates := slices.Clone(index.resets)
 		slices.Reverse(candidates)
 		index.summaries[decoded.UUID] = summaryProvenance{span: span, candidates: candidates}
