@@ -461,35 +461,13 @@ func (s *Server) dispatchNativeCodexResponses(
 		return
 	}
 
-	streamingResponse := strings.Contains(
-		strings.ToLower(response.Header.Get("Content-Type")),
-		"text/event-stream",
-	) ||
-		(raw.Stream && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices)
-	if compactionTransformer != nil {
-		response = transformNativeCodexCompactionResponse(
-			response,
-			compactionTransformer,
-			streamingResponse,
-		)
-	}
-
-	if v2Plan != nil {
-		response = adaptercodex.ObserveRawResponsesCompactionV2Response(
-			response,
-			*v2Plan,
-			s.compactionV2,
-		)
-	}
-
-	v2Transformer := adaptercodex.NewRawResponsesCompactionV2FinalAnswerTransformer(raw, v2Recovery)
-	if v2Transformer != nil {
-		response = transformNativeCodexCompactionResponse(
-			response,
-			v2Transformer,
-			streamingResponse,
-		)
-	}
+	response, streamingResponse, v2Transformer := s.transformNativeCodexResponse(
+		response,
+		raw,
+		compactionTransformer,
+		v2Plan,
+		v2Recovery,
+	)
 
 	defer func() { _ = response.Body.Close() }()
 	if streamingResponse {
@@ -527,15 +505,59 @@ func (s *Server) dispatchNativeCodexResponses(
 	var result adapterprovider.Result
 	lifecycle.terminal(ctx, result, terminalErr)
 	if copyErr != nil {
-		s.log.WarnContext(
-			ctx,
-			"adapter.codex.raw_responses.copy_failed",
-			"concern",
-			"adapter.providers.codex.request",
-			"err",
-			copyErr,
+		s.logNativeCodexCopyFailure(ctx, copyErr)
+	}
+}
+
+func (s *Server) logNativeCodexCopyFailure(ctx context.Context, copyErr error) {
+	s.log.WarnContext(
+		ctx,
+		"adapter.codex.raw_responses.copy_failed",
+		"concern",
+		"adapter.providers.codex.request",
+		"err",
+		copyErr,
+	)
+}
+
+func (s *Server) transformNativeCodexResponse(
+	response *http.Response,
+	raw adaptercodex.RawResponsesRequest,
+	compactionTransformer *adaptercodex.RawResponsesCompactionTransformer,
+	v2Plan *adaptercodex.RawResponsesCompactionV2Plan,
+	v2Recovery *adaptercodex.RawResponsesCompactionV2Recovery,
+) (*http.Response, bool, *adaptercodex.RawResponsesCompactionTransformer) {
+	streamingResponse := strings.Contains(
+		strings.ToLower(response.Header.Get("Content-Type")),
+		"text/event-stream",
+	) ||
+		(raw.Stream && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices)
+	if compactionTransformer != nil {
+		response = transformNativeCodexCompactionResponse(
+			response,
+			compactionTransformer,
+			streamingResponse,
 		)
 	}
+
+	if v2Plan != nil {
+		response = adaptercodex.ObserveRawResponsesCompactionV2Response(
+			response,
+			*v2Plan,
+			s.compactionV2,
+		)
+	}
+
+	v2Transformer := adaptercodex.NewRawResponsesCompactionV2FinalAnswerTransformer(raw, v2Recovery)
+	if v2Transformer != nil {
+		response = transformNativeCodexCompactionResponse(
+			response,
+			v2Transformer,
+			streamingResponse,
+		)
+	}
+
+	return response, streamingResponse, v2Transformer
 }
 
 // responsesRequestToChatRequest projects a typed Responses request into
