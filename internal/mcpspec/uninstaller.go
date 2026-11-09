@@ -62,6 +62,7 @@ func (Uninstaller) Uninstall(
 				"err",
 				err,
 			)
+
 			return UninstallResult{}, err
 		}
 

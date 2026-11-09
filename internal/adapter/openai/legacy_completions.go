@@ -348,6 +348,7 @@ func (w *LegacyCompletionWriter) Finish() error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("write legacy completion stream tail: %w", err)
 		}
 
@@ -363,6 +364,7 @@ func (w *LegacyCompletionWriter) Finish() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("decode chat response for legacy completion: %w", err)
 	}
 
@@ -375,6 +377,7 @@ func (w *LegacyCompletionWriter) Finish() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("encode legacy completion: %w", err)
 	}
 
@@ -388,6 +391,7 @@ func (w *LegacyCompletionWriter) Finish() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write legacy completion: %w", err)
 	}
 
@@ -418,6 +422,7 @@ func (w *LegacyCompletionWriter) writeCompleteFrames() error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("write legacy completion frame: %w", err)
 		}
 	}
@@ -468,6 +473,7 @@ func (w *LegacyCompletionWriter) marshalChunk(chunk CompletionResponse) ([]byte,
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("encode legacy completion chunk: %w", err)
 		}
 
@@ -483,6 +489,7 @@ func (w *LegacyCompletionWriter) marshalChunk(chunk CompletionResponse) ([]byte,
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode legacy completion chunk: %w", err)
 	}
 

@@ -64,6 +64,7 @@ func RunTranslatorEvents(
 			"err",
 			err,
 		)
+
 		return anthropic.Usage{}, "", "", fmt.Errorf("marshal anthropic message_start: %w", err)
 	}
 
@@ -100,6 +101,7 @@ func RunTranslatorEvents(
 			"err",
 			err,
 		)
+
 		return anthUsage, streamStopReason, "", fmt.Errorf(
 			"stream anthropic translator events: %w",
 			err,
@@ -136,6 +138,7 @@ func RunTranslatorEvents(
 			"err",
 			err,
 		)
+
 		return anthUsage, streamStopReason, "", fmt.Errorf(
 			"marshal anthropic message_delta: %w",
 			err,
@@ -171,6 +174,7 @@ func emitTranslatorEvents(
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("handle anthropic translator event %s: %w", eventName, err)
 	}
 
@@ -185,6 +189,7 @@ func emitTranslatorEvents(
 				"err",
 				err,
 			)
+
 			return "", fmt.Errorf("emit anthropic translator event %s: %w", eventName, err)
 		}
 	}

@@ -93,6 +93,7 @@ func (s *Server) dispatchAnthropicProviderCollect(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("marshal anthropic collect response: %w", err)
 	}
 
@@ -484,6 +485,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 			"err",
 			err,
 		)
+
 		return adapterprovider.Result{}, fmt.Errorf("run anthropic collect execution: %w", err)
 	}
 
@@ -601,6 +603,7 @@ func (s *Server) executeAnthropicPreparedStream(
 			"err",
 			err,
 		)
+
 		return providerResult, fmt.Errorf("run anthropic stream execution: %w", err)
 	}
 
@@ -624,6 +627,7 @@ func (s *Server) executeAnthropicPreparedCollectNative(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("execute native anthropic collect request: %w", err)
 	}
 
@@ -640,6 +644,7 @@ func (s *Server) executeAnthropicPreparedCollectNative(
 			"err",
 			readErr,
 		)
+
 		return fmt.Errorf("read native anthropic collect response: %w", readErr)
 	}
 
@@ -663,6 +668,7 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 			"err",
 			err,
 		)
+
 		return adapterprovider.Result{}, fmt.Errorf(
 			"execute native anthropic stream request: %w",
 			err,
@@ -681,6 +687,7 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 			"err",
 			err,
 		)
+
 		return adapterprovider.Result{}, fmt.Errorf(
 			"relay native anthropic stream response: %w",
 			err,

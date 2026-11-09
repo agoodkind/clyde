@@ -148,6 +148,7 @@ func writeTableError(operation string, err error) error {
 		"err",
 		err,
 	)
+
 	return fmt.Errorf("%s: %w", operation, err)
 }
 

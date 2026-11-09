@@ -49,6 +49,7 @@ func readRetained(path string) ([]Record, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("read retained records file %s: %w", path, err)
 	}
 
@@ -65,6 +66,7 @@ func readRetained(path string) ([]Record, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("decode retained records file %s: %w", path, err)
 	}
 
@@ -107,6 +109,7 @@ func writeRetained(path string, records []Record) (failure error) {
 				"err",
 				failure,
 			)
+
 			return
 		}
 

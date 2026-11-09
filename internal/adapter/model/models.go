@@ -836,6 +836,7 @@ func validateAdapterCoreConfig(cfg config.AdapterConfig) error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("validate anthropic OAuth config: %w", err)
 		}
 	}

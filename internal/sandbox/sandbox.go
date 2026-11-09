@@ -64,6 +64,7 @@ func NewRoots() (Roots, error) {
 			"err",
 			err,
 		)
+
 		return Roots{}, fmt.Errorf("create the sandbox root directory: %w", err)
 	}
 
@@ -186,6 +187,7 @@ func ExistingRoots(base string) (Roots, error) {
 				"err",
 				mkErr,
 			)
+
 			return Roots{}, fmt.Errorf("create sandbox subdirectory %s: %w", dir, mkErr)
 		}
 	}
@@ -265,6 +267,7 @@ func Apply(roots Roots) error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("clear inherited override %s: %w", name, err)
 		}
 	}
@@ -282,6 +285,7 @@ func Apply(roots Roots) error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("set %s: %w", variable.Name, err)
 		}
 	}

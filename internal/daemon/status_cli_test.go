@@ -39,6 +39,7 @@ func (p *statusCountingParser) Discover(
 	map[string]conversation.Record,
 ) ([]conversation.ScanCandidate, error) {
 	p.discoveries.Add(1)
+
 	return []conversation.ScanCandidate{
 		{Path: p.path, Stamp: conversation.FileStamp{Size: 1, Mtime: time.Unix(1, 0)}},
 	}, nil

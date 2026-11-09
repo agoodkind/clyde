@@ -244,6 +244,7 @@ func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 			"err",
 			err,
 		)
+
 		return false
 	}
 
@@ -441,6 +442,7 @@ func ambiguousRequestResolution(
 		"count",
 		carriers,
 	)
+
 	return missingRequestResolution(requestID, RequestNotFoundReasonAmbiguousConversation)
 }
 
@@ -720,6 +722,7 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshRe
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("refresh conversation index: %w", err)
 	}
 
@@ -853,6 +856,7 @@ func (idx *Index) waitForRefresh(ctx context.Context, run *refreshRun) error {
 				"err",
 				run.err,
 			)
+
 			return fmt.Errorf("await conversation index refresh: %w", run.err)
 		}
 
@@ -868,6 +872,7 @@ func (idx *Index) waitForRefresh(ctx context.Context, run *refreshRun) error {
 			"err",
 			ctx.Err(),
 		)
+
 		return fmt.Errorf("wait for conversation index refresh: %w", ctx.Err())
 	}
 }
@@ -1008,6 +1013,7 @@ func (idx *Index) refreshAsync(ctx context.Context, reasons ...RefreshReason) {
 				"err",
 				err,
 			)
+
 			return
 		}
 	}()
@@ -1073,6 +1079,7 @@ func readCache(path string) (cacheFile, bool, error) {
 			"err",
 			err,
 		)
+
 		return empty, false, fmt.Errorf("decode conversation cache: %w", err)
 	}
 
@@ -1107,6 +1114,7 @@ func writeCache(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("create conversation cache dir: %w", err)
 	}
 
@@ -1133,6 +1141,7 @@ func writeCache(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("encode conversation cache: %w", err)
 	}
 
@@ -1148,6 +1157,7 @@ func writeCache(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write conversation cache: %w", err)
 	}
 

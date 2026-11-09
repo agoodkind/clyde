@@ -56,6 +56,7 @@ func MarshalResponseCreateWsRequest(req ResponseCreateWsRequest) ([]byte, error)
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal websocket response.create request: %w", err)
 	}
 
@@ -79,6 +80,7 @@ func patchEmptyArrayFields(raw []byte, forceInput, forceTools bool) ([]byte, err
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("unmarshal websocket response.create request: %w", err)
 	}
 
@@ -99,6 +101,7 @@ func patchEmptyArrayFields(raw []byte, forceInput, forceTools bool) ([]byte, err
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal rewritten websocket response.create request: %w", err)
 	}
 

@@ -513,6 +513,7 @@ func rolloutWindowRequest(window []json.RawMessage) (reorientinject.ParsedReques
 			"err",
 			err,
 		)
+
 		return reorientinject.ParsedRequest{
 			SessionID:        "",
 			Messages:         nil,

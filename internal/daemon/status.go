@@ -117,6 +117,7 @@ func RunningSupervisorFingerprint(ctx context.Context) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("request supervisor status: %w", err)
 	}
 

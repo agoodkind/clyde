@@ -239,6 +239,7 @@ func renderMessagesWithCompaction(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("render json transcript: %w", err)
 		}
 
@@ -322,6 +323,7 @@ func renderRawJSON(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("render raw json transcript: %w", err)
 	}
 
@@ -495,6 +497,7 @@ func renderCompactionJSON(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("render compaction JSON transcript: %w", err)
 	}
 
@@ -543,6 +546,7 @@ func renderCompactionBlock(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("render compaction block: %w", err)
 	}
 

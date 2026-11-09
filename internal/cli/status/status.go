@@ -85,6 +85,7 @@ func run(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("write status snapshot: %w", err)
 		}
 
@@ -106,6 +107,7 @@ func run(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("write status snapshot: %w", err)
 		}
 
@@ -129,6 +131,7 @@ func run(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("run the status view: %w", err)
 	}
 

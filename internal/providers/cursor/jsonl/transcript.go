@@ -192,6 +192,7 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 			"err",
 			err,
 		)
+
 		return TranscriptHeader{}, fmt.Errorf("open cursor transcript %s: %w", path, err)
 	}
 
@@ -246,6 +247,7 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 				"err",
 				readErr,
 			)
+
 			return TranscriptHeader{}, fmt.Errorf(
 				"read cursor transcript %s line %d: %w",
 				path,
@@ -280,6 +282,7 @@ func ScanAppend(
 			"err",
 			err,
 		)
+
 		return header, offset, fmt.Errorf("seek cursor transcript %s: %w", path, err)
 	}
 
@@ -310,6 +313,7 @@ func ScanAppend(
 				"err",
 				err,
 			)
+
 			return header, offset, fmt.Errorf("read cursor transcript %s: %w", path, err)
 		}
 
@@ -373,6 +377,7 @@ func StreamMessages(path string, fn func(TranscriptMessage) error) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("open cursor transcript %s: %w", path, err)
 	}
 

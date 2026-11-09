@@ -155,6 +155,7 @@ func (p *Parser) Discover(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve Codex store paths: %w", err)
 	}
 
@@ -172,6 +173,7 @@ func (p *Parser) Discover(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("read Codex session index: %w", err)
 	}
 
@@ -187,6 +189,7 @@ func (p *Parser) Discover(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("discover Codex rollouts: %w", err)
 	}
 

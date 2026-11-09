@@ -59,6 +59,7 @@ func (server *Server) GetRecentTurns(
 			"component",
 			"contextsvc",
 		)
+
 		return nil, fmt.Errorf("context service conversation source is nil")
 	}
 

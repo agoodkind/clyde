@@ -129,6 +129,7 @@ func buildInventory(options inventoryOptions) (inventory, error) {
 			"component",
 			"cli",
 		)
+
 		return inventory{}, fmt.Errorf("state root is required")
 	}
 
@@ -160,6 +161,7 @@ func buildInventory(options inventoryOptions) (inventory, error) {
 				"err",
 				err,
 			)
+
 			return inventory{}, fmt.Errorf("walk state root %s: %w", stateRoot, err)
 		}
 	} else {
@@ -230,6 +232,7 @@ func collectDeepInventory(stateRoot string, builders map[category]*categoryBuild
 					"err",
 					err,
 				)
+
 				return fmt.Errorf("walk %s: %w", path, err)
 			}
 
@@ -250,6 +253,7 @@ func collectDeepInventory(stateRoot string, builders map[category]*categoryBuild
 					"err",
 					infoErr,
 				)
+
 				return fmt.Errorf("stat %s: %w", path, infoErr)
 			}
 
@@ -268,6 +272,7 @@ func collectDeepInventory(stateRoot string, builders map[category]*categoryBuild
 					"err",
 					relErr,
 				)
+
 				return fmt.Errorf("relative path %s: %w", path, relErr)
 			}
 

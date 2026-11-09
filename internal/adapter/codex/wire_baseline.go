@@ -159,6 +159,7 @@ func (l *WireBaselineLoader) Load(
 			"subcomponent",
 			"codex",
 		)
+
 		return zero, fmt.Errorf(
 			"%w: no baseline for %s",
 			ErrCodexBaselineMissing,
@@ -242,6 +243,7 @@ func loadWireIdentityFromStore(
 			"subcomponent",
 			"codex",
 		)
+
 		return zero, fmt.Errorf("%w: %s has no flavors", ErrCodexBaselineInvalid, codexWireUpstream)
 	}
 
@@ -255,6 +257,7 @@ func loadWireIdentityFromStore(
 			"subcomponent",
 			"codex",
 		)
+
 		return zero, fmt.Errorf(
 			"%w: no codex-cli flavor in baseline %s",
 			ErrCodexBaselineInvalid,

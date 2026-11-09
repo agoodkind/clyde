@@ -78,6 +78,7 @@ func openBackend(ctx context.Context, options Options) (openedBackend, error) {
 			byteBudget:         0,
 			deliveryBatchBytes: 0,
 		}
+
 		return failed, operationError{
 			operation: "open conversation vector store",
 			cause:     fmt.Errorf("backend %q is not registered", options.Backend),

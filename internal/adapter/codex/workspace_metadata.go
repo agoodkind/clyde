@@ -119,6 +119,7 @@ func cleanWorkspaceGitDir(workdir string) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("absolute workspace git dir: %w", err)
 	}
 

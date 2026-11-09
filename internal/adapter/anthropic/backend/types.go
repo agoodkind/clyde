@@ -160,6 +160,7 @@ func UnmarshalContentBlock(data []byte) (AnthContentBlock, bool, error) {
 			"err",
 			err,
 		)
+
 		return nil, false, fmt.Errorf("decode content block: %w", err)
 	}
 

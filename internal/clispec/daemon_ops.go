@@ -322,6 +322,7 @@ func daemonFingerprintOp() Operation[daemonFingerprintInput, daemonFingerprintPa
 					"err",
 					err,
 				)
+
 				return nil, fmt.Errorf("daemon fingerprint: %w", err)
 			}
 
@@ -447,6 +448,7 @@ func daemonDeployOp() Operation[daemonDeployInput, daemonDeployPayload] {
 						"err",
 						err,
 					)
+
 					return fmt.Errorf("daemon deploy: initial conversation index: %w", err)
 				}
 			}
@@ -469,6 +471,7 @@ func daemonDeployOp() Operation[daemonDeployInput, daemonDeployPayload] {
 					"err",
 					err,
 				)
+
 				return fmt.Errorf("daemon deploy: %w", err)
 			}
 

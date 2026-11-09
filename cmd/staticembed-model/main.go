@@ -67,6 +67,7 @@ func realMain() int {
 			"err",
 			err,
 		)
+
 		return 1
 	}
 
@@ -84,6 +85,7 @@ func run(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("read the model manifest: %w", err)
 	}
 
@@ -97,6 +99,7 @@ func run(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("parse the model manifest: %w", err)
 	}
 
@@ -129,6 +132,7 @@ func ensureFile(ctx context.Context, client *http.Client, pinned manifest, file 
 			"file",
 			file.Name,
 		)
+
 		return nil
 	}
 
@@ -190,6 +194,7 @@ func ensureFile(ctx context.Context, client *http.Client, pinned manifest, file 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("set the mode of %s: %w", temporary, err)
 	}
 
@@ -204,6 +209,7 @@ func ensureFile(ctx context.Context, client *http.Client, pinned manifest, file 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("move %s into place: %w", file.Name, err)
 	}
 
@@ -223,6 +229,7 @@ func download(ctx context.Context, client *http.Client, url string, path string)
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("build the request for %s: %w", url, err)
 	}
 
@@ -238,6 +245,7 @@ func download(ctx context.Context, client *http.Client, url string, path string)
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("download %s: %w", url, err)
 	}
 
@@ -258,6 +266,7 @@ func download(ctx context.Context, client *http.Client, url string, path string)
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("create a temporary file for %s: %w", path, err)
 	}
 
@@ -299,6 +308,7 @@ func fileSHA256(path string) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("open %s: %w", path, err)
 	}
 
@@ -314,6 +324,7 @@ func fileSHA256(path string) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 

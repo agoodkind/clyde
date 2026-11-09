@@ -51,6 +51,7 @@ func (m TurnMetadata) MarshalCompact() (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("marshal codex turn metadata: %w", err)
 	}
 

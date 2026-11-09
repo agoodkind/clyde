@@ -71,6 +71,7 @@ func MarshalDocumentedChatResponse(resp ChatResponse) ([]byte, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal documented chat response: %w", err)
 	}
 

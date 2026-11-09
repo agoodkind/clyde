@@ -37,6 +37,7 @@ func (rollout compressedRollout) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close compressed codex rollout: %w", err)
 	}
 
@@ -69,6 +70,7 @@ func openRollout(path string) (io.ReadCloser, error) {
 			"err",
 			err,
 		)
+
 		return nil, errors.Join(
 			fmt.Errorf("open compressed codex rollout %s: %w", resolved, err),
 			file.Close(),

@@ -30,6 +30,7 @@ func (idx *Index) resolveStream(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve parser for %s: %w", record.Provider.String(), err)
 	}
 
@@ -91,6 +92,7 @@ func (idx *Index) LoadMessagesWithOptions(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("load %s conversation: %w", record.Provider.String(), err)
 	}
 

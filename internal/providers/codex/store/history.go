@@ -145,6 +145,7 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 						"err",
 						err,
 					)
+
 					return ThreadSummary{}, fmt.Errorf(
 						"unmarshal codex session metadata %s: %w",
 						path,
@@ -176,6 +177,7 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 				"err",
 				readErr,
 			)
+
 			return ThreadSummary{}, fmt.Errorf("read codex rollout %s: %w", path, readErr)
 		}
 	}

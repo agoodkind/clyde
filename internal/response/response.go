@@ -58,6 +58,7 @@ func WriteResult(ctx context.Context, out io.Writer, body string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("response: write result body: %w", err)
 	}
 
@@ -107,6 +108,7 @@ func JSON(ctx context.Context, payload []byte, style JSONStyle) ([]byte, error) 
 				"err",
 				metaErr,
 			)
+
 			return nil, fmt.Errorf("response: encode json metadata: %w", metaErr)
 		}
 
@@ -141,6 +143,7 @@ func WriteJSON(ctx context.Context, writer io.Writer, payload []byte, style JSON
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("response: write json: %w", err)
 	}
 
@@ -174,6 +177,7 @@ func marshalJSONObjectBody(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("response: encode json envelope: %w", err)
 	}
 
@@ -207,6 +211,7 @@ func marshalJSONDocumentBody(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("response: encode json envelope: %w", err)
 	}
 

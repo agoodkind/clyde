@@ -276,6 +276,7 @@ func readWorkspaceFolderPath(path string, previousError error) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("decode cursor workspace descriptor %s: %w", path, err)
 	}
 
@@ -342,6 +343,7 @@ func defaultCursorDataDir(ctx context.Context) (string, error) {
 				"err",
 				err,
 			)
+
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
 
@@ -361,6 +363,7 @@ func defaultCursorDataDir(ctx context.Context) (string, error) {
 				"err",
 				err,
 			)
+
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
 
@@ -385,6 +388,7 @@ func defaultCursorDataDir(ctx context.Context) (string, error) {
 				"err",
 				err,
 			)
+
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
 
@@ -403,6 +407,7 @@ func defaultCursorDataDir(ctx context.Context) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("resolve cursor home for %s: %w", runtime.GOOS, err)
 	}
 
@@ -440,6 +445,7 @@ func StatSaysAbsent(statErr error, path string) bool {
 			"err",
 			statErr,
 		)
+
 		return false
 	}
 
@@ -495,6 +501,7 @@ func fileURIToPath(folder string) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("parse file uri %q: %w", folder, err)
 	}
 

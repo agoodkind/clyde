@@ -522,6 +522,7 @@ func ExportTokenSpec(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve conversation: %w", err)
 	}
 

@@ -24,6 +24,7 @@ func Copy(ctx context.Context, body []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("open pbcopy stdin: %w", err)
 	}
 
@@ -87,6 +88,7 @@ func Copy(ctx context.Context, body []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("finish pbcopy: %w", err)
 	}
 

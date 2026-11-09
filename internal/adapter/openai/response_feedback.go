@@ -269,6 +269,7 @@ func writeResponseFeedbackEvents(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("encode Responses feedback event: %w", err)
 		}
 
@@ -281,6 +282,7 @@ func writeResponseFeedbackEvents(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("read Responses feedback event type: %w", err)
 		}
 
@@ -304,6 +306,7 @@ func writeCompletedResponseItem(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("decode response.completed event: %w", err)
 	}
 
@@ -316,6 +319,7 @@ func writeCompletedResponseItem(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("decode response.completed object: %w", err)
 	}
 
@@ -330,6 +334,7 @@ func writeCompletedResponseItem(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("decode response.completed output: %w", err)
 		}
 	}
@@ -343,6 +348,7 @@ func writeCompletedResponseItem(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode Responses feedback item: %w", err)
 	}
 
@@ -356,6 +362,7 @@ func writeCompletedResponseItem(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode response.completed output: %w", err)
 	}
 
@@ -368,6 +375,7 @@ func writeCompletedResponseItem(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode response.completed object: %w", err)
 	}
 
@@ -380,6 +388,7 @@ func writeCompletedResponseItem(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode response.completed sequence: %w", err)
 	}
 
@@ -392,6 +401,7 @@ func writeCompletedResponseItem(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode response.completed event: %w", err)
 	}
 

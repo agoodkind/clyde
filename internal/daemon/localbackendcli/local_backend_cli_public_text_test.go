@@ -113,6 +113,7 @@ func assertLocalProofOmitsTrace(t *testing.T, surface string, text string) {
 				surface,
 				text,
 			)
+
 			return
 		}
 	}

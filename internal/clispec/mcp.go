@@ -222,6 +222,7 @@ func (p Param[I]) mcpOption() mcp.ToolOption {
 			mcp.Description(p.Description),
 			mcp.DefaultBool(p.DefaultBool),
 		}
+
 		return mcp.WithBoolean(p.Canonical, properties...)
 	case KindFloat:
 		properties := []mcp.PropertyOption{mcp.Description(p.Description)}

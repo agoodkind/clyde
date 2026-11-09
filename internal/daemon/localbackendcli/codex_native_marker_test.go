@@ -236,6 +236,7 @@ func (u *nativeMarkerUpstream) compactionBody(raw adaptercodex.RawResponsesReque
 			"PlanRawResponsesCompactionV2 rejected the native request: %s",
 			raw.Header.Get(adaptercodex.CodexTurnMetadataHeader),
 		)
+
 		return []byte(nativeMarkerCompactionStream())
 	}
 

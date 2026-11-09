@@ -219,6 +219,7 @@ func (runner updateRunner) runCheck(ctx context.Context, _ updateCheckPayload) (
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("update check: %w", err)
 	}
 
@@ -244,6 +245,7 @@ func (runner updateRunner) runApply(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("update apply: %w", err)
 	}
 
@@ -265,6 +267,7 @@ func (runner updateRunner) runApply(
 				"deploy_output",
 				updatehandoff.TruncateForLog(deployOutput.String()),
 			)
+
 			return nil, fmt.Errorf("update apply deploy handoff: %w", err)
 		}
 
@@ -312,6 +315,7 @@ func (runner updateRunner) runStatus(ctx context.Context, _ updateStatusPayload)
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("update status: %w", err)
 	}
 

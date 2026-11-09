@@ -222,6 +222,7 @@ func appendRawCompactionSSEContentPart(item []byte, transcriptText string) ([]by
 			false,
 			transcriptText,
 		)
+
 		return mutated, valid, valid
 	}
 

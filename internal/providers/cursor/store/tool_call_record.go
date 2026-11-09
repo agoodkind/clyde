@@ -58,6 +58,7 @@ func DecodeToolCallBinary(encoded string) (ToolCallRecord, error) {
 			"err",
 			err,
 		)
+
 		return record, fmt.Errorf("decode tool call binary base64: %w", err)
 	}
 

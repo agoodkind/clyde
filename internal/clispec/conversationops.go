@@ -407,6 +407,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 			"err",
 			err,
 		)
+
 		return searchPayload{}, fmt.Errorf("prepare search: %w", err)
 	}
 
@@ -907,6 +908,7 @@ func logOperationError(ctx context.Context, operation string, err error) error {
 		"err",
 		err,
 	)
+
 	return fmt.Errorf("%s: %w", operation, err)
 }
 

@@ -40,6 +40,7 @@ func (parser *cachedBoundaryParser) Discover(
 	map[string]conversation.Record,
 ) ([]conversation.ScanCandidate, error) {
 	parser.discoveries.Add(1)
+
 	return []conversation.ScanCandidate{
 		{Path: parser.record.ArtifactPath, Stamp: conversation.FileStamp{Size: 1}},
 	}, nil

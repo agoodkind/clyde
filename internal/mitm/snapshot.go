@@ -69,6 +69,7 @@ func marshalSnapshot(snap Snapshot) (json.RawMessage, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal snapshot json: %w", err)
 	}
 

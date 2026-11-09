@@ -246,6 +246,7 @@ func resolveNativeDiscoveredThread(
 			"err",
 			err,
 		)
+
 		return emptyDiscoveredThread(), false, fmt.Errorf("parse zed thread document: %w", err)
 	}
 
@@ -311,6 +312,7 @@ func readSidebarTerminalMetadataForRoot(
 				"err",
 				err,
 			)
+
 			return emptyMetadata, false, fmt.Errorf(
 				"open zed terminal metadata db %s: %w",
 				dbPath,
@@ -333,6 +335,7 @@ func readSidebarTerminalMetadataForRoot(
 				"err",
 				err,
 			)
+
 			return emptyMetadata, false, fmt.Errorf(
 				"read zed terminal sidebar row %q from %s: %w",
 				terminalID,

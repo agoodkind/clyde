@@ -26,6 +26,7 @@ func Uninstall(ctx context.Context, output io.Writer) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve Clyde executable: %w", err)
 	}
 
@@ -41,6 +42,7 @@ func Uninstall(ctx context.Context, output io.Writer) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve Clyde executable symlinks: %w", err)
 	}
 
@@ -63,6 +65,7 @@ func Uninstall(ctx context.Context, output io.Writer) error {
 			"err",
 			err,
 		)
+
 		return err
 	}
 
@@ -77,6 +80,7 @@ func Uninstall(ctx context.Context, output io.Writer) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("unregister Clyde daemon: %w", err)
 	}
 
@@ -91,6 +95,7 @@ func Uninstall(ctx context.Context, output io.Writer) error {
 			"err",
 			err,
 		)
+
 		return err
 	}
 
@@ -106,6 +111,7 @@ func Uninstall(ctx context.Context, output io.Writer) error {
 			"err",
 			err,
 		)
+
 		return err
 	}
 
@@ -120,6 +126,7 @@ func Uninstall(ctx context.Context, output io.Writer) error {
 			"err",
 			err,
 		)
+
 		return err
 	}
 

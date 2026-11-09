@@ -36,6 +36,7 @@ func readResponsesRequestBody(body []byte, contentEncoding string) ([]byte, erro
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create zstd request decoder: %w", err)
 	}
 	defer decoder.Close()
@@ -48,6 +49,7 @@ func readResponsesRequestBody(body []byte, contentEncoding string) ([]byte, erro
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("decode zstd request body: %w", err)
 	}
 
@@ -80,6 +82,7 @@ func prepareNativeCodexResponsesCompaction(
 			decodedBody,
 			splitter,
 		)
+
 		return transformed, nil, plan, nil
 	}
 
@@ -185,6 +188,7 @@ func transformNativeCodexCompactionResponse(
 			Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody),
 			source: originalBody,
 		}
+
 		return response
 	}
 
@@ -193,6 +197,7 @@ func transformNativeCodexCompactionResponse(
 			Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody),
 			source: originalBody,
 		}
+
 		return response
 	}
 
@@ -248,6 +253,7 @@ func transformStreamingNativeCodexCompactionResponse(
 			Reader: io.MultiReader(bytes.NewReader(wireBody), originalBody),
 			source: originalBody,
 		}
+
 		return response
 	}
 
@@ -319,6 +325,7 @@ func transformStreamingNativeCodexCompactionResponseWithoutTerminalValidation(
 			Reader: io.MultiReader(bytes.NewReader(consumed.Bytes()), response.Body),
 			source: response.Body,
 		}
+
 		return response
 	}
 
@@ -395,6 +402,7 @@ func (b *nativeResponsesZstdBody) Close() error {
 			"err",
 			decoderErr,
 		)
+
 		return fmt.Errorf("close zstd decoder: %w", decoderErr)
 	}
 
@@ -406,6 +414,7 @@ func (b *nativeResponsesZstdBody) Close() error {
 			"err",
 			sourceErr,
 		)
+
 		return fmt.Errorf("close encoded response body: %w", sourceErr)
 	}
 
@@ -426,6 +435,7 @@ func (b *nativeResponsesPassthroughBody) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close passthrough response body: %w", err)
 	}
 

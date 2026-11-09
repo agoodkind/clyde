@@ -130,6 +130,7 @@ func startRuntime(
 		}
 	} else if hasInheritedMITMListener(inherited) {
 		runtime.shutdown(context.WithoutCancel(ctx))
+
 		return nil, fmt.Errorf(
 			"mitm listener inherited but mitm is disabled; full daemon restart required",
 		)
@@ -158,6 +159,7 @@ func startRuntime(
 		runtime.addAdapterLifecycleHooks(server)
 	} else if inherited.listeners[listenerNameAdapter] != nil || inherited.listeners[listenerNameAdapterCursor] != nil {
 		runtime.shutdown(context.WithoutCancel(ctx))
+
 		return nil, fmt.Errorf(
 			"adapter listener inherited but adapter is disabled; full daemon restart required",
 		)
@@ -173,6 +175,7 @@ func startRuntime(
 		runtime.pprofListener = listener
 	} else if inherited.listeners[listenerNamePProf] != nil {
 		runtime.shutdown(context.WithoutCancel(ctx))
+
 		return nil, fmt.Errorf(
 			"pprof listener inherited but pprof is disabled; full daemon restart required",
 		)
@@ -266,6 +269,7 @@ func bindMITMStreamListeners(
 		if existing := inherited.listeners[mitmSocketKey(listenerCfg.ID, addr)]; existing != nil {
 			if got := existing.Addr().String(); got != addr {
 				closeMITMSockets(sockets, nil)
+
 				return nil, fmt.Errorf(
 					"mitm listener %q inherited address %s does not match config %s; full daemon restart required",
 					listenerCfg.ID,
@@ -324,6 +328,7 @@ func bindMITMPacketConns(
 		)]; existing != nil {
 			if got := existing.LocalAddr().String(); got != addr {
 				closeMITMSockets(nil, packetConns)
+
 				return nil, fmt.Errorf(
 					"mitm udp listener %q inherited address %s does not match config %s; full daemon restart required",
 					listenerCfg.ID,
@@ -638,6 +643,7 @@ func startAdapter(
 			"err",
 			err,
 		)
+
 		return nil, nil, nil, fmt.Errorf("adapter init: %w", err)
 	}
 
@@ -747,6 +753,7 @@ func bindOrInheritTCPListener(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("%s listen %s: %w", label, addr, err)
 	}
 

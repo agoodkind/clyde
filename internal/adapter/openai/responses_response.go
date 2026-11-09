@@ -186,6 +186,7 @@ func echoReasoning(reasoning *Reasoning) json.RawMessage {
 			"err",
 			err,
 		)
+
 		return jsonNull
 	}
 
@@ -356,6 +357,7 @@ func marshalResponsesItemWire(itemType string, wire responsesOutputItemWire) ([]
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal responses %s item: %w", itemType, err)
 	}
 
@@ -448,6 +450,7 @@ func marshalResponsesContentPartWire(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal responses %s content part: %w", partType, err)
 	}
 

@@ -350,6 +350,7 @@ func (s *Server) forwardPassthroughResponsesWire(
 				r,
 				adapterErrInvalidRequest("failed to encode passthrough Responses request", nil),
 			)
+
 			return
 		}
 
@@ -861,6 +862,7 @@ func (s *Server) dispatchResponsesCollect(
 					nil,
 				),
 			)
+
 			return
 		}
 	}

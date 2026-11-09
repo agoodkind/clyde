@@ -180,6 +180,7 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("unmarshal websocket event envelope: %w", err)
 	}
 
@@ -460,6 +461,7 @@ func dialResponsesWebsocket(
 			"err",
 			err,
 		)
+
 		return conn, statusCode, fmt.Errorf("dial codex websocket: %w", err)
 	}
 
@@ -810,6 +812,7 @@ func prewarmWebsocketTurn(
 	_ = conn.SetReadDeadline(time.Time{})
 	if warmupErr == nil && strings.TrimSpace(warmupResult.ResponseID) != "" {
 		payload = WithPreviousResponseID(payload, warmupResult.ResponseID, []codexwire.InputItem{})
+
 		return conn, cfg, payload, prewarmTelemetry{
 			PrewarmUsed:      true,
 			ConnectionReused: true,

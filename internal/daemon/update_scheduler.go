@@ -92,6 +92,7 @@ func startSelfUpdateSchedulerWith(
 							"deploy_output",
 							updatehandoff.TruncateForLog(deployOutput.String()),
 						)
+
 						return
 					}
 

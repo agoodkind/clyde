@@ -90,6 +90,7 @@ func (l *WireFlavorsLoader) Load(
 			"subcomponent",
 			"anthropic",
 		)
+
 		return nil, fmt.Errorf("%w: no capture store", ErrBaselineMissing)
 	}
 
@@ -118,6 +119,7 @@ func (l *WireFlavorsLoader) Load(
 			"subcomponent",
 			"anthropic",
 		)
+
 		return nil, fmt.Errorf("%w: no baseline for %s", ErrBaselineMissing, anthropicWireUpstream)
 	}
 
@@ -192,6 +194,7 @@ func loadWireFlavorsFromStore(
 			"subcomponent",
 			"anthropic",
 		)
+
 		return nil, fmt.Errorf("%w: %s has no flavors", ErrBaselineInvalid, anthropicWireUpstream)
 	}
 

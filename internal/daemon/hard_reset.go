@@ -81,6 +81,7 @@ func readRotatedLogTargets(state string) ([]resetTarget, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("read Clyde state logs: %w", err)
 	}
 
@@ -228,6 +229,7 @@ func HardResetWithOptions(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("clyde data reset; initial conversation index failed: %w", err)
 	}
 
@@ -405,6 +407,7 @@ func printResetPlan(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("print hard reset removal targets: %w", err)
 	}
 
@@ -422,6 +425,7 @@ func printResetPlan(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("print hard reset removal target: %w", err)
 		}
 	}
@@ -437,6 +441,7 @@ func printResetPlan(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("print hard reset preserved roots: %w", err)
 	}
 
@@ -454,6 +459,7 @@ func printResetPlan(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("print hard reset preserved root: %w", err)
 		}
 	}

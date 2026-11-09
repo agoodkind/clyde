@@ -77,6 +77,7 @@ func (p *Provider) OpenRawResponses(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("codex provider: auth lookup: %w", err)
 	}
 
@@ -124,6 +125,7 @@ func (p *Provider) rawResponsesAccountID(ctx context.Context) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("codex provider: account lookup: %w", err)
 	}
 
@@ -251,6 +253,7 @@ func (p *Provider) openRawResponsesOnce(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("codex provider: build raw Responses request: %w", err)
 	}
 
@@ -278,6 +281,7 @@ func (p *Provider) openRawResponsesOnce(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("codex provider: raw Responses request: %w", err)
 	}
 
@@ -341,6 +345,7 @@ func rawResponsesModelRewriteError(operation string, err error) error {
 		"err",
 		err,
 	)
+
 	return fmt.Errorf("raw Responses model rewrite %s: %w", operation, err)
 }
 
@@ -356,6 +361,7 @@ func (b *rawResponsesAttemptBody) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close raw Codex Responses body: %w", err)
 	}
 

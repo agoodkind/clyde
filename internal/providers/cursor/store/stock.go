@@ -75,6 +75,7 @@ func readBubbleChangeState(ctx context.Context, snapshot readSnapshot) (bubbleCh
 			"err",
 			err,
 		)
+
 		return state, err
 	}
 
@@ -95,6 +96,7 @@ func readBubbleChangeState(ctx context.Context, snapshot readSnapshot) (bubbleCh
 			"err",
 			err,
 		)
+
 		return state, fmt.Errorf("count cursor bubble change rows: %w", err)
 	}
 
@@ -118,6 +120,7 @@ func readBubbleChangeState(ctx context.Context, snapshot readSnapshot) (bubbleCh
 			"err",
 			err,
 		)
+
 		return state, fmt.Errorf("read cursor change high water row: %w", err)
 	}
 
@@ -142,6 +145,7 @@ func readChangedComposerIDs(
 			"err",
 			err,
 		)
+
 		return nil, 0, fmt.Errorf("query cursor changed rows after %d: %w", afterRow, err)
 	}
 
@@ -161,6 +165,7 @@ func readChangedComposerIDs(
 				"err",
 				err,
 			)
+
 			return nil, 0, fmt.Errorf("scan cursor changed row: %w", err)
 		}
 
@@ -184,6 +189,7 @@ func readChangedComposerIDs(
 			"err",
 			err,
 		)
+
 		return nil, 0, fmt.Errorf("iterate cursor changed rows: %w", err)
 	}
 
@@ -205,6 +211,7 @@ func readMostRecentlyActiveComposerID(
 			"err",
 			err,
 		)
+
 		return "", 1, err
 	}
 
@@ -232,6 +239,7 @@ func readMostRecentlyActiveComposerID(
 			"err",
 			err,
 		)
+
 		return "", 2, fmt.Errorf("read cursor active composer: %w", err)
 	}
 
@@ -326,6 +334,7 @@ func readComposerBubbleSelector(
 				"err",
 				err,
 			)
+
 			return selector, false, fmt.Errorf("scan cursor composer bubble selector: %w", err)
 		}
 
@@ -346,6 +355,7 @@ func readComposerBubbleSelector(
 			"err",
 			err,
 		)
+
 		return selector, false, fmt.Errorf("iterate cursor composer bubble selector: %w", err)
 	}
 

@@ -367,6 +367,7 @@ func (decomposition *legacyDecomposition) contentOffset(piece legacyPiece, prior
 		max(piece.sourceStart+priorOffset-piece.priorBase, piece.sourceStart),
 		piece.sourceEnd,
 	)
+
 	return decomposition.bodyStart + decomposition.persisted.outputOffset(source)
 }
 

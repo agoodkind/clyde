@@ -277,6 +277,7 @@ func (b *rawCompactionReadCloser) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close raw compaction response: %w", err)
 	}
 
@@ -330,6 +331,7 @@ func newRawCompactionEncodedBody(
 			_ = pipeWriter.CloseWithError(
 				errors.New("unsupported raw compaction response encoding"),
 			)
+
 			return
 		}
 
@@ -370,6 +372,7 @@ func (b *rawCompactionEncodedBody) Close() error {
 			"err",
 			sourceErr,
 		)
+
 		return fmt.Errorf("close raw compaction response source: %w", sourceErr)
 	}
 
@@ -381,6 +384,7 @@ func (b *rawCompactionEncodedBody) Close() error {
 			"err",
 			readerErr,
 		)
+
 		return fmt.Errorf("close encoded raw compaction response: %w", readerErr)
 	}
 

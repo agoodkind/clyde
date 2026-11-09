@@ -80,6 +80,7 @@ func resolveCodexHome(ctx context.Context, value string) (string, error) {
 				"err",
 				err,
 			)
+
 			return "", fmt.Errorf("resolve codex home: %w", err)
 		}
 
@@ -96,6 +97,7 @@ func resolveCodexHome(ctx context.Context, value string) (string, error) {
 				"err",
 				err,
 			)
+
 			return "", fmt.Errorf("expand codex home: %w", err)
 		}
 

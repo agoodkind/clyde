@@ -262,6 +262,7 @@ func appendMetricsRollupRecords(path string, records []metricsRollupRecord) erro
 		encoded, encodeErr := json.Marshal(record)
 		if encodeErr != nil {
 			_ = file.Close()
+
 			return rollupError(
 				"daemon.metrics_rollup.record_encode_failed",
 				path,
@@ -273,6 +274,7 @@ func appendMetricsRollupRecords(path string, records []metricsRollupRecord) erro
 		encoded = append(encoded, '\n')
 		if _, writeErr := writer.Write(encoded); writeErr != nil {
 			_ = file.Close()
+
 			return rollupError(
 				"daemon.metrics_rollup.record_write_failed",
 				path,
@@ -284,6 +286,7 @@ func appendMetricsRollupRecords(path string, records []metricsRollupRecord) erro
 
 	if flushErr := writer.Flush(); flushErr != nil {
 		_ = file.Close()
+
 		return rollupError(
 			"daemon.metrics_rollup.flush_failed",
 			path,
@@ -558,6 +561,7 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 	temporaryFile, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = file.Close()
+
 		return 0, rollupError(
 			"daemon.metrics_rollup.prune_open_failed",
 			temporary,
@@ -646,6 +650,7 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 
 	if closeErr := temporaryFile.Close(); closeErr != nil {
 		_ = os.Remove(temporary)
+
 		return 0, rollupError(
 			"daemon.metrics_rollup.prune_close_failed",
 			temporary,

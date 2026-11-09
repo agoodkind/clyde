@@ -145,6 +145,7 @@ func (handler *cachedReadHandler) writeRecord(ctx context.Context, record slog.R
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write cursor cached-read diagnostic %q: %w", record.Message, err)
 	}
 

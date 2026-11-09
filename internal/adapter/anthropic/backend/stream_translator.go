@@ -197,6 +197,7 @@ func (t *StreamTranslator) handleMessageStart(
 			"err",
 			err,
 		)
+
 		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic message_start event: %w", err)
 	}
 
@@ -223,6 +224,7 @@ func (t *StreamTranslator) handleContentBlockStart(
 			"err",
 			err,
 		)
+
 		return nil, false, "", nil, fmt.Errorf(
 			"unmarshal anthropic content_block_start event: %w",
 			err,
@@ -311,6 +313,7 @@ func (t *StreamTranslator) handleContentBlockDelta(
 			"err",
 			err,
 		)
+
 		return nil, false, "", nil, fmt.Errorf(
 			"unmarshal anthropic content_block_delta event: %w",
 			err,
@@ -444,6 +447,7 @@ func (t *StreamTranslator) handleMessageDelta(
 			"err",
 			err,
 		)
+
 		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic message_delta event: %w", err)
 	}
 
@@ -498,6 +502,7 @@ func (t *StreamTranslator) handleStreamError(
 			"err",
 			err,
 		)
+
 		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic error event: %w", err)
 	}
 

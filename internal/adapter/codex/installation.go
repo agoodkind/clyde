@@ -52,6 +52,7 @@ func (installationFileFinder) codexPath() (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("user home dir: %w", err)
 	}
 

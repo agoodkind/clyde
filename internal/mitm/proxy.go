@@ -292,6 +292,7 @@ func (p *Proxy) ShutdownHTTP(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("mitm shutdown: %w", err)
 	}
 
@@ -696,6 +697,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 			requestBodyIndex,
 			started,
 		)
+
 		return
 	}
 
@@ -1280,6 +1282,7 @@ func streamWithFlush(
 					"err",
 					werr,
 				)
+
 				return fmt.Errorf("stream client write: %w", werr)
 			}
 

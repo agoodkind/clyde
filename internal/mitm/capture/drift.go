@@ -189,6 +189,7 @@ func (s *Store) insertShape(ctx context.Context, shape DriftShape) {
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -222,6 +223,7 @@ func (s *Store) insertCheck(ctx context.Context, check DriftCheck) {
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -258,6 +260,7 @@ func (s *Store) PutBaseline(ctx context.Context, change BaselineChange) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("capture: begin baseline tx: %w", err)
 	}
 
@@ -374,6 +377,7 @@ func (s *Store) ShapesForUpstream(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("capture: query drift shapes: %w", err)
 	}
 
@@ -450,6 +454,7 @@ func (s *Store) CurrentBaseline(
 			"err",
 			err,
 		)
+
 		return nil, false, fmt.Errorf("capture: query baseline: %w", err)
 	}
 
@@ -485,6 +490,7 @@ func (s *Store) CurrentBaselineUpdatedAt(ctx context.Context, upstream string) (
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("capture: query baseline updated_at: %w", err)
 	}
 
@@ -521,6 +527,7 @@ func (s *Store) BaselineDiffs(ctx context.Context, upstream string) ([]BaselineD
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("capture: query baseline diffs: %w", err)
 	}
 

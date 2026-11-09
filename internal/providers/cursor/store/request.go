@@ -192,6 +192,7 @@ func FindGenerationEntry(
 			"err",
 			err,
 		)
+
 		return emptyLookup, fmt.Errorf("list cursor workspaces for request %q: %w", requestID, err)
 	}
 
@@ -483,6 +484,7 @@ func readTableColumns(ctx context.Context, db *sql.DB, table string) (map[string
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("query cursor %s columns: %w", table, err)
 	}
 
@@ -509,6 +511,7 @@ func scanTableColumns(ctx context.Context, rows *sql.Rows, table string) (map[st
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("scan cursor %s column: %w", table, err)
 		}
 
@@ -526,6 +529,7 @@ func scanTableColumns(ctx context.Context, rows *sql.Rows, table string) (map[st
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("iterate cursor %s columns: %w", table, err)
 	}
 
@@ -566,6 +570,7 @@ func ListComposerIDsCoveringTime(
 			"unix_ms",
 			unixMs,
 		)
+
 		return narrowing, fmt.Errorf("list cursor composers covering %d: nil database", unixMs)
 	}
 
@@ -596,6 +601,7 @@ func ListComposerIDsCoveringTime(
 			"has_created_at",
 			columns[composerCreatedAtColumn],
 		)
+
 		return narrowing, nil
 	}
 
@@ -640,6 +646,7 @@ func ListComposerIDsCoveringTime(
 			"err",
 			err,
 		)
+
 		return ComposerNarrowing{
 			ComposerIDs:   nil,
 			Usable:        false,
@@ -664,6 +671,7 @@ func ListComposerIDsCoveringTime(
 				"err",
 				err,
 			)
+
 			return ComposerNarrowing{
 				ComposerIDs:   nil,
 				Usable:        false,
@@ -685,6 +693,7 @@ func ListComposerIDsCoveringTime(
 			"err",
 			err,
 		)
+
 		return ComposerNarrowing{
 			ComposerIDs:   nil,
 			Usable:        false,
@@ -736,6 +745,7 @@ func countReachableComposerHeaders(
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("count reachable cursor composer headers: %w", err)
 	}
 
@@ -790,6 +800,7 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 			"concern",
 			concern,
 		)
+
 		return coverage, fmt.Errorf("read cursor composer header coverage: nil database")
 	}
 
@@ -817,6 +828,7 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 			"table",
 			string(KVTableCursorDiskKV),
 		)
+
 		return coverage, nil
 	}
 
@@ -832,6 +844,7 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 			"err",
 			err,
 		)
+
 		return coverage, fmt.Errorf("count cursor chats: %w", err)
 	}
 
@@ -897,6 +910,7 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 			"concern",
 			concern,
 		)
+
 		return coverage, fmt.Errorf("count cursor chats the header table omits: no row")
 	}
 
@@ -909,6 +923,7 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 			"err",
 			err,
 		)
+
 		return coverage, fmt.Errorf("scan cursor chats the header table omits: %w", err)
 	}
 
@@ -921,6 +936,7 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 			"err",
 			err,
 		)
+
 		return coverage, fmt.Errorf("iterate cursor chats the header table omits: %w", err)
 	}
 
@@ -1008,6 +1024,7 @@ func findBubbleRequestIDInRange(
 			"err",
 			err,
 		)
+
 		return search, fmt.Errorf("read cursor bubbles for request id: %w", err)
 	}
 

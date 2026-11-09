@@ -133,6 +133,7 @@ func decodeConfigTOML(data []byte, tomlPath string, log *slog.Logger, cfg *Confi
 			removedKeyErr := &removedConversationSemanticKeyError{
 				key: conversationSemanticKey + removedConversationSemanticEnabledKey,
 			}
+
 			return removedConversationSemanticConfigError(log, tomlPath, removedKeyErr)
 		}
 

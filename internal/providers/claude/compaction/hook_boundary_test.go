@@ -380,6 +380,7 @@ func TestHookLeavesANonStreamingResponseUnchanged(t *testing.T) {
 // markers appear only in message 0's tail and only inside a tool_use input.
 func recompactionBody(t *testing.T, arguments string) []byte {
 	t.Helper()
+
 	return recompactionBodyWithPrior(
 		t,
 		arguments,

@@ -160,6 +160,7 @@ func Resolve(
 			"err",
 			err,
 		)
+
 		return ResolvedRequest{}, fmt.Errorf("resolve request model %s: %w", req.OpenAI.Model, err)
 	}
 

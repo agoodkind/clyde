@@ -577,6 +577,7 @@ func recoveryThinkingPart(t *testing.T, text string) string {
 
 func recoveryToolUsePart(t *testing.T, id string, command string) string {
 	t.Helper()
+
 	return `{"id":"` + id + `","input":{"command":` + recoveryJSONString(
 		t,
 		command,

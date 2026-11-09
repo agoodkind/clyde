@@ -60,6 +60,7 @@ func (sw *SSEWriter) marshalStreamChunk(chunk StreamChunk) ([]byte, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("marshal stream chunk: %w", err)
 		}
 
@@ -75,6 +76,7 @@ func (sw *SSEWriter) marshalStreamChunk(chunk StreamChunk) ([]byte, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal stream chunk with null usage: %w", err)
 	}
 
@@ -119,6 +121,7 @@ func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("marshal OpenAI stream chunk: %w", err)
 	}
 
@@ -130,6 +133,7 @@ func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write OpenAI stream chunk: %w", err)
 	}
 
@@ -149,6 +153,7 @@ func (sw *SSEWriter) WriteStreamEvent(payload []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write OpenAI stream event: %w", err)
 	}
 
@@ -174,6 +179,7 @@ func (sw *SSEWriter) WriteNamedEvent(name string, payload []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write OpenAI named event %q: %w", name, err)
 	}
 
@@ -192,6 +198,7 @@ func (sw *SSEWriter) WriteStreamDone() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write OpenAI stream done: %w", err)
 	}
 

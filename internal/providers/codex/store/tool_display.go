@@ -78,6 +78,7 @@ func (command *codexShellCommand) UnmarshalJSON(data []byte) error {
 			"shape",
 			string(trimmed[:1]),
 		)
+
 		return nil
 	}
 }

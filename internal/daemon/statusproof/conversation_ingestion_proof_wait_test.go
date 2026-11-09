@@ -116,6 +116,7 @@ func assertIngestionProofMatch(
 			query,
 			result.Source,
 		)
+
 		return
 	}
 

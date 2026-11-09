@@ -74,6 +74,7 @@ func (s *Server) buildAnthropicWire(
 			"err",
 			err,
 		)
+
 		return anthropic.Request{}, fmt.Errorf("build anthropic wire request: %w", err)
 	}
 

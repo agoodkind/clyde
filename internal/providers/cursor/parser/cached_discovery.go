@@ -72,6 +72,7 @@ func cursorSourceStamps(ctx context.Context) (map[string]conversation.FileStamp,
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 
@@ -93,6 +94,7 @@ func cursorSourceStamps(ctx context.Context) (map[string]conversation.FileStamp,
 				"err",
 				listingErr,
 			)
+
 			return nil, fmt.Errorf("list cursor workspace entries: %w", listingErr)
 		}
 

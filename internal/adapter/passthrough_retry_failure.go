@@ -50,6 +50,7 @@ func (s *Server) respondPassthroughRetryFailure(
 			streamRequested,
 			failure.err,
 		)
+
 		return
 	}
 

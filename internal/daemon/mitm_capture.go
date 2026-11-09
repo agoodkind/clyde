@@ -35,6 +35,7 @@ func openMITMCaptureStore(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create capture store directory for %s: %w", dbPath, err)
 	}
 

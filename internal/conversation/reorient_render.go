@@ -62,6 +62,7 @@ func marshalReorientPageJSON(page ReorientPage) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("render reorient page json: %w", err)
 	}
 

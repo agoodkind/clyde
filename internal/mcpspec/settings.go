@@ -108,6 +108,7 @@ func (Installer) Install(ctx context.Context, options InstallOptions) (InstallRe
 				"err",
 				err,
 			)
+
 			return InstallResult{}, err
 		}
 

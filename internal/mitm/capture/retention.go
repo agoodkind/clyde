@@ -199,6 +199,7 @@ func (s *Store) diskBytes() (int64, error) {
 				"err",
 				err,
 			)
+
 			return 0, fmt.Errorf("stat capture database%s: %w", suffix, err)
 		}
 

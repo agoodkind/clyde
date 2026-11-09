@@ -57,6 +57,7 @@ func (s *Server) forwardPassthroughModel(
 			"err",
 			err,
 		)
+
 		return adapterErrUpstreamFailed(
 			"passthrough_override",
 			"create fallback model lookup request",
@@ -84,6 +85,7 @@ func (s *Server) forwardPassthroughModel(
 			"err",
 			err,
 		)
+
 		return adapterErrUpstreamFailed(
 			"passthrough_override",
 			"read fallback model lookup response",
@@ -100,6 +102,7 @@ func (s *Server) forwardPassthroughModel(
 			"limit_bytes",
 			passthroughModelLookupLimit,
 		)
+
 		return adapterErrUpstreamFailed(
 			"passthrough_override",
 			"fallback model lookup response exceeds "+strconv.Itoa(

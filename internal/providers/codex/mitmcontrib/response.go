@@ -48,6 +48,7 @@ func (routeProvider) TransformResponse(
 			"err",
 			err,
 		)
+
 		return mitm.ReplaceResponseBody(response, body), fmt.Errorf(
 			"read Responses stream: %w",
 			err,
@@ -82,6 +83,7 @@ func (routeProvider) TransformResponse(
 			"err",
 			err,
 		)
+
 		return response, fmt.Errorf("evaluate Responses output: %w", err)
 	}
 
@@ -103,6 +105,7 @@ func (routeProvider) TransformResponse(
 			"err",
 			err,
 		)
+
 		return response, fmt.Errorf("append Responses feedback: %w", err)
 	}
 

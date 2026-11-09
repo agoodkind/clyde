@@ -45,6 +45,7 @@ func (*Parser) ResolveRequestID(
 			"err",
 			err,
 		)
+
 		return conversation.RequestMatch{}, fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 
@@ -138,6 +139,7 @@ func matchAcrossRoots(
 			"count",
 			len(distinct),
 		)
+
 		return missingRequestMatch(conversation.RequestNotFoundReasonAmbiguousConversation)
 	case len(distinct) == 1 && reason == conversation.RequestNotFoundReasonInconclusive:
 		slog.WarnContext(
@@ -148,6 +150,7 @@ func matchAcrossRoots(
 			"request_id",
 			requestID,
 		)
+
 		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive)
 	case len(distinct) == 1:
 		return distinct[0]
@@ -221,6 +224,7 @@ func resolveRequestIDInRoot(
 			"err",
 			err,
 		)
+
 		return conversation.RequestMatch{}, fmt.Errorf(
 			"scan cursor bubbles for request %q: %w",
 			requestID,
@@ -266,6 +270,7 @@ func resolveRequestIDWithoutChatStore(
 			"err",
 			err,
 		)
+
 		return conversation.RequestMatch{}, fmt.Errorf(
 			"find cursor generation entry for request %q: %w",
 			requestID,
@@ -286,6 +291,7 @@ func resolveRequestIDWithoutChatStore(
 			"workspace_hashes",
 			lookup.WorkspaceHashes(),
 		)
+
 		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive), nil
 	}
 
@@ -321,6 +327,7 @@ func resolveRequestIDFromGenerationRing(
 			"err",
 			err,
 		)
+
 		return conversation.RequestNotFoundReasonUnspecified, conversation.RequestMatch{}, fmt.Errorf(
 			"find cursor generation entry for request %q: %w",
 			requestID,
@@ -542,6 +549,7 @@ func matchFromCarriers(
 			"count",
 			len(carriers.composerIDs),
 		)
+
 		return missingRequestMatch(conversation.RequestNotFoundReasonAmbiguousConversation)
 	case carriers.unread > 0:
 		slog.WarnContext(
@@ -558,6 +566,7 @@ func matchFromCarriers(
 			"unread",
 			carriers.unread,
 		)
+
 		return missingRequestMatch(conversation.RequestNotFoundReasonInconclusive)
 	case len(carriers.composerIDs) == 1:
 		return foundRequestMatch(carriers.composerIDs[0], origin)

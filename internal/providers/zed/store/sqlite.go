@@ -33,6 +33,7 @@ func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("open zed sqlite database %s: %w", path, err)
 	}
 
@@ -76,6 +77,7 @@ func TableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 			"err",
 			err,
 		)
+
 		return false, fmt.Errorf("query sqlite_master for %s: %w", table, err)
 	}
 

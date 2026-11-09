@@ -252,6 +252,7 @@ func scanResumeLinks(
 			"err",
 			err,
 		)
+
 		return resumeLinkCacheEntry{}, fmt.Errorf("open cursor resume transcript: %w", err)
 	}
 

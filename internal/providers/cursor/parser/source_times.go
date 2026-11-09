@@ -55,6 +55,7 @@ func (*Parser) SourceStoreMessages(
 				"err",
 				err,
 			)
+
 			return emptySourceMessages(), false, fmt.Errorf(
 				"parse cursor data root from record path %s: %w",
 				record.ArtifactPath,
@@ -253,6 +254,7 @@ func (resolver *sourceTimeResolver) load() bool {
 			"err",
 			err,
 		)
+
 		return false
 	}
 
@@ -387,6 +389,7 @@ func (resolver *sourceTimeResolver) readProvenTools() []int {
 			"err",
 			err,
 		)
+
 		return nil
 	}
 
@@ -416,6 +419,7 @@ func (resolver *sourceTimeResolver) readProvenTools() []int {
 			"err",
 			err,
 		)
+
 		return nil
 	}
 
@@ -511,6 +515,7 @@ func readComposerSourceMessages(
 			"err",
 			err,
 		)
+
 		return emptySourceMessages(), false, fmt.Errorf("resolve Cursor data roots: %w", err)
 	}
 
@@ -604,6 +609,7 @@ func rootComposerSourceMessages(
 			"err",
 			readErr,
 		)
+
 		return emptySourceMessages(), false, fmt.Errorf(
 			"read composer from Cursor global database %s: %w",
 			path,
@@ -622,6 +628,7 @@ func rootComposerSourceMessages(
 			"err",
 			closeErr,
 		)
+
 		return emptySourceMessages(), false, fmt.Errorf(
 			"close Cursor global database %s: %w",
 			path,
@@ -698,6 +705,7 @@ func composerSourceMessages(
 			"err",
 			err,
 		)
+
 		return source, false, fmt.Errorf("read composer header %q: %w", composerID, err)
 	}
 
@@ -750,6 +758,7 @@ func composerSourceMessages(
 			"err",
 			err,
 		)
+
 		return source, false, fmt.Errorf("read composer bubbles %q: %w", composerID, err)
 	}
 

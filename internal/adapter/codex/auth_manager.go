@@ -1038,6 +1038,7 @@ func writeTempAuthFile(tmp *os.File, data []byte) error {
 			"err",
 			err.Error(),
 		)
+
 		return fmt.Errorf("close temp codex auth file: %w", err)
 	}
 

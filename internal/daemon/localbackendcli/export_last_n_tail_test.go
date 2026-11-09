@@ -609,6 +609,7 @@ func lastNProbeToolResultRecord(
 	output string,
 ) string {
 	t.Helper()
+
 	return lastNProbeRecord(
 		session,
 		"user",
@@ -622,6 +623,7 @@ func lastNProbeToolResultRecord(
 
 func lastNProbeThinkingRecord(t *testing.T, session string, index int, thinking string) string {
 	t.Helper()
+
 	return lastNProbeRecord(
 		session,
 		"assistant",

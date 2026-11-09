@@ -102,6 +102,7 @@ func logsInventoryOp() Operation[logsInventoryInput, logsInventoryPayload] {
 					"err",
 					err,
 				)
+
 				return nil, fmt.Errorf("logs inventory: %w", err)
 			}
 
@@ -117,6 +118,7 @@ func logsInventoryOp() Operation[logsInventoryInput, logsInventoryPayload] {
 					"err",
 					err,
 				)
+
 				return nil, fmt.Errorf("render logs inventory: %w", err)
 			}
 

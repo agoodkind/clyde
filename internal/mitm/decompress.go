@@ -154,6 +154,7 @@ func (b *bufferedReadCloser) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close buffered response body: %w", err)
 	}
 

@@ -153,6 +153,7 @@ func sandboxSemanticSettings(path string) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("read semantic settings file %s: %w", path, err)
 	}
 
@@ -197,6 +198,7 @@ func (local sandboxLocalOptions) configLines() (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("resolve --local-root %s: %w", local.root, err)
 	}
 
@@ -241,6 +243,7 @@ func runSandbox(
 			"err",
 			err,
 		)
+
 		return err
 	}
 
@@ -270,6 +273,7 @@ func runSandbox(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("prepare the sandbox directories: %w", err)
 	}
 
@@ -290,6 +294,7 @@ func runSandbox(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("check the sandbox directories: %w", err)
 	}
 
@@ -307,6 +312,7 @@ func runSandbox(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf(
 			"create the sandbox config directory %s: %w",
 			filepath.Dir(configPath),
@@ -334,6 +340,7 @@ func runSandbox(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write the sandbox config %s: %w", configPath, err)
 	}
 
@@ -352,6 +359,7 @@ func runSandbox(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("point this process at the sandbox directories: %w", err)
 	}
 
@@ -390,6 +398,7 @@ func runSandbox(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("run the sandbox daemon: %w", err)
 	}
 

@@ -63,6 +63,7 @@ func ReadExchangeEvidence(
 	db, err := sql.Open("sqlite3", "file:"+query.DBPath+"?mode=ro&_busy_timeout=5000")
 	if err != nil {
 		slog.Warn("mitm.capture.evidence_open_failed", "path", query.DBPath, "err", err)
+
 		return fmt.Errorf(
 			"capture: the evidence reader could not open the evidence database: %w",
 			err,
@@ -97,6 +98,7 @@ func ReadExchangeEvidence(
 			&evidence.UpstreamResponse,
 		); err != nil {
 			slog.Warn("mitm.capture.evidence_scan_failed", "path", query.DBPath, "err", err)
+
 			return fmt.Errorf(
 				"capture: the evidence reader could not scan an evidence row: %w",
 				err,

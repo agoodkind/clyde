@@ -449,6 +449,7 @@ func (s *Server) dispatchCodexProviderCollect(
 			"err",
 			err,
 		)
+
 		return
 	}
 

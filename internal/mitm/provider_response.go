@@ -61,6 +61,7 @@ func (p *Proxy) forwardAndCaptureProviderResponse(
 				"err",
 				readErr,
 			)
+
 			return responseBytes, bodyBuffer.Bytes(), fmt.Errorf(
 				"read provider response body: %w",
 				readErr,
@@ -126,6 +127,7 @@ func writeProviderResponseEOF(client *bufio.Writer, chunked bool) (int64, error)
 				"err",
 				err,
 			)
+
 			return 0, fmt.Errorf("flush provider response body: %w", err)
 		}
 
@@ -146,6 +148,7 @@ func writeProviderResponseBytes(client *bufio.Writer, chunk []byte, label string
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("write provider response %s: %w", label, err)
 	}
 
@@ -159,6 +162,7 @@ func writeProviderResponseBytes(client *bufio.Writer, chunk []byte, label string
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("flush provider response %s: %w", label, err)
 	}
 
@@ -176,6 +180,7 @@ func writeProviderResponseString(client *bufio.Writer, text string, label string
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("write provider response %s: %w", label, err)
 	}
 
@@ -189,6 +194,7 @@ func writeProviderResponseString(client *bufio.Writer, text string, label string
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("flush provider response %s: %w", label, err)
 	}
 

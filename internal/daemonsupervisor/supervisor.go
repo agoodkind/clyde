@@ -142,6 +142,7 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve daemon supervisor executable: %w", err)
 	}
 
@@ -157,6 +158,7 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("create daemon worker readiness pipe: %w", err)
 	}
 
@@ -179,6 +181,7 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("listen daemon supervisor reload socket %s: %w", socketPath, err)
 	}
 
@@ -197,6 +200,7 @@ func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("start daemon worker: %w", err)
 	}
 
@@ -345,6 +349,7 @@ func RequestReplacement(
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("encode inherited listeners: %w", err)
 	}
 
@@ -408,6 +413,7 @@ func RequestRebind(
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("encode inherited listeners: %w", err)
 	}
 
@@ -634,6 +640,7 @@ func startWorker(cmd *exec.Cmd) (workerHandle, error) {
 			"err",
 			err,
 		)
+
 		return workerHandle{}, fmt.Errorf("start daemon worker: %w", err)
 	}
 
@@ -694,6 +701,7 @@ func waitForWorkerReady(ctx context.Context, ready io.Reader, waitCh <-chan erro
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("%w: %w", errWorkerExitedBeforeReady, workerExitError(err))
 	case <-deadlineCtx.Done():
 		slog.WarnContext(
@@ -704,6 +712,7 @@ func waitForWorkerReady(ctx context.Context, ready io.Reader, waitCh <-chan erro
 			"err",
 			deadlineCtx.Err(),
 		)
+
 		return fmt.Errorf("daemon worker did not become ready: %w", deadlineCtx.Err())
 	}
 }
@@ -953,6 +962,7 @@ func replacementWorkerEnvironment(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode supervisor reload listener specs: %w", err)
 	}
 
@@ -987,6 +997,7 @@ func sendControlRequest(
 			"err",
 			err,
 		)
+
 		return controlResponse{}, fmt.Errorf("connect supervisor: %w", err)
 	}
 	defer conn.Close()
@@ -1013,6 +1024,7 @@ func sendControlRequest(
 			"err",
 			err,
 		)
+
 		return controlResponse{}, fmt.Errorf("encode supervisor request: %w", err)
 	}
 
@@ -1051,6 +1063,7 @@ func sendControlRequest(
 			"err",
 			err,
 		)
+
 		return controlResponse{}, fmt.Errorf("send supervisor request header: %w", err)
 	}
 
@@ -1072,6 +1085,7 @@ func sendControlRequest(
 			"err",
 			err,
 		)
+
 		return controlResponse{}, fmt.Errorf("send supervisor request body: %w", err)
 	}
 
@@ -1093,6 +1107,7 @@ func sendControlRequest(
 			"err",
 			err,
 		)
+
 		return controlResponse{}, fmt.Errorf("decode supervisor response: %w", err)
 	}
 
@@ -1118,6 +1133,7 @@ func readControlRequest(conn *net.UnixConn) (controlRequest, []*os.File, error) 
 			"err",
 			err,
 		)
+
 		return controlRequest{}, nil, fmt.Errorf("read supervisor request header: %w", err)
 	}
 
@@ -1172,6 +1188,7 @@ func readControlRequest(conn *net.UnixConn) (controlRequest, []*os.File, error) 
 
 	if length > maxControlRequestBytes {
 		closeFiles(files)
+
 		return controlRequest{}, nil, fmt.Errorf(
 			"supervisor request body %d bytes exceeds limit %d",
 			length,
@@ -1220,6 +1237,7 @@ func filesFromUnixRights(oob []byte) ([]*os.File, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("parse supervisor control messages: %w", err)
 	}
 

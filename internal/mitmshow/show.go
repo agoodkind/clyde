@@ -397,6 +397,7 @@ func searchCaptureStore(ctx context.Context, dbPath, id string, found *Correlati
 			"err",
 			openErr,
 		)
+
 		return section
 	}
 
@@ -426,6 +427,7 @@ func searchCaptureStore(ctx context.Context, dbPath, id string, found *Correlati
 			"err",
 			queryErr,
 		)
+
 		return section
 	}
 

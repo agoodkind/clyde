@@ -184,6 +184,7 @@ func DecodeTranscriptEntry(line []byte) (TranscriptEntry, error) {
 			"component",
 			"claude",
 		)
+
 		return entry, errors.New("decode claude transcript entry: line is not a JSON object")
 	}
 
@@ -207,6 +208,7 @@ func DecodeTranscriptEntry(line []byte) (TranscriptEntry, error) {
 			"err",
 			err,
 		)
+
 		return entry, fmt.Errorf("decode claude transcript entry: %w", err)
 	}
 

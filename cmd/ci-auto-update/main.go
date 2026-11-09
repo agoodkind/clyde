@@ -141,6 +141,7 @@ func run(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("create test root: %w", err)
 	}
 
@@ -380,6 +381,7 @@ func fetchGitHubReleases(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("build GitHub releases request: %w", err)
 	}
 
@@ -425,6 +427,7 @@ func (check *updateCheck) prepareDirectories() error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("create test directory %s: %w", directory, err)
 		}
 	}
@@ -508,6 +511,7 @@ func (check *updateCheck) installFakeServiceManagers() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve CI executable: %w", err)
 	}
 
@@ -539,6 +543,7 @@ func (check *updateCheck) startDaemon(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("create daemon log: %w", err)
 	}
 
@@ -633,6 +638,7 @@ func (process *childProcess) stop() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("signal daemon process group: %w", err)
 	}
 
@@ -704,6 +710,7 @@ func stateReportsApplied(path string) (bool, error) {
 			"err",
 			err,
 		)
+
 		return false, fmt.Errorf("load update state: %w", err)
 	}
 
@@ -758,6 +765,7 @@ func tailLines(path string, count int) ([]string, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
@@ -816,6 +824,7 @@ func removeTestRoot(path string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve test root %s: %w", path, err)
 	}
 
@@ -860,6 +869,7 @@ func commandOutput(
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("run %s: %w: %s", name, err, strings.TrimSpace(string(output)))
 	}
 
@@ -884,6 +894,7 @@ func binaryVersion(ctx context.Context, directory string, binary string) (string
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf(
 			"run %s --version: %w: %s",
 			binary,
@@ -928,6 +939,7 @@ func wait(ctx context.Context, duration time.Duration) error {
 			"err",
 			ctx.Err(),
 		)
+
 		return fmt.Errorf("wait interrupted: %w", ctx.Err())
 	case <-timer.C:
 		return nil

@@ -100,6 +100,7 @@ func execRun(ctx context.Context, name string, args ...string) ([]byte, error) {
 			"err",
 			err,
 		)
+
 		return output, fmt.Errorf("cli.mitm.truststore.darwin: exec %s: %w", name, err)
 	}
 
@@ -209,6 +210,7 @@ func (d darwinRegistry) Install(certPath string) error {
 				"cert_path",
 				certPath,
 			)
+
 			return fmt.Errorf("%w: %s", ErrCAAbsent, certPath)
 		}
 
@@ -252,6 +254,7 @@ func (d darwinRegistry) Install(certPath string) error {
 				"err",
 				removeErr,
 			)
+
 			return fmt.Errorf("replace stale ca: %w", removeErr)
 		}
 	}
@@ -280,6 +283,7 @@ func (d darwinRegistry) Install(certPath string) error {
 			"output",
 			strings.TrimSpace(string(output)),
 		)
+
 		return fmt.Errorf(
 			"sudo security add-trusted-cert: %w (%s)",
 			runErr,
@@ -325,6 +329,7 @@ func (d darwinRegistry) Uninstall() error {
 			"common_name",
 			d.commonName,
 		)
+
 		return nil
 	}
 
@@ -336,6 +341,7 @@ func (d darwinRegistry) Uninstall() error {
 			"common_name",
 			d.commonName,
 		)
+
 		return nil
 	}
 

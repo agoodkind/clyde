@@ -107,6 +107,7 @@ func keepGoBuildCache() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("find user cache directory: %w", err)
 	}
 
@@ -122,6 +123,7 @@ func keepGoBuildCache() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("set %s: %w", goCacheEnv, err)
 	}
 

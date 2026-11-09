@@ -509,6 +509,7 @@ func (executor *executor) reloadOrRestart(ctx context.Context) error {
 			"branch.stale_root_parent",
 			field{Key: "cause", Value: string(causeRunningFingerprintFailed)},
 		)
+
 		return executor.restartByPlatform(ctx, causeRunningFingerprintFailed)
 	}
 
@@ -517,6 +518,7 @@ func (executor *executor) reloadOrRestart(ctx context.Context) error {
 			"branch.stale_root_parent",
 			field{Key: "cause", Value: string(causeRunningFingerprintEmpty)},
 		)
+
 		return executor.restartByPlatform(ctx, causeRunningFingerprintEmpty)
 	}
 
@@ -975,6 +977,7 @@ func (executor *executor) darwinServiceMatches() (bool, error) {
 			"darwin.service_config.missing",
 			field{Key: "plist", Value: executor.config.LaunchdPlist},
 		)
+
 		return false, nil
 	}
 
@@ -998,6 +1001,7 @@ func (executor *executor) darwinServiceMatches() (bool, error) {
 			"darwin.service_config.match",
 			field{Key: "plist", Value: executor.config.LaunchdPlist},
 		)
+
 		return true, nil
 	}
 
@@ -1027,6 +1031,7 @@ func (executor *executor) darwinServiceLoaded(ctx context.Context) (bool, error)
 				field{Key: "target", Value: executor.darwinTarget()},
 				field{Key: "status", Value: strconv.Itoa(runErr.result.normalizedExitCode())},
 			)
+
 			return false, nil
 		}
 
@@ -1070,6 +1075,7 @@ func (executor *executor) linuxServiceMatches() (bool, error) {
 			"linux.service_config.missing",
 			field{Key: "unit", Value: executor.config.SystemdUserUnit},
 		)
+
 		return false, nil
 	}
 
@@ -1093,6 +1099,7 @@ func (executor *executor) linuxServiceMatches() (bool, error) {
 			"linux.service_config.match",
 			field{Key: "unit", Value: executor.config.SystemdUserUnit},
 		)
+
 		return true, nil
 	}
 
@@ -1125,6 +1132,7 @@ func (executor *executor) linuxServiceActive(ctx context.Context) (bool, error) 
 				field{Key: "unit", Value: executor.config.SystemdUnit},
 				field{Key: "status", Value: strconv.Itoa(runErr.result.normalizedExitCode())},
 			)
+
 			return false, nil
 		}
 

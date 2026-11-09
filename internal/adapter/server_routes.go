@@ -209,6 +209,7 @@ func (s *Server) ShutdownHTTP(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("adapter HTTP shutdown: %w", err)
 	}
 
@@ -306,6 +307,7 @@ func (s *Server) handleRoot(ctx context.Context, hctx *handlerCtx) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("marshal root index: %w", err)
 	}
 
@@ -325,6 +327,7 @@ func (s *Server) handleHealth(ctx context.Context, hctx *handlerCtx) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("marshal health response: %w", err)
 	}
 

@@ -664,6 +664,7 @@ func (w *nativeAnthropicStreamWriter) write(chunk []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write native anthropic stream chunk: %w", err)
 	}
 

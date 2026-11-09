@@ -91,6 +91,7 @@ func newProviderStreamWriterWithOptions(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create provider SSE writer: %w", err)
 	}
 
@@ -150,6 +151,7 @@ func (p *providerStreamWriter) writeRenderedChunk(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("emit provider stream chunk: %w", err)
 	}
 
@@ -191,6 +193,7 @@ func (p *providerStreamWriter) writeStreamDone(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write provider stream done: %w", err)
 	}
 

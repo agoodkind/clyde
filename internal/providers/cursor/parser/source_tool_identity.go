@@ -42,6 +42,7 @@ func (dates *toolIdentityDates) add(bubble cursorstore.Bubble) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("cannot decode tool call binary for bubble %s: %w", bubble.BubbleID, err)
 	}
 

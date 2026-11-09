@@ -153,6 +153,7 @@ func includeSupervisorNamedFile(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("stat supervisor log %s; defer retention: %w", path, err)
 	}
 
@@ -208,6 +209,7 @@ func supervisorPolicyPath(policy slogger.CleanupPolicy, path string) (string, er
 				"err",
 				err,
 			)
+
 			return "", fmt.Errorf("resolve supervisor log root %s: %w", root, err)
 		}
 

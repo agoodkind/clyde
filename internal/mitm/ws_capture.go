@@ -856,6 +856,7 @@ func (p *Proxy) writeInterceptedHTTPError(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write intercepted HTTP error response: %w", err)
 	}
 
@@ -870,6 +871,7 @@ func (p *Proxy) writeInterceptedHTTPError(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("flush intercepted HTTP error response: %w", err)
 	}
 

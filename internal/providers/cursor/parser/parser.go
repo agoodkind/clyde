@@ -85,6 +85,7 @@ func (artifact discoveredArtifact) readTranscriptHeader() (cursorjsonl.Transcrip
 			"err",
 			err,
 		)
+
 		return header, fmt.Errorf("scan cursor transcript header: %w", err)
 	}
 
@@ -246,6 +247,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			"err",
 			err,
 		)
+
 		return emptyRecord(), false
 	}
 
@@ -264,6 +266,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 				"err",
 				err,
 			)
+
 			return emptyRecord(), false
 		}
 
@@ -452,6 +455,7 @@ func (p *Parser) discoverJSONL(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve cursor project roots: %w", err)
 	}
 
@@ -465,6 +469,7 @@ func (p *Parser) discoverJSONL(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("discover cursor transcript files: %w", err)
 	}
 
@@ -592,6 +597,7 @@ func discoverSQLite(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 
@@ -912,6 +918,7 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 			"err",
 			err,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf("stat cursor transcript %s: %w", path, err)
 	}
 
@@ -927,6 +934,7 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 			"err",
 			err,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf("match cursor transcript file: %w", err)
 	}
 
@@ -939,6 +947,7 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 			"path",
 			path,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf(
 			"cursor transcript path not discovered: %s",
 			path,
@@ -978,6 +987,7 @@ func resolveVirtualDiscovered(ctx context.Context, path string) (discoveredArtif
 			"err",
 			err,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf("parse cursor virtual path: %w", err)
 	}
 
@@ -993,6 +1003,7 @@ func resolveVirtualDiscovered(ctx context.Context, path string) (discoveredArtif
 			"err",
 			err,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 
@@ -1055,6 +1066,7 @@ func resolveComposerDiscovered(
 			"err",
 			err,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf(
 			"read cursor composer header %q: %w",
 			composerID,
@@ -1108,6 +1120,7 @@ func resolveLegacyDiscovered(
 			"err",
 			err,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf("list cursor workspace entries: %w", err)
 	}
 
@@ -1132,6 +1145,7 @@ func resolveLegacyDiscovered(
 			"unreadable",
 			listing.Unreadable,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf(
 			"cursor workspace %q not found among the %d workspaces that could be read, and %d could not",
 			workspaceHash,
@@ -1173,6 +1187,7 @@ func resolveLegacyDiscoveredForEntry(
 			"err",
 			err,
 		)
+
 		return emptyDiscoveredArtifact(), fmt.Errorf("read cursor legacy chat: %w", err)
 	}
 
@@ -1258,6 +1273,7 @@ func openOptionalDatabase(
 			"err",
 			err,
 		)
+
 		return nil, databaseAvailabilityUnreadable
 	}
 
@@ -1291,6 +1307,7 @@ func backgroundComposerIDSet(ctx context.Context, db *sql.DB, path string) map[s
 			"err",
 			err,
 		)
+
 		return backgroundIDs
 	}
 
@@ -1317,6 +1334,7 @@ func globalDBPathForDiscovered(
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 
@@ -1340,6 +1358,7 @@ func globalDBPathForDiscovered(
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("parse cursor virtual path: %w", err)
 	}
 

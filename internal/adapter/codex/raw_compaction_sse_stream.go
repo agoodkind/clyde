@@ -247,6 +247,7 @@ func (b *rawCompactionSSEBody) handleSSECandidateFrame(frame []byte, readErr err
 
 func rawCompactionSSEPendingFits(candidate []byte, following []byte, frame []byte) bool {
 	retained := len(candidate) + len(following)
+
 	return retained <= maxRawCompactionSSEPendingBytes &&
 		len(frame) <= maxRawCompactionSSEPendingBytes-retained
 }
@@ -368,6 +369,7 @@ func (b *rawCompactionSSEBody) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close raw compaction SSE response: %w", err)
 	}
 
@@ -449,6 +451,7 @@ func appendRawCompactionSSERun(
 			"err",
 			err,
 		)
+
 		return last, fmt.Errorf("discard raw compaction SSE run: %w", err)
 	}
 
@@ -483,6 +486,7 @@ func consumeRawCompactionSSECarriageReturn(
 			"err",
 			readErr,
 		)
+
 		return false, fmt.Errorf("read CRLF terminator: %w", readErr)
 	}
 

@@ -146,6 +146,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("load config: %w", err)
 	}
 
@@ -161,6 +162,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 			"err",
 			refreshErr,
 		)
+
 		return fmt.Errorf("refresh conversation index: %w", refreshErr)
 	}
 
@@ -176,6 +178,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("list conversations: %w", err)
 	}
 
@@ -192,6 +195,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("open conversation semantic client: %w", err)
 	}
 
@@ -215,6 +219,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("backfill conversation scalars: %w", err)
 	}
 
@@ -244,6 +249,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 			"err",
 			writeErr,
 		)
+
 		return fmt.Errorf("write backfill result: %w", writeErr)
 	}
 
@@ -319,6 +325,7 @@ func runBackfillConversationDocumentsWithDeps(
 			"err",
 			refreshErr,
 		)
+
 		return fmt.Errorf("refresh conversation index: %w", refreshErr)
 	}
 
@@ -334,6 +341,7 @@ func runBackfillConversationDocumentsWithDeps(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("list conversations with stamps: %w", err)
 	}
 
@@ -359,6 +367,7 @@ func runBackfillConversationDocumentsWithDeps(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("load config: %w", err)
 	}
 
@@ -376,6 +385,7 @@ func runBackfillConversationDocumentsWithDeps(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve backfill content kinds: %w", err)
 	}
 
@@ -436,6 +446,7 @@ func runBackfillConversationDocumentsWithDeps(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("open conversation semantic client: %w", err)
 	}
 
@@ -456,6 +467,7 @@ func runBackfillConversationDocumentsWithDeps(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("sync selected conversation manifest: %w", err)
 	}
 
@@ -478,6 +490,7 @@ func runBackfillConversationDocumentsWithDeps(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("upsert selected conversation documents: %w", err)
 	}
 
@@ -697,6 +710,7 @@ func writeBackfillConversationDocumentsResult(
 			"err",
 			writeErr,
 		)
+
 		return fmt.Errorf("write backfill documents result: %w", writeErr)
 	}
 

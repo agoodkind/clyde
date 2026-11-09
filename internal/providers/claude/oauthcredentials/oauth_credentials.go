@@ -265,6 +265,7 @@ func parseBlob(data []byte, now time.Time, fileMtime int64) (*Tokens, Metadata, 
 			"err",
 			err,
 		)
+
 		return nil, Metadata{
 			FileMtime:           fileMtime,
 			AccessTokenPresent:  false,

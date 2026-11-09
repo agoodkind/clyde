@@ -57,6 +57,7 @@ func ReadThreadRows(ctx context.Context, db *sql.DB) ([]ThreadRow, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("query threads: %w", err)
 	}
 

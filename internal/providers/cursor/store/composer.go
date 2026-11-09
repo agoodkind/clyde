@@ -59,6 +59,7 @@ func ReadComposerHeader(
 			"err",
 			err,
 		)
+
 		return emptyHeader, false, fmt.Errorf("read cursor composer header %q: %w", composerID, err)
 	}
 
@@ -80,6 +81,7 @@ func ReadComposerHeader(
 			"err",
 			err,
 		)
+
 		return emptyHeader, false, fmt.Errorf(
 			"decode cursor composer header %q: %w",
 			composerID,

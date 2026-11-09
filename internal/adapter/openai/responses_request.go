@@ -193,6 +193,7 @@ func DecodeFieldSet(body []byte) (ResponsesFieldSet, error) {
 			"err",
 			err,
 		)
+
 		return ResponsesFieldSet{fields: nil}, fmt.Errorf("decode request field presence: %w", err)
 	}
 
@@ -256,6 +257,7 @@ func UnmarshalResponsesRequest(body []byte) (ResponsesRequest, error) {
 			"err",
 			err,
 		)
+
 		return ResponsesRequest{}, fmt.Errorf("unmarshal responses request: %w", err)
 	}
 

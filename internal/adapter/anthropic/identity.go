@@ -128,6 +128,7 @@ func AccountUUIDFromClaudeConfig() (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("user home dir: %w", err)
 	}
 

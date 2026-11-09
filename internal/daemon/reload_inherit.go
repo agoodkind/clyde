@@ -31,6 +31,7 @@ func listenerFile(listener net.Listener) (*os.File, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("duplicate unix listener file: %w", err)
 		}
 
@@ -45,6 +46,7 @@ func listenerFile(listener net.Listener) (*os.File, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("duplicate tcp listener file: %w", err)
 		}
 
@@ -66,6 +68,7 @@ func packetConnFile(conn net.PacketConn) (*os.File, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("duplicate udp listener file: %w", err)
 		}
 
@@ -89,6 +92,7 @@ func validateReloadListenerConfig(runtime *runtimeServices) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("load config for reload validation: %w", err)
 	}
 
@@ -266,6 +270,7 @@ func loadInheritedListeners(
 			if conn.LocalAddr().Network() != spec.Network ||
 				conn.LocalAddr().String() != spec.Addr {
 				_ = conn.Close()
+
 				return fmt.Errorf(
 					"packet conn %s inherited as %s/%s, expected %s/%s",
 					spec.Name,
@@ -302,6 +307,7 @@ func loadInheritedListeners(
 
 		if listener.Addr().Network() != spec.Network || listener.Addr().String() != spec.Addr {
 			_ = listener.Close()
+
 			return fmt.Errorf(
 				"listener %s inherited as %s/%s, expected %s/%s",
 				spec.Name,

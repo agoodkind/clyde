@@ -1017,6 +1017,7 @@ func decodeResponseBody(resp *http.Response) {
 				"err",
 				err.Error(),
 			)
+
 			return
 		}
 
@@ -1071,6 +1072,7 @@ func (d *decodedBody) Close() error {
 			"err",
 			rerr,
 		)
+
 		return fmt.Errorf("close decoded anthropic reader: %w", rerr)
 	}
 
@@ -1082,6 +1084,7 @@ func (d *decodedBody) Close() error {
 			"err",
 			serr,
 		)
+
 		return fmt.Errorf("close anthropic source body: %w", serr)
 	}
 

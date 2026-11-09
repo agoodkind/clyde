@@ -616,6 +616,7 @@ func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("unmarshal anthropic text content block: %w", err)
 		}
 
@@ -672,6 +673,7 @@ func decodeSystemPrompt(raw json.RawMessage) (string, []SystemBlock, error) {
 				"err",
 				err,
 			)
+
 			return "", nil, fmt.Errorf("unmarshal anthropic system text: %w", err)
 		}
 

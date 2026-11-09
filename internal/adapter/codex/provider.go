@@ -158,6 +158,7 @@ func beforeAttemptFromContext(
 		context.Context,
 		func(string),
 	))
+
 	return v
 }
 

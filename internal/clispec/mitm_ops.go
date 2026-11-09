@@ -132,6 +132,7 @@ func mitmShowOp() Operation[mitmShowInput, mitmShowPayload] {
 					"err",
 					err,
 				)
+
 				return nil, fmt.Errorf("mitm show: %w", err)
 			}
 
@@ -174,6 +175,7 @@ func mitmStatusOp() Operation[mitmStatusInput, mitmStatusPayload] {
 					"err",
 					err,
 				)
+
 				return nil, fmt.Errorf("mitm status: %w", err)
 			}
 
@@ -286,6 +288,7 @@ func mitmBaselineSeedOp() Operation[mitmBaselineSeedInput, mitmBaselineSeedPaylo
 					"err",
 					err,
 				)
+
 				return nil, fmt.Errorf("baseline seed: %w", err)
 			}
 

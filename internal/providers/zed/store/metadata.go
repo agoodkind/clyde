@@ -66,6 +66,7 @@ func ReadSidebarThreads(ctx context.Context, db *sql.DB) ([]SidebarThreadMetadat
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("query sidebar_threads: %w", err)
 	}
 
@@ -277,6 +278,7 @@ func ReadSidebarTerminalThreads(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("query sidebar_terminal_threads: %w", err)
 	}
 
@@ -504,6 +506,7 @@ func parseOptionalRFC3339(ctx context.Context, value sql.NullString) (time.Time,
 			"err",
 			err,
 		)
+
 		return time.Time{}, fmt.Errorf("parse optional RFC3339 %q: %w", value.String, err)
 	}
 

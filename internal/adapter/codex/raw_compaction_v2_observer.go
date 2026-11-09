@@ -300,6 +300,7 @@ func (b *rawResponsesCompactionV2ObservedBody) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close observed compaction response: %w", err)
 	}
 

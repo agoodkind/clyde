@@ -89,6 +89,7 @@ func (p *Proxy) handleUnclaimedConnect(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -105,6 +106,7 @@ func (p *Proxy) handleUnclaimedConnect(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -117,6 +119,7 @@ func (p *Proxy) handleUnclaimedConnect(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -135,6 +138,7 @@ func (p *Proxy) handleUnclaimedConnect(
 			unclaimedProvider{},
 			started,
 		)
+
 		return
 	}
 
@@ -185,6 +189,7 @@ func (p *Proxy) spliceHijackedConnect(
 			"err",
 			err,
 		)
+
 		return
 	}
 	defer p.Tunnels.Release(ctx, sess, "mitm.connect.tunnel_closed")
@@ -240,6 +245,7 @@ func cleanConnectTarget(target string) (string, string, error) {
 			"err",
 			err,
 		)
+
 		return "", "", fmt.Errorf("split CONNECT target: %w", err)
 	}
 
@@ -391,6 +397,7 @@ func (p *Proxy) handleProviderTLSConnect(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -409,6 +416,7 @@ func (p *Proxy) handleProviderTLSConnect(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -425,6 +433,7 @@ func (p *Proxy) handleProviderTLSConnect(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -459,6 +468,7 @@ func (p *Proxy) interceptHijackedConnectTLS(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -478,6 +488,7 @@ func (p *Proxy) interceptHijackedConnectTLS(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -537,6 +548,7 @@ func (p *Proxy) interceptHijackedConnectTLS(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -555,6 +567,7 @@ func (p *Proxy) interceptHijackedConnectTLS(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -571,6 +584,7 @@ func (p *Proxy) interceptHijackedConnectTLS(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -618,6 +632,7 @@ func (p *Proxy) serveInterceptedTLS(
 			"err",
 			err,
 		)
+
 		return
 	}
 	defer p.Tunnels.Release(ctx, sess, "mitm."+providerID+".tls.closed")
@@ -851,6 +866,7 @@ func (p *Proxy) serveProviderInterceptedHTTP1(
 				"path",
 				req.URL.Path,
 			)
+
 			return
 		}
 	}

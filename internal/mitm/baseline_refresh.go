@@ -216,6 +216,7 @@ func putBaseline(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("baseline refresh: encode candidate: %w", err)
 	}
 
@@ -237,6 +238,7 @@ func putBaseline(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("baseline refresh: put baseline: %w", err)
 	}
 

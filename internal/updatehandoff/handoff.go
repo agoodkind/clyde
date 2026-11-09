@@ -49,6 +49,7 @@ func Deploy(ctx context.Context, stdout io.Writer, stderr io.Writer) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve installed binary path: %w", err)
 	}
 
@@ -71,6 +72,7 @@ func DeployPath(
 			"component",
 			"updatehandoff",
 		)
+
 		return fmt.Errorf("installed binary path is required")
 	}
 
@@ -88,6 +90,7 @@ func DeployPath(
 			"path",
 			installedPath,
 		)
+
 		return fmt.Errorf("installed binary path must be absolute: %q", installedPath)
 	}
 
@@ -119,6 +122,7 @@ func DeployPath(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("run new binary daemon deploy: %w", err)
 	}
 

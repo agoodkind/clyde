@@ -399,6 +399,7 @@ func ensureToolEventColumns(ctx context.Context, db *sql.DB, log *slog.Logger) e
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("capture: add decoded tool input encoding column: %w", err)
 		}
 	}
@@ -414,6 +415,7 @@ func ensureToolEventColumns(ctx context.Context, db *sql.DB, log *slog.Logger) e
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("capture: add decoded tool ordering text column: %w", err)
 		}
 	}
@@ -785,6 +787,7 @@ func (s *Store) insertDecodedBody(
 			"err",
 			err,
 		)
+
 		return false
 	}
 
@@ -798,6 +801,7 @@ func (s *Store) insertDecodedBody(
 			"err",
 			err,
 		)
+
 		return false
 	}
 
@@ -811,6 +815,7 @@ func (s *Store) insertDecodedBody(
 			"err",
 			err,
 		)
+
 		return false
 	}
 
@@ -848,6 +853,7 @@ func (s *Store) insertDecodedBody(
 				"err",
 				buildErr,
 			)
+
 			return false
 		}
 
@@ -905,6 +911,7 @@ func (s *Store) insertBody(
 			"err",
 			err,
 		)
+
 		return false
 	}
 
@@ -917,6 +924,7 @@ func (s *Store) insertBody(
 			"err",
 			err,
 		)
+
 		return false
 	}
 

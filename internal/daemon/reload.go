@@ -45,6 +45,7 @@ func reloadDaemonWorker(
 			"component",
 			"daemon",
 		)
+
 		return nil, fmt.Errorf("daemon worker already replaced; reload not permitted")
 	}
 
@@ -234,6 +235,7 @@ func rebindDaemonWorker(
 			"component",
 			"daemon",
 		)
+
 		return nil, fmt.Errorf("daemon worker already replaced; rebind not permitted")
 	}
 
@@ -249,6 +251,7 @@ func rebindDaemonWorker(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve executable: %w", err)
 	}
 
@@ -266,6 +269,7 @@ func rebindDaemonWorker(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve executable path: %w", err)
 	}
 
@@ -304,6 +308,7 @@ func rebindDaemonWorker(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create rebind readiness pipe: %w", err)
 	}
 
@@ -334,6 +339,7 @@ func rebindDaemonWorker(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("request supervisor rebind daemon: %w", err)
 	}
 
@@ -392,6 +398,7 @@ func daemonSocketInheritFile(
 			"err",
 			err,
 		)
+
 		return nil, nil, func() {}, fmt.Errorf("inherit daemon socket: %w", err)
 	}
 

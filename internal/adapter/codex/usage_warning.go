@@ -60,6 +60,7 @@ func ProbeUsageWarnings(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("build codex usage URL: %w", err)
 	}
 
@@ -73,6 +74,7 @@ func ProbeUsageWarnings(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create codex usage request: %w", err)
 	}
 
@@ -96,6 +98,7 @@ func ProbeUsageWarnings(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("perform codex usage request: %w", err)
 	}
 
@@ -115,6 +118,7 @@ func ProbeUsageWarnings(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("decode codex usage response: %w", err)
 	}
 
@@ -239,6 +243,7 @@ func whamUsageURL(baseURL string) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("parse codex usage base URL: %w", err)
 	}
 

@@ -109,6 +109,7 @@ func (*Parser) Discover(
 			"err",
 			err,
 		)
+
 		return nil, err
 	}
 

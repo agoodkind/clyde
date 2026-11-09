@@ -168,6 +168,7 @@ func NewConversationIndex() *conversation.Index {
 			"err",
 			err,
 		)
+
 		return conversation.NewIndex(
 			newConversationRegistry(),
 			config.NewConfigWithDefaults().Conversation,
@@ -201,6 +202,7 @@ func ExportTranscriptLocal(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve conversation: %w", err)
 	}
 
@@ -218,6 +220,7 @@ func ExportTranscriptLocal(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("export transcript: %w", err)
 	}
 

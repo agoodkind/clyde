@@ -67,6 +67,7 @@ func resolveDataDirList(ctx context.Context, dataDirs string) ([]string, error) 
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("resolve zed home: %w", err)
 		}
 

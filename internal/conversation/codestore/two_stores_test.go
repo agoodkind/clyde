@@ -193,6 +193,7 @@ func TestStoreLockWaitEndsWhenRequestCancels(t *testing.T) {
 					Declaration: declaration(),
 				},
 			)
+
 			return err
 		},
 		"write": func(ctx context.Context) error {
@@ -273,6 +274,7 @@ func TestStoreCloseEndsRequestsWaitingForCollectionLock(t *testing.T) {
 					Declaration: declaration(),
 				},
 			)
+
 			return err
 		},
 		"write": func(store *codestore.Store, row collection.Row) error {

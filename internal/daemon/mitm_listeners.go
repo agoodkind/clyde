@@ -88,6 +88,7 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 				"listener_id",
 				id,
 			)
+
 			return fmt.Errorf("mitm listener %q removed; full daemon restart required", id)
 		}
 
@@ -132,6 +133,7 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 				"listener_id",
 				id,
 			)
+
 			return fmt.Errorf("mitm udp listener %q removed; full daemon restart required", id)
 		}
 

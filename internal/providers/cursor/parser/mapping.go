@@ -277,6 +277,7 @@ func composerBubbleTimestamp(createdAt string) time.Time {
 			"err",
 			err,
 		)
+
 		return time.Time{}
 	}
 

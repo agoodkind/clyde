@@ -79,6 +79,7 @@ func (p *Parser) Discover(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve zed data roots: %w", err)
 	}
 
@@ -402,6 +403,7 @@ func readThreadRowsForRoot(
 			"err",
 			err,
 		)
+
 		return nil, nil
 	}
 
@@ -419,6 +421,7 @@ func readThreadRowsForRoot(
 			"err",
 			err,
 		)
+
 		return nil, nil
 	}
 
@@ -522,6 +525,7 @@ func (p *Parser) resolveDiscoveredThread(path string) (discoveredThread, error) 
 			"err",
 			err,
 		)
+
 		return emptyDiscovered, fmt.Errorf("parse zed virtual path: %w", err)
 	}
 
@@ -537,6 +541,7 @@ func (p *Parser) resolveDiscoveredThread(path string) (discoveredThread, error) 
 			"err",
 			err,
 		)
+
 		return emptyDiscovered, fmt.Errorf("resolve zed data roots: %w", err)
 	}
 
@@ -661,6 +666,7 @@ func readThreadRowByIDForRoot(
 			"err",
 			err,
 		)
+
 		return emptyRow, false, fmt.Errorf("open zed threads db %s: %w", root.ThreadsDBPath, err)
 	}
 
@@ -680,6 +686,7 @@ func readThreadRowByIDForRoot(
 			"err",
 			err,
 		)
+
 		return emptyRow, false, fmt.Errorf(
 			"read zed thread row %q from %s: %w",
 			threadID,
@@ -740,6 +747,7 @@ func readSidebarThreadMetadataForRoot(
 				"err",
 				err,
 			)
+
 			return emptyMetadata, false, fmt.Errorf("open zed metadata db %s: %w", dbPath, err)
 		}
 
@@ -758,6 +766,7 @@ func readSidebarThreadMetadataForRoot(
 				"err",
 				err,
 			)
+
 			return emptyMetadata, false, fmt.Errorf(
 				"read zed sidebar row %q from %s: %w",
 				sessionID,

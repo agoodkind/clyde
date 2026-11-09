@@ -26,6 +26,7 @@ func ForEachStoredComposerBubble(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("read stored bubbles for composer %s: %w", composerID, err)
 	}
 	defer snapshot.rollback()
@@ -54,6 +55,7 @@ func ForEachStoredComposerBubble(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("read stored bubbles for composer %s: %w", composerID, err)
 	}
 

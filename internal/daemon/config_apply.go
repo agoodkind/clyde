@@ -42,6 +42,7 @@ func (r *runtimeServices) applyConfigInProcess(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("apply adapter config: %w", err)
 		}
 	}
@@ -60,6 +61,7 @@ func (r *runtimeServices) applyConfigInProcess(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("apply mitm config for %q: %w", id, err)
 		}
 	}

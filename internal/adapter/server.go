@@ -93,6 +93,7 @@ func (s *Server) ApplyConfig(newCfg config.AdapterConfig) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("adapter apply config: %w", err)
 	}
 
@@ -268,6 +269,7 @@ func New(
 			slog.String("concern", "adapter.http.errors"),
 			slog.String("err", err.Error()),
 		)
+
 		return nil, fmt.Errorf("adapter: resolve logging policy: %w", err)
 	}
 
@@ -518,6 +520,7 @@ func (s *Server) acquire(ctx context.Context) error {
 			"err",
 			ctx.Err(),
 		)
+
 		return fmt.Errorf("adapter acquire concurrency slot: %w", ctx.Err())
 	case <-time.After(30 * time.Second):
 		return fmt.Errorf("timed out waiting for concurrency slot")

@@ -52,6 +52,7 @@ func loadCorrectionManifest(path string) (*correctionState, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("open correction manifest %s: %w", path, err)
 	}
 
@@ -185,6 +186,7 @@ func (run repairTimestampsRun) repairConversationIDs(ctx context.Context) ([]str
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("cannot list conversations with zero timestamp rows: %w", err)
 	}
 
@@ -218,6 +220,7 @@ func (run repairTimestampsRun) correctSourceStoreRecord(
 			"err",
 			loadErr,
 		)
+
 		return empty, false, run.recordCorrectionLoadFailure(record.ID, rows)
 	}
 
@@ -313,6 +316,7 @@ func (run repairTimestampsRun) writeCorrectionEvidence(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("write correction evidence: %w", err)
 		}
 	}

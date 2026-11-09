@@ -111,6 +111,7 @@ func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("walk codex rollout tree: %w", err)
 		}
 	}

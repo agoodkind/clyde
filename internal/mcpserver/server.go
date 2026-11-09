@@ -359,6 +359,7 @@ func serveStdioLocked(
 			"err",
 			listenErr,
 		)
+
 		return fmt.Errorf("mcpserver: stdio listen: %w", listenErr)
 	}
 

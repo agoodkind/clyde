@@ -72,6 +72,7 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 					"err",
 					ctx.Err(),
 				)
+
 				return scanResult{}, fmt.Errorf(
 					"scan %s conversations canceled: %w",
 					provider.String(),

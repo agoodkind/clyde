@@ -50,6 +50,7 @@ func (c *Client) ZeroTimeConversationIDs(
 			"collection",
 			collectionName,
 		)
+
 		return nil, fmt.Errorf(
 			"collection does not exist %s: %w",
 			collectionName,

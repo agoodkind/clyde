@@ -120,6 +120,7 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("load config: %w", err)
 	}
 
@@ -177,6 +178,7 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 			"component",
 			"cli",
 		)
+
 		return fmt.Errorf("open conversation semantic client: %w", err)
 	}
 
@@ -244,6 +246,7 @@ func writeCopySharedResult(ctx context.Context, f *cli.Factory, summary string) 
 			"err",
 			writeErr,
 		)
+
 		return fmt.Errorf("write copy result: %w", writeErr)
 	}
 
@@ -282,6 +285,7 @@ func reconcileAndVerifySharedCopy(
 				"err",
 				err,
 			)
+
 			return report, fmt.Errorf("reconcile shared conversation collection: %w", err)
 		}
 
@@ -328,6 +332,7 @@ func reconcileAndVerifySharedCopy(
 				"err",
 				err,
 			)
+
 			return report, fmt.Errorf("verify shared conversation collection: %w", err)
 		}
 

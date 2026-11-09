@@ -50,6 +50,7 @@ func runVerifySearchIndex(ctx context.Context, f *cli.Factory, sample int) error
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("load config: %w", err)
 	}
 
@@ -64,6 +65,7 @@ func runVerifySearchIndex(ctx context.Context, f *cli.Factory, sample int) error
 			"component",
 			"cli",
 		)
+
 		return fmt.Errorf("open conversation semantic client: %w", err)
 	}
 
@@ -80,6 +82,7 @@ func runVerifySearchIndex(ctx context.Context, f *cli.Factory, sample int) error
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("verify conversation index: %w", err)
 	}
 
@@ -118,6 +121,7 @@ func runVerifySearchIndex(ctx context.Context, f *cli.Factory, sample int) error
 			"err",
 			writeErr,
 		)
+
 		return fmt.Errorf("write verify result: %w", writeErr)
 	}
 

@@ -152,6 +152,7 @@ func (idx *Index) contextWindowByIndex(
 				"err",
 				streamErr,
 			)
+
 			return "", fmt.Errorf("read %s conversation: %w", record.Provider.String(), streamErr)
 		}
 

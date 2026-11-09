@@ -71,6 +71,7 @@ func composerScanStamp(
 			"err",
 			err,
 		)
+
 		return keepPriorComposer(ctx, globalDBPath, composerID, priorStamp)
 	}
 
@@ -88,6 +89,7 @@ func composerScanStamp(
 				"stored_rows",
 				stock.StoredRows,
 			)
+
 			return composerStamp(header, stock), true
 		}
 
@@ -187,6 +189,7 @@ func keepPriorComposer(
 			"composer_id",
 			composerID,
 		)
+
 		return conversation.FileStamp{Size: 0, Mtime: time.Time{}}, false
 	}
 

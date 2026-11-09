@@ -54,6 +54,7 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("marshal models response: %w", err)
 	}
 
@@ -144,6 +145,7 @@ func (s *Server) handleModel(ctx context.Context, hctx *handlerCtx) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("marshal model response: %w", err)
 	}
 
@@ -510,6 +512,7 @@ func marshalChatResponseForListener(ctx context.Context, resp ChatResponse) ([]b
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("marshal documented chat response: %w", err)
 		}
 
@@ -531,6 +534,7 @@ func marshalChatResponseForListener(ctx context.Context, resp ChatResponse) ([]b
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal chat response: %w", err)
 	}
 
@@ -746,6 +750,7 @@ func parseMessagesFromInput(req *ChatRequest) (int, error) {
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("invalid input payload: %w", err)
 	}
 
@@ -828,6 +833,7 @@ func parseInputContent(raw json.RawMessage) (json.RawMessage, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("invalid input content: %w", err)
 		}
 
@@ -913,6 +919,7 @@ func parseInputParts(parts []responsesInputContentPart) (json.RawMessage, error)
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("failed to normalize input content: %w", err)
 	}
 

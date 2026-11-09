@@ -34,6 +34,7 @@ func (source *backendConversationSearchSource) SearchConversations(
 				"component",
 				"daemon",
 			)
+
 			return result, fmt.Errorf("search configured backend: %w", err)
 		}
 
@@ -150,6 +151,7 @@ func openRequestedSearchBackend(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("open existing local index: %w", err)
 		}
 

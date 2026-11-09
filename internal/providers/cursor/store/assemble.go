@@ -77,6 +77,7 @@ func StreamComposerBubbles(
 			"err",
 			err,
 		)
+
 		return err
 	}
 
@@ -224,6 +225,7 @@ func readComposerBubbleDigestsInSnapshot(
 			"err",
 			err,
 		)
+
 		return stored, fmt.Errorf("count cursor bubbles for composer %q: %w", composerID, err)
 	}
 
@@ -248,6 +250,7 @@ func readComposerBubbleDigestsInSnapshot(
 					"key",
 					row.Key,
 				)
+
 				return nil
 			}
 
@@ -285,6 +288,7 @@ func readComposerBubbleDigestsInSnapshot(
 			"err",
 			err,
 		)
+
 		return stored, fmt.Errorf("read cursor bubbles for composer %q: %w", composerID, err)
 	}
 
@@ -552,6 +556,7 @@ func readUnreadableComposerBubbleIDs(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf(
 				"scan unreadable cursor bubble in key range %q: %w",
 				bounds.Lower,
@@ -575,6 +580,7 @@ func readUnreadableComposerBubbleIDs(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf(
 			"iterate unreadable cursor bubbles in key range %q: %w",
 			bounds.Lower,
@@ -622,6 +628,7 @@ func readBubble(
 			"err",
 			err,
 		)
+
 		return emptyBubble, false, fmt.Errorf(
 			"read cursor bubble %q of composer %q: %w",
 			entry.BubbleID,
@@ -678,6 +685,7 @@ func readBubble(
 			"err",
 			err,
 		)
+
 		return emptyBubble, false, fmt.Errorf(
 			"decode cursor bubble %q of composer %q: %w",
 			entry.BubbleID,

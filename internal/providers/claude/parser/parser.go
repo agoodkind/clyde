@@ -115,6 +115,7 @@ func (Parser) Discover(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 
@@ -134,6 +135,7 @@ func (Parser) Discover(
 					"err",
 					ctx.Err(),
 				)
+
 				return fmt.Errorf("discover Claude conversations canceled: %w", ctx.Err())
 			}
 
@@ -568,6 +570,7 @@ func collectWithToolResults(
 			"err",
 			err,
 		)
+
 		return nil, nil, fmt.Errorf("open transcript: %w", err)
 	}
 
@@ -631,6 +634,7 @@ func collectWithToolResults(
 				"err",
 				readErr,
 			)
+
 			return nil, nil, fmt.Errorf("read transcript line: %w", readErr)
 		}
 	}

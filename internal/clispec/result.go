@@ -194,6 +194,7 @@ func copyResultToClipboard(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("copy output to clipboard: %w", err)
 	}
 
@@ -211,6 +212,7 @@ func copyResultToClipboard(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write copy confirmation: %w", err)
 	}
 
@@ -402,6 +404,7 @@ func writeStructuredJSON(ctx context.Context, writer io.Writer, payload Structur
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write structured json: %w", err)
 	}
 
@@ -417,6 +420,7 @@ func marshalStructuredPayload(payload StructuredPayload) ([]byte, error) {
 			"component",
 			"clispec",
 		)
+
 		return nil, fmt.Errorf("clispec: structured payload is required")
 	}
 
@@ -431,6 +435,7 @@ func marshalStructuredPayload(payload StructuredPayload) ([]byte, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("marshal clispec payload: %w", err)
 	}
 
@@ -459,6 +464,7 @@ func newMCPStructuredResult(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode structured response: %w", err)
 	}
 
@@ -476,6 +482,7 @@ func writeRawBytes(writer io.Writer, body []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("clispec: write raw bytes: %w", err)
 	}
 
@@ -500,6 +507,7 @@ func writeCLITextBody(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("%s: %w", writeFailureOperation, err)
 	}
 
@@ -530,6 +538,7 @@ func writeFile(path string, body []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("clispec: write file %s: %w", path, err)
 	}
 
@@ -545,6 +554,7 @@ func writeFile(path string, body []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("clispec: set file permissions %s: %w", path, err)
 	}
 

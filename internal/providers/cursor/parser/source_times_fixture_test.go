@@ -282,6 +282,7 @@ func callPart(callID string, args json.RawMessage) fixturePart {
 
 func commandArgs(t *testing.T, command string, workingDirectory string) json.RawMessage {
 	t.Helper()
+
 	return mustMarshal(t)(
 		json.Marshal(fixtureCommandArgs{
 			Command:          command,
@@ -297,6 +298,7 @@ func fixtureLineText(t *testing.T, line fixtureLine) string {
 
 func userLine(t *testing.T, text string) string {
 	t.Helper()
+
 	return fixtureLineText(
 		t,
 		fixtureLine{
@@ -310,6 +312,7 @@ func userLine(t *testing.T, text string) string {
 
 func assistantTextLine(t *testing.T, text string) string {
 	t.Helper()
+
 	return fixtureLineText(
 		t,
 		fixtureLine{

@@ -153,6 +153,7 @@ func (p *Proxy) matchRequestResponseHook(
 				"err",
 				err,
 			)
+
 			return nil, nil, fmt.Errorf("match request response hook: %w", err)
 		}
 
@@ -317,6 +318,7 @@ func readAndRewindHookRequestBody(req *http.Request) ([]byte, error) {
 			"err",
 			closeErr,
 		)
+
 		return body, fmt.Errorf("close hook request body: %w", closeErr)
 	}
 
@@ -358,6 +360,7 @@ func (p *Proxy) transformRequestBody(
 			"err",
 			err,
 		)
+
 		return body, false
 	}
 
@@ -406,6 +409,7 @@ func (p *Proxy) applyResponseHook(
 			"encoding",
 			resp.Header.Get("Content-Encoding"),
 		)
+
 		return resp, nil
 	}
 
@@ -419,6 +423,7 @@ func (p *Proxy) applyResponseHook(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("transform response hook: %w", err)
 	}
 

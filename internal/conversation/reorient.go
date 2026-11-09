@@ -730,6 +730,7 @@ func (idx *Index) resolveArtifactRecord(
 			"err",
 			err,
 		)
+
 		return zero, false, fmt.Errorf("stat reorient artifact %q: %w", path, err)
 	}
 
@@ -743,6 +744,7 @@ func (idx *Index) resolveArtifactRecord(
 			"path",
 			path,
 		)
+
 		return zero, false, fmt.Errorf("reorient artifact %q is a directory", path)
 	}
 
@@ -876,6 +878,7 @@ func decodeReorientCursor(cursor string) (reorientCursor, error) {
 			"err",
 			err,
 		)
+
 		return reorientCursor{}, fmt.Errorf("decode reorient cursor: %w", err)
 	}
 
@@ -890,6 +893,7 @@ func decodeReorientCursor(cursor string) (reorientCursor, error) {
 			"err",
 			err,
 		)
+
 		return reorientCursor{}, fmt.Errorf("decode reorient cursor: %w", err)
 	}
 

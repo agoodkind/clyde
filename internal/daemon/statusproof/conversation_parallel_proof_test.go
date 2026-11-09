@@ -177,6 +177,7 @@ func TestParallelIngestionContinuesLocalWhileMilvusIsUnavailable(t *testing.T) {
 				semantic.Detail,
 				"semantic_backends.local.semantic_freshness.pending",
 			)
+
 			return known && pending == 1
 		},
 	)
@@ -223,6 +224,7 @@ func TestParallelIngestionContinuesLocalWhileMilvusIsUnavailable(t *testing.T) {
 				semantic.Detail,
 				"semantic_backends.local.semantic_sync.checkpoint.count",
 			)
+
 			return known && count == 2
 		},
 	).Semantic.Detail

@@ -316,6 +316,7 @@ func retainActiveCleanupFiles(
 
 func isRemovableCleanupArchive(path string, policy CleanupPolicy) bool {
 	_, archived := cleanupArchiveGroup(path)
+
 	return archived && !slices.Contains(policy.KeepInPlacePaths, path) &&
 		!slices.Contains(policy.ProtectedPaths, path)
 }

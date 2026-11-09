@@ -123,6 +123,7 @@ func readResetProcess(ctx context.Context, pid int) (resetProcess, error) {
 			"err",
 			err,
 		)
+
 		return resetProcess{}, fmt.Errorf("read reset process %d: %w", pid, err)
 	}
 

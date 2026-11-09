@@ -40,6 +40,7 @@ func (connection initialSemanticConnection) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close initial semantic client: %w", err)
 	}
 
@@ -88,6 +89,7 @@ func RunInitialConversationIndex(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("load config for initial conversation indexing: %w", err)
 	}
 
@@ -107,6 +109,7 @@ func RunInitialConversationIndex(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("check conversation index cache: %w", err)
 	}
 
@@ -265,6 +268,7 @@ func runInitialSemanticIndex(
 			"Initial indexing: semantic indexing skipped because semantic service is unavailable: %v\n",
 			err,
 		)
+
 		return false, nil
 	}
 

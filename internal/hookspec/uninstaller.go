@@ -81,6 +81,7 @@ func (uninstaller Uninstaller) Uninstall(
 				"err",
 				err,
 			)
+
 			return UninstallResult{}, err
 		}
 
@@ -131,6 +132,7 @@ func uninstallHookFile(
 			"err",
 			err,
 		)
+
 		return UninstallFileResult{}, fmt.Errorf("uninstall %s hooks canceled: %w", client, err)
 	}
 
@@ -152,6 +154,7 @@ func uninstallHookFile(
 			"err",
 			err,
 		)
+
 		return UninstallFileResult{}, fmt.Errorf("read %s hooks %s: %w", client, path, err)
 	}
 
@@ -191,6 +194,7 @@ func uninstallHookFile(
 			"err",
 			err,
 		)
+
 		return UninstallFileResult{}, err
 	}
 
@@ -212,6 +216,7 @@ func uninstallHookFile(
 			"err",
 			err,
 		)
+
 		return UninstallFileResult{}, fmt.Errorf("write %s hooks %s: %w", client, path, err)
 	}
 

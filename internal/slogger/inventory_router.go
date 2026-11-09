@@ -68,6 +68,7 @@ func buildInventoryIndexHandler(
 			"err",
 			err,
 		)
+
 		return nil
 	}
 
@@ -119,6 +120,7 @@ func (h *inventoryFilterHandler) Close() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("close inventory index writer: %w", err)
 	}
 
@@ -219,6 +221,7 @@ func (h *inventoryFilterHandler) encode(ctx context.Context, record slog.Record)
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("encode inventory index event: %w", err)
 	}
 
@@ -269,6 +272,7 @@ func (h *inventoryFilterHandler) write(record []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("create inventory index dir: %w", err)
 	}
 
@@ -288,6 +292,7 @@ func (h *inventoryFilterHandler) write(record []byte) error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("open inventory index writer: %w", err)
 		}
 
@@ -304,6 +309,7 @@ func (h *inventoryFilterHandler) write(record []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write inventory index event: %w", err)
 	}
 
@@ -328,6 +334,7 @@ func newInventoryIndexWriter(
 			path,
 			gklog.NewLumberjackWriterWithConfig(path, rotation),
 		)
+
 		return requireInventoryIndexWriter(path, writer)
 	}
 
@@ -342,6 +349,7 @@ func newInventoryIndexWriter(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("open inventory index: %w", err)
 	}
 

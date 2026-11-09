@@ -41,6 +41,7 @@ func (routeProvider) TransformResponse(
 			"err",
 			err,
 		)
+
 		return mitm.ReplaceResponseBody(response, body), fmt.Errorf(
 			"read Anthropic response: %w",
 			err,
@@ -75,6 +76,7 @@ func (routeProvider) TransformResponse(
 			"err",
 			err,
 		)
+
 		return response, fmt.Errorf("evaluate Anthropic response: %w", err)
 	}
 
@@ -96,6 +98,7 @@ func (routeProvider) TransformResponse(
 			"err",
 			err,
 		)
+
 		return response, fmt.Errorf("append Anthropic response feedback: %w", err)
 	}
 

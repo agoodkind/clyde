@@ -111,6 +111,7 @@ func loadOrCreateCertAuthority(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("stat mitm ca cert %q: %w", certPath, err)
 	}
 
@@ -125,6 +126,7 @@ func loadOrCreateCertAuthority(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("stat mitm ca key %q: %w", keyPath, err)
 	}
 
@@ -205,6 +207,7 @@ func loadExistingCertAuthority(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("read mitm ca cert %q: %w", certPath, err)
 	}
 
@@ -219,6 +222,7 @@ func loadExistingCertAuthority(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("read mitm ca key %q: %w", keyPath, err)
 	}
 
@@ -247,6 +251,7 @@ func loadExistingCertAuthority(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("parse mitm ca cert %q: %w", certPath, err)
 	}
 
@@ -276,6 +281,7 @@ func loadExistingCertAuthority(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("parse mitm ca key %q: %w", keyPath, err)
 	}
 
@@ -327,6 +333,7 @@ func decodeRSAPrivateKey(block *pem.Block) (*rsa.PrivateKey, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("pkcs1: %w", err)
 		}
 
@@ -341,6 +348,7 @@ func decodeRSAPrivateKey(block *pem.Block) (*rsa.PrivateKey, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("pkcs8: %w", err)
 		}
 
@@ -353,6 +361,7 @@ func decodeRSAPrivateKey(block *pem.Block) (*rsa.PrivateKey, error) {
 				"type",
 				fmt.Sprintf("%T", parsed),
 			)
+
 			return nil, fmt.Errorf("pkcs8 key is %T, want *rsa.PrivateKey", parsed)
 		}
 
@@ -365,6 +374,7 @@ func decodeRSAPrivateKey(block *pem.Block) (*rsa.PrivateKey, error) {
 			"type",
 			block.Type,
 		)
+
 		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
 	}
 }
@@ -451,6 +461,7 @@ func persistCAFiles(certPath, keyPath string, certPEM, keyPEM []byte) error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("create mitm ca dir %q: %w", dir, err)
 		}
 	}
@@ -468,6 +479,7 @@ func persistCAFiles(certPath, keyPath string, certPEM, keyPEM []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write mitm ca cert %q: %w", certPath, err)
 	}
 
@@ -505,6 +517,7 @@ func writeFileExclusive(path string, data []byte, mode os.FileMode) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("os.OpenFile: %w", err)
 	}
 
@@ -533,6 +546,7 @@ func writeFileExclusive(path string, data []byte, mode os.FileMode) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("file.Close: %w", err)
 	}
 
@@ -564,6 +578,7 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("generate mitm leaf key: %w", err)
 	}
 
@@ -610,6 +625,7 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create mitm leaf cert: %w", err)
 	}
 
@@ -632,6 +648,7 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("load mitm leaf cert: %w", err)
 	}
 

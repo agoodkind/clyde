@@ -40,6 +40,7 @@ func uninstallMCPFile(
 			"err",
 			err,
 		)
+
 		return InstallFileResult{}, fmt.Errorf(
 			"uninstall %s MCP settings canceled: %w",
 			client,
@@ -65,6 +66,7 @@ func uninstallMCPFile(
 			"err",
 			err,
 		)
+
 		return InstallFileResult{}, fmt.Errorf("read %s MCP settings %s: %w", client, path, err)
 	}
 
@@ -89,6 +91,7 @@ func uninstallMCPFile(
 				"err",
 				err,
 			)
+
 			return InstallFileResult{}, fmt.Errorf(
 				"render %s MCP settings %s: %w",
 				client,
@@ -116,6 +119,7 @@ func uninstallMCPFile(
 			"err",
 			err,
 		)
+
 		return InstallFileResult{}, fmt.Errorf("write %s MCP settings %s: %w", client, path, err)
 	}
 

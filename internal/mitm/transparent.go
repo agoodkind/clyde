@@ -331,6 +331,7 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -377,6 +378,7 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -391,6 +393,7 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -405,6 +408,7 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 			"err",
 			err,
 		)
+
 		return
 	}
 

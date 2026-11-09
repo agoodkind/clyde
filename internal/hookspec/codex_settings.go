@@ -130,6 +130,7 @@ func removeCodexCommandHookGroupsExact(
 
 func isCodexHookGroupHeader(line string) bool {
 	trimmed := tomlHeaderText(line)
+
 	return strings.HasPrefix(trimmed, "[[hooks.") && strings.HasSuffix(trimmed, "]]") &&
 		!strings.Contains(trimmed, ".hooks")
 }

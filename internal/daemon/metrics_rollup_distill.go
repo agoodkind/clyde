@@ -193,6 +193,7 @@ func (s *metricsRollupState) closeSource() error {
 
 func rollupSourcePosition(path string, info os.FileInfo) metricsRollupSourcePosition {
 	stat, _ := info.Sys().(*syscall.Stat_t)
+
 	return metricsRollupSourcePosition{
 		Path:   path,
 		Device: rollupDeviceID(stat),
@@ -219,6 +220,7 @@ func (s *metricsRollupState) openSource(path string, now time.Time) error {
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
+
 		return rollupError(
 			"daemon.metrics_rollup.source_stat_failed",
 			path,

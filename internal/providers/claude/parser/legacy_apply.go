@@ -38,6 +38,7 @@ func resolveLegacyTranscripts(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("open transcript for legacy transcript provenance: %w", err)
 	}
 

@@ -49,6 +49,7 @@ func (s *CLISink) Text(text string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("clispec: write text response: %w", err)
 	}
 
@@ -67,6 +68,7 @@ func (s *CLISink) Bytes(body []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("clispec: write byte response: %w", err)
 	}
 
@@ -85,6 +87,7 @@ func (s *CLISink) RawBytes(body []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("clispec: write raw byte response: %w", err)
 	}
 
@@ -106,6 +109,7 @@ func (s *CLISink) WriteFile(path string, body []byte) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("clispec: write file %s: %w", path, err)
 	}
 

@@ -279,6 +279,7 @@ func ReadComposerNativeToolCalls(
 			"err",
 			err,
 		)
+
 		return result, false, fmt.Errorf(
 			"decode native conversation state for composer %s: %w",
 			composerID,
@@ -345,6 +346,7 @@ func readNativeMessage(
 			"length",
 			len(reference.digest),
 		)
+
 		return message, fmt.Errorf(
 			"invalid native message reference length for composer %s: %d",
 			composerID,
@@ -377,6 +379,7 @@ func readNativeMessage(
 			"err",
 			err,
 		)
+
 		return message, fmt.Errorf(
 			"decode native message for composer and blob %s %s: %w",
 			composerID,
@@ -434,6 +437,7 @@ func nativeMessageReferences(
 				"err",
 				parseErr,
 			)
+
 			return nil, fmt.Errorf(
 				"decode native archive for composer %s: %w",
 				composerID,
@@ -504,6 +508,7 @@ func readNativeState(ctx context.Context, db *sql.DB, composerID string) ([]byte
 			"err",
 			err,
 		)
+
 		return nil, false, fmt.Errorf("decode native header for composer %s: %w", composerID, err)
 	}
 
@@ -528,6 +533,7 @@ func readNativeState(ctx context.Context, db *sql.DB, composerID string) ([]byte
 			"err",
 			err,
 		)
+
 		return nil, false, fmt.Errorf(
 			"decode native state base64 for composer %s: %w",
 			composerID,
@@ -585,6 +591,7 @@ func unmarshalNativeMessage(data []byte) (nativeMessageFields, error) {
 			"err",
 			err,
 		)
+
 		return fields, fmt.Errorf("decode native message JSON: %w", err)
 	}
 
@@ -607,6 +614,7 @@ func unmarshalNativeMessage(data []byte) (nativeMessageFields, error) {
 				"err",
 				err,
 			)
+
 			return fields, fmt.Errorf("decode native message text: %w", err)
 		}
 
@@ -621,6 +629,7 @@ func unmarshalNativeMessage(data []byte) (nativeMessageFields, error) {
 				"err",
 				err,
 			)
+
 			return fields, fmt.Errorf("decode native message content parts: %w", err)
 		}
 

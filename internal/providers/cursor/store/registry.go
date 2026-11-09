@@ -99,6 +99,7 @@ func BuildComposerMetadataIndex(
 	root DataRoot,
 ) ComposerMetadataIndex {
 	globalIndex, globalErr := ReadComposerMetadataIndex(ctx, globalDB)
+
 	return MergeWorkspaceComposerMetadata(
 		ctx,
 		root,

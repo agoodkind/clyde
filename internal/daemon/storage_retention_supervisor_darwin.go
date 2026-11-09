@@ -155,6 +155,7 @@ func readSupervisorLogMetadata(
 			"err",
 			err,
 		)
+
 		return file, fmt.Errorf("parse lsof descriptor %d size: %w", file.descriptor, err)
 	}
 
@@ -187,6 +188,7 @@ func readSupervisorLogMetadata(
 				"err",
 				err,
 			)
+
 			return file, fmt.Errorf(
 				"parse lsof descriptor %d metadata field %d: %w",
 				file.descriptor,

@@ -226,6 +226,7 @@ func runRepairConversationTimestamps(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
@@ -272,6 +273,7 @@ func runRepairConversationTimestamps(
 			"component",
 			"cli",
 		)
+
 		return fmt.Errorf("open conversation search client: %w", err)
 	}
 
@@ -316,6 +318,7 @@ func runRepairConversationTimestamps(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("open evidence file %s: %w", options.EvidencePath, err)
 		}
 
@@ -435,6 +438,7 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("refresh the conversation index: %w", err)
 	}
 
@@ -450,6 +454,7 @@ func (run repairTimestampsRun) execute(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("list indexed conversations: %w", err)
 	}
 
@@ -623,6 +628,7 @@ func (run repairTimestampsRun) repairTranscriptRecord(
 			"err",
 			loadErr,
 		)
+
 		return empty, false, nil
 	}
 
@@ -658,6 +664,7 @@ func (run repairTimestampsRun) writeEvidence(evidence []vectorsearch.SourceRepai
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("write source repair evidence: %w", err)
 		}
 	}
@@ -775,6 +782,7 @@ func (run repairTimestampsRun) loadStoreSource(
 			"err",
 			err,
 		)
+
 		return empty, fmt.Errorf("read source store messages: %w", err)
 	}
 
@@ -791,6 +799,7 @@ func (run repairTimestampsRun) loadStoreSource(
 			"missing",
 			source.MissingNativeRecords,
 		)
+
 		return empty, fmt.Errorf(
 			"cannot correct timestamps with missing native records: %d",
 			source.MissingNativeRecords,
@@ -820,6 +829,7 @@ func (run repairTimestampsRun) loadStoreSource(
 				"err",
 				err,
 			)
+
 			return empty, fmt.Errorf("read transcript source messages: %w", err)
 		}
 	}
@@ -838,6 +848,7 @@ func (run repairTimestampsRun) loadStoreSource(
 			"err",
 			err,
 		)
+
 		return empty, fmt.Errorf("build source store documents: %w", err)
 	}
 
@@ -856,6 +867,7 @@ func (run repairTimestampsRun) loadStoreSource(
 			"err",
 			err,
 		)
+
 		return empty, fmt.Errorf("build source copy documents: %w", err)
 	}
 
@@ -931,6 +943,7 @@ func (run repairTimestampsRun) loadSourceTranscript(
 			"err",
 			err,
 		)
+
 		return result, fmt.Errorf("read source transcript: %w", err)
 	}
 
@@ -984,6 +997,7 @@ func (run repairTimestampsRun) loadSource(
 			"err",
 			err,
 		)
+
 		return empty, fmt.Errorf("load conversation messages: %w", err)
 	}
 
@@ -1001,6 +1015,7 @@ func (run repairTimestampsRun) loadSource(
 			"err",
 			err,
 		)
+
 		return empty, fmt.Errorf("build conversation documents: %w", err)
 	}
 
@@ -1112,6 +1127,7 @@ func (run repairTimestampsRun) writeResult(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write timestamp repair result: %w", err)
 	}
 
@@ -1304,6 +1320,7 @@ func readTimestampRepairProgress(path string) (timestampRepairProgress, error) {
 			"err",
 			err,
 		)
+
 		return progress, fmt.Errorf("read progress file %s to resume: %w", path, err)
 	}
 
@@ -1319,6 +1336,7 @@ func readTimestampRepairProgress(path string) (timestampRepairProgress, error) {
 			"err",
 			err,
 		)
+
 		return progress, fmt.Errorf("parse progress file %s: %w", path, err)
 	}
 

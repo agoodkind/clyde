@@ -63,6 +63,7 @@ func ResolveProjectRoots() ([]ProjectRoot, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("resolve cursor projects home: %w", err)
 		}
 
@@ -176,6 +177,7 @@ func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("walk cursor transcript root %s: %w", root.Path, err)
 		}
 	}

@@ -44,6 +44,7 @@ func stripEncryptedContentJSON(raw json.RawMessage) (json.RawMessage, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("marshal sanitized export object: %w", err)
 		}
 
@@ -72,6 +73,7 @@ func stripEncryptedContentJSON(raw json.RawMessage) (json.RawMessage, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("marshal sanitized export array: %w", err)
 		}
 
@@ -94,6 +96,7 @@ func sanitizeExportValue[T sanitizableExportValue](value T) (T, error) {
 			"err",
 			err,
 		)
+
 		return sanitized, fmt.Errorf("marshal export value: %w", err)
 	}
 
@@ -112,6 +115,7 @@ func sanitizeExportValue[T sanitizableExportValue](value T) (T, error) {
 			"err",
 			err,
 		)
+
 		return sanitized, fmt.Errorf("unmarshal sanitized export value: %w", err)
 	}
 
@@ -146,6 +150,7 @@ func sanitizeCompactionMessagesForExport(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("sanitize message %d compaction: %w", i, err)
 		}
 

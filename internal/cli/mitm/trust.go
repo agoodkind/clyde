@@ -76,6 +76,7 @@ func newTrustInstallCmd(
 					"err",
 					err,
 				)
+
 				return fmt.Errorf("load config: %w", err)
 			}
 
@@ -176,6 +177,7 @@ func newTrustStatusCmd(
 					"err",
 					err,
 				)
+
 				return fmt.Errorf("load config: %w", err)
 			}
 

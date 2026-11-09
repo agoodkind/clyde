@@ -117,6 +117,7 @@ func unseededFlavorError(model string) error {
 		"anthropic wire flavor unseeded: model %q has no learned claude-cli wire flavor; run claude-cli once with that model through the Clyde MITM proxy to seed it",
 		model,
 	)
+
 	return newWireFlavorSelectionError(ErrFlavorUnseeded, message)
 }
 

@@ -811,6 +811,7 @@ func imageURLToSource(rawURL string) (*AnthImageSource, error) {
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("parse image data URI: %w", err)
 		}
 
@@ -947,6 +948,7 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("unmarshal Anthropic tool choice: %w", err)
 	}
 

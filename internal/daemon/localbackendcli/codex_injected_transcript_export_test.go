@@ -651,6 +651,7 @@ func codexProbeSplitter() adaptercodex.CompactionSplitter {
 
 func codexProbeResponseWithSummary(t *testing.T, summary string) string {
 	t.Helper()
+
 	return `{"id":"resp-codexprobe","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + injectedProbeJSON(
 		t,
 		summary,

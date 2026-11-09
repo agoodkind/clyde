@@ -1147,6 +1147,7 @@ func (p *responsesStreamWriter) emitEnvelope(
 		Response:       resp,
 		SequenceNumber: p.nextSeq(),
 	}
+
 	return p.marshalSend(name, evt)
 }
 
@@ -1161,6 +1162,7 @@ func (p *responsesStreamWriter) emitOutputItem(
 		Item:           item,
 		SequenceNumber: p.nextSeq(),
 	}
+
 	return p.marshalSend(name, evt)
 }
 

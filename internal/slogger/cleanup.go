@@ -130,6 +130,7 @@ func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (Clean
 			"reason",
 			"disabled",
 		)
+
 		return emptyResult, nil
 	}
 
