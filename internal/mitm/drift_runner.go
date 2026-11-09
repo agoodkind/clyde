@@ -66,16 +66,7 @@ func RunDriftCheck(
 	versionTag := "live-" + startedAt.Format("20060102T150405")
 	candidate, err := ExtractSnapshotFromShapes(
 		shapes,
-		SnapshotOptions{
-			UpstreamName:               upstream,
-			UpstreamVersion:            versionTag,
-			IncludeUserAgentSubstrings: opts.IncludeUA,
-			ExcludeUserAgentSubstrings: opts.ExcludeUA,
-			RequireBodyKeys:            opts.RequireBodyKeys,
-			ForbidBodyKeys:             opts.ForbidBodyKeys,
-			MaxBodyDepth:               0,
-			EnumThreshold:              0,
-		},
+		driftSnapshotOptions(upstream, versionTag, opts),
 	)
 	if err != nil {
 		log.WarnContext(
@@ -132,4 +123,21 @@ func RunDriftCheck(
 	})
 
 	return outcome, nil
+}
+
+func driftSnapshotOptions(
+	upstream string,
+	versionTag string,
+	opts DriftCheckOptions,
+) SnapshotOptions {
+	return SnapshotOptions{
+		UpstreamName:               upstream,
+		UpstreamVersion:            versionTag,
+		IncludeUserAgentSubstrings: opts.IncludeUA,
+		ExcludeUserAgentSubstrings: opts.ExcludeUA,
+		RequireBodyKeys:            opts.RequireBodyKeys,
+		ForbidBodyKeys:             opts.ForbidBodyKeys,
+		MaxBodyDepth:               0,
+		EnumThreshold:              0,
+	}
 }
