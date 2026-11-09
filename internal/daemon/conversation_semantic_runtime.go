@@ -269,7 +269,16 @@ func conversationEmbeddingAPIKey(envName string, filePath string) (string, error
 }
 
 // OpenConversationSearchClient opens the configured local or Milvus backend.
-// Only the Milvus backend resolves the embedding API key.
+//
+// Only the Milvus backend resolves the embedding API key. The client uses the
+// shared conversation checkpoint directory. The caller closes the client after
+// its last search or ingestion operation.
+//
+//	client, err := OpenConversationSearchClient(ctx, semanticCfg)
+//	if err != nil {
+//		return err
+//	}
+//	defer client.Close(ctx)
 func OpenConversationSearchClient(
 	ctx context.Context,
 	semanticCfg config.ConversationSemanticConfig,

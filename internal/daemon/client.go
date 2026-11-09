@@ -270,6 +270,19 @@ func GetConversationContext(
 
 // SearchConversations asks the daemon for bounded transcript text matches
 // across candidate conversations.
+//
+// The request includes the backend selection and search filters. The result
+// includes paging, source, and freshness details. Connection and RPC failures
+// return an error instead of an empty successful search.
+//
+//	result, err := SearchConversations(
+//		ctx,
+//		conversation.SearchConversationsOptions{
+//			Query:   "reload",
+//			Backend: conversation.SearchBackendLocal,
+//			Limit:   10,
+//		},
+//	)
 func SearchConversations(
 	ctx context.Context,
 	options conversation.SearchConversationsOptions,

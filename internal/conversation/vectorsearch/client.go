@@ -108,7 +108,16 @@ func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName str
 	return c.store.collectionPresent(ctx, collectionName)
 }
 
-// SearchCollectionAvailable checks whether the backend can query an existing collection.
+// SearchCollectionAvailable checks whether the backend can query an existing
+// collection.
+//
+// The client converts collectionID to its storage collection name. A missing
+// collection returns false without an error; backend read or load failures
+// return an error. Milvus loads the collection before reporting availability.
+//
+// An existing client can check a logical collection ID before searching:
+//
+//	available, err := client.SearchCollectionAvailable(ctx, "project")
 func (c *Client) SearchCollectionAvailable(ctx context.Context, collectionID string) (bool, error) {
 	return c.store.searchCollectionPresent(ctx, CollectionName(collectionID))
 }

@@ -147,8 +147,17 @@ func loadDaemonStartupConfig(
 	return cfg, exportTokens, nil
 }
 
-// RunContext starts the daemon worker process using ctx as the parent context
-// for shutdown and child loops.
+// RunContext starts the daemon worker process using parent as the parent
+// context for shutdown and child loops.
+//
+// It loads the configuration, starts the runtime and background workers, and
+// serves the control RPCs until cancellation or a runtime failure. It stops
+// extra loops and shuts down the runtime before returning. A nil logger selects
+// the default logger.
+//
+// A worker entry point can return the run result:
+//
+//	return RunContext(ctx, log)
 func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	if log == nil {
 		log = slog.Default()

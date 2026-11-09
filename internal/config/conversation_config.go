@@ -186,7 +186,16 @@ func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
-// DefaultBackend resolves the legacy Milvus aliases for the default search store.
+// DefaultBackend resolves the legacy Milvus aliases for the default search
+// store.
+//
+// Only the local value selects the local store. Empty, LMS, and other values
+// resolve to Milvus; this method does not validate the configuration.
+//
+//	semantic := ConversationSemanticConfig{
+//		Backend: ConversationSemanticBackendLMS,
+//	}
+//	semantic.DefaultBackend() // Returns ConversationSemanticBackendMilvus.
 func (semantic ConversationSemanticConfig) DefaultBackend() ConversationSemanticBackend {
 	if semantic.Backend == ConversationSemanticBackendLocal {
 		return ConversationSemanticBackendLocal
@@ -196,6 +205,14 @@ func (semantic ConversationSemanticConfig) DefaultBackend() ConversationSemantic
 }
 
 // EnabledBackends returns the configured stores in ingestion startup order.
+//
+// An omitted or empty Backends list selects DefaultBackend alone. An explicit
+// list retains its order and shares its backing array with the configuration.
+//
+//	semantic := ConversationSemanticConfig{
+//		Backend: ConversationSemanticBackendLocal,
+//	}
+//	semantic.EnabledBackends() // Returns a list with only the local backend.
 func (semantic ConversationSemanticConfig) EnabledBackends() []ConversationSemanticBackend {
 	if len(semantic.Backends) == 0 {
 		return []ConversationSemanticBackend{semantic.DefaultBackend()}
@@ -204,7 +221,14 @@ func (semantic ConversationSemanticConfig) EnabledBackends() []ConversationSeman
 	return semantic.Backends
 }
 
-// ForSearchBackend copies the settings and applies defaults for one search backend.
+// ForSearchBackend copies the settings and applies defaults for one search
+// backend.
+//
+// The local backend fills an empty LocalRoot. Other backends fill missing
+// Milvus and embedding settings. The original configuration retains its values.
+//
+//	semantic := ConversationSemanticConfig{CollectionID: "project"}
+//	semantic.ForSearchBackend(ConversationSemanticBackendLocal)
 func (semantic ConversationSemanticConfig) ForSearchBackend(
 	backend ConversationSemanticBackend,
 ) ConversationSemanticConfig {

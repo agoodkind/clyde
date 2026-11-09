@@ -222,11 +222,20 @@ func (s *controlServer) GetConversationInfo(
 }
 
 // SearchConversations returns a relevance-ranked list of conversation hits.
-// Each hit carries the matched passage as a byte-bounded excerpt (set in
-// engineSearchMatches), so the list is self-sufficient for triage and small
-// enough for any transport. The full surrounding window is a separate windowed
-// read; search never inlines it. The freshness snapshot lets a thin result be
-// distinguished from a cold index.
+//
+// Each engine hit includes a byte-bounded excerpt of the matched passage;
+// callers request the full surrounding transcript window separately. The
+// response includes the selected backend's freshness snapshot to distinguish
+// sparse results from an index that has not finished ingestion. Invalid queries
+// and backend selections return InvalidArgument before the source runs.
+//
+// A request can select the local backend explicitly:
+//
+//	&clydev1.SearchConversationsRequest{
+//		Query:   "reload",
+//		Backend: "local",
+//		Limit:   10,
+//	}
 func (s *controlServer) SearchConversations(
 	ctx context.Context,
 	req *clydev1.SearchConversationsRequest,
@@ -357,9 +366,16 @@ func (s *controlServer) ReorientConversation(
 	return protoReorientPage(page), nil
 }
 
-// GetSemanticSearchFreshness returns the feeder's latest sync snapshot, the same
-// freshness each search response carries, so a status view reads it without
-// running a search.
+// GetSemanticSearchFreshness returns the daemon's default conversation-index
+// sync snapshot.
+//
+// A status view can read this snapshot without running a search. The response
+// uses the same freshness fields as a search response and contains zero values
+// when the server does not have a freshness source.
+//
+// The request does not select a backend or require search text:
+//
+//	&clydev1.GetSemanticSearchFreshnessRequest{}
 func (s *controlServer) GetSemanticSearchFreshness(
 	_ context.Context,
 	_ *clydev1.GetSemanticSearchFreshnessRequest,
