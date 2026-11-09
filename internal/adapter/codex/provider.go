@@ -223,42 +223,7 @@ func (p *Provider) ExecutePrepared(
 		authRefresh = refresher.ForceRefresh
 	}
 
-	directCfg := DirectConfig{
-		NativePatchRepresentation: "",
-		HTTPClient:                p.httpClient,
-		BaseURL:                   codexBaseURL(p.cfg.BaseURL),
-		WebsocketEnabled:          p.cfg.WebsocketEnabled,
-		WebsocketURL:              codexWebsocketURL(p.cfg.BaseURL),
-		Token:                     token,
-		AccountID:                 p.accountID,
-		RequestID:                 codexRequestID(prepared.Resolved),
-		CursorRequestID:           prepared.Resolved.Cursor.RequestID,
-		Correlation:               prepared.Resolved.Correlation,
-		WorkspacePath:             prepared.Resolved.Cursor.WorkspacePath,
-		WorkspaceProbe:            p.workspaceProbe,
-		SessionCache:              p.sessionCache,
-		Log:                       p.log,
-		FileLog:                   p.fileLog,
-		ReasoningSummary:          p.cfg.ReasoningSummary,
-		InboundThinkingMaterialization: codexSummaryRenderStrategy(
-			p.cfg.Reasoning.ResolvedRoundTripSummary(),
-		),
-		RoundTripEncrypted: RoundTripEncrypted(
-			p.cfg.Reasoning.ResolvedRoundTripEncrypted(),
-		),
-		RoundTripSummary: RoundTripSummary(
-			p.cfg.Reasoning.ResolvedRoundTripSummary(),
-		),
-		RetryPolicies: p.retryPolicies,
-		// BeforeAttempt is injected by the adapter dispatch layer via
-		// context so the server can register each retry attempt as a
-		// nested livetrack egress session without changing this interface.
-		BeforeAttempt:  beforeAttemptFromContext(ctx),
-		AuthRefresh:    authRefresh,
-		WireIdentity:   p.resolveWireIdentity(ctx),
-		CaptureStore:   p.captureStore,
-		StripWireFlags: p.stripWireFlags,
-	}
+	directCfg := p.preparedDirectConfig(ctx, prepared, token, authRefresh)
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(
 		ctx,
@@ -318,6 +283,50 @@ func (p *Provider) ExecutePrepared(
 		ReasoningSummary:           "",
 		UsageNotices:               nil,
 	}, nil
+}
+
+func (p *Provider) preparedDirectConfig(
+	ctx context.Context,
+	prepared PreparedRequest,
+	token string,
+	authRefresh func(context.Context) (string, error),
+) DirectConfig {
+	return DirectConfig{
+		NativePatchRepresentation: "",
+		HTTPClient:                p.httpClient,
+		BaseURL:                   codexBaseURL(p.cfg.BaseURL),
+		WebsocketEnabled:          p.cfg.WebsocketEnabled,
+		WebsocketURL:              codexWebsocketURL(p.cfg.BaseURL),
+		Token:                     token,
+		AccountID:                 p.accountID,
+		RequestID:                 codexRequestID(prepared.Resolved),
+		CursorRequestID:           prepared.Resolved.Cursor.RequestID,
+		Correlation:               prepared.Resolved.Correlation,
+		WorkspacePath:             prepared.Resolved.Cursor.WorkspacePath,
+		WorkspaceProbe:            p.workspaceProbe,
+		SessionCache:              p.sessionCache,
+		Log:                       p.log,
+		FileLog:                   p.fileLog,
+		ReasoningSummary:          p.cfg.ReasoningSummary,
+		InboundThinkingMaterialization: codexSummaryRenderStrategy(
+			p.cfg.Reasoning.ResolvedRoundTripSummary(),
+		),
+		RoundTripEncrypted: RoundTripEncrypted(
+			p.cfg.Reasoning.ResolvedRoundTripEncrypted(),
+		),
+		RoundTripSummary: RoundTripSummary(
+			p.cfg.Reasoning.ResolvedRoundTripSummary(),
+		),
+		RetryPolicies: p.retryPolicies,
+		// BeforeAttempt is injected by the adapter dispatch layer via
+		// context so the server can register each retry attempt as a
+		// nested livetrack egress session without changing this interface.
+		BeforeAttempt:  beforeAttemptFromContext(ctx),
+		AuthRefresh:    authRefresh,
+		WireIdentity:   p.resolveWireIdentity(ctx),
+		CaptureStore:   p.captureStore,
+		StripWireFlags: p.stripWireFlags,
+	}
 }
 
 // resolveWireIdentity projects the codex-cli outbound wire identity from
