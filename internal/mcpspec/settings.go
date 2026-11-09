@@ -147,6 +147,7 @@ func installSettingsFile(
 			"err",
 			err,
 		)
+
 		return InstallFileResult{}, fmt.Errorf("install %s MCP settings canceled: %w", client, err)
 	}
 
@@ -164,6 +165,7 @@ func installSettingsFile(
 			"err",
 			err,
 		)
+
 		return InstallFileResult{}, fmt.Errorf("read %s MCP settings %s: %w", client, path, err)
 	}
 
@@ -187,6 +189,7 @@ func installSettingsFile(
 			"err",
 			err,
 		)
+
 		return InstallFileResult{}, fmt.Errorf("render %s MCP settings %s: %w", client, path, err)
 	}
 
@@ -196,6 +199,14 @@ func installSettingsFile(
 		return result, nil
 	}
 
+	if err := writeMCPSettingsFile(ctx, client, path, body); err != nil {
+		return InstallFileResult{}, err
+	}
+
+	return result, nil
+}
+
+func writeMCPSettingsFile(ctx context.Context, client Client, path string, body []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		slog.WarnContext(
 			ctx,
@@ -209,7 +220,8 @@ func installSettingsFile(
 			"err",
 			err,
 		)
-		return InstallFileResult{}, fmt.Errorf("create %s MCP settings directory: %w", client, err)
+
+		return fmt.Errorf("create %s MCP settings directory: %w", client, err)
 	}
 
 	if err := os.WriteFile(path, body, 0o600); err != nil {
@@ -225,10 +237,11 @@ func installSettingsFile(
 			"err",
 			err,
 		)
-		return InstallFileResult{}, fmt.Errorf("write %s MCP settings %s: %w", client, path, err)
+
+		return fmt.Errorf("write %s MCP settings %s: %w", client, path, err)
 	}
 
-	return result, nil
+	return nil
 }
 
 func installJSONSettings(ctx context.Context, existing []byte, clydeBin string) ([]byte, error) {
