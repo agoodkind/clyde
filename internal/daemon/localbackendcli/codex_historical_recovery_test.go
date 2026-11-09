@@ -65,6 +65,7 @@ const (
 
 func historyProbeMessage(role string, kind string, text string, t *testing.T) string {
 	t.Helper()
+
 	return `{"type":"message","role":"` + role + `","content":[{"type":"` + kind + `","text":` + injectedProbeJSON(
 		t,
 		text,
@@ -91,6 +92,7 @@ func historyProbeUserInjection(userText string) string {
 	retained := "### User\n\n" + userText + "\n\n" + historyProbeToolTranscript(
 		"{\"cmd\":\"echo "+historyProbeTool+"\"}",
 	)
+
 	return reorienttag.WrapInjection(retained, "")
 }
 
@@ -574,6 +576,7 @@ func assertHistoryProbeExports(
 			mcpEnvironment,
 			testCase.session,
 		)
+
 		return
 	}
 
@@ -692,6 +695,7 @@ func TestExportReconstructsSuccessiveCodexCompactions(t *testing.T) {
 						sandboxDaemon.environment,
 						session,
 					)
+
 					return
 				}
 

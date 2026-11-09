@@ -12,7 +12,11 @@ func TestDistillKeepsUnfinishedLifecyclesAmongHealthRecords(t *testing.T) {
 		t,
 		path,
 		[]metricsHistoryRecord{
-			{Time: "2026-08-08T10:00:00Z", Message: "adapter.request.started", RequestID: "ongoing"},
+			{
+				Time:      "2026-08-08T10:00:00Z",
+				Message:   "adapter.request.started",
+				RequestID: "ongoing",
+			},
 			{
 				Time:      "2026-08-08T10:00:01Z",
 				Message:   "adapter.request.io",

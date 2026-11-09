@@ -68,7 +68,8 @@ func TestCleanupAccountsForUnlinkedOpenLogs(t *testing.T) {
 					available -= info.Size()
 				}
 
-				if result.BytesAfter <= 0 || result.BytesAfter > available || result.BytesTrimmed <= 0 {
+				if result.BytesAfter <= 0 || result.BytesAfter > available ||
+					result.BytesTrimmed <= 0 {
 					t.Fatalf("cleanup did not retain a bounded set of named logs: %+v", result)
 				}
 

@@ -357,14 +357,17 @@ func TestDecodeTranscriptEntryReadsRecordWithoutNewerFields(t *testing.T) {
 		t.Fatalf("an absent object field decoded to a non-nil value: %+v", entry)
 	}
 
-	if entry.Entrypoint != EntrypointUnspecified || entry.PermissionMode != PermissionModeUnspecified ||
-		entry.PromptSource != PromptSourceUnspecified || entry.Level != EntryLevelUnspecified ||
+	if entry.Entrypoint != EntrypointUnspecified ||
+		entry.PermissionMode != PermissionModeUnspecified ||
+		entry.PromptSource != PromptSourceUnspecified ||
+		entry.Level != EntryLevelUnspecified ||
 		entry.Operation != QueueOperationUnspecified ||
 		entry.ToolDenialKind != ToolDenialKindUnspecified {
 		t.Fatalf("an absent enum field decoded to a non-zero value: %+v", entry)
 	}
 
-	if entry.RequestID != "" || entry.PromptID != "" || entry.LeafUUID != "" || entry.HookCount != 0 ||
+	if entry.RequestID != "" || entry.PromptID != "" || entry.LeafUUID != "" ||
+		entry.HookCount != 0 ||
 		entry.PRNumber != 0 ||
 		entry.RetryInMs != 0 {
 		t.Fatalf("an absent scalar field decoded to a non-zero value: %+v", entry)

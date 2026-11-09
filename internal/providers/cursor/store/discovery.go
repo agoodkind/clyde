@@ -400,7 +400,8 @@ func readChangedGlobalDiscovery(
 
 	selectorDuration := clock.Since(selectorStarted)
 	signatureErr = errors.Join(signatureErr, selectorErr)
-	unchanged := refreshPath == bubbleRefreshPathDelta && signatureErr == nil && cached.known && cached.signed &&
+	unchanged := refreshPath == bubbleRefreshPathDelta && signatureErr == nil && cached.known &&
+		cached.signed &&
 		signature.sameNonBubble(cached.signature) &&
 		state.rows == cached.signature.bubbleRows &&
 		len(changedComposerIDs) == 0
@@ -694,6 +695,7 @@ func readBackgroundSignature(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("read cursor background signature: %w", err)
 	}
 
@@ -735,6 +737,7 @@ func readComposerMetadataSignature(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("read cursor composer metadata signature: %w", err)
 	}
 

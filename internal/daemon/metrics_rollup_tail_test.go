@@ -197,7 +197,11 @@ func TestDistillLeavesIncompleteFinalLine(t *testing.T) {
 		path,
 		[]metricsHistoryRecord{
 			{Time: "2026-08-08T10:00:00Z", Message: "daemon.health"},
-			{Time: "2026-08-08T10:00:01Z", Message: "adapter.request.started", RequestID: "partial"},
+			{
+				Time:      "2026-08-08T10:00:01Z",
+				Message:   "adapter.request.started",
+				RequestID: "partial",
+			},
 		},
 	)
 	info, err := os.Stat(path)

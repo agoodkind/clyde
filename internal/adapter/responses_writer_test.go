@@ -835,9 +835,12 @@ func TestResponsesStreamWriterFunctionArgsDoneCarriesFinalNameAndArguments(t *te
 	if err := writer.WriteEvent(adapterrender.ToolCallDelta{
 		ToolCalls: []adapteropenai.ToolCall{
 			{
-				Index:    0,
-				Type:     "function",
-				Function: adapteropenai.ToolCallFunction{Name: "get_weather", Arguments: `"Paris"}`},
+				Index: 0,
+				Type:  "function",
+				Function: adapteropenai.ToolCallFunction{
+					Name:      "get_weather",
+					Arguments: `"Paris"}`,
+				},
 			},
 		},
 	}); err != nil {

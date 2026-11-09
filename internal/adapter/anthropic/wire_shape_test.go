@@ -197,8 +197,10 @@ func TestAnthropicVersionPrefersFlavor(t *testing.T) {
 	_, _, err = cli.StreamEvents(
 		context.Background(),
 		Request{
-			Model:     "claude-test",
-			Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
 			MaxTokens: 10,
 		},
 		func(StreamEvent) error { return nil },

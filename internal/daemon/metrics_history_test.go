@@ -724,7 +724,9 @@ func TestBuildMetricsHistoryRejectsImpossibleLifecycle(t *testing.T) {
 				t.Parallel()
 				logPath := filepath.Join(t.TempDir(), "clyde-daemon.jsonl")
 				records := append(
-					[]metricsHistoryRecord{{Time: "2026-07-31T09:00:00Z", Message: "daemon.health"}},
+					[]metricsHistoryRecord{
+						{Time: "2026-07-31T09:00:00Z", Message: "daemon.health"},
+					},
 					testCase.records...,
 				)
 				writeMetricsHistoryRecords(t, logPath, records)
@@ -835,7 +837,11 @@ func TestBuildMetricsHistoryUnknownModelMakesCostUnavailable(t *testing.T) {
 		logPath,
 		[]metricsHistoryRecord{
 			{Time: "2026-07-31T09:00:00Z", Message: "daemon.health"},
-			{Time: "2026-07-31T10:00:00Z", Message: "adapter.request.started", RequestID: "unknown"},
+			{
+				Time:      "2026-07-31T10:00:00Z",
+				Message:   "adapter.request.started",
+				RequestID: "unknown",
+			},
 			{
 				Time:         "2026-07-31T10:00:00.100Z",
 				Message:      "adapter.request.completed",

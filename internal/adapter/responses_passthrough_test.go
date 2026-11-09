@@ -1390,6 +1390,7 @@ func TestPassthroughSSEUsageRejectsMalformedTerminalJSON(t *testing.T) {
 						test.want.TotalTokens,
 						test.want.CachedTokens(),
 					)
+
 					return
 				}
 
@@ -1673,6 +1674,7 @@ func TestPassthroughSSEUsageReplacesOrRejectsRepeatedCounters(t *testing.T) {
 						test.want.TotalTokens,
 						test.want.CachedTokens(),
 					)
+
 					return
 				}
 
@@ -1724,6 +1726,7 @@ func TestPassthroughSSEUsageClearsSupersededStructuralValues(t *testing.T) {
 						test.want.TotalTokens,
 						test.want.CachedTokens(),
 					)
+
 					return
 				}
 
@@ -1791,6 +1794,7 @@ func TestPassthroughSSEUsageAcceptsOnlyLeadingBOM(t *testing.T) {
 						test.want.TotalTokens,
 						test.want.CachedTokens(),
 					)
+
 					return
 				}
 
@@ -2196,8 +2200,11 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 	}
 
 	retry := captures[1]
-	if retry.status != 0 || retry.method != http.MethodPost || retry.path != "/v1/chat/completions" || retry.host == "" ||
-		retry.requestID == "" || retry.requestID != captures[0].requestID ||
+	if retry.status != 0 || retry.method != http.MethodPost ||
+		retry.path != "/v1/chat/completions" ||
+		retry.host == "" ||
+		retry.requestID == "" ||
+		retry.requestID != captures[0].requestID ||
 		retry.requestBytes != len(retry.body) ||
 		!bytes.Equal(retry.body, retryRequestBody) ||
 		retry.responseBytes != 0 ||

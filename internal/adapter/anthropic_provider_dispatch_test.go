@@ -453,7 +453,8 @@ func TestAnthropicProviderErrorResponseWordsOverloadedForCursorPassthrough(t *te
 				}
 
 				env := renderedOpenAIEnvelope(t, aerr)
-				if env.Error.Type != "invalid_request_error" || env.Error.Code != "upstream_failed" {
+				if env.Error.Type != "invalid_request_error" ||
+					env.Error.Code != "upstream_failed" {
 					t.Fatalf("rendered envelope=%+v", env.Error)
 				}
 

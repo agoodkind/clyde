@@ -1043,7 +1043,8 @@ func TestReadHeaderMarksMachinerySourcesAsSubagent(t *testing.T) {
 					)
 				}
 
-				if testCase.wantAgentRole != "" && thread.Source.AgentRole != testCase.wantAgentRole {
+				if testCase.wantAgentRole != "" &&
+					thread.Source.AgentRole != testCase.wantAgentRole {
 					t.Fatalf(
 						"Source.AgentRole = %q, want %q",
 						thread.Source.AgentRole,

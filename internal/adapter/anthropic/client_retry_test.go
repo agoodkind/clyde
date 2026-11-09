@@ -95,8 +95,10 @@ func TestDoRetriesOn401WithFreshToken(t *testing.T) {
 	resp, err := cli.do(
 		context.Background(),
 		Request{
-			Model:     "claude-test",
-			Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
 			MaxTokens: 10,
 		},
 	)
@@ -157,8 +159,10 @@ func TestDoFallsThroughOnSecond401(t *testing.T) {
 	_, err := cli.do(
 		context.Background(),
 		Request{
-			Model:     "claude-test",
-			Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
 			MaxTokens: 10,
 		},
 	)
@@ -220,8 +224,10 @@ func TestDoSkipsRetryWhenRecoverErrors(t *testing.T) {
 	_, err := cli.do(
 		context.Background(),
 		Request{
-			Model:     "claude-test",
-			Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
 			MaxTokens: 10,
 		},
 	)
@@ -284,8 +290,10 @@ func TestDoSkipsRetryWhenTokenUnchanged(t *testing.T) {
 	_, err := cli.do(
 		context.Background(),
 		Request{
-			Model:     "claude-test",
-			Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
 			MaxTokens: 10,
 		},
 	)

@@ -136,7 +136,11 @@ type IngressContract interface {
 	// ResolveIdentity returns the canonical chat identity for a
 	// translated request. Implementations may keep per-daemon state
 	// internally; the boundary only reads ChatIdentityPrimitive.
-	ResolveIdentity(corr correlation.Context, ic IngressContext, req ChatRequestPrimitive) ChatIdentityPrimitive
+	ResolveIdentity(
+		corr correlation.Context,
+		ic IngressContext,
+		req ChatRequestPrimitive,
+	) ChatIdentityPrimitive
 
 	// LogAttrs returns the vendor-specific structured log attributes
 	// the adapter emits at boundary log sites. rawModel is the raw
