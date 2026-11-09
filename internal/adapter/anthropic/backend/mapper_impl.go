@@ -830,13 +830,13 @@ func imageURLToSource(rawURL string) (*AnthImageSource, error) {
 	return &AnthImageSource{Type: "url", URL: rawURL, MediaType: "", Data: ""}, nil
 }
 
-func parseDataURI(s string) (mediaType string, data string, err error) {
+func parseDataURI(dataURI string) (mediaType string, data string, err error) {
 	const prefix = "data:"
-	if !strings.HasPrefix(s, prefix) {
+	if !strings.HasPrefix(dataURI, prefix) {
 		return "", "", fmt.Errorf("not a data uri")
 	}
 
-	rest := strings.TrimPrefix(s, prefix)
+	rest := strings.TrimPrefix(dataURI, prefix)
 	meta, payload, ok := strings.Cut(rest, ",")
 	if !ok {
 		return "", "", fmt.Errorf("invalid data uri: missing comma")
@@ -882,13 +882,13 @@ func translateTools(req OpenAIRequest) ([]AnthTool, error) {
 		)
 	}
 
-	for _, f := range req.Functions {
+	for _, function := range req.Functions {
 		out = append(
 			out,
 			AnthTool{
-				Name:        f.Name,
-				Description: f.Description,
-				InputSchema: f.Parameters,
+				Name:        function.Name,
+				Description: function.Description,
+				InputSchema: function.Parameters,
 			},
 		)
 	}

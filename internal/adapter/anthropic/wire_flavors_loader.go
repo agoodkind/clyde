@@ -441,13 +441,13 @@ func canonicalWireHeaderName(name string) string {
 	return strings.Join(parts, "-")
 }
 
-func copyStrings(in []string) []string {
-	if len(in) == 0 {
+func copyStrings(input []string) []string {
+	if len(input) == 0 {
 		return nil
 	}
 
-	out := make([]string, len(in))
-	copy(out, in)
+	out := make([]string, len(input))
+	copy(out, input)
 
 	return out
 }

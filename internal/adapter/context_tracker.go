@@ -98,19 +98,19 @@ func requestContextTrackerKey(req ChatRequest, modelAlias string) string {
 }
 
 func requestContextTrackerKeyFromIngress(
-	ic ingresscontract.IngressContext,
+	ingressContext ingresscontract.IngressContext,
 	req ChatRequest,
 	modelAlias string,
 ) string {
-	if conversation := strings.TrimSpace(ic.ConversationID); conversation != "" {
+	if conversation := strings.TrimSpace(ingressContext.ConversationID); conversation != "" {
 		return "cursor:" + conversation
 	}
 
-	if v := strings.TrimSpace(ic.User); v != "" {
+	if v := strings.TrimSpace(ingressContext.User); v != "" {
 		return "user:" + v
 	}
 
-	if v := metadataString(
+	if metadataID := metadataString(
 		req.Metadata,
 		"conversation_id",
 		"conversationId",
@@ -120,8 +120,8 @@ func requestContextTrackerKeyFromIngress(
 		"threadId",
 		"chat_id",
 		"chatId",
-	); v != "" {
-		return "meta:" + v
+	); metadataID != "" {
+		return "meta:" + metadataID
 	}
 
 	firstUser := ""
@@ -178,13 +178,13 @@ func metadataString(raw json.RawMessage, keys ...string) string {
 		return ""
 	}
 
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
+	var metadata map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &metadata); err != nil {
 		return ""
 	}
 
 	for _, key := range keys {
-		if v, ok := m[key]; ok {
+		if v, ok := metadata[key]; ok {
 			var s string
 			if json.Unmarshal(v, &s) == nil && strings.TrimSpace(s) != "" {
 				return strings.TrimSpace(s)

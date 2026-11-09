@@ -37,13 +37,13 @@ func ToAPIRequest(
 	}
 
 	tools := make([]anthropic.Tool, 0, len(tr.Tools))
-	for _, t := range tr.Tools {
+	for _, tool := range tr.Tools {
 		tools = append(
 			tools,
 			anthropic.Tool{
-				Name:         t.Name,
-				Description:  t.Description,
-				InputSchema:  t.InputSchema,
+				Name:         tool.Name,
+				Description:  tool.Description,
+				InputSchema:  tool.InputSchema,
 				CacheControl: nil,
 			},
 		)
@@ -332,13 +332,13 @@ func ApplyCacheBreakpoints(
 		return stats
 	}
 
-	for i := range lastCCMsg {
-		if msgs[i].Role != "user" {
+	for messageIndex := range lastCCMsg {
+		if msgs[messageIndex].Role != "user" {
 			continue
 		}
 
-		for j := range msgs[i].Content {
-			block := &msgs[i].Content[j]
+		for j := range msgs[messageIndex].Content {
+			block := &msgs[messageIndex].Content[j]
 			if block.Type != "tool_result" || strings.TrimSpace(block.ToolUseID) == "" {
 				continue
 			}
