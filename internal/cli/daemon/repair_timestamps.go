@@ -199,7 +199,8 @@ func newRepairConversationTimestampsCmd(f *cli.Factory) *cobra.Command {
 		&options.CorrectionManifest,
 		"correction-manifest",
 		"",
-		"Select rows and their expected state from this JSON lines manifest for timestamp correction. Use --source-store with this flag.",
+		"Select rows and their expected state from this JSON lines manifest for timestamp correction. "+
+			"Use --source-store with this flag.",
 	)
 
 	return cmd

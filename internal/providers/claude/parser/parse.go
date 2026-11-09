@@ -176,7 +176,9 @@ type rawClaudePreservedSegment struct {
 
 var (
 	systemTagRe = regexp.MustCompile(
-		`<(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)[^>]*>[\s\S]*?</(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>`,
+		`<(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|` +
+			`local-command-stdout|local-command-caveat)[^>]*>[\s\S]*?</(?:system-reminder|` +
+			`local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>`,
 	)
 	noiseTags = []string{
 		"command-name",

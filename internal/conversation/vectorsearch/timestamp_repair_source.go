@@ -1225,7 +1225,8 @@ func rowHasZeroTime(row collection.StoredRow) bool {
 	cell, found := row.Scalars[timestampUnixColumn]
 
 	return found &&
-		(cell.State == collection.ScalarCellNull || (cell.State == collection.ScalarCellValue && cell.Value.Int64 == missingTimestampUnix))
+		(cell.State == collection.ScalarCellNull ||
+			(cell.State == collection.ScalarCellValue && cell.Value.Int64 == missingTimestampUnix))
 }
 
 // rowRole returns the first nonempty role in the family.

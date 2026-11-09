@@ -133,7 +133,8 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 
 	if semanticCfg.IngestionEnabled {
 		return errors.New(
-			"copy shared conversation collection: set conversation.semantic.ingestion_enabled = false and run `clyde daemon reload` before the copy",
+			"copy shared conversation collection: set conversation.semantic.ingestion_enabled = false " +
+				"and run `clyde daemon reload` before the copy",
 		)
 	}
 
@@ -221,7 +222,8 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 	}
 
 	summary := fmt.Sprintf(
-		"Verified %d source rows: the shared copy stores %d rows and %d distinct vectors, and every row matches. Copied %d conversation fingerprint records.\n",
+		"Verified %d source rows: the shared copy stores %d rows and %d distinct vectors, and every row matches. "+
+			"Copied %d conversation fingerprint records.\n",
 		report.SourceRows,
 		report.TargetRows,
 		report.TargetVectors,
@@ -368,7 +370,8 @@ func reconcileAndVerifySharedCopy(
 	}
 
 	unequalErr := fmt.Errorf(
-		"shared conversation collection still differs after %d rounds: %d missing, %d mismatched, %d extra, %d dangling rows, %d unreferenced vectors",
+		"shared conversation collection still differs after %d rounds: %d missing, %d mismatched, "+
+			"%d extra, %d dangling rows, %d unreferenced vectors",
 		options.RepairRounds,
 		report.MissingCount,
 		report.MismatchedCount,

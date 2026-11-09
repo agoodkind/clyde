@@ -1074,7 +1074,8 @@ func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
 
 	if err := adapter.Anthropic.Reasoning.InboundThinking.Validate(); err != nil {
 		return fmt.Errorf(
-			"adapter.anthropic.reasoning.inbound_thinking must be one of native_thinking_block|drop|plain_text_concat|passthrough (got %q)",
+			"adapter.anthropic.reasoning.inbound_thinking must be one of "+
+				"native_thinking_block|drop|plain_text_concat|passthrough (got %q)",
 			adapter.Anthropic.Reasoning.InboundThinking,
 		)
 	}

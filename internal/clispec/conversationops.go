@@ -277,14 +277,16 @@ func searchParams() []Param[searchInput] {
 		),
 		StringParam(
 			"load_rules",
-			"Loading-rules tag from the search hit being read around, so the window counts over the same message sequence its message index refers to. Leave empty for hits without one.",
+			"Loading-rules tag from the search hit being read around, so the window counts over "+
+				"the same message sequence its message index refers to. Leave empty for hits without one.",
 			"",
 			false,
 			func(in *searchInput, v string) { in.LoadRules = v },
 		),
 		StringParam(
 			"cursor",
-			"Continuation cursor from a previous search result's next_cursor, with the same query and filters. Requires query. The current search source returns no next_cursor and refuses a cursor; page with offset.",
+			"Continuation cursor from a previous search result's next_cursor, with the same query and filters. "+
+				"Requires query. The current search source returns no next_cursor and refuses a cursor; page with offset.",
 			"",
 			false,
 			func(in *searchInput, v string) { in.Cursor = v },
@@ -829,7 +831,8 @@ func formatConversationInfo(info conv.Info) string {
 
 	out.WriteString("\n")
 	out.WriteString(
-		"segment\thas_summary\tstart_message_index\tend_message_index\tsummary_message_index\tsummary_timestamp\tvisible_messages\ttool_calls\texport_selector\n",
+		"segment\thas_summary\tstart_message_index\tend_message_index\t" +
+			"summary_message_index\tsummary_timestamp\tvisible_messages\ttool_calls\texport_selector\n",
 	)
 
 	for _, segment := range info.Segments {
@@ -860,7 +863,8 @@ func formatConversationInfo(info conv.Info) string {
 
 func writeConversationRecordHeader(out *strings.Builder) {
 	out.WriteString(
-		"conversation_id\tprovider\tnative_id\ttitle\tworkspace_root\tartifact_path\tartifact_kind\tmodel\tcreated_at\tupdated_at\tsize_bytes\tarchived\n",
+		"conversation_id\tprovider\tnative_id\ttitle\tworkspace_root\tartifact_path\t" +
+			"artifact_kind\tmodel\tcreated_at\tupdated_at\tsize_bytes\tarchived\n",
 	)
 }
 

@@ -87,7 +87,8 @@ func loadCorrectionManifest(path string) (*correctionState, error) {
 			row.ExpectedMetadataHash == "" ||
 			row.ExpectedVectorKey == "" {
 			return nil, fmt.Errorf(
-				"correction manifest row requires row_id, conversation_id, expected_timestamp_unix, expected_metadata_timestamp_unix, expected_metadata_sha256, and expected_vector_key at %s:%d",
+				"correction manifest row requires row_id, conversation_id, expected_timestamp_unix, "+
+					"expected_metadata_timestamp_unix, expected_metadata_sha256, and expected_vector_key at %s:%d",
 				path,
 				line,
 			)
