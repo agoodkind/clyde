@@ -297,13 +297,17 @@ func searchParams() []Param[searchInput] {
 			0,
 			func(in *searchInput, v float64) { in.MinScore = v },
 		),
-		BoolParam(
-			"include_archived",
-			"Include archived conversations.",
-			false,
-			func(in *searchInput, v bool) { in.IncludeArchived = v },
-		),
+		archivedSearchParam(),
 	}
+}
+
+func archivedSearchParam() Param[searchInput] {
+	return BoolParam(
+		"include_archived",
+		"Include archived conversations.",
+		false,
+		func(in *searchInput, v bool) { in.IncludeArchived = v },
+	)
 }
 
 func newSearchInput() searchInput {
@@ -452,44 +456,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 			LoadRules:    strings.TrimSpace(in.LoadRules),
 		}, nil
 	case conversation != "":
-		mode := searchModeReadConversation
-		if in.Around >= 0 {
-			mode = searchModeReadWindow
-		}
-
-		return searchPayload{
-			Mode: mode,
-			SearchOpts: conv.SearchConversationsOptions{
-				Query:                "",
-				Backend:              "",
-				Limit:                0,
-				Offset:               0,
-				Provider:             providerid.ProviderUnspecified,
-				WorkspaceRoot:        "",
-				IncludeArchived:      false,
-				Roles:                nil,
-				FromUnix:             nil,
-				UntilUnix:            nil,
-				MinScore:             0,
-				PerConversationLimit: 0,
-				ConversationID:       "",
-				ContextWindow:        0,
-				Cursor:               "",
-			},
-			ListOpts: conv.ListOptions{
-				Limit:           0,
-				Offset:          0,
-				Provider:        providerid.ProviderUnspecified,
-				WorkspaceRoot:   "",
-				Query:           "",
-				IncludeArchived: false,
-				All:             false,
-			},
-			Conversation: conversation,
-			Around:       in.Around,
-			Window:       in.Window,
-			LoadRules:    strings.TrimSpace(in.LoadRules),
-		}, nil
+		return prepareReadSearch(in, conversation), nil
 	default:
 		opts, err := listOptionsFromInput(in)
 		if err != nil {
@@ -521,6 +488,47 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 			Window:       in.Window,
 			LoadRules:    strings.TrimSpace(in.LoadRules),
 		}, nil
+	}
+}
+
+func prepareReadSearch(input searchInput, conversation string) searchPayload {
+	mode := searchModeReadConversation
+	if input.Around >= 0 {
+		mode = searchModeReadWindow
+	}
+
+	return searchPayload{
+		Mode: mode,
+		SearchOpts: conv.SearchConversationsOptions{
+			Query:                "",
+			Backend:              "",
+			Limit:                0,
+			Offset:               0,
+			Provider:             providerid.ProviderUnspecified,
+			WorkspaceRoot:        "",
+			IncludeArchived:      false,
+			Roles:                nil,
+			FromUnix:             nil,
+			UntilUnix:            nil,
+			MinScore:             0,
+			PerConversationLimit: 0,
+			ConversationID:       "",
+			ContextWindow:        0,
+			Cursor:               "",
+		},
+		ListOpts: conv.ListOptions{
+			Limit:           0,
+			Offset:          0,
+			Provider:        providerid.ProviderUnspecified,
+			WorkspaceRoot:   "",
+			Query:           "",
+			IncludeArchived: false,
+			All:             false,
+		},
+		Conversation: conversation,
+		Around:       input.Around,
+		Window:       input.Window,
+		LoadRules:    strings.TrimSpace(input.LoadRules),
 	}
 }
 
