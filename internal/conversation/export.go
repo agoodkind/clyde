@@ -42,23 +42,11 @@ func exportMessages(
 	messages []transcript.Message,
 	options ExportOptions,
 ) ([]byte, error) {
-	compactionOptions, err := NormalizeCompactionExportOptions(
-		options.Compaction,
-		options.HistoryStart,
-		options.LastN,
-	)
+	options, selection, err := selectExportCompaction(messages, options)
 	if err != nil {
 		return nil, err
 	}
 
-	options.Compaction = compactionOptions
-	segments := CompactionSegments(messages)
-	selection, err := SelectCompactionSegments(segments, options.Compaction.IncludeSelector)
-	if err != nil {
-		return nil, err
-	}
-
-	selection = applyLastNToSegmentSelection(messages, selection, options)
 	if !options.Content.Has(ContentKindRawJSONMetadata) {
 		if summaryUUID, unresolved := unresolvedInjectedTranscriptSummary(selection); unresolved {
 			slog.Warn(
@@ -72,6 +60,7 @@ func exportMessages(
 				"summary_uuid",
 				summaryUUID,
 			)
+
 			return nil, fmt.Errorf(unresolvedInjectedTranscriptError, record.ID, summaryUUID)
 		}
 
@@ -89,6 +78,7 @@ func exportMessages(
 				"message_index",
 				messageIndex,
 			)
+
 			return nil, fmt.Errorf(unresolvedLiveTranscriptError, record.ID, messageIndex)
 		}
 	}
@@ -105,6 +95,7 @@ func exportMessages(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("sanitize compaction selection: %w", err)
 	}
 
@@ -122,6 +113,7 @@ func exportMessages(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("sanitize compaction messages: %w", err)
 	}
 
@@ -142,6 +134,31 @@ func exportMessages(
 	}
 
 	return body, nil
+}
+
+func selectExportCompaction(
+	messages []transcript.Message,
+	options ExportOptions,
+) (ExportOptions, CompactionSegmentSelection, error) {
+	var selection CompactionSegmentSelection
+
+	compactionOptions, err := NormalizeCompactionExportOptions(
+		options.Compaction,
+		options.HistoryStart,
+		options.LastN,
+	)
+	if err != nil {
+		return options, selection, err
+	}
+
+	options.Compaction = compactionOptions
+	segments := CompactionSegments(messages)
+	selection, err = SelectCompactionSegments(segments, options.Compaction.IncludeSelector)
+	if err != nil {
+		return options, selection, err
+	}
+
+	return options, applyLastNToSegmentSelection(messages, selection, options), nil
 }
 
 // capToLastLines keeps only the last maxLines lines of text. It returns the
