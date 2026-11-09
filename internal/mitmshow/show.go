@@ -434,33 +434,8 @@ func searchCaptureStore(ctx context.Context, dbPath, id string, found *Correlati
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
-		var row CaptureRow
-		if scanErr := rows.Scan(
-			&row.Timestamp,
-			&row.Client,
-			&row.Provider,
-			&row.Concern,
-			&row.Host,
-			&row.Method,
-			&row.Path,
-			&row.Status,
-			&row.RequestID,
-			&row.UpstreamRequestID,
-			&row.SessionID,
-			&row.TraceID,
-		); scanErr != nil {
-			slog.WarnContext(
-				ctx,
-				"mitmshow.capture_scan_failed",
-				"concern",
-				"providers.mitm.lifecycle",
-				"component",
-				"daemon",
-				"path",
-				dbPath,
-				"err",
-				scanErr,
-			)
+		row, ok := scanCaptureRow(ctx, rows, dbPath)
+		if !ok {
 			continue
 		}
 
@@ -484,6 +459,41 @@ func searchCaptureStore(ctx context.Context, dbPath, id string, found *Correlati
 	}
 
 	return section
+}
+
+func scanCaptureRow(ctx context.Context, rows *sql.Rows, dbPath string) (CaptureRow, bool) {
+	var row CaptureRow
+	if scanErr := rows.Scan(
+		&row.Timestamp,
+		&row.Client,
+		&row.Provider,
+		&row.Concern,
+		&row.Host,
+		&row.Method,
+		&row.Path,
+		&row.Status,
+		&row.RequestID,
+		&row.UpstreamRequestID,
+		&row.SessionID,
+		&row.TraceID,
+	); scanErr != nil {
+		slog.WarnContext(
+			ctx,
+			"mitmshow.capture_scan_failed",
+			"concern",
+			"providers.mitm.lifecycle",
+			"component",
+			"daemon",
+			"path",
+			dbPath,
+			"err",
+			scanErr,
+		)
+
+		return row, false
+	}
+
+	return row, true
 }
 
 // updateCorrelationFromCaptureRow fills any still-empty correlation slot from a
