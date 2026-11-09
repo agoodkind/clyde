@@ -181,14 +181,7 @@ func New(
 
 	baseLog := log
 	log = slogger.WithConcern(log, slogger.ConcernAdapterHTTPIngress)
-	errorLog := slogger.WithConcern(
-		baseLog.With("subcomponent", "adapter"),
-		slogger.ConcernAdapterHTTPErrors,
-	)
-	dispatchLog := slogger.WithConcern(
-		baseLog.With("subcomponent", "adapter"),
-		slogger.ConcernAdapterChatDispatch,
-	)
+	errorLog, dispatchLog := serverErrorAndDispatchLoggers(baseLog)
 	runtimeLogging := deps.RuntimeLogging
 	if runtimeLogging == nil {
 		runtimeLogging = NewRuntimeLogging(logging)
@@ -277,6 +270,19 @@ func New(
 	s.mux = s.routes()
 
 	return s, nil
+}
+
+func serverErrorAndDispatchLoggers(baseLog *slog.Logger) (*slog.Logger, *slog.Logger) {
+	errorLog := slogger.WithConcern(
+		baseLog.With("subcomponent", "adapter"),
+		slogger.ConcernAdapterHTTPErrors,
+	)
+	dispatchLog := slogger.WithConcern(
+		baseLog.With("subcomponent", "adapter"),
+		slogger.ConcernAdapterChatDispatch,
+	)
+
+	return errorLog, dispatchLog
 }
 
 // registerProviders wires the optional Codex and Anthropic providers
