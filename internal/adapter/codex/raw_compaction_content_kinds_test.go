@@ -78,31 +78,48 @@ func rawCompactionMarkerSplitter() adaptercodex.CompactionSplitter {
 		DefaultContent:   conversation.NewContentKindSet(),
 		MaxRetainedBytes: adaptercodex.MaxCompactionInjectionBytes,
 		InstructionsFile: "",
-		Counter:          tokencount.LocalCounter(tokencount.FamilyClaude, "", tokencount.Settings{}),
+		Counter: tokencount.LocalCounter(
+			tokencount.FamilyClaude,
+			"",
+			tokencount.Settings{},
+		),
 	})
 }
 
-func rawCompactionMarkerV1Transformer(t *testing.T) *adaptercodex.RawResponsesCompactionTransformer {
+func rawCompactionMarkerV1Transformer(
+	t *testing.T,
+) *adaptercodex.RawResponsesCompactionTransformer {
 	t.Helper()
 	request := rawCompactionMarkerRequest(rawCompactionMarkerV1Body, rawCompactionMarkerV1)
-	_, transformer := adaptercodex.PrepareRawResponsesCompaction(request, rawCompactionMarkerSplitter())
+	_, transformer := adaptercodex.PrepareRawResponsesCompaction(
+		request,
+		rawCompactionMarkerSplitter(),
+	)
 	if transformer == nil {
-		t.Fatal("PrepareRawResponsesCompaction did not return a response transformer for the probe request.")
+		t.Fatal(
+			"PrepareRawResponsesCompaction did not return a response transformer for the probe request.",
+		)
 	}
+
 	return transformer
 }
 
-func rawCompactionMarkerV2Transformer(t *testing.T, injection string) *adaptercodex.RawResponsesCompactionTransformer {
+func rawCompactionMarkerV2Transformer(
+	t *testing.T,
+	injection string,
+) *adaptercodex.RawResponsesCompactionTransformer {
 	t.Helper()
 	registry := adaptercodex.NewRawResponsesCompactionV2Registry(nil)
 	if !registry.Arm(rawCompactionMarkerSession, rawCompactionMarkerCipher, injection) {
 		t.Fatal("Registry Arm rejected the test injection.")
 	}
+
 	request := rawCompactionMarkerRequest(rawCompactionMarkerV2Body, rawCompactionMarkerV2)
 	injected, recovery, ok := adaptercodex.InjectRawResponsesCompactionV2Recovery(request, registry)
 	if !ok {
 		t.Fatal("InjectRawResponsesCompactionV2Recovery rejected the test request.")
 	}
+
 	return adaptercodex.NewRawResponsesCompactionV2FinalAnswerTransformer(injected, recovery)
 }
 
@@ -112,7 +129,9 @@ func rawCompactionMarkerProducers(t *testing.T) []rawCompactionMarkerProducer {
 	if !ok {
 		t.Fatal("The splitter did not plan a split for the probe request.")
 	}
+
 	v2Injection := reorienttag.WrapInjection("recovered transcript", "")
+
 	return []rawCompactionMarkerProducer{
 		{name: "v1", injection: split.Injection, build: rawCompactionMarkerV1Transformer},
 		{
@@ -132,11 +151,13 @@ func rawCompactionMarkerJSON(t *testing.T, text string) string {
 	if err != nil {
 		t.Fatalf("The test could not encode the transcript: %v", err)
 	}
+
 	return string(encoded)
 }
 
 func rawCompactionMarkerItemJSON(t *testing.T, text string) string {
 	t.Helper()
+
 	return `{"id":"` + rawCompactionMarkerItemID + `","type":"message","role":"assistant","phase":"final_answer",` +
 		`"content":[{"type":"output_text","text":` + rawCompactionMarkerJSON(t, text) + `}],` +
 		`"internal_chat_message_metadata_passthrough":{"turn_id":"` + rawCompactionMarkerTurnID + `"}}`
@@ -151,7 +172,12 @@ func rawCompactionMarkerStream(item string) string {
 	)
 }
 
-func rawCompactionMarkerTransform(t *testing.T, transformer *adaptercodex.RawResponsesCompactionTransformer, contentType string, body string) []byte {
+func rawCompactionMarkerTransform(
+	t *testing.T,
+	transformer *adaptercodex.RawResponsesCompactionTransformer,
+	contentType string,
+	body string,
+) []byte {
 	t.Helper()
 	response := transformer.TransformResponse(&http.Response{
 		StatusCode: http.StatusOK,
@@ -162,25 +188,43 @@ func rawCompactionMarkerTransform(t *testing.T, transformer *adaptercodex.RawRes
 	if err != nil {
 		t.Fatalf("The test could not read the transformed response body: %v", err)
 	}
+
 	return got
 }
 
-func assertRawCompactionMarkedItem(t *testing.T, raw json.RawMessage, originalText string, injection string) {
+func assertRawCompactionMarkedItem(
+	t *testing.T,
+	raw json.RawMessage,
+	originalText string,
+	injection string,
+) {
 	t.Helper()
 	var item rawCompactionMarkerItem
 	if err := json.Unmarshal(raw, &item); err != nil {
-		t.Fatalf("The test could not decode the transformed item: %v\nThe transformed item contains: %s", err, raw)
+		t.Fatalf(
+			"The test could not decode the transformed item: %v\nThe transformed item contains: %s",
+			err,
+			raw,
+		)
 	}
+
 	if item.ID != rawCompactionMarkerItemID || item.Metadata.TurnID != rawCompactionMarkerTurnID {
 		t.Fatalf("The transformation changed the native identity: %s", raw)
 	}
-	if len(item.Content) != 2 || item.Content[0].Text != originalText || item.Content[1].Text != injection {
+
+	if len(item.Content) != 2 || item.Content[0].Text != originalText ||
+		item.Content[1].Text != injection {
 		t.Fatalf("The transformed content did not match the expected parts: %#v", item.Content)
 	}
+
 	wantKinds := []string{rawCompactionMarkerUnknown, codexstore.InjectedTranscriptContentKind}
 	if !slices.Equal(item.Metadata.ContentItemKinds, wantKinds) {
-		t.Fatalf("The content_item_kinds array did not match the expected kinds: %v", item.Metadata.ContentItemKinds)
+		t.Fatalf(
+			"The content_item_kinds array did not match the expected kinds: %v",
+			item.Metadata.ContentItemKinds,
+		)
 	}
+
 	if indexes := codexstore.InjectedTranscriptIndexes(raw); !slices.Equal(indexes, []int{1}) {
 		t.Fatalf("The injected transcript indexes did not match the expected indexes: %v", indexes)
 	}
@@ -188,38 +232,85 @@ func assertRawCompactionMarkedItem(t *testing.T, raw json.RawMessage, originalTe
 
 func TestRawResponsesCompactionMarksSeparateTranscriptPart(t *testing.T) {
 	for _, producer := range rawCompactionMarkerProducers(t) {
+		olderInjection := reorienttag.WrapInjection("older", "")
+
 		texts := map[string]string{
 			"plain":              rawCompactionMarkerSummary,
 			"opening tag":        "quoted " + reorienttag.PreCompactionTranscriptOpen,
 			"closing tag":        "quoted " + reorienttag.PreCompactionTranscriptClose,
-			"older wrapper":      rawCompactionMarkerSummary + reorienttag.WrapInjection("older", ""),
+			"older wrapper":      rawCompactionMarkerSummary + olderInjection,
 			"intended injection": rawCompactionMarkerSummary + producer.injection,
 		}
 		for name, text := range texts {
-			t.Run(producer.name+" json "+name, func(t *testing.T) {
-				body := `{"status":"completed","id":"resp-1","output":[` + rawCompactionMarkerItemJSON(t, text) + `]}`
-				got := rawCompactionMarkerTransform(t, producer.build(t), "application/json", body)
-				var decoded struct {
-					Output []json.RawMessage `json:"output"`
-				}
-				if err := json.Unmarshal(got, &decoded); err != nil || len(decoded.Output) != 1 {
-					t.Fatalf("The test could not decode the transformed response: %v\nThe transformed response contains: %s", err, got)
-				}
-				assertRawCompactionMarkedItem(t, decoded.Output[0], text, producer.injection)
-				repeated := rawCompactionMarkerTransform(t, producer.build(t), "application/json", string(got))
-				if !bytes.Equal(repeated, got) {
-					t.Fatalf("The repeated transformation changed the response.\nThe response contains: %s\nThe test expected: %s", repeated, got)
-				}
-			})
-			t.Run(producer.name+" sse "+name, func(t *testing.T) {
-				stream := rawCompactionMarkerStream(rawCompactionMarkerItemJSON(t, text))
-				got := rawCompactionMarkerTransform(t, producer.build(t), "text/event-stream", stream)
-				assertRawCompactionMarkedStream(t, got, text, producer.injection)
-				repeated := rawCompactionMarkerTransform(t, producer.build(t), "text/event-stream", string(got))
-				if !bytes.Equal(repeated, got) {
-					t.Fatalf("The repeated transformation changed the stream.\nThe stream contains: %s\nThe test expected: %s", repeated, got)
-				}
-			})
+			t.Run(
+				producer.name+" json "+name,
+				func(t *testing.T) {
+					body := `{"status":"completed","id":"resp-1","output":[` + rawCompactionMarkerItemJSON(
+						t,
+						text,
+					) + `]}`
+					got := rawCompactionMarkerTransform(
+						t,
+						producer.build(t),
+						"application/json",
+						body,
+					)
+					var decoded struct {
+						Output []json.RawMessage `json:"output"`
+					}
+					if err := json.Unmarshal(
+						got,
+						&decoded,
+					); err != nil || len(decoded.Output) != 1 {
+						t.Fatalf(
+							"The test could not decode the transformed response: %v\nThe transformed response contains: %s",
+							err,
+							got,
+						)
+					}
+
+					assertRawCompactionMarkedItem(t, decoded.Output[0], text, producer.injection)
+					repeated := rawCompactionMarkerTransform(
+						t,
+						producer.build(t),
+						"application/json",
+						string(got),
+					)
+					if !bytes.Equal(repeated, got) {
+						t.Fatalf(
+							"The repeated transformation changed the response.\nThe response contains: %s\nThe test expected: %s",
+							repeated,
+							got,
+						)
+					}
+				},
+			)
+			t.Run(
+				producer.name+" sse "+name,
+				func(t *testing.T) {
+					stream := rawCompactionMarkerStream(rawCompactionMarkerItemJSON(t, text))
+					got := rawCompactionMarkerTransform(
+						t,
+						producer.build(t),
+						"text/event-stream",
+						stream,
+					)
+					assertRawCompactionMarkedStream(t, got, text, producer.injection)
+					repeated := rawCompactionMarkerTransform(
+						t,
+						producer.build(t),
+						"text/event-stream",
+						string(got),
+					)
+					if !bytes.Equal(repeated, got) {
+						t.Fatalf(
+							"The repeated transformation changed the stream.\nThe stream contains: %s\nThe test expected: %s",
+							repeated,
+							got,
+						)
+					}
+				},
+			)
 		}
 	}
 }
@@ -227,27 +318,41 @@ func TestRawResponsesCompactionMarksSeparateTranscriptPart(t *testing.T) {
 func rawCompactionMarkerFrames(t *testing.T, body []byte) []rawCompactionMarkerFrame {
 	t.Helper()
 	frames := make([]rawCompactionMarkerFrame, 0)
+
 	for rawFrame := range bytes.SplitSeq(bytes.TrimSpace(body), []byte("\n\n")) {
 		for line := range bytes.SplitSeq(rawFrame, []byte("\n")) {
 			data, isData := bytes.CutPrefix(line, []byte("data: "))
 			if !isData {
 				continue
 			}
+
 			var frame rawCompactionMarkerFrame
 			if err := json.Unmarshal(data, &frame); err != nil {
-				t.Fatalf("The test could not decode the stream frame: %v\nThe frame contains %s", err, rawFrame)
+				t.Fatalf(
+					"The test could not decode the stream frame: %v\nThe frame contains %s",
+					err,
+					rawFrame,
+				)
 			}
+
 			frames = append(frames, frame)
 		}
 	}
+
 	return frames
 }
 
-func assertRawCompactionMarkedStream(t *testing.T, body []byte, originalText string, injection string) {
+func assertRawCompactionMarkedStream(
+	t *testing.T,
+	body []byte,
+	originalText string,
+	injection string,
+) {
 	t.Helper()
 	var itemDone json.RawMessage
 	var completedItem json.RawMessage
 	var deltas string
+
 	for _, frame := range rawCompactionMarkerFrames(t, body) {
 		switch frame.Type {
 		case "response.output_text.delta":
@@ -258,19 +363,31 @@ func assertRawCompactionMarkedStream(t *testing.T, body []byte, originalText str
 			var response struct {
 				Output []json.RawMessage `json:"output"`
 			}
-			if err := json.Unmarshal(frame.Response, &response); err != nil || len(response.Output) != 1 {
-				t.Fatalf("The test could not decode the completed response: %v\nThe completed response contains: %s", err, frame.Response)
+			if err := json.Unmarshal(frame.Response, &response); err != nil ||
+				len(response.Output) != 1 {
+				t.Fatalf(
+					"The test could not decode the completed response: %v\nThe completed response contains: %s",
+					err,
+					frame.Response,
+				)
 			}
+
 			completedItem = response.Output[0]
 		}
 	}
+
 	if deltas != injection {
 		t.Fatalf("The stream emitted deltas %q instead of %q", deltas, injection)
 	}
+
 	assertRawCompactionMarkedItem(t, itemDone, originalText, injection)
 	assertRawCompactionMarkedItem(t, completedItem, originalText, injection)
 	if !bytes.Equal(itemDone, completedItem) {
-		t.Fatalf("The stream snapshots differ.\nThe item contains: %s\nThe completed response contains: %s", itemDone, completedItem)
+		t.Fatalf(
+			"The stream snapshots differ.\nThe item contains: %s\nThe completed response contains: %s",
+			itemDone,
+			completedItem,
+		)
 	}
 }
 
@@ -278,15 +395,26 @@ func TestRawResponsesCompactionFillsContentKindsThroughNewPart(t *testing.T) {
 	body := `{"status":"completed","id":"resp-1","output":[{"id":"msg-1","type":"message","role":"assistant",` +
 		`"content":[{"type":"refusal","refusal":"No"},{"type":"output_text","text":"summary"}],` +
 		`"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1","content_item_kinds":["native"]}}]}`
-	got := rawCompactionMarkerTransform(t, rawCompactionMarkerV1Transformer(t), "application/json", body)
+	got := rawCompactionMarkerTransform(
+		t,
+		rawCompactionMarkerV1Transformer(t),
+		"application/json",
+		body,
+	)
 	var decoded struct {
 		Output []rawCompactionMarkerItem `json:"output"`
 	}
 	if err := json.Unmarshal(got, &decoded); err != nil || len(decoded.Output) != 1 {
-		t.Fatalf("The test could not decode the transformed response: %v\nThe transformed response contains: %s", err, got)
+		t.Fatalf(
+			"The test could not decode the transformed response: %v\nThe transformed response contains: %s",
+			err,
+			got,
+		)
 	}
+
 	want := []string{"native", rawCompactionMarkerUnknown, codexstore.InjectedTranscriptContentKind}
-	if !slices.Equal(decoded.Output[0].Metadata.ContentItemKinds, want) || decoded.Output[0].Metadata.TurnID != rawCompactionMarkerTurnID {
+	if !slices.Equal(decoded.Output[0].Metadata.ContentItemKinds, want) ||
+		decoded.Output[0].Metadata.TurnID != rawCompactionMarkerTurnID {
 		t.Fatalf("The metadata did not match the expected fields: %+v", decoded.Output[0].Metadata)
 	}
 }
@@ -297,13 +425,25 @@ func TestRawResponsesCompactionPreservesResponseWithUnusableContentKinds(t *test
 		"kinds not an array":   `{"content_item_kinds":"native"}`,
 		"metadata not object":  `"native"`,
 	} {
-		t.Run(name, func(t *testing.T) {
-			body := `{"status":"completed","id":"resp-1","output":[{"id":"msg-1","type":"message","role":"assistant",` +
-				`"content":[{"type":"output_text","text":"summary"}],"internal_chat_message_metadata_passthrough":` + metadata + `}]}`
-			got := rawCompactionMarkerTransform(t, rawCompactionMarkerV1Transformer(t), "application/json", body)
-			if string(got) != body {
-				t.Fatalf("The transformation changed the response.\nThe response contains: %s\nThe test expected: %s", got, body)
-			}
-		})
+		t.Run(
+			name,
+			func(t *testing.T) {
+				body := `{"status":"completed","id":"resp-1","output":[{"id":"msg-1","type":"message","role":"assistant",` +
+					`"content":[{"type":"output_text","text":"summary"}],"internal_chat_message_metadata_passthrough":` + metadata + `}]}`
+				got := rawCompactionMarkerTransform(
+					t,
+					rawCompactionMarkerV1Transformer(t),
+					"application/json",
+					body,
+				)
+				if string(got) != body {
+					t.Fatalf(
+						"The transformation changed the response.\nThe response contains: %s\nThe test expected: %s",
+						got,
+						body,
+					)
+				}
+			},
+		)
 	}
 }
