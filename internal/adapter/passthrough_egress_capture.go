@@ -92,7 +92,7 @@ func passthroughCaptureResponseMetadata(
 }
 
 func passthroughUpstreamRequestID(headers http.Header) string {
-	if requestID := headers.Get("X-Request-Id"); requestID != "" {
+	if requestID := headers.Get("X-Request-ID"); requestID != "" {
 		return requestID
 	}
 
