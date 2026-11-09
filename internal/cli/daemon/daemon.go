@@ -85,30 +85,7 @@ func ReloadCommandError(err error) error {
 // WriteStatusReport writes the human-readable daemon status report.
 func WriteStatusReport(out io.Writer, report daemonsvc.StatusReport) {
 	_, _ = fmt.Fprintln(out, "daemon status")
-	switch {
-	case report.LaunchdTarget == "":
-		_, _ = fmt.Fprintln(out, "launchd: unavailable")
-	case report.LaunchdError != "":
-		_, _ = fmt.Fprintf(
-			out,
-			"launchd: unavailable target=%s error=%s\n",
-			report.LaunchdTarget,
-			report.LaunchdError,
-		)
-	case report.SupervisorPID > 0:
-		_, _ = fmt.Fprintf(
-			out,
-			"launchd: running target=%s supervisor_pid=%d\n",
-			report.LaunchdTarget,
-			report.SupervisorPID,
-		)
-	default:
-		_, _ = fmt.Fprintf(
-			out,
-			"launchd: loaded target=%s supervisor_pid=none\n",
-			report.LaunchdTarget,
-		)
-	}
+	writeLaunchdStatus(out, report)
 
 	daemonSocketState := "missing"
 	if report.DaemonSocketExists {
@@ -187,6 +164,33 @@ func WriteStatusReport(out io.Writer, report daemonsvc.StatusReport) {
 	}
 
 	_, _ = fmt.Fprintln(out, "worker: none")
+}
+
+func writeLaunchdStatus(out io.Writer, report daemonsvc.StatusReport) {
+	switch {
+	case report.LaunchdTarget == "":
+		_, _ = fmt.Fprintln(out, "launchd: unavailable")
+	case report.LaunchdError != "":
+		_, _ = fmt.Fprintf(
+			out,
+			"launchd: unavailable target=%s error=%s\n",
+			report.LaunchdTarget,
+			report.LaunchdError,
+		)
+	case report.SupervisorPID > 0:
+		_, _ = fmt.Fprintf(
+			out,
+			"launchd: running target=%s supervisor_pid=%d\n",
+			report.LaunchdTarget,
+			report.SupervisorPID,
+		)
+	default:
+		_, _ = fmt.Fprintf(
+			out,
+			"launchd: loaded target=%s supervisor_pid=none\n",
+			report.LaunchdTarget,
+		)
+	}
 }
 
 // WriteRuntimeStatusReport writes the passive semantic and listener snapshot.
