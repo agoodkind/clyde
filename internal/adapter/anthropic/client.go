@@ -180,39 +180,13 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	token, err := c.oauth.Token(ctx)
-	if err != nil {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.auth_lookup_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"err",
-			err.Error(),
-		)
-
-		return nil, fmt.Errorf("oauth token: %w", err)
-	}
-
-	httpReq, err := c.buildMessagesRequest(ctx, req, body, token, flavor)
+	token, httpReq, err := c.prepareMessagesPost(ctx, log, req, body, flavor)
 	if err != nil {
 		return nil, err
 	}
 
 	postStarted := clock.Now()
-	ex := egressExchange{
-		method:     httpReq.Method,
-		host:       httpReq.URL.Host,
-		path:       httpReq.URL.Path,
-		reqType:    httpReq.Header.Get("Content-Type"),
-		reqHeaders: httpReq.Header,
-		reqBody:    body,
-		started:    postStarted,
-	}
+	ex := newEgressExchange(httpReq, body, postStarted)
 	resp, err := c.http.Do(httpReq)
 	if resp != nil {
 		// We set Accept-Encoding explicitly, so Go's transparent gzip
@@ -299,6 +273,51 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	c.attachEgressObservers(ctx, resp, base, ex)
 
 	return resp, nil
+}
+
+func newEgressExchange(request *http.Request, body []byte, started time.Time) egressExchange {
+	return egressExchange{
+		method:     request.Method,
+		host:       request.URL.Host,
+		path:       request.URL.Path,
+		reqType:    request.Header.Get("Content-Type"),
+		reqHeaders: request.Header,
+		reqBody:    body,
+		started:    started,
+	}
+}
+
+func (c *Client) prepareMessagesPost(
+	ctx context.Context,
+	log *slog.Logger,
+	req Request,
+	body []byte,
+	flavor WireFlavor,
+) (string, *http.Request, error) {
+	token, err := c.oauth.Token(ctx)
+	if err != nil {
+		log.WarnContext(
+			ctx,
+			"anthropic.messages.auth_lookup_failed",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"subcomponent",
+			"anthropic",
+			"model",
+			req.Model,
+			"err",
+			err.Error(),
+		)
+
+		return "", nil, fmt.Errorf("oauth token: %w", err)
+	}
+
+	httpReq, err := c.buildMessagesRequest(ctx, req, body, token, flavor)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return token, httpReq, nil
 }
 
 // handle429Response builds the typed UpstreamError for a 429 reply, logs the
