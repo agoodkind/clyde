@@ -296,7 +296,6 @@ func (resolver *sourceTimeResolver) applyUniqueTool(tool *transcript.ToolCall) {
 	setToolTime(tool, native.Timestamp)
 }
 
-// setToolTime sets the tool timestamp when stamp is not zero.
 func setToolTime(tool *transcript.ToolCall, stamp time.Time) {
 	if stamp.IsZero() {
 		return

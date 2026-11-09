@@ -57,7 +57,7 @@ type ExtraLoop func(*slog.Logger) func()
 // RunCommandContext starts the launchd or systemd-owned supervisor process and
 // forwards context cancellation as a process-level termination signal.
 //
-// The supervisor manages the daemon worker until shutdown or a startup error.
+// The self-update scheduler runs until this call returns.
 //
 //	err := RunCommandContext(ctx, slog.Default())
 func RunCommandContext(ctx context.Context, log *slog.Logger, _ ...ExtraLoop) error {
@@ -105,8 +105,7 @@ func loadDaemonStartupConfig(ctx context.Context, log *slog.Logger) (*config.Con
 // RunContext starts the daemon worker process using ctx as the parent context
 // for shutdown and child loops.
 //
-// The worker reads global configuration and stops its child loops during
-// shutdown.
+// The worker signals readiness after starting its control server.
 //
 //	err := RunContext(ctx, slog.Default())
 func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoop) (err error) {

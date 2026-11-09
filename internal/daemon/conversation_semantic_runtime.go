@@ -36,7 +36,7 @@ const (
 // ConversationCheckpointDir returns the directory that stores fingerprint
 // record files for every conversation collection.
 //
-// Ingestion clients use this directory to persist synchronization checkpoints.
+// Collections use separate child directories under this path.
 //
 //	directory := ConversationCheckpointDir()
 func ConversationCheckpointDir() string {
@@ -147,7 +147,7 @@ var _ livetrack.Meta = conversationSemanticConnectionMeta{
 
 // IsLivetrackMeta satisfies the livetrack.Meta constraint.
 //
-// The marker lets livetrack accept connection metadata without changing it.
+// Connection records identify their collection with CollectionID.
 //
 //	metadata.IsLivetrackMeta()
 func (conversationSemanticConnectionMeta) IsLivetrackMeta() {}

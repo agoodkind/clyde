@@ -97,7 +97,7 @@ func (s *controlServer) GetProviderStats(context.Context, *clydev1.GetProviderSt
 // ListConversations answers the conversation index that the daemon refreshes in
 // the background. It is the one place that reads the index for every front end.
 //
-// The request applies filters and pagination to cached records.
+// Index read failures return an Internal status before record conversion.
 //
 //	page, err := server.ListConversations(ctx, request)
 func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.ListConversationsRequest) (*clydev1.ListConversationsResponse, error) {
@@ -136,8 +136,7 @@ func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.List
 // GetConversationInfo resolves one conversation and returns static metadata
 // plus its compaction segment stack.
 //
-// Resolution failures return NotFound. A failure to load conversation metadata
-// returns Internal.
+// Warning logs include the requesting peer and conversation ID.
 //
 //	info, err := server.GetConversationInfo(ctx, request)
 func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.GetConversationInfoRequest) (*clydev1.GetConversationInfoResponse, error) {

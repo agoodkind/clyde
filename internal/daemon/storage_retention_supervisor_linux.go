@@ -20,80 +20,87 @@ var (
 )
 
 func supervisorOpenLogFiles(ctx context.Context, pid int) ([]supervisorLogFile, error) {
-	files, err := func() ([]supervisorLogFile, error) {
-		slog.DebugContext(ctx, "daemon.retention.supervisor_proc_started", "concern", "daemon.workers", "pid", pid)
-		root := filepath.Join("/proc", strconv.Itoa(pid))
+	var files []supervisorLogFile
+	var resultErr error
 
-		entries, err := os.ReadDir(filepath.Join(root, "fd"))
-		if err != nil {
-			return nil, fmt.Errorf("list supervisor descriptors: %w", err)
+	defer func() {
+		if resultErr != nil {
+			slog.WarnContext(ctx, "daemon.retention.supervisor_proc_failed",
+				"concern", "daemon.workers", "pid", pid, "err", resultErr)
 		}
-
-		var files []supervisorLogFile
-
-		for _, entry := range entries {
-			err := ctx.Err()
-			if err != nil {
-				return nil, fmt.Errorf("inspect supervisor log descriptors: %w", err)
-			}
-
-			descriptor, err := strconv.Atoi(entry.Name())
-			if err != nil {
-				return nil, fmt.Errorf("parse supervisor descriptor %s: %w", entry.Name(), err)
-			}
-
-			link := filepath.Join(root, "fd", entry.Name())
-
-			info, err := os.Stat(link)
-			if err != nil {
-				return nil, fmt.Errorf("stat supervisor descriptor %d: %w", descriptor, err)
-			}
-
-			if !info.Mode().IsRegular() {
-				continue
-			}
-
-			stat, ok := info.Sys().(*syscall.Stat_t)
-			if !ok {
-				return nil, fmt.Errorf("supervisor descriptor %d %w", descriptor, errSupervisorInodeUnavailable)
-			}
-
-			path, err := os.Readlink(link)
-			if err != nil {
-				return nil, fmt.Errorf("read supervisor descriptor %d: %w", descriptor, err)
-			}
-
-			if stat.Nlink == 0 {
-				path = strings.TrimSuffix(path, " (deleted)")
-			}
-
-			data, err := os.ReadFile(filepath.Join(root, "fdinfo", entry.Name()))
-			if err != nil {
-				return nil, fmt.Errorf("read supervisor descriptor %d flags: %w", descriptor, err)
-			}
-
-			flags, err := readSupervisorDescriptorFlags(data, descriptor)
-			if err != nil {
-				return nil, err
-			}
-
-			if flags&syscall.O_ACCMODE != syscall.O_RDONLY {
-				files = append(files, supervisorLogFile{
-					path: path, descriptor: descriptor, appendMode: flags&syscall.O_APPEND != 0,
-					size: info.Size(), links: supervisorLinkCount(stat.Nlink),
-					identity: supervisorLogIdentity{device: stat.Dev, inode: stat.Ino},
-				})
-			}
-		}
-
-		return files, nil
 	}()
+	slog.DebugContext(ctx, "daemon.retention.supervisor_proc_started", "concern", "daemon.workers", "pid", pid)
+	root := filepath.Join("/proc", strconv.Itoa(pid))
+
+	entries, err := os.ReadDir(filepath.Join(root, "fd"))
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.retention.supervisor_proc_failed",
-			"concern", "daemon.workers", "pid", pid, "err", err)
+		resultErr = fmt.Errorf("list supervisor descriptors: %w", err)
+		return nil, resultErr
 	}
 
-	return files, err
+	for _, entry := range entries {
+		err := ctx.Err()
+		if err != nil {
+			resultErr = fmt.Errorf("inspect supervisor log descriptors: %w", err)
+			return nil, resultErr
+		}
+
+		descriptor, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			resultErr = fmt.Errorf("parse supervisor descriptor %s: %w", entry.Name(), err)
+			return nil, resultErr
+		}
+
+		link := filepath.Join(root, "fd", entry.Name())
+
+		info, err := os.Stat(link)
+		if err != nil {
+			resultErr = fmt.Errorf("stat supervisor descriptor %d: %w", descriptor, err)
+			return nil, resultErr
+		}
+
+		if !info.Mode().IsRegular() {
+			continue
+		}
+
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			resultErr = fmt.Errorf("supervisor descriptor %d %w", descriptor, errSupervisorInodeUnavailable)
+			return nil, resultErr
+		}
+
+		path, err := os.Readlink(link)
+		if err != nil {
+			resultErr = fmt.Errorf("read supervisor descriptor %d: %w", descriptor, err)
+			return nil, resultErr
+		}
+
+		if stat.Nlink == 0 {
+			path = strings.TrimSuffix(path, " (deleted)")
+		}
+
+		data, err := os.ReadFile(filepath.Join(root, "fdinfo", entry.Name()))
+		if err != nil {
+			resultErr = fmt.Errorf("read supervisor descriptor %d flags: %w", descriptor, err)
+			return nil, resultErr
+		}
+
+		flags, err := readSupervisorDescriptorFlags(data, descriptor)
+		if err != nil {
+			resultErr = err
+			return nil, resultErr
+		}
+
+		if flags&syscall.O_ACCMODE != syscall.O_RDONLY {
+			files = append(files, supervisorLogFile{
+				path: path, descriptor: descriptor, appendMode: flags&syscall.O_APPEND != 0,
+				size: info.Size(), links: supervisorLinkCount(stat.Nlink),
+				identity: supervisorLogIdentity{device: stat.Dev, inode: stat.Ino},
+			})
+		}
+	}
+
+	return files, nil
 }
 
 func supervisorLinkCount[Count ~uint32 | ~uint64](count Count) uint64 {
