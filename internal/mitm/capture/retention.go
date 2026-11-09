@@ -358,18 +358,8 @@ func (s *Store) deleteBatch(
 		return 0, fmt.Errorf("delete capture retention batch: %w", err)
 	}
 
-	queries := []string{
-		retentionDeleteOrphanEventsSQL,
-		retentionDeleteRequestEventsSQL,
-		retentionDeleteDecodedBodiesSQL,
-		retentionDeleteBodiesSQL,
-		retentionDeleteRequestsSQL,
-	}
-	for _, query := range queries {
-		if _, err := tx.ExecContext(ctx, query); err != nil {
-			s.log.WarnContext(ctx, "mitm.capture.retention_operation_failed", "err", err)
-			return 0, fmt.Errorf("delete capture retention batch: %w", err)
-		}
+	if err := s.deleteSelectedRows(ctx, tx); err != nil {
+		return 0, err
 	}
 
 	for _, table := range []struct{ name, column string }{
@@ -419,4 +409,23 @@ func (s *Store) deleteBatch(
 	}
 
 	return deleted, nil
+}
+
+func (s *Store) deleteSelectedRows(ctx context.Context, transaction *sql.Tx) error {
+	queries := []string{
+		retentionDeleteOrphanEventsSQL,
+		retentionDeleteRequestEventsSQL,
+		retentionDeleteDecodedBodiesSQL,
+		retentionDeleteBodiesSQL,
+		retentionDeleteRequestsSQL,
+	}
+	for _, query := range queries {
+		if _, err := transaction.ExecContext(ctx, query); err != nil {
+			s.log.WarnContext(ctx, "mitm.capture.retention_operation_failed", "err", err)
+
+			return fmt.Errorf("delete capture retention batch: %w", err)
+		}
+	}
+
+	return nil
 }
