@@ -1,8 +1,11 @@
 package anthropicbackend
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -180,6 +183,86 @@ func TestTranslateRequestImageHTTPSURL(t *testing.T) {
 	src := ib.Source
 	if src == nil || src.Type != "url" || src.URL != "https://x/y.png" {
 		t.Fatalf("unexpected source: %+v", src)
+	}
+}
+
+func TestTranslateRequestRejectsUnsupportedImageScheme(t *testing.T) {
+	const maximumTokens = 64
+	const expectedMessage = `unsupported image url scheme: "ftp"`
+
+	for _, role := range []string{"user", "assistant"} {
+		t.Run(
+			role,
+			func(t *testing.T) {
+				var output bytes.Buffer
+				previousLogger := slog.Default()
+				slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+				t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+				request := OpenAIRequest{
+					Model: "test",
+					Messages: []OpenAIMessage{
+						{
+							Role: role,
+							Content: json.RawMessage(
+								`[{"type":"image_url","image_url":{"url":"ftp://localhost/image.png"}}]`,
+							),
+						},
+					},
+				}
+				_, err := TranslateRequest(request, "", maximumTokens, "")
+				if err == nil {
+					t.Fatal("expected unsupported image scheme error")
+				}
+
+				if !errors.Is(err, errUnsupportedImageURLScheme) {
+					t.Fatalf("error does not wrap the image scheme sentinel: %v", err)
+				}
+
+				if err.Error() != expectedMessage {
+					t.Fatalf("error = %q, want %q", err.Error(), expectedMessage)
+				}
+
+				assertImageRejectionLog(t, output.Bytes(), role, expectedMessage)
+			},
+		)
+	}
+}
+
+func assertImageRejectionLog(t *testing.T, output []byte, role string, message string) {
+	t.Helper()
+	var event struct {
+		Message      string `json:"msg"`
+		Level        string `json:"level"`
+		Concern      string `json:"concern"`
+		Subcomponent string `json:"subcomponent"`
+		Error        string `json:"err"`
+		MessageIndex *int   `json:"msg_idx"`
+		PartIndex    *int   `json:"part_idx"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	if err := decoder.Decode(&event); err != nil {
+		t.Fatalf("decode image rejection event: %v; log: %s", err, output)
+	}
+
+	expectedEvent := "adapter.anthropic." + role + "_part.image_rejected"
+	if event.Message != expectedEvent || event.Level != "WARN" || event.Error != message {
+		t.Fatalf("unexpected image rejection event: %+v", event)
+	}
+
+	if event.Concern != "adapter.providers.anthropic.request" ||
+		event.Subcomponent != "anthropic_mapper" {
+		t.Fatalf("unexpected image rejection metadata: %+v", event)
+	}
+
+	if event.MessageIndex == nil || event.PartIndex == nil || *event.MessageIndex != 0 ||
+		*event.PartIndex != 0 {
+		t.Fatalf("unexpected image rejection positions: %+v", event)
+	}
+
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected one image rejection event, got %s, error %v", extra, err)
 	}
 }
 

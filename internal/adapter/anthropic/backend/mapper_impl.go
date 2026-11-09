@@ -53,6 +53,8 @@ const (
 )
 
 var (
+	errUnsupportedImageURLScheme = errors.New("unsupported image url scheme")
+
 	// ErrAudioUnsupported is returned when a message includes an input_audio part.
 	ErrAudioUnsupported = errors.New(
 		"audio content parts are not supported by the Anthropic backend",
@@ -818,13 +820,13 @@ func imageURLToSource(rawURL string) (*AnthImageSource, error) {
 		return &AnthImageSource{Type: "base64", MediaType: media, Data: data, URL: ""}, nil
 	}
 
-	u, err := url.Parse(rawURL)
+	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse image URL: %w", err)
 	}
 
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("unsupported image url scheme: %q", u.Scheme)
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("%w: %q", errUnsupportedImageURLScheme, parsedURL.Scheme)
 	}
 
 	return &AnthImageSource{Type: "url", URL: rawURL, MediaType: "", Data: ""}, nil
