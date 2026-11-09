@@ -124,6 +124,15 @@ func ProbeUsageWarnings(
 
 	now := cfg.Now().UTC()
 	windows := make([]adapterruntime.UsageWindowNoticeInput, 0, 2)
+
+	return appendUsageWarningWindows(windows, payload, now), nil
+}
+
+func appendUsageWarningWindows(
+	windows []adapterruntime.UsageWindowNoticeInput,
+	payload whamUsageResponse,
+	now time.Time,
+) []adapterruntime.UsageWindowNoticeInput {
 	if warning, ok := usageWindowNoticeInput(
 		"codex",
 		"weekly",
@@ -142,7 +151,7 @@ func ProbeUsageWarnings(
 		windows = append(windows, warning)
 	}
 
-	return windows, nil
+	return windows
 }
 
 func usageWindowNoticeInput(

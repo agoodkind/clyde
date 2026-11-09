@@ -156,16 +156,7 @@ func ReadSidebarThreadBySession(
 		return emptyMetadata, false, nil
 	}
 
-	row := db.QueryRowContext(
-		ctx,
-		`SELECT session_id, agent_id, title, title_override, updated_at, created_at,
-		 folder_paths, folder_paths_order, archived, main_worktree_paths, main_worktree_paths_order
-		 FROM sidebar_threads
-		 WHERE session_id = ?
-		 ORDER BY updated_at DESC
-		 LIMIT 1`,
-		sessionID,
-	)
+	row := sidebarThreadRow(ctx, db, sessionID)
 
 	var rowSessionID string
 	var agentID sql.NullString
@@ -511,4 +502,17 @@ func parseOptionalRFC3339(ctx context.Context, value sql.NullString) (time.Time,
 	}
 
 	return parsed, nil
+}
+
+func sidebarThreadRow(ctx context.Context, db *sql.DB, sessionID string) *sql.Row {
+	return db.QueryRowContext(
+		ctx,
+		`SELECT session_id, agent_id, title, title_override, updated_at, created_at,
+		 folder_paths, folder_paths_order, archived, main_worktree_paths, main_worktree_paths_order
+		 FROM sidebar_threads
+		 WHERE session_id = ?
+		 ORDER BY updated_at DESC
+		 LIMIT 1`,
+		sessionID,
+	)
 }
