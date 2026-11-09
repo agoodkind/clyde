@@ -57,6 +57,10 @@ type controlServer struct {
 }
 
 // GetDaemonStatus reads only daemon-owned flags, connections, and listener handles.
+//
+// Status requests do not probe external dependencies.
+//
+//	status, err := server.GetDaemonStatus(ctx, request)
 func (s *controlServer) GetDaemonStatus(context.Context, *emptypb.Empty) (*clydev1.GetDaemonStatusResponse, error) {
 	if s.runtimeStatus == nil {
 		return nil, status.Error(codes.Unavailable, "daemon runtime status is unavailable")
@@ -92,6 +96,10 @@ func (s *controlServer) GetProviderStats(context.Context, *clydev1.GetProviderSt
 
 // ListConversations answers the conversation index that the daemon refreshes in
 // the background. It is the one place that reads the index for every front end.
+//
+// Index read failures return an Internal status before record conversion.
+//
+//	page, err := server.ListConversations(ctx, request)
 func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.ListConversationsRequest) (*clydev1.ListConversationsResponse, error) {
 	result, err := s.index.ListPage(ctx, conversation.ListOptions{
 		Limit:           int(req.GetLimit()),
@@ -127,6 +135,10 @@ func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.List
 
 // GetConversationInfo resolves one conversation and returns static metadata
 // plus its compaction segment stack.
+//
+// Warning logs include the requesting peer and conversation ID.
+//
+//	info, err := server.GetConversationInfo(ctx, request)
 func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.GetConversationInfoRequest) (*clydev1.GetConversationInfoResponse, error) {
 	client, _ := peer.FromContext(ctx)
 	record, err := s.index.Resolve(ctx, req.GetConversationId())
@@ -156,6 +168,10 @@ func (s *controlServer) GetConversationInfo(ctx context.Context, req *clydev1.Ge
 // enough for any transport. The full surrounding window is a separate windowed
 // read; search never inlines it. The freshness snapshot lets a thin result be
 // distinguished from a cold index.
+//
+// The request selects a query and filters before semantic retrieval.
+//
+//	results, err := server.SearchConversations(ctx, request)
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
 	// Establish correlation before any blocking search work so the operation is
 	// traceable, including a source failure.
@@ -232,6 +248,10 @@ func searchConversationsOptionsFromProto(req *clydev1.SearchConversationsRequest
 // ReorientConversation builds the recovered pre-compaction transcript for one
 // conversation and returns one cursor-paged page of it. The page is bounded so
 // it renders inline, and the caller loops on next_cursor until remaining is zero.
+//
+// The cursor continues the export from the previous page.
+//
+//	page, err := server.ReorientConversation(ctx, request)
 func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.ReorientConversationRequest) (*clydev1.ReorientConversationResponse, error) {
 	ctx, _ = correlation.Ensure(ctx, "")
 	page, err := s.index.ReorientPage(ctx, conversation.ReorientOptions{
@@ -251,6 +271,10 @@ func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.R
 // GetSemanticSearchFreshness returns the feeder's latest sync snapshot, the same
 // freshness each search response carries, so a status view reads it without
 // running a search.
+//
+// Clients use the snapshot to inspect ingestion progress.
+//
+//	freshness, err := server.GetSemanticSearchFreshness(ctx, request)
 func (s *controlServer) GetSemanticSearchFreshness(_ context.Context, _ *clydev1.GetSemanticSearchFreshnessRequest) (*clydev1.GetSemanticSearchFreshnessResponse, error) {
 	return &clydev1.GetSemanticSearchFreshnessResponse{
 		SemanticFreshness: protoSearchFreshness(s.freshnessSnapshot("")),
@@ -448,6 +472,10 @@ func contentKindSetFromExportRequest(req *clydev1.ExportTranscriptRequest) conve
 
 // GetMITMStatus reports each configured MITM listener address, whether the
 // daemon has it bound, and the CA paths.
+//
+// The response reads the listener handles from the running daemon.
+//
+//	status, err := server.GetMITMStatus(ctx, request)
 func (s *controlServer) GetMITMStatus(context.Context, *clydev1.GetMITMStatusRequest) (*clydev1.GetMITMStatusResponse, error) {
 	snapshot := MITMStatus{Listeners: nil, CACertPath: "", CAKeyPath: ""}
 	if s.mitmStatus != nil {
@@ -470,6 +498,10 @@ func (s *controlServer) GetMITMStatus(context.Context, *clydev1.GetMITMStatusReq
 
 // ShowCapture correlates one request id across the daemon's logs and the SQLite
 // capture store and returns the typed lookup result.
+//
+// The request identifier selects the captured operation.
+//
+//	capture, err := server.ShowCapture(ctx, request)
 func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptureRequest) (*clydev1.ShowCaptureResponse, error) {
 	if s.showCapture == nil {
 		return &clydev1.ShowCaptureResponse{
@@ -493,6 +525,10 @@ func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptur
 
 // SeedBaseline builds a wire baseline from the capture store's deduped shape
 // corpus and writes it as the current baseline for the given upstream.
+//
+// The request can restrict the corpus with user-agent filters.
+//
+//	result, err := server.SeedBaseline(ctx, request)
 func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBaselineRequest) (*clydev1.SeedBaselineResponse, error) {
 	result, err := mitm.SeedBaseline(ctx, s.captureStore, req.GetUpstream(), req.GetIncludeUa(), req.GetExcludeUa())
 	if err != nil {
@@ -513,6 +549,10 @@ func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBasel
 
 // LogsInventory builds a metadata-only inventory of the daemon's log files and
 // returns it as typed data for the client-side renderer.
+//
+// The request controls the state root and depth of inspection.
+//
+//	inventory, err := server.LogsInventory(ctx, request)
 func (s *controlServer) LogsInventory(ctx context.Context, req *clydev1.LogsInventoryRequest) (*clydev1.LogsInventoryResponse, error) {
 	output, err := loginventory.Build(
 		req.GetStateRoot(),

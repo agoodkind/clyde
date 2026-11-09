@@ -145,6 +145,85 @@ func TestTranscriptToolCallsStayUndatedWhenTheNativeSequenceDiffers(t *testing.T
 	}
 }
 
+// writeUniqueIdentityFixture writes a transcript with the given Shell commands and a native
+// Cursor store with dated git status and go test calls.
+func writeUniqueIdentityFixture(t *testing.T, commands []string) string {
+	t.Helper()
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+
+	lines := []string{`{"role":"user","message":{"content":[{"type":"text","text":"check the tree"}]}}`}
+	for _, command := range commands {
+		lines = append(lines, `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"`+command+`"}}]}}`)
+	}
+
+	transcriptPath := writeSourceTimesTranscript(t, projectsDir, "Users-alice-unique", nativeComposerID, lines)
+	prefix := "bubbleId:" + nativeComposerID + ":"
+	statements := nativeStateStatements(nativeComposerID, `{"bubbleId":"u1","type":1},{"bubbleId":"u2","type":2},{"bubbleId":"u3","type":2}`, []string{
+		`{"role":"user","content":[{"type":"text","text":"check the tree"}]}`,
+		`{"role":"assistant","content":[` + nativeCall("call_git", "Shell", nativeGitCommand) + `]}`,
+		`{"role":"assistant","content":[` + nativeCall("call_test", "Shell", nativeTestCommand) + `]}`,
+	})
+	statements = append(statements,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('`+prefix+`u1', '{"_v":3,"type":1,"bubbleId":"u1","text":"check the tree","createdAt":"2026-05-20T10:00:00.000Z"}')`,
+		nativeToolBubble("u2", "2026-05-20T10:01:00.000Z", "call_git", "", ""),
+		nativeToolBubble("u3", "2026-05-20T10:03:00.000Z", "call_test", "", ""),
+	)
+	createSourceTimesGlobalDB(t, filepath.Join(rootDir, "globalStorage", "state.vscdb"), statements)
+
+	return transcriptPath
+}
+
+// TestTranscriptDatesUniqueToolCallsAfterMismatch checks that unique calls receive native
+// dates after a mismatch and repeated calls stay undated.
+func TestTranscriptDatesUniqueToolCallsAfterMismatch(t *testing.T) {
+	const omittedCommand = "go vet ./..."
+
+	testCases := []struct {
+		name     string
+		commands []string
+		dated    []bool
+	}{
+		{name: "unique call", commands: []string{nativeGitCommand, omittedCommand, nativeTestCommand}, dated: []bool{true, false, true}},
+		{name: "repeated call", commands: []string{nativeGitCommand, omittedCommand, nativeTestCommand, nativeTestCommand}, dated: []bool{true, false, false, false}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			transcriptPath := writeUniqueIdentityFixture(t, testCase.commands)
+
+			messages, err := conversation.CollectMessages(parser.New().Stream(transcriptPath, sourceRootLoadOptions()))
+			if err != nil {
+				t.Fatalf("stream transcript: %v", err)
+			}
+
+			wants := map[int]time.Time{
+				0: time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC),
+				2: time.Date(2026, time.May, 20, 10, 3, 0, 0, time.UTC),
+			}
+
+			for toolIndex, dated := range testCase.dated {
+				got := toolTime(t, messages, 1, toolIndex)
+				want := time.Time{}
+
+				if dated {
+					var found bool
+
+					want, found = wants[toolIndex]
+					if !found {
+						t.Fatalf("missing expected timestamp for tool index %d", toolIndex)
+					}
+				}
+
+				if !got.Equal(want) {
+					t.Fatalf("unexpected tool timestamp; tool index, actual, expected: %d: %v, %v", toolIndex, got, want)
+				}
+			}
+		})
+	}
+}
+
 // TestTranscriptCombinedMessageIgnoresACopiedWholeBody checks that a combined
 // message stays undated when a copied whole body also matches.
 func TestTranscriptCombinedMessageIgnoresACopiedWholeBody(t *testing.T) {

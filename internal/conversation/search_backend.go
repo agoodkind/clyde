@@ -13,6 +13,11 @@ const (
 )
 
 // Validate rejects unsupported search backends.
+//
+// An empty backend uses the configured source. Explicit selections accept
+// milvus or local.
+//
+//	err := SearchBackendLocal.Validate()
 func (backend SearchBackend) Validate() error {
 	switch backend {
 	case "", SearchBackendMilvus, SearchBackendLocal:

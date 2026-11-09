@@ -35,6 +35,10 @@ const (
 
 // ConversationCheckpointDir returns the directory that stores fingerprint
 // record files for every conversation collection.
+//
+// Collections use separate child directories under this path.
+//
+//	directory := ConversationCheckpointDir()
 func ConversationCheckpointDir() string {
 	return filepath.Join(config.DefaultStateDir(), conversationSemanticStateDirName, conversationCheckpointDirName)
 }
@@ -142,6 +146,10 @@ var _ livetrack.Meta = conversationSemanticConnectionMeta{
 }
 
 // IsLivetrackMeta satisfies the livetrack.Meta constraint.
+//
+// Connection records identify their collection with CollectionID.
+//
+//	metadata.IsLivetrackMeta()
 func (conversationSemanticConnectionMeta) IsLivetrackMeta() {}
 
 type conversationSemanticConnectionCloser struct {
@@ -150,6 +158,10 @@ type conversationSemanticConnectionCloser struct {
 }
 
 // Close closes the semantic-search daemon connection during livetrack drain.
+//
+// Failures include the drain reason in the connection warning log.
+//
+//	err := closer.Close(reason)
 func (c *conversationSemanticConnectionCloser) Close(reason string) error {
 	if c == nil || c.closer == nil {
 		return nil
@@ -195,6 +207,10 @@ func (c *semanticConnectionCloser) closeWithContext(ctx context.Context) error {
 
 // GetState reports Ready. The in-process client has no gRPC connection to
 // report.
+//
+// Readiness does not depend on a separate gRPC connection for this client.
+//
+//	state := closer.GetState()
 func (c *semanticConnectionCloser) GetState() connectivity.State {
 	return connectivity.Ready
 }
@@ -236,6 +252,10 @@ func conversationEmbeddingAPIKey(envName string, filePath string) (string, error
 
 // OpenConversationSearchClient opens the configured local or Milvus backend.
 // Only the Milvus backend resolves the embedding API key.
+//
+// The caller closes the returned client when operations finish.
+//
+//	client, err := OpenConversationSearchClient(ctx, settings)
 func OpenConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
 	return openConversationSearchClient(ctx, semanticCfg, ConversationCheckpointDir())
 }

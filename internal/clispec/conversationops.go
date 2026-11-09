@@ -94,6 +94,10 @@ func (conversationInfoPayload) isClispecPrepared() {}
 
 // ConversationProviderList returns the registered conversation providers as a
 // display-ready English list.
+//
+// Provider labels use title case and English list punctuation.
+//
+//	providers := ConversationProviderList()
 func ConversationProviderList() string {
 	return formatConversationProviderList(true)
 }
@@ -125,6 +129,10 @@ func formatEnglishList(values []string) string {
 }
 
 // ConversationGroup returns the terminal parent for conversation operations.
+//
+// Register conversation commands under this group to use the shared CLI path.
+//
+//	group := ConversationGroup()
 func ConversationGroup() *Group {
 	return conversationGroup
 }

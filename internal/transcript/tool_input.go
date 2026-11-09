@@ -98,6 +98,62 @@ func toolIdentityKey(identity ToolIdentity, invalid string) string {
 	return identity.Name + toolIdentitySeparator + canonical
 }
 
+// UniqueToolPositions returns a source position for each saved call when the
+// tool name and complete canonical JSON input occur exactly once in each set.
+// It returns UnprovenToolPosition for every other saved call.
+// Calls with empty or invalid JSON input never match.
+func UniqueToolPositions(saved []ToolIdentity, source []ToolIdentity) []int {
+	savedCounts := make(map[string]int, len(saved))
+
+	savedKeys := make([]string, 0, len(saved))
+	for _, identity := range saved {
+		key, valid := UniqueToolIdentityKey(identity)
+
+		savedKeys = append(savedKeys, key)
+		if valid {
+			savedCounts[key]++
+		}
+	}
+
+	sourceCounts := make(map[string]int, len(source))
+
+	sourcePositions := make(map[string]int, len(source))
+	for position, identity := range source {
+		key, valid := UniqueToolIdentityKey(identity)
+		if !valid {
+			continue
+		}
+
+		sourceCounts[key]++
+		sourcePositions[key] = position
+	}
+
+	positions := slices.Repeat([]int{UnprovenToolPosition}, len(saved))
+
+	for index, key := range savedKeys {
+		if key != "" && savedCounts[key] == 1 && sourceCounts[key] == 1 {
+			positions[index] = sourcePositions[key]
+		}
+	}
+
+	return positions
+}
+
+// UniqueToolIdentityKey joins the tool name and canonical JSON input. It
+// returns false when the input is empty or invalid JSON.
+func UniqueToolIdentityKey(identity ToolIdentity) (string, bool) {
+	if len(bytes.TrimSpace(identity.Input)) == 0 {
+		return "", false
+	}
+
+	canonical, valid := CanonicalToolInput(identity.Input)
+	if !valid {
+		return "", false
+	}
+
+	return identity.Name + toolIdentitySeparator + canonical, true
+}
+
 // SameToolInput compares two tool inputs as canonical JSON.
 func SameToolInput(left json.RawMessage, right json.RawMessage) bool {
 	leftCanonical, leftOK := CanonicalToolInput(left)

@@ -136,6 +136,10 @@ type SearchConversationsResult struct {
 }
 
 // ListPage returns one filtered, bounded page from the cached index.
+//
+// An index read failure returns an error before filters run.
+//
+//	page, err := index.ListPage(ctx, ListOptions{Limit: 20})
 func (idx *Index) ListPage(ctx context.Context, options ListOptions) (ListResult, error) {
 	records, err := idx.List(ctx)
 	if err != nil {
@@ -148,6 +152,10 @@ func (idx *Index) ListPage(ctx context.Context, options ListOptions) (ListResult
 // archived) into the conversation-id set that scopes engine retrieval, so a
 // record-scoped search filters in the vector store instead of post-filtering
 // engine hits.
+//
+// The result contains the IDs accepted by the provider and workspace filters.
+//
+//	ids, err := index.ConversationIDsMatching(ctx, provider, workspace, false)
 func (idx *Index) ConversationIDsMatching(ctx context.Context, provider Provider, workspaceRoot string, includeArchived bool) ([]string, error) {
 	result, err := idx.ListPage(ctx, ListOptions{
 		Limit:           0,
@@ -169,6 +177,10 @@ func (idx *Index) ConversationIDsMatching(ctx context.Context, provider Provider
 }
 
 // FilterRecords applies list filters and pagination to a pre-sorted record slice.
+//
+// The All option removes the page limit while retaining the other filters.
+//
+//	page := FilterRecords(records, ListOptions{Limit: 20})
 func FilterRecords(records []Record, options ListOptions) ListResult {
 	options = normalizeListOptions(options)
 	filtered := make([]Record, 0, len(records))
@@ -288,6 +300,10 @@ func cleanWorkspaceFilter(workspaceRoot string) string {
 
 // Snippet normalizes and bounds free text to the cross-conversation search
 // snippet length so engine-first matches render like live literal matches.
+//
+// Use this representation for compact result lists.
+//
+//	preview := Snippet(text)
 func Snippet(text string) string {
 	return snippet(text)
 }
@@ -327,6 +343,10 @@ const searchExcerptMaxBytes = 4096
 // preserving line breaks so a hit renders as a readable multi-line block. A
 // truncated excerpt ends with an ellipsis so the reader knows to drill in for
 // the rest.
+//
+// The function removes leading and trailing whitespace before truncation.
+//
+//	preview := Excerpt(text)
 func Excerpt(text string) string {
 	trimmed := strings.TrimSpace(text)
 	if len(trimmed) <= searchExcerptMaxBytes {

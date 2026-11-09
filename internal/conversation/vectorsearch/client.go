@@ -109,12 +109,20 @@ func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName str
 }
 
 // SearchCollectionAvailable checks whether the backend can query an existing collection.
+//
+// The selected backend checks the collection without creating it.
+//
+//	available, err := client.SearchCollectionAvailable(ctx, collectionID)
 func (c *Client) SearchCollectionAvailable(ctx context.Context, collectionID string) (bool, error) {
 	return c.store.searchCollectionPresent(ctx, CollectionName(collectionID))
 }
 
 // Open builds the embedding provider and opens the vector store that
 // options.Backend selects.
+//
+// The caller closes the client after its searches and writes finish.
+//
+//	client, err := Open(ctx, options)
 func Open(ctx context.Context, options Options) (*Client, error) {
 	opened, err := openBackend(ctx, options)
 	if err != nil {
@@ -152,6 +160,10 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 
 // DeliveryBatchBytes returns the per-pass raw transcript byte budget for this
 // backend. Zero selects the worker default.
+//
+// Sync workers use this limit when selecting a transcript batch.
+//
+//	budget := client.DeliveryBatchBytes()
 func (c *Client) DeliveryBatchBytes() int64 {
 	if c == nil {
 		return 0
@@ -160,6 +172,10 @@ func (c *Client) DeliveryBatchBytes() int64 {
 }
 
 // Close closes the vector store.
+//
+// A nil client does not require cleanup.
+//
+//	err := client.Close(ctx)
 func (c *Client) Close(ctx context.Context) error {
 	if c == nil || c.store == nil {
 		return nil
@@ -170,6 +186,10 @@ func (c *Client) Close(ctx context.Context) error {
 // SearchConversations ranks the conversation collection for query and returns
 // at most limit hits, at most perConversationLimit per conversation, none
 // scoring below the filter's MinScore. A missing collection returns no hits.
+//
+// Filters restrict the stored rows before the backend returns ranked hits.
+//
+//	hits, err := client.SearchConversations(ctx, id, query, 20, filter, 2)
 func (c *Client) SearchConversations(
 	ctx context.Context,
 	collectionID string,
@@ -261,6 +281,10 @@ func (c *Client) queryVector(ctx context.Context, query string) ([]float32, bool
 
 // SearchWithinConversation ranks one conversation's rows for query.
 // Its fingerprint result is always empty.
+//
+// The conversation ID restricts retrieval to that conversation.
+//
+//	hits, _, err := client.SearchWithinConversation(ctx, id, chatID, query, 20, filter)
 func (c *Client) SearchWithinConversation(
 	ctx context.Context,
 	collectionID string,

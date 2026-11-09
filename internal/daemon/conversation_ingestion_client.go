@@ -13,7 +13,10 @@ const conversationBackendCheckpointDirName = "backends"
 
 // OpenConversationIngestionClient opens the selected backend with independent
 // checkpoints. It does not read or change the legacy shared checkpoints.
+//
 // The caller closes the returned client after ingestion stops.
+//
+//	client, err := OpenConversationIngestionClient(ctx, semanticConfig)
 func OpenConversationIngestionClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
 	backend := semanticCfg.Backend
 	switch backend {
