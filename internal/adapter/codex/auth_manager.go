@@ -310,23 +310,8 @@ func (m *AuthManager) refreshFromAuthorityLocked(
 	ctx context.Context,
 	rejectedToken string,
 ) (string, error) {
-	if err := os.MkdirAll(filepath.Dir(m.path), 0o700); err != nil {
-		m.log.WarnContext(
-			ctx,
-			"adapter.codex.auth.mkdir_failed",
-			"concern",
-			"adapter.providers.codex.request",
-			"component",
-			"adapter",
-			"subcomponent",
-			"codex",
-			"dir",
-			filepath.Dir(m.path),
-			"err",
-			err.Error(),
-		)
-
-		return "", fmt.Errorf("mkdir codex auth dir: %w", err)
+	if err := m.ensureAuthDirectory(ctx); err != nil {
+		return "", err
 	}
 
 	lock := flock.New(m.lockPath)
@@ -422,6 +407,29 @@ func (m *AuthManager) refreshFromAuthorityLocked(
 	}
 
 	return m.persistRefreshedTokens(ctx, doc, response)
+}
+
+func (m *AuthManager) ensureAuthDirectory(ctx context.Context) error {
+	if err := os.MkdirAll(filepath.Dir(m.path), 0o700); err != nil {
+		m.log.WarnContext(
+			ctx,
+			"adapter.codex.auth.mkdir_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"component",
+			"adapter",
+			"subcomponent",
+			"codex",
+			"dir",
+			filepath.Dir(m.path),
+			"err",
+			err.Error(),
+		)
+
+		return fmt.Errorf("mkdir codex auth dir: %w", err)
+	}
+
+	return nil
 }
 
 func (m *AuthManager) takeFreshOnDiskToken(
@@ -600,6 +608,15 @@ func (m *AuthManager) callRefreshEndpoint(
 
 	defer func() { _ = resp.Body.Close() }()
 	respBytes, _ := io.ReadAll(resp.Body)
+
+	return m.parseRefreshResponse(ctx, resp, respBytes)
+}
+
+func (m *AuthManager) parseRefreshResponse(
+	ctx context.Context,
+	resp *http.Response,
+	respBytes []byte,
+) (codexRefreshResponse, error) {
 	if resp.StatusCode == http.StatusOK {
 		var parsed codexRefreshResponse
 		if unmarshalErr := json.Unmarshal(respBytes, &parsed); unmarshalErr != nil {
