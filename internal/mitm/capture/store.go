@@ -286,22 +286,7 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 
 	rdb.SetMaxOpenConns(readPoolMaxConns)
 	rdb.SetMaxIdleConns(readPoolMaxConns)
-	s := &Store{
-		cfg:                         cfg,
-		log:                         log,
-		db:                          db,
-		rdb:                         rdb,
-		records:                     make(chan queuedRecord, cfg.QueueDepth),
-		shapes:                      make(chan DriftShape, cfg.QueueDepth),
-		checks:                      make(chan DriftCheck, cfg.QueueDepth),
-		done:                        make(chan struct{}),
-		openedAt:                    clock.Now(),
-		closed:                      atomic.Bool{},
-		wg:                          sync.WaitGroup{},
-		initialRequestID:            0,
-		lastRetentionReport:         time.Time{},
-		reclamationDeferredReported: false,
-	}
+	s := newStore(cfg, log, db, rdb)
 	if err := db.QueryRowContext(ctx, retentionInitialCutoffSQL).Scan(
 		&s.initialRequestID,
 	); err != nil {
@@ -336,6 +321,25 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	}()
 
 	return s, nil
+}
+
+func newStore(cfg Config, log *slog.Logger, db *sql.DB, rdb *sql.DB) *Store {
+	return &Store{
+		cfg:                         cfg,
+		log:                         log,
+		db:                          db,
+		rdb:                         rdb,
+		records:                     make(chan queuedRecord, cfg.QueueDepth),
+		shapes:                      make(chan DriftShape, cfg.QueueDepth),
+		checks:                      make(chan DriftCheck, cfg.QueueDepth),
+		done:                        make(chan struct{}),
+		openedAt:                    clock.Now(),
+		closed:                      atomic.Bool{},
+		wg:                          sync.WaitGroup{},
+		initialRequestID:            0,
+		lastRetentionReport:         time.Time{},
+		reclamationDeferredReported: false,
+	}
 }
 
 // schemaSQL is the capture store's DDL, kept in schema.sql so the schema is
@@ -606,54 +610,11 @@ func (s *Store) insert(ctx context.Context, queued queuedRecord) {
 		return
 	}
 
-	requestSQL, requestArgs, err := sq.Insert("requests").
-		Columns(
-			"ts",
-			"client",
-			"provider",
-			"concern",
-			"host",
-			"method",
-			"path",
-			"status",
-			"request_id",
-			"upstream_request_id",
-			"session_id",
-			"conversation_id",
-			"conversation_source",
-			"trace_id",
-			"req_headers",
-			"resp_headers",
-			"req_content_type",
-			"resp_content_type",
-			"req_bytes",
-			"resp_bytes",
-			"duration_ms",
-		).
-		Values(
-			rec.Timestamp.UnixNano(),
-			rec.Client,
-			rec.Provider,
-			rec.Concern,
-			rec.Host,
-			rec.Method,
-			rec.Path,
-			rec.Status,
-			rec.RequestID,
-			rec.UpstreamRequestID,
-			rec.SessionID,
-			rec.ConversationID,
-			rec.ConversationSource,
-			rec.TraceID,
-			encodeHeaders(rec.RequestHeaders),
-			encodeHeaders(rec.ResponseHeaders),
-			rec.RequestType,
-			rec.ResponseType,
-			queued.requestBytes,
-			queued.responseBytes,
-			rec.Duration.Milliseconds(),
-		).
-		ToSql()
+	requestSQL, requestArgs, err := requestInsert(
+		rec,
+		queued.requestBytes,
+		queued.responseBytes,
+	).ToSql()
 	if err != nil {
 		_ = tx.Rollback()
 		s.log.WarnContext(
@@ -704,33 +665,14 @@ func (s *Store) insert(ctx context.Context, queued queuedRecord) {
 		return
 	}
 
-	if !s.insertBody(
+	if !s.insertRecordBodies(
 		ctx,
 		tx,
 		rowID,
-		BodyRequest,
-		rec.RequestType,
-		rec.RequestBody,
+		rec,
 		queued.requestTruncated,
-	) {
-		_ = tx.Rollback()
-		return
-	}
-
-	if !s.insertBody(
-		ctx,
-		tx,
-		rowID,
-		BodyResponse,
-		rec.ResponseType,
-		rec.ResponseBody,
 		queued.responseTruncated,
 	) {
-		_ = tx.Rollback()
-		return
-	}
-
-	if !s.insertDecodedBody(ctx, tx, rowID, BodyRequest, rec.DecodedRequest) {
 		_ = tx.Rollback()
 		return
 	}
@@ -747,6 +689,56 @@ func (s *Store) insert(ctx context.Context, queued queuedRecord) {
 			err,
 		)
 	}
+}
+
+func requestInsert(rec Record, requestBytes int, responseBytes int) sq.InsertBuilder {
+	return sq.Insert("requests").
+		Columns(
+			"ts",
+			"client",
+			"provider",
+			"concern",
+			"host",
+			"method",
+			"path",
+			"status",
+			"request_id",
+			"upstream_request_id",
+			"session_id",
+			"conversation_id",
+			"conversation_source",
+			"trace_id",
+			"req_headers",
+			"resp_headers",
+			"req_content_type",
+			"resp_content_type",
+			"req_bytes",
+			"resp_bytes",
+			"duration_ms",
+		).
+		Values(
+			rec.Timestamp.UnixNano(),
+			rec.Client,
+			rec.Provider,
+			rec.Concern,
+			rec.Host,
+			rec.Method,
+			rec.Path,
+			rec.Status,
+			rec.RequestID,
+			rec.UpstreamRequestID,
+			rec.SessionID,
+			rec.ConversationID,
+			rec.ConversationSource,
+			rec.TraceID,
+			encodeHeaders(rec.RequestHeaders),
+			encodeHeaders(rec.ResponseHeaders),
+			rec.RequestType,
+			rec.ResponseType,
+			requestBytes,
+			responseBytes,
+			rec.Duration.Milliseconds(),
+		)
 }
 
 func (s *Store) insertDecodedBody(
@@ -819,51 +811,7 @@ func (s *Store) insertDecodedBody(
 		return false
 	}
 
-	for _, event := range decoded.ToolEvents {
-		legacyOrdering := int64(0)
-		if event.Ordering <= uint64(1<<63-1) {
-			legacyOrdering = int64(event.Ordering)
-		}
-
-		orderingText := strconv.FormatUint(event.Ordering, 10)
-		eventSQL, eventArgs, buildErr := sq.Insert("decoded_tool_events").
-			Columns(
-				"decoded_body_id",
-				"ordering",
-				"ordering_text",
-				"call_id",
-				"tool_name",
-				"input_representation",
-				"input_encoding",
-			).
-			Values(
-				decodedBodyID,
-				legacyOrdering,
-				orderingText,
-				event.CallID,
-				event.ToolName,
-				event.InputRepresentation,
-				string(event.InputEncoding),
-			).
-			ToSql()
-		if buildErr != nil {
-			s.log.WarnContext(
-				ctx,
-				"mitm.capture.build_decoded_tool_event_insert_failed",
-				"err",
-				buildErr,
-			)
-
-			return false
-		}
-
-		if _, execErr := tx.ExecContext(ctx, eventSQL, eventArgs...); execErr != nil {
-			s.log.WarnContext(ctx, "mitm.capture.insert_decoded_tool_event_failed", "err", execErr)
-			return false
-		}
-	}
-
-	return true
+	return s.insertDecodedToolEvents(ctx, tx, decodedBodyID, decoded.ToolEvents)
 }
 
 // insertBody writes one body row, returning false (after logging) on failure so
@@ -978,6 +926,99 @@ func (s *Store) Close(ctx context.Context, reason string) error {
 	s.log.InfoContext(ctx, "mitm.capture.closed", "reason", reason)
 
 	return nil
+}
+
+func (s *Store) insertRecordBodies(
+	ctx context.Context,
+	transaction *sql.Tx,
+	rowID int64,
+	rec Record,
+	requestTruncated bool,
+	responseTruncated bool,
+) bool {
+	if !s.insertBody(
+		ctx,
+		transaction,
+		rowID,
+		BodyRequest,
+		rec.RequestType,
+		rec.RequestBody,
+		requestTruncated,
+	) {
+		return false
+	}
+
+	if !s.insertBody(
+		ctx,
+		transaction,
+		rowID,
+		BodyResponse,
+		rec.ResponseType,
+		rec.ResponseBody,
+		responseTruncated,
+	) {
+		return false
+	}
+
+	if !s.insertDecodedBody(ctx, transaction, rowID, BodyRequest, rec.DecodedRequest) {
+		return false
+	}
+
+	return true
+}
+
+func (s *Store) insertDecodedToolEvents(
+	ctx context.Context,
+	transaction *sql.Tx,
+	decodedBodyID int64,
+	events []ToolEvent,
+) bool {
+	for _, event := range events {
+		legacyOrdering := int64(0)
+		if event.Ordering <= uint64(1<<63-1) {
+			legacyOrdering = int64(event.Ordering)
+		}
+
+		orderingText := strconv.FormatUint(event.Ordering, 10)
+		eventSQL, eventArgs, buildErr := sq.Insert("decoded_tool_events").
+			Columns(
+				"decoded_body_id",
+				"ordering",
+				"ordering_text",
+				"call_id",
+				"tool_name",
+				"input_representation",
+				"input_encoding",
+			).
+			Values(
+				decodedBodyID,
+				legacyOrdering,
+				orderingText,
+				event.CallID,
+				event.ToolName,
+				event.InputRepresentation,
+				string(event.InputEncoding),
+			).
+			ToSql()
+		if buildErr != nil {
+			s.log.WarnContext(
+				ctx,
+				"mitm.capture.build_decoded_tool_event_insert_failed",
+				"err",
+				buildErr,
+			)
+
+			return false
+		}
+
+		if _, execErr := transaction.ExecContext(ctx, eventSQL, eventArgs...); execErr != nil {
+			s.log.WarnContext(ctx, "mitm.capture.insert_decoded_tool_event_failed", "err", execErr)
+
+			return false
+		}
+	}
+
+	return true
 }
 
 func encodeHeaders(h http.Header) string {
