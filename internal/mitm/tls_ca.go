@@ -196,34 +196,9 @@ func loadExistingCertAuthority(
 		now = time.Now
 	}
 
-	certPEM, err := os.ReadFile(certPath)
+	certPEM, keyPEM, err := readCAFiles(certPath, keyPath)
 	if err != nil {
-		slog.Warn(
-			"mitm.tls.ca_cert_read_failed",
-			"concern",
-			"providers.mitm.wire",
-			"path",
-			certPath,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("read mitm ca cert %q: %w", certPath, err)
-	}
-
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		slog.Warn(
-			"mitm.tls.ca_key_read_failed",
-			"concern",
-			"providers.mitm.wire",
-			"path",
-			keyPath,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("read mitm ca key %q: %w", keyPath, err)
+		return nil, err
 	}
 
 	certBlock, _ := pem.Decode(certPEM)
@@ -316,6 +291,40 @@ func loadExistingCertAuthority(
 		now:   now,
 		mu:    sync.Mutex{},
 	}, nil
+}
+
+func readCAFiles(certPath string, keyPath string) ([]byte, []byte, error) {
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		slog.Warn(
+			"mitm.tls.ca_cert_read_failed",
+			"concern",
+			"providers.mitm.wire",
+			"path",
+			certPath,
+			"err",
+			err,
+		)
+
+		return nil, nil, fmt.Errorf("read mitm ca cert %q: %w", certPath, err)
+	}
+
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		slog.Warn(
+			"mitm.tls.ca_key_read_failed",
+			"concern",
+			"providers.mitm.wire",
+			"path",
+			keyPath,
+			"err",
+			err,
+		)
+
+		return nil, nil, fmt.Errorf("read mitm ca key %q: %w", keyPath, err)
+	}
+
+	return certPEM, keyPEM, nil
 }
 
 // decodeRSAPrivateKey parses a PEM block as an RSA private key, accepting
@@ -587,32 +596,7 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
-	// The leaf stays short-lived for native client trust compatibility while
-	// the CA itself remains long-lived on disk. NotBefore is backdated for
-	// clock skew but never precedes the CA's own NotBefore.
-	notBefore := now.Add(-leafBackdate)
-	if notBefore.Before(ca.cert.NotBefore) {
-		notBefore = ca.cert.NotBefore
-	}
-
-	notAfter := notBefore.Add(leafValidity + leafBackdate)
-	if notAfter.After(ca.cert.NotAfter) {
-		notAfter = ca.cert.NotAfter
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: host},
-		NotBefore:    notBefore,
-		NotAfter:     notAfter,
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{host},
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		template.IPAddresses = []net.IP{ip}
-		template.DNSNames = nil
-	}
+	template := ca.leafTemplate(host, now, serial)
 
 	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
@@ -671,6 +655,41 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 	)
 
 	return &cert, nil
+}
+
+func (ca *certAuthority) leafTemplate(
+	host string,
+	now time.Time,
+	serial *big.Int,
+) *x509.Certificate {
+	// The leaf stays short-lived for native client trust compatibility while
+	// the CA itself remains long-lived on disk. NotBefore is backdated for
+	// clock skew but never precedes the CA's own NotBefore.
+	notBefore := now.Add(-leafBackdate)
+	if notBefore.Before(ca.cert.NotBefore) {
+		notBefore = ca.cert.NotBefore
+	}
+
+	notAfter := notBefore.Add(leafValidity + leafBackdate)
+	if notAfter.After(ca.cert.NotAfter) {
+		notAfter = ca.cert.NotAfter
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: host},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{host},
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		template.IPAddresses = []net.IP{ip}
+		template.DNSNames = nil
+	}
+
+	return template
 }
 
 func randomSerial() (*big.Int, error) {
