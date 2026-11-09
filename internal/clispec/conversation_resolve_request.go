@@ -60,7 +60,8 @@ func resolveRequestOp() Operation[resolveRequestInput, resolveRequestPayload] {
 		Params: []Param[resolveRequestInput]{
 			BoolParam(
 				"full_scan",
-				"Read every stored turn when the bounded paths miss. This takes tens of seconds, so it never runs unless you pass it.",
+				"Read every stored turn when the bounded paths miss. "+
+					"This takes tens of seconds, so it never runs unless you pass it.",
 				false,
 				func(in *resolveRequestInput, v bool) { in.FullScan = v },
 			),

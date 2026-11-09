@@ -253,7 +253,8 @@ func retainCleanupFiles(files []cleanupFile, policy CleanupPolicy, result *Clean
 			result.Errors = append(
 				result.Errors,
 				fmt.Sprintf(
-					"retained logs exceed the combined budget by %d bytes; protected named files account for %d bytes and %d open unlinked files retain %d bytes",
+					"retained logs exceed the combined budget by %d bytes; "+
+						"protected named files account for %d bytes and %d open unlinked files retain %d bytes",
 					result.ExcessBytes,
 					result.ProtectedBytes,
 					result.RetainedOpenFiles,

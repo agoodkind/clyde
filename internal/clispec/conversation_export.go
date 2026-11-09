@@ -213,7 +213,8 @@ func renderExportParam(declaration exportargs.Declaration, bind exportBind) Para
 func exportParams() []Param[exportInput] {
 	outputPathParam := StringParam(
 		"output",
-		"Write the export to this path; MCP requires an absolute path. Use - for stdout on the terminal or inline output on MCP.",
+		"Write the export to this path; MCP requires an absolute path. "+
+			"Use - for stdout on the terminal or inline output on MCP.",
 		"",
 		false,
 		func(in *exportInput, v string) { in.OutputPath = v },
@@ -221,7 +222,8 @@ func exportParams() []Param[exportInput] {
 
 	stdoutParam := BoolParam(
 		"stdout",
-		"Write the body to stdout on the terminal, equivalent to output -. On MCP, return the body inline when it is at most 32768 bytes.",
+		"Write the body to stdout on the terminal, equivalent to output -. "+
+			"On MCP, return the body inline when it is at most 32768 bytes.",
 		false,
 		func(in *exportInput, v bool) { in.Stdout = v },
 	)

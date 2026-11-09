@@ -127,7 +127,8 @@ func newBackfillConversationDocumentsCmd(f *cli.Factory) *cobra.Command {
 		&allowFullReexamine,
 		"all",
 		false,
-		"Allow a full uncapped --execute reexamine of every conversation. Required when --execute is passed with no --conversation and no --limit.",
+		"Allow a full uncapped --execute reexamine of every conversation. "+
+			"Required when --execute is passed with no --conversation and no --limit.",
 	)
 
 	return cmd

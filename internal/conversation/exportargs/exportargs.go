@@ -207,11 +207,13 @@ func Declarations() []Declaration {
 		),
 		stringDeclaration(
 			"max_tokens",
-			"Cap the rendered body to a token budget, keeping the tail. Accepts human sizes like 200000, 200,000, 200k, or 1m. Empty leaves the output uncapped.",
+			"Cap the rendered body to a token budget, keeping the tail. "+
+				"Accepts human sizes like 200000, 200,000, 200k, or 1m. Empty leaves the output uncapped.",
 		),
 		stringDeclaration(
 			"token_model",
-			"Override the model whose tokenizer counts --max-tokens (for example gpt-4o). Empty derives it from the conversation's provider and model.",
+			"Override the model whose tokenizer counts --max-tokens (for example gpt-4o). "+
+				"Empty derives it from the conversation's provider and model.",
 		),
 		enumListDeclaration(
 			"only",

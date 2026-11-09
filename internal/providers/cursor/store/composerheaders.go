@@ -118,7 +118,8 @@ func ReadComposerMetadataIndex(
 	// is worth, and leaves the rest readable.
 	rows, err := db.QueryContext(
 		ctx,
-		"SELECT composerId, CAST(createdAt AS INTEGER), CAST(lastUpdatedAt AS INTEGER), CAST(isArchived AS INTEGER), CAST(isSubagent AS INTEGER), value FROM composerHeaders",
+		"SELECT composerId, CAST(createdAt AS INTEGER), CAST(lastUpdatedAt AS INTEGER), "+
+			"CAST(isArchived AS INTEGER), CAST(isSubagent AS INTEGER), value FROM composerHeaders",
 	)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
