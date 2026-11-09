@@ -55,10 +55,7 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 		return nil
 	}
 
-	configured := make(map[string][]string, len(cfg.MITM.Listeners))
-	for id, listenerCfg := range cfg.MITM.Listeners {
-		configured[id] = mitmBindAddrs(listenerCfg.Host, listenerCfg.Port)
-	}
+	configured := configuredMITMListenerAddresses(cfg)
 
 	if len(configured) != len(runtime.mitmListeners) {
 		slog.Warn(
@@ -98,17 +95,10 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 		}
 
 		if !equalStringSet(gotAddrs, wantAddrs) {
-			slog.Warn(
+			logMITMListenerAddressChange(
 				"daemon.reload.mitm_listener_address_changed",
-				"concern",
-				"daemon.workers.reload",
-				"component",
-				"daemon",
-				"listener_id",
 				id,
-				"running",
 				gotAddrs,
-				"configured",
 				wantAddrs,
 			)
 
@@ -143,17 +133,10 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 		}
 
 		if !equalStringSet(gotAddrs, wantAddrs) {
-			slog.Warn(
+			logMITMListenerAddressChange(
 				"daemon.reload.mitm_udp_listener_address_changed",
-				"concern",
-				"daemon.workers.reload",
-				"component",
-				"daemon",
-				"listener_id",
 				id,
-				"running",
 				gotAddrs,
-				"configured",
 				wantAddrs,
 			)
 
@@ -167,6 +150,36 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 	}
 
 	return nil
+}
+
+func configuredMITMListenerAddresses(cfg *config.Config) map[string][]string {
+	configured := make(map[string][]string, len(cfg.MITM.Listeners))
+	for listenerID, listenerCfg := range cfg.MITM.Listeners {
+		configured[listenerID] = mitmBindAddrs(listenerCfg.Host, listenerCfg.Port)
+	}
+
+	return configured
+}
+
+func logMITMListenerAddressChange(
+	event string,
+	listenerID string,
+	gotAddrs []string,
+	wantAddrs []string,
+) {
+	slog.Warn(
+		event,
+		"concern",
+		"daemon.workers.reload",
+		"component",
+		"daemon",
+		"listener_id",
+		listenerID,
+		"running",
+		gotAddrs,
+		"configured",
+		wantAddrs,
+	)
 }
 
 // equalStringSet reports whether two string slices contain the same elements
