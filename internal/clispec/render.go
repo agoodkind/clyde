@@ -18,13 +18,13 @@ func RenderCobra(reg *Registry, f *cli.Factory) []*cobra.Command {
 	commands := make([]*cobra.Command, 0, len(reg.ops)+len(reg.handwritten))
 	parents := map[*Group]*cobra.Command{}
 
-	for _, op := range reg.ops {
-		if !op.surfaceSet().CLI {
+	for _, operation := range reg.ops {
+		if !operation.surfaceSet().CLI {
 			continue
 		}
 
-		child := op.cobraCommand(f)
-		groupRef := op.group()
+		child := operation.cobraCommand(f)
+		groupRef := operation.group()
 		if groupRef == nil {
 			commands = append(commands, child)
 			continue
@@ -105,13 +105,13 @@ func RenderMCP(reg *Registry, mcpServer *server.MCPServer) {
 	}
 }
 
-func renderMCPTools(op renderable, mcpServer *server.MCPServer) {
-	if op.surfaceSet().MCP {
-		tool, handler := op.mcpTool()
+func renderMCPTools(operation renderable, mcpServer *server.MCPServer) {
+	if operation.surfaceSet().MCP {
+		tool, handler := operation.mcpTool()
 		mcpServer.AddTool(tool, handler)
 	}
 
-	for _, child := range op.children() {
+	for _, child := range operation.children() {
 		renderMCPTools(child, mcpServer)
 	}
 }

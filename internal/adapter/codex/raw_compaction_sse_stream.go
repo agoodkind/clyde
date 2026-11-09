@@ -270,13 +270,13 @@ func (b *rawCompactionSSEBody) handleSSECompletedFrame(frame []byte, readErr err
 		return b.failOpenSSE(frame, readErr)
 	}
 
-	mutatedFrames, ok := appendRawCompactionSSEStreamEvents(
+	mutatedFrames, hasMutation := appendRawCompactionSSEStreamEvents(
 		b.candidate,
 		b.following,
 		frame,
 		b.transcript,
 	)
-	if !ok {
+	if !hasMutation {
 		return b.failOpenSSE(frame, readErr)
 	}
 

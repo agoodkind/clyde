@@ -506,14 +506,14 @@ func BuildRequestWithConfig(
 	modelName := codexResolvedModelName(resolved)
 	workspacePath := cursorReq.WorkspacePath
 	customTools := newDeclaredCustomTools(requestTools(req))
-	if rawInput, ok := inputFromResponsesInput(
+	if rawInput, hasResponsesInput := inputFromResponsesInput(
 		req.Input,
 		workspacePath,
 		&systemSections,
 		strategy,
 		cfg,
 		toolIDs,
-	); ok {
+	); hasResponsesInput {
 		input = rawInput
 	} else {
 		toolIDs.reserveCompliant(chatToolCallIDs(req.Messages))
@@ -1046,7 +1046,7 @@ func requestContextIdentity(
 		}
 	}
 
-	if v := requestMetadataString(
+	if metadataID := requestMetadataString(
 		req.OpenAI.Metadata,
 		"conversation_id",
 		"conversationId",
@@ -1056,8 +1056,8 @@ func requestContextIdentity(
 		"threadId",
 		"chat_id",
 		"chatId",
-	); v != "" {
-		key := "meta:" + v
+	); metadataID != "" {
+		key := "meta:" + metadataID
 
 		return codexRequestContextIdentity{
 			PromptCacheKey:      key,
@@ -1104,24 +1104,24 @@ func requestMetadataString(raw json.RawMessage, keys ...string) string {
 		return ""
 	}
 
-	var m metadataString
-	if err := json.Unmarshal(raw, &m); err != nil {
+	var metadata metadataString
+	if err := json.Unmarshal(raw, &metadata); err != nil {
 		return ""
 	}
 
 	for _, key := range keys {
-		v, ok := m[key]
+		v, ok := metadata[key]
 		if !ok {
 			continue
 		}
 
-		var s string
-		if err := json.Unmarshal(v, &s); err != nil {
+		var text string
+		if err := json.Unmarshal(v, &text); err != nil {
 			continue
 		}
 
-		if strings.TrimSpace(s) != "" {
-			return strings.TrimSpace(s)
+		if strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
 		}
 	}
 

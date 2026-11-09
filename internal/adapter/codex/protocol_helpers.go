@@ -288,8 +288,8 @@ func reasoningEventsFromItem(
 	return out
 }
 
-func mapUsage(c completedResponse) adapteropenai.Usage {
-	if c.Response.Usage == nil {
+func mapUsage(completed completedResponse) adapteropenai.Usage {
+	if completed.Response.Usage == nil {
 		return adapteropenai.Usage{
 			PromptTokens:            0,
 			CompletionTokens:        0,
@@ -304,7 +304,7 @@ func mapUsage(c completedResponse) adapteropenai.Usage {
 		}
 	}
 
-	usage := c.Response.Usage
+	usage := completed.Response.Usage
 	u := adapteropenai.Usage{
 		PromptTokens:            usage.InputTokens,
 		CompletionTokens:        usage.OutputTokens,
