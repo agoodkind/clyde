@@ -150,37 +150,7 @@ func (p *Proxy) handleProviderH2Stream(
 		livetrack.WithParent(parent),
 	)
 	if registerErr != nil {
-		_ = req.Body.Close()
-		if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil ||
-			p.Tunnels.State() != livetrack.StateDraining {
-			p.log.WarnContext(
-				ctx,
-				"mitm.provider.http2.register_rejected",
-				"concern",
-				"providers.mitm.wire",
-				"provider",
-				providerID,
-				"host",
-				host,
-				"err",
-				registerErr,
-			)
-		} else {
-			p.log.DebugContext(
-				ctx,
-				"mitm.provider.http2.request_rejected_reload_drain",
-				"concern",
-				"providers.mitm.wire",
-				"provider",
-				providerID,
-				"host",
-				host,
-				"err",
-				registerErr,
-			)
-		}
-
-		http.Error(w, "service draining", http.StatusServiceUnavailable)
+		p.rejectProviderH2Stream(ctx, w, req, providerID, host, parent, registerErr)
 
 		return
 	}
@@ -232,6 +202,48 @@ func (p *Proxy) handleProviderH2Stream(
 
 	parent.Touch()
 	streamSession.Touch()
+}
+
+func (p *Proxy) rejectProviderH2Stream(
+	ctx context.Context,
+	writer http.ResponseWriter,
+	req *http.Request,
+	providerID string,
+	host string,
+	parent *livetrack.Session[TunnelMeta],
+	registerErr error,
+) {
+	_ = req.Body.Close()
+	if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil ||
+		p.Tunnels.State() != livetrack.StateDraining {
+		p.log.WarnContext(
+			ctx,
+			"mitm.provider.http2.register_rejected",
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			providerID,
+			"host",
+			host,
+			"err",
+			registerErr,
+		)
+	} else {
+		p.log.DebugContext(
+			ctx,
+			"mitm.provider.http2.request_rejected_reload_drain",
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			providerID,
+			"host",
+			host,
+			"err",
+			registerErr,
+		)
+	}
+
+	http.Error(writer, "service draining", http.StatusServiceUnavailable)
 }
 
 type h2ProviderResponseSink struct {
