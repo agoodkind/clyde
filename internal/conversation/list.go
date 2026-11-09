@@ -178,7 +178,7 @@ func (idx *Index) ConversationIDsMatching(ctx context.Context, provider Provider
 
 // FilterRecords applies list filters and pagination to a pre-sorted record slice.
 //
-// Filtering preserves the input order before selecting the requested page.
+// The All option removes the page limit while retaining the other filters.
 //
 //	page := FilterRecords(records, ListOptions{Limit: 20})
 func FilterRecords(records []Record, options ListOptions) ListResult {
@@ -344,7 +344,7 @@ const searchExcerptMaxBytes = 4096
 // truncated excerpt ends with an ellipsis so the reader knows to drill in for
 // the rest.
 //
-// The result preserves complete UTF-8 runes at the truncation boundary.
+// The function removes leading and trailing whitespace before truncation.
 //
 //	preview := Excerpt(text)
 func Excerpt(text string) string {
