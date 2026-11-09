@@ -339,6 +339,16 @@ func writeCompletedResponseItem(
 		}
 	}
 
+	return encodeCompletedResponseItem(envelope, response, output, item, sequenceNumber)
+}
+
+func encodeCompletedResponseItem(
+	envelope map[string]json.RawMessage,
+	response map[string]json.RawMessage,
+	output []json.RawMessage,
+	item ResponsesOutputItem,
+	sequenceNumber int,
+) ([]byte, error) {
 	itemData, err := json.Marshal(item)
 	if err != nil {
 		slog.Warn(
