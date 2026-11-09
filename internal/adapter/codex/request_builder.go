@@ -1110,13 +1110,13 @@ func requestMetadataString(raw json.RawMessage, keys ...string) string {
 	}
 
 	for _, key := range keys {
-		v, ok := metadata[key]
+		rawValue, ok := metadata[key]
 		if !ok {
 			continue
 		}
 
 		var text string
-		if err := json.Unmarshal(v, &text); err != nil {
+		if err := json.Unmarshal(rawValue, &text); err != nil {
 			continue
 		}
 

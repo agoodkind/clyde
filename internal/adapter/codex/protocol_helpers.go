@@ -342,8 +342,8 @@ func reasoningTokensFromEvent(raw transportStreamEvent) int {
 	return raw.Response.Usage.OutputTokensDetails.ReasoningTokens
 }
 
-func usageTelemetry(c completedResponse) UsageTelemetry {
-	if c.Response.Usage == nil {
+func usageTelemetry(completed completedResponse) UsageTelemetry {
+	if completed.Response.Usage == nil {
 		return UsageTelemetry{
 			UsagePresent:               false,
 			InputTokens:                0,
@@ -356,7 +356,7 @@ func usageTelemetry(c completedResponse) UsageTelemetry {
 		}
 	}
 
-	usage := c.Response.Usage
+	usage := completed.Response.Usage
 	out := UsageTelemetry{
 		UsagePresent:               true,
 		InputTokens:                usage.InputTokens,

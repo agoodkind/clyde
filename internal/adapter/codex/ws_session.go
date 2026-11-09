@@ -177,13 +177,13 @@ func (c *WebsocketSessionCache) Invalidate(ctx context.Context, conversationID, 
 	}
 
 	c.mu.Lock()
-	entry, ok := c.entries[conv]
-	if ok {
+	entry, hasEntry := c.entries[conv]
+	if hasEntry {
 		delete(c.entries, conv)
 	}
 
 	c.mu.Unlock()
-	if !ok {
+	if !hasEntry {
 		return
 	}
 
@@ -281,13 +281,13 @@ func (c *WebsocketSessionCache) releaseRegistryEntry(ctx context.Context, conv, 
 	}
 
 	c.mu.Lock()
-	liveSess, ok := c.liveSessions[conv]
-	if ok {
+	liveSess, hasSession := c.liveSessions[conv]
+	if hasSession {
 		delete(c.liveSessions, conv)
 	}
 
 	c.mu.Unlock()
-	if !ok {
+	if !hasSession {
 		return
 	}
 

@@ -158,13 +158,13 @@ func (r Request) Context() Context {
 }
 
 func metadataString(raw json.RawMessage, keys ...string) string {
-	m := metadataMap(raw)
-	if len(m) == 0 {
+	metadata := metadataMap(raw)
+	if len(metadata) == 0 {
 		return ""
 	}
 
 	for _, key := range keys {
-		if v, ok := m[key]; ok {
+		if v, ok := metadata[key]; ok {
 			var s string
 			if json.Unmarshal(v, &s) == nil && strings.TrimSpace(s) != "" {
 				return strings.TrimSpace(s)

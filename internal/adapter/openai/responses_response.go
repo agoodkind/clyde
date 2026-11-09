@@ -346,7 +346,7 @@ func (i ResponsesOutputItem) MarshalJSON() ([]byte, error) {
 // marshalResponsesItemWire marshals one output item wire shape and wraps
 // any marshal error with the item type for context.
 func marshalResponsesItemWire(itemType string, wire responsesOutputItemWire) ([]byte, error) {
-	b, err := json.Marshal(wire)
+	encoded, err := json.Marshal(wire)
 	if err != nil {
 		slog.Warn(
 			"adapter.openai.responses_item_marshal_failed",
@@ -361,7 +361,7 @@ func marshalResponsesItemWire(itemType string, wire responsesOutputItemWire) ([]
 		return nil, fmt.Errorf("marshal responses %s item: %w", itemType, err)
 	}
 
-	return b, nil
+	return encoded, nil
 }
 
 // responsesOutputItemWire is the closed set of per-type wire shapes
@@ -439,7 +439,7 @@ func marshalResponsesContentPartWire(
 	partType string,
 	wire responsesContentPartWire,
 ) ([]byte, error) {
-	b, err := json.Marshal(wire)
+	encoded, err := json.Marshal(wire)
 	if err != nil {
 		slog.Warn(
 			"adapter.openai.responses_content_part_marshal_failed",
@@ -454,7 +454,7 @@ func marshalResponsesContentPartWire(
 		return nil, fmt.Errorf("marshal responses %s content part: %w", partType, err)
 	}
 
-	return b, nil
+	return encoded, nil
 }
 
 // ResponsesAnnotation is a placeholder for output_text annotations.

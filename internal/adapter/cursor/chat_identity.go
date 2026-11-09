@@ -236,13 +236,13 @@ func derivedChatIdentity(
 }
 
 func matchingBranch(branches []chatBranch, lineage []string) (int, bool) {
-	for i, branch := range branches {
+	for branchIndex, branch := range branches {
 		if stringSliceHasPrefix(lineage, branch.lineage) {
-			return i, false
+			return branchIndex, false
 		}
 
 		if stringSliceHasSuffix(branch.lineage, lineage) {
-			return i, true
+			return branchIndex, true
 		}
 	}
 
