@@ -239,37 +239,7 @@ func (p *Proxy) handleProviderH3Stream(w http.ResponseWriter, req *http.Request)
 		livetrack.WithParent(parent),
 	)
 	if registerErr != nil {
-		_ = req.Body.Close()
-		if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil ||
-			p.Tunnels.State() != livetrack.StateDraining {
-			p.log.WarnContext(
-				lifecycleCtx,
-				"mitm.provider.http3.stream_register_rejected",
-				"concern",
-				"providers.mitm.wire",
-				"provider",
-				providerID,
-				"host",
-				host,
-				"err",
-				registerErr,
-			)
-		} else {
-			p.log.DebugContext(
-				lifecycleCtx,
-				"mitm.provider.http3.stream_rejected_reload_drain",
-				"concern",
-				"providers.mitm.wire",
-				"provider",
-				providerID,
-				"host",
-				host,
-				"err",
-				registerErr,
-			)
-		}
-
-		http.Error(w, "service draining", http.StatusServiceUnavailable)
+		p.rejectProviderH3Stream(lifecycleCtx, w, req, providerID, host, parent, registerErr)
 
 		return
 	}
@@ -319,6 +289,48 @@ func (p *Proxy) handleProviderH3Stream(w http.ResponseWriter, req *http.Request)
 	}
 
 	streamSession.Touch()
+}
+
+func (p *Proxy) rejectProviderH3Stream(
+	lifecycleCtx context.Context,
+	writer http.ResponseWriter,
+	req *http.Request,
+	providerID string,
+	host string,
+	parent *livetrack.Session[TunnelMeta],
+	registerErr error,
+) {
+	_ = req.Body.Close()
+	if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil ||
+		p.Tunnels.State() != livetrack.StateDraining {
+		p.log.WarnContext(
+			lifecycleCtx,
+			"mitm.provider.http3.stream_register_rejected",
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			providerID,
+			"host",
+			host,
+			"err",
+			registerErr,
+		)
+	} else {
+		p.log.DebugContext(
+			lifecycleCtx,
+			"mitm.provider.http3.stream_rejected_reload_drain",
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			providerID,
+			"host",
+			host,
+			"err",
+			registerErr,
+		)
+	}
+
+	http.Error(writer, "service draining", http.StatusServiceUnavailable)
 }
 
 func providerH3RequestHost(req *http.Request) string {
