@@ -103,16 +103,7 @@ func RefreshBaseline(
 	versionTag := "live-" + startedAt.Format("20060102T150405")
 	candidate, err := ExtractSnapshotFromShapes(
 		shapes,
-		SnapshotOptions{
-			UpstreamName:               upstream,
-			UpstreamVersion:            versionTag,
-			IncludeUserAgentSubstrings: opts.IncludeUA,
-			ExcludeUserAgentSubstrings: opts.ExcludeUA,
-			RequireBodyKeys:            opts.RequireBodyKeys,
-			ForbidBodyKeys:             opts.ForbidBodyKeys,
-			MaxBodyDepth:               0,
-			EnumThreshold:              0,
-		},
+		baselineSnapshotOptions(upstream, versionTag, opts),
 	)
 	if err != nil {
 		// A no-op refresh (empty/filtered corpus) records no check row. The
@@ -170,6 +161,17 @@ func RefreshBaseline(
 		return outcome, nil
 	}
 
+	return initializeStoredBaseline(ctx, store, upstream, candidate, outcome, startedAt)
+}
+
+func initializeStoredBaseline(
+	ctx context.Context,
+	store *capture.Store,
+	upstream string,
+	candidate Snapshot,
+	outcome BaselineRefreshOutcome,
+	startedAt time.Time,
+) (BaselineRefreshOutcome, error) {
 	outcome.Created = true
 	outcome.Updated = true
 	outcome.Summary = "initialized baseline for upstream=" + upstream
@@ -434,4 +436,21 @@ func ProviderForUpstream(upstream string) string {
 	}
 
 	return ""
+}
+
+func baselineSnapshotOptions(
+	upstream string,
+	versionTag string,
+	opts BaselineRefreshOptions,
+) SnapshotOptions {
+	return SnapshotOptions{
+		UpstreamName:               upstream,
+		UpstreamVersion:            versionTag,
+		IncludeUserAgentSubstrings: opts.IncludeUA,
+		ExcludeUserAgentSubstrings: opts.ExcludeUA,
+		RequireBodyKeys:            opts.RequireBodyKeys,
+		ForbidBodyKeys:             opts.ForbidBodyKeys,
+		MaxBodyDepth:               0,
+		EnumThreshold:              0,
+	}
 }
