@@ -183,23 +183,10 @@ func runHTTPTransportEventsOnce(
 	// replies with a text/event-stream body. Reference:
 	// research/codex/codex-rs/core/src/client.rs ResponsesApiRequest.
 	payload.Stream = true
-	body, err := json.Marshal(payload)
+	req, body, err := buildResponsesHTTPRequest(ctx, cfg, payload)
 	if err != nil {
-		wrapped := fmt.Errorf("codex http transport: marshal request: %w", err)
-		logHTTPTransportError(ctx, cfg, "marshal_request", wrapped)
-
-		return NewRunResult("stop"), false, wrapped
+		return NewRunResult("stop"), false, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
-	if err != nil {
-		wrapped := fmt.Errorf("codex http transport: build request: %w", err)
-		logHTTPTransportError(ctx, cfg, "build_request", wrapped)
-
-		return NewRunResult("stop"), false, wrapped
-	}
-
-	req.Header = buildResponsesHTTPHeaders(cfg)
 
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
@@ -269,24 +256,7 @@ func runHTTPTransportEventsOnce(
 		return NewRunResult("stop"), false, statusErr
 	}
 
-	logCtx := sseInstrumentationContext{
-		RequestID:          cfg.RequestID,
-		CursorRequestID:    cfg.CursorRequestID,
-		ConversationID:     cfg.ConversationID,
-		Correlation:        cfg.Correlation,
-		Alias:              cfg.Alias,
-		Model:              payload.Model,
-		Transport:          "responses_http",
-		ServiceTier:        payload.ServiceTier,
-		PromptCacheKey:     payload.PromptCache,
-		PreviousResponseID: "",
-		Warmup:             false,
-	}
-	parseOpts := SSEParseOptions{
-		DropEncryptedContent:      cfg.RoundTripEncrypted == RoundTripEncryptedDrop,
-		DeclaredTools:             payload.Tools,
-		NativePatchRepresentation: cfg.NativePatchRepresentation,
-	}
+	logCtx, parseOpts := buildResponsesHTTPParseInputs(cfg, payload)
 	responseStarted := false
 	sink := capture.NewCappedBuffer(codexCaptureBodyCap)
 	var bodyReader io.Reader = resp.Body
@@ -319,6 +289,55 @@ func runHTTPTransportEventsOnce(
 	)
 
 	return result, responseStarted, parseErr
+}
+
+func buildResponsesHTTPRequest(
+	ctx context.Context,
+	cfg HTTPTransportConfig,
+	payload HTTPTransportRequest,
+) (*http.Request, []byte, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		wrapped := fmt.Errorf("codex http transport: marshal request: %w", err)
+		logHTTPTransportError(ctx, cfg, "marshal_request", wrapped)
+
+		return nil, nil, wrapped
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
+	if err != nil {
+		wrapped := fmt.Errorf("codex http transport: build request: %w", err)
+		logHTTPTransportError(ctx, cfg, "build_request", wrapped)
+
+		return nil, nil, wrapped
+	}
+
+	req.Header = buildResponsesHTTPHeaders(cfg)
+
+	return req, body, nil
+}
+
+func buildResponsesHTTPParseInputs(
+	cfg HTTPTransportConfig,
+	payload HTTPTransportRequest,
+) (sseInstrumentationContext, SSEParseOptions) {
+	return sseInstrumentationContext{
+		RequestID:          cfg.RequestID,
+		CursorRequestID:    cfg.CursorRequestID,
+		ConversationID:     cfg.ConversationID,
+		Correlation:        cfg.Correlation,
+		Alias:              cfg.Alias,
+		Model:              payload.Model,
+		Transport:          "responses_http",
+		ServiceTier:        payload.ServiceTier,
+		PromptCacheKey:     payload.PromptCache,
+		PreviousResponseID: "",
+		Warmup:             false,
+	}, SSEParseOptions{
+		DropEncryptedContent:      cfg.RoundTripEncrypted == RoundTripEncryptedDrop,
+		DeclaredTools:             payload.Tools,
+		NativePatchRepresentation: cfg.NativePatchRepresentation,
+	}
 }
 
 func shouldRefreshAuthForStatus(status int, refresh func(context.Context) (string, error)) bool {
