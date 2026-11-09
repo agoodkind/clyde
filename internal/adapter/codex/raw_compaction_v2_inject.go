@@ -55,7 +55,10 @@ func InjectRawResponsesCompactionV2Recovery(
 		return request, nil, false
 	}
 
-	trace.metadataRequestKindTurn, trace.metadataImplementationEmpty, trace.metadataStrategyEmpty, trace.metadataPhaseFinalAnswer = rawResponsesCompactionV2RegularFinalAnswerFields(
+	trace.metadataRequestKindTurn,
+		trace.metadataImplementationEmpty,
+		trace.metadataStrategyEmpty,
+		trace.metadataPhaseFinalAnswer = rawResponsesCompactionV2RegularFinalAnswerFields(
 		request.Header,
 	)
 	trace.metadataRegular = rawResponsesCompactionV2RegularTurn(request.Header)
@@ -90,9 +93,11 @@ func InjectRawResponsesCompactionV2Recovery(
 		return request, nil, false
 	}
 
-	compactionIndex, encryptedContent, normalizerValid, compactionItemCount, ok := rawResponsesCompactionV2InjectedCompactionTrace(
-		input,
-	)
+	compactionIndex,
+		encryptedContent,
+		normalizerValid,
+		compactionItemCount,
+		ok := rawResponsesCompactionV2InjectedCompactionTrace(input)
 	trace.normalizerValid = normalizerValid
 	trace.compactionItemCount = compactionItemCount
 	trace.singleCompactionItem = ok

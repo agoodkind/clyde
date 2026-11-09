@@ -254,7 +254,9 @@ func (store FileSnapshotStore) pathForKey(key ReorientSnapshotKey) string {
 	if err != nil {
 		slog.Warn("hooks.reorient_snapshot.key_marshal_failed", "component", "hooks", "err", err)
 		body = []byte(
-			normalized.TranscriptPath + "\x00" + normalized.ConversationID + "\x00" + normalized.SessionID + "\x00" + normalized.CWD,
+			normalized.TranscriptPath + "\x00" +
+				normalized.ConversationID + "\x00" +
+				normalized.SessionID + "\x00" + normalized.CWD,
 		)
 	}
 
