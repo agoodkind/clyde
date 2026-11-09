@@ -76,22 +76,7 @@ func BuildRequest(
 		return anthropic.Request{}, err
 	}
 
-	callerSystem := stripSystemPrefix(tr.System, cfg.SystemPromptPrefix)
-	if instr := strings.TrimSpace(resolved.Instructions); instr != "" {
-		if callerSystem == "" {
-			callerSystem = instr
-		} else {
-			callerSystem = instr + "\n\n" + callerSystem
-		}
-	}
-
-	if instr := strings.TrimSpace(cfg.JSONSystemPrompt); instr != "" {
-		if callerSystem == "" {
-			callerSystem = instr
-		} else {
-			callerSystem = callerSystem + "\n\n" + instr
-		}
-	}
+	callerSystem := composeCallerSystem(tr.System, resolved, cfg)
 
 	cliVersion := anthropic.VersionFromUserAgent(cfg.UserAgent)
 	if cliVersion == "" {
@@ -174,6 +159,31 @@ func BuildRequest(
 	}
 
 	return out, nil
+}
+
+func composeCallerSystem(
+	system string,
+	resolved *adapterresolver.ResolvedRequest,
+	cfg BuildRequestConfig,
+) string {
+	callerSystem := stripSystemPrefix(system, cfg.SystemPromptPrefix)
+	if instr := strings.TrimSpace(resolved.Instructions); instr != "" {
+		if callerSystem == "" {
+			callerSystem = instr
+		} else {
+			callerSystem = instr + "\n\n" + callerSystem
+		}
+	}
+
+	if instr := strings.TrimSpace(cfg.JSONSystemPrompt); instr != "" {
+		if callerSystem == "" {
+			callerSystem = instr
+		} else {
+			callerSystem = callerSystem + "\n\n" + instr
+		}
+	}
+
+	return callerSystem
 }
 
 // anthropicTemperatureMax is the upper bound Anthropic accepts for the
