@@ -163,6 +163,18 @@ func (g *UsageNoticeGate) Evaluate(
 		)
 	}
 
+	logUsageNoticeSummary(ctx, logger, due, windows, policy)
+
+	return due
+}
+
+func logUsageNoticeSummary(
+	ctx context.Context,
+	logger *slog.Logger,
+	due []UsageNotice,
+	windows []UsageWindowNoticeInput,
+	policy config.AdapterNoticeRepeatPolicy,
+) {
 	if len(due) > 0 {
 		providers := make([]string, 0, len(due))
 		windowKeys := make([]string, 0, len(due))
@@ -189,8 +201,6 @@ func (g *UsageNoticeGate) Evaluate(
 			slog.String("repeat_mode", string(policy.Mode)),
 		)
 	}
-
-	return due
 }
 
 func (g *UsageNoticeGate) logger() *slog.Logger {
