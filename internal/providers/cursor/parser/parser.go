@@ -922,7 +922,7 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 		return emptyDiscoveredArtifact(), fmt.Errorf("stat cursor transcript %s: %w", path, err)
 	}
 
-	file, ok, err := cursorjsonl.MatchTranscriptFile(path)
+	file, found, err := cursorjsonl.MatchTranscriptFile(path)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
@@ -938,7 +938,7 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 		return emptyDiscoveredArtifact(), fmt.Errorf("match cursor transcript file: %w", err)
 	}
 
-	if !ok {
+	if !found {
 		slog.WarnContext(
 			ctx,
 			"providers.cursor.parser.jsonl_path_not_found",

@@ -454,7 +454,7 @@ func (p *Proxy) interceptHijackedConnectTLS(
 ) {
 	ctx = context.WithoutCancel(ctx)
 	providerID := provider.ID().String()
-	ca, err := p.mitmCA()
+	authority, err := p.mitmCA()
 	if err != nil {
 		p.log.WarnContext(
 			ctx,
@@ -472,7 +472,7 @@ func (p *Proxy) interceptHijackedConnectTLS(
 		return
 	}
 
-	leaf, err := ca.leafForHost(host)
+	leaf, err := authority.leafForHost(host)
 	if err != nil {
 		p.log.WarnContext(
 			ctx,

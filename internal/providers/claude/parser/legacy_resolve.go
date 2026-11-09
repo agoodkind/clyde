@@ -571,13 +571,13 @@ func matchLegacyBody(
 			}
 
 			bodyEnd := position + offset
-			if rendering, persisted, ok := matchLegacyCut(
+			if rendering, persisted, matched := matchLegacyCut(
 				request,
 				instruction,
 				full,
 				fullPersisted,
 				content[bodyStart:bodyEnd],
-			); ok {
+			); matched {
 				matches = append(
 					matches,
 					legacyMatch{

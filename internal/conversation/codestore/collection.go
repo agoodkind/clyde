@@ -888,14 +888,14 @@ func (stored *codeCollection) recordOf(position int) rowRecord {
 	record.dataLength = current.dataLength
 
 	record.cells = make([]storedCell, 0, len(current.cells))
-	for column, id := range current.cells {
-		if id == 0 {
+	for column, valueID := range current.cells {
+		if valueID == 0 {
 			continue
 		}
 
 		record.cells = append(
 			record.cells,
-			storedCell{column: column, value: stored.dictionaries[column].values[id]},
+			storedCell{column: column, value: stored.dictionaries[column].values[valueID]},
 		)
 	}
 

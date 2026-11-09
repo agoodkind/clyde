@@ -450,16 +450,16 @@ func (r *Registry[M]) CountByPredicate(p Predicate[M]) int {
 	return count
 }
 
-// ForEach calls f for every tracked session. The callback receives a
+// ForEach calls callback for every tracked session. The callback receives a
 // snapshot value so it cannot mutate registry state through the
 // session pointer.
-func (r *Registry[M]) ForEach(f func(Session[M])) {
-	if f == nil {
+func (r *Registry[M]) ForEach(callback func(Session[M])) {
+	if callback == nil {
 		return
 	}
 
 	for _, sess := range r.Snapshot() {
-		f(sess)
+		callback(sess)
 	}
 }
 

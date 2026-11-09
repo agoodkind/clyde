@@ -487,13 +487,13 @@ func sharedTimestampRow(update timestampUpdate) collection.Row {
 // writeSourceTimestamps writes timestamp updates in batches and counts written rows.
 func writeSourceTimestamps(
 	ctx context.Context,
-	c *Client,
+	client *Client,
 	milvus *milvusBackend,
 	collectionName string,
 	updates []timestampUpdate,
 	report *TimestampRepairReport,
 ) error {
-	columns := declaredColumns(c.declaration, timestampUnixColumn)
+	columns := declaredColumns(client.declaration, timestampUnixColumn)
 
 	for start := 0; start < len(updates); start += timestampRepairWriteBatchRows {
 		batch := updates[start:min(start+timestampRepairWriteBatchRows, len(updates))]

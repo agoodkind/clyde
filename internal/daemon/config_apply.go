@@ -47,7 +47,7 @@ func (r *runtimeServices) applyConfigInProcess(
 		}
 	}
 
-	for id, proxy := range r.mitmProxies {
+	for listenerID, proxy := range r.mitmProxies {
 		if err := proxy.ApplyConfig(newCfg.MITM); err != nil {
 			log.WarnContext(
 				ctx,
@@ -57,12 +57,12 @@ func (r *runtimeServices) applyConfigInProcess(
 				"component",
 				"daemon",
 				"listener_id",
-				id,
+				listenerID,
 				"err",
 				err,
 			)
 
-			return fmt.Errorf("apply mitm config for %q: %w", id, err)
+			return fmt.Errorf("apply mitm config for %q: %w", listenerID, err)
 		}
 	}
 
