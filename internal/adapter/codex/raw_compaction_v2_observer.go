@@ -320,9 +320,8 @@ func (b *rawResponsesCompactionV2ObservedBody) arm(callbackInvoked bool) {
 		encryptedExtracted:  false,
 	}
 	if strings.Contains(strings.ToLower(b.contentType), "text/event-stream") {
-		diagnostics.SSEDataFrameCount, diagnostics.compactionItemCount, diagnostics.completedCount = rawResponsesCompactionV2SSECounts(
-			body,
-		)
+		diagnostics.SSEDataFrameCount, diagnostics.compactionItemCount,
+			diagnostics.completedCount = rawResponsesCompactionV2SSECounts(body)
 	}
 
 	if b.armed || diagnostics.captureTruncated {
@@ -351,9 +350,8 @@ func (b *rawResponsesCompactionV2ObservedBody) arm(callbackInvoked bool) {
 
 		body = decoded
 		if strings.Contains(strings.ToLower(b.contentType), "text/event-stream") {
-			diagnostics.SSEDataFrameCount, diagnostics.compactionItemCount, diagnostics.completedCount = rawResponsesCompactionV2SSECounts(
-				body,
-			)
+			diagnostics.SSEDataFrameCount, diagnostics.compactionItemCount,
+				diagnostics.completedCount = rawResponsesCompactionV2SSECounts(body)
 		}
 	}
 
