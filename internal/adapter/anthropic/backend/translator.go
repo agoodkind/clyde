@@ -108,6 +108,16 @@ func RunTranslatorEvents(
 		)
 	}
 
+	return finishTranslatorEvents(ctx, tr, anthUsage, &streamStopReason, emit)
+}
+
+func finishTranslatorEvents(
+	ctx context.Context,
+	translator *StreamTranslator,
+	anthUsage anthropic.Usage,
+	stopReason *string,
+	emit func(adapterrender.Event) error,
+) (anthropic.Usage, string, string, error) {
 	mdPayload, err := json.Marshal(
 		struct {
 			Delta struct {
@@ -120,7 +130,7 @@ func RunTranslatorEvents(
 			Delta: struct {
 				StopReason string `json:"stop_reason"`
 			}{
-				StopReason: streamStopReason,
+				StopReason: *stopReason,
 			},
 			Usage: struct {
 				OutputTokens int `json:"output_tokens"`
@@ -139,22 +149,19 @@ func RunTranslatorEvents(
 			err,
 		)
 
-		return anthUsage, streamStopReason, "", fmt.Errorf(
-			"marshal anthropic message_delta: %w",
-			err,
-		)
+		return anthUsage, *stopReason, "", fmt.Errorf("marshal anthropic message_delta: %w", err)
 	}
 
-	if _, err := emitTranslatorEvents(tr, "message_delta", mdPayload, emit); err != nil {
-		return anthUsage, streamStopReason, "", err
+	if _, err := emitTranslatorEvents(translator, "message_delta", mdPayload, emit); err != nil {
+		return anthUsage, *stopReason, "", err
 	}
 
-	finishReason, err := emitTranslatorEvents(tr, "message_stop", []byte("{}"), emit)
+	finishReason, err := emitTranslatorEvents(translator, "message_stop", []byte("{}"), emit)
 	if err != nil {
-		return anthropic.Usage{}, streamStopReason, "", err
+		return anthropic.Usage{}, *stopReason, "", err
 	}
 
-	return anthUsage, streamStopReason, finishReason, nil
+	return anthUsage, *stopReason, finishReason, nil
 }
 
 func emitTranslatorEvents(
