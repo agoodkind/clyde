@@ -828,7 +828,7 @@ func exportTranscriptRequest(conversationID string, options conversation.ExportO
 // GetMITMStatus asks the daemon for each MITM listener address, whether it is
 // bound, and the CA paths.
 //
-// The response reports the running daemon's listener state.
+// The status request does not probe external network connections.
 //
 //	status, err := GetMITMStatus(ctx)
 func GetMITMStatus(ctx context.Context) (MITMStatus, error) {
@@ -865,7 +865,7 @@ func GetMITMStatus(ctx context.Context) (MITMStatus, error) {
 // ShowCapture asks the daemon to correlate one request id across its logs and
 // the SQLite capture store and returns the typed lookup result.
 //
-// The identifier selects the request to correlate.
+// A legacy text-only daemon response returns a version mismatch error.
 //
 //	capture, err := ShowCapture(ctx, requestID)
 func ShowCapture(ctx context.Context, id string) (mitmshow.ShowOutput, error) {
@@ -891,7 +891,8 @@ func ShowCapture(ctx context.Context, id string) (mitmshow.ShowOutput, error) {
 // store's deduped shape corpus and write it as the current baseline for the
 // given upstream.
 //
-// User-agent filters restrict the captured shapes used for the result.
+// The includeUA and excludeUA filters select captured input shapes
+// before baseline construction.
 //
 //	result, err := SeedBaseline(ctx, upstream, includeUA, excludeUA)
 func SeedBaseline(ctx context.Context, upstream string, includeUA, excludeUA []string) (mitm.SeedBaselineResult, error) {
@@ -921,7 +922,8 @@ func SeedBaseline(ctx context.Context, upstream string, includeUA, excludeUA []s
 // LogsInventory asks the daemon to build a metadata-only inventory of its log
 // files and return it as typed data.
 //
-// The request controls the state root, listing limit, and depth of inspection.
+// Setting deep to true scans files under stateRoot instead of using
+// indexed locations.
 //
 //	inventory, err := LogsInventory(ctx, stateRoot, 20, false)
 func LogsInventory(ctx context.Context, stateRoot string, largestFileLimit int, deep bool) (loginventory.Inventory, error) {
