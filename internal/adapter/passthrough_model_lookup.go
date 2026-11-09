@@ -75,41 +75,9 @@ func (s *Server) forwardPassthroughModel(
 	}
 
 	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, passthroughModelLookupLimit+1))
+	body, err := s.readPassthroughModelBody(ctx, response)
 	if err != nil {
-		s.log.WarnContext(
-			ctx,
-			"adapter.models.fallback_lookup_read_failed",
-			"concern",
-			"adapter.models.catalog",
-			"err",
-			err,
-		)
-
-		return adapterErrUpstreamFailed(
-			"passthrough_override",
-			"read fallback model lookup response",
-			err,
-		)
-	}
-
-	if len(body) > passthroughModelLookupLimit {
-		s.log.WarnContext(
-			ctx,
-			"adapter.models.fallback_lookup_body_too_large",
-			"concern",
-			"adapter.models.catalog",
-			"limit_bytes",
-			passthroughModelLookupLimit,
-		)
-
-		return adapterErrUpstreamFailed(
-			"passthrough_override",
-			"fallback model lookup response exceeds "+strconv.Itoa(
-				passthroughModelLookupLimit,
-			)+" bytes",
-			nil,
-		)
+		return err
 	}
 
 	switch {
@@ -137,4 +105,48 @@ func (s *Server) forwardPassthroughModel(
 	}
 
 	return nil
+}
+
+func (s *Server) readPassthroughModelBody(
+	ctx context.Context,
+	response *http.Response,
+) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(response.Body, passthroughModelLookupLimit+1))
+	if err != nil {
+		s.log.WarnContext(
+			ctx,
+			"adapter.models.fallback_lookup_read_failed",
+			"concern",
+			"adapter.models.catalog",
+			"err",
+			err,
+		)
+
+		return nil, adapterErrUpstreamFailed(
+			"passthrough_override",
+			"read fallback model lookup response",
+			err,
+		)
+	}
+
+	if len(body) > passthroughModelLookupLimit {
+		s.log.WarnContext(
+			ctx,
+			"adapter.models.fallback_lookup_body_too_large",
+			"concern",
+			"adapter.models.catalog",
+			"limit_bytes",
+			passthroughModelLookupLimit,
+		)
+
+		return nil, adapterErrUpstreamFailed(
+			"passthrough_override",
+			"fallback model lookup response exceeds "+strconv.Itoa(
+				passthroughModelLookupLimit,
+			)+" bytes",
+			nil,
+		)
+	}
+
+	return body, nil
 }
