@@ -108,20 +108,9 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 		return errors.New("copy shared conversation collection: --repair-rounds must be at least 1")
 	}
 
-	cfg, err := f.Config()
+	cfg, err := loadCopySharedConfig(ctx, f)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.copy_shared.config_failed",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
 
 	semanticCfg := cfg.Conversation.Semantic
@@ -204,34 +193,13 @@ func runCopySharedIndex(ctx context.Context, f *cli.Factory, options copySharedO
 		return err
 	}
 
-	slog.InfoContext(
-		ctx,
-		"cli.daemon.copy_shared.equal",
-		"concern",
-		"cli.daemon",
-		"component",
-		"cli",
-		"rows",
-		report.SourceRows,
-		"vectors",
-		report.TargetVectors,
-	)
+	logCopySharedEqual(ctx, report)
 	records, err := client.CopySharedCheckpoints(options.FromCollectionID, options.ToCollectionID)
 	if err != nil {
 		return fmt.Errorf("copy shared conversation collection: %w", err)
 	}
 
-	summary := fmt.Sprintf(
-		"Verified %d source rows: the shared copy stores %d rows and %d distinct vectors, and every row matches. "+
-			"Copied %d conversation fingerprint records.\n",
-		report.SourceRows,
-		report.TargetRows,
-		report.TargetVectors,
-		records,
-	)
-	if copied >= 0 {
-		summary = fmt.Sprintf("Copied %d rows. ", copied) + summary
-	}
+	summary := formatCopySharedSummary(report, records, copied)
 
 	return writeCopySharedResult(ctx, f, summary)
 }
@@ -291,30 +259,7 @@ func reconcileAndVerifySharedCopy(
 			return report, fmt.Errorf("reconcile shared conversation collection: %w", err)
 		}
 
-		slog.DebugContext(
-			ctx,
-			"cli.daemon.copy_shared.reconciled",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"round",
-			round,
-			"source_rows",
-			reconciled.SourceRows,
-			"target_rows",
-			reconciled.TargetRows,
-			"missing",
-			reconciled.Missing,
-			"mismatched",
-			reconciled.Mismatched,
-			"dangling",
-			reconciled.Dangling,
-			"extra",
-			reconciled.Extra,
-			"unreferenced_vectors",
-			reconciled.UnreferencedVectors,
-		)
+		logCopySharedReconciled(ctx, round, reconciled)
 		report, err = client.VerifySharedCopy(
 			ctx,
 			options.FromCollectionID,
@@ -338,32 +283,7 @@ func reconcileAndVerifySharedCopy(
 			return report, fmt.Errorf("verify shared conversation collection: %w", err)
 		}
 
-		slog.DebugContext(
-			ctx,
-			"cli.daemon.copy_shared.verified",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"round",
-			round,
-			"source_rows",
-			report.SourceRows,
-			"target_rows",
-			report.TargetRows,
-			"target_vectors",
-			report.TargetVectors,
-			"missing",
-			report.MissingCount,
-			"mismatched",
-			report.MismatchedCount,
-			"extra",
-			report.ExtraCount,
-			"dangling",
-			report.DanglingCount,
-			"unreferenced_vectors",
-			report.UnreferencedVectors,
-		)
+		logCopySharedVerified(ctx, round, report)
 		if report.Equal() {
 			return report, nil
 		}
@@ -391,4 +311,119 @@ func reconcileAndVerifySharedCopy(
 	)
 
 	return report, unequalErr
+}
+
+func loadCopySharedConfig(ctx context.Context, factory *cli.Factory) (*config.Config, error) {
+	cfg, err := factory.Config()
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"cli.daemon.copy_shared.config_failed",
+			"concern",
+			"cli.daemon",
+			"component",
+			"cli",
+			"err",
+			err,
+		)
+
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	return cfg, nil
+}
+
+func logCopySharedEqual(ctx context.Context, report vectorsearch.SharedCopyReport) {
+	slog.InfoContext(
+		ctx,
+		"cli.daemon.copy_shared.equal",
+		"concern",
+		"cli.daemon",
+		"component",
+		"cli",
+		"rows",
+		report.SourceRows,
+		"vectors",
+		report.TargetVectors,
+	)
+}
+
+func formatCopySharedSummary(
+	report vectorsearch.SharedCopyReport,
+	records int,
+	copied int64,
+) string {
+	summary := fmt.Sprintf(
+		"Verified %d source rows: the shared copy stores %d rows and %d distinct vectors, and every row matches. "+
+			"Copied %d conversation fingerprint records.\n",
+		report.SourceRows,
+		report.TargetRows,
+		report.TargetVectors,
+		records,
+	)
+	if copied >= 0 {
+		summary = fmt.Sprintf("Copied %d rows. ", copied) + summary
+	}
+
+	return summary
+}
+
+func logCopySharedReconciled(
+	ctx context.Context,
+	round int,
+	reconciled vectorsearch.SharedReconcileResult,
+) {
+	slog.DebugContext(
+		ctx,
+		"cli.daemon.copy_shared.reconciled",
+		"concern",
+		"cli.daemon",
+		"component",
+		"cli",
+		"round",
+		round,
+		"source_rows",
+		reconciled.SourceRows,
+		"target_rows",
+		reconciled.TargetRows,
+		"missing",
+		reconciled.Missing,
+		"mismatched",
+		reconciled.Mismatched,
+		"dangling",
+		reconciled.Dangling,
+		"extra",
+		reconciled.Extra,
+		"unreferenced_vectors",
+		reconciled.UnreferencedVectors,
+	)
+}
+
+func logCopySharedVerified(ctx context.Context, round int, report vectorsearch.SharedCopyReport) {
+	slog.DebugContext(
+		ctx,
+		"cli.daemon.copy_shared.verified",
+		"concern",
+		"cli.daemon",
+		"component",
+		"cli",
+		"round",
+		round,
+		"source_rows",
+		report.SourceRows,
+		"target_rows",
+		report.TargetRows,
+		"target_vectors",
+		report.TargetVectors,
+		"missing",
+		report.MissingCount,
+		"mismatched",
+		report.MismatchedCount,
+		"extra",
+		report.ExtraCount,
+		"dangling",
+		report.DanglingCount,
+		"unreferenced_vectors",
+		report.UnreferencedVectors,
+	)
 }
