@@ -21,6 +21,7 @@ var (
 
 func supervisorOpenLogFiles(ctx context.Context, pid int) ([]supervisorLogFile, error) {
 	var files []supervisorLogFile
+
 	var resultErr error
 
 	defer func() {
@@ -29,12 +30,14 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) ([]supervisorLogFile, 
 				"concern", "daemon.workers", "pid", pid, "err", resultErr)
 		}
 	}()
+
 	slog.DebugContext(ctx, "daemon.retention.supervisor_proc_started", "concern", "daemon.workers", "pid", pid)
 	root := filepath.Join("/proc", strconv.Itoa(pid))
 
 	entries, err := os.ReadDir(filepath.Join(root, "fd"))
 	if err != nil {
 		resultErr = fmt.Errorf("list supervisor descriptors: %w", err)
+
 		return nil, resultErr
 	}
 
@@ -42,12 +45,14 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) ([]supervisorLogFile, 
 		err := ctx.Err()
 		if err != nil {
 			resultErr = fmt.Errorf("inspect supervisor log descriptors: %w", err)
+
 			return nil, resultErr
 		}
 
 		descriptor, err := strconv.Atoi(entry.Name())
 		if err != nil {
 			resultErr = fmt.Errorf("parse supervisor descriptor %s: %w", entry.Name(), err)
+
 			return nil, resultErr
 		}
 
@@ -56,6 +61,7 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) ([]supervisorLogFile, 
 		info, err := os.Stat(link)
 		if err != nil {
 			resultErr = fmt.Errorf("stat supervisor descriptor %d: %w", descriptor, err)
+
 			return nil, resultErr
 		}
 
@@ -66,12 +72,14 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) ([]supervisorLogFile, 
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok {
 			resultErr = fmt.Errorf("supervisor descriptor %d %w", descriptor, errSupervisorInodeUnavailable)
+
 			return nil, resultErr
 		}
 
 		path, err := os.Readlink(link)
 		if err != nil {
 			resultErr = fmt.Errorf("read supervisor descriptor %d: %w", descriptor, err)
+
 			return nil, resultErr
 		}
 
@@ -82,12 +90,14 @@ func supervisorOpenLogFiles(ctx context.Context, pid int) ([]supervisorLogFile, 
 		data, err := os.ReadFile(filepath.Join(root, "fdinfo", entry.Name()))
 		if err != nil {
 			resultErr = fmt.Errorf("read supervisor descriptor %d flags: %w", descriptor, err)
+
 			return nil, resultErr
 		}
 
 		flags, err := readSupervisorDescriptorFlags(data, descriptor)
 		if err != nil {
 			resultErr = err
+
 			return nil, resultErr
 		}
 
