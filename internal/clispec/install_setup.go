@@ -83,7 +83,12 @@ func installSetupOpWithDependencies(
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
 		Prepare:        prepareInstallSetup,
-		Run: func(ctx context.Context, payload installSetupPayload, _ Surface, sink ResultSink) error {
+		Run: func(
+			ctx context.Context,
+			payload installSetupPayload,
+			_ Surface,
+			sink ResultSink,
+		) error {
 			if payload.Daemon {
 				if err := dependencies.installDaemon(ctx, sink); err != nil {
 					slog.WarnContext(ctx, "clispec.install_setup.daemon_failed", "err", err)

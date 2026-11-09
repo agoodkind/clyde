@@ -81,6 +81,7 @@ func RunCommandContext(ctx context.Context, log *slog.Logger, _ ...ExtraLoop) er
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("run daemon supervisor: %w", err)
 		}
 
@@ -98,6 +99,7 @@ func RunCommandContext(ctx context.Context, log *slog.Logger, _ ...ExtraLoop) er
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("run daemon supervisor: %w", err)
 		}
 
@@ -122,6 +124,7 @@ func loadDaemonStartupConfig(
 			"err",
 			err,
 		)
+
 		return nil, empty, fmt.Errorf("load daemon config: %w", err)
 	}
 
@@ -137,6 +140,7 @@ func loadDaemonStartupConfig(
 			"err",
 			err,
 		)
+
 		return nil, empty, fmt.Errorf("load export API keys: %w", err)
 	}
 
@@ -395,13 +399,22 @@ func newControlServer(
 			return collectMITMStatus(cfg.MITM, runtime.mitmListeners)
 		},
 		runtimeStatus: runtime.statusSnapshot,
-		showCapture: func(showCtx context.Context, id string) (mitmshow.ShowOutput, error) {
+		showCapture: func(showCtx context.Context, id string) (
+			mitmshow.ShowOutput,
+			error,
+		) {
 			return mitmshow.Lookup(showCtx, cfg, id)
 		},
-		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
+		reload: func(ctx context.Context) (
+			*clydev1.ReloadDaemonResponse,
+			error,
+		) {
 			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
 		},
-		rebind: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
+		rebind: func(ctx context.Context) (
+			*clydev1.ReloadDaemonResponse,
+			error,
+		) {
 			return rebindDaemonWorker(ctx, log, grpcServer, runtime)
 		},
 		searchSource: &backendConversationSearchSource{
@@ -465,6 +478,7 @@ func signalReady() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("parse daemon ready fd %q: %w", fdText, err)
 	}
 
@@ -486,6 +500,7 @@ func signalReady() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write daemon ready fd: %w", err)
 	}
 

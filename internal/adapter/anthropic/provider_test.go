@@ -37,7 +37,11 @@ func TestProviderExecuteCollectBuildsFinalResponse(t *testing.T) {
 	provider := NewProvider(
 		adapterprovider.Deps{},
 		ProviderOptions{
-			Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, reqID string) (
+			Prepare: func(
+				_ context.Context,
+				req adapterresolver.ResolvedRequest,
+				reqID string,
+			) (
 				PreparedRequest,
 				error,
 			) {
@@ -129,7 +133,11 @@ func TestProviderExecuteStreamUsesStreamCallback(t *testing.T) {
 	provider := NewProvider(
 		adapterprovider.Deps{},
 		ProviderOptions{
-			Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, reqID string) (
+			Prepare: func(
+				_ context.Context,
+				req adapterresolver.ResolvedRequest,
+				reqID string,
+			) (
 				PreparedRequest,
 				error,
 			) {

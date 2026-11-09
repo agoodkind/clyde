@@ -1,4 +1,4 @@
-# staticcheck-extra: generated_at=2026-11-09T05:52:08Z
+# staticcheck-extra: generated_at=2026-11-09T08:26:33Z
 cmd/ci-auto-update/main.go:118:1: commandentry: delegate implementation to an importable package [id=a28342178caccbc862cb9477128b8321:1]	# staticcheck-extra:first_added=2026-11-09T05:50:57Z last_seen=2026-11-09T05:52:08Z
 cmd/ci-auto-update/main.go:229:1: commandentry: delegate implementation to an importable package [id=84d1f07300fec9618e6e1e2f021853ef:1]	# staticcheck-extra:first_added=2026-11-09T05:50:57Z last_seen=2026-11-09T05:52:08Z
 cmd/ci-auto-update/main.go:25:1: commandentry: delegate implementation to an importable package [id=f571284c4b29e60f47b9dce2aa4e91ec:1]	# staticcheck-extra:first_added=2026-11-09T05:50:57Z last_seen=2026-11-09T05:52:08Z

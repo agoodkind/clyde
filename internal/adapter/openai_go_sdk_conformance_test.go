@@ -272,7 +272,11 @@ func startAnthropicConformanceServer(t *testing.T, usage anthropic.Usage) confor
 	srv.anthropicProvider = anthropic.NewProvider(
 		adapterprovider.Deps{},
 		anthropic.ProviderOptions{
-			Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, requestID string) (
+			Prepare: func(
+				_ context.Context,
+				req adapterresolver.ResolvedRequest,
+				requestID string,
+			) (
 				anthropic.PreparedRequest,
 				error,
 			) {

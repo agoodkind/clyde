@@ -14,7 +14,10 @@ func TestUpdateApplyRunsDeployHandoffAfterAppliedRelease(t *testing.T) {
 	deployCalls := 0
 	runner := updateRunner{
 		check: nil,
-		apply: func(_ context.Context, options selfupdate.Options) (selfupdate.ApplyResult, error) {
+		apply: func(_ context.Context, options selfupdate.Options) (
+			selfupdate.ApplyResult,
+			error,
+		) {
 			if !options.DryRun {
 				return selfupdate.ApplyResult{
 					CheckResult: selfupdate.CheckResult{
@@ -29,6 +32,7 @@ func TestUpdateApplyRunsDeployHandoffAfterAppliedRelease(t *testing.T) {
 					DryRun:  false,
 				}, nil
 			}
+
 			return selfupdate.ApplyResult{}, nil
 		},
 		loadState: nil,
@@ -36,10 +40,13 @@ func TestUpdateApplyRunsDeployHandoffAfterAppliedRelease(t *testing.T) {
 			if stdout == nil {
 				t.Fatal("stdout = nil, want subprocess stream")
 			}
+
 			if stderr == nil {
 				t.Fatal("stderr = nil, want subprocess stream")
 			}
+
 			deployCalls++
+
 			return nil
 		},
 	}
@@ -52,20 +59,25 @@ func TestUpdateApplyRunsDeployHandoffAfterAppliedRelease(t *testing.T) {
 	if deployCalls != 1 {
 		t.Fatalf("deploy calls = %d, want 1", deployCalls)
 	}
+
 	value, ok := result.(valueResult)
 	if !ok {
 		t.Fatalf("result type = %T, want valueResult", result)
 	}
+
 	payload, ok := value.Payload.(updateApplyOutput)
 	if !ok {
 		t.Fatalf("payload type = %T, want updateApplyOutput", value.Payload)
 	}
+
 	if !payload.DeployHandoff {
 		t.Fatal("DeployHandoff = false, want true")
 	}
+
 	if payload.HandoffCommand != "clyde daemon deploy" {
 		t.Fatalf("HandoffCommand = %q, want clyde daemon deploy", payload.HandoffCommand)
 	}
+
 	if !strings.Contains(value.Text, "deploy handoff: yes") {
 		t.Fatalf("text = %q, want deploy handoff confirmation", value.Text)
 	}
@@ -105,6 +117,7 @@ func TestUpdateApplySkipsDeployHandoffWhenAlreadyCurrent(t *testing.T) {
 	if deployCalls != 0 {
 		t.Fatalf("deploy calls = %d, want 0", deployCalls)
 	}
+
 	value := result.(valueResult)
 	payload := value.Payload.(updateApplyOutput)
 	if payload.DeployHandoff {

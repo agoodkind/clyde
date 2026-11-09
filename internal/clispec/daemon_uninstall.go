@@ -51,7 +51,12 @@ func daemonUninstallOp() Operation[daemonUninstallInput, daemonUninstallPayload]
 
 			return daemonUninstallPayload(in), nil
 		},
-		Run: func(ctx context.Context, payload daemonUninstallPayload, _ Surface, sink ResultSink) error {
+		Run: func(
+			ctx context.Context,
+			payload daemonUninstallPayload,
+			_ Surface,
+			sink ResultSink,
+		) error {
 			output, ok := sink.(*CLISink)
 			if !ok {
 				return fmt.Errorf("daemon uninstall requires terminal output")

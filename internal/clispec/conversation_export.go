@@ -285,6 +285,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 					"err",
 					err,
 				)
+
 				return exportPayload{}, fmt.Errorf("select content kinds: %w", err)
 			}
 
@@ -304,6 +305,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 					"err",
 					err,
 				)
+
 				return exportPayload{}, fmt.Errorf("select compaction controls: %w", err)
 			}
 
@@ -407,6 +409,7 @@ func absoluteExportPath(ctx context.Context, path string) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("resolve export path %q: %w", path, err)
 	}
 
@@ -426,6 +429,7 @@ func exportWorkingDirectory(ctx context.Context) (string, error) {
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("get CLI working directory: %w", err)
 	}
 
@@ -458,6 +462,7 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("select export destination: %w", err)
 	}
 
@@ -512,6 +517,7 @@ func temporaryMCPExportPath(ctx context.Context, p exportPayload) (string, error
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("create temporary export directory: %w", err)
 	}
 
@@ -529,6 +535,7 @@ func temporaryMCPExportPath(ctx context.Context, p exportPayload) (string, error
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("resolve temporary export directory %s: %w", directory, err)
 	}
 
@@ -597,7 +604,12 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 				},
 			}, nil
 		},
-		Run: func(ctx context.Context, p exportTailPayload, surface Surface, sink ResultSink) error {
+		Run: func(
+			ctx context.Context,
+			p exportTailPayload,
+			surface Surface,
+			sink ResultSink,
+		) error {
 			payload := exportPayload{
 				ConversationID: p.ConversationID,
 				Options:        p.Options,
@@ -644,6 +656,7 @@ func runExportTranscript(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("export transcript: write MCP body: %w", err)
 	}
 
@@ -668,6 +681,7 @@ func writeCLIExportBody(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("export transcript: write stdout: %w", err)
 		}
 
@@ -695,6 +709,7 @@ func writeCLIExportFile(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("select export destination: %w", err)
 	}
 
@@ -711,6 +726,7 @@ func writeCLIExportFile(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("export transcript: write output %s: %w", path, err)
 	}
 
@@ -798,6 +814,7 @@ func exportTokenSpec(ctx context.Context, conversationID, tokenModel string) *to
 			"err",
 			err,
 		)
+
 		return nil
 	}
 

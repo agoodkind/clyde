@@ -78,7 +78,12 @@ func daemonControlOp(
 
 			return daemonControlPayload{Apply: true}, nil
 		},
-		Run: func(ctx context.Context, _ daemonControlPayload, _ Surface, sink ResultSink) error {
+		Run: func(
+			ctx context.Context,
+			_ daemonControlPayload,
+			_ Surface,
+			sink ResultSink,
+		) error {
 			output, ok := sink.(*CLISink)
 			if !ok {
 				return fmt.Errorf("daemon %s requires terminal output", name.CLI())

@@ -341,7 +341,12 @@ func (t *testProxy) http3Client(tb testing.TB, host string) *http3.Transport {
 			ServerName: host,
 			MinVersion: tls.VersionTLS13,
 		},
-		Dial: func(ctx context.Context, _ string, tlsCfg *tls.Config, cfg *quic.Config) (
+		Dial: func(
+			ctx context.Context,
+			_ string,
+			tlsCfg *tls.Config,
+			cfg *quic.Config,
+		) (
 			*quic.Conn,
 			error,
 		) {

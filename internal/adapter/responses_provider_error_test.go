@@ -211,6 +211,7 @@ func TestResponsesProviderExecutionPreservesClientErrorAndLogsContext(t *testing
 							requestID string,
 						) (anthropic.PreparedRequest, error) {
 							resolved := req
+
 							return anthropic.PreparedRequest{
 								RequestID: requestID,
 								Resolved:  &resolved,
@@ -296,7 +297,11 @@ func TestResponsesNonStreamingProviderErrorCarriesCanonicalWarnings(t *testing.T
 	srv.anthropicProvider = anthropic.NewProvider(
 		adapterprovider.Deps{},
 		anthropic.ProviderOptions{
-			Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, requestID string) (
+			Prepare: func(
+				_ context.Context,
+				req adapterresolver.ResolvedRequest,
+				requestID string,
+			) (
 				anthropic.PreparedRequest,
 				error,
 			) {

@@ -55,7 +55,12 @@ func daemonHardResetOp() Operation[daemonHardResetInput, daemonHardResetPayload]
 				func(in *daemonHardResetInput, value bool) { in.Apply = value },
 			),
 		},
-		New: func() daemonHardResetInput { return daemonHardResetInput{Target: "", Apply: false} },
+		New: func() daemonHardResetInput {
+			return daemonHardResetInput{
+				Target: "",
+				Apply:  false,
+			}
+		},
 		Prepare: func(in daemonHardResetInput) (daemonHardResetPayload, error) {
 			target := daemon.HardResetScope(strings.TrimSpace(in.Target))
 			switch target {
@@ -72,7 +77,12 @@ func daemonHardResetOp() Operation[daemonHardResetInput, daemonHardResetPayload]
 				)
 			}
 		},
-		Run: func(ctx context.Context, payload daemonHardResetPayload, _ Surface, sink ResultSink) error {
+		Run: func(
+			ctx context.Context,
+			payload daemonHardResetPayload,
+			_ Surface,
+			sink ResultSink,
+		) error {
 			output, ok := sink.(*CLISink)
 			if !ok || !payload.Apply {
 				return fmt.Errorf("daemon hard-reset requires --apply")

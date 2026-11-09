@@ -104,7 +104,12 @@ func uninstallOpWithDependencies(
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
 		Prepare:        prepareUninstall,
-		Run: func(ctx context.Context, payload uninstallPayload, _ Surface, sink ResultSink) error {
+		Run: func(
+			ctx context.Context,
+			payload uninstallPayload,
+			_ Surface,
+			sink ResultSink,
+		) error {
 			steps := []struct {
 				selected bool
 				name     string
@@ -129,6 +134,7 @@ func uninstallOpWithDependencies(
 						"err",
 						err,
 					)
+
 					return fmt.Errorf("uninstall %s: %w", step.name, err)
 				}
 			}
