@@ -75,13 +75,13 @@ func resolveRequestOp() Operation[resolveRequestInput, resolveRequestPayload] {
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
 		Children:       nil,
-		Prepare: func(in resolveRequestInput) (resolveRequestPayload, error) {
-			requestID := strings.TrimSpace(in.RequestID)
+		Prepare: func(input resolveRequestInput) (resolveRequestPayload, error) {
+			requestID := strings.TrimSpace(input.RequestID)
 			if requestID == "" {
 				return resolveRequestPayload{}, fmt.Errorf("request_id is required")
 			}
 
-			return resolveRequestPayload{RequestID: requestID, FullScan: in.FullScan}, nil
+			return resolveRequestPayload{RequestID: requestID, FullScan: input.FullScan}, nil
 		},
 		Run: nil,
 		runResult: func(ctx context.Context, p resolveRequestPayload) (Result, error) {

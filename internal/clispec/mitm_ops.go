@@ -273,8 +273,13 @@ func mitmBaselineSeedOp() Operation[mitmBaselineSeedInput, mitmBaselineSeedPaylo
 			return mitmBaselineSeedPayload(in), nil
 		},
 		Run: nil,
-		runResult: func(ctx context.Context, p mitmBaselineSeedPayload) (Result, error) {
-			result, err := daemon.SeedBaseline(ctx, p.Upstream, p.IncludeUA, p.ExcludeUA)
+		runResult: func(ctx context.Context, payload mitmBaselineSeedPayload) (Result, error) {
+			result, err := daemon.SeedBaseline(
+				ctx,
+				payload.Upstream,
+				payload.IncludeUA,
+				payload.ExcludeUA,
+			)
 			if err != nil {
 				slog.WarnContext(
 					ctx,
@@ -284,7 +289,7 @@ func mitmBaselineSeedOp() Operation[mitmBaselineSeedInput, mitmBaselineSeedPaylo
 					"component",
 					"clispec",
 					"upstream",
-					p.Upstream,
+					payload.Upstream,
 					"err",
 					err,
 				)

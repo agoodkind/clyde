@@ -170,16 +170,16 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
-		Prepare: func(in daemonStatusInput) (daemonStatusPayload, error) {
+		Prepare: func(input daemonStatusInput) (daemonStatusPayload, error) {
 			payload := daemonStatusPayload{
-				Timeout: time.Duration(in.TimeoutSeconds) * time.Second,
+				Timeout: time.Duration(input.TimeoutSeconds) * time.Second,
 				Since:   0,
 			}
-			if in.Since == "" {
+			if input.Since == "" {
 				return payload, nil
 			}
 
-			since, err := time.ParseDuration(in.Since)
+			since, err := time.ParseDuration(input.Since)
 			if err != nil || since <= 0 {
 				return daemonStatusPayload{}, fmt.Errorf("since must be a positive duration")
 			}

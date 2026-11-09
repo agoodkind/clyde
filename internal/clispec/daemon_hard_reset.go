@@ -61,8 +61,8 @@ func daemonHardResetOp() Operation[daemonHardResetInput, daemonHardResetPayload]
 				Apply:  false,
 			}
 		},
-		Prepare: func(in daemonHardResetInput) (daemonHardResetPayload, error) {
-			target := daemon.HardResetScope(strings.TrimSpace(in.Target))
+		Prepare: func(input daemonHardResetInput) (daemonHardResetPayload, error) {
+			target := daemon.HardResetScope(strings.TrimSpace(input.Target))
 			switch target {
 			case daemon.HardResetScopeAll,
 				daemon.HardResetScopeDB,
@@ -70,7 +70,7 @@ func daemonHardResetOp() Operation[daemonHardResetInput, daemonHardResetPayload]
 				daemon.HardResetScopeCache,
 				daemon.HardResetScopeConfig,
 				daemon.HardResetScopeHooks:
-				return daemonHardResetPayload{Scope: target, Apply: in.Apply}, nil
+				return daemonHardResetPayload{Scope: target, Apply: input.Apply}, nil
 			default:
 				return daemonHardResetPayload{}, fmt.Errorf(
 					"hard-reset target must be db, state, cache, config, or hooks",

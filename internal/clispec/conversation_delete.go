@@ -73,15 +73,15 @@ func conversationDeleteOp() Operation[conversationDeleteInput, conversationDelet
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
 		Children:       nil,
-		Prepare: func(in conversationDeleteInput) (conversationDeletePayload, error) {
-			conversationID := strings.TrimSpace(in.ConversationID)
+		Prepare: func(input conversationDeleteInput) (conversationDeletePayload, error) {
+			conversationID := strings.TrimSpace(input.ConversationID)
 			if conversationID == "" {
 				return conversationDeletePayload{}, errors.New("conversation id is required")
 			}
 
 			return conversationDeletePayload{
 				ConversationID: conversationID,
-				Execute:        in.Execute,
+				Execute:        input.Execute,
 			}, nil
 		},
 		Run: nil,

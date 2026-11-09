@@ -189,7 +189,7 @@ func (s *Server) logChatReceived(
 
 func (s *Server) logSubagentMissingGenerationID(
 	ctx context.Context,
-	r *http.Request,
+	request *http.Request,
 	corr correlation.Context,
 	reqID string,
 	ingressCtx ingresscontract.IngressContext,
@@ -200,7 +200,7 @@ func (s *Server) logSubagentMissingGenerationID(
 		slog.String("request_id", reqID),
 		slog.Bool("subagent_tool_available", ingressCtx.HasSubagentTool),
 		slog.Any("metadata_keys", discovery.MetadataKeys),
-		slog.Any("header_names", HeaderNames(r.Header)),
+		slog.Any("header_names", HeaderNames(request.Header)),
 	}
 	missingAttrs = append(
 		missingAttrs,

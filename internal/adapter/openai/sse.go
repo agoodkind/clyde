@@ -112,7 +112,7 @@ func (sw *SSEWriter) WriteSSEHeaders() {
 func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk) error {
 	sw.WriteSSEHeaders()
 	chunk.SystemFingerprint = systemFingerprint
-	b, err := sw.marshalStreamChunk(chunk)
+	encoded, err := sw.marshalStreamChunk(chunk)
 	if err != nil {
 		slog.Warn(
 			"adapter.openai_sse.marshal_chunk_failed",
@@ -125,7 +125,7 @@ func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk
 		return fmt.Errorf("marshal OpenAI stream chunk: %w", err)
 	}
 
-	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", b); err != nil {
+	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", encoded); err != nil {
 		slog.Warn(
 			"adapter.openai_sse.write_chunk_failed",
 			"concern",

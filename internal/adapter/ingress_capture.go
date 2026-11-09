@@ -53,13 +53,13 @@ func (w *ingressCaptureWriter) WriteHeader(status int) {
 	w.ResponseWriter.WriteHeader(status)
 }
 
-func (w *ingressCaptureWriter) Write(p []byte) (int, error) {
+func (w *ingressCaptureWriter) Write(payload []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
 
-	_, _ = w.body.Write(p)
-	n, err := w.ResponseWriter.Write(p)
+	_, _ = w.body.Write(payload)
+	n, err := w.ResponseWriter.Write(payload)
 	if err != nil {
 		return n, fmt.Errorf("ingress capture write: %w", err)
 	}
