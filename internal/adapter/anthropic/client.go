@@ -634,18 +634,7 @@ func (c *Client) retryAfter401(
 	originalResp *http.Response,
 ) (*http.Response, time.Duration, error) {
 	log := anthropicRequestLog.Logger()
-	log.InfoContext(
-		ctx,
-		"anthropic.messages.auth_retry_attempted",
-		"concern",
-		"adapter.providers.anthropic.request",
-		"subcomponent",
-		"anthropic",
-		"model",
-		req.Model,
-		"attempt",
-		1,
-	)
+	logAuthRetryAttempt(ctx, log, req.Model)
 	// Read and close the original 401 body, then replace it with a reader
 	// over the saved bytes. The retry path consumes the underlying
 	// connection either way; the in-memory copy lets the fall-through
@@ -737,25 +726,50 @@ func (c *Client) retryAfter401(
 	}
 
 	if retryResp.StatusCode != http.StatusUnauthorized {
-		log.InfoContext(
-			ctx,
-			"anthropic.messages.auth_retry_recovered",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"attempt",
-			1,
-			"status",
-			retryResp.StatusCode,
-			"duration_ms",
-			clock.Since(retryStarted).Milliseconds(),
-		)
+		logAuthRetryRecovered(ctx, log, req.Model, retryResp, retryStarted)
 	}
 
 	return retryResp, clock.Since(retryStarted), nil
+}
+
+func logAuthRetryAttempt(ctx context.Context, log *slog.Logger, model string) {
+	log.InfoContext(
+		ctx,
+		"anthropic.messages.auth_retry_attempted",
+		"concern",
+		"adapter.providers.anthropic.request",
+		"subcomponent",
+		"anthropic",
+		"model",
+		model,
+		"attempt",
+		1,
+	)
+}
+
+func logAuthRetryRecovered(
+	ctx context.Context,
+	log *slog.Logger,
+	model string,
+	retryResp *http.Response,
+	retryStarted time.Time,
+) {
+	log.InfoContext(
+		ctx,
+		"anthropic.messages.auth_retry_recovered",
+		"concern",
+		"adapter.providers.anthropic.request",
+		"subcomponent",
+		"anthropic",
+		"model",
+		model,
+		"attempt",
+		1,
+		"status",
+		retryResp.StatusCode,
+		"duration_ms",
+		clock.Since(retryStarted).Milliseconds(),
+	)
 }
 
 // captureTee is the [io.ReadCloser] shim the egress capture wraps around
