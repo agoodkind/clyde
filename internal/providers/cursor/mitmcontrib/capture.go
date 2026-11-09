@@ -44,7 +44,7 @@ func (routeProvider) DiagnoseExchange(
 		return
 	}
 
-	diag, ok := DiagnoseRequest(
+	diag, diagnosed := DiagnoseRequest(
 		RequestCapture{
 			Path:    exchange.Path,
 			Headers: exchange.RequestHeader,
@@ -52,7 +52,7 @@ func (routeProvider) DiagnoseExchange(
 		},
 		nil,
 	)
-	if !ok {
+	if !diagnosed {
 		return
 	}
 

@@ -73,21 +73,26 @@ type CaptureHeaders struct {
 
 // ExtractCaptureHeaders returns the raw Cursor identity headers
 // from the supplied header bundle.
-func ExtractCaptureHeaders(h http.Header) CaptureHeaders {
+func ExtractCaptureHeaders(headers http.Header) CaptureHeaders {
 	return CaptureHeaders{
-		RequestID: firstHeader(h, "x-request-id", "x-cursor-request-id", "request-id"),
+		RequestID: firstHeader(
+			headers,
+			"x-request-id",
+			"x-cursor-request-id",
+			"request-id",
+		),
 		OriginalRequestID: firstHeader(
-			h,
+			headers,
 			"x-original-request-id",
 			"x-cursor-original-request-id",
 			"original-request-id",
 		),
 		SessionID: firstHeader(
-			h,
+			headers,
 			"x-session-id",
 			"x-cursor-session-id",
 			"cursor-session-id",
 		),
-		Traceparent: firstHeader(h, "traceparent"),
+		Traceparent: firstHeader(headers, "traceparent"),
 	}
 }

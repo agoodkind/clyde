@@ -463,13 +463,13 @@ func attachCodexToolOutputs(
 // the file itself cannot be read, preserving the prior scanner's behavior of
 // keeping a record for unreadable rollouts.
 func fallbackThread(path string, archived bool) (codexstore.ThreadSummary, bool) {
-	id, createdAt, ok := codexstore.RolloutIdentityFromFilename(filepath.Base(path))
+	threadID, createdAt, ok := codexstore.RolloutIdentityFromFilename(filepath.Base(path))
 	if !ok {
 		return emptyThreadSummary(), false
 	}
 
 	summary := codexstore.ThreadSummary{
-		ID:            id,
+		ID:            threadID,
 		RolloutPath:   path,
 		ForkedFromID:  "",
 		Preview:       "",

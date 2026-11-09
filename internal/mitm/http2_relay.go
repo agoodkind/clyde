@@ -277,11 +277,11 @@ type countingWriter struct {
 }
 
 func (w *countingWriter) Write(p []byte) (int, error) {
-	n, err := w.writer.Write(p)
-	w.bytesWritten += int64(n)
+	written, err := w.writer.Write(p)
+	w.bytesWritten += int64(written)
 	if err != nil {
-		return n, fmt.Errorf("counting writer: %w", err)
+		return written, fmt.Errorf("counting writer: %w", err)
 	}
 
-	return n, nil
+	return written, nil
 }

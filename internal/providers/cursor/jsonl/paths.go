@@ -244,16 +244,16 @@ func fillTwinSubagentParents(files []TranscriptFile) {
 		return
 	}
 
-	for i := range files {
-		if files[i].ParentConversationID != "" {
+	for fileIndex := range files {
+		if files[fileIndex].ParentConversationID != "" {
 			continue
 		}
 
 		key := projectConversationKey{
-			ProjectKey:     files[i].ProjectKey,
-			ConversationID: files[i].ConversationID,
+			ProjectKey:     files[fileIndex].ProjectKey,
+			ConversationID: files[fileIndex].ConversationID,
 		}
-		files[i].TwinSubagentParentID = subagentParentByKey[key]
+		files[fileIndex].TwinSubagentParentID = subagentParentByKey[key]
 	}
 }
 

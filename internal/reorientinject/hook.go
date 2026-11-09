@@ -49,13 +49,13 @@ func (h *Hook) MatchRequestResponse(
 		return unmatched(), nil
 	}
 
-	body, ok := readRequestBody(req.Body)
-	if !ok {
+	body, succeeded := readRequestBody(req.Body)
+	if !succeeded {
 		return unmatched(), nil
 	}
 
-	result, ok := h.splitter.Plan(body)
-	if !ok {
+	result, succeeded := h.splitter.Plan(body)
+	if !succeeded {
 		return unmatched(), nil
 	}
 

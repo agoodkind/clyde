@@ -172,13 +172,13 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 // equalStringSet reports whether two string slices contain the same elements
 // regardless of order, used to compare a MITM listener's bound-address set
 // against its configured set during reload validation.
-func equalStringSet(a, b []string) bool {
-	if len(a) != len(b) {
+func equalStringSet(a, right []string) bool {
+	if len(a) != len(right) {
 		return false
 	}
 
 	ac := slices.Clone(a)
-	bc := slices.Clone(b)
+	bc := slices.Clone(right)
 	slices.Sort(ac)
 	slices.Sort(bc)
 

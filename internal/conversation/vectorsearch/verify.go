@@ -82,7 +82,7 @@ func (c *Client) VerifyIndex(
 
 	seen := make(map[string]bool, sample)
 	for i := range sample {
-		key, vector, ok, readErr := milvus.sampleVector(
+		key, vector, hasSample, readErr := milvus.sampleVector(
 			ctx,
 			collectionName,
 			fmt.Sprintf(sampleKeyPattern, i*primaryKeySpace/sample),
@@ -91,7 +91,7 @@ func (c *Client) VerifyIndex(
 			return check, readErr
 		}
 
-		if !ok || seen[key] {
+		if !hasSample || seen[key] {
 			continue
 		}
 
