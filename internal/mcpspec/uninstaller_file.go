@@ -70,35 +70,9 @@ func uninstallMCPFile(
 		return InstallFileResult{}, fmt.Errorf("read %s MCP settings %s: %w", client, path, err)
 	}
 
-	filtered := removeManagedClydeCodexTable(string(existing), homeDir)
-	body := existing
-	if filtered != string(existing) {
-		body = []byte(strings.TrimSpace(filtered) + "\n")
-	}
-
-	if isJSON {
-		body, err = uninstallJSONSettings(existing, homeDir)
-		if err != nil {
-			slog.WarnContext(
-				ctx,
-				"mcp.settings.uninstall_file_failed",
-				"component",
-				"mcpspec",
-				"client",
-				client,
-				"path",
-				path,
-				"err",
-				err,
-			)
-
-			return InstallFileResult{}, fmt.Errorf(
-				"render %s MCP settings %s: %w",
-				client,
-				path,
-				err,
-			)
-		}
+	body, err := renderUninstalledMCPSettings(ctx, client, path, isJSON, homeDir, existing)
+	if err != nil {
+		return InstallFileResult{}, err
 	}
 
 	if bytes.Equal(existing, body) {
@@ -126,4 +100,43 @@ func uninstallMCPFile(
 	result.Changed = true
 
 	return result, nil
+}
+
+func renderUninstalledMCPSettings(
+	ctx context.Context,
+	client Client,
+	path string,
+	isJSON bool,
+	homeDir string,
+	existing []byte,
+) ([]byte, error) {
+	var err error
+
+	filtered := removeManagedClydeCodexTable(string(existing), homeDir)
+	body := existing
+	if filtered != string(existing) {
+		body = []byte(strings.TrimSpace(filtered) + "\n")
+	}
+
+	if isJSON {
+		body, err = uninstallJSONSettings(existing, homeDir)
+		if err != nil {
+			slog.WarnContext(
+				ctx,
+				"mcp.settings.uninstall_file_failed",
+				"component",
+				"mcpspec",
+				"client",
+				client,
+				"path",
+				path,
+				"err",
+				err,
+			)
+
+			return nil, fmt.Errorf("render %s MCP settings %s: %w", client, path, err)
+		}
+	}
+
+	return body, nil
 }
