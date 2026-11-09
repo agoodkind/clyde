@@ -164,46 +164,7 @@ func (Parser) Discover(
 				return nil
 			}
 
-			// A transcript under subagents/ is admitted rather than dropped here.
-			// scanHeader reads its isSidechain marker, classifies it as subagent
-			// origin, and gives it an artifact-hash identity so it cannot collide with
-			// the parent conversation whose session id it records. The one conversation
-			// setting then decides whether it is served. Dropping it here instead would
-			// be a second, always-on skip the setting could not reach.
-			info, infoErr := entry.Info()
-			if infoErr != nil {
-				if errors.Is(infoErr, os.ErrNotExist) {
-					return nil
-				}
-
-				slog.WarnContext(
-					ctx,
-					"providers.claude.parser.stat_failed",
-					"concern",
-					concern,
-					"component",
-					"claude",
-					"path",
-					path,
-					"err",
-					infoErr,
-				)
-
-				return nil
-			}
-
-			out = append(
-				out,
-				conversation.ScanCandidate{
-					MetadataChanged: false,
-					Path:            path,
-					Selector:        "",
-					Stamp: conversation.FileStamp{
-						Size:  info.Size(),
-						Mtime: info.ModTime(),
-					},
-				},
-			)
+			out = appendTranscriptCandidate(ctx, path, entry, out)
 
 			return nil
 		},
@@ -230,6 +191,56 @@ func (Parser) Discover(
 	}
 
 	return out, nil
+}
+
+func appendTranscriptCandidate(
+	ctx context.Context,
+	path string,
+	entry os.DirEntry,
+	out []conversation.ScanCandidate,
+) []conversation.ScanCandidate {
+	// A transcript under subagents/ is admitted rather than dropped here.
+	// scanHeader reads its isSidechain marker, classifies it as subagent
+	// origin, and gives it an artifact-hash identity so it cannot collide with
+	// the parent conversation whose session id it records. The one conversation
+	// setting then decides whether it is served. Dropping it here instead would
+	// be a second, always-on skip the setting could not reach.
+	info, infoErr := entry.Info()
+	if infoErr != nil {
+		if errors.Is(infoErr, os.ErrNotExist) {
+			return out
+		}
+
+		slog.WarnContext(
+			ctx,
+			"providers.claude.parser.stat_failed",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"path",
+			path,
+			"err",
+			infoErr,
+		)
+
+		return out
+	}
+
+	out = append(
+		out,
+		conversation.ScanCandidate{
+			MetadataChanged: false,
+			Path:            path,
+			Selector:        "",
+			Stamp: conversation.FileStamp{
+				Size:  info.Size(),
+				Mtime: info.ModTime(),
+			},
+		},
+	)
+
+	return out
 }
 
 // ScanRecord reads only the top of a transcript and stops the moment it has the
@@ -325,6 +336,14 @@ func scanHeader(
 		return emptyRecord(), false
 	}
 
+	return recordFromHeader(fields, path, stamp), true
+}
+
+func recordFromHeader(
+	fields headerFields,
+	path string,
+	stamp conversation.FileStamp,
+) conversation.Record {
 	var lineage *conversation.Lineage
 	if fields.forkedFromSessionID != "" {
 		lineage = &conversation.Lineage{
@@ -385,7 +404,7 @@ func scanHeader(
 		Archived:       false,
 		// Claude transcript headers carry no request id.
 		LatestRequestID: "",
-	}, true
+	}
 }
 
 // applyHeaderLine folds one decoded header line into the accumulating fields,
