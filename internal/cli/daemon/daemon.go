@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -58,11 +59,23 @@ func NewConversationIndexCmd(f *cli.Factory) *cobra.Command {
 	return index
 }
 
-// ReloadCommandError normalizes reload command errors into user-facing wording.
+// ReloadCommandError adds recovery instructions to daemon reload timeouts.
+//
+// Deadline errors retain their original cause and produce a warning log.
+// Other errors return unchanged.
+//
+// Example:
+//
+//	err := ReloadCommandError(context.DeadlineExceeded)
 func ReloadCommandError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errors.New(
-			"daemon reload did not complete within " + ReloadCommandTimeout.String() + " and no reload confirmation was received; check `clyde daemon status` and the daemon log, then rerun `clyde daemon reload`: " + err.Error(),
+		slog.Warn("cli.daemon.reload_timed_out", "concern", "process.daemon.lifecycle", "err", err)
+
+		return fmt.Errorf(
+			"daemon reload did not complete within %s and no reload confirmation was received; "+
+				"check `clyde daemon status` and the daemon log, then rerun `clyde daemon reload`: %w",
+			ReloadCommandTimeout.String(),
+			err,
 		)
 	}
 
