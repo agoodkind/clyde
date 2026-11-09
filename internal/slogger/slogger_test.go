@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
@@ -29,6 +30,56 @@ func TestDefaultProcessPathUsesConfigStateResolver(t *testing.T) {
 	want := filepath.Join(home, "state-root", "clyde", "clyde-daemon.jsonl")
 	if got != want {
 		t.Fatalf("DefaultProcessPath()=%q want %q", got, want)
+	}
+}
+
+func TestAsyncHandlerReportsPanicThroughLogger(t *testing.T) {
+	const panicValue = "boom"
+	const logTimeout = 10 * time.Second
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create panic log pipe: %v", err)
+	}
+
+	t.Cleanup(func() { _ = reader.Close() })
+	t.Cleanup(func() { _ = writer.Close() })
+	if err := reader.SetReadDeadline(time.Now().Add(logTimeout)); err != nil {
+		t.Fatalf("set panic log deadline: %v", err)
+	}
+
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(writer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	jsonHandler := slog.NewJSONHandler(
+		io.Discard,
+		&slog.HandlerOptions{
+			AddSource: false,
+			Level:     nil,
+			ReplaceAttr: func(_ []string, _ slog.Attr) slog.Attr {
+				panic(panicValue)
+			},
+		},
+	)
+	// Recovery leaves drained open. This test does not call Close.
+	handler := newAsyncHandler(jsonHandler, nil)
+	slog.New(handler).Info("trigger asynchronous handler panic")
+
+	var event struct {
+		Message   string `json:"msg"`
+		Level     string `json:"level"`
+		Component string `json:"component"`
+		Error     string `json:"err"`
+	}
+	if err := json.NewDecoder(reader).Decode(&event); err != nil {
+		t.Fatalf("decode asynchronous panic event: %v", err)
+	}
+
+	if event.Message != "slogger.async_handler.panicked" || event.Level != "ERROR" {
+		t.Fatalf("unexpected asynchronous panic event: %+v", event)
+	}
+
+	if event.Component != "slogger" || event.Error != "async handler panic: "+panicValue {
+		t.Fatalf("unexpected asynchronous panic metadata: %+v", event)
 	}
 }
 

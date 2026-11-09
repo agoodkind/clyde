@@ -2,11 +2,14 @@ package slogger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"sync"
 )
+
+var errAsyncHandlerPanic = errors.New("async handler panic")
 
 type queuedRecord struct {
 	handler slog.Handler
@@ -43,13 +46,13 @@ func newAsyncHandler(handler slog.Handler, handlerCloser io.Closer) *asyncHandle
 	state.cond = sync.NewCond(&state.mu)
 	go func() {
 		defer func() {
-			if r := recover(); r != nil {
+			if recovered := recover(); recovered != nil {
 				slog.Error(
 					"slogger.async_handler.panicked",
 					"component",
 					"slogger",
 					"err",
-					fmt.Errorf("async handler panic: %v", r),
+					fmt.Errorf("%w: %v", errAsyncHandlerPanic, recovered),
 				)
 			}
 		}()
