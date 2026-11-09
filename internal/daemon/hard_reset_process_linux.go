@@ -27,80 +27,78 @@ var (
 )
 
 func resetProcessDetails(pid int) (resetProcess, error) {
-	process, err := readResetProcessDetails(pid)
+	process, err := func() (resetProcess, error) {
+		root := filepath.Join("/proc", strconv.Itoa(pid))
+
+		info, err := os.Stat(root)
+		if err != nil {
+			return resetProcess{}, fmt.Errorf("stat reset process %d: %w", pid, err)
+		}
+
+		stat, valid := info.Sys().(*syscall.Stat_t)
+		if !valid || int64(stat.Uid) != int64(os.Getuid()) {
+			return resetProcess{}, fmt.Errorf("process %d %w", pid, errProcessOtherUser)
+		}
+
+		started, err := resetProcessStart(pid)
+		if err != nil {
+			return resetProcess{}, err
+		}
+
+		info, err = os.Stat(root)
+		if err != nil {
+			return resetProcess{}, fmt.Errorf("recheck reset process %d ownership: %w", pid, err)
+		}
+
+		stat, valid = info.Sys().(*syscall.Stat_t)
+		if !valid || int64(stat.Uid) != int64(os.Getuid()) {
+			return resetProcess{}, fmt.Errorf("process %d %w", pid, errProcessOtherUser)
+		}
+
+		currentStarted, err := resetProcessStart(pid)
+		if err != nil {
+			return resetProcess{}, err
+		}
+
+		if currentStarted != started {
+			return resetProcess{}, os.ErrNotExist
+		}
+
+		executable, err := os.Readlink(filepath.Join(root, "exe"))
+		if err != nil {
+			return resetProcess{}, fmt.Errorf("read reset process executable %d: %w", pid, err)
+		}
+
+		arguments, err := os.ReadFile(filepath.Join(root, "cmdline"))
+		if err != nil {
+			return resetProcess{}, fmt.Errorf("read reset process arguments %d: %w", pid, err)
+		}
+
+		environment, err := os.ReadFile(filepath.Join(root, "environ"))
+		if err != nil {
+			return resetProcess{}, fmt.Errorf("read reset process environment %d: %w", pid, err)
+		}
+
+		result := resetProcess{
+			PID: pid, Started: started, Executable: strings.TrimSuffix(executable, " (deleted)"),
+			Arguments:        strings.Split(strings.TrimSuffix(string(arguments), "\x00"), "\x00"),
+			SupervisorSocket: "",
+		}
+
+		for entry := range strings.SplitSeq(string(environment), "\x00") {
+			if value, ok := strings.CutPrefix(entry, daemonsupervisor.EnvSupervisorSocket+"="); ok {
+				result.SupervisorSocket = value
+			}
+		}
+
+		return result, nil
+	}()
 	if err != nil && !os.IsNotExist(err) {
 		slog.Warn("daemon.hard_reset.process_details_failed",
 			"concern", "process.daemon.lifecycle", "pid", pid, "err", err)
 	}
 
 	return process, err
-}
-
-func readResetProcessDetails(pid int) (resetProcess, error) {
-	root := filepath.Join("/proc", strconv.Itoa(pid))
-
-	info, err := os.Stat(root)
-	if err != nil {
-		return resetProcess{}, fmt.Errorf("stat reset process %d: %w", pid, err)
-	}
-
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int64(stat.Uid) != int64(os.Getuid()) {
-		return resetProcess{}, fmt.Errorf("process %d %w", pid, errProcessOtherUser)
-	}
-
-	started, err := resetProcessStart(pid)
-	if err != nil {
-		return resetProcess{}, err
-	}
-
-	info, err = os.Stat(root)
-	if err != nil {
-		return resetProcess{}, fmt.Errorf("recheck reset process %d ownership: %w", pid, err)
-	}
-
-	stat, ok = info.Sys().(*syscall.Stat_t)
-	if !ok || int64(stat.Uid) != int64(os.Getuid()) {
-		return resetProcess{}, fmt.Errorf("process %d %w", pid, errProcessOtherUser)
-	}
-
-	currentStarted, err := resetProcessStart(pid)
-	if err != nil {
-		return resetProcess{}, err
-	}
-
-	if currentStarted != started {
-		return resetProcess{}, os.ErrNotExist
-	}
-
-	executable, err := os.Readlink(filepath.Join(root, "exe"))
-	if err != nil {
-		return resetProcess{}, fmt.Errorf("read reset process executable %d: %w", pid, err)
-	}
-
-	arguments, err := os.ReadFile(filepath.Join(root, "cmdline"))
-	if err != nil {
-		return resetProcess{}, fmt.Errorf("read reset process arguments %d: %w", pid, err)
-	}
-
-	environment, err := os.ReadFile(filepath.Join(root, "environ"))
-	if err != nil {
-		return resetProcess{}, fmt.Errorf("read reset process environment %d: %w", pid, err)
-	}
-
-	result := resetProcess{
-		PID: pid, Started: started, Executable: strings.TrimSuffix(executable, " (deleted)"),
-		Arguments:        strings.Split(strings.TrimSuffix(string(arguments), "\x00"), "\x00"),
-		SupervisorSocket: "",
-	}
-
-	for entry := range strings.SplitSeq(string(environment), "\x00") {
-		if value, ok := strings.CutPrefix(entry, daemonsupervisor.EnvSupervisorSocket+"="); ok {
-			result.SupervisorSocket = value
-		}
-	}
-
-	return result, nil
 }
 
 func resetProcessStart(pid int) (string, error) {

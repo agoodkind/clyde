@@ -56,6 +56,10 @@ type ExtraLoop func(*slog.Logger) func()
 
 // RunCommandContext starts the launchd or systemd-owned supervisor process and
 // forwards context cancellation as a process-level termination signal.
+//
+// The supervisor manages the daemon worker until shutdown or a startup error.
+//
+//	err := RunCommandContext(ctx, slog.Default())
 func RunCommandContext(ctx context.Context, log *slog.Logger, _ ...ExtraLoop) error {
 	if log == nil {
 		log = slog.Default()

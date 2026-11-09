@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
@@ -23,10 +21,7 @@ import (
 	"goodkind.io/clyde/internal/mitmshow"
 )
 
-// controlMaxMessageBytes is the message-size ceiling for the control leg, set on
-// both the daemon server and the CLI/MCP client. Large reads and exports cross
-// the wire as chunk streams, so this is a belt-and-suspenders bound for any
-// remaining unary control RPC rather than the primary mechanism.
+// controlMaxMessageBytes limits unary RPC message size.
 const controlMaxMessageBytes = 128 << 20
 
 const (
@@ -44,6 +39,10 @@ type daemonClient struct {
 
 // ReloadDaemon asks the running worker to hand its live listeners to a
 // supervisor-spawned replacement worker.
+//
+// The reload lock serializes this request with other daemon replacements.
+//
+//	response, err := ReloadDaemon(ctx)
 func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 	unlock, err := lockDaemonReload(ctx)
 	if err != nil {
@@ -75,6 +74,10 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 // its config-driven listeners fresh, for a config edit that moves a listener
 // address. It takes the same daemon.reload.lock flock as ReloadDaemon so a
 // watcher-driven rebind serializes against any CLI-driven reload.
+//
+// The replacement worker opens listeners from the updated configuration.
+//
+//	response, err := RebindDaemon(ctx)
 func RebindDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 	unlock, err := lockDaemonReload(ctx)
 	if err != nil {
@@ -142,8 +145,11 @@ func ListConversations(ctx context.Context, options conversation.ListOptions) (c
 	}, nil
 }
 
-// GetConversation asks the daemon for one conversation transcript rendered as
-// plain text.
+// GetConversation returns one conversation transcript as plain text.
+//
+// A positive lastN limits the returned transcript to recent messages.
+//
+//	text, err := GetConversation(ctx, conversationID, 20)
 func GetConversation(ctx context.Context, conversationID string, lastN int) (string, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
@@ -167,8 +173,11 @@ func GetConversation(ctx context.Context, conversationID string, lastN int) (str
 	return text, nil
 }
 
-// GetConversationInfo asks the daemon for one conversation's static metadata
-// and compaction segment stack.
+// GetConversationInfo returns static metadata and compaction segments.
+//
+// The response summarizes the conversation without exporting its transcript.
+//
+//	info, err := GetConversationInfo(ctx, conversationID)
 func GetConversationInfo(ctx context.Context, conversationID string) (conversation.Info, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
@@ -191,6 +200,10 @@ func GetConversationInfo(ctx context.Context, conversationID string) (conversati
 // rendered as plain text. loadRules is the loading-rules tag a search hit
 // carried for the row that produced messageIndex; empty means the default
 // rules.
+//
+// The center and surrounding-message limits select the returned window.
+//
+//	text, err := GetConversationContext(ctx, id, "", index, 2, 2, rules)
 func GetConversationContext(ctx context.Context, conversationID, timestamp string, messageIndex, before, after int, loadRules string) (string, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
@@ -218,8 +231,11 @@ func GetConversationContext(ctx context.Context, conversationID, timestamp strin
 	return text, nil
 }
 
-// SearchConversations asks the daemon for bounded transcript text matches
-// across candidate conversations.
+// SearchConversations returns bounded matches across conversations.
+//
+// Search options select the query, filters, and result limit.
+//
+//	results, err := SearchConversations(ctx, options)
 func SearchConversations(ctx context.Context, options conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
@@ -283,6 +299,10 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 // ReorientConversationForHook asks the daemon for one reorient page and lets
 // hook callers recover the current conversation before the provider compacts.
 // The recovered transcript is still capped by maxLines (or the daemon default).
+//
+// Callers request subsequent pages with the returned cursor.
+//
+//	page, err := ReorientConversationForHook(ctx, id, workspace, "", 100, 32000, false, false)
 func ReorientConversationForHook(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs, syntheticPreCompact bool) (conversation.ReorientPage, error) {
 	return reorientConversation(ctx, conversationID, workspace, cursor, maxLines, pageBytes, includeToolOutputs, syntheticPreCompact)
 }
@@ -716,8 +736,11 @@ func conversationSegmentsFromProto(
 	return segments
 }
 
-// ExportTranscript asks the daemon to export one conversation and returns the
-// exported body.
+// ExportTranscript returns the requested conversation export.
+//
+// Export options select the transcript content and output format.
+//
+//	body, err := ExportTranscript(ctx, conversationID, options)
 func ExportTranscript(ctx context.Context, conversationID string, options conversation.ExportOptions) ([]byte, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
@@ -804,6 +827,10 @@ func exportTranscriptRequest(conversationID string, options conversation.ExportO
 
 // GetMITMStatus asks the daemon for each MITM listener address, whether it is
 // bound, and the CA paths.
+//
+// The response reports the running daemon's listener state.
+//
+//	status, err := GetMITMStatus(ctx)
 func GetMITMStatus(ctx context.Context) (MITMStatus, error) {
 	empty := MITMStatus{Listeners: nil, CACertPath: "", CAKeyPath: ""}
 	client, err := connectDaemon(ctx)
@@ -837,6 +864,10 @@ func GetMITMStatus(ctx context.Context) (MITMStatus, error) {
 
 // ShowCapture asks the daemon to correlate one request id across its logs and
 // the SQLite capture store and returns the typed lookup result.
+//
+// The identifier selects the request to correlate.
+//
+//	capture, err := ShowCapture(ctx, requestID)
 func ShowCapture(ctx context.Context, id string) (mitmshow.ShowOutput, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
@@ -859,6 +890,10 @@ func ShowCapture(ctx context.Context, id string) (mitmshow.ShowOutput, error) {
 // SeedBaseline asks the daemon to build a wire baseline from the capture
 // store's deduped shape corpus and write it as the current baseline for the
 // given upstream.
+//
+// User-agent filters restrict the captured shapes used for the result.
+//
+//	result, err := SeedBaseline(ctx, upstream, includeUA, excludeUA)
 func SeedBaseline(ctx context.Context, upstream string, includeUA, excludeUA []string) (mitm.SeedBaselineResult, error) {
 	empty := mitm.SeedBaselineResult{Upstream: "", Flavors: 0}
 	client, err := connectDaemon(ctx)
@@ -885,6 +920,10 @@ func SeedBaseline(ctx context.Context, upstream string, includeUA, excludeUA []s
 
 // LogsInventory asks the daemon to build a metadata-only inventory of its log
 // files and return it as typed data.
+//
+// The request controls the state root, listing limit, and depth of inspection.
+//
+//	inventory, err := LogsInventory(ctx, stateRoot, 20, false)
 func LogsInventory(ctx context.Context, stateRoot string, largestFileLimit int, deep bool) (loginventory.Inventory, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
@@ -958,46 +997,4 @@ func daemonGRPCAddress() string {
 		return config.DefaultDaemonGRPCAddress()
 	}
 	return cfg.Daemon.GRPCAddress
-}
-
-func lockDaemonReload(ctx context.Context) (func(), error) {
-	if err := config.EnsureRuntimeDir(); err != nil {
-		return nil, fmt.Errorf("ensure runtime dir for reload lock: %w", err)
-	}
-	lockPath := daemonReloadLockPath()
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.client.reload_lock.open_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"lock_path", lockPath,
-			"err", err,
-		)
-		return nil, fmt.Errorf("open reload lock: %w", err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				done <- fmt.Errorf("reload lock panic: %v", recovered)
-			}
-		}()
-		done <- syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX)
-	}()
-	select {
-	case <-ctx.Done():
-		_ = lockFile.Close()
-		return nil, fmt.Errorf("lock daemon reload: %w", ctx.Err())
-	case err := <-done:
-		if err != nil {
-			_ = lockFile.Close()
-			slog.WarnContext(ctx, "daemon.client.reload_lock.lock_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"lock_path", lockPath,
-				"err", err,
-			)
-			return nil, fmt.Errorf("lock reload: %w", err)
-		}
-	}
-	return func() {
-		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
-		_ = lockFile.Close()
-	}, nil
 }

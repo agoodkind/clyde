@@ -94,6 +94,10 @@ func (conversationInfoPayload) isClispecPrepared() {}
 
 // ConversationProviderList returns the registered conversation providers as a
 // display-ready English list.
+//
+// Provider labels use title case and English list punctuation.
+//
+//	providers := ConversationProviderList()
 func ConversationProviderList() string {
 	return formatConversationProviderList(true)
 }

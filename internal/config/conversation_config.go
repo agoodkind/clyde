@@ -46,6 +46,10 @@ type CursorConversationConfig struct {
 }
 
 // RawIndexingEnabled reports whether Cursor discovery and projection run.
+//
+// An unset Enabled value uses the default configuration.
+//
+//	enabled := cursor.RawIndexingEnabled()
 func (cursor CursorConversationConfig) RawIndexingEnabled() bool {
 	return cursor.Enabled == nil || *cursor.Enabled
 }
@@ -136,6 +140,10 @@ func (semantic ConversationSemanticConfig) SyncPassInterval() time.Duration {
 
 // IndexRefreshPeriod supplies the raw index cadence independently of semantic
 // sync passes.
+//
+// A nonpositive IndexRefreshInterval selects the default worker interval.
+//
+//	interval := semantic.IndexRefreshPeriod()
 func (semantic ConversationSemanticConfig) IndexRefreshPeriod() time.Duration {
 	if semantic.IndexRefreshInterval <= 0 {
 		return defaultConversationWorkerInterval
@@ -172,23 +180,39 @@ const (
 
 // FeedsEngine reports whether the daemon offers conversations to the search
 // engine.
+//
+// IngestionEnabled controls this direction independently of search.
+//
+//	enabled := semantic.FeedsEngine()
 func (semantic ConversationSemanticConfig) FeedsEngine() bool {
 	return semantic.IngestionEnabled
 }
 
 // AnswersSearch reports whether the daemon answers conversation searches from
 // the engine.
+//
+// SearchEnabled controls this direction independently of ingestion.
+//
+//	enabled := semantic.AnswersSearch()
 func (semantic ConversationSemanticConfig) AnswersSearch() bool {
 	return semantic.SearchEnabled
 }
 
 // UsesEngine reports whether either direction needs a connection to the engine,
 // which is what decides whether the daemon builds one.
+//
+// Either enabled direction requires a backend connection.
+//
+//	needed := semantic.UsesEngine()
 func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
 // DefaultBackend resolves the legacy Milvus aliases for the default search store.
+//
+// A local selection remains local; other supported selections use Milvus.
+//
+//	backend := semantic.DefaultBackend()
 func (semantic ConversationSemanticConfig) DefaultBackend() ConversationSemanticBackend {
 	if semantic.Backend == ConversationSemanticBackendLocal {
 		return ConversationSemanticBackendLocal
@@ -197,6 +221,10 @@ func (semantic ConversationSemanticConfig) DefaultBackend() ConversationSemantic
 }
 
 // EnabledBackends returns the configured stores in ingestion startup order.
+//
+// An empty Backends list uses the default backend.
+//
+//	backends := semantic.EnabledBackends()
 func (semantic ConversationSemanticConfig) EnabledBackends() []ConversationSemanticBackend {
 	if len(semantic.Backends) == 0 {
 		return []ConversationSemanticBackend{semantic.DefaultBackend()}
@@ -205,6 +233,10 @@ func (semantic ConversationSemanticConfig) EnabledBackends() []ConversationSeman
 }
 
 // ForSearchBackend copies the settings and applies defaults for one search backend.
+//
+// The returned configuration selects the requested backend.
+//
+//	settings := semantic.ForSearchBackend(ConversationSemanticBackendLocal)
 func (semantic ConversationSemanticConfig) ForSearchBackend(backend ConversationSemanticBackend) ConversationSemanticConfig {
 	semantic.Backend = backend
 	if backend == ConversationSemanticBackendLocal {
@@ -263,6 +295,10 @@ func applyConversationSemanticBackendDefaults(semantic *ConversationSemanticConf
 
 // DenseSearchParams returns the index search parameters of a dense
 // conversation search.
+//
+// The result supplies the configured dense-index probe setting.
+//
+//	parameters := semantic.DenseSearchParams()
 func (semantic ConversationSemanticConfig) DenseSearchParams() map[string]string {
 	if semantic.SearchNProbe == nil || *semantic.SearchNProbe <= 0 {
 		return nil

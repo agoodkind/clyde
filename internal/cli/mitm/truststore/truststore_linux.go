@@ -59,7 +59,7 @@ const updateCACertificatesPath = "/usr/sbin/update-ca-certificates"
 // system; the timeout is generous enough for the password prompt.
 const defaultLinuxCommandTimeout = 2 * time.Minute
 
-func newPlatformRegistry() Registry {
+func newPlatformRegistry() linuxRegistry {
 	return NewLinuxRegistry(LinuxRegistryOptions{
 		Runner: nil, InstallPath: "", CommandTimeout: 0,
 	})
@@ -75,7 +75,11 @@ type LinuxRegistryOptions struct {
 }
 
 // NewLinuxRegistry returns the update-ca-certificates registry.
-func NewLinuxRegistry(options LinuxRegistryOptions) Registry {
+//
+// Options can replace the command runner, certificate path, and timeout.
+//
+//	registry := NewLinuxRegistry(LinuxRegistryOptions{})
+func NewLinuxRegistry(options LinuxRegistryOptions) linuxRegistry {
 	registry := linuxRegistry{
 		runner:         linuxExecRun,
 		installPath:    linuxInstallPath,
@@ -181,10 +185,13 @@ func (l linuxRegistry) Status(certPath string) (InstallStatus, error) {
 }
 
 // Install copies the configured CA into installPath and runs
-// update-ca-certificates so the system trust bundle picks it up. The
-// operation is idempotent: matching content at installPath skips the
+// update-ca-certificates to update the system trust bundle.
+//
+// The operation is idempotent: matching content at installPath skips the
 // copy, and a successful update with a freshly written file is the
 // same shape as a no-op refresh.
+//
+//	err := registry.Install(certPath)
 func (l linuxRegistry) Install(certPath string) error {
 	if strings.TrimSpace(certPath) == "" {
 		return ErrCAAbsent
@@ -280,7 +287,11 @@ func (l linuxRegistry) Install(certPath string) error {
 
 // Uninstall removes the CA file under /usr/local/share/ca-certificates
 // and re-runs update-ca-certificates so the system bundle drops the
-// entry. Removing when nothing is installed is silently ignored.
+// entry.
+//
+// A missing installed certificate does not require an update command.
+//
+//	err := registry.Uninstall()
 func (l linuxRegistry) Uninstall() error {
 	ctx, cancel := context.WithTimeout(context.Background(), l.commandTimeout)
 	defer cancel()

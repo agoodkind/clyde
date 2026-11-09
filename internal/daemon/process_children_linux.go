@@ -39,13 +39,13 @@ func childProcessIDs(ctx context.Context, parentPID int) ([]int, error) {
 	pids := make([]int, 0)
 
 	for _, entry := range entries {
-		pid, ok := parseProcEntryPID(entry.Name())
-		if !ok {
+		pid, valid := parseProcEntryPID(entry.Name())
+		if !valid {
 			continue
 		}
 
-		ppid, ok := procParentPID(pid)
-		if ok && ppid == parentPID {
+		ppid, known := procParentPID(pid)
+		if known && ppid == parentPID {
 			pids = append(pids, pid)
 		}
 	}
