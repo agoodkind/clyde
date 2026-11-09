@@ -128,7 +128,7 @@ type ConversationSemanticConfig struct {
 // SyncPassInterval permits shorter sync cadences without shortening the
 // transcript growth window.
 //
-// A nonpositive SyncInterval selects the default worker interval.
+// Raw conversation discovery uses IndexRefreshPeriod independently.
 //
 //	interval := semantic.SyncPassInterval()
 func (semantic ConversationSemanticConfig) SyncPassInterval() time.Duration {
