@@ -179,6 +179,7 @@ func (s *Server) forwardPassthroughHTTP(
 			options.streamRequested,
 			err,
 		)
+
 		return
 	}
 
@@ -320,6 +321,7 @@ func (s *Server) forwardPassthroughHTTP(
 				options.streamRequested,
 				retryFailure,
 			)
+
 			return
 		}
 
@@ -384,6 +386,7 @@ func (s *Server) openPassthroughResponse(
 			passthroughCaptureResultFromBody(nil),
 			started,
 		)
+
 		return nil, err
 	}
 
@@ -481,6 +484,7 @@ func (s *Server) writePassthroughChunk(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("write passthrough response: %w", err)
 	}
 
@@ -873,6 +877,7 @@ func (s *Server) respondPassthroughStreamCopyError(
 			"err",
 			sseErr,
 		)
+
 		return fmt.Errorf("create passthrough stream error writer: %w", sseErr)
 	}
 
@@ -885,6 +890,7 @@ func (s *Server) respondPassthroughStreamCopyError(
 			"err",
 			boundaryErr,
 		)
+
 		return fmt.Errorf("respond passthrough stream error: %w", boundaryErr)
 	}
 
@@ -905,20 +911,20 @@ func (s *Server) logPassthroughOverrideTerminal(
 	usage Usage,
 ) {
 	alias := resolvedRequestAlias(req)
-	streamOpened := streamRequested || strings.Contains(contentType, "text/event-stream")
 	adapterruntime.LogTerminal(
 		s.log,
 		ctx,
 		s.deps.RequestEvents,
 		adapterruntime.RequestEvent{
-			Stage:                      adapterruntime.RequestStageCompleted,
-			Provider:                   providerName(req, ""),
-			Backend:                    req.Provider.String(),
-			RequestID:                  reqID,
-			ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
-			Alias:                      alias,
-			ModelID:                    alias,
-			Stream:                     streamOpened,
+			Stage:       adapterruntime.RequestStageCompleted,
+			Provider:    providerName(req, ""),
+			Backend:     req.Provider.String(),
+			RequestID:   reqID,
+			ExecutionID: adapterruntime.ExecutionIDFromContext(ctx),
+			Alias:       alias,
+			ModelID:     alias,
+			Stream: streamRequested ||
+				strings.Contains(contentType, "text/event-stream"),
 			TokensIn:                   usage.PromptTokens,
 			TokensOut:                  usage.CompletionTokens,
 			CacheReadTokens:            usage.CachedTokens(),
@@ -1017,6 +1023,7 @@ func (s *Server) coerceOrRetryPassthroughOverrideJSON(
 			passthroughCaptureResultFromBody(nil),
 			secondStarted,
 		)
+
 		return respBody, status, hdr, true, newPassthroughRetryFailure(0, nil, "", err2)
 	}
 
@@ -1082,20 +1089,20 @@ func (s *Server) respondPassthroughOverrideError(
 	aerr.Backend = req.Provider.String()
 	aerr.ModelAlias = alias
 	s.writeShapedError(w, r, aerr)
-	streamOpened := streamRequested || strings.Contains(contentType, "text/event-stream")
 	adapterruntime.LogTerminal(
 		s.log,
 		ctx,
 		s.deps.RequestEvents,
 		adapterruntime.RequestEvent{
-			Stage:                      adapterruntime.RequestStageFailed,
-			Provider:                   providerName(req, ""),
-			Backend:                    req.Provider.String(),
-			RequestID:                  reqID,
-			ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
-			Alias:                      alias,
-			ModelID:                    alias,
-			Stream:                     streamOpened,
+			Stage:       adapterruntime.RequestStageFailed,
+			Provider:    providerName(req, ""),
+			Backend:     req.Provider.String(),
+			RequestID:   reqID,
+			ExecutionID: adapterruntime.ExecutionIDFromContext(ctx),
+			Alias:       alias,
+			ModelID:     alias,
+			Stream: streamRequested ||
+				strings.Contains(contentType, "text/event-stream"),
 			DurationMs:                 clock.Since(started).Milliseconds(),
 			Err:                        "upstream returned status " + strconv.Itoa(status),
 			FinishReason:               "",

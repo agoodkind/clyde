@@ -232,13 +232,14 @@ func assertRawCompactionMarkedItem(
 
 func TestRawResponsesCompactionMarksSeparateTranscriptPart(t *testing.T) {
 	for _, producer := range rawCompactionMarkerProducers(t) {
-		olderInjection := reorienttag.WrapInjection("older", "")
-
 		texts := map[string]string{
-			"plain":              rawCompactionMarkerSummary,
-			"opening tag":        "quoted " + reorienttag.PreCompactionTranscriptOpen,
-			"closing tag":        "quoted " + reorienttag.PreCompactionTranscriptClose,
-			"older wrapper":      rawCompactionMarkerSummary + olderInjection,
+			"plain":       rawCompactionMarkerSummary,
+			"opening tag": "quoted " + reorienttag.PreCompactionTranscriptOpen,
+			"closing tag": "quoted " + reorienttag.PreCompactionTranscriptClose,
+			"older wrapper": rawCompactionMarkerSummary + reorienttag.WrapInjection(
+				"older",
+				"",
+			),
 			"intended injection": rawCompactionMarkerSummary + producer.injection,
 		}
 		for name, text := range texts {
