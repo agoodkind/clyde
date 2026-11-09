@@ -76,13 +76,13 @@ func RunTranslatorEvents(
 	anthUsage, _, err := client.StreamEvents(
 		ctx,
 		anthReq,
-		func(ev anthropic.StreamEvent) error {
-			if stopEv, ok := ev.(anthropic.StreamStop); ok {
+		func(event anthropic.StreamEvent) error {
+			if stopEv, ok := event.(anthropic.StreamStop); ok {
 				streamStopReason = stopEv.StopReason
 				return nil
 			}
 
-			evName, payload, ok := StreamEventToTranslatorSSE(ev)
+			evName, payload, ok := StreamEventToTranslatorSSE(event)
 			if !ok {
 				return nil
 			}

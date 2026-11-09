@@ -1006,7 +1006,7 @@ func decodeResponseBody(resp *http.Response) {
 
 	switch httpContentEncoding(enc) {
 	case httpContentEncodingGzip:
-		zr, err := gzip.NewReader(resp.Body)
+		gzipReader, err := gzip.NewReader(resp.Body)
 		if err != nil {
 			anthropicRequestLog.Logger().Warn(
 				"anthropic.response.gzip_decode_failed",
@@ -1021,7 +1021,7 @@ func decodeResponseBody(resp *http.Response) {
 			return
 		}
 
-		resp.Body = &decodedBody{r: zr, src: resp.Body}
+		resp.Body = &decodedBody{r: gzipReader, src: resp.Body}
 		resp.Header.Del("Content-Encoding")
 	case httpContentEncodingDeflate:
 		fr := flate.NewReader(resp.Body)

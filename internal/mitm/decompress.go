@@ -41,13 +41,13 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 
 	switch mitmContentEncoding(enc) {
 	case mitmContentEncodingGzip, mitmContentEncodingXGzip:
-		gr, err := gzip.NewReader(bytes.NewReader(raw))
+		gzipReader, err := gzip.NewReader(bytes.NewReader(raw))
 		if err != nil {
 			return raw, false
 		}
 
-		defer func() { _ = gr.Close() }()
-		out, err := io.ReadAll(gr)
+		defer func() { _ = gzipReader.Close() }()
+		out, err := io.ReadAll(gzipReader)
 		if err != nil {
 			return raw, false
 		}

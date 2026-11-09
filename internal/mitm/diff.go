@@ -298,13 +298,13 @@ func indexHeaders(hs []Header) map[string]Header {
 	return out
 }
 
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
+func stringSlicesEqual(reference, candidate []string) bool {
+	if len(reference) != len(candidate) {
 		return false
 	}
 
-	for i := range a {
-		if a[i] != b[i] {
+	for i := range reference {
+		if reference[i] != candidate[i] {
 			return false
 		}
 	}

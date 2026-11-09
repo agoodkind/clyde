@@ -311,13 +311,13 @@ func projectWireIdentity(shape mitm.FlavorShape) WireIdentity {
 // "" when the header is not constant, not present, or carries more than
 // one observed value, matching the Anthropic loader's projection rule.
 func codexConstantHeaderValue(shape mitm.FlavorShape, name string) string {
-	for _, h := range shape.Headers {
-		if !strings.EqualFold(h.Name, name) {
+	for _, header := range shape.Headers {
+		if !strings.EqualFold(header.Name, name) {
 			continue
 		}
 
-		if h.Classification == mitm.HeaderClassConstant && len(h.ObservedValues) == 1 {
-			return strings.TrimSpace(h.ObservedValues[0])
+		if header.Classification == mitm.HeaderClassConstant && len(header.ObservedValues) == 1 {
+			return strings.TrimSpace(header.ObservedValues[0])
 		}
 
 		return ""
@@ -344,13 +344,13 @@ func codexRequiredBodyFields(shape mitm.FlavorShape) []string {
 	return out
 }
 
-func copyCodexStrings(in []string) []string {
-	if len(in) == 0 {
+func copyCodexStrings(input []string) []string {
+	if len(input) == 0 {
 		return nil
 	}
 
-	out := make([]string, len(in))
-	copy(out, in)
+	out := make([]string, len(input))
+	copy(out, input)
 
 	return out
 }

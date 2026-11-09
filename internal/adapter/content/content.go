@@ -160,13 +160,13 @@ func NormalizeRaw(raw json.RawMessage) ([]Part, Kind) {
 		return nil, KindEmpty
 	}
 
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
 		return []Part{
 			{
 				Kind:      PartText,
 				WireType:  "text",
-				Text:      s,
+				Text:      text,
 				Image:     nil,
 				Audio:     nil,
 				Refusal:   "",
