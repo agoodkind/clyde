@@ -198,6 +198,13 @@ func loadWireFlavorsFromStore(
 		return nil, fmt.Errorf("%w: %s has no flavors", ErrBaselineInvalid, anthropicWireUpstream)
 	}
 
+	return projectStoredWireFlavors(ctx, snap)
+}
+
+func projectStoredWireFlavors(
+	ctx context.Context,
+	snap mitm.Snapshot,
+) (map[string]WireFlavor, error) {
 	// Incomplete flavors are skipped, not fatal: the learn loop also
 	// captures non-interactive caller flavors (bootstrap GETs, probes,
 	// axios sidecar calls) whose identity headers are absent or
@@ -218,6 +225,7 @@ func loadWireFlavorsFromStore(
 				"slug",
 				flavor.Slug,
 			)
+
 			continue
 		}
 
@@ -232,6 +240,7 @@ func loadWireFlavorsFromStore(
 				"slug",
 				flavor.Slug,
 			)
+
 			continue
 		}
 
