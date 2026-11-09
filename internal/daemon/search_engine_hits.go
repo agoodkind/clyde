@@ -148,8 +148,18 @@ func engineSearchMatches(
 		engineLimit = nextLimit
 	}
 
+	return finalizeEngineSearchPage(ctx, page, limit, offset, engineLimit), nil
+}
+
+func finalizeEngineSearchPage(
+	ctx context.Context,
+	page engineSearchPage,
+	limit int,
+	offset int,
+	engineLimit int,
+) engineSearchPage {
 	if !page.needsMoreHeadroom(limit) {
-		return page, nil
+		return page
 	}
 
 	if engineLimit >= maxEngineOverfetchLimit {
@@ -174,7 +184,7 @@ func engineSearchMatches(
 			engineLimit,
 		)
 
-		return page, nil
+		return page
 	}
 
 	page.short = true
@@ -199,7 +209,7 @@ func engineSearchMatches(
 		engineLimit,
 	)
 
-	return page, nil
+	return page
 }
 
 func hasDateBound(options conversation.SearchConversationsOptions) bool {
