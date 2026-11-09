@@ -248,7 +248,7 @@ func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 	r.lastReasoningRedactedData = ""
 	// Reset the kind so a later reasoning span starts fresh.
 	r.lastReasoningKind = ""
-	ch := r.baseChunk(adapteropenai.StreamDelta{
+	chunk := r.baseChunk(adapteropenai.StreamDelta{
 		Content:          SyntheticContentCloseWithAttrs(kind, encrypted, signature),
 		Role:             "",
 		Reasoning:        "",
@@ -257,5 +257,5 @@ func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 		Refusal:          "",
 	})
 
-	return &ch
+	return &chunk
 }

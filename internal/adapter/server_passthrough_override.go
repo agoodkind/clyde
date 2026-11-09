@@ -98,15 +98,15 @@ func passthroughUpstreamTarget(
 	if req.PassthroughOverrideName != "" {
 		override := req.PassthroughOverride
 		if override.BaseURL == "" {
-			e := newAdapterError(
+			targetError := newAdapterError(
 				adapterErrorUpstreamUnavailable,
 				"alias routes to passthrough override "+req.PassthroughOverrideName+" but no base URL is configured",
 			)
-			e.Provider = providerName(req, "")
-			e.Backend = req.Provider.String()
-			e.ModelAlias = resolvedRequestAlias(req)
+			targetError.Provider = providerName(req, "")
+			targetError.Backend = req.Provider.String()
+			targetError.ModelAlias = resolvedRequestAlias(req)
 
-			return "", "", "", "", e
+			return "", "", "", "", targetError
 		}
 
 		baseURL = override.BaseURL
@@ -1352,13 +1352,13 @@ func coercePassthroughOverrideJSON(body []byte) ([]byte, bool) {
 
 	allOK := true
 
-	for i, raw := range choices {
+	for choiceIndex, raw := range choices {
 		coerced, ok := coercePassthroughOverrideChoice(raw)
 		if !ok {
 			allOK = false
 		}
 
-		choices[i] = coerced
+		choices[choiceIndex] = coerced
 	}
 
 	rawChoices, err := json.Marshal(choices)

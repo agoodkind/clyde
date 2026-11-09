@@ -394,7 +394,7 @@ func (c *Client) planCorrections(
 // desired and restoring guard.MetadataTimestampUnix reproduces
 // guard.MetadataSHA256.
 func correctedFromGuard(
-	id string,
+	rowID string,
 	current storedGuard,
 	guard TimestampCorrectionGuard,
 	desired int64,
@@ -404,7 +404,7 @@ func correctedFromGuard(
 	}
 
 	restored, metadataTimestamp, err := replaceMetadataTimestamp(
-		id,
+		rowID,
 		current.metadata,
 		guard.MetadataTimestampUnix,
 	)

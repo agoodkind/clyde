@@ -59,13 +59,13 @@ type conversationState struct {
 	families map[string][]storedFamilyRow
 }
 
-func (state *conversationState) hasUnknownTimeRow(familyKey string, id string) bool {
+func (state *conversationState) hasUnknownTimeRow(familyKey string, rowID string) bool {
 	if state == nil {
 		return false
 	}
 
 	for _, row := range state.families[familyKey] {
-		if row.id == id {
+		if row.id == rowID {
 			return !row.timeKnown
 		}
 	}
@@ -73,13 +73,13 @@ func (state *conversationState) hasUnknownTimeRow(familyKey string, id string) b
 	return false
 }
 
-func (state *conversationState) hasRow(familyKey string, id string) bool {
+func (state *conversationState) hasRow(familyKey string, rowID string) bool {
 	if state == nil {
 		return false
 	}
 
 	for _, row := range state.families[familyKey] {
-		if row.id == id {
+		if row.id == rowID {
 			return true
 		}
 	}

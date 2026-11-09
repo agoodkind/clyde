@@ -466,13 +466,13 @@ func EventsWithInjectedUsageNotices(
 	out = append(out, events...)
 
 	for _, notice := range notices {
-		ev, ok := noticeEvent(notice.Text)
+		event, ok := noticeEvent(notice.Text)
 		if !ok {
 			continue
 		}
 
 		LogNoticeEmission(ctx, notice, "stream_injected")
-		out = append(out, ev)
+		out = append(out, event)
 	}
 
 	return out

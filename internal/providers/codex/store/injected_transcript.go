@@ -177,14 +177,14 @@ func annotateInjectedTranscript(
 		return
 	}
 
-	resolved, ok := resolveTranscript(
+	resolved, hasTranscript := resolveTranscript(
 		message.Raw,
 		timestamp,
 		opts,
 		opts.history.currentWindow(),
 		index,
 	)
-	if ok && resolved.PartIndex == index && len(resolved.Spans) > 0 {
+	if hasTranscript && resolved.PartIndex == index && len(resolved.Spans) > 0 {
 		content.TranscriptSpans = resolved.Spans
 		return
 	}
@@ -315,14 +315,14 @@ func markedPartSpans(
 		return spans
 	}
 
-	resolved, ok := resolveTranscript(
+	resolved, hasTranscript := resolveTranscript(
 		raw,
 		timestamp,
 		opts,
 		opts.history.lastCompactionWindow(),
 		index,
 	)
-	if !ok || resolved.PartIndex != index {
+	if !hasTranscript || resolved.PartIndex != index {
 		return nil
 	}
 

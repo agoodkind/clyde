@@ -406,16 +406,16 @@ func (b *localBackend) fillUnknownTimes(
 		collectionName,
 		sortedFillIDs(fills),
 		columns,
-		func(id string, metadata string, cells map[string]collection.ScalarCell) (
+		func(rowID string, metadata string, cells map[string]collection.ScalarCell) (
 			string,
 			map[string]collection.ScalarValue,
 			bool,
 			error,
 		) {
 			cell := cells[timestampUnixColumn]
-			want := fills[id].timestampUnix
+			want := fills[rowID].timestampUnix
 			rewritten, apply := unknownTimeFill(
-				id,
+				rowID,
 				metadata,
 				cell.State == collection.ScalarCellValue,
 				cell.Value.Int64,
@@ -440,7 +440,7 @@ func (b *localBackend) fillUnknownTimes(
 // unknownTimeFill replaces an unknown metadata timestamp when the target is known
 // and the stored scalar is null or contains the unknown marker.
 func unknownTimeFill(
-	id string,
+	rowID string,
 	metadata string,
 	scalarKnown bool,
 	scalarValue int64,
@@ -450,7 +450,7 @@ func unknownTimeFill(
 		return "", false
 	}
 
-	rewritten, metadataTimestamp, err := replaceMetadataTimestamp(id, metadata, want)
+	rewritten, metadataTimestamp, err := replaceMetadataTimestamp(rowID, metadata, want)
 	if err != nil || metadataTimestamp != missingTimestampUnix {
 		return "", false
 	}

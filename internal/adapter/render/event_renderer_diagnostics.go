@@ -212,7 +212,7 @@ func eventDiagnosticFields(ev Event) (itemType, itemID string, deltaLen int) {
 	}
 }
 
-func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
+func (r *EventRenderer) logRender(ev Event, chunk adapteropenai.StreamChunk) {
 	kind := ev.eventKind()
 	delta := adapteropenai.StreamDelta{
 		Role:             "",
@@ -222,8 +222,8 @@ func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
 		ToolCalls:        nil,
 		Refusal:          "",
 	}
-	if len(ch.Choices) > 0 {
-		delta = ch.Choices[0].Delta
+	if len(chunk.Choices) > 0 {
+		delta = chunk.Choices[0].Delta
 	}
 
 	attrs := []slog.Attr{
