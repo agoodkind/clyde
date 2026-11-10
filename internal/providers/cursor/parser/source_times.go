@@ -695,16 +695,7 @@ func composerSourceMessages(
 	source := emptySourceMessages()
 	header, found, err := cursorstore.ReadComposerHeader(ctx, db, composerID)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.parser.source_times_header_failed",
-			"concern",
-			concern,
-			"composer_id",
-			composerID,
-			"err",
-			err,
-		)
+		logSourceHeaderFailure(ctx, composerID, err)
 
 		return source, false, fmt.Errorf("read composer header %q: %w", composerID, err)
 	}
@@ -722,10 +713,7 @@ func composerSourceMessages(
 		)
 	}
 
-	chronologyKeys := map[chronologyKey]bool{}
-	if nativeFound && native.Complete {
-		chronologyKeys = nativeChronologyKeys(native)
-	}
+	chronologyKeys := sourceChronologyKeys(native, nativeFound)
 
 	kept := make(map[string]bool)
 	source.Messages = make([]transcript.Message, 0)
@@ -771,31 +759,16 @@ func composerSourceMessages(
 		db,
 		composerID,
 		func(bubble cursorstore.Bubble) error {
-			if err := toolDates.add(bubble); err != nil {
-				return err
-			}
-
-			key, keyed := bubbleChronologyKey(bubble)
-			if keyed && chronologyKeys[key] {
-				candidates[key] = append(
-					candidates[key],
-					chronologyCandidate{
-						created:   composerBubbleTimestamp(bubble.CreatedAt),
-						requestID: bubble.RequestID,
-					},
-				)
-			}
-
-			if kept[bubble.BubbleID] {
-				return nil
-			}
-
-			if mapped, include := mapComposerBubble(bubble, opts); include {
-				source.Copies = append(source.Copies, mapped)
-				copyKeys = append(copyKeys, key)
-			}
-
-			return nil
+			return recordStoredSourceCopy(
+				bubble,
+				opts,
+				toolDates,
+				chronologyKeys,
+				candidates,
+				kept,
+				&source,
+				&copyKeys,
+			)
 		},
 	)
 	if err != nil {
@@ -810,6 +783,79 @@ func composerSourceMessages(
 		applyChronologyTimes(source.Copies, copyKeys, governed)
 	}
 
+	populateNativeSource(&source, &native, nativeFound, callDates)
+
+	return source, true, nil
+}
+
+func logSourceHeaderFailure(ctx context.Context, composerID string, err error) {
+	slog.WarnContext(
+		ctx,
+		"providers.cursor.parser.source_times_header_failed",
+		"concern",
+		concern,
+		"composer_id",
+		composerID,
+		"err",
+		err,
+	)
+}
+
+func sourceChronologyKeys(
+	native cursorstore.NativeToolCalls,
+	nativeFound bool,
+) map[chronologyKey]bool {
+	chronologyKeys := map[chronologyKey]bool{}
+	if nativeFound && native.Complete {
+		chronologyKeys = nativeChronologyKeys(native)
+	}
+
+	return chronologyKeys
+}
+
+func recordStoredSourceCopy(
+	bubble cursorstore.Bubble,
+	opts conversation.LoadOptions,
+	toolDates *toolIdentityDates,
+	chronologyKeys map[chronologyKey]bool,
+	candidates map[chronologyKey][]chronologyCandidate,
+	kept map[string]bool,
+	source *conversation.SourceMessages,
+	copyKeys *[]chronologyKey,
+) error {
+	if err := toolDates.add(bubble); err != nil {
+		return err
+	}
+
+	key, keyed := bubbleChronologyKey(bubble)
+	if keyed && chronologyKeys[key] {
+		candidates[key] = append(
+			candidates[key],
+			chronologyCandidate{
+				created:   composerBubbleTimestamp(bubble.CreatedAt),
+				requestID: bubble.RequestID,
+			},
+		)
+	}
+
+	if kept[bubble.BubbleID] {
+		return nil
+	}
+
+	if mapped, include := mapComposerBubble(bubble, opts); include {
+		source.Copies = append(source.Copies, mapped)
+		*copyKeys = append(*copyKeys, key)
+	}
+
+	return nil
+}
+
+func populateNativeSource(
+	source *conversation.SourceMessages,
+	native *cursorstore.NativeToolCalls,
+	nativeFound bool,
+	callDates map[string][]time.Time,
+) {
 	source.ToolCallsComplete = nativeFound && native.Complete
 	source.MissingNativeRecords = native.MissingBlobs
 	projection := native.Project()
@@ -827,8 +873,6 @@ func composerSourceMessages(
 		call.ActualOrdinal = entry.ActualOrdinal
 		source.ToolCalls = append(source.ToolCalls, call)
 	}
-
-	return source, true, nil
 }
 
 func sourceUserTurns(turns []cursorstore.NativeUserTurn) []transcript.UserTurn {
