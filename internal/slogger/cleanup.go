@@ -187,49 +187,7 @@ func applyCleanupPolicyContext(ctx context.Context, policy CleanupPolicy) (Clean
 		completionLevel = slog.LevelInfo
 	}
 
-	slog.Log(
-		ctx,
-		completionLevel,
-		"slogger.cleanup.completed",
-		"component",
-		"slogger",
-		"root",
-		root,
-		"scanned_roots",
-		result.ScannedRoots,
-		"candidates",
-		result.Candidates,
-		"deleted",
-		result.Deleted,
-		"bytes_deleted",
-		result.BytesDeleted,
-		"bytes_before",
-		result.BytesBefore,
-		"bytes_after",
-		result.BytesAfter,
-		"retained_open_bytes",
-		result.RetainedOpenBytes,
-		"retained_open_files",
-		result.RetainedOpenFiles,
-		"protected_bytes",
-		result.ProtectedBytes,
-		"excess_bytes",
-		result.ExcessBytes,
-		"trimmed",
-		result.Trimmed,
-		"bytes_trimmed",
-		result.BytesTrimmed,
-		"trimmed_paths",
-		result.TrimmedPaths,
-		"deleted_paths",
-		result.DeletedPaths,
-		"skipped",
-		result.Skipped,
-		"errors",
-		result.Errors,
-		"duration_ms",
-		result.DurationMS,
-	)
+	logCleanupCompleted(ctx, completionLevel, root, result)
 	if walkErr != nil {
 		return result, walkErr
 	}
@@ -439,4 +397,55 @@ func cleanupGroup(path string) string {
 	}
 
 	return path
+}
+
+func logCleanupCompleted(
+	ctx context.Context,
+	completionLevel slog.Level,
+	root string,
+	result CleanupResult,
+) {
+	slog.Log(
+		ctx,
+		completionLevel,
+		"slogger.cleanup.completed",
+		"component",
+		"slogger",
+		"root",
+		root,
+		"scanned_roots",
+		result.ScannedRoots,
+		"candidates",
+		result.Candidates,
+		"deleted",
+		result.Deleted,
+		"bytes_deleted",
+		result.BytesDeleted,
+		"bytes_before",
+		result.BytesBefore,
+		"bytes_after",
+		result.BytesAfter,
+		"retained_open_bytes",
+		result.RetainedOpenBytes,
+		"retained_open_files",
+		result.RetainedOpenFiles,
+		"protected_bytes",
+		result.ProtectedBytes,
+		"excess_bytes",
+		result.ExcessBytes,
+		"trimmed",
+		result.Trimmed,
+		"bytes_trimmed",
+		result.BytesTrimmed,
+		"trimmed_paths",
+		result.TrimmedPaths,
+		"deleted_paths",
+		result.DeletedPaths,
+		"skipped",
+		result.Skipped,
+		"errors",
+		result.Errors,
+		"duration_ms",
+		result.DurationMS,
+	)
 }
