@@ -204,26 +204,11 @@ func (s *Server) dispatchCodexProviderStream(
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
 	alias := resolvedRequestAlias(&resolvedReq)
-	writer, err := newProviderStreamWriterWithOptions(
-		ctx,
-		s,
-		w,
-		reqID,
-		alias,
-		"codex",
-		adapterrender.EventRendererOptions{
-			ReasoningRenderMode:       "",
-			NativePatchRepresentation: nativePatchRepresentationForResolvedCursorRoute(resolvedReq),
-		},
-	)
+	writer, err := s.prepareCodexDispatchStreamWriter(ctx, w, &req, reqID, alias, &resolvedReq)
 	if err != nil {
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
 	}
-
-	writer.configureStreamUsage(req.StreamOptions != nil && req.StreamOptions.IncludeUsage)
-
-	s.emitRequestStreamOpened(ctx, &resolvedReq, "direct", reqID, alias)
 
 	// Register the overall Codex egress call and inject the per-attempt
 	// hook before dispatching to the provider.
@@ -273,21 +258,16 @@ func (s *Server) dispatchCodexProviderStream(
 		return
 	}
 
-	completedAttrs := codexCompletedAttrs(
+	s.logCodexDispatchCompleted(
+		ctx,
 		reqID,
 		alias,
-		usage,
-		result,
+		&usage,
+		&result,
 		finishReason,
-		clock.Since(started).Milliseconds(),
+		started,
+		&corr,
 		true,
-	)
-	completedAttrs = append(completedAttrs, corr.Attrs()...)
-	s.log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.chat.completed",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...,
 	)
 	adapterruntime.LogTerminal(
 		s.log,
@@ -397,78 +377,31 @@ func (s *Server) dispatchCodexProviderCollect(
 	}
 
 	result.UsageNotices = notices
-	runResult := adaptercodex.RunResult{
-		Usage:                      result.Usage,
-		FinishReason:               finishReason,
-		ReasoningSignaled:          result.ReasoningSignaled,
-		ReasoningVisible:           result.ReasoningVisible,
-		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
-		ToolCallCount:              result.ToolCallCount,
-		ToolCallNames:              result.ToolCallNames,
-		HasSubagentToolCall:        result.HasSubagentToolCall,
-		UsageTelemetry: adaptercodex.
-			UsageTelemetry{
-			UsagePresent:               false,
-			InputTokens:                0,
-			OutputTokens:               0,
-			TotalTokens:                0,
-			InputTokensDetailsPresent:  false,
-			CachedTokens:               0,
-			OutputTokensDetailsPresent: false,
-			ReasoningOutputTokens:      0,
-		},
-
-		ResponseID:  "",
-		OutputItems: nil,
-	}
-	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(ctx, collector.events, notices)
-	merged := adaptercodex.MergeEventsWithNativePatchRepresentation(
+	mergedBody, usage, marshalErr := s.codexCollectedBody(
+		ctx,
+		collector,
+		notices,
+		&result,
+		finishReason,
 		reqID,
 		alias,
-		systemFingerprint,
-		mergedEvents,
-		runResult,
-		nativePatchRepresentationForResolvedCursorRoute(resolvedReq),
+		&resolvedReq,
 	)
-	usage := result.Usage
-	if resolvedReq.ContextBudget.InputTokens > 0 {
-		usage.MaxTokens = resolvedReq.ContextBudget.InputTokens
-	}
-
-	if merged.Usage != nil {
-		merged.Usage.MaxTokens = usage.MaxTokens
-	}
-
-	mergedBody, err := marshalChatResponseForListener(ctx, merged)
-	if err != nil {
-		s.log.WarnContext(
-			ctx,
-			"adapter.codex.collect_marshal_failed",
-			"concern",
-			"adapter.providers.codex.request",
-			"err",
-			err,
-		)
-
+	if marshalErr != nil {
 		return
 	}
 
 	writeJSON(w, mergedBody)
-	completedAttrs := codexCompletedAttrs(
+	s.logCodexDispatchCompleted(
+		ctx,
 		reqID,
 		alias,
-		usage,
-		result,
+		&usage,
+		&result,
 		finishReason,
-		clock.Since(started).Milliseconds(),
+		started,
+		&corr,
 		false,
-	)
-	completedAttrs = append(completedAttrs, corr.Attrs()...)
-	s.log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.chat.completed",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...,
 	)
 	adapterruntime.LogTerminal(
 		s.log,
@@ -637,4 +570,135 @@ func codexClassifyError(message string) upstreamCodeClass {
 	}
 
 	return upstreamClassServerError
+}
+
+func (s *Server) prepareCodexDispatchStreamWriter(
+	ctx context.Context,
+	responseWriter http.ResponseWriter,
+	req *ChatRequest,
+	reqID string,
+	alias string,
+	resolvedReq *adapterresolver.ResolvedRequest,
+) (*providerStreamWriter, error) {
+	writer, err := newProviderStreamWriterWithOptions(
+		ctx,
+		s,
+		responseWriter,
+		reqID,
+		alias,
+		"codex",
+		adapterrender.EventRendererOptions{
+			ReasoningRenderMode: "",
+			NativePatchRepresentation: nativePatchRepresentationForResolvedCursorRoute(
+				*resolvedReq,
+			),
+		},
+	)
+	if err != nil {
+		return writer, err
+	}
+
+	writer.configureStreamUsage(req.StreamOptions != nil && req.StreamOptions.IncludeUsage)
+
+	s.emitRequestStreamOpened(ctx, resolvedReq, "direct", reqID, alias)
+
+	return writer, nil
+}
+
+func (s *Server) logCodexDispatchCompleted(
+	ctx context.Context,
+	reqID string,
+	alias string,
+	usage *adapteropenai.Usage,
+	result *adapterprovider.Result,
+	finishReason string,
+	started time.Time,
+	corr *correlation.Context,
+	stream bool,
+) {
+	completedAttrs := codexCompletedAttrs(
+		reqID,
+		alias,
+		*usage,
+		*result,
+		finishReason,
+		clock.Since(started).Milliseconds(),
+		stream,
+	)
+	completedAttrs = append(completedAttrs, corr.Attrs()...)
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.chat.completed",
+		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...,
+	)
+}
+
+func (s *Server) codexCollectedBody(
+	ctx context.Context,
+	collector *providerCollectorWriter,
+	notices []adapterruntime.UsageNotice,
+	result *adapterprovider.Result,
+	finishReason string,
+	reqID string,
+	alias string,
+	resolvedReq *adapterresolver.ResolvedRequest,
+) ([]byte, adapteropenai.Usage, error) {
+	runResult := adaptercodex.RunResult{
+		Usage:                      result.Usage,
+		FinishReason:               finishReason,
+		ReasoningSignaled:          result.ReasoningSignaled,
+		ReasoningVisible:           result.ReasoningVisible,
+		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
+		ToolCallCount:              result.ToolCallCount,
+		ToolCallNames:              result.ToolCallNames,
+		HasSubagentToolCall:        result.HasSubagentToolCall,
+		UsageTelemetry: adaptercodex.
+			UsageTelemetry{
+			UsagePresent:               false,
+			InputTokens:                0,
+			OutputTokens:               0,
+			TotalTokens:                0,
+			InputTokensDetailsPresent:  false,
+			CachedTokens:               0,
+			OutputTokensDetailsPresent: false,
+			ReasoningOutputTokens:      0,
+		},
+
+		ResponseID:  "",
+		OutputItems: nil,
+	}
+	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(ctx, collector.events, notices)
+	merged := adaptercodex.MergeEventsWithNativePatchRepresentation(
+		reqID,
+		alias,
+		systemFingerprint,
+		mergedEvents,
+		runResult,
+		nativePatchRepresentationForResolvedCursorRoute(*resolvedReq),
+	)
+	usage := result.Usage
+	if resolvedReq.ContextBudget.InputTokens > 0 {
+		usage.MaxTokens = resolvedReq.ContextBudget.InputTokens
+	}
+
+	if merged.Usage != nil {
+		merged.Usage.MaxTokens = usage.MaxTokens
+	}
+
+	mergedBody, err := marshalChatResponseForListener(ctx, merged)
+	if err != nil {
+		s.log.WarnContext(
+			ctx,
+			"adapter.codex.collect_marshal_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"err",
+			err,
+		)
+
+		return nil, usage, err
+	}
+
+	return mergedBody, usage, nil
 }
