@@ -310,21 +310,8 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 		return false
 	}
 
-	next, err := w.parse()
+	next, err := w.parseChangedConfig(ctx)
 	if err != nil {
-		w.log.WarnContext(
-			ctx,
-			"daemon.config_watch.parse_failed",
-			"concern",
-			slogger.ConcernProcessDaemonConfig,
-			"component",
-			"daemon",
-			"path",
-			w.path,
-			"err",
-			err,
-		)
-
 		return false
 	}
 
@@ -343,23 +330,7 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 	// config it cannot serve. A hot-appliable change is swapped in process with
 	// no re-exec and no severed exchanges; on apply failure it falls through to
 	// the reload path below.
-	route := config.RouteReload
-	if w.classify != nil {
-		route = w.classify(next)
-	}
-
-	w.log.InfoContext(
-		ctx,
-		"daemon.config_watch.classified",
-		"concern",
-		slogger.ConcernProcessDaemonConfig,
-		"component",
-		"daemon",
-		"path",
-		w.path,
-		"route",
-		route.String(),
-	)
+	route := w.classifyChangedConfig(ctx, next)
 	if route == config.RouteRestartRequired {
 		w.log.WarnContext(
 			ctx,
@@ -438,6 +409,53 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 	}
 
 	return w.trigger(ctx, "reload", w.reload)
+}
+
+func (w *configWatcher) parseChangedConfig(ctx context.Context) (*config.Config, error) {
+	next, err := w.parse()
+	if err != nil {
+		w.log.WarnContext(
+			ctx,
+			"daemon.config_watch.parse_failed",
+			"concern",
+			slogger.ConcernProcessDaemonConfig,
+			"component",
+			"daemon",
+			"path",
+			w.path,
+			"err",
+			err,
+		)
+
+		return nil, err
+	}
+
+	return next, nil
+}
+
+func (w *configWatcher) classifyChangedConfig(
+	ctx context.Context,
+	next *config.Config,
+) config.Route {
+	route := config.RouteReload
+	if w.classify != nil {
+		route = w.classify(next)
+	}
+
+	w.log.InfoContext(
+		ctx,
+		"daemon.config_watch.classified",
+		"concern",
+		slogger.ConcernProcessDaemonConfig,
+		"component",
+		"daemon",
+		"path",
+		w.path,
+		"route",
+		route.String(),
+	)
+
+	return route
 }
 
 // trigger runs one reload or rebind and logs the outcome. It returns true only
