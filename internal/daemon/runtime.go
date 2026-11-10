@@ -137,26 +137,10 @@ func startRuntime(
 	}
 
 	if cfg.Adapter.Enabled {
-		server, adapterListener, adapterCursorListener, err := startAdapter(
-			ctx,
-			cfg,
-			log,
-			stats,
-			runtime.captureStore,
-			runtime.group,
-			runtime.errors,
-			inherited.listeners[listenerNameAdapter],
-			inherited.listeners[listenerNameAdapterCursor],
-		)
-		if err != nil {
+		if err := runtime.startAdapterServices(ctx, cfg, log, stats, inherited); err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
 			return nil, err
 		}
-
-		runtime.adapter = server
-		runtime.adapterListener = adapterListener
-		runtime.adapterCursorListener = adapterCursorListener
-		runtime.addAdapterLifecycleHooks(server)
 	} else if inherited.listeners[listenerNameAdapter] != nil || inherited.listeners[listenerNameAdapterCursor] != nil {
 		runtime.shutdown(context.WithoutCancel(ctx))
 
@@ -184,6 +168,36 @@ func startRuntime(
 	runtime.startSemanticBackends(ctx, cfg, log)
 
 	return runtime, nil
+}
+
+func (runtime *runtimeServices) startAdapterServices(
+	ctx context.Context,
+	cfg *config.Config,
+	log *slog.Logger,
+	stats *providerStatsRecorder,
+	inherited inheritedRuntime,
+) error {
+	server, adapterListener, adapterCursorListener, err := startAdapter(
+		ctx,
+		cfg,
+		log,
+		stats,
+		runtime.captureStore,
+		runtime.group,
+		runtime.errors,
+		inherited.listeners[listenerNameAdapter],
+		inherited.listeners[listenerNameAdapterCursor],
+	)
+	if err != nil {
+		return err
+	}
+
+	runtime.adapter = server
+	runtime.adapterListener = adapterListener
+	runtime.adapterCursorListener = adapterCursorListener
+	runtime.addAdapterLifecycleHooks(server)
+
+	return nil
 }
 
 func captureStoreRequired(cfg *config.Config) bool {
