@@ -224,37 +224,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 		return fmt.Errorf("backfill conversation scalars: %w", err)
 	}
 
-	mode := "Backfilled"
-	if dryRun {
-		mode = "Dry run counted"
-	}
-
-	if writeErr := response.WriteResult(
-		ctx,
-		f.IOStreams.Out,
-		fmt.Sprintf(
-			"%s conversation scalars from %d conversations: %d rows changed, %d orphan rows.\n",
-			mode,
-			len(entries),
-			changed,
-			orphan,
-		),
-	); writeErr != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.backfill.write_failed",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"err",
-			writeErr,
-		)
-
-		return fmt.Errorf("write backfill result: %w", writeErr)
-	}
-
-	return nil
+	return writeBackfillConversationScalarsResult(ctx, f, dryRun, entries, changed, orphan)
 }
 
 func runBackfillConversationDocuments(
@@ -315,79 +285,14 @@ func runBackfillConversationDocumentsWithDeps(
 		)
 	}
 
-	if refreshErr := index.Refresh(ctx); refreshErr != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.backfill_documents.refresh_failed",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"err",
-			refreshErr,
-		)
-
-		return fmt.Errorf("refresh conversation index: %w", refreshErr)
-	}
-
-	stampedRecords, err := index.ListWithStamps(ctx)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.backfill_documents.list_failed",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("list conversations with stamps: %w", err)
-	}
-
-	selectedRecords, nextCursor, err := selectBackfillDocumentRecords(
-		stampedRecords,
-		options.Limit,
-		options.ConversationID,
-		options.Cursor,
-	)
+	selectedRecords, nextCursor, err := loadBackfillDocumentRecords(ctx, index, options)
 	if err != nil {
 		return err
 	}
 
-	cfg, err := f.Config()
+	cfg, contentKinds, err := loadBackfillDocumentContentKinds(ctx, f)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.backfill_documents.config_failed",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	// The backfill projects documents under the same content kinds the daemon
-	// feeder runs, so a backfill cannot re-add rows the next sync would remove.
-	contentKinds, err := daemonsvc.SemanticContentKinds(cfg.Conversation.Semantic)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.backfill_documents.content_kinds_failed",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("resolve backfill content kinds: %w", err)
+		return err
 	}
 
 	docs, manifest, skipped := buildBackfillConversationDocuments(
@@ -405,34 +310,9 @@ func runBackfillConversationDocumentsWithDeps(
 		nextCursor = ""
 	}
 
-	if options.DryRun {
-		return writeBackfillConversationDocumentsResult(
-			ctx,
-			f,
-			"Would send",
-			len(selectedRecords),
-			len(docs),
-			skipped,
-			"",
-			0,
-			nextCursor,
-		)
-	}
-
-	if len(docs) == 0 {
-		// No conversation produced documents, and the command opens no Milvus
-		// connection.
-		return writeBackfillConversationDocumentsResult(
-			ctx,
-			f,
-			"Sent",
-			len(selectedRecords),
-			0,
-			skipped,
-			"",
-			0,
-			nextCursor,
-		)
+	done, err := finishBackfillBatch(ctx, f, options, selectedRecords, docs, skipped, nextCursor)
+	if done {
+		return err
 	}
 
 	client, err := dial(ctx, cfg.Conversation.Semantic)
@@ -452,47 +332,9 @@ func runBackfillConversationDocumentsWithDeps(
 	}
 
 	defer func() { _ = client.Close(context.WithoutCancel(ctx)) }()
-	needed, err := client.SyncConversationManifest(
-		ctx,
-		cfg.Conversation.Semantic.CollectionID,
-		manifest,
-	)
+	jobID, needed, err := upsertBackfillConversationDocuments(ctx, client, cfg, docs, manifest)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.backfill_documents.sync_failed",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("sync selected conversation manifest: %w", err)
-	}
-
-	jobID, err := client.UpsertConversationDocuments(
-		ctx,
-		cfg.Conversation.Semantic.CollectionID,
-		docs,
-		manifest,
-	)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.backfill_documents.upsert_failed",
-			"concern",
-			"cli.daemon",
-			"component",
-			"cli",
-			"documents",
-			len(docs),
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("upsert selected conversation documents: %w", err)
+		return err
 	}
 
 	return writeBackfillConversationDocumentsResult(
@@ -788,4 +630,233 @@ func preferBackfillRecord(candidate, current conversation.Record) bool {
 	}
 
 	return candidate.UpdatedAt.After(current.UpdatedAt)
+}
+
+func writeBackfillConversationScalarsResult(
+	ctx context.Context,
+	factory *cli.Factory,
+	dryRun bool,
+	entries []semsearch.BackfillScalarEntry,
+	changed int,
+	orphan int,
+) error {
+	mode := "Backfilled"
+	if dryRun {
+		mode = "Dry run counted"
+	}
+
+	if writeErr := response.WriteResult(
+		ctx,
+		factory.IOStreams.Out,
+		fmt.Sprintf(
+			"%s conversation scalars from %d conversations: %d rows changed, %d orphan rows.\n",
+			mode,
+			len(entries),
+			changed,
+			orphan,
+		),
+	); writeErr != nil {
+		slog.ErrorContext(
+			ctx,
+			"cli.daemon.backfill.write_failed",
+			"concern",
+			"cli.daemon",
+			"component",
+			"cli",
+			"err",
+			writeErr,
+		)
+
+		return fmt.Errorf("write backfill result: %w", writeErr)
+	}
+
+	return nil
+}
+
+func loadBackfillDocumentRecords(
+	ctx context.Context,
+	index conversationDocumentBackfillIndex,
+	options backfillConversationDocumentsOptions,
+) ([]conversation.StampedRecord, string, error) {
+	if refreshErr := index.Refresh(ctx); refreshErr != nil {
+		slog.ErrorContext(
+			ctx,
+			"cli.daemon.backfill_documents.refresh_failed",
+			"concern",
+			"cli.daemon",
+			"component",
+			"cli",
+			"err",
+			refreshErr,
+		)
+
+		return nil, "", fmt.Errorf("refresh conversation index: %w", refreshErr)
+	}
+
+	stampedRecords, err := index.ListWithStamps(ctx)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"cli.daemon.backfill_documents.list_failed",
+			"concern",
+			"cli.daemon",
+			"component",
+			"cli",
+			"err",
+			err,
+		)
+
+		return nil, "", fmt.Errorf("list conversations with stamps: %w", err)
+	}
+
+	selectedRecords, nextCursor, err := selectBackfillDocumentRecords(
+		stampedRecords,
+		options.Limit,
+		options.ConversationID,
+		options.Cursor,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return selectedRecords, nextCursor, nil
+}
+
+func loadBackfillDocumentContentKinds(
+	ctx context.Context,
+	factory *cli.Factory,
+) (*config.Config, conversation.ContentKindSet, error) {
+	cfg, err := factory.Config()
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"cli.daemon.backfill_documents.config_failed",
+			"concern",
+			"cli.daemon",
+			"component",
+			"cli",
+			"err",
+			err,
+		)
+
+		return nil, conversation.ContentKindSet{}, fmt.Errorf("load config: %w", err)
+	}
+
+	// The backfill projects documents under the same content kinds the daemon
+	// feeder runs, so a backfill cannot re-add rows the next sync would remove.
+	contentKinds, err := daemonsvc.SemanticContentKinds(cfg.Conversation.Semantic)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"cli.daemon.backfill_documents.content_kinds_failed",
+			"concern",
+			"cli.daemon",
+			"component",
+			"cli",
+			"err",
+			err,
+		)
+
+		return nil, conversation.ContentKindSet{}, fmt.Errorf(
+			"resolve backfill content kinds: %w",
+			err,
+		)
+	}
+
+	return cfg, contentKinds, nil
+}
+
+func upsertBackfillConversationDocuments(
+	ctx context.Context,
+	client conversationDocumentBackfillClient,
+	cfg *config.Config,
+	docs []semsearch.SemDoc,
+	manifest []semsearch.Fingerprint,
+) (string, []string, error) {
+	needed, err := client.SyncConversationManifest(
+		ctx,
+		cfg.Conversation.Semantic.CollectionID,
+		manifest,
+	)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"cli.daemon.backfill_documents.sync_failed",
+			"concern",
+			"cli.daemon",
+			"component",
+			"cli",
+			"err",
+			err,
+		)
+
+		return "", nil, fmt.Errorf("sync selected conversation manifest: %w", err)
+	}
+
+	jobID, err := client.UpsertConversationDocuments(
+		ctx,
+		cfg.Conversation.Semantic.CollectionID,
+		docs,
+		manifest,
+	)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"cli.daemon.backfill_documents.upsert_failed",
+			"concern",
+			"cli.daemon",
+			"component",
+			"cli",
+			"documents",
+			len(docs),
+			"err",
+			err,
+		)
+
+		return "", nil, fmt.Errorf("upsert selected conversation documents: %w", err)
+	}
+
+	return jobID, needed, nil
+}
+
+func finishBackfillBatch(
+	ctx context.Context,
+	factory *cli.Factory,
+	options backfillConversationDocumentsOptions,
+	selectedRecords []conversation.StampedRecord,
+	docs []semsearch.SemDoc,
+	skipped int,
+	nextCursor string,
+) (bool, error) {
+	if options.DryRun {
+		return true, writeBackfillConversationDocumentsResult(
+			ctx,
+			factory,
+			"Would send",
+			len(selectedRecords),
+			len(docs),
+			skipped,
+			"",
+			0,
+			nextCursor,
+		)
+	}
+
+	if len(docs) == 0 {
+		// No conversation produced documents, and the command opens no Milvus
+		// connection.
+		return true, writeBackfillConversationDocumentsResult(
+			ctx,
+			factory,
+			"Sent",
+			len(selectedRecords),
+			0,
+			skipped,
+			"",
+			0,
+			nextCursor,
+		)
+	}
+
+	return false, nil
 }
