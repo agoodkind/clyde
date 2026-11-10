@@ -48,48 +48,8 @@ func InjectRawResponsesCompactionV2Recovery(
 ) (RawResponsesRequest, *RawResponsesCompactionV2Recovery, bool) {
 	var trace rawResponsesCompactionV2InjectionTrace
 	defer func() { trace.log() }()
-	protocol := DetectRawResponsesCompactionProtocol(request.Header)
-	trace.detectedProtocol = string(protocol)
-	trace.protocolRegular = protocol == RawResponsesCompactionNone
-	if !trace.protocolRegular {
-		return request, nil, false
-	}
-
-	trace.metadataRequestKindTurn,
-		trace.metadataImplementationEmpty,
-		trace.metadataStrategyEmpty,
-		trace.metadataPhaseFinalAnswer = rawResponsesCompactionV2RegularFinalAnswerFields(
-		request.Header,
-	)
-	trace.metadataRegular = rawResponsesCompactionV2RegularTurn(request.Header)
-	if !trace.metadataRegular {
-		return request, nil, false
-	}
-
-	trace.registryPresent = registry != nil
-	if !trace.registryPresent {
-		return request, nil, false
-	}
-
-	sessionID, ok := rawResponsesCompactionV2SessionID(request)
-	trace.sessionPresent = ok
+	sessionID, inputStart, inputEnd, input, ok := prepareRawRecoveryInput(request, registry, &trace)
 	if !ok {
-		return request, nil, false
-	}
-
-	inputStart, inputEnd, ok := jsonObjectFieldValueRange(request.Body, "input")
-	trace.inputRangeValid = ok
-	if !ok {
-		return request, nil, false
-	}
-
-	if !rawCompactionJSONHasUniqueObjectKeys(request.Body) {
-		return request, nil, false
-	}
-
-	var input []json.RawMessage
-	trace.inputJSONValid = json.Unmarshal(request.Body[inputStart:inputEnd], &input) == nil
-	if !trace.inputJSONValid {
 		return request, nil, false
 	}
 
@@ -348,4 +308,57 @@ func rawResponsesCompactionV2InjectedCompactionTrace(
 	}
 
 	return index, encryptedContent, true, compactionItemCount, index >= 0
+}
+
+func prepareRawRecoveryInput(
+	request RawResponsesRequest,
+	registry *RawResponsesCompactionV2Registry,
+	trace *rawResponsesCompactionV2InjectionTrace,
+) (string, int, int, []json.RawMessage, bool) {
+	protocol := DetectRawResponsesCompactionProtocol(request.Header)
+	trace.detectedProtocol = string(protocol)
+	trace.protocolRegular = protocol == RawResponsesCompactionNone
+	if !trace.protocolRegular {
+		return "", 0, 0, nil, false
+	}
+
+	trace.metadataRequestKindTurn,
+		trace.metadataImplementationEmpty,
+		trace.metadataStrategyEmpty,
+		trace.metadataPhaseFinalAnswer = rawResponsesCompactionV2RegularFinalAnswerFields(
+		request.Header,
+	)
+	trace.metadataRegular = rawResponsesCompactionV2RegularTurn(request.Header)
+	if !trace.metadataRegular {
+		return "", 0, 0, nil, false
+	}
+
+	trace.registryPresent = registry != nil
+	if !trace.registryPresent {
+		return "", 0, 0, nil, false
+	}
+
+	sessionID, sessionPresent := rawResponsesCompactionV2SessionID(request)
+	trace.sessionPresent = sessionPresent
+	if !sessionPresent {
+		return "", 0, 0, nil, false
+	}
+
+	inputStart, inputEnd, inputValid := jsonObjectFieldValueRange(request.Body, "input")
+	trace.inputRangeValid = inputValid
+	if !inputValid {
+		return "", 0, 0, nil, false
+	}
+
+	if !rawCompactionJSONHasUniqueObjectKeys(request.Body) {
+		return "", 0, 0, nil, false
+	}
+
+	var input []json.RawMessage
+	trace.inputJSONValid = json.Unmarshal(request.Body[inputStart:inputEnd], &input) == nil
+	if !trace.inputJSONValid {
+		return "", 0, 0, nil, false
+	}
+
+	return sessionID, inputStart, inputEnd, input, true
 }
