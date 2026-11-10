@@ -121,6 +121,53 @@ func buildFields(snapshot statusSnapshot) []lmstatus.Field {
 
 	fields = append(fields, semanticFields(snapshot.report.Runtime)...)
 
+	fields = appendFreshnessFields(fields, snapshot)
+
+	if snapshot.providersErr != nil {
+		fields = append(
+			fields,
+			textField("providers", "providers.error", snapshot.providersErr.Error()),
+		)
+	} else {
+		for _, provider := range snapshot.providers.Providers {
+			prefix := "provider." + provider.Provider.String() + "."
+			fields = append(
+				fields,
+				intField("providers", prefix+"requests", int64(provider.Requests), "requests"),
+				intField("providers", prefix+"inflight", int64(provider.Inflight), "requests"),
+				intField("providers", prefix+"streaming", int64(provider.Streaming), "streams"),
+				intField("providers", prefix+"input_tokens", provider.InputTokens, "tokens"),
+				intField("providers", prefix+"output_tokens", provider.OutputTokens, "tokens"),
+				intField(
+					"providers",
+					prefix+"cache_read_tokens",
+					provider.CacheReadTokens,
+					"tokens",
+				),
+			)
+			if provider.Error != "" {
+				fields = append(fields, textField("providers", prefix+"error", provider.Error))
+			}
+		}
+	}
+
+	if snapshot.mitmErr != nil {
+		fields = append(fields, textField("mitm", "mitm.error", snapshot.mitmErr.Error()))
+	} else {
+		for _, listener := range snapshot.mitm.Listeners {
+			prefix := "mitm." + listener.ID + "." + addressFamily(listener.Address) + "."
+			fields = append(
+				fields,
+				textField("mitm", prefix+"address", listener.Address),
+				boolField("mitm", prefix+"up", listener.Up),
+			)
+		}
+	}
+
+	return fields
+}
+
+func appendFreshnessFields(fields []lmstatus.Field, snapshot statusSnapshot) []lmstatus.Field {
 	if snapshot.freshnessErr != nil {
 		fields = append(
 			fields,
@@ -172,47 +219,6 @@ func buildFields(snapshot statusSnapshot) []lmstatus.Field {
 			),
 			lastSync,
 		)
-	}
-
-	if snapshot.providersErr != nil {
-		fields = append(
-			fields,
-			textField("providers", "providers.error", snapshot.providersErr.Error()),
-		)
-	} else {
-		for _, provider := range snapshot.providers.Providers {
-			prefix := "provider." + provider.Provider.String() + "."
-			fields = append(
-				fields,
-				intField("providers", prefix+"requests", int64(provider.Requests), "requests"),
-				intField("providers", prefix+"inflight", int64(provider.Inflight), "requests"),
-				intField("providers", prefix+"streaming", int64(provider.Streaming), "streams"),
-				intField("providers", prefix+"input_tokens", provider.InputTokens, "tokens"),
-				intField("providers", prefix+"output_tokens", provider.OutputTokens, "tokens"),
-				intField(
-					"providers",
-					prefix+"cache_read_tokens",
-					provider.CacheReadTokens,
-					"tokens",
-				),
-			)
-			if provider.Error != "" {
-				fields = append(fields, textField("providers", prefix+"error", provider.Error))
-			}
-		}
-	}
-
-	if snapshot.mitmErr != nil {
-		fields = append(fields, textField("mitm", "mitm.error", snapshot.mitmErr.Error()))
-	} else {
-		for _, listener := range snapshot.mitm.Listeners {
-			prefix := "mitm." + listener.ID + "." + addressFamily(listener.Address) + "."
-			fields = append(
-				fields,
-				textField("mitm", prefix+"address", listener.Address),
-				boolField("mitm", prefix+"up", listener.Up),
-			)
-		}
 	}
 
 	return fields
