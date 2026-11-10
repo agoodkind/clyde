@@ -192,11 +192,7 @@ func (d darwinRegistry) Status(certPath string) (InstallStatus, error) {
 	return status, nil
 }
 
-// Install adds the CA to the System keychain via sudo. The operation
-// is idempotent: when the same fingerprint is already trusted the
-// call is a no-op. Re-running with a different fingerprint replaces
-// the previous entry by uninstalling first and then installing.
-func (d darwinRegistry) Install(certPath string) error {
+func validateDarwinCertificate(certPath string) error {
 	if strings.TrimSpace(certPath) == "" {
 		return ErrCAAbsent
 	}
@@ -225,6 +221,18 @@ func (d darwinRegistry) Install(certPath string) error {
 		)
 
 		return fmt.Errorf("stat ca cert %q: %w", certPath, err)
+	}
+
+	return nil
+}
+
+// Install adds the CA to the System keychain via sudo. The operation
+// is idempotent: when the same fingerprint is already trusted the
+// call is a no-op. Re-running with a different fingerprint replaces
+// the previous entry by uninstalling first and then installing.
+func (d darwinRegistry) Install(certPath string) error {
+	if err := validateDarwinCertificate(certPath); err != nil {
+		return err
 	}
 
 	current, err := d.Status(certPath)
