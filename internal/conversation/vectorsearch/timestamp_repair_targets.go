@@ -84,10 +84,7 @@ func (c *Client) ZeroTimeConversationIDs(
 		return nil, failRead("open zero-time row iterator for "+collectionName, err)
 	}
 
-	prefix := ""
-	if provider != "" {
-		prefix = provider + ":"
-	}
+	prefix := zeroTimeProviderPrefix(provider)
 
 	found := make(map[string]struct{})
 
@@ -122,6 +119,24 @@ func (c *Client) ZeroTimeConversationIDs(
 		}
 	}
 
+	return finishZeroTimeIDs(ctx, collectionName, provider, found), nil
+}
+
+func zeroTimeProviderPrefix(provider string) string {
+	prefix := ""
+	if provider != "" {
+		prefix = provider + ":"
+	}
+
+	return prefix
+}
+
+func finishZeroTimeIDs(
+	ctx context.Context,
+	collectionName string,
+	provider string,
+	found map[string]struct{},
+) []string {
 	ids := make([]string, 0, len(found))
 	for id := range found {
 		ids = append(ids, id)
@@ -143,7 +158,7 @@ func (c *Client) ZeroTimeConversationIDs(
 		len(ids),
 	)
 
-	return ids, nil
+	return ids
 }
 
 // storedConversationID reads the ID column or extracts the ID from the relative path.
