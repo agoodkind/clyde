@@ -1,14 +1,14 @@
-# golangci-lint: generated_at=2026-11-10T00:12:13Z
-internal/adapter/runtime/log.go:175:1: 175-232 lines are duplicate of `internal/adapter/runtime/log.go:250-312` (dupl)	# golangci-lint:first_added=2026-11-09T16:04:17Z last_seen=2026-11-10T00:12:13Z
-internal/adapter/runtime/log.go:250:1: 250-312 lines are duplicate of `internal/adapter/runtime/log.go:175-232` (dupl)	# golangci-lint:first_added=2026-11-09T16:04:17Z last_seen=2026-11-10T00:12:13Z
-internal/clispec/daemon_ops.go:484:1: 484-509 lines are duplicate of `internal/clispec/daemon_ops.go:511-536` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T00:12:13Z
-internal/clispec/daemon_ops.go:511:1: 511-536 lines are duplicate of `internal/clispec/daemon_ops.go:484-509` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T00:12:13Z
-internal/daemon/runtime.go:274:1: 274-325 lines are duplicate of `internal/daemon/runtime.go:330-389` (dupl)	# golangci-lint:first_added=2026-11-10T00:12:13Z last_seen=2026-11-10T00:12:13Z
-internal/daemon/runtime.go:330:1: 330-389 lines are duplicate of `internal/daemon/runtime.go:274-325` (dupl)	# golangci-lint:first_added=2026-11-10T00:12:13Z last_seen=2026-11-10T00:12:13Z
-internal/daemonsupervisor/supervisor.go:328:1: 328-384 lines are duplicate of `internal/daemonsupervisor/supervisor.go:392-448` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T00:12:13Z
-internal/daemonsupervisor/supervisor.go:392:1: 392-448 lines are duplicate of `internal/daemonsupervisor/supervisor.go:328-384` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T00:12:13Z
-internal/providers/zed/parser/parser.go:701:1: 701-784 lines are duplicate of `internal/providers/zed/parser/terminal_helpers.go:262-353` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T00:12:13Z
-internal/providers/zed/parser/terminal_helpers.go:262:1: 262-353 lines are duplicate of `internal/providers/zed/parser/parser.go:701-784` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T00:12:13Z
+# golangci-lint: generated_at=2026-11-10T02:35:58Z
+internal/adapter/runtime/log.go:175:1: 175-232 lines are duplicate of `internal/adapter/runtime/log.go:250-312` (dupl)	# golangci-lint:first_added=2026-11-09T16:04:17Z last_seen=2026-11-10T02:35:58Z
+internal/adapter/runtime/log.go:250:1: 250-312 lines are duplicate of `internal/adapter/runtime/log.go:175-232` (dupl)	# golangci-lint:first_added=2026-11-09T16:04:17Z last_seen=2026-11-10T02:35:58Z
+internal/clispec/daemon_ops.go:461:1: 461-486 lines are duplicate of `internal/clispec/daemon_ops.go:488-513` (dupl)	# golangci-lint:first_added=2026-11-10T02:35:58Z last_seen=2026-11-10T02:35:58Z
+internal/clispec/daemon_ops.go:488:1: 488-513 lines are duplicate of `internal/clispec/daemon_ops.go:461-486` (dupl)	# golangci-lint:first_added=2026-11-10T02:35:58Z last_seen=2026-11-10T02:35:58Z
+internal/daemon/runtime.go:274:1: 274-325 lines are duplicate of `internal/daemon/runtime.go:330-389` (dupl)	# golangci-lint:first_added=2026-11-10T00:12:13Z last_seen=2026-11-10T02:35:58Z
+internal/daemon/runtime.go:330:1: 330-389 lines are duplicate of `internal/daemon/runtime.go:274-325` (dupl)	# golangci-lint:first_added=2026-11-10T00:12:13Z last_seen=2026-11-10T02:35:58Z
+internal/daemonsupervisor/supervisor.go:328:1: 328-384 lines are duplicate of `internal/daemonsupervisor/supervisor.go:392-448` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T02:35:58Z
+internal/daemonsupervisor/supervisor.go:392:1: 392-448 lines are duplicate of `internal/daemonsupervisor/supervisor.go:328-384` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T02:35:58Z
+internal/providers/zed/parser/parser.go:701:1: 701-784 lines are duplicate of `internal/providers/zed/parser/terminal_helpers.go:262-353` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T02:35:58Z
+internal/providers/zed/parser/terminal_helpers.go:262:1: 262-353 lines are duplicate of `internal/providers/zed/parser/parser.go:701-784` (dupl)	# golangci-lint:first_added=2026-11-09T18:40:32Z last_seen=2026-11-10T02:35:58Z
 cmd/clyde/main_test.go:106:2: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-09T02:34:03Z last_seen=2026-11-09T02:42:22Z
 cmd/clyde/main_test.go:41:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-09T02:34:03Z last_seen=2026-11-09T02:42:22Z
 cmd/clyde/main_test.go:64:2: missing whitespace above this line (too many statements above range) (wsl_v5)	# golangci-lint:first_added=2026-11-09T02:34:03Z last_seen=2026-11-09T02:42:22Z
