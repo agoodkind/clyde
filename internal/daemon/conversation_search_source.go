@@ -51,6 +51,7 @@ func searchSourceForBackend(backend config.ConversationSemanticBackend) conversa
 type rawTextFallbackSearchSource struct {
 	primary conversationSearchSource
 	index   *conversation.Index
+	enabled *bool
 }
 
 func (s *rawTextFallbackSearchSource) SearchConversations(
@@ -60,6 +61,9 @@ func (s *rawTextFallbackSearchSource) SearchConversations(
 	result, err := s.primary.SearchConversations(ctx, options)
 	if err == nil {
 		return result, nil
+	}
+	if s.enabled != nil && !*s.enabled {
+		return result, err
 	}
 	var sourceFailure conversationSearchSourceError
 	if !errors.As(err, &sourceFailure) {

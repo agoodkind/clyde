@@ -276,7 +276,8 @@ func newControlServer(
 			collectionID: cfg.Conversation.Semantic.CollectionID,
 			backend:      cfg.Conversation.Semantic.Backend,
 		},
-		index: index,
+		index:   index,
+		enabled: cfg.Conversation.Semantic.RawTextFallback,
 	}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},

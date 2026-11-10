@@ -62,6 +62,9 @@ type ConversationSemanticConfig struct {
 	IngestionEnabled bool   `json:"ingestionEnabled,omitempty" toml:"ingestion_enabled,omitempty"`
 	SearchEnabled    bool   `json:"searchEnabled,omitempty" toml:"search_enabled,omitempty"`
 	CollectionID     string `json:"collectionId,omitempty" toml:"collection_id,omitempty"`
+	// RawTextFallback enables transcript scans after indexed search fails.
+	// An unset value enables the fallback.
+	RawTextFallback *bool `json:"rawTextFallback,omitempty" toml:"raw_text_fallback,omitempty"`
 	// IndexedContent names the content kinds offered to the search engine, using
 	// the same selector vocabulary the export surface accepts. The names and their
 	// validation belong to the conversation package's content-kind taxonomy, which
