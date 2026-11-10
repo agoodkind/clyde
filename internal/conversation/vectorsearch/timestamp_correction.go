@@ -214,26 +214,7 @@ func (c *Client) CorrectTimestampsFromSource(
 			return report, readErr
 		}
 
-		for _, entry := range evidence {
-			desired, evaluated := correctionDesired(entry)
-			for _, id := range entry.Rows {
-				report.SourceOutcomes[entry.Outcome]++
-				target := correctionTarget{
-					conversationID: source.ConversationID,
-					family:         entry.Family,
-					outcome:        entry.Outcome,
-					desired:        desired,
-					evaluated:      evaluated,
-					toolCallID:     entry.ToolCallID,
-					toolProjection: entry.ToolProjection,
-				}
-				if !evaluated {
-					target.desired = guards[id].TimestampUnix
-				}
-
-				targets[id] = target
-			}
-		}
+		applyCorrectionEvidence(source.ConversationID, evidence, guards, targets, &report)
 	}
 
 	updates, err := c.planCorrections(ctx, milvus, collectionName, guards, targets, &report)
@@ -242,25 +223,66 @@ func (c *Client) CorrectTimestampsFromSource(
 		return report, err
 	}
 
-	written := TimestampRepairReport{
-		Conversations:        0,
-		RowsRead:             0,
-		RowsCurrent:          0,
-		RowsChanged:          0,
-		RowsWritten:          0,
-		RowsUnmatched:        0,
-		RowsMissingTimestamp: 0,
-		RowsAmbiguous:        0,
-		RowsInvalidMetadata:  0,
+	if err := c.writeTimestampCorrections(
+		ctx,
+		milvus,
+		collectionName,
+		updates,
+		guards,
+		&report,
+	); err != nil {
+		return report, err
 	}
+
+	return report, nil
+}
+
+func applyCorrectionEvidence(
+	sourceConversationID string,
+	evidence []SourceRepairEvidence,
+	guards map[string]TimestampCorrectionGuard,
+	targets map[string]correctionTarget,
+	report *TimestampCorrectionReport,
+) {
+	for _, entry := range evidence {
+		desired, evaluated := correctionDesired(entry)
+		for _, rowID := range entry.Rows {
+			report.SourceOutcomes[entry.Outcome]++
+			target := correctionTarget{
+				conversationID: sourceConversationID,
+				family:         entry.Family,
+				outcome:        entry.Outcome,
+				desired:        desired,
+				evaluated:      evaluated,
+				toolCallID:     entry.ToolCallID,
+				toolProjection: entry.ToolProjection,
+			}
+			if !evaluated {
+				target.desired = guards[rowID].TimestampUnix
+			}
+
+			targets[rowID] = target
+		}
+	}
+}
+
+func (c *Client) writeTimestampCorrections(
+	ctx context.Context,
+	milvus *milvusBackend,
+	collectionName string,
+	updates []timestampUpdate,
+	guards map[string]TimestampCorrectionGuard,
+	report *TimestampCorrectionReport,
+) error {
+	written := newTimestampRepairReport()
 	writeErr := writeSourceTimestamps(ctx, c, milvus, collectionName, updates, &written)
 	report.RowsWritten = written.RowsWritten
 	if writeErr != nil {
-		return report, writeErr
+		return writeErr
 	}
 
 	if err := milvus.verifyCorrections(ctx, collectionName, updates, guards); err != nil {
-		return report, err
+		return err
 	}
 
 	writtenIDs := make(map[string]bool, len(updates))
@@ -295,7 +317,7 @@ func (c *Client) CorrectTimestampsFromSource(
 		report.RowsAbsent,
 	)
 
-	return report, nil
+	return nil
 }
 
 func (c *Client) planCorrections(
