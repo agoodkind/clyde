@@ -49,38 +49,14 @@ func reloadDaemonWorker(
 		return nil, fmt.Errorf("daemon worker already replaced; reload not permitted")
 	}
 
-	executablePath, err := os.Executable()
+	executablePath, err := resolveWorkerExecutable(
+		ctx,
+		log,
+		"daemon.reload.executable_failed",
+		"daemon.reload.executable_abs_failed",
+	)
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.reload.executable_failed",
-			"concern",
-			"daemon.workers.reload",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("resolve executable: %w", err)
-	}
-
-	executablePath, err = filepath.Abs(executablePath)
-	if err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.reload.executable_abs_failed",
-			"concern",
-			"daemon.workers.reload",
-			"component",
-			"daemon",
-			"path",
-			executablePath,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("resolve executable path: %w", err)
+		return nil, err
 	}
 
 	files, specs, cleanup, err := inheritedListenerFiles(runtime)
@@ -109,62 +85,14 @@ func reloadDaemonWorker(
 	readyFD := 3 + len(files)
 	requestFiles := append([]*os.File{}, files...)
 	requestFiles = append(requestFiles, readyWrite)
-	pid, err := daemonsupervisor.RequestReplacement(
-		ctx,
-		daemonsupervisor.SocketPath(config.RuntimeDir()),
-		executablePath,
-		specs,
-		readyFD,
-		os.Environ(),
-		requestFiles,
-	)
+	pid, err := requestReloadReplacement(ctx, log, executablePath, specs, readyFD, requestFiles)
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.reload.supervisor_request_failed",
-			"concern",
-			"daemon.workers.reload",
-			"component",
-			"daemon",
-			"path",
-			executablePath,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("request supervisor replacement daemon: %w", err)
+		return nil, err
 	}
 
 	_ = readyWrite.Close()
 	if err := waitForReplacementDaemon(ctx, readyRead); err != nil {
-		// This worker stays in service. Without the abort the replacement
-		// keeps running and shares the inherited listener sockets.
-		abortErr := daemonsupervisor.RequestAbort(
-			context.WithoutCancel(ctx),
-			daemonsupervisor.SocketPath(config.RuntimeDir()),
-			pid,
-		)
-		if abortErr != nil {
-			log.WarnContext(
-				ctx,
-				"daemon.reload.abort_replacement_failed",
-				"concern",
-				"daemon.workers.reload",
-				"component",
-				"daemon",
-				"pid",
-				pid,
-				"err",
-				abortErr,
-			)
-
-			return nil, errors.Join(
-				err,
-				fmt.Errorf("stop replacement daemon worker %d: %w", pid, abortErr),
-			)
-		}
-
-		return nil, err
+		return nil, abortReloadReplacement(ctx, log, pid, err)
 	}
 
 	// The replacement generation is ready and runs its own config watcher.
@@ -239,38 +167,14 @@ func rebindDaemonWorker(
 		return nil, fmt.Errorf("daemon worker already replaced; rebind not permitted")
 	}
 
-	executablePath, err := os.Executable()
+	executablePath, err := resolveWorkerExecutable(
+		ctx,
+		log,
+		"daemon.rebind.executable_failed",
+		"daemon.rebind.executable_abs_failed",
+	)
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.rebind.executable_failed",
-			"concern",
-			"daemon.workers.reload",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("resolve executable: %w", err)
-	}
-
-	executablePath, err = filepath.Abs(executablePath)
-	if err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.rebind.executable_abs_failed",
-			"concern",
-			"daemon.workers.reload",
-			"component",
-			"daemon",
-			"path",
-			executablePath,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("resolve executable path: %w", err)
+		return nil, err
 	}
 
 	files, specs, cleanup, err := daemonSocketInheritFile(runtime)
@@ -279,22 +183,7 @@ func rebindDaemonWorker(
 	}
 	defer cleanup()
 
-	// Drain the TCP surfaces synchronously so their ports are free before the
-	// replacement worker binds them fresh from config. The drain also closes
-	// the SQLite stores so their WALs flush before the new worker reopens them.
-	log.InfoContext(
-		ctx,
-		"daemon.rebind.draining_listeners",
-		"concern",
-		"daemon.workers.reload",
-		"component",
-		"daemon",
-	)
-	drainDone := runtime.startReloadDrain(ctx, log)
-	<-drainDone
-	if runtime.pprofListener != nil {
-		_ = runtime.pprofListener.Close()
-	}
+	drainDone := drainRebindListeners(ctx, log, runtime)
 
 	readyRead, readyWrite, err := os.Pipe()
 	if err != nil {
@@ -317,30 +206,9 @@ func rebindDaemonWorker(
 	readyFD := 3 + len(files)
 	requestFiles := append([]*os.File{}, files...)
 	requestFiles = append(requestFiles, readyWrite)
-	pid, err := daemonsupervisor.RequestRebind(
-		ctx,
-		daemonsupervisor.SocketPath(config.RuntimeDir()),
-		executablePath,
-		specs,
-		readyFD,
-		os.Environ(),
-		requestFiles,
-	)
+	pid, err := requestRebindReplacement(ctx, log, executablePath, specs, readyFD, requestFiles)
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.rebind.supervisor_request_failed",
-			"concern",
-			"daemon.workers.reload",
-			"component",
-			"daemon",
-			"path",
-			executablePath,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("request supervisor rebind daemon: %w", err)
+		return nil, err
 	}
 
 	_ = readyWrite.Close()
@@ -458,12 +326,7 @@ func inheritedListenerFiles(
 		)
 	}
 
-	mitmIDs := make([]string, 0, len(runtime.mitmListeners))
-	for id := range runtime.mitmListeners {
-		mitmIDs = append(mitmIDs, id)
-	}
-
-	slices.Sort(mitmIDs)
+	mitmIDs := sortedReloadListenerIDs(runtime)
 
 	for _, id := range mitmIDs {
 		for _, socket := range runtime.mitmListeners[id] {
@@ -474,12 +337,7 @@ func inheritedListenerFiles(
 		}
 	}
 
-	mitmUDPIDs := make([]string, 0, len(runtime.mitmPacketConns))
-	for id := range runtime.mitmPacketConns {
-		mitmUDPIDs = append(mitmUDPIDs, id)
-	}
-
-	slices.Sort(mitmUDPIDs)
+	mitmUDPIDs := sortedReloadPacketIDs(runtime)
 
 	for _, id := range mitmUDPIDs {
 		for _, conn := range runtime.mitmPacketConns[id] {
@@ -502,65 +360,285 @@ func inheritedListenerFiles(
 		file, err := listenerFile(named.lis)
 		if err != nil {
 			cleanup()
-			slog.Warn(
-				"daemon.reload.listener_file_failed",
-				"concern",
-				"daemon.workers.reload",
-				"component",
-				"daemon",
-				"name",
-				named.name,
-				"err",
-				err,
-			)
 
-			return nil, nil, func() {}, fmt.Errorf("inherit listener %s: %w", named.name, err)
+			return nil, nil, func() {}, listenerInheritanceError(named.name, err)
 		}
 
 		files = append(files, file)
-		specs = append(
-			specs,
-			daemonsupervisor.ListenerSpec{
-				Name:    named.name,
-				Network: named.lis.Addr().Network(),
-				Addr:    named.lis.Addr().String(),
-				FD:      3 + len(files) - 1,
-			},
-		)
+		specs = append(specs, reloadListenerSpec(named.name, named.lis, files))
 	}
 
 	for _, named := range packetConns {
 		file, err := packetConnFile(named.conn)
 		if err != nil {
 			cleanup()
-			slog.Warn(
-				"daemon.reload.packet_conn_file_failed",
-				"concern",
-				"daemon.workers.reload",
-				"component",
-				"daemon",
-				"name",
-				named.name,
-				"err",
-				err,
-			)
 
-			return nil, nil, func() {}, fmt.Errorf("inherit packet conn %s: %w", named.name, err)
+			return nil, nil, func() {}, packetInheritanceError(named.name, err)
 		}
 
 		files = append(files, file)
-		specs = append(
-			specs,
-			daemonsupervisor.ListenerSpec{
-				Name:    named.name,
-				Network: named.conn.LocalAddr().Network(),
-				Addr:    named.conn.LocalAddr().String(),
-				FD:      3 + len(files) - 1,
-			},
-		)
+		specs = append(specs, reloadPacketSpec(named.name, named.conn, files))
 	}
 
 	return files, specs, cleanup, nil
+}
+
+func resolveWorkerExecutable(
+	ctx context.Context,
+	log *slog.Logger,
+	failureEvent string,
+	absoluteFailureEvent string,
+) (string, error) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		log.WarnContext(
+			ctx,
+			failureEvent,
+			"concern",
+			"daemon.workers.reload",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
+
+		return "", fmt.Errorf("resolve executable: %w", err)
+	}
+
+	executablePath, err = filepath.Abs(executablePath)
+	if err != nil {
+		log.WarnContext(
+			ctx,
+			absoluteFailureEvent,
+			"concern",
+			"daemon.workers.reload",
+			"component",
+			"daemon",
+			"path",
+			executablePath,
+			"err",
+			err,
+		)
+
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+
+	return executablePath, nil
+}
+
+func requestReloadReplacement(
+	ctx context.Context,
+	log *slog.Logger,
+	executablePath string,
+	specs []daemonsupervisor.ListenerSpec,
+	readyFD int,
+	requestFiles []*os.File,
+) (int, error) {
+	pid, err := daemonsupervisor.RequestReplacement(
+		ctx,
+		daemonsupervisor.SocketPath(config.RuntimeDir()),
+		executablePath,
+		specs,
+		readyFD,
+		os.Environ(),
+		requestFiles,
+	)
+	if err != nil {
+		log.WarnContext(
+			ctx,
+			"daemon.reload.supervisor_request_failed",
+			"concern",
+			"daemon.workers.reload",
+			"component",
+			"daemon",
+			"path",
+			executablePath,
+			"err",
+			err,
+		)
+
+		return 0, fmt.Errorf("request supervisor replacement daemon: %w", err)
+	}
+
+	return pid, nil
+}
+
+func requestRebindReplacement(
+	ctx context.Context,
+	log *slog.Logger,
+	executablePath string,
+	specs []daemonsupervisor.ListenerSpec,
+	readyFD int,
+	requestFiles []*os.File,
+) (int, error) {
+	pid, err := daemonsupervisor.RequestRebind(
+		ctx,
+		daemonsupervisor.SocketPath(config.RuntimeDir()),
+		executablePath,
+		specs,
+		readyFD,
+		os.Environ(),
+		requestFiles,
+	)
+	if err != nil {
+		log.WarnContext(
+			ctx,
+			"daemon.rebind.supervisor_request_failed",
+			"concern",
+			"daemon.workers.reload",
+			"component",
+			"daemon",
+			"path",
+			executablePath,
+			"err",
+			err,
+		)
+
+		return 0, fmt.Errorf("request supervisor rebind daemon: %w", err)
+	}
+
+	return pid, nil
+}
+
+func abortReloadReplacement(
+	ctx context.Context,
+	log *slog.Logger,
+	pid int,
+	readinessErr error,
+) error {
+	// This worker stays in service. Without the abort the replacement
+	// keeps running and shares the inherited listener sockets.
+	abortErr := daemonsupervisor.RequestAbort(
+		context.WithoutCancel(ctx),
+		daemonsupervisor.SocketPath(config.RuntimeDir()),
+		pid,
+	)
+	if abortErr != nil {
+		log.WarnContext(
+			ctx,
+			"daemon.reload.abort_replacement_failed",
+			"concern",
+			"daemon.workers.reload",
+			"component",
+			"daemon",
+			"pid",
+			pid,
+			"err",
+			abortErr,
+		)
+
+		return errors.Join(
+			readinessErr,
+			fmt.Errorf("stop replacement daemon worker %d: %w", pid, abortErr),
+		)
+	}
+
+	return readinessErr
+}
+
+func drainRebindListeners(
+	ctx context.Context,
+	log *slog.Logger,
+	runtime *runtimeServices,
+) <-chan struct{} {
+	// Drain the TCP surfaces synchronously so their ports are free before the
+	// replacement worker binds them fresh from config. The drain also closes
+	// the SQLite stores so their WALs flush before the new worker reopens them.
+	log.InfoContext(
+		ctx,
+		"daemon.rebind.draining_listeners",
+		"concern",
+		"daemon.workers.reload",
+		"component",
+		"daemon",
+	)
+	drainDone := runtime.startReloadDrain(ctx, log)
+	<-drainDone
+	if runtime.pprofListener != nil {
+		_ = runtime.pprofListener.Close()
+	}
+
+	return drainDone
+}
+
+func sortedReloadListenerIDs(runtime *runtimeServices) []string {
+	mitmIDs := make([]string, 0, len(runtime.mitmListeners))
+	for id := range runtime.mitmListeners {
+		mitmIDs = append(mitmIDs, id)
+	}
+
+	slices.Sort(mitmIDs)
+
+	return mitmIDs
+}
+
+func listenerInheritanceError(name string, err error) error {
+	slog.Warn(
+		"daemon.reload.listener_file_failed",
+		"concern",
+		"daemon.workers.reload",
+		"component",
+		"daemon",
+		"name",
+		name,
+		"err",
+		err,
+	)
+
+	return fmt.Errorf("inherit listener %s: %w", name, err)
+}
+
+func reloadListenerSpec(
+	name string,
+	listener net.Listener,
+	files []*os.File,
+) daemonsupervisor.ListenerSpec {
+	return daemonsupervisor.ListenerSpec{
+		Name:    name,
+		Network: listener.Addr().Network(),
+		Addr:    listener.Addr().String(),
+		FD:      3 + len(files) - 1,
+	}
+}
+
+func packetInheritanceError(name string, err error) error {
+	slog.Warn(
+		"daemon.reload.packet_conn_file_failed",
+		"concern",
+		"daemon.workers.reload",
+		"component",
+		"daemon",
+		"name",
+		name,
+		"err",
+		err,
+	)
+
+	return fmt.Errorf("inherit packet conn %s: %w", name, err)
+}
+
+func reloadPacketSpec(
+	name string,
+	packet net.PacketConn,
+	files []*os.File,
+) daemonsupervisor.ListenerSpec {
+	return daemonsupervisor.ListenerSpec{
+		Name:    name,
+		Network: packet.LocalAddr().Network(),
+		Addr:    packet.LocalAddr().String(),
+		FD:      3 + len(files) - 1,
+	}
+}
+
+func sortedReloadPacketIDs(runtime *runtimeServices) []string {
+	mitmUDPIDs := make([]string, 0, len(runtime.mitmPacketConns))
+	for id := range runtime.mitmPacketConns {
+		mitmUDPIDs = append(mitmUDPIDs, id)
+	}
+
+	slices.Sort(mitmUDPIDs)
+
+	return mitmUDPIDs
 }
 
 // startReloadDrain runs the lifecycle group's ordered Quiesce for a reload in a
