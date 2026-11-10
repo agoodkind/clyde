@@ -1,4 +1,38 @@
-# golangci-lint: generated_at=2026-11-10T10:02:15Z
+# Historical Linux golangci-lint: generated_at=2026-11-10T10:53:30Z
+internal/cli/clipboard/clipboard_other.go:11:1: godoc line is too long (78 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/clipboard/clipboard_other.go:14:9: do not define dynamic errors, use wrapped static errors instead: "errors.New(\"clipboard copy is not supported on this platform\")" (err113)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux.go:130:3: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux.go:130:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux.go:131:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux.go:198:24: Function 'Install' is too long (137 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux.go:62:1: newPlatformRegistry returns interface (goodkind.io/clyde/internal/cli/mitm/truststore.Registry) (ireturn)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux.go:80:1: NewLinuxRegistry returns interface (goodkind.io/clyde/internal/cli/mitm/truststore.Registry) (ireturn)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux_test.go:111:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux_test.go:178:2: missing whitespace above this line (invalid statement above range) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux_test.go:55:2: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux_test.go:55:2: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:100:3: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:100:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:101:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:104:14: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"process %d stat is malformed\", pid)" (err113)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:107:19: Magic number: 20, in <condition> detected (mnd)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:108:14: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"process %d start time is unavailable\", pid)" (err113)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:131:2: variable name 'ok' is too short for the scope of its usage (varnamelen)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:133:14: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"process %d belongs to another user\", pid)" (err113)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:17:52: named return "err" with type "error" must not be referenced or used by a naked return (nonamedreturns)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/hard_reset_process_linux.go:78:2: missing whitespace above this line (no shared variables above range) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/process_children_linux.go:28:3: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/process_children_linux.go:28:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/process_children_linux.go:29:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/process_children_linux.go:47:2: missing whitespace above this line (no shared variables above range) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/process_children_linux.go:92:19: Magic number: 2, in <condition> detected (mnd)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/storage_retention_supervisor_linux.go:100:2: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/storage_retention_supervisor_linux.go:100:2: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/storage_retention_supervisor_linux.go:112:3: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/storage_retention_supervisor_linux.go:128:12: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"supervisor descriptor %d does not report file flags\", descriptor)" (err113)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/storage_retention_supervisor_linux.go:19:27: named return "resultError" with type "error" must not be referenced or used by a naked return (nonamedreturns)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/storage_retention_supervisor_linux.go:48:2: missing whitespace above this line (no shared variables above range) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/daemon/storage_retention_supervisor_linux.go:66:16: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\n\t\"supervisor descriptor %d does not report inode metadata\",\n\tdescriptor,\n)" (err113)	# golangci-lint:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
 api/clyde/v1/doc.go:1:1: godoc line is too long (80 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T09:39:02Z last_seen=2026-11-10T10:02:15Z
 cmd/ci-auto-update/main.go:109:11: Magic number: 130, in <return> detected (mnd)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T10:02:15Z
 cmd/ci-auto-update/main.go:118:6: Function 'run' is too long (109 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T10:02:15Z

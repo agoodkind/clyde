@@ -1,4 +1,7 @@
-# staticcheck-extra: generated_at=2026-11-10T10:02:15Z
+# Historical Linux staticcheck-extra: generated_at=2026-11-10T10:53:30Z
+internal/cli/clipboard/clipboard_other.go:10:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/cli/mitm/truststore/truststore_linux.go:157:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
+internal/providers/claude/oauthcredentials/oauth_credentials_keychain_other.go:7:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-10T10:53:30Z last_seen=2026-11-10T10:53:30Z
 cmd/ci-auto-update/main.go:118:1: commandentry: delegate implementation to an importable package [id=a28342178caccbc862cb9477128b8321:1]	# staticcheck-extra:first_added=2026-11-10T09:54:52Z last_seen=2026-11-10T10:02:15Z
 cmd/ci-auto-update/main.go:230:1: commandentry: delegate implementation to an importable package [id=84d1f07300fec9618e6e1e2f021853ef:1]	# staticcheck-extra:first_added=2026-11-10T09:54:52Z last_seen=2026-11-10T10:02:15Z
 cmd/ci-auto-update/main.go:25:1: commandentry: delegate implementation to an importable package [id=f571284c4b29e60f47b9dce2aa4e91ec:1]	# staticcheck-extra:first_added=2026-11-10T09:54:52Z last_seen=2026-11-10T10:02:15Z
