@@ -369,46 +369,7 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 	// then stalls cannot pin this goroutine and its fd indefinitely. The sniff
 	// read deadline was already cleared, and ctx has no cancellation, so this
 	// deadline is the only bound on the ClientHello read.
-	if err := client.SetDeadline(clock.Now().Add(transparentSniffTimeout)); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.transparent.set_handshake_deadline_failed",
-			"concern",
-			"providers.mitm.wire",
-			"err",
-			err,
-		)
-
-		return
-	}
-
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.transparent.client_tls_failed",
-			"concern",
-			"providers.mitm.wire",
-			"host",
-			sniHost,
-			"err",
-			err,
-		)
-
-		return
-	}
-
-	if err := client.SetDeadline(time.Time{}); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.transparent.clear_handshake_deadline_failed",
-			"concern",
-			"providers.mitm.wire",
-			"host",
-			sniHost,
-			"err",
-			err,
-		)
-
+	if !p.handshakeTransparentTLS(ctx, client, tlsConn, &sniHost) {
 		return
 	}
 
@@ -444,4 +405,56 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 		provider,
 		started,
 	)
+}
+
+func (p *Proxy) handshakeTransparentTLS(
+	ctx context.Context,
+	client net.Conn,
+	tlsConn *tls.Conn,
+	sniHost *string,
+) bool {
+	if err := client.SetDeadline(clock.Now().Add(transparentSniffTimeout)); err != nil {
+		p.log.WarnContext(
+			ctx,
+			"mitm.transparent.set_handshake_deadline_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			err,
+		)
+
+		return false
+	}
+
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		p.log.WarnContext(
+			ctx,
+			"mitm.transparent.client_tls_failed",
+			"concern",
+			"providers.mitm.wire",
+			"host",
+			*sniHost,
+			"err",
+			err,
+		)
+
+		return false
+	}
+
+	if err := client.SetDeadline(time.Time{}); err != nil {
+		p.log.WarnContext(
+			ctx,
+			"mitm.transparent.clear_handshake_deadline_failed",
+			"concern",
+			"providers.mitm.wire",
+			"host",
+			*sniHost,
+			"err",
+			err,
+		)
+
+		return false
+	}
+
+	return true
 }
