@@ -89,7 +89,7 @@ When `backends` is absent, selecting local stops Milvus ingestion. Clyde does no
 
    The `semantic:` line prints `backend=local`. Local search reports `"source":"local"`.
 
-   Search without an explicit backend uses a raw text scan when the configured store is disabled, unavailable, or fails. The scan reports `"source":"raw_text"`.
+   Search without an explicit backend uses a raw text scan when the configured store is disabled, unavailable, or fails. The scan reports `"source":"raw_text"`. Set `raw_text_fallback = false` under `[conversation.semantic]` to return the indexed search error instead. The change takes effect after a daemon reload.
 
 ## Return to Milvus
 

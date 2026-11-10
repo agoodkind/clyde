@@ -25,10 +25,12 @@ func (op Operation[I, P]) mcpDescription() string {
 		b.WriteString("\n\n")
 		b.WriteString(op.Long)
 	}
+
 	if len(op.Examples) > 0 {
 		b.WriteString("\n\nExamples:\n")
 		b.WriteString(strings.Join(op.Examples, "\n"))
 	}
+
 	return b.String()
 }
 
@@ -44,6 +46,7 @@ func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 		if missingArg != "" {
 			return mcp.NewToolResultText(missingArg + " is required"), nil
 		}
+
 		bindMCPParams(&in, op.Params, req)
 		// Prepare is the only place input is rejected. It runs after binding and
 		// before the work, so an input error becomes the tool result text instead
@@ -54,6 +57,7 @@ func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 			wrapped := logFail(ctx, SurfaceMCP, "invalid_input", op.Name.Canonical, prepErr)
 			return mcp.NewToolResultText(wrapped.Error()), nil
 		}
+
 		// A task-augmented call (the client supplied task params) runs the
 		// run-to-completion work function so the result reaches the client
 		// through tasks/result. mcp-go runs this handler in its own task
@@ -62,8 +66,10 @@ func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 		if op.runResult != nil || op.mcpTaskResult != nil {
 			return runMCPResultOperation(ctx, req, op, prepared), nil
 		}
+
 		return runMCPLegacyOperation(ctx, req, op, prepared), nil
 	}
+
 	return tool, handler
 }
 
@@ -74,17 +80,22 @@ func (op Operation[I, P]) mcpToolOptions() []mcp.ToolOption {
 		if arg.Required {
 			properties = append(properties, mcp.Required())
 		}
+
 		options = append(options, mcp.WithString(arg.MCPName, properties...))
 	}
+
 	for _, param := range op.Params {
 		if param.CLIOnly {
 			continue
 		}
+
 		options = append(options, param.mcpOption())
 	}
+
 	if op.MCPTaskSupport != "" {
 		options = append(options, mcp.WithTaskSupport(op.MCPTaskSupport))
 	}
+
 	return options
 }
 
@@ -95,6 +106,7 @@ func bindMCPArgs[I Input](in *I, args []Arg[I], req mcp.CallToolRequest) string 
 			return missing
 		}
 	}
+
 	return ""
 }
 
@@ -104,16 +116,21 @@ func bindMCPArg[I Input](in *I, arg Arg[I], req mcp.CallToolRequest) (string, bo
 		if err != nil {
 			return arg.MCPName, false
 		}
+
 		if strings.TrimSpace(value) == "" {
 			return arg.MCPName, false
 		}
+
 		arg.bind(in, value)
+
 		return "", true
 	}
+
 	value := req.GetString(arg.MCPName, "")
 	if strings.TrimSpace(value) != "" {
 		arg.bind(in, value)
 	}
+
 	return "", true
 }
 
@@ -122,6 +139,7 @@ func bindMCPParams[I Input](in *I, params []Param[I], req mcp.CallToolRequest) {
 		if param.CLIOnly {
 			continue
 		}
+
 		param.decodeMCP(in, req)
 	}
 }
@@ -147,13 +165,16 @@ func runMCPResultOperation[I Input, P Prepared](
 	default:
 		runErr = fmt.Errorf("%s has no result execution path", op.Name.Canonical)
 	}
+
 	if runErr != nil {
 		return mcp.NewToolResultError(runErr.Error())
 	}
+
 	rendered, err := renderMCPResult(ctx, op.outputKind, result)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error())
 	}
+
 	return rendered
 }
 
@@ -170,10 +191,12 @@ func runMCPLegacyOperation[I Input, P Prepared](
 	} else {
 		runErr = op.Run(ctx, prepared, SurfaceMCP, sink)
 	}
+
 	text := sink.String()
 	if runErr != nil {
 		return mcp.NewToolResultError(runErr.Error())
 	}
+
 	return mcp.NewToolResultText(text)
 }
 
@@ -185,30 +208,41 @@ func (p Param[I]) mcpOption() mcp.ToolOption {
 		if p.DefaultStr != "" {
 			properties = append(properties, mcp.DefaultString(p.DefaultStr))
 		}
+
 		return mcp.WithString(p.Canonical, properties...)
 	case KindInt:
 		properties := []mcp.PropertyOption{mcp.Description(p.Description)}
 		if p.DefaultInt != 0 {
 			properties = append(properties, mcp.DefaultNumber(float64(p.DefaultInt)))
 		}
+
 		return mcp.WithNumber(p.Canonical, properties...)
 	case KindBool:
-		properties := []mcp.PropertyOption{mcp.Description(p.Description), mcp.DefaultBool(p.DefaultBool)}
+		properties := []mcp.PropertyOption{
+			mcp.Description(p.Description),
+			mcp.DefaultBool(p.DefaultBool),
+		}
+
 		return mcp.WithBoolean(p.Canonical, properties...)
 	case KindFloat:
 		properties := []mcp.PropertyOption{mcp.Description(p.Description)}
 		if p.DefaultFloat != 0 {
 			properties = append(properties, mcp.DefaultNumber(p.DefaultFloat))
 		}
+
 		return mcp.WithNumber(p.Canonical, properties...)
 	case KindStringList:
 		properties := []mcp.PropertyOption{mcp.Description(p.Description)}
 		return mcp.WithArray(p.Canonical, properties...)
 	case KindEnumList:
-		properties := []mcp.PropertyOption{mcp.Description(p.Description), mcp.WithStringEnumItems(p.Values)}
+		properties := []mcp.PropertyOption{
+			mcp.Description(p.Description),
+			mcp.WithStringEnumItems(p.Values),
+		}
 		if p.Required {
 			properties = append(properties, mcp.Required())
 		}
+
 		return mcp.WithArray(p.Canonical, properties...)
 	case KindString:
 		fallthrough
@@ -217,9 +251,11 @@ func (p Param[I]) mcpOption() mcp.ToolOption {
 		if p.Required {
 			properties = append(properties, mcp.Required())
 		}
+
 		if p.DefaultStr != "" {
 			properties = append(properties, mcp.DefaultString(p.DefaultStr))
 		}
+
 		return mcp.WithString(p.Canonical, properties...)
 	}
 }
@@ -233,6 +269,7 @@ func (p Param[I]) decodeMCP(in *I, req mcp.CallToolRequest) {
 		if !enumContains(p.Values, raw) {
 			raw = p.DefaultStr
 		}
+
 		p.bindString(in, raw)
 	case KindInt:
 		p.bindInt(in, req.GetInt(p.Canonical, p.DefaultInt))
@@ -244,6 +281,7 @@ func (p Param[I]) decodeMCP(in *I, req mcp.CallToolRequest) {
 		p.bindStrSlice(in, req.GetStringSlice(p.Canonical, p.DefaultStrSlice))
 	case KindEnumList:
 		raw := req.GetStringSlice(p.Canonical, nil)
+
 		valid := make([]string, 0, len(raw))
 		for _, item := range raw {
 			candidate := strings.TrimSpace(item)
@@ -251,6 +289,7 @@ func (p Param[I]) decodeMCP(in *I, req mcp.CallToolRequest) {
 				valid = append(valid, candidate)
 			}
 		}
+
 		p.bindStrSlice(in, valid)
 	case KindString:
 		fallthrough

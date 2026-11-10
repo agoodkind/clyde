@@ -36,11 +36,14 @@ func validJSONObject(raw json.RawMessage) json.RawMessage {
 	if trimmed == "" || trimmed == "null" {
 		return nil
 	}
+
 	if !json.Valid(raw) {
 		return nil
 	}
+
 	if trimmed[0] != '{' {
 		return nil
 	}
+
 	return raw
 }

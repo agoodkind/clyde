@@ -60,6 +60,7 @@ func (e catalogEntry) dispositionFor(column providerColumn) disposition {
 	if column == columnCodex {
 		return e.codex
 	}
+
 	return e.anthropic
 }
 
@@ -126,6 +127,7 @@ func backendLabel(column providerColumn) string {
 	if column == columnCodex {
 		return "codex"
 	}
+
 	return "anthropic"
 }
 
@@ -146,6 +148,7 @@ func warningFor(entry catalogEntry, column providerColumn) CompatibilityWarning 
 		if column == columnCodex && entry.param == "prompt_cache_key" {
 			message = "prompt_cache_key is replaced with Clyde-owned cache identity for the codex backend"
 		}
+
 		return CompatibilityWarning{
 			Code:        warningCodeOverridden,
 			Param:       entry.param,

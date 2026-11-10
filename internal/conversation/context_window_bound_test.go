@@ -71,18 +71,33 @@ func TestContextWindowRenderIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ContextWindowText by index returned error: %v", err)
 	}
+
 	if len([]rune(byIndex)) >= perMessageRunes {
-		t.Fatalf("index-centered window is %d runes, want it bounded well under one message of %d",
-			len([]rune(byIndex)), perMessageRunes)
+		t.Fatalf(
+			"index-centered window is %d runes, want it bounded well under one message of %d",
+			len([]rune(byIndex)),
+			perMessageRunes,
+		)
 	}
 
 	// The timestamp-centered path, which renders from a materialized slice.
-	byTimestamp, err := idx.ContextWindowText(hugeTurnRecord(), time.Unix(2, 0).Format(time.RFC3339), -1, 2, 2, "")
+	byTimestamp, err := idx.ContextWindowText(
+		hugeTurnRecord(),
+		time.Unix(2, 0).Format(time.RFC3339),
+		-1,
+		2,
+		2,
+		"",
+	)
 	if err != nil {
 		t.Fatalf("ContextWindowText by timestamp returned error: %v", err)
 	}
+
 	if len([]rune(byTimestamp)) >= perMessageRunes {
-		t.Fatalf("timestamp-centered window is %d runes, want it bounded well under one message of %d",
-			len([]rune(byTimestamp)), perMessageRunes)
+		t.Fatalf(
+			"timestamp-centered window is %d runes, want it bounded well under one message of %d",
+			len([]rune(byTimestamp)),
+			perMessageRunes,
+		)
 	}
 }

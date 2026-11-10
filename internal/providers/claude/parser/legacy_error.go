@@ -20,10 +20,12 @@ func (resolutionError *legacyResolutionError) Error() string {
 	builder.WriteString(resolutionError.subject)
 	builder.WriteString(": ")
 	builder.WriteString(resolutionError.reason)
+
 	for _, cause := range resolutionError.causes {
 		builder.WriteString("; ")
 		builder.WriteString(cause.Error())
 	}
+
 	return builder.String()
 }
 

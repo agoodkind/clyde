@@ -15,10 +15,12 @@ func TestResolvePProfAddrEnvOverridesConfig(t *testing.T) {
 	if got := resolvePProfAddr("[::1]:6060"); got != "[::1]:7070" {
 		t.Fatalf("env override = %q, want [::1]:7070", got)
 	}
+
 	t.Setenv(debugPProfAddrEnv, "")
 	if got := resolvePProfAddr("[::1]:6060"); got != "[::1]:6060" {
 		t.Fatalf("configured fallback = %q, want [::1]:6060", got)
 	}
+
 	if got := resolvePProfAddr(""); got != "" {
 		t.Fatalf("empty config and env = %q, want empty (pprof off)", got)
 	}
@@ -32,12 +34,20 @@ func TestBindOrInheritTCPListenerReusesInheritedSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind inherited listener: %v", err)
 	}
+
 	t.Cleanup(func() { _ = inherited.Close() })
 	addr := inherited.Addr().String()
-	got, err := bindOrInheritTCPListener(context.Background(), slog.Default(), addr, inherited, listenerNamePProf)
+	got, err := bindOrInheritTCPListener(
+		context.Background(),
+		slog.Default(),
+		addr,
+		inherited,
+		listenerNamePProf,
+	)
 	if err != nil {
 		t.Fatalf("matching inherited listener must reuse, got error: %v", err)
 	}
+
 	if got != inherited {
 		t.Fatalf("matching inherited listener must be returned unchanged")
 	}
@@ -51,11 +61,19 @@ func TestBindOrInheritTCPListenerAddressChangeForcesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind inherited listener: %v", err)
 	}
+
 	t.Cleanup(func() { _ = inherited.Close() })
-	_, err = bindOrInheritTCPListener(context.Background(), slog.Default(), "[::1]:1", inherited, listenerNamePProf)
+	_, err = bindOrInheritTCPListener(
+		context.Background(),
+		slog.Default(),
+		"[::1]:1",
+		inherited,
+		listenerNamePProf,
+	)
 	if err == nil {
 		t.Fatalf("changed listen address must force restart, got nil error")
 	}
+
 	if want := "does not match config"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q must mention %q", err.Error(), want)
 	}
@@ -64,10 +82,17 @@ func TestBindOrInheritTCPListenerAddressChangeForcesRestart(t *testing.T) {
 // TestBindOrInheritTCPListenerBindsFreshWhenNoneInherited confirms a cold start
 // (no inherited socket) binds a new listener at the requested loopback address.
 func TestBindOrInheritTCPListenerBindsFreshWhenNoneInherited(t *testing.T) {
-	got, err := bindOrInheritTCPListener(context.Background(), slog.Default(), "[::1]:0", nil, listenerNamePProf)
+	got, err := bindOrInheritTCPListener(
+		context.Background(),
+		slog.Default(),
+		"[::1]:0",
+		nil,
+		listenerNamePProf,
+	)
 	if err != nil {
 		t.Fatalf("cold start must bind fresh, got error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = got.Close() })
 	if _, ok := got.(*net.TCPListener); !ok {
 		t.Fatalf("fresh listener is %T, want *net.TCPListener", got)
@@ -83,16 +108,19 @@ func TestListenerFileRoundTripsTCPListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind listener: %v", err)
 	}
+
 	t.Cleanup(func() { _ = lis.Close() })
 	file, err := listenerFile(lis)
 	if err != nil {
 		t.Fatalf("duplicate listener file: %v", err)
 	}
+
 	t.Cleanup(func() { _ = file.Close() })
 	reconstructed, err := net.FileListener(file)
 	if err != nil {
 		t.Fatalf("rebuild listener from inherited fd: %v", err)
 	}
+
 	t.Cleanup(func() { _ = reconstructed.Close() })
 	if got, want := reconstructed.Addr().String(), lis.Addr().String(); got != want {
 		t.Fatalf("inherited listener address = %q, want %q", got, want)

@@ -58,15 +58,19 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read sink: %v", err)
 	}
+
 	if !strings.Contains(string(got), "adapter.codex.telemetry_probe") {
 		t.Errorf("sink missing event name: %s", string(got))
 	}
+
 	if !strings.Contains(string(got), `"request_id":"req-test"`) {
 		t.Errorf("sink missing request_id: %s", string(got))
 	}
+
 	if !strings.Contains(string(got), `"cursor_request_id":"cursor-req-test"`) {
 		t.Errorf("sink missing cursor_request_id: %s", string(got))
 	}
+
 	if strings.Contains(string(got), `"body":`) || strings.Contains(string(got), "hello") {
 		t.Errorf("sink leaked body bytes: %s", string(got))
 	}
@@ -87,6 +91,7 @@ func TestDedicatedCodexLoggerRotatesByVolume(t *testing.T) {
 	})
 
 	largeField := strings.Repeat("x", 700*1024)
+
 	for range 3 {
 		attrs := []slog.Attr{
 			slog.String("request_id", "req-rotate"),
@@ -95,6 +100,7 @@ func TestDedicatedCodexLoggerRotatesByVolume(t *testing.T) {
 		}
 		logCodexEvent(context.Background(), slog.LevelDebug, "adapter.codex.rotation_probe", attrs)
 	}
+
 	if codexFileCloser != nil {
 		if err := codexFileCloser.Close(); err != nil {
 			t.Fatalf("close codex logger: %v", err)
@@ -105,13 +111,16 @@ func TestDedicatedCodexLoggerRotatesByVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read log dir: %v", err)
 	}
+
 	var rotated int
+
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, "codex-") && strings.HasSuffix(name, ".jsonl") {
 			rotated++
 		}
 	}
+
 	if rotated == 0 {
 		t.Fatalf("expected rotated codex sidecar logs, entries=%v", entryNames(entries))
 	}
@@ -124,6 +133,7 @@ func resetDedicatedCodexLoggerForTest(t *testing.T) {
 	if codexFileCloser != nil {
 		_ = codexFileCloser.Close()
 	}
+
 	codexFileLoggerOnce = sync.Once{}
 	codexFileLogger = nil
 	codexFileCloser = nil
@@ -139,6 +149,7 @@ func resetDedicatedCodexLoggerForTest(t *testing.T) {
 		if codexFileCloser != nil {
 			_ = codexFileCloser.Close()
 		}
+
 		codexFileLoggerOnce = sync.Once{}
 		codexFileLogger = nil
 		codexFileCloser = nil
@@ -156,5 +167,6 @@ func entryNames(entries []os.DirEntry) []string {
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
+
 	return names
 }

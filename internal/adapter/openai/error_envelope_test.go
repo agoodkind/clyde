@@ -40,25 +40,35 @@ func TestErrorRendererIncludesClydeDiagnostics(t *testing.T) {
 	if err := NewErrorRenderer().Render(rec, http.StatusBadRequest, info); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
+
 	var out ErrorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, rec.Body.String())
 	}
-	if out.Error.Message != "upstream failed" || out.Error.Type != "invalid_request_error" || out.Error.Code != "upstream_failed" {
+
+	if out.Error.Message != "upstream failed" || out.Error.Type != "invalid_request_error" ||
+		out.Error.Code != "upstream_failed" {
 		t.Fatalf("canonical fields changed: %+v", out.Error)
 	}
+
 	if out.Error.Clyde == nil {
 		t.Fatalf("missing Clyde diagnostics: %+v", out.Error)
 	}
+
 	if out.Error.Clyde.RequestID != "chatcmpl-test" {
 		t.Fatalf("request_id=%q", out.Error.Clyde.RequestID)
 	}
-	if out.Error.Clyde.ChatKey != "root.b02" || out.Error.Clyde.ChatRootKey != "root" || out.Error.Clyde.ChatBranchKey != "b02" {
+
+	if out.Error.Clyde.ChatKey != "root.b02" || out.Error.Clyde.ChatRootKey != "root" ||
+		out.Error.Clyde.ChatBranchKey != "b02" {
 		t.Fatalf("chat diagnostics=%+v", out.Error.Clyde)
 	}
-	if out.Error.Clyde.UpstreamRequestID != "upstream-req" || out.Error.Clyde.UpstreamResponseID != "resp-123" {
+
+	if out.Error.Clyde.UpstreamRequestID != "upstream-req" ||
+		out.Error.Clyde.UpstreamResponseID != "resp-123" {
 		t.Fatalf("upstream diagnostics=%+v", out.Error.Clyde)
 	}
+
 	if out.Error.Clyde.Headers["authorization"] != "[redacted]" {
 		t.Fatalf("authorization header was not redacted: %+v", out.Error.Clyde.Headers)
 	}
@@ -79,10 +89,12 @@ func TestErrorRendererOmitsEmptyClydeDiagnostics(t *testing.T) {
 	if err := NewErrorRenderer().Render(rec, http.StatusBadRequest, info); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
+
 	var out ErrorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, rec.Body.String())
 	}
+
 	if out.Error.Clyde != nil {
 		t.Fatalf("unexpected Clyde diagnostics: %+v", out.Error.Clyde)
 	}

@@ -14,6 +14,7 @@ import (
 // kind exists in the taxonomy without a wire mapping.
 func TestExportContentKindsSurviveTheWire(t *testing.T) {
 	t.Parallel()
+
 	for _, kind := range conversation.AllContentKinds {
 		set := conversation.NewContentKindSet(kind)
 		options := conversation.ExportOptions{
@@ -35,12 +36,14 @@ func TestExportContentKindsSurviveTheWire(t *testing.T) {
 		if !rebuilt.Has(kind) {
 			t.Errorf("content kind %q was lost crossing the export wire", kind)
 		}
+
 		// The rebuilt set must also not invent kinds the caller never named,
 		// modulo the deliberate tool-kind collapse both sides share.
 		for _, other := range conversation.AllContentKinds {
 			if other == kind {
 				continue
 			}
+
 			if rebuilt.Has(other) && !set.Has(other) {
 				t.Errorf("selecting %q surfaced %q on the daemon side", kind, other)
 			}

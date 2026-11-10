@@ -41,6 +41,7 @@ func (r xdgResolver) runtimeRoot() string {
 	if base, ok := xdgBaseFromEnv("XDG_RUNTIME_DIR"); ok {
 		return filepath.Join(base, r.appName)
 	}
+
 	return filepath.Join(platformRuntimeBase(), fmt.Sprintf("%s-%d", r.appName, r.uid()))
 }
 
@@ -55,6 +56,7 @@ func platformRuntimeBase() string {
 			return cleanExpandedPath(dir)
 		}
 	}
+
 	return cleanExpandedPath(os.TempDir())
 }
 
@@ -67,6 +69,7 @@ var darwinUserTempDir = sync.OnceValue(func() string {
 	if err != nil {
 		return ""
 	}
+
 	return strings.TrimSpace(string(out))
 })
 
@@ -74,6 +77,7 @@ func (r xdgResolver) appScopedRoot(envVar string, fallbackRelative string) strin
 	if base, ok := xdgBaseFromEnv(envVar); ok {
 		return filepath.Join(base, r.appName)
 	}
+
 	return filepath.Join(homeRelativeRoot(fallbackRelative), r.appName)
 }
 
@@ -82,6 +86,7 @@ func xdgBaseFromEnv(envVar string) (string, bool) {
 	if value == "" {
 		return "", false
 	}
+
 	return cleanExpandedPath(value), true
 }
 
@@ -90,6 +95,7 @@ func homeRelativeRoot(relativePath string) string {
 	if err != nil {
 		home = os.Getenv("HOME")
 	}
+
 	return cleanExpandedPath(filepath.Join(home, relativePath))
 }
 
@@ -97,6 +103,7 @@ func cleanExpandedPath(path string) string {
 	if path == "" {
 		return ""
 	}
+
 	return filepath.Clean(homedir.Expand(path))
 }
 
@@ -131,12 +138,21 @@ func EnsureRuntimeDir() error {
 	if err != nil {
 		log := slog.Default()
 		log.Warn(
-			"config.runtime_dir.create_failed", "concern", "config", "component", "config",
-			"subcomponent", "runtime_dir",
-			"path", dir,
-			"err", err,
+			"config.runtime_dir.create_failed",
+			"concern",
+			"config",
+			"component",
+			"config",
+			"subcomponent",
+			"runtime_dir",
+			"path",
+			dir,
+			"err",
+			err,
 		)
+
 		return fmt.Errorf("failed to create runtime dir %s: %w", dir, err)
 	}
+
 	return nil
 }

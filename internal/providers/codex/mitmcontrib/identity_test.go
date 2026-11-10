@@ -16,12 +16,15 @@ func TestExtractIdentityCodexLiveHeaderSet(t *testing.T) {
 	if contrib.SessionID != session {
 		t.Fatalf("SessionID = %q", contrib.SessionID)
 	}
+
 	if contrib.PreferredRequestID != session {
 		t.Fatalf("PreferredRequestID = %q", contrib.PreferredRequestID)
 	}
+
 	if contrib.ConversationID != session {
 		t.Fatalf("ConversationID = %q", contrib.ConversationID)
 	}
+
 	if contrib.ConversationSource != conversationSourceHeader {
 		t.Fatalf("ConversationSource = %q", contrib.ConversationSource)
 	}
@@ -33,6 +36,7 @@ func TestExtractIdentityCodexThreadOnly(t *testing.T) {
 	if contrib.SessionID != "thread-only" {
 		t.Fatalf("SessionID = %q", contrib.SessionID)
 	}
+
 	if contrib.ConversationID != "thread-only" {
 		t.Fatalf("ConversationID = %q", contrib.ConversationID)
 	}
@@ -44,6 +48,7 @@ func TestExtractIdentityCodexSessionOnly(t *testing.T) {
 	if contrib.SessionID != "session-only" {
 		t.Fatalf("SessionID = %q", contrib.SessionID)
 	}
+
 	if contrib.ConversationID != "session-only" {
 		t.Fatalf("ConversationID = %q", contrib.ConversationID)
 	}

@@ -46,8 +46,10 @@ func (f *fakeDarwinRunner) run(_ context.Context, name string, args ...string) (
 	if !ok || len(queue) == 0 {
 		return nil, errors.New("no programmed response for binary " + name)
 	}
+
 	resp := queue[0]
 	f.responses[name] = queue[1:]
+
 	return resp.output, resp.err
 }
 
@@ -80,16 +82,23 @@ func TestDarwinStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
+
 	if status.Platform != PlatformDarwin {
 		t.Fatalf("platform = %q", status.Platform)
 	}
+
 	if !status.Installed {
 		t.Fatalf("expected Installed=true, got %v", status)
 	}
+
 	if !status.FingerprintsMatch() {
-		t.Fatalf("expected FingerprintsMatch=true: on_disk=%q installed=%q",
-			status.OnDiskFingerprint, status.InstalledFingerprint)
+		t.Fatalf(
+			"expected FingerprintsMatch=true: on_disk=%q installed=%q",
+			status.OnDiskFingerprint,
+			status.InstalledFingerprint,
+		)
 	}
+
 	if !strings.Contains(strings.Join(runner.calls[0].args, " "), CACommonName) {
 		t.Fatalf("security argv must include common name: %v", runner.calls)
 	}
@@ -105,7 +114,14 @@ func TestDarwinStatusNotFoundReportsAbsentWithoutError(t *testing.T) {
 
 	runner := &fakeDarwinRunner{
 		responses: map[string][]runnerResponse{
-			securityPath: {{output: []byte("SecKeychainSearchCopyNext: The specified item could not be found in the keychain."), err: errors.New("exit status 44")}},
+			securityPath: {
+				{
+					output: []byte(
+						"SecKeychainSearchCopyNext: The specified item could not be found in the keychain.",
+					),
+					err: errors.New("exit status 44"),
+				},
+			},
 		},
 	}
 	reg := darwinRegistry{
@@ -119,12 +135,15 @@ func TestDarwinStatusNotFoundReportsAbsentWithoutError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
+
 	if status.Installed {
 		t.Fatalf("expected Installed=false; got %#v", status)
 	}
+
 	if status.OnDiskFingerprint.IsZero() {
 		t.Fatalf("expected on-disk fingerprint populated when file exists")
 	}
+
 	if !status.InstalledFingerprint.IsZero() {
 		t.Fatalf("expected installed fingerprint empty when not installed")
 	}
@@ -142,7 +161,14 @@ func TestDarwinInstallSendsAddTrustedCertViaSudo(t *testing.T) {
 	runner := &fakeDarwinRunner{
 		responses: map[string][]runnerResponse{
 			// First call: Status() -- security says not installed.
-			securityPath: {{output: []byte("SecKeychainSearchCopyNext: The specified item could not be found in the keychain."), err: errors.New("exit status 44")}},
+			securityPath: {
+				{
+					output: []byte(
+						"SecKeychainSearchCopyNext: The specified item could not be found in the keychain.",
+					),
+					err: errors.New("exit status 44"),
+				},
+			},
 			// Second call: sudo add-trusted-cert succeeds.
 			sudoPath: {{output: []byte(""), err: nil}},
 		},
@@ -157,15 +183,28 @@ func TestDarwinInstallSendsAddTrustedCertViaSudo(t *testing.T) {
 	if err := reg.Install(certPath); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
+
 	if len(runner.calls) < 2 {
 		t.Fatalf("expected at least 2 calls; got %d", len(runner.calls))
 	}
+
 	last := runner.calls[len(runner.calls)-1]
 	if last.binary != sudoPath {
 		t.Fatalf("last call binary = %q, want %q", last.binary, sudoPath)
 	}
-	wantSubstrings := []string{securityPath, "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", certPath}
+
+	wantSubstrings := []string{
+		securityPath,
+		"add-trusted-cert",
+		"-d",
+		"-r",
+		"trustRoot",
+		"-k",
+		"/Library/Keychains/System.keychain",
+		certPath,
+	}
 	joined := strings.Join(last.args, " ")
+
 	for _, want := range wantSubstrings {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("install argv missing %q: %s", want, joined)
@@ -209,15 +248,25 @@ func TestDarwinUninstallSendsDeleteCertificateViaSudo(t *testing.T) {
 	if err := reg.Uninstall(); err != nil {
 		t.Fatalf("Uninstall: %v", err)
 	}
+
 	if len(runner.calls) != 1 {
 		t.Fatalf("expected 1 call; got %d", len(runner.calls))
 	}
+
 	call := runner.calls[0]
 	if call.binary != sudoPath {
 		t.Fatalf("binary = %q, want %q", call.binary, sudoPath)
 	}
-	wantSubstrings := []string{securityPath, "delete-certificate", "-c", CACommonName, "/Library/Keychains/System.keychain"}
+
+	wantSubstrings := []string{
+		securityPath,
+		"delete-certificate",
+		"-c",
+		CACommonName,
+		"/Library/Keychains/System.keychain",
+	}
 	joined := strings.Join(call.args, " ")
+
 	for _, want := range wantSubstrings {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("uninstall argv missing %q: %s", want, joined)
@@ -231,7 +280,12 @@ func TestDarwinUninstallSendsDeleteCertificateViaSudo(t *testing.T) {
 func TestDarwinUninstallTreatsNotFoundAsSuccess(t *testing.T) {
 	runner := &fakeDarwinRunner{
 		responses: map[string][]runnerResponse{
-			sudoPath: {{output: []byte("Could not be found in the keychain."), err: errors.New("exit status 44")}},
+			sudoPath: {
+				{
+					output: []byte("Could not be found in the keychain."),
+					err:    errors.New("exit status 44"),
+				},
+			},
 		},
 	}
 	reg := darwinRegistry{

@@ -26,9 +26,11 @@ func TestControlServerRebindRoutesToClosure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RebindDaemon: %v", err)
 	}
+
 	if !called {
 		t.Fatal("rebind closure was not called")
 	}
+
 	if resp.GetNewPid() != 4242 {
 		t.Fatalf("NewPid = %d, want 4242", resp.GetNewPid())
 	}

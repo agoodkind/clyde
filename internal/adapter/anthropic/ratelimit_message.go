@@ -36,13 +36,16 @@ func FormatRateLimitMessage(h http.Header) string {
 		if !earliest.IsZero() {
 			suffix = " · resets " + formatResetTime(earliest, clock.Now())
 		}
+
 		if overageDisabled == "out_of_credits" {
 			return "You're out of extra usage" + suffix
 		}
+
 		return "You've hit your limit" + suffix
 	}
 
 	limit := limitNameForClaim(claim)
+
 	return "You've hit your " + limit + resetMsg
 }
 
@@ -67,10 +70,12 @@ func parseUnix(s string) time.Time {
 	if s == "" {
 		return time.Time{}
 	}
+
 	secs, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
 	if err != nil || secs <= 0 {
 		return time.Time{}
 	}
+
 	return time.Unix(secs, 0)
 }
 
@@ -95,6 +100,7 @@ func formatResetTime(t, now time.Time) string {
 	if location == nil {
 		location = time.UTC
 	}
+
 	local := t.In(location)
 	zone, _ := local.Zone()
 
@@ -111,10 +117,12 @@ func formatResetTime(t, now time.Time) string {
 		if local.Year() != now.Year() {
 			dateFmt = "Jan 2 2006"
 		}
+
 		out := local.Format(dateFmt + ", " + timeFmt)
 		if zone != "" {
 			out += fmt.Sprintf(" (%s)", zone)
 		}
+
 		return out
 	}
 
@@ -122,5 +130,6 @@ func formatResetTime(t, now time.Time) string {
 	if zone != "" {
 		out += fmt.Sprintf(" (%s)", zone)
 	}
+
 	return out
 }

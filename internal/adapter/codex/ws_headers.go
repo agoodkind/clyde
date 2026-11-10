@@ -54,49 +54,62 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 	if token := strings.TrimSpace(cfg.Token); token != "" {
 		header.Set("Authorization", "Bearer "+token)
 	}
+
 	conversationID := strings.TrimSpace(cfg.ConversationID)
 	clientRequestID := conversationID
 	if clientRequestID == "" {
 		clientRequestID = strings.TrimSpace(cfg.RequestID)
 	}
+
 	if clientRequestID != "" {
 		header.Set("X-Client-Request-Id", clientRequestID)
 	}
+
 	for key, values := range clydeingress.HTTPHeaders(cfg.Correlation) {
 		for _, value := range values {
 			header.Add(key, value)
 		}
 	}
+
 	if conversationID != "" {
 		header.Set("Session_id", conversationID)
 	}
+
 	if installationID := strings.TrimSpace(cfg.InstallationID); installationID != "" {
 		header.Set(CodexInstallationIDHeader, installationID)
 	}
+
 	windowID := strings.TrimSpace(cfg.WindowID)
 	if windowID == "" {
 		windowID = WindowID(conversationID)
 	}
+
 	if windowID != "" {
 		header.Set(WindowIDHeader, windowID)
 	}
+
 	betaFeatures, _ := wireflags.Suppress(strings.TrimSpace(cfg.BetaFeatures), cfg.StripWireFlags)
 	if betaFeatures != "" {
 		header.Set(CodexBetaFeaturesHeader, betaFeatures)
 	}
+
 	if turnState := cfg.TurnState.Value(); turnState != "" {
 		header.Set(CodexTurnStateHeader, turnState)
 	}
+
 	if turnMetadata := strings.TrimSpace(cfg.TurnMetadata); turnMetadata != "" {
 		header.Set(CodexTurnMetadataHeader, turnMetadata)
 	}
+
 	if cfg.IncludeTimingMetrics {
 		header.Set(CodexTimingMetricsHeader, "true")
 	}
+
 	openAIBeta := strings.TrimSpace(cfg.OpenAIBeta)
 	if openAIBeta == "" {
 		openAIBeta = responsesWebsocketsV2BetaHeaderValue
 	}
+
 	// Suppressing the responses-websocket upgrade token breaks the WS
 	// handshake, so the config doc warns operators not to list it. On the
 	// HTTP path this header is deleted downstream, making suppression there a
@@ -105,18 +118,22 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 	if openAIBeta != "" {
 		header.Set(openAIBetaHeader, openAIBeta)
 	}
+
 	originator := strings.TrimSpace(cfg.Originator)
 	if originator == "" {
 		originator = CodexOriginatorValue
 	}
+
 	header.Set(CodexOriginatorHeader, originator)
 	userAgent := strings.TrimSpace(cfg.UserAgent)
 	if userAgent == "" {
 		userAgent = UserAgent()
 	}
+
 	header.Set("User-Agent", userAgent)
 	if attestation := strings.TrimSpace(cfg.Attestation); attestation != "" {
 		header.Set(codexAttestationHeader, attestation)
 	}
+
 	return header
 }

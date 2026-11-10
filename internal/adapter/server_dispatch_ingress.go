@@ -21,7 +21,15 @@ import (
 // logChatResolveFailed records a model lookup failure with vendor
 // ingress context. Vendor-specific log attrs come back through the
 // registered IngressContract so the dispatcher carries no Cursor type.
-func (s *Server) logChatResolveFailed(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, ingressCtx ingresscontract.IngressContext, ingress ingresscontract.IngressContract, err error) {
+func (s *Server) logChatResolveFailed(
+	ctx context.Context,
+	corr correlation.Context,
+	reqID string,
+	req ChatRequest,
+	ingressCtx ingresscontract.IngressContext,
+	ingress ingresscontract.IngressContract,
+	err error,
+) {
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("model", req.Model),
@@ -29,13 +37,34 @@ func (s *Server) logChatResolveFailed(ctx context.Context, corr correlation.Cont
 	}
 	attrs = append(attrs, ingress.LogAttrs(ingressCtx, req.Model, nil)...)
 	attrs = append(attrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelWarn, "adapter.model.resolve_failed", append([]slog.Attr{slog.String("concern",
+	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(
+		ctx,
+		slog.LevelWarn,
+		"adapter.model.resolve_failed",
+		append(
+			[]slog.Attr{
+				slog.String(
+					"concern",
 
-		// logChatResolved records the successful resolution of a chat alias.
-		"adapter.models.resolve")}, attrs...)...)
+					// logChatResolved records the successful resolution of a chat alias.
+					"adapter.models.resolve",
+				),
+			},
+			attrs...,
+		)...,
+	)
 }
 
-func (s *Server) logChatResolved(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, ingressCtx ingresscontract.IngressContext, ingress ingresscontract.IngressContract, resolved *adapterresolver.ResolvedRequest, effort string) {
+func (s *Server) logChatResolved(
+	ctx context.Context,
+	corr correlation.Context,
+	reqID string,
+	req ChatRequest,
+	ingressCtx ingresscontract.IngressContext,
+	ingress ingresscontract.IngressContract,
+	resolved *adapterresolver.ResolvedRequest,
+	effort string,
+) {
 	resolveAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
@@ -47,21 +76,48 @@ func (s *Server) logChatResolved(ctx context.Context, corr correlation.Context, 
 	}
 	resolveAttrs = append(resolveAttrs, ingress.LogAttrs(ingressCtx, req.Model, nil)...)
 	resolveAttrs = append(resolveAttrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelInfo, "adapter.model.resolved", append([]slog.Attr{slog.String("concern",
+	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.model.resolved",
+		append(
+			[]slog.Attr{
+				slog.String(
+					"concern",
 
-		// logResolverOutcome emits the typed-resolver shadow event and stamps
-		// request id and correlation onto the resolved request when it succeeded.
-		"adapter.models.resolve")}, resolveAttrs...)...)
+					// logResolverOutcome emits the typed-resolver shadow event and stamps
+					// request id and correlation onto the resolved request when it succeeded.
+					"adapter.models.resolve",
+				),
+			},
+			resolveAttrs...,
+		)...,
+	)
 }
 
-func (s *Server) logResolverOutcome(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, ingressCtx ingresscontract.IngressContext, resolvedReq *adapterresolver.ResolvedRequest, resolverErr error) {
+func (s *Server) logResolverOutcome(
+	ctx context.Context,
+	corr correlation.Context,
+	reqID string,
+	req ChatRequest,
+	ingressCtx ingresscontract.IngressContext,
+	resolvedReq *adapterresolver.ResolvedRequest,
+	resolverErr error,
+) {
 	if resolverErr != nil {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelDebug, "adapter.resolver.unresolved", slog.String("concern", "adapter.models.resolve"), slog.String("request_id", reqID),
+		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(
+			ctx,
+			slog.LevelDebug,
+			"adapter.resolver.unresolved",
+			slog.String("concern", "adapter.models.resolve"),
+			slog.String("request_id", reqID),
 			slog.String("alias", req.Model),
 			slog.String("err", resolverErr.Error()),
 		)
+
 		return
 	}
+
 	resolvedReq.RequestID = reqID
 	resolvedReq.Correlation = corr
 	resolverAttrs := []slog.Attr{
@@ -80,11 +136,25 @@ func (s *Server) logResolverOutcome(ctx context.Context, corr correlation.Contex
 		slog.Int("mcp_tool_count", len(ingressCtx.MCPToolNames)),
 	}
 	resolverAttrs = append(resolverAttrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelInfo, "adapter.resolver.resolved", append([]slog.Attr{slog.String("concern", "adapter.models.resolve")}, resolverAttrs...)...)
+	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.resolver.resolved",
+		append([]slog.Attr{slog.String("concern", "adapter.models.resolve")}, resolverAttrs...)...,
+	)
 }
 
 // logChatReceived records the dispatch-time view of a chat request.
-func (s *Server) logChatReceived(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, ingressCtx ingresscontract.IngressContext, ingress ingresscontract.IngressContract, resolved *adapterresolver.ResolvedRequest, toolNames []string) {
+func (s *Server) logChatReceived(
+	ctx context.Context,
+	corr correlation.Context,
+	reqID string,
+	req ChatRequest,
+	ingressCtx ingresscontract.IngressContext,
+	ingress ingresscontract.IngressContract,
+	resolved *adapterresolver.ResolvedRequest,
+	toolNames []string,
+) {
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
@@ -98,27 +168,62 @@ func (s *Server) logChatReceived(ctx context.Context, corr correlation.Context, 
 	attrs = append(attrs, ingress.LogAttrs(ingressCtx, req.Model, toolNames)...)
 	attrs = appendFacetSlogAttrs(attrs, ingress.RequestFacets(ingressCtx))
 	attrs = append(attrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.received", append([]slog.Attr{slog.String("concern",
+	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.chat.received",
+		append(
+			[]slog.Attr{
+				slog.String(
+					"concern",
 
-		// logSubagentMissingGenerationID flags a vendor subagent request that
-		// arrived without the expected generation_id metadata.
-		"adapter.chat.dispatch")}, attrs...)...)
+					// logSubagentMissingGenerationID flags a vendor subagent request that
+					// arrived without the expected generation_id metadata.
+					"adapter.chat.dispatch",
+				),
+			},
+			attrs...,
+		)...,
+	)
 }
 
-func (s *Server) logSubagentMissingGenerationID(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, ingressCtx ingresscontract.IngressContext, ingress ingresscontract.IngressContract, discovery RequestDiscovery) {
+func (s *Server) logSubagentMissingGenerationID(
+	ctx context.Context,
+	r *http.Request,
+	corr correlation.Context,
+	reqID string,
+	ingressCtx ingresscontract.IngressContext,
+	ingress ingresscontract.IngressContract,
+	discovery RequestDiscovery,
+) {
 	missingAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.Bool("subagent_tool_available", ingressCtx.HasSubagentTool),
 		slog.Any("metadata_keys", discovery.MetadataKeys),
 		slog.Any("header_names", HeaderNames(r.Header)),
 	}
-	missingAttrs = append(missingAttrs, ingress.LogAttrs(ingressCtx, "", ingressCtx.RawToolNames)...)
+	missingAttrs = append(
+		missingAttrs,
+		ingress.LogAttrs(ingressCtx, "", ingressCtx.RawToolNames)...,
+	)
 	missingAttrs = append(missingAttrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsCursor).LogAttrs(ctx, slog.LevelInfo, "adapter.cursor.generation_id_missing", append([]slog.Attr{slog.String("concern",
+	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsCursor).LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.cursor.generation_id_missing",
+		append(
+			[]slog.Attr{
+				slog.String(
+					"concern",
 
-		// logChatForkDetected records the per-daemon branch fork event when
-		// the registered IngressContract reports one for this request.
-		"adapter.models.cursor")}, missingAttrs...)...)
+					// logChatForkDetected records the per-daemon branch fork event when
+					// the registered IngressContract reports one for this request.
+					"adapter.models.cursor",
+				),
+			},
+			missingAttrs...,
+		)...,
+	)
 }
 
 // resolvedModelString returns the resolved wire model id, empty-safe.
@@ -126,6 +231,7 @@ func resolvedModelString(resolved *adapterresolver.ResolvedRequest) string {
 	if resolved == nil {
 		return ""
 	}
+
 	return resolved.Model
 }
 
@@ -135,13 +241,19 @@ func resolvedContextWindow(resolved *adapterresolver.ResolvedRequest) int {
 	if resolved == nil {
 		return 0
 	}
+
 	return resolved.ContextBudget.InputTokens
 }
 
-func (s *Server) logChatForkDetected(ctx context.Context, corr correlation.Context, identity ingresscontract.ChatIdentityPrimitive) {
+func (s *Server) logChatForkDetected(
+	ctx context.Context,
+	corr correlation.Context,
+	identity ingresscontract.ChatIdentityPrimitive,
+) {
 	if !identity.Fork.Detected {
 		return
 	}
+
 	attrs := []slog.Attr{
 		slog.String("chat_root_key", identity.ChatRootKey),
 		slog.String("chat_branch_key", identity.ChatBranchKey),
@@ -151,5 +263,10 @@ func (s *Server) logChatForkDetected(ctx context.Context, corr correlation.Conte
 		slog.Int("common_prefix_len", identity.Fork.CommonPrefixLen),
 	}
 	attrs = append(attrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.fork_detected", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...)
+	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.chat.fork_detected",
+		append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...,
+	)
 }

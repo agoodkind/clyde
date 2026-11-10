@@ -29,6 +29,7 @@ func TestHookRejectsCompactionBeforeProviderMatching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse: %v", err)
 	}
+
 	if match.Matched {
 		t.Fatal("response action matched compaction")
 	}

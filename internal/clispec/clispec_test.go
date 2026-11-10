@@ -30,6 +30,7 @@ func TestNameSpellings(t *testing.T) {
 	if got := name.CLI(); got != "get-conversation" {
 		t.Errorf("CLI(): got %q, want %q", got, "get-conversation")
 	}
+
 	if got := name.MCP(); got != "clyde_get_conversation" {
 		t.Errorf("MCP(): got %q, want %q", got, "clyde_get_conversation")
 	}
@@ -43,10 +44,12 @@ func TestCLISinkWriteFile(t *testing.T) {
 	if err := sink.WriteFile(path, []byte("body")); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+
 	if string(got) != "body" {
 		t.Errorf("file body: got %q, want %q", got, "body")
 	}
@@ -62,6 +65,7 @@ func TestMCPSinkCollects(t *testing.T) {
 	if got := sink.String(); got != "abcd" {
 		t.Errorf("String(): got %q, want %q", got, "abcd")
 	}
+
 	if sink.Surface() != SurfaceMCP {
 		t.Errorf("Surface(): got %d, want SurfaceMCP", sink.Surface())
 	}
@@ -114,9 +118,23 @@ func probeOp() Operation[probeInput, probeInput] {
 		Params: []Param[probeInput]{
 			IntParam("count", "count", 7, func(in *probeInput, v int) { in.Count = v }),
 			BoolParam("on", "on", false, func(in *probeInput, v bool) { in.On = v }),
-			EnumParam("mode", "mode", "alpha", []string{"alpha", "beta"}, func(in *probeInput, v string) { in.Mode = v }),
+			EnumParam(
+				"mode",
+				"mode",
+				"alpha",
+				[]string{"alpha", "beta"},
+				func(in *probeInput, v string) { in.Mode = v },
+			),
 		},
-		New:      func() probeInput { return probeInput{ID: "", Count: 7, On: false, Mode: "alpha", Surface: SurfaceCLI} },
+		New: func() probeInput {
+			return probeInput{
+				ID:      "",
+				Count:   7,
+				On:      false,
+				Mode:    "alpha",
+				Surface: SurfaceCLI,
+			}
+		},
 		Children: nil,
 		Prepare:  func(in probeInput) (probeInput, error) { return in, nil },
 		Run:      nil,
@@ -135,7 +153,14 @@ func stringListProbeOp() Operation[stringListProbeInput, stringListProbeInput] {
 		Short:      "string-list probe",
 		Args:       nil,
 		Params: []Param[stringListProbeInput]{
-			StringSliceParam("items", "items", nil, func(in *stringListProbeInput, v []string) { in.Items = append([]string(nil), v...) }),
+			StringSliceParam(
+				"items",
+				"items",
+				nil,
+				func(in *stringListProbeInput, v []string) {
+					in.Items = append([]string(nil), v...)
+				},
+			),
 		},
 		New:      func() stringListProbeInput { return stringListProbeInput{Items: nil} },
 		Children: nil,
@@ -155,6 +180,7 @@ func formatProbe(in probePayload) string {
 	if in.On {
 		onText = "on"
 	}
+
 	return in.ID + ":" + itoa(in.Count) + ":" + onText + ":" + in.Mode
 }
 
@@ -162,18 +188,23 @@ func itoa(n int) string {
 	if n == 0 {
 		return "0"
 	}
+
 	neg := n < 0
 	if neg {
 		n = -n
 	}
+
 	var digits []byte
+
 	for n > 0 {
 		digits = append([]byte{byte('0' + n%10)}, digits...)
 		n /= 10
 	}
+
 	if neg {
 		return "-" + string(digits)
 	}
+
 	return string(digits)
 }
 
@@ -187,6 +218,7 @@ func rootWithChild(child *cobra.Command) *cobra.Command {
 	root := &cobra.Command{Use: "root"}
 	output.PersistentFlag(root)
 	root.AddCommand(child)
+
 	return root
 }
 
@@ -198,6 +230,7 @@ func TestCobraRenderBindsAllKinds(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
+
 	if got := out.String(); got != "abc:12:on:beta" {
 		t.Errorf("cli output: got %q, want %q", got, "abc:12:on:beta")
 	}
@@ -211,6 +244,7 @@ func TestCobraRenderUsesDefaults(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
+
 	if got := out.String(); got != "abc:7:off:alpha" {
 		t.Errorf("cli output: got %q, want %q", got, "abc:7:off:alpha")
 	}
@@ -224,6 +258,7 @@ func TestCobraRenderBindsStringSliceParam(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
+
 	if got := out.String(); got != "alpha,beta,gamma" {
 		t.Fatalf("string list cli output: got %q, want %q", got, "alpha,beta,gamma")
 	}
@@ -237,10 +272,12 @@ func TestCobraRenderJSONUsesStructuredPayload(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
+
 	var got map[string]json.RawMessage
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out.String())
 	}
+
 	if _, ok := got["_meta"]; !ok {
 		t.Fatalf("json output missing _meta: %s", out.String())
 	}
@@ -285,10 +322,12 @@ func TestCobraRenderJSONUsesStructuredPayloadForInlineArtifact(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
+
 	var got map[string]json.RawMessage
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out.String())
 	}
+
 	if _, ok := got["_meta"]; !ok {
 		t.Fatalf("json output missing _meta: %s", out.String())
 	}
@@ -296,6 +335,7 @@ func TestCobraRenderJSONUsesStructuredPayloadForInlineArtifact(t *testing.T) {
 
 func TestCopyLineCount(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name string
 		body string
@@ -306,17 +346,21 @@ func TestCopyLineCount(t *testing.T) {
 		{name: "empty", body: "", want: 0},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := copyLineCount([]byte(tc.body)); got != tc.want {
-				t.Errorf("copyLineCount() = %d, want %d", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
+				if got := copyLineCount([]byte(tc.body)); got != tc.want {
+					t.Errorf("copyLineCount() = %d, want %d", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
 func TestBodySizeSummary(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name string
 		body string
@@ -329,19 +373,26 @@ func TestBodySizeSummary(t *testing.T) {
 		{name: "kibibyte", body: strings.Repeat("x", 1024), want: "1 line, 1024 chars, 1.0 KB"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := bodySizeSummary([]byte(tc.body)); got != tc.want {
-				t.Fatalf("bodySizeSummary() = %q, want %q", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
+				if got := bodySizeSummary([]byte(tc.body)); got != tc.want {
+					t.Fatalf("bodySizeSummary() = %q, want %q", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
 func TestWroteConfirmation(t *testing.T) {
 	t.Parallel()
 	path := "/tmp/out.md"
-	got := wroteConfirmation(path, []byte("alpha\nbeta\n"), tokencount.Estimate{Tokenizer: "", Tokens: 0})
+	got := wroteConfirmation(
+		path,
+		[]byte("alpha\nbeta\n"),
+		tokencount.Estimate{Tokenizer: "", Tokens: 0},
+	)
 	want := "wrote: /tmp/out.md (2 lines, 11 chars, 11 B)\n"
 	if got != want {
 		t.Fatalf("wroteConfirmation() = %q, want %q", got, want)
@@ -351,10 +402,14 @@ func TestWroteConfirmation(t *testing.T) {
 func TestWroteConfirmationIncludesTokens(t *testing.T) {
 	t.Parallel()
 	path := "/tmp/out.md"
-	got := wroteConfirmation(path, []byte("alpha\nbeta\n"), tokencount.Estimate{
-		Tokenizer: "o200k x 1.3",
-		Tokens:    42,
-	})
+	got := wroteConfirmation(
+		path,
+		[]byte("alpha\nbeta\n"),
+		tokencount.Estimate{
+			Tokenizer: "o200k x 1.3",
+			Tokens:    42,
+		},
+	)
 	want := "wrote: /tmp/out.md (2 lines, 11 chars, 11 B, 42 tokens (o200k x 1.3))\n"
 	if got != want {
 		t.Fatalf("wroteConfirmation() = %q, want %q", got, want)
@@ -363,10 +418,13 @@ func TestWroteConfirmationIncludesTokens(t *testing.T) {
 
 func TestCopyConfirmationIncludesTokens(t *testing.T) {
 	t.Parallel()
-	got := copyConfirmation([]byte("alpha\nbeta\n"), tokencount.Estimate{
-		Tokenizer: "o200k",
-		Tokens:    7,
-	})
+	got := copyConfirmation(
+		[]byte("alpha\nbeta\n"),
+		tokencount.Estimate{
+			Tokenizer: "o200k",
+			Tokens:    7,
+		},
+	)
 	want := "copied 2 lines, 11 chars, 11 B, 7 tokens (o200k)\n"
 	if got != want {
 		t.Fatalf("copyConfirmation() = %q, want %q", got, want)
@@ -407,12 +465,15 @@ func TestRenderCopyResultCopiesArtifactBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	if !bytes.Equal(copied, body) {
 		t.Fatalf("copied body = %q, want %q", string(copied), string(body))
 	}
+
 	if got := out.String(); got != "human-text" {
 		t.Fatalf("normal output = %q, want %q", got, "human-text")
 	}
+
 	if got := errOut.String(); got != "copied 2 lines, 11 chars, 11 B\n" {
 		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines, 11 chars, 11 B\n")
 	}
@@ -423,21 +484,36 @@ func TestRenderCopyResultCopiesArtifactBody(t *testing.T) {
 // trace-id header on stderr, so JSON behavior is unchanged.
 func TestRenderJSONResultWritesNoHeaderToErrOut(t *testing.T) {
 	t.Parallel()
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:  correlation.SpanID("2222222222222222"),
-	})
+	ctx := correlation.WithContext(
+		context.Background(),
+		correlation.Context{
+			TraceID: correlation.TraceID("11111111111111111111111111111111"),
+			SpanID:  correlation.SpanID("2222222222222222"),
+		},
+	)
 	var out, errOut bytes.Buffer
 	result := valueResult{
 		Payload: probePayload{ID: "json", Count: 1, On: false, Mode: "alpha"},
 		Text:    "value text",
 	}
-	if err := renderCLIResult(ctx, &out, &errOut, output.FormatJSON, resultKindValue, result); err != nil {
+	if err := renderCLIResult(
+		ctx,
+		&out,
+		&errOut,
+		output.FormatJSON,
+		resultKindValue,
+		result,
+	); err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	if got := errOut.String(); got != "" {
-		t.Fatalf("stderr = %q, want empty (JSON keeps _meta in the document, no stderr header)", got)
+		t.Fatalf(
+			"stderr = %q, want empty (JSON keeps _meta in the document, no stderr header)",
+			got,
+		)
 	}
+
 	if !strings.Contains(out.String(), "_meta") {
 		t.Fatalf("stdout = %q, want JSON containing _meta", out.String())
 	}
@@ -473,12 +549,15 @@ func TestRenderCopyOnlyArtifactWritesNoFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	if got := out.String(); got != "" {
 		t.Fatalf("stdout = %q, want empty", got)
 	}
+
 	if !bytes.Equal(copied, []byte("a\nb\n")) {
 		t.Fatalf("copied body = %q, want %q", string(copied), "a\nb\n")
 	}
+
 	if got := errOut.String(); got != "copied 2 lines, 4 chars, 4 B\n" {
 		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines, 4 chars, 4 B\n")
 	}
@@ -512,12 +591,15 @@ func TestRenderCopyResultCopiesValueText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	if got := string(copied); got != "value text" {
 		t.Fatalf("copied value = %q, want %q", got, "value text")
 	}
+
 	if got := out.String(); got != "value text" {
 		t.Fatalf("normal output = %q, want %q", got, "value text")
 	}
+
 	if got := errOut.String(); got != "copied 1 line, 10 chars, 10 B\n" {
 		t.Fatalf("copy confirmation = %q, want %q", got, "copied 1 line, 10 chars, 10 B\n")
 	}
@@ -552,16 +634,20 @@ func TestRenderCopyResultJSONCopiesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	var copiedDoc map[string]json.RawMessage
 	if err := json.Unmarshal(copied, &copiedDoc); err != nil {
 		t.Fatalf("copied bytes are not JSON: %v\n%s", err, string(copied))
 	}
+
 	if string(copied) == "value text" {
 		t.Fatal("copied the text body, want the JSON document")
 	}
+
 	if got := out.String(); got != string(copied) {
 		t.Fatalf("copied JSON %q does not match rendered stdout %q", string(copied), got)
 	}
+
 	wantConfirm := "copied " + bodySizeSummary(copied) + "\n"
 	if got := errOut.String(); got != wantConfirm {
 		t.Fatalf("copy confirmation = %q, want %q", got, wantConfirm)
@@ -602,12 +688,15 @@ func TestRenderCopyResultAdditiveWithStdout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	if got := out.String(); got != string(body) {
 		t.Fatalf("stdout = %q, want raw body %q", got, string(body))
 	}
+
 	if !bytes.Equal(copied, body) {
 		t.Fatalf("copied body = %q, want %q", string(copied), string(body))
 	}
+
 	if got := errOut.String(); got != "copied 3 lines, 18 chars, 18 B\n" {
 		t.Fatalf("copy confirmation = %q, want %q", got, "copied 3 lines, 18 chars, 18 B\n")
 	}
@@ -644,9 +733,11 @@ func TestRenderCopyResultSurfacesClipboardError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected clipboard error to surface")
 	}
+
 	if got := out.String(); got != "data\n" {
 		t.Fatalf("stdout = %q, want body written before copy failure", got)
 	}
+
 	if got := errOut.String(); got != "" {
 		t.Fatalf("no confirmation should print on copy failure, got %q", got)
 	}
@@ -684,9 +775,11 @@ func TestRenderCopyResultIncludesTokenizer(t *testing.T) {
 	); err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	if !bytes.Equal(copied, body) {
 		t.Fatalf("copied body = %q, want %q", string(copied), string(body))
 	}
+
 	want := copyConfirmation(body, wantEstimate)
 	if got := errOut.String(); got != want {
 		t.Fatalf("copy confirmation = %q, want %q", got, want)
@@ -725,13 +818,16 @@ func TestRenderCopyJSONRecountsCopiedBytes(t *testing.T) {
 	); err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	if bytes.Equal(copied, body) {
 		t.Fatal("copied the transcript body, want the JSON document")
 	}
+
 	want := copyConfirmation(copied, spec.Count(string(copied)))
 	if got := errOut.String(); got != want {
 		t.Fatalf("copy confirmation = %q, want %q", got, want)
 	}
+
 	transcriptWant := copyConfirmation(body, spec.Count(string(body)))
 	if errOut.String() == transcriptWant {
 		t.Fatal("copy confirmation used transcript tokens, want JSON document tokens")
@@ -751,16 +847,26 @@ func TestRenderCLIArtifactWriteIncludesSize(t *testing.T) {
 		Text:        wroteConfirmation(path, body, tokencount.Estimate{Tokenizer: "", Tokens: 0}),
 		InlineText:  string(body),
 	}
-	if err := renderCLIResult(context.Background(), &out, &errOut, output.FormatText, resultKindArtifact, result); err != nil {
+	if err := renderCLIResult(
+		context.Background(),
+		&out,
+		&errOut,
+		output.FormatText,
+		resultKindArtifact,
+		result,
+	); err != nil {
 		t.Fatalf("renderCLIResult: %v", err)
 	}
+
 	gotBody, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read export file: %v", err)
 	}
+
 	if !bytes.Equal(gotBody, body) {
 		t.Fatalf("export file body = %q, want %q", string(gotBody), string(body))
 	}
+
 	want := "wrote: " + path + " (2 lines, 11 chars, 11 B)\n"
 	if got := out.String(); got != want {
 		t.Fatalf("write confirmation = %q, want %q", got, want)
@@ -788,7 +894,11 @@ func TestMitmBaselineSeedCommandRejectsMissingUpstream(t *testing.T) {
 	if err := root.Execute(); err == nil {
 		t.Fatal("expected error for missing upstream")
 	} else if !strings.Contains(err.Error(), "upstream is required") {
-		t.Fatalf("missing upstream error = %q, want substring %q", err.Error(), "upstream is required")
+		t.Fatalf(
+			"missing upstream error = %q, want substring %q",
+			err.Error(),
+			"upstream is required",
+		)
 	}
 }
 
@@ -806,6 +916,7 @@ func TestMCPHandlerBindsAndIsLenient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
 	text := textOf(t, result)
 	if text != "xyz:3:on:alpha" {
 		t.Errorf("mcp output: got %q, want %q", text, "xyz:3:on:alpha")
@@ -821,17 +932,21 @@ func TestMCPHandlerStructuredContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
 	if result.StructuredContent == nil {
 		t.Fatal("structured content missing")
 	}
+
 	raw, ok := result.StructuredContent.(json.RawMessage)
 	if !ok {
 		t.Fatalf("structured content type = %T, want json.RawMessage", result.StructuredContent)
 	}
+
 	var got map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("unmarshal structured content: %v\n%s", err, string(raw))
 	}
+
 	if _, ok := got["_meta"]; !ok {
 		t.Fatalf("structured content missing _meta: %s", string(raw))
 	}
@@ -840,24 +955,43 @@ func TestMCPHandlerStructuredContent(t *testing.T) {
 func TestSearchStructuredSurfacesLabelSemanticFreshness(t *testing.T) {
 	t.Parallel()
 	payload := searchConversationsOutputFromDomain(conv.SearchConversationsResult{
-		Freshness: conv.SearchFreshness{Manifest: 7, Needed: 2, Embedded: 5, Pending: 2, LastSyncUnix: 123},
+		Freshness: conv.SearchFreshness{
+			Manifest:     7,
+			Needed:       2,
+			Embedded:     5,
+			Pending:      2,
+			LastSyncUnix: 123,
+		},
 	})
 	result := valueResult{Payload: payload, Text: "search result"}
 
 	var terminal bytes.Buffer
-	if err := renderCLIResult(context.Background(), &terminal, &bytes.Buffer{}, output.FormatJSON, resultKindValue, result); err != nil {
+	if err := renderCLIResult(
+		context.Background(),
+		&terminal,
+		&bytes.Buffer{},
+		output.FormatJSON,
+		resultKindValue,
+		result,
+	); err != nil {
 		t.Fatal(err)
 	}
+
 	assertSemanticFreshnessField(t, terminal.Bytes(), "terminal")
 
 	mcpResult, err := renderMCPResult(context.Background(), resultKindValue, result)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	raw, ok := mcpResult.StructuredContent.(json.RawMessage)
 	if !ok {
-		t.Fatalf("MCP structured content type = %T, want json.RawMessage", mcpResult.StructuredContent)
+		t.Fatalf(
+			"MCP structured content type = %T, want json.RawMessage",
+			mcpResult.StructuredContent,
+		)
 	}
+
 	assertSemanticFreshnessField(t, raw, "MCP")
 }
 
@@ -866,6 +1000,7 @@ func assertSemanticFreshnessField(t *testing.T, body []byte, surface string) {
 	if !bytes.Contains(body, []byte(`"semantic_freshness":{"manifest":7`)) {
 		t.Fatalf("%s output missing semantic freshness: %s", surface, body)
 	}
+
 	if bytes.Contains(body, []byte(`"freshness":`)) {
 		t.Fatalf("%s output retained generic freshness: %s", surface, body)
 	}
@@ -879,13 +1014,17 @@ func TestSearchMCPHandlerMarksEngineRefusalAsToolError(t *testing.T) {
 			codes.InvalidArgument,
 			"conversation_search_source_refused: conversation search source refused the query",
 		)
+
 		return nil, fmt.Errorf("search conversations: daemon rpc: %w", cause)
 	}
 	_, handler := operation.mcpTool()
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:  correlation.SpanID("2222222222222222"),
-	})
+	ctx := correlation.WithContext(
+		context.Background(),
+		correlation.Context{
+			TraceID: correlation.TraceID("11111111111111111111111111111111"),
+			SpanID:  correlation.SpanID("2222222222222222"),
+		},
+	)
 	request := mcp.CallToolRequest{}
 	request.Params.Arguments = map[string]any{"query": "oversized input"}
 
@@ -893,10 +1032,13 @@ func TestSearchMCPHandlerMarksEngineRefusalAsToolError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
 	if !result.IsError {
 		t.Fatal("IsError = false, want true")
 	}
+
 	text := textOf(t, result)
+
 	for _, expected := range []string{
 		"InvalidArgument",
 		"conversation_search_source_refused",
@@ -906,9 +1048,11 @@ func TestSearchMCPHandlerMarksEngineRefusalAsToolError(t *testing.T) {
 			t.Fatalf("tool error missing %q: %q", expected, text)
 		}
 	}
+
 	if result.StructuredContent != nil {
 		t.Fatalf("structured content = %T, want nil on a refusal", result.StructuredContent)
 	}
+
 	if strings.Contains(text, `"matches"`) || strings.Contains(text, "No results found") {
 		t.Fatalf("tool error contains an empty-result payload: %q", text)
 	}
@@ -921,19 +1065,25 @@ func TestMCPHandlerMarksResultRenderingFailureAsToolError(t *testing.T) {
 	_, handler := operation.mcpTool()
 	request := mcp.CallToolRequest{}
 	request.Params.Arguments = map[string]any{"the_id": "xyz"}
-	ctx := correlation.WithContext(context.Background(), correlation.Context{
-		TraceID: correlation.TraceID("33333333333333333333333333333333"),
-		SpanID:  correlation.SpanID("4444444444444444"),
-	})
+	ctx := correlation.WithContext(
+		context.Background(),
+		correlation.Context{
+			TraceID: correlation.TraceID("33333333333333333333333333333333"),
+			SpanID:  correlation.SpanID("4444444444444444"),
+		},
+	)
 
 	result, err := handler(ctx, request)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
 	if !result.IsError {
 		t.Fatal("IsError = false, want true")
 	}
+
 	text := textOf(t, result)
+
 	for _, expected := range []string{
 		"declared artifact output but returned value",
 	} {
@@ -948,18 +1098,22 @@ func TestRenderMCPArtifactWritesFileAndPreservesResult(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "claude-probe.txt")
 	body := []byte("export body\n")
-	result, err := renderMCPResult(context.Background(), resultKindArtifact, artifactResult{
-		Payload: exportTranscriptOutput{
-			ConversationID: "claude:probe",
-			Format:         "plain_text",
-			Path:           path,
-			Bytes:          len(body),
+	result, err := renderMCPResult(
+		context.Background(),
+		resultKindArtifact,
+		artifactResult{
+			Payload: exportTranscriptOutput{
+				ConversationID: "claude:probe",
+				Format:         "plain_text",
+				Path:           path,
+				Bytes:          len(body),
+			},
+			Body:        body,
+			DefaultPath: path,
+			Text:        "wrote: " + path + "\n",
+			InlineText:  string(body),
 		},
-		Body:        body,
-		DefaultPath: path,
-		Text:        "wrote: " + path + "\n",
-		InlineText:  string(body),
-	})
+	)
 	if err != nil {
 		t.Fatalf("renderMCPResult: %v", err)
 	}
@@ -968,29 +1122,40 @@ func TestRenderMCPArtifactWritesFileAndPreservesResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read export file: %v", err)
 	}
+
 	if !bytes.Equal(gotBody, body) {
 		t.Fatalf("export file body = %q, want %q", string(gotBody), string(body))
 	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat export file: %v", err)
 	}
+
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("export file permissions = %o, want 600", got)
 	}
+
 	if got := textOf(t, result); got != "wrote: "+path+"\n" {
-		t.Fatalf("mcp text after file write does not match receipt; got text and path: %q, %q", got, path)
+		t.Fatalf(
+			"mcp text after file write does not match receipt; got text and path: %q, %q",
+			got,
+			path,
+		)
 	}
 
 	raw, ok := result.StructuredContent.(json.RawMessage)
 	if !ok {
 		t.Fatalf("structured content type = %T, want json.RawMessage", result.StructuredContent)
 	}
+
 	var got exportTranscriptOutput
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("unmarshal structured content: %v\n%s", err, string(raw))
 	}
-	if got.ConversationID != "claude:probe" || got.Format != "plain_text" || got.Path != path || got.Bytes != len(body) {
+
+	if got.ConversationID != "claude:probe" || got.Format != "plain_text" || got.Path != path ||
+		got.Bytes != len(body) {
 		t.Fatalf("structured export = %#v, want preserved export metadata", got)
 	}
 
@@ -998,31 +1163,40 @@ func TestRenderMCPArtifactWritesFileAndPreservesResult(t *testing.T) {
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatalf("make export file permissive: %v", err)
 	}
-	_, err = renderMCPResult(context.Background(), resultKindArtifact, artifactResult{
-		Payload: exportTranscriptOutput{
-			ConversationID: "claude:probe",
-			Format:         "plain_text",
-			Path:           path,
-			Bytes:          len(replacement),
+
+	_, err = renderMCPResult(
+		context.Background(),
+		resultKindArtifact,
+		artifactResult{
+			Payload: exportTranscriptOutput{
+				ConversationID: "claude:probe",
+				Format:         "plain_text",
+				Path:           path,
+				Bytes:          len(replacement),
+			},
+			Body:        replacement,
+			DefaultPath: path,
+			InlineText:  string(replacement),
 		},
-		Body:        replacement,
-		DefaultPath: path,
-		InlineText:  string(replacement),
-	})
+	)
 	if err != nil {
 		t.Fatalf("render replacement MCP result: %v", err)
 	}
+
 	gotBody, err = os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read replacement export file: %v", err)
 	}
+
 	if !bytes.Equal(gotBody, replacement) {
 		t.Fatalf("replacement export file body = %q, want %q", string(gotBody), string(replacement))
 	}
+
 	info, err = os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat replacement export file: %v", err)
 	}
+
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("replacement export file permissions = %o, want 600", got)
 	}
@@ -1031,15 +1205,20 @@ func TestRenderMCPArtifactWritesFileAndPreservesResult(t *testing.T) {
 func TestRenderMCPArtifactReturnsWriteFailure(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "missing", "export.txt")
-	_, err := renderMCPResult(context.Background(), resultKindArtifact, artifactResult{
-		Payload:     artifactProbePayload{Text: "metadata"},
-		Body:        []byte("body"),
-		DefaultPath: path,
-		InlineText:  "body",
-	})
+	_, err := renderMCPResult(
+		context.Background(),
+		resultKindArtifact,
+		artifactResult{
+			Payload:     artifactProbePayload{Text: "metadata"},
+			Body:        []byte("body"),
+			DefaultPath: path,
+			InlineText:  "body",
+		},
+	)
 	if err == nil {
 		t.Fatal("renderMCPResult succeeded when the artifact file could not be written")
 	}
+
 	if !strings.Contains(err.Error(), path) {
 		t.Fatalf("write error = %q, want path %q", err, path)
 	}
@@ -1054,6 +1233,7 @@ func TestMCPHandlerRequiresPositional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
 	if got := textOf(t, result); got != "the_id is required" {
 		t.Errorf("missing positional: got %q, want %q", got, "the_id is required")
 	}
@@ -1068,6 +1248,7 @@ func TestMCPHandlerBindsStringSliceParam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
 	if got := textOf(t, result); got != "alpha,beta" {
 		t.Fatalf("string list mcp output: got %q, want %q", got, "alpha,beta")
 	}
@@ -1104,11 +1285,17 @@ func TestMCPResultHandlerRejectsTaskOnlyOperationWithoutTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
 	if !result.IsError {
 		t.Fatal("IsError = false, want true")
 	}
+
 	if got := textOf(t, result); got != "task_only_probe requires task-augmented MCP calls" {
-		t.Fatalf("task-only error: got %q, want %q", got, "task_only_probe requires task-augmented MCP calls")
+		t.Fatalf(
+			"task-only error: got %q, want %q",
+			got,
+			"task_only_probe requires task-augmented MCP calls",
+		)
 	}
 }
 
@@ -1126,7 +1313,9 @@ func TestExportDestinationPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get working directory: %v", err)
 	}
+
 	defaultPath := defaultExportOutputPath("claude:probe", conv.ExportFormatMarkdown)
+
 	cases := []struct {
 		name       string
 		outputPath string
@@ -1134,51 +1323,78 @@ func TestExportDestinationPath(t *testing.T) {
 		copy       bool
 		want       string
 	}{
-		{name: "implicit file", outputPath: "", stdout: false, copy: false, want: filepath.Join(workingDirectory, defaultPath)},
-		{name: "explicit file", outputPath: "transcript.md", stdout: false, copy: false, want: filepath.Join(workingDirectory, "transcript.md")},
-		{name: "explicit file with copy", outputPath: "transcript.md", stdout: false, copy: true, want: filepath.Join(workingDirectory, "transcript.md")},
+		{
+			name:       "implicit file",
+			outputPath: "",
+			stdout:     false,
+			copy:       false,
+			want:       filepath.Join(workingDirectory, defaultPath),
+		},
+		{
+			name:       "explicit file",
+			outputPath: "transcript.md",
+			stdout:     false,
+			copy:       false,
+			want:       filepath.Join(workingDirectory, "transcript.md"),
+		},
+		{
+			name:       "explicit file with copy",
+			outputPath: "transcript.md",
+			stdout:     false,
+			copy:       true,
+			want:       filepath.Join(workingDirectory, "transcript.md"),
+		},
 		{name: "stdout", outputPath: "", stdout: true, copy: false, want: ""},
 		{name: "copy only", outputPath: "", stdout: false, copy: true, want: ""},
 		{name: "stdout with copy", outputPath: "", stdout: true, copy: true, want: ""},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			ctx := context.Background()
-			if tc.copy {
-				ctx = withCopy(ctx, true)
-			}
-			payload := exportPayload{
-				ConversationID: "claude:probe",
-				Options: conv.ExportOptions{
-					Format: conv.ExportFormatMarkdown,
-				},
-				OutputPath: tc.outputPath,
-				Stdout:     tc.stdout,
-			}
-			got, err := exportDestinationPath(ctx, payload)
-			if err != nil {
-				t.Fatalf("exportDestinationPath: %v", err)
-			}
-			if got != tc.want {
-				t.Fatalf("exportDestinationPath() = %q, want %q", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				if tc.copy {
+					ctx = withCopy(ctx, true)
+				}
+
+				payload := exportPayload{
+					ConversationID: "claude:probe",
+					Options: conv.ExportOptions{
+						Format: conv.ExportFormatMarkdown,
+					},
+					OutputPath: tc.outputPath,
+					Stdout:     tc.stdout,
+				}
+				got, err := exportDestinationPath(ctx, payload)
+				if err != nil {
+					t.Fatalf("exportDestinationPath: %v", err)
+				}
+
+				if got != tc.want {
+					t.Fatalf("exportDestinationPath() = %q, want %q", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
 func TestExportDestinationPathReturnsInlineForMCP(t *testing.T) {
 	t.Parallel()
 	ctx := withSurface(context.Background(), SurfaceMCP)
-	path, err := exportDestinationPath(ctx, exportPayload{
-		ConversationID: "claude:probe",
-		Options: conv.ExportOptions{
-			Format: conv.ExportFormatPlainText,
+	path, err := exportDestinationPath(
+		ctx,
+		exportPayload{
+			ConversationID: "claude:probe",
+			Options: conv.ExportOptions{
+				Format: conv.ExportFormatPlainText,
+			},
 		},
-	})
+	)
 	if err != nil {
 		t.Fatalf("exportDestinationPath: %v", err)
 	}
+
 	if path != "" {
 		t.Fatalf("MCP export path = %q, want inline output", path)
 	}
@@ -1188,16 +1404,20 @@ func TestExportDestinationPathUsesExplicitMCPOutput(t *testing.T) {
 	t.Parallel()
 	want := filepath.Join(t.TempDir(), "transcript.txt")
 	ctx := withSurface(context.Background(), SurfaceMCP)
-	path, err := exportDestinationPath(ctx, exportPayload{
-		ConversationID: "claude:probe",
-		Options: conv.ExportOptions{
-			Format: conv.ExportFormatPlainText,
+	path, err := exportDestinationPath(
+		ctx,
+		exportPayload{
+			ConversationID: "claude:probe",
+			Options: conv.ExportOptions{
+				Format: conv.ExportFormatPlainText,
+			},
+			OutputPath: want,
 		},
-		OutputPath: want,
-	})
+	)
 	if err != nil {
 		t.Fatalf("exportDestinationPath: %v", err)
 	}
+
 	if path != want {
 		t.Fatalf("MCP export path = %q, want %q", path, want)
 	}
@@ -1211,37 +1431,58 @@ func TestWriteCLIExportFileConfirmationIncludesSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create temporary directories: %v", err)
 	}
+
 	t.Cleanup(func() { _ = os.RemoveAll(roots.Base) })
+
 	for _, variable := range sandbox.Env(roots) {
 		t.Setenv(variable.Name, variable.Value)
 	}
+
 	t.Setenv("HOME", filepath.Join(roots.Base, "home"))
-	for _, name := range []string{"CODEX_HOME", "CODEX_SQLITE_HOME", "CLYDE_CURSOR_PROJECTS_DIRS", "CLYDE_CURSOR_DATA_DIRS", "CLYDE_ZED_DATA_DIRS", "COPILOT_HOME"} {
+
+	for _, name := range []string{
+		"CODEX_HOME",
+		"CODEX_SQLITE_HOME",
+		"CLYDE_CURSOR_PROJECTS_DIRS",
+		"CLYDE_CURSOR_DATA_DIRS",
+		"CLYDE_ZED_DATA_DIRS",
+		"COPILOT_HOME",
+	} {
 		directory := filepath.Join(roots.Base, "providers", name)
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatalf("create provider directory %s: %v", directory, err)
 		}
+
 		t.Setenv(name, directory)
 	}
+
 	var out bytes.Buffer
 	sink := NewCLISink(&out)
-	err = writeCLIExportFile(context.Background(), exportPayload{
-		ConversationID: "claude:probe",
-		Options: conv.ExportOptions{
-			Format: conv.ExportFormatMarkdown,
+	err = writeCLIExportFile(
+		context.Background(),
+		exportPayload{
+			ConversationID: "claude:probe",
+			Options: conv.ExportOptions{
+				Format: conv.ExportFormatMarkdown,
+			},
+			OutputPath: path,
 		},
-		OutputPath: path,
-	}, body, sink)
+		body,
+		sink,
+	)
 	if err != nil {
 		t.Fatalf("writeCLIExportFile: %v", err)
 	}
+
 	gotBody, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read export file: %v", err)
 	}
+
 	if !bytes.Equal(gotBody, body) {
 		t.Fatalf("export file body = %q, want %q", string(gotBody), string(body))
 	}
+
 	want := "wrote: " + path + " (2 lines, 11 chars, 11 B)\n"
 	if got := out.String(); got != want {
 		t.Fatalf("write confirmation = %q, want %q", got, want)
@@ -1251,7 +1492,10 @@ func TestWriteCLIExportFileConfirmationIncludesSize(t *testing.T) {
 func TestWriteCLIExportFileConfirmationIncludesTokens(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.md")
 	body := []byte("alpha\nbeta\n")
-	spec := &tokencount.Spec{Family: tokencount.FamilyClaude, Settings: tokencount.Settings{SafetyFactor: 1.3}}
+	spec := &tokencount.Spec{
+		Family:   tokencount.FamilyClaude,
+		Settings: tokencount.Settings{SafetyFactor: 1.3},
+	}
 	originalLookup := lookupExportTokenSpec
 	lookupExportTokenSpec = func(_ context.Context, _, _ string) (*tokencount.Spec, error) {
 		return spec, nil
@@ -1260,16 +1504,22 @@ func TestWriteCLIExportFileConfirmationIncludesTokens(t *testing.T) {
 
 	var out bytes.Buffer
 	sink := NewCLISink(&out)
-	err := writeCLIExportFile(context.Background(), exportPayload{
-		ConversationID: "claude:probe",
-		Options: conv.ExportOptions{
-			Format: conv.ExportFormatMarkdown,
+	err := writeCLIExportFile(
+		context.Background(),
+		exportPayload{
+			ConversationID: "claude:probe",
+			Options: conv.ExportOptions{
+				Format: conv.ExportFormatMarkdown,
+			},
+			OutputPath: path,
 		},
-		OutputPath: path,
-	}, body, sink)
+		body,
+		sink,
+	)
 	if err != nil {
 		t.Fatalf("writeCLIExportFile: %v", err)
 	}
+
 	want := wroteConfirmation(path, body, spec.Count(string(body)))
 	if got := out.String(); got != want {
 		t.Fatalf("write confirmation = %q, want %q", got, want)
@@ -1281,12 +1531,15 @@ func textOf(t *testing.T, result *mcp.CallToolResult) string {
 	if result == nil {
 		t.Fatal("nil result")
 	}
+
 	if len(result.Content) != 1 {
 		t.Fatalf("content length: got %d, want 1", len(result.Content))
 	}
+
 	text, ok := result.Content[0].(mcp.TextContent)
 	if !ok {
 		t.Fatalf("content type: got %T, want mcp.TextContent", result.Content[0])
 	}
+
 	return text.Text
 }

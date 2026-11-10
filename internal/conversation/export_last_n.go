@@ -13,6 +13,7 @@ func exportShapeOptions(content ContentKindSet) transcript.ShapeOptions {
 	if includeTools {
 		shapeOptions.ToolOnly = exportToolOnlyMode(content)
 	}
+
 	return shapeOptions
 }
 
@@ -24,8 +25,10 @@ func messageRendersForExport(message transcript.Message, options ExportOptions) 
 	if len(kept) == 0 {
 		return false
 	}
+
 	if options.Format == ExportFormatJSON && options.Content.Has(ContentKindRawJSONMetadata) {
 		return true
 	}
+
 	return len(transcript.ShapeConversation(kept, exportShapeOptions(options.Content))) > 0
 }

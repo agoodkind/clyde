@@ -170,12 +170,15 @@ func (m *Message) UnmarshalJSON(raw []byte) error {
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return fmt.Errorf("unmarshal anthropic message: %w", err)
 	}
+
 	content, err := decodeContentBlocks(wire.Content)
 	if err != nil {
 		return fmt.Errorf("decode anthropic message content: %w", err)
 	}
+
 	m.Role = wire.Role
 	m.Content = content
+
 	return nil
 }
 
@@ -187,28 +190,35 @@ func (m *Message) UnmarshalJSON(raw []byte) error {
 // marker survives serialization.
 func (m Message) MarshalJSON() ([]byte, error) {
 	if len(m.Content) == 1 && m.Content[0].Type == "text" && m.Content[0].CacheControl == nil {
-		encoded, err := json.Marshal(struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		}{
-			Role:    m.Role,
-			Content: m.Content[0].Text,
-		})
+		encoded, err := json.Marshal(
+			struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{
+				Role:    m.Role,
+				Content: m.Content[0].Text,
+			},
+		)
 		if err != nil {
 			return nil, fmt.Errorf("marshal anthropic text message: %w", err)
 		}
+
 		return encoded, nil
 	}
-	encoded, err := json.Marshal(struct {
-		Role    string         `json:"role"`
-		Content []ContentBlock `json:"content"`
-	}{
-		Role:    m.Role,
-		Content: m.Content,
-	})
+
+	encoded, err := json.Marshal(
+		struct {
+			Role    string         `json:"role"`
+			Content []ContentBlock `json:"content"`
+		}{
+			Role:    m.Role,
+			Content: m.Content,
+		},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic block message: %w", err)
 	}
+
 	return encoded, nil
 }
 
@@ -322,10 +332,12 @@ func (r *Request) UnmarshalJSON(raw []byte) error {
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return fmt.Errorf("unmarshal anthropic request: %w", err)
 	}
+
 	system, blocks, err := decodeSystemPrompt(wire.System)
 	if err != nil {
 		return fmt.Errorf("decode anthropic system prompt: %w", err)
 	}
+
 	r.Model = wire.Model
 	r.System = system
 	r.SystemBlocks = blocks
@@ -341,6 +353,7 @@ func (r *Request) UnmarshalJSON(raw []byte) error {
 	r.ToolChoice = wire.ToolChoice
 	r.Metadata = wire.Metadata
 	r.ContextManagement = wire.ContextManagement
+
 	return nil
 }
 
@@ -356,8 +369,10 @@ func (r Request) MarshalJSON() ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal anthropic request: %w", err)
 		}
+
 		return encoded, nil
 	}
+
 	// SystemBlocks wins. Clear the string form on the wire so we do
 	// not double-emit system.
 	base.System = ""
@@ -365,21 +380,25 @@ func (r Request) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request without system blocks: %w", err)
 	}
+
 	// Splice "system":<blocks> into the encoded object. This is
 	// cheaper than a second struct definition mirroring every field.
 	blocks, err := json.Marshal(r.SystemBlocks)
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic system blocks: %w", err)
 	}
+
 	insertion := []byte(`"system":` + string(blocks) + `,`)
 	// Insert just after the opening brace.
 	if len(encoded) < 2 || encoded[0] != '{' {
 		return nil, fmt.Errorf("anthropic: marshaled request is not a JSON object: %q", encoded)
 	}
+
 	out := make([]byte, 0, len(encoded)+len(insertion))
 	out = append(out, '{')
 	out = append(out, insertion...)
 	out = append(out, encoded[1:]...)
+
 	return out, nil
 }
 
@@ -586,40 +605,55 @@ func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
 	if trimmed == "" || trimmed == "null" {
 		return nil, nil
 	}
+
 	if trimmed[0] == '"' {
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
-			slog.Warn("adapter.anthropic.types.text_content_block_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+			slog.Warn(
+				"adapter.anthropic.types.text_content_block_unmarshal_failed",
+				"concern",
+				"adapter.providers.anthropic.request",
+				"err",
+				err,
+			)
+
 			return nil, fmt.Errorf("unmarshal anthropic text content block: %w", err)
 		}
-		return []ContentBlock{{
-			Type:           "text",
-			Text:           text,
-			ID:             "",
-			Name:           "",
-			Input:          nil,
-			ToolUseID:      "",
-			Content:        "",
-			CacheReference: "",
-			Source:         nil,
-			CacheControl:   nil,
-			Thinking:       "",
-			Signature:      "",
-			Data:           "",
-		}}, nil
+
+		return []ContentBlock{
+			{
+				Type:           "text",
+				Text:           text,
+				ID:             "",
+				Name:           "",
+				Input:          nil,
+				ToolUseID:      "",
+				Content:        "",
+				CacheReference: "",
+				Source:         nil,
+				CacheControl:   nil,
+				Thinking:       "",
+				Signature:      "",
+				Data:           "",
+			},
+		}, nil
 	}
+
 	if trimmed[0] == '[' {
 		var blocks []ContentBlock
 		if err := json.Unmarshal(raw, &blocks); err != nil {
 			return nil, fmt.Errorf("unmarshal anthropic content blocks: %w", err)
 		}
+
 		for i := range blocks {
 			if strings.TrimSpace(blocks[i].Type) == "" {
 				blocks[i].Type = "text"
 			}
 		}
+
 		return blocks, nil
 	}
+
 	return nil, fmt.Errorf("anthropic: content must be a string or array")
 }
 
@@ -628,25 +662,38 @@ func decodeSystemPrompt(raw json.RawMessage) (string, []SystemBlock, error) {
 	if trimmed == "" || trimmed == "null" {
 		return "", nil, nil
 	}
+
 	if trimmed[0] == '"' {
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
-			slog.Warn("adapter.anthropic.types.system_text_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+			slog.Warn(
+				"adapter.anthropic.types.system_text_unmarshal_failed",
+				"concern",
+				"adapter.providers.anthropic.request",
+				"err",
+				err,
+			)
+
 			return "", nil, fmt.Errorf("unmarshal anthropic system text: %w", err)
 		}
+
 		return text, nil, nil
 	}
+
 	if trimmed[0] == '[' {
 		var blocks []SystemBlock
 		if err := json.Unmarshal(raw, &blocks); err != nil {
 			return "", nil, fmt.Errorf("unmarshal anthropic system blocks: %w", err)
 		}
+
 		for i := range blocks {
 			if strings.TrimSpace(blocks[i].Type) == "" {
 				blocks[i].Type = "text"
 			}
 		}
+
 		return "", blocks, nil
 	}
+
 	return "", nil, fmt.Errorf("anthropic: system must be a string or array")
 }

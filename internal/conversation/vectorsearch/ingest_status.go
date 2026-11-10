@@ -32,12 +32,18 @@ func (c *Client) IngestStatus(collectionID string) IngestStatus {
 		CheckpointDirectory: "",
 		CheckpointCount:     0,
 		CheckpointKnown:     false,
-		LastUpsert:          UpsertStats{JobID: "", RowsWritten: 0, VectorsReused: 0, VectorsEmbedded: 0},
-		LastUpsertKnown:     false,
+		LastUpsert: UpsertStats{
+			JobID:           "",
+			RowsWritten:     0,
+			VectorsReused:   0,
+			VectorsEmbedded: 0,
+		},
+		LastUpsertKnown: false,
 	}
 	if c == nil {
 		return status
 	}
+
 	status.EmbeddingModel = c.embeddingModel
 	status.EmbeddingDimension = c.dimension
 	c.ingestMu.Lock()
@@ -48,8 +54,12 @@ func (c *Client) IngestStatus(collectionID string) IngestStatus {
 	if trimmedCollectionID == "" || c.checkpoint == nil {
 		return status
 	}
+
 	collectionName := CollectionName(trimmedCollectionID)
-	status.CheckpointDirectory, status.CheckpointCount, status.CheckpointKnown = c.checkpoint.loadedCount(collectionName)
+	status.CheckpointDirectory, status.CheckpointCount, status.CheckpointKnown = c.checkpoint.loadedCount(
+		collectionName,
+	)
+
 	return status
 }
 
@@ -67,9 +77,11 @@ func (store *checkpointStore) loadedCount(collectionName string) (string, int, b
 	if !found {
 		return "", 0, false
 	}
+
 	directory := ""
 	if store.root != "" {
 		directory = filepath.Join(store.root, collectionName)
 	}
+
 	return directory, len(fingerprints), true
 }

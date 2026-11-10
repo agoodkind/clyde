@@ -54,8 +54,10 @@ func (s *TurnState) Value() string {
 	if s == nil {
 		return ""
 	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	return s.value
 }
 
@@ -64,16 +66,20 @@ func (s *TurnState) CaptureFromHeaders(header http.Header) bool {
 	if s == nil {
 		return false
 	}
+
 	value := strings.TrimSpace(header.Get(CodexTurnStateHeader))
 	if value == "" {
 		return false
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.value != "" {
 		return false
 	}
+
 	s.value = value
+
 	return true
 }
 
@@ -83,5 +89,6 @@ func WindowID(conversationID string) string {
 	if conversationID == "" {
 		return ""
 	}
+
 	return conversationID + ":0"
 }

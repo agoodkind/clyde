@@ -18,24 +18,32 @@ var ErrQueryRequired = errors.New("query is required")
 // the first message in each conversation that contains every query term. The
 // match is case-insensitive. Each match has a zero score. A conversation with a
 // transcript that cannot be read is logged and skipped.
-func (idx *Index) SearchRawText(ctx context.Context, options SearchConversationsOptions) (SearchConversationsResult, error) {
+func (idx *Index) SearchRawText(
+	ctx context.Context,
+	options SearchConversationsOptions,
+) (SearchConversationsResult, error) {
 	options = normalizeRawTextOptions(options)
 	terms := queryTerms(options.Query)
 	if len(terms) == 0 {
 		return SearchConversationsResult{}, ErrQueryRequired
 	}
-	candidates, err := idx.ListPage(ctx, ListOptions{
-		Limit:           0,
-		Offset:          0,
-		Provider:        options.Provider,
-		WorkspaceRoot:   options.WorkspaceRoot,
-		Query:           "",
-		IncludeArchived: options.IncludeArchived,
-		All:             true,
-	})
+
+	candidates, err := idx.ListPage(
+		ctx,
+		ListOptions{
+			Limit:           0,
+			Offset:          0,
+			Provider:        options.Provider,
+			WorkspaceRoot:   options.WorkspaceRoot,
+			Query:           "",
+			IncludeArchived: options.IncludeArchived,
+			All:             true,
+		},
+	)
 	if err != nil {
 		return SearchConversationsResult{}, err
 	}
+
 	result := SearchConversationsResult{
 		Matches:              nil,
 		ConversationsScanned: 0,
@@ -47,63 +55,93 @@ func (idx *Index) SearchRawText(ctx context.Context, options SearchConversations
 		NextCursor:           "",
 		Source:               SearchSourceRawText,
 		Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
-		Freshness:            SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-		FilterAccounting:     nil,
+		Freshness: SearchFreshness{
+			Manifest:     0,
+			Needed:       0,
+			Embedded:     0,
+			Pending:      0,
+			LastSyncUnix: 0,
+		},
+		FilterAccounting: nil,
 	}
 	skipped := 0
+
 	for _, record := range candidates.Records {
 		if options.ConversationID != "" && record.ID != options.ConversationID {
 			continue
 		}
+
 		if err := ctx.Err(); err != nil {
 			return SearchConversationsResult{}, fmt.Errorf("search raw text: %w", err)
 		}
+
 		result.ConversationsScanned++
 		match, found, matchErr := idx.firstRawTextMatch(record, terms, options)
 		if matchErr != nil {
-			slog.WarnContext(ctx, "conversation.raw_text_search.read_failed",
-				"concern", "conversation.search",
-				"conversation_id", record.ID,
-				"err", matchErr,
+			slog.WarnContext(
+				ctx,
+				"conversation.raw_text_search.read_failed",
+				"concern",
+				"conversation.search",
+				"conversation_id",
+				record.ID,
+				"err",
+				matchErr,
 			)
 			continue
 		}
+
 		if !found {
 			continue
 		}
+
 		if skipped < options.Offset {
 			skipped++
 			continue
 		}
+
 		if len(result.Matches) == options.Limit {
 			result.HasMore = true
 			break
 		}
+
 		result.Matches = append(result.Matches, match)
 	}
+
 	result.ReturnedCount = len(result.Matches)
 	result.NextOffset = options.Offset + result.ReturnedCount
 	result.Facets = ComputeFacets(result.Matches, 0)
+
 	return result, nil
 }
 
-func (idx *Index) firstRawTextMatch(record Record, terms []string, options SearchConversationsOptions) (SearchMatch, bool, error) {
-	stream, err := idx.resolveStream(record, LoadOptions{
-		IncludeSystemPrompts:       false,
-		IncludeSystemMessages:      false,
-		IncludeToolOutputs:         true,
-		IncludeInjected:            false,
-		HarnessTally:               nil,
-		ResolveInjectedTranscripts: false,
-	})
+func (idx *Index) firstRawTextMatch(
+	record Record,
+	terms []string,
+	options SearchConversationsOptions,
+) (SearchMatch, bool, error) {
+	stream, err := idx.resolveStream(
+		record,
+		LoadOptions{
+			IncludeSystemPrompts:       false,
+			IncludeSystemMessages:      false,
+			IncludeToolOutputs:         true,
+			IncludeInjected:            false,
+			HarnessTally:               nil,
+			ResolveInjectedTranscripts: false,
+		},
+	)
 	if err != nil {
 		return emptySearchMatch(), false, err
 	}
+
 	messageIndex := 0
+
 	for message, streamErr := range stream {
 		if streamErr != nil {
 			return emptySearchMatch(), false, streamErr
 		}
+
 		if messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) {
 			indexText := transcript.RenderMessageIndexText(message)
 			if textContainsTerms(indexText, terms) {
@@ -120,8 +158,10 @@ func (idx *Index) firstRawTextMatch(record Record, terms []string, options Searc
 				}, true, nil
 			}
 		}
+
 		messageIndex++
 	}
+
 	return emptySearchMatch(), false, nil
 }
 
@@ -141,32 +181,44 @@ func emptySearchMatch() SearchMatch {
 
 // messageMatchesRowFilters applies the role and time filters. The lower time
 // bound is inclusive and the upper bound is exclusive.
-func messageMatchesRowFilters(message transcript.Message, roles []string, fromUnix *int64, untilUnix *int64) bool {
+func messageMatchesRowFilters(
+	message transcript.Message,
+	roles []string,
+	fromUnix *int64,
+	untilUnix *int64,
+) bool {
 	if len(roles) > 0 {
 		matched := false
+
 		for _, role := range roles {
 			if strings.EqualFold(role, message.Role) {
 				matched = true
 				break
 			}
 		}
+
 		if !matched {
 			return false
 		}
 	}
+
 	if fromUnix == nil && untilUnix == nil {
 		return true
 	}
+
 	if message.Timestamp.IsZero() {
 		return false
 	}
+
 	timestamp := message.Timestamp.Unix()
 	if fromUnix != nil && timestamp < *fromUnix {
 		return false
 	}
+
 	if untilUnix != nil && timestamp >= *untilUnix {
 		return false
 	}
+
 	return true
 }
 
@@ -176,11 +228,13 @@ func textContainsTerms(text string, terms []string) bool {
 	if needsLowering(text) {
 		text = strings.ToLower(text)
 	}
+
 	for _, term := range terms {
 		if !strings.Contains(text, term) {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -191,6 +245,7 @@ func needsLowering(text string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -200,11 +255,14 @@ func normalizeRawTextOptions(options SearchConversationsOptions) SearchConversat
 	if options.Offset < 0 {
 		options.Offset = 0
 	}
+
 	if options.Limit <= 0 {
 		options.Limit = DefaultSearchLimit
 	}
+
 	if options.Limit > MaxSearchLimit {
 		options.Limit = MaxSearchLimit
 	}
+
 	return options
 }

@@ -23,21 +23,31 @@ func ResolveConversationRequest(
 	if err != nil {
 		return conversation.RequestResolution{}, err
 	}
+
 	defer func() { _ = client.conn.Close() }()
 
 	timeout := queryClientRPCTimeout
 	if allowFullScan {
 		timeout = analysisClientRPCTimeout
 	}
+
 	rpcCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	resp, err := client.rpc.ResolveConversationRequest(rpcCtx, &clydev1.ResolveConversationRequestRequest{
-		RequestId:     requestID,
-		AllowFullScan: allowFullScan,
-	})
+	resp, err := client.rpc.ResolveConversationRequest(
+		rpcCtx,
+		&clydev1.ResolveConversationRequestRequest{
+			RequestId:     requestID,
+			AllowFullScan: allowFullScan,
+		},
+	)
 	if err != nil {
-		return conversation.RequestResolution{}, daemonRPCError(rpcCtx, "resolve conversation request", err)
+		return conversation.RequestResolution{}, daemonRPCError(
+			rpcCtx,
+			"resolve conversation request",
+			err,
+		)
 	}
+
 	return conversation.RequestResolution{
 		RequestID: resp.GetRequestId(),
 		Found:     resp.GetFound(),
@@ -62,7 +72,9 @@ func requestOriginFromProto(origin clydev1.RequestResolutionOrigin) conversation
 	}
 }
 
-func requestNotFoundReasonFromProto(reason clydev1.RequestResolutionNotFoundReason) conversation.RequestNotFoundReason {
+func requestNotFoundReasonFromProto(
+	reason clydev1.RequestResolutionNotFoundReason,
+) conversation.RequestNotFoundReason {
 	switch reason {
 	case clydev1.RequestResolutionNotFoundReason_REQUEST_RESOLUTION_NOT_FOUND_REASON_UNSPECIFIED:
 		return conversation.RequestNotFoundReasonUnspecified

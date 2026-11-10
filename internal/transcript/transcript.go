@@ -121,7 +121,9 @@ func (j *ToolInputJSON) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return nil
 	}
+
 	j.Raw = append(j.Raw[:0], data...)
+
 	return nil
 }
 
@@ -130,9 +132,11 @@ func (j *ToolInputJSON) MarshalJSON() ([]byte, error) {
 	if j == nil {
 		return []byte("null"), nil
 	}
+
 	if len(j.Raw) == 0 {
 		return []byte("null"), nil
 	}
+
 	return j.Raw, nil
 }
 
@@ -141,6 +145,7 @@ func (j *ToolInputJSON) Len() int {
 	if j == nil {
 		return 0
 	}
+
 	return len(j.Raw)
 }
 
@@ -192,6 +197,7 @@ func (m *Message) ToolNames() []string {
 	for i, t := range m.Tools {
 		names[i] = t.Name
 	}
+
 	return names
 }
 
@@ -202,7 +208,9 @@ func CompactionMessages(messages []Message) []Message {
 		if message.Compaction == nil {
 			continue
 		}
+
 		out = append(out, message)
 	}
+
 	return out
 }

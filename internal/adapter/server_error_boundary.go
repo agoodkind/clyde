@@ -29,11 +29,13 @@ func (w *adapterRecoveryWriter) Write(body []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
+
 	n, err := w.ResponseWriter.Write(body)
 	w.bytesOut += int64(n)
 	if err != nil {
 		return n, fmt.Errorf("adapter recovery write: %w", err)
 	}
+
 	return n, nil
 }
 
@@ -41,6 +43,7 @@ func (w *adapterRecoveryWriter) Flush() {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
+
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -55,9 +58,11 @@ func correlationForRequest(r *http.Request) correlation.Context {
 	if corr.RequestID != "" {
 		return corr
 	}
+
 	reqID := strings.TrimSpace(r.Header.Get(clydeingress.HeaderRequestID))
 	if reqID == "" {
 		reqID = newRequestID()
 	}
+
 	return clydeingress.FromHTTPHeader(r.Header, reqID)
 }

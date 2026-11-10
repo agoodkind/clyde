@@ -44,6 +44,7 @@ func ParseHumanCount(s string) (int, error) {
 		multiplier = humanMillion
 		cleaned = cleaned[:len(cleaned)-1]
 	}
+
 	if cleaned == "" {
 		return 0, fmt.Errorf("parse token count %q: missing number before suffix", s)
 	}
@@ -52,9 +53,11 @@ func ParseHumanCount(s string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("parse token count %q: not a number", s)
 	}
+
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return 0, fmt.Errorf("parse token count %q: not a finite number", s)
 	}
+
 	if value < 0 {
 		return 0, fmt.Errorf("parse token count %q: must not be negative", s)
 	}
@@ -63,9 +66,11 @@ func ParseHumanCount(s string) (int, error) {
 	if scaled > float64(math.MaxInt) {
 		return 0, fmt.Errorf("parse token count %q: exceeds maximum", s)
 	}
+
 	rounded := math.Round(scaled)
 	if math.Abs(scaled-rounded) > wholeNumberEpsilon {
 		return 0, fmt.Errorf("parse token count %q: not a whole number of tokens", s)
 	}
+
 	return int(rounded), nil
 }

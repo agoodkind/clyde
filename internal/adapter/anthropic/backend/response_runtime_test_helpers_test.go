@@ -11,10 +11,14 @@ import (
 )
 
 type fakeResponseDispatcher struct {
-	streamEvents func(context.Context, anthropic.Request, anthropic.EventSink) (anthropic.Usage, string, error)
-	sseWriter    *fakeResponseSSEWriter
-	renderer     *adapterrender.EventRenderer
-	events       []adapterrender.Event
+	streamEvents func(context.Context, anthropic.Request, anthropic.EventSink) (
+		anthropic.Usage,
+		string,
+		error,
+	)
+	sseWriter *fakeResponseSSEWriter
+	renderer  *adapterrender.EventRenderer
+	events    []adapterrender.Event
 }
 
 func (f *fakeResponseDispatcher) Log() *slog.Logger {
@@ -25,7 +29,10 @@ func (f *fakeResponseDispatcher) AnthropicStreamClient() StreamClient {
 	return fakeStreamClient{streamEvents: f.streamEvents}
 }
 
-func (f *fakeResponseDispatcher) TrackAnthropicContextUsage(_ string, usage adapteropenai.Usage) TrackedUsage {
+func (f *fakeResponseDispatcher) TrackAnthropicContextUsage(
+	_ string,
+	usage adapteropenai.Usage,
+) TrackedUsage {
 	return TrackedUsage{Usage: usage, RawPrompt: usage.PromptTokens, RawTotal: usage.TotalTokens}
 }
 
@@ -40,10 +47,17 @@ func (f *fakeResponseDispatcher) WriteEvent(ev adapterrender.Event) error {
 	f.events = append(f.events, ev)
 	if f.sseWriter != nil {
 		if f.renderer == nil {
-			f.renderer = adapterrender.NewEventRenderer("req-stream-test", "alias", "anthropic", nil)
+			f.renderer = adapterrender.NewEventRenderer(
+				"req-stream-test",
+				"alias",
+				"anthropic",
+				nil,
+			)
 		}
+
 		f.sseWriter.chunks = append(f.sseWriter.chunks, f.renderer.HandleEvent(ev)...)
 	}
+
 	return nil
 }
 
@@ -56,12 +70,21 @@ type fakeResponseSSEWriter struct {
 }
 
 type fakeStreamClient struct {
-	streamEvents func(context.Context, anthropic.Request, anthropic.EventSink) (anthropic.Usage, string, error)
+	streamEvents func(context.Context, anthropic.Request, anthropic.EventSink) (
+		anthropic.Usage,
+		string,
+		error,
+	)
 }
 
-func (f fakeStreamClient) StreamEvents(ctx context.Context, req anthropic.Request, sink anthropic.EventSink) (anthropic.Usage, string, error) {
+func (f fakeStreamClient) StreamEvents(
+	ctx context.Context,
+	req anthropic.Request,
+	sink anthropic.EventSink,
+) (anthropic.Usage, string, error) {
 	if f.streamEvents == nil {
 		return anthropic.Usage{}, "", nil
 	}
+
 	return f.streamEvents(ctx, req, sink)
 }

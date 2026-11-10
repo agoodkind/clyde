@@ -35,8 +35,12 @@ type UnknownFormatError struct {
 // set so the caller can surface a complete message without
 // duplicating the enumeration.
 func (e *UnknownFormatError) Error() string {
-	return fmt.Sprintf("output: unknown format %q (supported: %s, %s)",
-		e.Input, FormatText, FormatJSON)
+	return fmt.Sprintf(
+		"output: unknown format %q (supported: %s, %s)",
+		e.Input,
+		FormatText,
+		FormatJSON,
+	)
 }
 
 // ParseFormat resolves a user-supplied string into a Format. The

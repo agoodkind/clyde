@@ -52,6 +52,7 @@ func TestExpandContractRoundTrip(t *testing.T) {
 	if display != "~/state/clyde/capture.db" {
 		t.Fatalf("Contract(%q)=%q", absolute, display)
 	}
+
 	if back := Expand(display); back != absolute {
 		t.Fatalf("Expand(%q)=%q want %q", display, back, absolute)
 	}

@@ -21,10 +21,16 @@ const defaultPeriodicDriftInterval = 5 * time.Minute
 // no store is wired it returns immediately, so the caller can spawn it
 // unconditionally. A single upstream's infrastructure error is logged at warn
 // and does not stop the loop. The loop returns promptly when ctx is cancelled.
-func RunPeriodicDrift(ctx context.Context, store *capture.Store, cfg config.MITMConfig, log *slog.Logger) {
+func RunPeriodicDrift(
+	ctx context.Context,
+	store *capture.Store,
+	cfg config.MITMConfig,
+	log *slog.Logger,
+) {
 	if log == nil {
 		log = slog.Default()
 	}
+
 	dcfg := cfg.Drift
 	if !dcfg.Enabled || len(dcfg.Upstreams) == 0 || store == nil {
 		return
@@ -37,6 +43,7 @@ func RunPeriodicDrift(ctx context.Context, store *capture.Store, cfg config.MITM
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -50,7 +57,12 @@ func RunPeriodicDrift(ctx context.Context, store *capture.Store, cfg config.MITM
 // runDriftSweep performs one compare-only drift check for each configured
 // upstream against the store. It is best-effort: per-upstream infrastructure
 // errors are logged and the sweep continues with the next upstream.
-func runDriftSweep(ctx context.Context, store *capture.Store, cfg config.MITMConfig, log *slog.Logger) {
+func runDriftSweep(
+	ctx context.Context,
+	store *capture.Store,
+	cfg config.MITMConfig,
+	log *slog.Logger,
+) {
 	dcfg := cfg.Drift
 	for upstream, entry := range dcfg.Upstreams {
 		select {
@@ -58,6 +70,7 @@ func runDriftSweep(ctx context.Context, store *capture.Store, cfg config.MITMCon
 			return
 		default:
 		}
+
 		opts := DriftCheckOptions{
 			Upstream:        upstream,
 			IncludeUA:       entry.IncludeUA,
@@ -68,16 +81,29 @@ func runDriftSweep(ctx context.Context, store *capture.Store, cfg config.MITMCon
 		}
 		outcome, err := RunDriftCheck(ctx, store, opts)
 		if err != nil {
-			log.WarnContext(ctx, "mitm.drift.periodic_check_failed", "concern", "providers.mitm.wire",
-				"upstream", upstream,
-				"err", err,
+			log.WarnContext(
+				ctx,
+				"mitm.drift.periodic_check_failed",
+				"concern",
+				"providers.mitm.wire",
+				"upstream",
+				upstream,
+				"err",
+				err,
 			)
 			continue
 		}
+
 		if outcome.Diverged {
-			log.WarnContext(ctx, "mitm.drift.periodic_diverged", "concern", "providers.mitm.wire",
-				"upstream", upstream,
-				"summary", outcome.Summary,
+			log.WarnContext(
+				ctx,
+				"mitm.drift.periodic_diverged",
+				"concern",
+				"providers.mitm.wire",
+				"upstream",
+				upstream,
+				"summary",
+				outcome.Summary,
 			)
 		}
 	}

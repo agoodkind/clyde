@@ -22,11 +22,13 @@ func boundLoopbackListener(t *testing.T) (net.Listener, config.MITMListenerConfi
 	if err != nil {
 		t.Fatalf("bind loopback listener: %v", err)
 	}
+
 	t.Cleanup(func() { _ = lis.Close() })
 	tcpAddr, ok := lis.Addr().(*net.TCPAddr)
 	if !ok {
 		t.Fatalf("listener addr is %T, want *net.TCPAddr", lis.Addr())
 	}
+
 	return lis, config.MITMListenerConfig{Host: "::1", Port: tcpAddr.Port}
 }
 
@@ -35,18 +37,23 @@ func boundLoopbackListener(t *testing.T) (net.Listener, config.MITMListenerConfi
 // config (Host "localhost"), mirroring mitmBindAddrs's dual-stack expansion.
 func boundLocalhostListener(t *testing.T) ([]net.Listener, config.MITMListenerConfig) {
 	t.Helper()
+
 	for range 20 {
 		sockets, cfg, err := tryBoundLocalhostListener(t)
 		if err == nil {
 			return sockets, cfg
 		}
+
 		if !errors.Is(err, syscall.EADDRINUSE) {
 			t.Fatalf("bind both loopback stacks: %v", err)
 		}
+
 		// An IPv6 ephemeral port may already be occupied on IPv4.
 		// Release the first socket and ask the kernel for another pair.
 	}
+
 	t.Fatal("could not reserve one loopback port on both stacks after 20 attempts")
+
 	return nil, config.MITMListenerConfig{}
 }
 
@@ -56,18 +63,22 @@ func tryBoundLocalhostListener(t *testing.T) ([]net.Listener, config.MITMListene
 	if err != nil {
 		t.Fatalf("bind v6 loopback listener: %v", err)
 	}
+
 	tcpAddr, ok := v6.Addr().(*net.TCPAddr)
 	if !ok {
 		t.Fatalf("listener addr is %T, want *net.TCPAddr", v6.Addr())
 	}
+
 	port := tcpAddr.Port
 	v4, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
 		_ = v6.Close()
 		return nil, config.MITMListenerConfig{}, err
 	}
+
 	t.Cleanup(func() { _ = v6.Close() })
 	t.Cleanup(func() { _ = v4.Close() })
+
 	return []net.Listener{v6, v4}, config.MITMListenerConfig{Host: "localhost", Port: port}, nil
 }
 
@@ -77,12 +88,15 @@ func TestMITMBindAddrsExpandsLocalhostToBothStacks(t *testing.T) {
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("localhost expansion = %v, want %v (IPv6 first)", got, want)
 	}
+
 	for _, host := range []string{"::1", "[::1]"} {
 		if single := mitmBindAddrs(host, 48723); len(single) != 1 || single[0] != "[::1]:48723" {
 			t.Fatalf("host %q expansion = %v, want single [::1]:48723", host, single)
 		}
 	}
-	if single := mitmBindAddrs("127.0.0.1", 48724); len(single) != 1 || single[0] != "127.0.0.1:48724" {
+
+	if single := mitmBindAddrs("127.0.0.1", 48724); len(single) != 1 ||
+		single[0] != "127.0.0.1:48724" {
 		t.Fatalf("127.0.0.1 expansion = %v, want single 127.0.0.1:48724", single)
 	}
 }
@@ -90,10 +104,12 @@ func TestMITMBindAddrsExpandsLocalhostToBothStacks(t *testing.T) {
 func TestValidateMITMListenerSetMatchingSetReloadsHot(t *testing.T) {
 	lisA, cfgA := boundLoopbackListener(t)
 	lisB, cfgB := boundLoopbackListener(t)
-	runtime := &runtimeServices{mitmListeners: map[string][]net.Listener{
-		"default":     {lisA},
-		"claude-code": {lisB},
-	}}
+	runtime := &runtimeServices{
+		mitmListeners: map[string][]net.Listener{
+			"default":     {lisA},
+			"claude-code": {lisB},
+		},
+	}
 	cfg := &config.Config{}
 	cfg.MITM.Listeners = map[string]config.MITMListenerConfig{
 		"default":     cfgA,
@@ -119,40 +135,49 @@ func TestLoadInheritedListenersRestoresUDPPacketConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind udp loopback listener: %v", err)
 	}
+
 	t.Cleanup(func() { _ = conn.Close() })
 
 	file, err := packetConnFile(conn)
 	if err != nil {
 		t.Fatalf("packetConnFile: %v", err)
 	}
+
 	t.Cleanup(func() { _ = file.Close() })
 	name := mitmUDPSocketKey("app.cursor", conn.LocalAddr().String())
-	raw, err := json.Marshal([]daemonsupervisor.ListenerSpec{{
-		Name:    name,
-		Network: conn.LocalAddr().Network(),
-		Addr:    conn.LocalAddr().String(),
-		FD:      int(file.Fd()),
-	}})
+	raw, err := json.Marshal([]daemonsupervisor.ListenerSpec{
+		{
+			Name:    name,
+			Network: conn.LocalAddr().Network(),
+			Addr:    conn.LocalAddr().String(),
+			FD:      int(file.Fd()),
+		},
+	})
 	if err != nil {
 		t.Fatalf("marshal listener spec: %v", err)
 	}
+
 	listeners := map[string]net.Listener{}
 	packetConns := map[string]net.PacketConn{}
 
 	if err := loadInheritedListeners(string(raw), listeners, packetConns); err != nil {
 		t.Fatalf("loadInheritedListeners: %v", err)
 	}
+
 	restored := packetConns[name]
 	if restored == nil {
 		t.Fatalf("restored packet conn %q missing", name)
 	}
+
 	t.Cleanup(func() { _ = restored.Close() })
 	if restored.LocalAddr().Network() != "udp" {
 		t.Fatalf("network = %q want udp", restored.LocalAddr().Network())
 	}
+
 	if restored.LocalAddr().String() != conn.LocalAddr().String() {
 		t.Fatalf("addr = %q want %q", restored.LocalAddr().String(), conn.LocalAddr().String())
 	}
+
 	if _, exists := listeners[name]; exists {
 		t.Fatalf("udp spec populated listener map")
 	}
@@ -180,6 +205,7 @@ func TestValidateMITMListenerSetAddressChangeForcesRestart(t *testing.T) {
 	if err == nil {
 		t.Fatalf("changed listen address must force restart, got nil error")
 	}
+
 	if want := "address changed"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q must mention %q", err.Error(), want)
 	}
@@ -198,6 +224,7 @@ func TestValidateMITMListenerSetStackChangeForcesRestart(t *testing.T) {
 	if err == nil {
 		t.Fatalf("narrowing localhost to one stack must force restart, got nil error")
 	}
+
 	if want := "address changed"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q must mention %q", err.Error(), want)
 	}
@@ -215,6 +242,7 @@ func TestValidateMITMListenerSetAddedListenerForcesRestart(t *testing.T) {
 	if err == nil {
 		t.Fatalf("adding a listener must force restart, got nil error")
 	}
+
 	if want := "listener set changed"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q must mention %q", err.Error(), want)
 	}
@@ -223,10 +251,12 @@ func TestValidateMITMListenerSetAddedListenerForcesRestart(t *testing.T) {
 func TestValidateMITMListenerSetRenamedListenerForcesRestart(t *testing.T) {
 	lisA, cfgA := boundLoopbackListener(t)
 	lisB, cfgB := boundLoopbackListener(t)
-	runtime := &runtimeServices{mitmListeners: map[string][]net.Listener{
-		"default":     {lisA},
-		"claude-code": {lisB},
-	}}
+	runtime := &runtimeServices{
+		mitmListeners: map[string][]net.Listener{
+			"default":     {lisA},
+			"claude-code": {lisB},
+		},
+	}
 	cfg := &config.Config{}
 	cfg.MITM.Listeners = map[string]config.MITMListenerConfig{
 		"default": cfgA,
@@ -236,6 +266,7 @@ func TestValidateMITMListenerSetRenamedListenerForcesRestart(t *testing.T) {
 	if err == nil {
 		t.Fatalf("removing a running listener id must force restart, got nil error")
 	}
+
 	if want := "removed"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q must mention %q", err.Error(), want)
 	}

@@ -14,12 +14,15 @@ func TestExtractIdentityClaudeHeaders(t *testing.T) {
 	if contrib.SessionID != "b3e8f88e-3fe8-421f-9cb0-e327103d0a4e" {
 		t.Fatalf("SessionID = %q", contrib.SessionID)
 	}
+
 	if contrib.PreferredRequestID != "req-claude-1" {
 		t.Fatalf("PreferredRequestID = %q", contrib.PreferredRequestID)
 	}
+
 	if contrib.ConversationID != "b3e8f88e-3fe8-421f-9cb0-e327103d0a4e" {
 		t.Fatalf("ConversationID = %q", contrib.ConversationID)
 	}
+
 	if contrib.ConversationSource != conversationSourceHeader {
 		t.Fatalf("ConversationSource = %q", contrib.ConversationSource)
 	}
@@ -41,6 +44,7 @@ func TestExtractIdentityClaudeBlankSession(t *testing.T) {
 	if contrib.SessionID != "" || contrib.ConversationID != "" {
 		t.Fatalf("blank session should not populate ids, got %+v", contrib)
 	}
+
 	if contrib.PreferredRequestID != "req-claude-1" {
 		t.Fatalf("PreferredRequestID = %q", contrib.PreferredRequestID)
 	}

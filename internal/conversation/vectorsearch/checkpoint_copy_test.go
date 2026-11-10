@@ -22,9 +22,22 @@ const (
 
 // writeSavedRecord writes a fingerprint record in the daemon's JSON format
 // under <root>/<collection>/<fileName>.
-func writeSavedRecord(t *testing.T, root string, collectionID string, fileName string, conversationID string, fingerprint string) {
+func writeSavedRecord(
+	t *testing.T,
+	root string,
+	collectionID string,
+	fileName string,
+	conversationID string,
+	fingerprint string,
+) {
 	t.Helper()
-	checkpointtest.WriteRecord(t, filepath.Join(root, vectorsearch.CollectionName(collectionID)), fileName, conversationID, fingerprint)
+	checkpointtest.WriteRecord(
+		t,
+		filepath.Join(root, vectorsearch.CollectionName(collectionID)),
+		fileName,
+		conversationID,
+		fingerprint,
+	)
 }
 
 // directoryBytes returns each file's content by file name.
@@ -34,23 +47,32 @@ func directoryBytes(t *testing.T, directory string) map[string]string {
 	if err != nil {
 		t.Fatalf("read %s: %v", directory, err)
 	}
+
 	contents := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		content, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
 		if readErr != nil {
 			t.Fatalf("read %s: %v", entry.Name(), readErr)
 		}
+
 		contents[entry.Name()] = string(content)
 	}
+
 	return contents
 }
 
 // requireSameFiles fails if a directory lost, gained, or changed a file.
-func requireSameFiles(t *testing.T, stage string, before map[string]string, after map[string]string) {
+func requireSameFiles(
+	t *testing.T,
+	stage string,
+	before map[string]string,
+	after map[string]string,
+) {
 	t.Helper()
 	if len(after) != len(before) {
 		t.Fatalf("%s: directory stores %d files, want %d", stage, len(after), len(before))
 	}
+
 	for name, content := range before {
 		if after[name] != content {
 			t.Fatalf("%s: record %s changed", stage, name)
@@ -60,18 +82,32 @@ func requireSameFiles(t *testing.T, stage string, before map[string]string, afte
 
 // neededAfterRestart opens a local client to read the saved records as a
 // restarted daemon would and returns the conversations the client requests.
-func neededAfterRestart(t *testing.T, root string, collectionID string, manifest []semsearch.Fingerprint) []string {
+func neededAfterRestart(
+	t *testing.T,
+	root string,
+	collectionID string,
+	manifest []semsearch.Fingerprint,
+) []string {
 	t.Helper()
 	ctx := context.Background()
-	client, err := vectorsearch.Open(ctx, vectorsearch.Options{Backend: vectorsearch.BackendLocal, LocalRoot: t.TempDir(), CheckpointDir: root})
+	client, err := vectorsearch.Open(
+		ctx,
+		vectorsearch.Options{
+			Backend:       vectorsearch.BackendLocal,
+			LocalRoot:     t.TempDir(),
+			CheckpointDir: root,
+		},
+	)
 	if err != nil {
 		t.Fatalf("open local client: %v", err)
 	}
+
 	defer func() { _ = client.Close(ctx) }()
 	needed, err := client.SyncConversationManifest(ctx, collectionID, manifest)
 	if err != nil {
 		t.Fatalf("sync manifest of %s: %v", collectionID, err)
 	}
+
 	return needed
 }
 
@@ -91,13 +127,19 @@ func TestCopyConversationCheckpointsCopiesSavedRecords(t *testing.T) {
 	targetDir := filepath.Join(root, vectorsearch.CollectionName(checkpointTargetID))
 	sourceBefore := directoryBytes(t, sourceDir)
 
-	copied, err := vectorsearch.CopyConversationCheckpoints(root, checkpointSourceID, checkpointTargetID)
+	copied, err := vectorsearch.CopyConversationCheckpoints(
+		root,
+		checkpointSourceID,
+		checkpointTargetID,
+	)
 	if err != nil {
 		t.Fatalf("copy records: %v", err)
 	}
+
 	if copied != 3 {
 		t.Fatalf("copied %d records, want 3", copied)
 	}
+
 	wantRecords := map[string]string{"codex:a": "fp-a", "codex:b": "fp-b", "codex:c": "fp-c-saved"}
 	if got := checkpointtest.Records(t, targetDir); !maps.Equal(got, wantRecords) {
 		t.Fatalf("target stores records %v, want %v", got, wantRecords)
@@ -110,12 +152,20 @@ func TestCopyConversationCheckpointsCopiesSavedRecords(t *testing.T) {
 		{ConversationID: "codex:gone", Value: "fp-gone"},
 	}
 	want := []string{"codex:c", "codex:gone"}
-	if needed := neededAfterRestart(t, root, checkpointTargetID, manifest); !slices.Equal(needed, want) {
+	if needed := neededAfterRestart(t, root, checkpointTargetID, manifest); !slices.Equal(
+		needed,
+		want,
+	) {
 		t.Fatalf("target requests %v, want %v", needed, want)
 	}
-	if needed := neededAfterRestart(t, root, checkpointSourceID, manifest); !slices.Equal(needed, want) {
+
+	if needed := neededAfterRestart(t, root, checkpointSourceID, manifest); !slices.Equal(
+		needed,
+		want,
+	) {
 		t.Fatalf("source requests %v, want %v", needed, want)
 	}
+
 	requireSameFiles(t, "after the copy", sourceBefore, directoryBytes(t, sourceDir))
 }
 
@@ -131,11 +181,17 @@ func TestCopyConversationCheckpointsFailsWhenTheTargetIsReadOnly(t *testing.T) {
 	if err := os.MkdirAll(targetDir, readOnlyDirMode); err != nil {
 		t.Fatalf("create %s: %v", targetDir, err)
 	}
+
 	t.Cleanup(func() { _ = os.Chmod(targetDir, checkpointDirMode) })
 
-	if _, err := vectorsearch.CopyConversationCheckpoints(root, checkpointSourceID, checkpointTargetID); err == nil {
+	if _, err := vectorsearch.CopyConversationCheckpoints(
+		root,
+		checkpointSourceID,
+		checkpointTargetID,
+	); err == nil {
 		t.Fatal("copy into a read-only target succeeded")
 	}
+
 	requireSameFiles(t, "after the failed copy", sourceBefore, directoryBytes(t, sourceDir))
 }
 
@@ -149,11 +205,23 @@ func TestCopyConversationCheckpointsFailsWhenTheSourceIsMissing(t *testing.T) {
 	targetDir := filepath.Join(root, vectorsearch.CollectionName(checkpointTargetID))
 	targetBefore := directoryBytes(t, targetDir)
 
-	if _, err := vectorsearch.CopyConversationCheckpoints(root, checkpointSourceID, checkpointTargetID); err == nil {
+	if _, err := vectorsearch.CopyConversationCheckpoints(
+		root,
+		checkpointSourceID,
+		checkpointTargetID,
+	); err == nil {
 		t.Fatal("copy from a missing source directory succeeded")
 	}
-	requireSameFiles(t, "after the copy from a missing source", targetBefore, directoryBytes(t, targetDir))
-	if _, err := os.Stat(filepath.Join(root, vectorsearch.CollectionName(checkpointSourceID))); !os.IsNotExist(err) {
+
+	requireSameFiles(
+		t,
+		"after the copy from a missing source",
+		targetBefore,
+		directoryBytes(t, targetDir),
+	)
+	if _, err := os.Stat(
+		filepath.Join(root, vectorsearch.CollectionName(checkpointSourceID)),
+	); !os.IsNotExist(err) {
 		t.Fatalf("copy from a missing source created the source directory: %v", err)
 	}
 }

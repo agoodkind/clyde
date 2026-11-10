@@ -17,32 +17,41 @@ func Suppress(value string, drop []string) (kept string, removed []string) {
 	if strings.TrimSpace(value) == "" || len(drop) == 0 {
 		return value, nil
 	}
+
 	dropSet := make(map[string]bool, len(drop))
 	for _, token := range drop {
 		trimmed := strings.TrimSpace(token)
 		if trimmed == "" {
 			continue
 		}
+
 		dropSet[strings.ToLower(trimmed)] = true
 	}
+
 	if len(dropSet) == 0 {
 		return value, nil
 	}
+
 	keptTokens := make([]string, 0)
 	removedTokens := make([]string, 0)
+
 	for raw := range strings.SplitSeq(value, ",") {
 		token := strings.TrimSpace(raw)
 		if token == "" {
 			continue
 		}
+
 		if dropSet[strings.ToLower(token)] {
 			removedTokens = append(removedTokens, token)
 			continue
 		}
+
 		keptTokens = append(keptTokens, token)
 	}
+
 	if len(removedTokens) == 0 {
 		return value, nil
 	}
+
 	return strings.Join(keptTokens, ","), removedTokens
 }

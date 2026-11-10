@@ -23,5 +23,6 @@ func classifyRequestPurpose(headers http.Header) mitm.RequestPurpose {
 	if class == requestClassCompaction {
 		return mitm.RequestPurposeCompaction
 	}
+
 	return mitm.RequestPurposeUnspecified
 }

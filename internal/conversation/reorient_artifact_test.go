@@ -53,21 +53,37 @@ func TestRenderReorientArtifactReadsPathWithoutIndex(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x\n"), 0o600); err != nil {
 		t.Fatalf("write temp transcript: %v", err)
 	}
+
 	registry := NewRegistry()
-	registry.Register(artifactTestParser{messages: []transcript.Message{
-		{Role: "user", Text: "recover-me-marker", Visibility: transcript.MessageVisibilityVisible},
-		{Role: "assistant", Text: "acknowledged", Visibility: transcript.MessageVisibilityVisible},
-	}})
+	registry.Register(artifactTestParser{
+		messages: []transcript.Message{
+			{
+				Role:       "user",
+				Text:       "recover-me-marker",
+				Visibility: transcript.MessageVisibilityVisible,
+			},
+			{
+				Role:       "assistant",
+				Text:       "acknowledged",
+				Visibility: transcript.MessageVisibilityVisible,
+			},
+		},
+	})
 	// NewIndex builds an unscanned index: RenderReorientArtifact must read the
 	// path directly through the parser rather than consult cached records.
 	index := NewIndex(registry, config.ConversationConfig{})
-	body, err := index.RenderReorientArtifact(path, providerid.ProviderClaude, ReorientOptions{
-		SyntheticPreCompact: true,
-		IncludeToolOutputs:  true,
-	})
+	body, err := index.RenderReorientArtifact(
+		path,
+		providerid.ProviderClaude,
+		ReorientOptions{
+			SyntheticPreCompact: true,
+			IncludeToolOutputs:  true,
+		},
+	)
 	if err != nil {
 		t.Fatalf("RenderReorientArtifact err = %v", err)
 	}
+
 	if !strings.Contains(body, "recover-me-marker") {
 		t.Fatalf("rendered body missing the recovered message; got %q", body)
 	}
@@ -79,8 +95,13 @@ func TestRenderReorientArtifactUnknownProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x\n"), 0o600); err != nil {
 		t.Fatalf("write temp transcript: %v", err)
 	}
+
 	index := NewIndex(NewRegistry(), config.ConversationConfig{})
-	if _, err := index.RenderReorientArtifact(path, providerid.ProviderClaude, ReorientOptions{SyntheticPreCompact: true}); err == nil {
+	if _, err := index.RenderReorientArtifact(
+		path,
+		providerid.ProviderClaude,
+		ReorientOptions{SyntheticPreCompact: true},
+	); err == nil {
 		t.Fatal("expected an error when no registered provider parses the artifact")
 	}
 }
@@ -89,7 +110,11 @@ func TestRenderReorientArtifactMissingFile(t *testing.T) {
 	t.Parallel()
 	index := NewIndex(NewRegistry(), config.ConversationConfig{})
 	missing := filepath.Join(t.TempDir(), "does-not-exist.jsonl")
-	if _, err := index.RenderReorientArtifact(missing, providerid.ProviderClaude, ReorientOptions{SyntheticPreCompact: true}); err == nil {
+	if _, err := index.RenderReorientArtifact(
+		missing,
+		providerid.ProviderClaude,
+		ReorientOptions{SyntheticPreCompact: true},
+	); err == nil {
 		t.Fatal("expected an error for a missing transcript file")
 	}
 }

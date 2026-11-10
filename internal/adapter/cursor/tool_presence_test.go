@@ -28,6 +28,7 @@ func TestTranslateRequestSetsMetadataFields(t *testing.T) {
 	if got.ConversationID != "conv-abc" {
 		t.Errorf("ConversationID = %q, want conv-abc", got.ConversationID)
 	}
+
 	if got.RequestID != "req-xyz" {
 		t.Errorf("RequestID = %q, want req-xyz", got.RequestID)
 	}
@@ -49,15 +50,19 @@ func TestTranslateRequestPopulatesToolPresenceFlags(t *testing.T) {
 	if !got.HasSubagentTool {
 		t.Errorf("HasSubagentTool = false, want true")
 	}
+
 	if !got.HasSwitchModeTool {
 		t.Errorf("HasSwitchModeTool = false, want true")
 	}
+
 	if !got.HasAskQuestionTool {
 		t.Errorf("HasAskQuestionTool = false, want true")
 	}
+
 	if !got.HasCreatePlanTool {
 		t.Errorf("HasCreatePlanTool = false, want true")
 	}
+
 	if !got.HasApplyPatchTool {
 		t.Errorf("HasApplyPatchTool = false, want true")
 	}
@@ -72,15 +77,19 @@ func TestTranslateRequestAbsentToolsAreFalse(t *testing.T) {
 	if got.HasSubagentTool {
 		t.Errorf("HasSubagentTool = true, want false")
 	}
+
 	if got.HasSwitchModeTool {
 		t.Errorf("HasSwitchModeTool = true, want false")
 	}
+
 	if got.HasAskQuestionTool {
 		t.Errorf("HasAskQuestionTool = true, want false")
 	}
+
 	if got.HasCreatePlanTool {
 		t.Errorf("HasCreatePlanTool = true, want false")
 	}
+
 	if got.HasApplyPatchTool {
 		t.Errorf("HasApplyPatchTool = true, want false")
 	}

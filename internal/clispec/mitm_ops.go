@@ -103,8 +103,11 @@ func mitmShowOp() Operation[mitmShowInput, mitmShowPayload] {
 			"and performs the lookup. Use --output-format json for structured output.",
 		Examples: []string{"clyde mitm show chatcmpl-abc123"},
 		Args: []Arg[mitmShowInput]{
-			PositionalArg("id", "Correlation id to inspect.",
-				func(in *mitmShowInput, v string) { in.ID = v }),
+			PositionalArg(
+				"id",
+				"Correlation id to inspect.",
+				func(in *mitmShowInput, v string) { in.ID = v },
+			),
 		},
 		Params:         nil,
 		New:            func() mitmShowInput { return mitmShowInput{ID: ""} },
@@ -112,14 +115,27 @@ func mitmShowOp() Operation[mitmShowInput, mitmShowPayload] {
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
-		Prepare:        func(in mitmShowInput) (mitmShowPayload, error) { return mitmShowPayload(in), nil },
-		Run:            nil,
+		Prepare: func(in mitmShowInput) (mitmShowPayload, error) {
+			return mitmShowPayload(in), nil
+		},
+		Run: nil,
 		runResult: func(ctx context.Context, p mitmShowPayload) (Result, error) {
 			output, err := daemon.ShowCapture(ctx, p.ID)
 			if err != nil {
-				slog.WarnContext(ctx, "cli.mitm.show.failed", "concern", "cli.mitm", "component", "clispec", "err", err)
+				slog.WarnContext(
+					ctx,
+					"cli.mitm.show.failed",
+					"concern",
+					"cli.mitm",
+					"component",
+					"clispec",
+					"err",
+					err,
+				)
+
 				return nil, fmt.Errorf("mitm show: %w", err)
 			}
+
 			return valueResult{
 				Payload: mitmShowOutput{ShowOutput: output},
 				Text:    mitmshow.RenderText(output),
@@ -149,22 +165,44 @@ func mitmStatusOp() Operation[mitmStatusInput, mitmStatusPayload] {
 		runResult: func(ctx context.Context, _ mitmStatusPayload) (Result, error) {
 			status, err := daemon.GetMITMStatus(ctx)
 			if err != nil {
-				slog.WarnContext(ctx, "cli.mitm.status.failed", "concern", "cli.mitm", "component", "clispec", "err", err)
+				slog.WarnContext(
+					ctx,
+					"cli.mitm.status.failed",
+					"concern",
+					"cli.mitm",
+					"component",
+					"clispec",
+					"err",
+					err,
+				)
+
 				return nil, fmt.Errorf("mitm status: %w", err)
 			}
+
 			listeners := make([]mitmListenerStatusOutput, 0, len(status.Listeners))
 			var out strings.Builder
+
 			for _, listener := range status.Listeners {
-				listeners = append(listeners, mitmListenerStatusOutput{
-					ID:      listener.ID,
-					Address: listener.Address,
-					Up:      listener.Up,
-				})
-				fmt.Fprintf(&out, "listener[%s] listen_address: %s\n", listener.ID, listener.Address)
+				listeners = append(
+					listeners,
+					mitmListenerStatusOutput{
+						ID:      listener.ID,
+						Address: listener.Address,
+						Up:      listener.Up,
+					},
+				)
+				fmt.Fprintf(
+					&out,
+					"listener[%s] listen_address: %s\n",
+					listener.ID,
+					listener.Address,
+				)
 				fmt.Fprintf(&out, "listener[%s] listener_up: %t\n", listener.ID, listener.Up)
 			}
+
 			fmt.Fprintf(&out, "ca_cert_path: %s\n", status.CACertPath)
 			fmt.Fprintf(&out, "ca_key_path: %s\n", status.CAKeyPath)
+
 			return valueResult{
 				Payload: mitmStatusOutput{
 					Listeners:  listeners,
@@ -191,15 +229,34 @@ func mitmBaselineSeedOp() Operation[mitmBaselineSeedInput, mitmBaselineSeedPaylo
 			"--exclude-ua to scope which captured caller flavor seeds the " +
 			"baseline (for example --include-ua claude-cli). The daemon " +
 			"performs the build and write against its capture store.",
-		Examples: []string{"clyde mitm baseline seed --upstream claude-code --include-ua claude-cli"},
-		Args:     nil,
+		Examples: []string{
+			"clyde mitm baseline seed --upstream claude-code --include-ua claude-cli",
+		},
+		Args: nil,
 		Params: []Param[mitmBaselineSeedInput]{
-			StringParam("upstream", "Upstream name, e.g. claude-code or codex-cli.", "", true,
-				func(in *mitmBaselineSeedInput, v string) { in.Upstream = v }),
-			StringSliceParam("include_ua", "Only seed from shapes whose User-Agent contains one of these substrings.", nil,
-				func(in *mitmBaselineSeedInput, v []string) { in.IncludeUA = append(in.IncludeUA, v...) }),
-			StringSliceParam("exclude_ua", "Drop shapes whose User-Agent contains one of these substrings.", nil,
-				func(in *mitmBaselineSeedInput, v []string) { in.ExcludeUA = append(in.ExcludeUA, v...) }),
+			StringParam(
+				"upstream",
+				"Upstream name, e.g. claude-code or codex-cli.",
+				"",
+				true,
+				func(in *mitmBaselineSeedInput, v string) { in.Upstream = v },
+			),
+			StringSliceParam(
+				"include_ua",
+				"Only seed from shapes whose User-Agent contains one of these substrings.",
+				nil,
+				func(in *mitmBaselineSeedInput, v []string) {
+					in.IncludeUA = append(in.IncludeUA, v...)
+				},
+			),
+			StringSliceParam(
+				"exclude_ua",
+				"Drop shapes whose User-Agent contains one of these substrings.",
+				nil,
+				func(in *mitmBaselineSeedInput, v []string) {
+					in.ExcludeUA = append(in.ExcludeUA, v...)
+				},
+			),
 		},
 		New: func() mitmBaselineSeedInput {
 			return mitmBaselineSeedInput{Upstream: "", IncludeUA: nil, ExcludeUA: nil}
@@ -212,18 +269,33 @@ func mitmBaselineSeedOp() Operation[mitmBaselineSeedInput, mitmBaselineSeedPaylo
 			if strings.TrimSpace(in.Upstream) == "" {
 				return mitmBaselineSeedPayload{}, fmt.Errorf("upstream is required")
 			}
+
 			return mitmBaselineSeedPayload(in), nil
 		},
 		Run: nil,
 		runResult: func(ctx context.Context, p mitmBaselineSeedPayload) (Result, error) {
 			result, err := daemon.SeedBaseline(ctx, p.Upstream, p.IncludeUA, p.ExcludeUA)
 			if err != nil {
-				slog.WarnContext(ctx, "cli.mitm.seed_baseline.failed", "concern", "cli.mitm", "component", "clispec", "upstream", p.Upstream, "err", err)
+				slog.WarnContext(
+					ctx,
+					"cli.mitm.seed_baseline.failed",
+					"concern",
+					"cli.mitm",
+					"component",
+					"clispec",
+					"upstream",
+					p.Upstream,
+					"err",
+					err,
+				)
+
 				return nil, fmt.Errorf("baseline seed: %w", err)
 			}
+
 			var out strings.Builder
 			fmt.Fprintf(&out, "upstream: %s\n", result.Upstream)
 			fmt.Fprintf(&out, "flavors: %d\n", result.Flavors)
+
 			return valueResult{
 				Payload: mitmBaselineSeedOutput{Upstream: result.Upstream, Flavors: result.Flavors},
 				Text:    out.String(),

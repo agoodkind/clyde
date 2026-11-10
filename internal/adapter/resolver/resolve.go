@@ -115,6 +115,7 @@ func (err *InvalidRequestError) Unwrap() error {
 	if err == nil {
 		return nil
 	}
+
 	return err.cause
 }
 
@@ -123,6 +124,7 @@ func (err *InvalidRequestError) Error() string {
 	if err == nil {
 		return ""
 	}
+
 	return err.message
 }
 
@@ -133,22 +135,39 @@ func (err *InvalidRequestError) Error() string {
 // This is the Step A skeleton. The full implementation lands in Step C
 // once the existing model registry exposes the ModelRegistry interface
 // or the resolver gains a small adapter.
-func Resolve(surface IngressSurface, req adaptercursor.Request, registry ModelRegistry) (ResolvedRequest, error) {
+func Resolve(
+	surface IngressSurface,
+	req adaptercursor.Request,
+	registry ModelRegistry,
+) (ResolvedRequest, error) {
 	if registry == nil {
 		return ResolvedRequest{}, errors.New("resolver: nil registry")
 	}
+
 	effort, err := effectiveReasoningEffort(req.OpenAI)
 	if err != nil {
 		return ResolvedRequest{}, err
 	}
+
 	view, err := registry.Resolve(surface, req.OpenAI.Model, effort)
 	if err != nil {
-		slog.Warn("adapter.resolver.resolve_failed", "concern", "adapter.models.resolve", "model", req.OpenAI.Model, "err", err)
+		slog.Warn(
+			"adapter.resolver.resolve_failed",
+			"concern",
+			"adapter.models.resolve",
+			"model",
+			req.OpenAI.Model,
+			"err",
+			err,
+		)
+
 		return ResolvedRequest{}, fmt.Errorf("resolve request model %s: %w", req.OpenAI.Model, err)
 	}
+
 	if !view.Provider.Valid() {
 		return ResolvedRequest{}, ErrUnresolvedProvider
 	}
+
 	return ResolvedRequest{
 		Provider:   view.Provider,
 		Family:     view.Family,
@@ -181,9 +200,15 @@ func Resolve(surface IngressSurface, req adaptercursor.Request, registry ModelRe
 		OpenAI:                  req.OpenAI,
 		Verbosity:               "",
 		RequestID:               "",
-		Correlation:             correlation.Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
-		Responses:               nil,
-		ResponsesFields:         adapteropenai.ResponsesFieldSet{},
+		Correlation: correlation.Context{
+			TraceID:            "",
+			SpanID:             "",
+			ParentSpanID:       "",
+			RequestID:          "",
+			IdentityAttributes: nil,
+		},
+		Responses:       nil,
+		ResponsesFields: adapteropenai.ResponsesFieldSet{},
 	}, nil
 }
 
@@ -193,6 +218,7 @@ func effectiveReasoningEffort(req adapteropenai.ChatRequest) (string, error) {
 	if req.Reasoning != nil {
 		nested = req.Reasoning.Effort
 	}
+
 	if topLevel != "" && nested != "" && topLevel != nested {
 		return "", &InvalidRequestError{
 			message: fmt.Sprintf(
@@ -203,8 +229,10 @@ func effectiveReasoningEffort(req adapteropenai.ChatRequest) (string, error) {
 			cause: nil,
 		}
 	}
+
 	if topLevel != "" {
 		return topLevel, nil
 	}
+
 	return nested, nil
 }

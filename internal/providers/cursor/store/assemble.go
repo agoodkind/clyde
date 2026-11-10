@@ -64,34 +64,61 @@ func StreamComposerBubbles(
 	if err != nil {
 		return err
 	}
+
 	order, err := assembleBubbleOrder(ctx, composerID, header, stored)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_assembly_failed", "concern", concern, "composer_id", composerID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_assembly_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
+
 		return err
 	}
+
 	for _, entry := range order {
 		bubble, found, err := readBubble(ctx, db, composerID, entry)
 		if err != nil {
 			return err
 		}
+
 		if !found {
 			if entry.Referenced {
 				// The digest pass saw this row. The two passes are separate reads, so a
 				// referenced bubble that has since vanished is a message the header
 				// ordered into the conversation and the store no longer holds, which is
 				// the same loss as one that will not parse.
-				slog.WarnContext(ctx, "providers.cursor.store.referenced_bubble_vanished", "concern", concern, "composer_id", composerID, "bubble_id", entry.BubbleID)
+				slog.WarnContext(
+					ctx,
+					"providers.cursor.store.referenced_bubble_vanished",
+					"concern",
+					concern,
+					"composer_id",
+					composerID,
+					"bubble_id",
+					entry.BubbleID,
+				)
+
 				return fmt.Errorf(
 					"read cursor bubble %q of composer %q: row disappeared between the ordering pass and the read",
-					entry.BubbleID, composerID,
+					entry.BubbleID,
+					composerID,
 				)
 			}
+
 			continue
 		}
+
 		if !visit(bubble) {
 			return nil
 		}
 	}
+
 	return nil
 }
 
@@ -172,6 +199,7 @@ func readComposerBubbleDigests(
 		return stored, err
 	}
 	defer snapshot.rollback()
+
 	return readComposerBubbleDigestsInSnapshot(ctx, snapshot, composerID)
 }
 
@@ -187,7 +215,17 @@ func readComposerBubbleDigestsInSnapshot(
 
 	storedRows, err := snapshot.countRange(ctx, bounds)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_bubble_count_failed", "concern", concern, "composer_id", composerID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_bubble_count_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
+
 		return stored, fmt.Errorf("count cursor bubbles for composer %q: %w", composerID, err)
 	}
 
@@ -195,25 +233,65 @@ func readComposerBubbleDigestsInSnapshot(
 	// key will not parse as projected would keep the totals level and hide it from
 	// the pass below, which is the one place that names what went unread.
 	projected := 0
-	err = forEachComposerBubbleProjection(ctx, snapshot, bounds, func(row bubbleProjection) error {
-		keyBubbleID, ok := bubbleIDFromKey(row.Key, composerID)
-		if !ok {
-			slog.WarnContext(ctx, "providers.cursor.store.bubble_key_unparsed", "concern", concern, "composer_id", composerID, "key", row.Key)
+	err = forEachComposerBubbleProjection(
+		ctx,
+		snapshot,
+		bounds,
+		func(row bubbleProjection) error {
+			keyBubbleID, ok := bubbleIDFromKey(row.Key, composerID)
+			if !ok {
+				slog.WarnContext(
+					ctx,
+					"providers.cursor.store.bubble_key_unparsed",
+					"concern",
+					concern,
+					"composer_id",
+					composerID,
+					"key",
+					row.Key,
+				)
+
+				return nil
+			}
+
+			projected++
+			bubble := row.bubble()
+			digest := newBubbleDigest(keyBubbleID, bubble, row.RowID)
+			if bubble.CreatedAt != "" && digest.CreatedAt == "" {
+				slog.WarnContext(
+					ctx,
+					"providers.cursor.store.bubble_timestamp_unparsed",
+					"concern",
+					concern,
+					"composer_id",
+					composerID,
+					"bubble_id",
+					keyBubbleID,
+					"created_at",
+					bubble.CreatedAt,
+				)
+			}
+
+			stored.Digests[keyBubbleID] = digest
+
 			return nil
-		}
-		projected++
-		bubble := row.bubble()
-		digest := newBubbleDigest(keyBubbleID, bubble, row.RowID)
-		if bubble.CreatedAt != "" && digest.CreatedAt == "" {
-			slog.WarnContext(ctx, "providers.cursor.store.bubble_timestamp_unparsed", "concern", concern, "composer_id", composerID, "bubble_id", keyBubbleID, "created_at", bubble.CreatedAt)
-		}
-		stored.Digests[keyBubbleID] = digest
-		return nil
-	})
+		},
+	)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.composer_bubble_range_failed", "concern", concern, "composer_id", composerID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_bubble_range_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
+
 		return stored, fmt.Errorf("read cursor bubbles for composer %q: %w", composerID, err)
 	}
+
 	if projected >= storedRows {
 		return stored, nil
 	}
@@ -221,16 +299,43 @@ func readComposerBubbleDigestsInSnapshot(
 	// Rows the projection did not see are rows SQLite would not parse. Naming
 	// them costs a second pass over the range, which is why it runs only when the
 	// counts say there is something to name.
-	if err := readUnreadableComposerBubbleIDs(ctx, snapshot, composerID, bounds, stored.Unreadable); err != nil {
-		return stored, fmt.Errorf("read unreadable cursor bubbles for composer %q: %w", composerID, err)
+	if err := readUnreadableComposerBubbleIDs(
+		ctx,
+		snapshot,
+		composerID,
+		bounds,
+		stored.Unreadable,
+	); err != nil {
+		return stored, fmt.Errorf(
+			"read unreadable cursor bubbles for composer %q: %w",
+			composerID,
+			err,
+		)
 	}
+
 	// Whatever the two passes together still do not account for is recorded as a
 	// number rather than assumed to be nothing. Every statement above ran on one
 	// snapshot, so this is a real shortfall rather than a row Cursor appended
 	// between two reads, and a header reference that finds no digest may be one of
 	// these rather than a row the store does not hold.
 	stored.Unaccounted = max(storedRows-projected-len(stored.Unreadable), 0)
-	slog.WarnContext(ctx, "providers.cursor.store.composer_bubbles_unreadable", "concern", concern, "composer_id", composerID, "stored", storedRows, "projected", projected, "named", len(stored.Unreadable), "unaccounted", stored.Unaccounted)
+	slog.WarnContext(
+		ctx,
+		"providers.cursor.store.composer_bubbles_unreadable",
+		"concern",
+		concern,
+		"composer_id",
+		composerID,
+		"stored",
+		storedRows,
+		"projected",
+		projected,
+		"named",
+		len(stored.Unreadable),
+		"unaccounted",
+		stored.Unaccounted,
+	)
+
 	return stored, nil
 }
 
@@ -288,6 +393,7 @@ func (row bubbleProjection) bubble() Bubble {
 			ToolCallBinary: row.ToolCallBinary.String,
 		}
 	}
+
 	return bubble
 }
 
@@ -323,16 +429,22 @@ func forEachComposerBubbleProjection(
 	visit func(bubbleProjection) error,
 ) error {
 	if ctx == nil {
-		return fmt.Errorf("read cursor bubble projection in key range %q: nil context", bounds.Lower)
+		return fmt.Errorf(
+			"read cursor bubble projection in key range %q: nil context",
+			bounds.Lower,
+		)
 	}
+
 	sqlTableName, err := KVTableCursorDiskKV.sqlTableName()
 	if err != nil {
 		return err
 	}
+
 	exists, err := snapshot.tableExists(ctx, sqlTableName)
 	if err != nil {
 		return err
 	}
+
 	if !exists {
 		return nil
 	}
@@ -343,29 +455,68 @@ func forEachComposerBubbleProjection(
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var row bubbleProjection
 		if err := rows.Scan(
-			&row.RowID, &row.Key,
-			&row.ServerBubbleID, &row.CreatedAt, &row.Type, &row.Text, &row.Thinking,
-			&row.ToolCallJSONType, &row.ToolCallID, &row.ToolName, &row.ToolRawArgs,
-			&row.ToolResult, &row.ToolStatus, &row.ToolCallBinary, &row.RequestID,
+			&row.RowID,
+			&row.Key,
+			&row.ServerBubbleID,
+			&row.CreatedAt,
+			&row.Type,
+			&row.Text,
+			&row.Thinking,
+			&row.ToolCallJSONType,
+			&row.ToolCallID,
+			&row.ToolName,
+			&row.ToolRawArgs,
+			&row.ToolResult,
+			&row.ToolStatus,
+			&row.ToolCallBinary,
+			&row.RequestID,
 		); err != nil {
 			logger := discoveryReadLogger(ctx)
-			logger.WarnContext(ctx, "providers.cursor.store.bubble_projection_scan_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
-			return fmt.Errorf("scan cursor bubble projection in key range %q: %w", bounds.Lower, err)
+			logger.WarnContext(
+				ctx,
+				"providers.cursor.store.bubble_projection_scan_failed",
+				"concern",
+				concern,
+				"key_lower",
+				bounds.Lower,
+				"err",
+				err,
+			)
+
+			return fmt.Errorf(
+				"scan cursor bubble projection in key range %q: %w",
+				bounds.Lower,
+				err,
+			)
 		}
+
 		if err := visit(row); err != nil {
 			return err
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.bubble_projection_iterate_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.bubble_projection_iterate_failed",
+			"concern",
+			concern,
+			"key_lower",
+			bounds.Lower,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("iterate cursor bubble projection in key range %q: %w", bounds.Lower, err)
 	}
+
 	return nil
 }
 
@@ -383,27 +534,60 @@ func readUnreadableComposerBubbleIDs(
 	if err != nil {
 		return err
 	}
+
 	query := "SELECT key FROM " + sqlTableName + keyRangePredicate(bounds, "") + undecodableValueSQL
 	rows, err := snapshot.queryRange(ctx, query, bounds, "unreadable bubbles")
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var key string
 		if err := rows.Scan(&key); err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.unreadable_bubble_scan_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
-			return fmt.Errorf("scan unreadable cursor bubble in key range %q: %w", bounds.Lower, err)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.store.unreadable_bubble_scan_failed",
+				"concern",
+				concern,
+				"key_lower",
+				bounds.Lower,
+				"err",
+				err,
+			)
+
+			return fmt.Errorf(
+				"scan unreadable cursor bubble in key range %q: %w",
+				bounds.Lower,
+				err,
+			)
 		}
+
 		if bubbleID, ok := bubbleIDFromKey(key, composerID); ok {
 			into[bubbleID] = true
 		}
 	}
+
 	if err := rows.Err(); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.unreadable_bubble_iterate_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
-		return fmt.Errorf("iterate unreadable cursor bubbles in key range %q: %w", bounds.Lower, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.unreadable_bubble_iterate_failed",
+			"concern",
+			concern,
+			"key_lower",
+			bounds.Lower,
+			"err",
+			err,
+		)
+
+		return fmt.Errorf(
+			"iterate unreadable cursor bubbles in key range %q: %w",
+			bounds.Lower,
+			err,
+		)
 	}
+
 	return nil
 }
 
@@ -425,21 +609,61 @@ func readBubble(
 ) (Bubble, bool, error) {
 	var emptyBubble Bubble
 
-	value, writeOrder, found, err := readKVRowInKnownTable(ctx, db, KVTableCursorDiskKV, bubbleKey(composerID, entry.BubbleID))
+	value, writeOrder, found, err := readKVRowInKnownTable(
+		ctx,
+		db,
+		KVTableCursorDiskKV,
+		bubbleKey(composerID, entry.BubbleID),
+	)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.bubble_read_failed", "concern", concern, "composer_id", composerID, "bubble_id", entry.BubbleID, "err", err)
-		return emptyBubble, false, fmt.Errorf("read cursor bubble %q of composer %q: %w", entry.BubbleID, composerID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.bubble_read_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"bubble_id",
+			entry.BubbleID,
+			"err",
+			err,
+		)
+
+		return emptyBubble, false, fmt.Errorf(
+			"read cursor bubble %q of composer %q: %w",
+			entry.BubbleID,
+			composerID,
+			err,
+		)
 	}
+
 	if !found {
 		return emptyBubble, false, nil
 	}
+
 	if writeOrder != entry.WriteOrder {
-		slog.WarnContext(ctx, "providers.cursor.store.ordered_bubble_rewritten", "concern", concern, "composer_id", composerID, "bubble_id", entry.BubbleID, "ordered_write_order", entry.WriteOrder, "read_write_order", writeOrder)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.ordered_bubble_rewritten",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"bubble_id",
+			entry.BubbleID,
+			"ordered_write_order",
+			entry.WriteOrder,
+			"read_write_order",
+			writeOrder,
+		)
+
 		return emptyBubble, false, fmt.Errorf(
 			"read cursor bubble %q of composer %q: the row was rewritten between the ordering pass and the read",
-			entry.BubbleID, composerID,
+			entry.BubbleID,
+			composerID,
 		)
 	}
+
 	bubble, err := DecodeBubbleJSON(value)
 	if err != nil {
 		// Whether the header named it or not, the ordering pass read this row,
@@ -447,12 +671,33 @@ func readBubble(
 		// disagreeing is a fault in Clyde's own reading rather than a property of
 		// the store, and serving the conversation without a message assembly
 		// committed to emitting would present an incomplete transcript as whole.
-		slog.WarnContext(ctx, "providers.cursor.store.ordered_bubble_decode_failed", "concern", concern, "composer_id", composerID, "bubble_id", entry.BubbleID, "referenced", entry.Referenced, "err", err)
-		return emptyBubble, false, fmt.Errorf("decode cursor bubble %q of composer %q: %w", entry.BubbleID, composerID, err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.ordered_bubble_decode_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"bubble_id",
+			entry.BubbleID,
+			"referenced",
+			entry.Referenced,
+			"err",
+			err,
+		)
+
+		return emptyBubble, false, fmt.Errorf(
+			"decode cursor bubble %q of composer %q: %w",
+			entry.BubbleID,
+			composerID,
+			err,
+		)
 	}
+
 	if bubble.BubbleID == "" {
 		bubble.BubbleID = entry.BubbleID
 	}
+
 	return bubble, true, nil
 }
 
@@ -511,8 +756,10 @@ func fingerprintOf(bubble Bubble) [sha256.Size]byte {
 		writeFingerprintField(hasher, string(bubble.ToolCall.Result))
 		writeFingerprintField(hasher, bubble.ToolCall.Status)
 	}
+
 	var fingerprint [sha256.Size]byte
 	copy(fingerprint[:], hasher.Sum(nil))
+
 	return fingerprint
 }
 
@@ -550,7 +797,9 @@ func assembleBubbleOrder(
 	if err != nil {
 		return nil, err
 	}
+
 	kept := keptUnreferencedBubbles(spine, stored.Digests, referenced)
+
 	return mergeBubbleOrder(spine, kept), nil
 }
 
@@ -578,34 +827,52 @@ func composerSpine(
 	stored composerBubbles,
 ) ([]bubbleDigest, map[string]bool, error) {
 	spine := make([]bubbleDigest, 0, len(header.FullConversationHeadersOnly))
+
 	referenced := make(map[string]bool, len(header.FullConversationHeadersOnly))
 	for _, bubbleRef := range header.FullConversationHeadersOnly {
 		if referenced[bubbleRef.BubbleID] {
 			continue
 		}
+
 		referenced[bubbleRef.BubbleID] = true
 		if stored.Unreadable[bubbleRef.BubbleID] {
 			return nil, nil, fmt.Errorf(
 				"read cursor bubble %q of composer %q: stored value is not decodable",
-				bubbleRef.BubbleID, composerID,
+				bubbleRef.BubbleID,
+				composerID,
 			)
 		}
+
 		if _, ok := stored.Digests[bubbleRef.BubbleID]; ok {
 			spine = append(spine, stored.Digests[bubbleRef.BubbleID])
 			continue
 		}
+
 		if stored.Unaccounted > 0 {
 			return nil, nil, fmt.Errorf(
 				"read cursor bubble %q of composer %q: %d rows of the chat went unread, so this reference cannot be shown to be absent",
-				bubbleRef.BubbleID, composerID, stored.Unaccounted,
+				bubbleRef.BubbleID,
+				composerID,
+				stored.Unaccounted,
 			)
 		}
+
 		// The store holds no row for this reference, and the read accounted for
 		// every row it does hold, so the message is gone rather than unread. That is
 		// still a turn the header ordered into the conversation and the transcript
 		// will not carry, which nothing else records.
-		slog.WarnContext(ctx, "providers.cursor.store.referenced_bubble_absent", "concern", concern, "composer_id", composerID, "bubble_id", bubbleRef.BubbleID)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.referenced_bubble_absent",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"bubble_id",
+			bubbleRef.BubbleID,
+		)
 	}
+
 	return spine, referenced, nil
 }
 
@@ -662,12 +929,15 @@ func keptUnreferencedBubbles(
 	}
 
 	candidates := make([]bubbleDigest, 0)
+
 	for bubbleID, digest := range digests {
 		if referenced[bubbleID] || !digest.HasContent {
 			continue
 		}
+
 		candidates = append(candidates, digest)
 	}
+
 	sortBubbleDigests(candidates)
 
 	kept := make([]bubbleDigest, 0, len(candidates))
@@ -675,9 +945,11 @@ func keptUnreferencedBubbles(
 		if seen.supersedes(digest) {
 			continue
 		}
+
 		seen.keep(digest)
 		kept = append(kept, digest)
 	}
+
 	return kept
 }
 
@@ -706,8 +978,10 @@ func (seen seenBubbles) keep(digest bubbleDigest) {
 	if digest.ServerBubbleID != "" {
 		seen.serverIDs[digest.ServerBubbleID] = true
 		seen.stampedFingerprints[digest.Fingerprint] = true
+
 		return
 	}
+
 	seen.unstampedFingerprints[digest.Fingerprint] = true
 }
 
@@ -716,6 +990,7 @@ func (seen seenBubbles) supersedes(digest bubbleDigest) bool {
 	if digest.ServerBubbleID == "" {
 		return seen.stampedFingerprints[digest.Fingerprint]
 	}
+
 	return seen.serverIDs[digest.ServerBubbleID] || seen.unstampedFingerprints[digest.Fingerprint]
 }
 
@@ -736,45 +1011,68 @@ func (seen seenBubbles) supersedes(digest bubbleDigest) bool {
 func mergeBubbleOrder(spine []bubbleDigest, kept []bubbleDigest) []orderedBubble {
 	order := make([]orderedBubble, 0, len(spine)+len(kept))
 	appendReferenced := func(digest bubbleDigest) {
-		order = append(order, orderedBubble{BubbleID: digest.BubbleID, Referenced: true, WriteOrder: digest.WriteOrder})
+		order = append(
+			order,
+			orderedBubble{
+				BubbleID:   digest.BubbleID,
+				Referenced: true,
+				WriteOrder: digest.WriteOrder,
+			},
+		)
 	}
 	appendAddition := func(digest bubbleDigest) {
-		order = append(order, orderedBubble{BubbleID: digest.BubbleID, Referenced: false, WriteOrder: digest.WriteOrder})
+		order = append(
+			order,
+			orderedBubble{
+				BubbleID:   digest.BubbleID,
+				Referenced: false,
+				WriteOrder: digest.WriteOrder,
+			},
+		)
 	}
 	if len(kept) == 0 {
 		for _, digest := range spine {
 			appendReferenced(digest)
 		}
+
 		return order
 	}
 
 	// sortBubbleDigests already sorted the undated bubbles to the end, so the
 	// dated prefix is the part a gap can bracket.
 	datedCount := 0
+
 	for _, digest := range kept {
 		if digest.CreatedAt == "" {
 			break
 		}
+
 		datedCount++
 	}
+
 	dated := kept[:datedCount]
 
 	byGap := make([][]int, len(spine)+1)
 	for position, gap := range assignBubbleGaps(spine, dated) {
 		byGap[gap] = append(byGap[gap], position)
 	}
+
 	for index, digest := range spine {
 		for _, position := range byGap[index] {
 			appendAddition(dated[position])
 		}
+
 		appendReferenced(digest)
 	}
+
 	for _, position := range byGap[len(spine)] {
 		appendAddition(dated[position])
 	}
+
 	for _, digest := range kept[datedCount:] {
 		appendAddition(digest)
 	}
+
 	return order
 }
 
@@ -797,30 +1095,43 @@ func assignBubbleGaps(spine []bubbleDigest, dated []bubbleDigest) []int {
 	for position := range gaps {
 		gaps[position] = len(spine)
 	}
+
 	bounds := spineGapBounds(spine)
 	pending := newPendingBubbles(len(dated))
+
 	for index := range slices.Backward(spine) {
 		first := 0
 		if bounds.lower[index] != "" {
-			first = sort.Search(len(dated), func(position int) bool {
-				return dated[position].CreatedAt >= bounds.lower[index]
-			})
+			first = sort.Search(
+				len(dated),
+				func(position int) bool {
+					return dated[position].CreatedAt >= bounds.lower[index]
+				},
+			)
 		}
+
 		// A gap with no dated header bubble at or after it is open ended, and an
 		// open-ended gap brackets nothing: the rule is that a bubble no gap brackets
 		// lands after the whole header order, so a trailing undated header bubble
 		// must not pull a late addition in front of it.
 		limit := first
 		if bounds.upper[index] != "" {
-			limit = sort.Search(len(dated), func(position int) bool {
-				return dated[position].CreatedAt >= bounds.upper[index]
-			})
+			limit = sort.Search(
+				len(dated),
+				func(position int) bool {
+					return dated[position].CreatedAt >= bounds.upper[index]
+				},
+			)
 		}
-		for position := pending.firstAtOrAfter(first); position < limit; position = pending.firstAtOrAfter(position + 1) {
+
+		for position := pending.firstAtOrAfter(
+			first,
+		); position < limit; position = pending.firstAtOrAfter(position + 1) {
 			gaps[position] = index
 			pending.take(position)
 		}
 	}
+
 	return gaps
 }
 
@@ -847,19 +1158,24 @@ func spineGapBounds(spine []bubbleDigest) gapBounds {
 		upper: make([]string, len(spine)),
 	}
 	newest := ""
+
 	for index, digest := range spine {
 		bounds.lower[index] = newest
 		if digest.CreatedAt != "" {
 			newest = digest.CreatedAt
 		}
 	}
+
 	oldest := ""
+
 	for index, digest := range slices.Backward(spine) {
 		if digest.CreatedAt != "" {
 			oldest = digest.CreatedAt
 		}
+
 		bounds.upper[index] = oldest
 	}
+
 	return bounds
 }
 
@@ -876,6 +1192,7 @@ func newPendingBubbles(count int) pendingBubbles {
 	for position := range next {
 		next[position] = position
 	}
+
 	return pendingBubbles{next: next}
 }
 
@@ -886,6 +1203,7 @@ func (pending pendingBubbles) firstAtOrAfter(position int) int {
 		pending.next[position] = pending.next[pending.next[position]]
 		position = pending.next[position]
 	}
+
 	return position
 }
 
@@ -906,14 +1224,19 @@ func (pending pendingBubbles) take(position int) {
 // A bubble with no timestamp sorts last so it cannot claim an interior position
 // it has no evidence for.
 func sortBubbleDigests(digests []bubbleDigest) {
-	sort.SliceStable(digests, func(i int, j int) bool {
-		left, right := digests[i], digests[j]
-		if (left.CreatedAt == "") != (right.CreatedAt == "") {
-			return right.CreatedAt == ""
-		}
-		if left.CreatedAt != right.CreatedAt {
-			return left.CreatedAt < right.CreatedAt
-		}
-		return left.WriteOrder < right.WriteOrder
-	})
+	sort.SliceStable(
+		digests,
+		func(i int, j int) bool {
+			left, right := digests[i], digests[j]
+			if (left.CreatedAt == "") != (right.CreatedAt == "") {
+				return right.CreatedAt == ""
+			}
+
+			if left.CreatedAt != right.CreatedAt {
+				return left.CreatedAt < right.CreatedAt
+			}
+
+			return left.WriteOrder < right.WriteOrder
+		},
+	)
 }

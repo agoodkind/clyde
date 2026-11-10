@@ -95,6 +95,7 @@ func (s *LoggingSinks) setOverride(name string, override LoggingSinkOverride) er
 	default:
 		return fmt.Errorf("logging.sinks: unknown sink %q", name)
 	}
+
 	return nil
 }
 
@@ -174,6 +175,7 @@ var loggingSinkSpecs = []LoggingSinkSpec{
 func LoggingSinkSpecs() []LoggingSinkSpec {
 	specs := make([]LoggingSinkSpec, len(loggingSinkSpecs))
 	copy(specs, loggingSinkSpecs)
+
 	return specs
 }
 
@@ -186,6 +188,7 @@ func IsKnownLoggingSink(name string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -212,6 +215,7 @@ func (t LoggingTranscript) IsEnabled() bool {
 	if t.Enabled == nil {
 		return true
 	}
+
 	return *t.Enabled
 }
 
@@ -259,16 +263,20 @@ func NormalizeSidecarRotation(in SidecarRotation) SidecarRotation {
 	if in.MaxSizeMB <= 0 {
 		in.MaxSizeMB = SidecarRotationMaxSizeMB
 	}
+
 	if in.MaxBackups <= 0 {
 		in.MaxBackups = SidecarRotationMaxBackups
 	}
+
 	if in.MaxAgeDays <= 0 {
 		in.MaxAgeDays = SidecarRotationMaxAgeDays
 	}
+
 	if in.Compress == nil {
 		enabled := true
 		in.Compress = &enabled
 	}
+
 	return in
 }
 

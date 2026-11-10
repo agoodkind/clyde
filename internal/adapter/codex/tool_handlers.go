@@ -68,6 +68,7 @@ func (h toolHandlers) functionToolName(nativeName string) string {
 	if trimmed := strings.TrimSpace(nativeName); trimmed != "" {
 		return trimmed
 	}
+
 	return string(codexwire.ItemTypeFunctionCall)
 }
 
@@ -80,9 +81,11 @@ func (h toolHandlers) patchToolName(nativeName string) string {
 	if name, ok := h.declared.patchToolName(); ok {
 		return name
 	}
+
 	if trimmed := strings.TrimSpace(nativeName); trimmed != "" {
 		return trimmed
 	}
+
 	return codexApplyPatchToolType
 }
 
@@ -97,6 +100,7 @@ func (h toolHandlers) customToolReply(nativeName string) (string, bool) {
 	if name, ok := h.declared.declaredCustomToolName(nativeName); ok {
 		return name, true
 	}
+
 	return h.patchToolName(nativeName), false
 }
 
@@ -108,6 +112,7 @@ func (h toolHandlers) shellToolName() string {
 	if name, ok := h.declared.commandToolName(); ok {
 		return name
 	}
+
 	return string(codexwire.ItemTypeLocalShellCall)
 }
 
@@ -119,6 +124,7 @@ func (h toolHandlers) handleFunctionArguments(arguments string) (string, bool) {
 	if arguments == "" {
 		return "", false
 	}
+
 	return arguments, true
 }
 
@@ -179,7 +185,9 @@ func (h toolHandlers) shellFields() shellFields {
 	if !ok {
 		return out
 	}
+
 	out = shellFields{command: "", workdir: "", timeout: ""}
+
 	for name := range schema.Properties {
 		lower := strings.ToLower(strings.TrimSpace(name))
 		switch {
@@ -191,11 +199,13 @@ func (h toolHandlers) shellFields() shellFields {
 			out.timeout = strings.TrimSpace(name)
 		}
 	}
+
 	if out.command == "" {
 		// The chooser matched this tool as command-like, so a command
 		// property exists; keep the codex-rs default name as a guard.
 		out.command = "command"
 	}
+
 	return out
 }
 
@@ -214,20 +224,24 @@ func shellArgsFromLocalShellItem(item codexwire.InputItem, fields shellFields) (
 	if len(item.Action) == 0 {
 		return "", false
 	}
+
 	var action codexwire.LocalShellAction
 	if err := json.Unmarshal(item.Action, &action); err != nil {
 		return "", false
 	}
+
 	command := CommandString(action.Command)
 	if command == "" {
 		return "", false
 	}
+
 	out := make(map[string]json.RawMessage, 3)
 	if name := strings.TrimSpace(fields.command); name != "" {
 		if encoded, err := json.Marshal(command); err == nil {
 			out[name] = encoded
 		}
 	}
+
 	if name := strings.TrimSpace(fields.workdir); name != "" {
 		if cwd := action.WorkingDir(); cwd != "" {
 			if encoded, err := json.Marshal(cwd); err == nil {
@@ -235,6 +249,7 @@ func shellArgsFromLocalShellItem(item codexwire.InputItem, fields shellFields) (
 			}
 		}
 	}
+
 	if name := strings.TrimSpace(fields.timeout); name != "" {
 		if ms := localShellTimeoutMs(action); ms != nil {
 			if encoded, err := json.Marshal(*ms); err == nil {
@@ -242,13 +257,16 @@ func shellArgsFromLocalShellItem(item codexwire.InputItem, fields shellFields) (
 			}
 		}
 	}
+
 	if len(out) == 0 {
 		return "", false
 	}
+
 	raw, err := json.Marshal(out)
 	if err != nil {
 		return "", false
 	}
+
 	return string(raw), true
 }
 
@@ -260,9 +278,11 @@ func localShellTimeoutMs(action codexwire.LocalShellAction) *int64 {
 		ms := *action.TimeoutMs
 		return &ms
 	}
+
 	if action.BlockUntilMs != nil {
 		ms := *action.BlockUntilMs
 		return &ms
 	}
+
 	return nil
 }

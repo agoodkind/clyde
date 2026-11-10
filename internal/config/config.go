@@ -333,6 +333,7 @@ func (r AdapterCodexReasoning) ResolvedRoundTripSummary() CodexRoundTripSummary 
 	if r.RoundTripSummary == "" {
 		return CodexRoundTripSummaryNative
 	}
+
 	return r.RoundTripSummary
 }
 
@@ -342,6 +343,7 @@ func (r AdapterCodexReasoning) ResolvedRoundTripEncrypted() CodexRoundTripEncryp
 	if r.RoundTripEncrypted == "" {
 		return CodexRoundTripEncryptedRoundTrip
 	}
+
 	return r.RoundTripEncrypted
 }
 
@@ -413,6 +415,7 @@ func (n AdapterNotices) EnabledOrDefault() bool {
 	if n.Enabled == nil {
 		return true
 	}
+
 	return *n.Enabled
 }
 
@@ -422,6 +425,7 @@ func (n AdapterNotices) UsageThresholdsUsedPercentOrDefault() []float64 {
 	if len(n.Usage.ThresholdsUsedPercent) == 0 {
 		return append([]float64(nil), defaultNoticeUsageThresholdsUsedPercent...)
 	}
+
 	return append([]float64(nil), n.Usage.ThresholdsUsedPercent...)
 }
 
@@ -431,6 +435,7 @@ func (n AdapterNotices) UsageRepeatPolicyOrDefault() AdapterNoticeRepeatPolicy {
 	if policy.Mode == "" {
 		policy.Mode = AdapterNoticeRepeatEvery
 	}
+
 	return policy
 }
 
@@ -455,12 +460,15 @@ func (o AdapterOAuth) ValidateOAuthFields() error {
 	if o.MessagesURL == "" {
 		return fmt.Errorf("adapter: [adapter.anthropic.oauth].messages_url must be set")
 	}
+
 	if o.AnthropicBeta == "" {
 		return fmt.Errorf("adapter: [adapter.anthropic.oauth].anthropic_beta must be set")
 	}
+
 	if o.AnthropicVersion == "" {
 		return fmt.Errorf("adapter: [adapter.anthropic.oauth].anthropic_version must be set")
 	}
+
 	return nil
 }
 
@@ -527,16 +535,19 @@ func (duration *Duration) UnmarshalText(text []byte) error {
 		*duration = 0
 		return nil
 	}
+
 	parsed, err := time.ParseDuration(value)
 	if err == nil {
 		*duration = Duration(parsed)
 		return nil
 	}
+
 	numeric, numericErr := strconv.ParseInt(value, 10, 64)
 	if numericErr == nil {
 		*duration = Duration(time.Duration(numeric))
 		return nil
 	}
+
 	return fmt.Errorf("parse duration %q: %w", value, err)
 }
 

@@ -30,11 +30,13 @@ func resolveCaptureConcern(rules []config.MITMCaptureRouteRule, input captureCon
 	if len(rules) == 0 {
 		rules = config.DefaultMITMCaptureRouteRules()
 	}
+
 	for _, rule := range rules {
 		if captureRuleMatches(rule, input) {
 			return rule.Concern
 		}
 	}
+
 	return autoClassifyConcern(input)
 }
 
@@ -50,9 +52,11 @@ func autoClassifyConcern(input captureConcernInput) string {
 	if provider == "" {
 		return "unknown"
 	}
+
 	if token := concernTokenFromPath(provider, input.Path); token != "" {
 		return provider + "." + token
 	}
+
 	return provider + ".other"
 }
 
@@ -64,20 +68,31 @@ func concernTokenFromPath(provider, path string) string {
 	if svc := grpcServiceToken(path); svc != "" {
 		return svc
 	}
+
 	skip := map[string]bool{
-		"": true, "v1": true, "v2": true, "v3": true, "api": true,
-		"backend-api": true, "ces": true, "tev1": true, "rest": true,
-		provider: true,
+		"":            true,
+		"v1":          true,
+		"v2":          true,
+		"v3":          true,
+		"api":         true,
+		"backend-api": true,
+		"ces":         true,
+		"tev1":        true,
+		"rest":        true,
+		provider:      true,
 	}
+
 	for seg := range strings.SplitSeq(strings.Trim(path, "/"), "/") {
 		lower := strings.ToLower(seg)
 		if skip[lower] || strings.Contains(lower, ".") || concernSegmentIsIDLike(lower) {
 			continue
 		}
+
 		if slug := concernSlug(lower); slug != "" {
 			return slug
 		}
 	}
+
 	return ""
 }
 
@@ -88,11 +103,13 @@ func grpcServiceToken(path string) string {
 	if !strings.Contains(first, ".") {
 		return ""
 	}
+
 	for part := range strings.SplitSeq(first, ".") {
 		if len(part) > len("Service") && strings.HasSuffix(part, "Service") {
 			return concernSlug(strings.TrimSuffix(part, "Service"))
 		}
 	}
+
 	return ""
 }
 
@@ -102,6 +119,7 @@ func concernSegmentIsIDLike(seg string) bool {
 	if len(seg) < 12 {
 		return false
 	}
+
 	for _, r := range seg {
 		switch {
 		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r == '-':
@@ -109,6 +127,7 @@ func concernSegmentIsIDLike(seg string) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -118,6 +137,7 @@ func concernSegmentIsIDLike(seg string) bool {
 func concernSlug(value string) string {
 	var b strings.Builder
 	lastUnderscore := false
+
 	for _, r := range strings.ToLower(value) {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
@@ -130,35 +150,47 @@ func concernSlug(value string) string {
 			}
 		}
 	}
+
 	out := strings.Trim(b.String(), "_")
 	if len(out) > 40 {
 		return out[:40]
 	}
+
 	return out
 }
 
 func captureRuleMatches(rule config.MITMCaptureRouteRule, input captureConcernInput) bool {
-	if rule.Provider != "" && !strings.EqualFold(string(rule.Provider), strings.TrimSpace(input.Provider)) {
+	if rule.Provider != "" &&
+		!strings.EqualFold(string(rule.Provider), strings.TrimSpace(input.Provider)) {
 		return false
 	}
+
 	if rule.Host != "" && normalizeCaptureHost(rule.Host) != normalizeCaptureHost(input.Host) {
 		return false
 	}
-	if rule.Method != "" && !strings.EqualFold(string(rule.Method), strings.TrimSpace(input.Method)) {
+
+	if rule.Method != "" &&
+		!strings.EqualFold(string(rule.Method), strings.TrimSpace(input.Method)) {
 		return false
 	}
+
 	if rule.PathExact != "" && rule.PathExact != input.Path {
 		return false
 	}
+
 	if rule.PathPrefix != "" && !strings.HasPrefix(input.Path, rule.PathPrefix) {
 		return false
 	}
+
 	if rule.PathContains != "" && !strings.Contains(input.Path, rule.PathContains) {
 		return false
 	}
-	if rule.ContentTypeContains != "" && !captureContentTypeMatches(rule.ContentTypeContains, input) {
+
+	if rule.ContentTypeContains != "" &&
+		!captureContentTypeMatches(rule.ContentTypeContains, input) {
 		return false
 	}
+
 	return rule.Concern != ""
 }
 
@@ -170,7 +202,9 @@ func captureContentTypeMatches(needle string, input captureConcernInput) bool {
 	needle = strings.ToLower(strings.TrimSpace(needle))
 	requestContentType := strings.ToLower(input.RequestContentType)
 	responseContentType := strings.ToLower(input.ResponseContentType)
-	return strings.Contains(requestContentType, needle) || strings.Contains(responseContentType, needle)
+
+	return strings.Contains(requestContentType, needle) ||
+		strings.Contains(responseContentType, needle)
 }
 
 // safePathPart sanitizes an arbitrary string (host, upstream slug) into a
@@ -182,7 +216,9 @@ func safePathPart(value string) string {
 	if value == "" || value == "/" {
 		return "root"
 	}
+
 	var b strings.Builder
+
 	for _, r := range value {
 		switch {
 		case r >= 'a' && r <= 'z':
@@ -195,17 +231,21 @@ func safePathPart(value string) string {
 			b.WriteByte('-')
 		}
 	}
+
 	out := b.String()
 	for strings.Contains(out, "..") {
 		out = strings.ReplaceAll(out, "..", ".")
 	}
+
 	out = strings.Trim(out, "-.")
 	if out == "" {
 		return "capture"
 	}
+
 	if len(out) > 80 {
 		return out[:80]
 	}
+
 	return out
 }
 
@@ -217,6 +257,7 @@ func headerBlock(statusLine string, h http.Header) []byte {
 	buf.WriteString(statusLine)
 	_ = h.Write(&buf)
 	buf.WriteString("\r\n")
+
 	return buf.Bytes()
 }
 

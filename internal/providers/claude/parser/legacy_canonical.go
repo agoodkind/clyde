@@ -33,7 +33,9 @@ func canonicalMessageHash(message []byte) (string, bool) {
 	if !ok {
 		return "", false
 	}
+
 	digest := sha256.Sum256(encoded)
+
 	return hex.EncodeToString(digest[:]), true
 }
 
@@ -45,16 +47,20 @@ func canonicalMessage(message []byte) ([]byte, bool) {
 	if err := json.Unmarshal(message, &fields); err != nil || fields == nil {
 		return nil, false
 	}
+
 	members := make([]canonicalMember, 0, len(fields))
 	for key, raw := range fields {
 		value, ok := canonicalMessageField(key, raw)
 		if !ok {
 			return nil, false
 		}
+
 		members = append(members, canonicalMember{key: key, value: value})
 	}
+
 	var out bytes.Buffer
 	writeCanonicalObject(&out, members)
+
 	return out.Bytes(), true
 }
 
@@ -63,14 +69,17 @@ func canonicalMessageField(key string, raw json.RawMessage) ([]byte, bool) {
 	if key != canonicalContentKey || len(trimmed) == 0 || trimmed[0] != '"' {
 		return canonicalJSON(raw)
 	}
+
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
 		return nil, false
 	}
+
 	var out bytes.Buffer
 	out.WriteString(`[{"text":`)
 	writeCanonicalString(&out, text)
 	out.WriteString(`,"type":"text"}]`)
+
 	return out.Bytes(), true
 }
 
@@ -84,9 +93,11 @@ func canonicalJSON(raw []byte) ([]byte, bool) {
 	if !writeCanonicalValue(decoder, &out) {
 		return nil, false
 	}
+
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return nil, false
 	}
+
 	return out.Bytes(), true
 }
 
@@ -95,14 +106,17 @@ func writeCanonicalValue(decoder *json.Decoder, out *bytes.Buffer) bool {
 	if err != nil {
 		return false
 	}
+
 	switch value := token.(type) {
 	case json.Delim:
 		if value == '[' {
 			return writeCanonicalArray(decoder, out)
 		}
+
 		if value == '{' {
 			return writeCanonicalObjectValue(decoder, out)
 		}
+
 		return false
 	case string:
 		writeCanonicalString(out, value)
@@ -115,75 +129,95 @@ func writeCanonicalValue(decoder *json.Decoder, out *bytes.Buffer) bool {
 	default:
 		return false
 	}
+
 	return true
 }
 
 func writeCanonicalArray(decoder *json.Decoder, out *bytes.Buffer) bool {
 	out.WriteByte('[')
 	first := true
+
 	for decoder.More() {
 		if !first {
 			out.WriteByte(',')
 		}
+
 		first = false
 		if !writeCanonicalValue(decoder, out) {
 			return false
 		}
 	}
+
 	if _, err := decoder.Token(); err != nil {
 		return false
 	}
+
 	out.WriteByte(']')
+
 	return true
 }
 
 func writeCanonicalObjectValue(decoder *json.Decoder, out *bytes.Buffer) bool {
 	members := make([]canonicalMember, 0)
 	positions := make(map[string]int)
+
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
 			return false
 		}
+
 		key, ok := token.(string)
 		if !ok {
 			return false
 		}
+
 		var value bytes.Buffer
 		if !writeCanonicalValue(decoder, &value) {
 			return false
 		}
+
 		// A repeated key keeps its first position and takes its last value, as
 		// JSON.parse does.
 		if position, seen := positions[key]; seen {
 			members[position].value = value.Bytes()
 			continue
 		}
+
 		positions[key] = len(members)
 		members = append(members, canonicalMember{key: key, value: value.Bytes()})
 	}
+
 	if _, err := decoder.Token(); err != nil {
 		return false
 	}
+
 	writeCanonicalObject(out, members)
+
 	return true
 }
 
 // writeCanonicalObject sorts members by key in UTF-16 code unit order, as
 // JavaScript Array sort does, and writes the object.
 func writeCanonicalObject(out *bytes.Buffer, members []canonicalMember) {
-	slices.SortFunc(members, func(left canonicalMember, right canonicalMember) int {
-		return compareUTF16(left.key, right.key)
-	})
+	slices.SortFunc(
+		members,
+		func(left canonicalMember, right canonicalMember) int {
+			return compareUTF16(left.key, right.key)
+		},
+	)
 	out.WriteByte('{')
+
 	for index, member := range members {
 		if index > 0 {
 			out.WriteByte(',')
 		}
+
 		writeCanonicalString(out, member.key)
 		out.WriteByte(':')
 		out.Write(member.value)
 	}
+
 	out.WriteByte('}')
 }
 
@@ -197,6 +231,7 @@ func compareUTF16(left string, right string) int {
 // It writes other characters as UTF-8.
 func writeCanonicalString(out *bytes.Buffer, text string) {
 	out.WriteByte('"')
+
 	for _, character := range text {
 		switch character {
 		case '"':
@@ -218,9 +253,11 @@ func writeCanonicalString(out *bytes.Buffer, text string) {
 				fmt.Fprintf(out, `\u%04x`, character)
 				continue
 			}
+
 			out.WriteRune(character)
 		}
 	}
+
 	out.WriteByte('"')
 }
 
@@ -230,5 +267,6 @@ func isRuneBoundary(text string, offset int) bool {
 	if offset < 0 || offset > len(text) {
 		return false
 	}
+
 	return offset == len(text) || utf8.RuneStart(text[offset])
 }

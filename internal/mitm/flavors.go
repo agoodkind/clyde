@@ -29,6 +29,7 @@ func (s FlavorSignature) FlavorSlug() string {
 	if humanPart == "" {
 		return hashPart
 	}
+
 	return humanPart + "-" + hashPart
 }
 
@@ -40,9 +41,11 @@ func flavorHumanPrefix(s FlavorSignature) string {
 		if hasKey(s.BodyKeys, "tools") || hasKey(s.BodyKeys, "system") {
 			return "claude-code-interactive"
 		}
+
 		if hasKey(s.BodyKeys, "messages") {
 			return "claude-code-probe"
 		}
+
 		return "claude-code-other"
 	case strings.Contains(ua, "codex"):
 		return "codex"
@@ -53,6 +56,7 @@ func flavorHumanPrefix(s FlavorSignature) string {
 	case ua == "":
 		return "unknown"
 	}
+
 	return slugifyUA(ua)
 }
 
@@ -61,6 +65,7 @@ func flavorHashSuffix(s FlavorSignature) string {
 	sort.Strings(keys)
 	raw := s.UserAgent + "|" + s.BetaFingerprint + "|" + strings.Join(keys, ",")
 	sum := sha256.Sum256([]byte(raw))
+
 	return hex.EncodeToString(sum[:4])
 }
 
@@ -74,9 +79,11 @@ func slugifyUA(ua string) string {
 	if clean == "" {
 		return "unknown"
 	}
+
 	if len(clean) > 24 {
 		clean = clean[:24]
 	}
+
 	return clean
 }
 
@@ -89,7 +96,9 @@ func betaFingerprint(raw string) string {
 	if raw == "" {
 		return ""
 	}
+
 	parts := strings.Split(raw, ",")
+
 	cleaned := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(strings.ToLower(p))
@@ -97,7 +106,9 @@ func betaFingerprint(raw string) string {
 			cleaned = append(cleaned, p)
 		}
 	}
+
 	sort.Strings(cleaned)
+
 	return strings.Join(cleaned, ",")
 }
 

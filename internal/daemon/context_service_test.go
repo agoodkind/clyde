@@ -31,13 +31,16 @@ func TestConversationContextServiceDialSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create socket path: %v", err)
 	}
+
 	socketPath := socketFile.Name()
 	if err := socketFile.Close(); err != nil {
 		t.Fatalf("close socket placeholder: %v", err)
 	}
+
 	if err := os.Remove(socketPath); err != nil {
 		t.Fatalf("remove socket placeholder: %v", err)
 	}
+
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -77,6 +80,7 @@ func TestConversationContextServiceDialSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial context service: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if closeErr := conn.Close(); closeErr != nil {
 			t.Fatalf("close context service connection: %v", closeErr)
@@ -86,15 +90,19 @@ func TestConversationContextServiceDialSmoke(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	got, err := client.GetRecentTurns(ctx, &contextpb.GetRecentTurnsRequest{
-		WorkspaceRef:    filepath.Join(tempDir, "repo"),
-		SessionRef:      "",
-		TurnBudget:      1,
-		MaxCharsPerTurn: 20,
-	})
+	got, err := client.GetRecentTurns(
+		ctx,
+		&contextpb.GetRecentTurnsRequest{
+			WorkspaceRef:    filepath.Join(tempDir, "repo"),
+			SessionRef:      "",
+			TurnBudget:      1,
+			MaxCharsPerTurn: 20,
+		},
+	)
 	if err != nil {
 		t.Fatalf("GetRecentTurns over daemon socket: %v", err)
 	}
+
 	if len(got.GetTurns()) != 0 {
 		t.Fatalf("turns len = %d, want 0 for unmatched workspace", len(got.GetTurns()))
 	}

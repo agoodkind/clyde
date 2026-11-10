@@ -140,15 +140,18 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 		if w.Type != "" && w.Type != "function" {
 			return fmt.Errorf("tool has unsupported type %q", w.Type)
 		}
+
 		t.Type = string(openAIToolWireTypeFunction)
 		t.Function = *w.Function
 		t.Format = nil
+
 		return nil
 	}
 
 	if w.Name == "" {
 		return fmt.Errorf("tool missing function schema")
 	}
+
 	wireType := openAIToolWireType(w.Type)
 	switch wireType {
 	case openAIToolWireTypeEmpty, openAIToolWireTypeFunction, openAIToolWireTypeCustom:
@@ -180,12 +183,14 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 		t.Type = string(openAIToolWireTypeFunction)
 		t.Format = nil
 	}
+
 	t.Function = ToolFunctionSchema{
 		Name:        w.Name,
 		Description: w.Description,
 		Parameters:  parameters,
 		Strict:      w.Strict,
 	}
+
 	return nil
 }
 
@@ -204,13 +209,16 @@ func (t Tool) MarshalJSON() ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal OpenAI custom tool: %w", err)
 		}
+
 		return out, nil
 	}
+
 	nested := functionToolWire{Type: t.Type, Function: t.Function}
 	out, err := json.Marshal(nested)
 	if err != nil {
 		return nil, fmt.Errorf("marshal OpenAI tool: %w", err)
 	}
+
 	return out, nil
 }
 
@@ -427,6 +435,7 @@ func CompatibilityUsage(usage Usage) Usage {
 			usage.PromptTokensDetails = nil
 		}
 	}
+
 	return usage
 }
 
@@ -441,6 +450,7 @@ func (u Usage) CachedTokens() int {
 	if u.PromptTokensDetails == nil {
 		return 0
 	}
+
 	return u.PromptTokensDetails.CachedTokens
 }
 
@@ -509,9 +519,12 @@ func FlattenContent(raw json.RawMessage) string {
 		if len(parts) == 0 {
 			return ""
 		}
+
 		return parts[0].Text
 	}
+
 	var b strings.Builder
+
 	for _, p := range parts {
 		switch openAIChatContentPartType(p.Type) {
 		case openAIChatContentPartText:
@@ -530,6 +543,7 @@ func FlattenContent(raw json.RawMessage) string {
 			b.WriteString("]")
 		}
 	}
+
 	return b.String()
 }
 
@@ -538,10 +552,12 @@ func NormalizeContent(raw json.RawMessage) ([]ContentPart, ContentKind) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, ContentKindEmpty
 	}
+
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return []ContentPart{textContentPart(s)}, ContentKindString
 	}
+
 	var parts []ContentPart
 	if err := json.Unmarshal(raw, &parts); err == nil {
 		for i := range parts {
@@ -549,8 +565,10 @@ func NormalizeContent(raw json.RawMessage) ([]ContentPart, ContentKind) {
 				parts[i].Type = "text"
 			}
 		}
+
 		return parts, ContentKindParts
 	}
+
 	return []ContentPart{textContentPart(string(raw))}, ContentKindString
 }
 

@@ -13,6 +13,7 @@ import (
 // was switched off.
 func blankTextKinds(t *testing.T) conversation.ContentKindSet {
 	t.Helper()
+
 	return conversation.NewContentKindSet(
 		conversation.ContentKindChat,
 		conversation.ContentKindThinking,
@@ -33,26 +34,37 @@ func TestWhitespaceOnlyTextIsOfferedAsNoText(t *testing.T) {
 	t.Parallel()
 
 	kinds := blankTextKinds(t)
+
 	for _, spacing := range []string{" ", "   ", "\n", "\t", " \n\t "} {
-		messages := []transcript.Message{{
-			Role:      "assistant",
-			Timestamp: time.Unix(1710000000, 0),
-			Text:      spacing,
-			HasTools:  true,
-			Tools: []transcript.ToolCall{{
-				Name:        "Bash",
-				Input:       transcript.ToolInputJSON{Raw: []byte(`{"command":"ls"}`)},
-				Display:     "",
-				DisplayLang: "",
-			}},
-		}}
+		messages := []transcript.Message{
+			{
+				Role:      "assistant",
+				Timestamp: time.Unix(1710000000, 0),
+				Text:      spacing,
+				HasTools:  true,
+				Tools: []transcript.ToolCall{
+					{
+						Name:        "Bash",
+						Input:       transcript.ToolInputJSON{Raw: []byte(`{"command":"ls"}`)},
+						Display:     "",
+						DisplayLang: "",
+					},
+				},
+			},
+		}
 		built, err := BuildSemanticConversationDocuments(policyTestRecord(), messages, kinds)
 		if err != nil {
 			t.Fatalf("BuildSemanticConversationDocuments(%q) returned error: %v", spacing, err)
 		}
+
 		if len(built.Docs) != 1 {
-			t.Fatalf("text %q produced %d documents, want 1 for its tool call", spacing, len(built.Docs))
+			t.Fatalf(
+				"text %q produced %d documents, want 1 for its tool call",
+				spacing,
+				len(built.Docs),
+			)
 		}
+
 		if built.Docs[0].Text != "" {
 			t.Fatalf("text %q was offered as %q, want no text", spacing, built.Docs[0].Text)
 		}
@@ -66,18 +78,29 @@ func TestWhitespaceOnlyTextIsOfferedAsNoText(t *testing.T) {
 func TestWhitespaceOnlyTextWithNothingElseIsNotOffered(t *testing.T) {
 	t.Parallel()
 
-	messages := []transcript.Message{{
-		Role:      "assistant",
-		Timestamp: time.Unix(1710000000, 0),
-		Text:      "   \n  ",
-	}}
-	built, err := BuildSemanticConversationDocuments(policyTestRecord(), messages, blankTextKinds(t))
+	messages := []transcript.Message{
+		{
+			Role:      "assistant",
+			Timestamp: time.Unix(1710000000, 0),
+			Text:      "   \n  ",
+		},
+	}
+	built, err := BuildSemanticConversationDocuments(
+		policyTestRecord(),
+		messages,
+		blankTextKinds(t),
+	)
 	if err != nil {
 		t.Fatalf("BuildSemanticConversationDocuments returned error: %v", err)
 	}
+
 	if len(built.Docs) != 0 {
-		t.Fatalf("offered %d documents for a message holding only spacing, want none", len(built.Docs))
+		t.Fatalf(
+			"offered %d documents for a message holding only spacing, want none",
+			len(built.Docs),
+		)
 	}
+
 	if built.PolicySkipped != 1 {
 		t.Fatalf("PolicySkipped = %d, want 1", built.PolicySkipped)
 	}
@@ -95,24 +118,29 @@ func TestTextWithContentIsOfferedByteForByte(t *testing.T) {
 	t.Parallel()
 
 	kinds := blankTextKinds(t)
+
 	for _, text := range []string{
 		"  leading spacing is preserved",
 		"trailing spacing is preserved  ",
 		"\n\nboth ends\n\n",
 		"interior  spacing  preserved",
 	} {
-		messages := []transcript.Message{{
-			Role:      "assistant",
-			Timestamp: time.Unix(1710000000, 0),
-			Text:      text,
-		}}
+		messages := []transcript.Message{
+			{
+				Role:      "assistant",
+				Timestamp: time.Unix(1710000000, 0),
+				Text:      text,
+			},
+		}
 		built, err := BuildSemanticConversationDocuments(policyTestRecord(), messages, kinds)
 		if err != nil {
 			t.Fatalf("BuildSemanticConversationDocuments(%q) returned error: %v", text, err)
 		}
+
 		if len(built.Docs) != 1 {
 			t.Fatalf("text %q produced %d documents, want 1", text, len(built.Docs))
 		}
+
 		if built.Docs[0].Text != text {
 			t.Fatalf("text %q was offered as %q, want it unchanged", text, built.Docs[0].Text)
 		}

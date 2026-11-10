@@ -56,21 +56,26 @@ func NormalizeContent(raw json.RawMessage) ([]content.Part, content.Kind) {
 	if trimmed == "" || trimmed == "null" {
 		return nil, content.KindEmpty
 	}
+
 	if trimmed[0] == '"' {
 		var plain string
 		if err := json.Unmarshal(raw, &plain); err != nil {
 			return nil, content.KindEmpty
 		}
+
 		return []content.Part{textPart(plain)}, content.KindString
 	}
+
 	var blocks []inboundBlock
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return nil, content.KindEmpty
 	}
+
 	parts := make([]content.Part, 0, len(blocks))
 	for _, block := range blocks {
 		parts = append(parts, normalizeBlock(block))
 	}
+
 	return parts, content.KindParts
 }
 
@@ -103,6 +108,7 @@ func normalizeBlock(block inboundBlock) content.Part {
 	default:
 		part.Kind = content.PartUnsupported
 	}
+
 	return part
 }
 
@@ -114,25 +120,31 @@ func flattenToolResult(nested json.RawMessage) string {
 	if trimmed == "" || trimmed == "null" {
 		return ""
 	}
+
 	if trimmed[0] == '"' {
 		var plain string
 		if err := json.Unmarshal(nested, &plain); err != nil {
 			return ""
 		}
+
 		return plain
 	}
+
 	parts, kind := NormalizeContent(nested)
 	if kind != content.KindParts {
 		return ""
 	}
+
 	rendered := make([]string, 0, len(parts))
 	for _, part := range parts {
 		text := content.FlattenParts([]content.Part{part})
 		if text == "" {
 			continue
 		}
+
 		rendered = append(rendered, text)
 	}
+
 	return strings.Join(rendered, "\n")
 }
 
@@ -144,9 +156,11 @@ func imagePart(source *ImageSource) *content.Image {
 	if source == nil {
 		return nil
 	}
+
 	if url := strings.TrimSpace(source.URL); url != "" {
 		return &content.Image{URL: url, Detail: ""}
 	}
+
 	return &content.Image{URL: "", Detail: strings.TrimSpace(source.MediaType)}
 }
 
@@ -154,6 +168,7 @@ func textPart(text string) content.Part {
 	part := emptyPart("text")
 	part.Kind = content.PartText
 	part.Text = text
+
 	return part
 }
 
@@ -161,6 +176,7 @@ func emptyPart(wireType string) content.Part {
 	if wireType == "" {
 		wireType = "text"
 	}
+
 	return content.Part{
 		Kind:      "",
 		WireType:  wireType,

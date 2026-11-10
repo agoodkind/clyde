@@ -46,21 +46,28 @@ func TestLogResponseDoubleWritesToDedicatedSink(t *testing.T) {
 	t.Setenv("CLYDE_ANTHROPIC_LOG_PATH", sinkPath)
 	resetDedicatedAnthropicLoggerForTest(t)
 
-	logResponse(context.Background(), slog.LevelInfo, "anthropic.messages.response", responseEvent{
-		Subcomponent: "anthropic",
-		Model:        "claude-sonnet-4-5",
-		Status:       200,
-		RequestID:    "req-test",
-		RequestBytes: 42,
-	})
+	logResponse(
+		context.Background(),
+		slog.LevelInfo,
+		"anthropic.messages.response",
+		responseEvent{
+			Subcomponent: "anthropic",
+			Model:        "claude-sonnet-4-5",
+			Status:       200,
+			RequestID:    "req-test",
+			RequestBytes: 42,
+		},
+	)
 
 	got, err := os.ReadFile(sinkPath)
 	if err != nil {
 		t.Fatalf("read sink: %v", err)
 	}
+
 	if !strings.Contains(string(got), "anthropic.messages.response") {
 		t.Errorf("sink missing event name: %s", string(got))
 	}
+
 	if !strings.Contains(string(got), `"request_id":"req-test"`) {
 		t.Errorf("sink missing request_id: %s", string(got))
 	}
@@ -84,16 +91,23 @@ func TestDedicatedAnthropicLoggerRotatesByVolume(t *testing.T) {
 	// error string instead: three oversized error events push the sidecar past
 	// its 1 MB cap and force at least one rotation.
 	largeErr := strings.Repeat("x", 700*1024)
+
 	for range 3 {
-		logResponse(context.Background(), slog.LevelError, "anthropic.messages.upstream_error", responseEvent{
-			Subcomponent:  "anthropic",
-			Model:         "claude-sonnet-4-5",
-			Status:        500,
-			RequestID:     "req-rotate",
-			ResponseBytes: len(largeErr),
-			Err:           largeErr,
-		})
+		logResponse(
+			context.Background(),
+			slog.LevelError,
+			"anthropic.messages.upstream_error",
+			responseEvent{
+				Subcomponent:  "anthropic",
+				Model:         "claude-sonnet-4-5",
+				Status:        500,
+				RequestID:     "req-rotate",
+				ResponseBytes: len(largeErr),
+				Err:           largeErr,
+			},
+		)
 	}
+
 	if fileLoggerCloser != nil {
 		if err := fileLoggerCloser.Close(); err != nil {
 			t.Fatalf("close anthropic logger: %v", err)
@@ -104,18 +118,22 @@ func TestDedicatedAnthropicLoggerRotatesByVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read log dir: %v", err)
 	}
+
 	var rotated int
+
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, "anthropic-") && strings.HasSuffix(name, ".jsonl") {
 			rotated++
 		}
 	}
+
 	if rotated == 0 {
 		names := make([]string, 0, len(entries))
 		for _, entry := range entries {
 			names = append(names, entry.Name())
 		}
+
 		t.Fatalf("expected rotated anthropic sidecar logs, entries=%v", names)
 	}
 }
@@ -124,14 +142,29 @@ func TestConfigureAnthropicFileLoggerNormalizesDefaults(t *testing.T) {
 	resetDedicatedAnthropicLoggerForTest(t)
 	ConfigureAnthropicFileLogger(FileLogRotationConfig{})
 	if fileLoggerRotation.MaxSizeMB != config.SidecarRotationMaxSizeMB {
-		t.Fatalf("max size MB = %d, want %d", fileLoggerRotation.MaxSizeMB, config.SidecarRotationMaxSizeMB)
+		t.Fatalf(
+			"max size MB = %d, want %d",
+			fileLoggerRotation.MaxSizeMB,
+			config.SidecarRotationMaxSizeMB,
+		)
 	}
+
 	if fileLoggerRotation.MaxBackups != config.SidecarRotationMaxBackups {
-		t.Fatalf("max backups = %d, want %d", fileLoggerRotation.MaxBackups, config.SidecarRotationMaxBackups)
+		t.Fatalf(
+			"max backups = %d, want %d",
+			fileLoggerRotation.MaxBackups,
+			config.SidecarRotationMaxBackups,
+		)
 	}
+
 	if fileLoggerRotation.MaxAgeDays != config.SidecarRotationMaxAgeDays {
-		t.Fatalf("max age days = %d, want %d", fileLoggerRotation.MaxAgeDays, config.SidecarRotationMaxAgeDays)
+		t.Fatalf(
+			"max age days = %d, want %d",
+			fileLoggerRotation.MaxAgeDays,
+			config.SidecarRotationMaxAgeDays,
+		)
 	}
+
 	if fileLoggerRotation.Compress == nil || !*fileLoggerRotation.Compress {
 		t.Fatalf("compress should default to true")
 	}
@@ -144,6 +177,7 @@ func resetDedicatedAnthropicLoggerForTest(t *testing.T) {
 	if fileLoggerCloser != nil {
 		_ = fileLoggerCloser.Close()
 	}
+
 	fileLoggerOnce = sync.Once{}
 	fileLogger = nil
 	fileLoggerCloser = nil
@@ -159,6 +193,7 @@ func resetDedicatedAnthropicLoggerForTest(t *testing.T) {
 		if fileLoggerCloser != nil {
 			_ = fileLoggerCloser.Close()
 		}
+
 		fileLoggerOnce = sync.Once{}
 		fileLogger = nil
 		fileLoggerCloser = nil

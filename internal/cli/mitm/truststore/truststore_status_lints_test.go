@@ -29,24 +29,31 @@ func TestStatusFilesDoNotImportMutatingHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read package dir: %v", err)
 	}
+
 	matched := 0
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
+
 		name := entry.Name()
 		if !strings.HasPrefix(name, "truststore_status") {
 			continue
 		}
+
 		if !strings.HasSuffix(name, ".go") {
 			continue
 		}
+
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
+
 		matched++
 		assertFileHasNoForbiddenImport(t, name)
 	}
+
 	if matched == 0 {
 		t.Fatalf("no truststore_status*.go files matched; the lint cannot run")
 	}
@@ -59,11 +66,17 @@ func assertFileHasNoForbiddenImport(t *testing.T, name string) {
 	if err != nil {
 		t.Fatalf("parse %s: %v", name, err)
 	}
+
 	for _, importSpec := range parsed.Imports {
 		path := strings.Trim(importSpec.Path.Value, `"`)
+
 		for _, banned := range forbiddenStatusImports {
 			if path == banned {
-				t.Fatalf("file %s imports forbidden package %q; status path must stay read-only", name, banned)
+				t.Fatalf(
+					"file %s imports forbidden package %q; status path must stay read-only",
+					name,
+					banned,
+				)
 			}
 		}
 	}

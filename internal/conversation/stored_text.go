@@ -16,6 +16,8 @@ func (r *Registry) StoredTextNormalizer(provider providerid.Provider) (StoredTex
 	if err != nil {
 		return nil, false
 	}
+
 	normalizer, implemented := parser.(StoredTextNormalizer)
+
 	return normalizer, implemented
 }

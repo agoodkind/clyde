@@ -18,34 +18,62 @@ const (
 )
 
 func optionalInt(group, name string, value *int64, unit string) lmstatus.Field {
-	field := lmstatus.Field{Group: group, Name: name, Unit: unit, Value: lmstatus.Value{}, NoDelta: false}
+	field := lmstatus.Field{
+		Group:   group,
+		Name:    name,
+		Unit:    unit,
+		Value:   lmstatus.Value{},
+		NoDelta: false,
+	}
 	if value != nil {
 		field.Value = lmstatus.Int(*value)
 	}
+
 	return field
 }
 
 func optionalText(group, name string, value *string) lmstatus.Field {
-	field := lmstatus.Field{Group: group, Name: name, Unit: "", Value: lmstatus.Value{}, NoDelta: false}
+	field := lmstatus.Field{
+		Group:   group,
+		Name:    name,
+		Unit:    "",
+		Value:   lmstatus.Value{},
+		NoDelta: false,
+	}
 	if value != nil {
 		field.Value = lmstatus.Text(*value)
 	}
+
 	return field
 }
 
 func optionalBool(group, name string, value *bool) lmstatus.Field {
-	field := lmstatus.Field{Group: group, Name: name, Unit: "", Value: lmstatus.Value{}, NoDelta: false}
+	field := lmstatus.Field{
+		Group:   group,
+		Name:    name,
+		Unit:    "",
+		Value:   lmstatus.Value{},
+		NoDelta: false,
+	}
 	if value != nil {
 		field.Value = lmstatus.Bool(*value)
 	}
+
 	return field
 }
 
 func optionalTime(group, name string, unix *int64) lmstatus.Field {
-	field := lmstatus.Field{Group: group, Name: name, Unit: "", Value: lmstatus.Value{}, NoDelta: true}
+	field := lmstatus.Field{
+		Group:   group,
+		Name:    name,
+		Unit:    "",
+		Value:   lmstatus.Value{},
+		NoDelta: true,
+	}
 	if unix != nil {
 		field.Value = lmstatus.Text(time.Unix(*unix, 0).UTC().Format(time.RFC3339))
 	}
+
 	return field
 }
 
@@ -53,7 +81,13 @@ func metricFields(metrics []daemonsvc.StatusMetric) []lmstatus.Field {
 	fields := make([]lmstatus.Field, 0, len(metrics))
 	for _, metric := range metrics {
 		group, _, _ := strings.Cut(metric.Name, metricGroupSeparator)
-		field := lmstatus.Field{Group: group, Name: metric.Name, Unit: metric.Unit, Value: lmstatus.Value{}, NoDelta: false}
+		field := lmstatus.Field{
+			Group:   group,
+			Name:    metric.Name,
+			Unit:    metric.Unit,
+			Value:   lmstatus.Value{},
+			NoDelta: false,
+		}
 		switch metric.Kind {
 		case daemonsvc.StatusMetricInt:
 			field.Value = lmstatus.Int(metric.Int)
@@ -65,8 +99,10 @@ func metricFields(metrics []daemonsvc.StatusMetric) []lmstatus.Field {
 			field.Value = lmstatus.Text(metric.Text)
 		case daemonsvc.StatusMetricAbsent:
 		}
+
 		fields = append(fields, field)
 	}
+
 	return fields
 }
 
@@ -87,11 +123,13 @@ func semanticFields(runtime *daemonsvc.RuntimeStatus) []lmstatus.Field {
 		if semantic.Attempts < math.MaxInt64 {
 			attemptCount = int64(semantic.Attempts)
 		}
+
 		attempts = &attemptCount
 		nextRetry = semantic.NextRetryUnix
 		detail = semantic.Detail
 		process = runtime.Process
 	}
+
 	fields := []lmstatus.Field{
 		optionalBool(groupSemantic, "semantic.ingestion_enabled", ingestionEnabled),
 		optionalBool(groupSemantic, "semantic.search_enabled", searchEnabled),
@@ -101,5 +139,6 @@ func semanticFields(runtime *daemonsvc.RuntimeStatus) []lmstatus.Field {
 		optionalTime(groupSemantic, "semantic.next_retry", nextRetry),
 	}
 	fields = append(fields, metricFields(detail)...)
+
 	return append(fields, metricFields(process)...)
 }

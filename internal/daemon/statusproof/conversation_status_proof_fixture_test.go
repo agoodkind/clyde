@@ -64,7 +64,11 @@ func runStatusProofCommand(t *testing.T, step string, arguments ...string) strin
 	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	factory := cli.NewSystemFactory(cli.BuildInfo{Version: "status-proof", Commit: "", Date: ""})
+	factory := cli.NewSystemFactory(cli.BuildInfo{
+		Version: "status-proof",
+		Commit:  "",
+		Date:    "",
+	})
 	factory.IOStreams = &cli.IOStreams{In: strings.NewReader(""), Out: &stdout, Err: &stderr}
 	root := &cobra.Command{Use: "clyde", SilenceUsage: true, SilenceErrors: true}
 	output.PersistentFlag(root)
@@ -73,8 +77,15 @@ func runStatusProofCommand(t *testing.T, step string, arguments ...string) strin
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
 	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("step=%s operation=run_status_command arguments=%v err=%v stderr=%s", step, arguments, err, stderr.String())
+		t.Fatalf(
+			"step=%s operation=run_status_command arguments=%v err=%v stderr=%s",
+			step,
+			arguments,
+			err,
+			stderr.String(),
+		)
 	}
+
 	return stdout.String()
 }
 
@@ -87,23 +98,39 @@ func statusProofJSON(t *testing.T, step string) (statusProofJSONDocument, string
 	if err := decoder.Decode(&document); err != nil {
 		t.Fatalf("step=%s operation=decode_status_json err=%v body=%s", step, err, body)
 	}
+
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		t.Fatalf("step=%s operation=check_status_json_end err=%v trailing=%s body=%s", step, err, trailing, body)
+		t.Fatalf(
+			"step=%s operation=check_status_json_end err=%v trailing=%s body=%s",
+			step,
+			err,
+			trailing,
+			body,
+		)
 	}
+
 	if strings.Count(strings.TrimRight(body, "\n"), "\n") != 0 {
 		t.Errorf("step=%s operation=check_status_json_lines body=%s", step, body)
 	}
+
 	return document, body
 }
 
-func assertStatusProofJSONValue(t *testing.T, step string, document statusProofJSONDocument, name string, want string) {
+func assertStatusProofJSONValue(
+	t *testing.T,
+	step string,
+	document statusProofJSONDocument,
+	name string,
+	want string,
+) {
 	t.Helper()
 	field, found := document.Counters[name]
 	if !found {
 		t.Errorf("step=%s counter=%s found=false", step, name)
 		return
 	}
+
 	if got := string(field.Value); got != want {
 		t.Errorf("step=%s counter=%s value=%s want=%s", step, name, got, want)
 	}
@@ -112,9 +139,11 @@ func assertStatusProofJSONValue(t *testing.T, step string, document statusProofJ
 func assertStatusProofLines(t *testing.T, step string, body string, lines ...string) {
 	t.Helper()
 	present := make(map[string]bool)
+
 	for line := range strings.SplitSeq(body, "\n") {
 		present[line] = true
 	}
+
 	for _, line := range lines {
 		if !present[line] {
 			t.Errorf("step=%s missing_line=%q body=\n%s", step, line, body)
@@ -130,18 +159,29 @@ func waitForStatusProof(
 ) *daemon.RuntimeStatus {
 	t.Helper()
 	var last daemon.StatusReport
+
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		last = daemon.InspectStatus(context.Background())
 		if last.Runtime != nil && accept(last.Runtime.Semantic) {
 			return last.Runtime
 		}
+
 		time.Sleep(ingestionProofPollInterval)
 	}
+
 	described, err := json.Marshal(last.Runtime)
 	if err != nil {
 		t.Fatalf("step=%s operation=encode_status err=%v", step, err)
 	}
-	t.Fatalf("step=%s operation=wait_for_status timeout=%s daemon_error=%q runtime=%s", step, timeout, last.DaemonError, described)
+
+	t.Fatalf(
+		"step=%s operation=wait_for_status timeout=%s daemon_error=%q runtime=%s",
+		step,
+		timeout,
+		last.DaemonError,
+		described,
+	)
+
 	return nil
 }

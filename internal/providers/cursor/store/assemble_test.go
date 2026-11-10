@@ -42,8 +42,10 @@ func headerFixture(composerID string, bubbleIDs ...string) ComposerHeader {
 		if index%2 == 0 {
 			bubbleType = BubbleTypeUser
 		}
+
 		refs = append(refs, ComposerBubbleRef{BubbleID: bubbleID, Type: bubbleType})
 	}
+
 	return ComposerHeader{
 		ComposerID:                  composerID,
 		Name:                        "",
@@ -72,11 +74,17 @@ func storedFixtureOf(bubbles ...Bubble) *storedFixture {
 		textByID:   make(map[string]string),
 		writeOrder: 0,
 	}
+
 	for _, bubble := range bubbles {
 		fixture.writeOrder++
-		fixture.stored.Digests[bubble.BubbleID] = newBubbleDigest(bubble.BubbleID, bubble, fixture.writeOrder)
+		fixture.stored.Digests[bubble.BubbleID] = newBubbleDigest(
+			bubble.BubbleID,
+			bubble,
+			fixture.writeOrder,
+		)
 		fixture.textByID[bubble.BubbleID] = bubble.Text
 	}
+
 	return fixture
 }
 
@@ -91,23 +99,32 @@ func (fixture *storedFixture) assembledText(t *testing.T, header ComposerHeader)
 	t.Helper()
 
 	parts := make([]string, 0)
+
 	for _, bubbleID := range fixture.assembledIDs(t, header) {
 		parts = append(parts, fixture.textByID[bubbleID])
 	}
+
 	return strings.Join(parts, "|")
 }
 
 func (fixture *storedFixture) assembledIDs(t *testing.T, header ComposerHeader) []string {
 	t.Helper()
 
-	order, err := assembleBubbleOrder(context.Background(), header.ComposerID, header, fixture.stored)
+	order, err := assembleBubbleOrder(
+		context.Background(),
+		header.ComposerID,
+		header,
+		fixture.stored,
+	)
 	if err != nil {
 		t.Fatalf("assembleBubbleOrder returned error: %v", err)
 	}
+
 	ids := make([]string, 0, len(order))
 	for _, entry := range order {
 		ids = append(ids, entry.BubbleID)
 	}
+
 	return ids
 }
 
@@ -115,8 +132,18 @@ func TestAssembleKeepsUnreferencedBubblesThatCarryNewContent(t *testing.T) {
 	header := headerFixture("c", "b-user", "b-reply")
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
-		bubbleFixture("b-orphan", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "the dropped reply"),
-		bubbleFixture("b-reply", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the retained reply"),
+		bubbleFixture(
+			"b-orphan",
+			BubbleTypeAssistant,
+			"2026-05-06T05:00:10.000Z",
+			"the dropped reply",
+		),
+		bubbleFixture(
+			"b-reply",
+			BubbleTypeAssistant,
+			"2026-05-06T05:00:30.000Z",
+			"the retained reply",
+		),
 	)
 
 	got := stored.assembledText(t, header)
@@ -131,8 +158,19 @@ func TestAssembleDropsASupersededCopyOfAReferencedBubble(t *testing.T) {
 	header := headerFixture("c", "b-user", "b-reply")
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
-		withServerID(bubbleFixture("b-superseded", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "the reply"), "s-reply"),
-		withServerID(bubbleFixture("b-reply", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the reply"), "s-reply"),
+		withServerID(
+			bubbleFixture(
+				"b-superseded",
+				BubbleTypeAssistant,
+				"2026-05-06T05:00:10.000Z",
+				"the reply",
+			),
+			"s-reply",
+		),
+		withServerID(
+			bubbleFixture("b-reply", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the reply"),
+			"s-reply",
+		),
 	)
 
 	got := stored.assembledText(t, header)
@@ -145,8 +183,24 @@ func TestAssembleDropsASupersededCopyAmongUnreferencedBubbles(t *testing.T) {
 	header := headerFixture("c", "b-user")
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
-		withServerID(bubbleFixture("b-copy1", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "same answer"), "s-answer"),
-		withServerID(bubbleFixture("b-copy2", BubbleTypeAssistant, "2026-05-06T05:00:20.000Z", "same answer"), "s-answer"),
+		withServerID(
+			bubbleFixture(
+				"b-copy1",
+				BubbleTypeAssistant,
+				"2026-05-06T05:00:10.000Z",
+				"same answer",
+			),
+			"s-answer",
+		),
+		withServerID(
+			bubbleFixture(
+				"b-copy2",
+				BubbleTypeAssistant,
+				"2026-05-06T05:00:20.000Z",
+				"same answer",
+			),
+			"s-answer",
+		),
 	)
 
 	got := stored.assembledText(t, header)
@@ -163,7 +217,15 @@ func TestAssembleDropsACopyCursorStampedWhenTheKeptRowIsUnstamped(t *testing.T) 
 	header := headerFixture("c", "b-user", "b-reply")
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
-		withServerID(bubbleFixture("b-superseded", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "the reply"), "s-reply"),
+		withServerID(
+			bubbleFixture(
+				"b-superseded",
+				BubbleTypeAssistant,
+				"2026-05-06T05:00:10.000Z",
+				"the reply",
+			),
+			"s-reply",
+		),
 		bubbleFixture("b-reply", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the reply"),
 	)
 
@@ -184,27 +246,48 @@ func TestAssembleDedupesAMixedPairInEitherOrder(t *testing.T) {
 		{name: "cursor stamped the earlier row", stamped: "b-first"},
 		{name: "cursor stamped the later row", stamped: "b-second"},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			first := bubbleFixture("b-first", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "one answer")
-			second := bubbleFixture("b-second", BubbleTypeAssistant, "2026-05-06T05:00:20.000Z", "one answer")
-			if testCase.stamped == "b-first" {
-				first = withServerID(first, "s-answer")
-			} else {
-				second = withServerID(second, "s-answer")
-			}
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				first := bubbleFixture(
+					"b-first",
+					BubbleTypeAssistant,
+					"2026-05-06T05:00:10.000Z",
+					"one answer",
+				)
+				second := bubbleFixture(
+					"b-second",
+					BubbleTypeAssistant,
+					"2026-05-06T05:00:20.000Z",
+					"one answer",
+				)
+				if testCase.stamped == "b-first" {
+					first = withServerID(first, "s-answer")
+				} else {
+					second = withServerID(second, "s-answer")
+				}
 
-			header := headerFixture("c", "b-user")
-			stored := storedFixtureOf(
-				bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
-				first,
-				second,
-			)
+				header := headerFixture("c", "b-user")
+				stored := storedFixtureOf(
+					bubbleFixture(
+						"b-user",
+						BubbleTypeUser,
+						"2026-05-06T05:00:00.000Z",
+						"the question",
+					),
+					first,
+					second,
+				)
 
-			got := stored.assembledText(t, header)
-			if got != "the question|one answer" {
-				t.Fatalf("assembled = %q, want one copy whichever row carries the server id", got)
-			}
-		})
+				got := stored.assembledText(t, header)
+				if got != "the question|one answer" {
+					t.Fatalf(
+						"assembled = %q, want one copy whichever row carries the server id",
+						got,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -216,11 +299,22 @@ func TestAssembleDedupesAMixedPairInEitherOrder(t *testing.T) {
 // dropped by the content key, and half of them were tool calls.
 func TestAssembleKeepsARepeatedTurnCursorGaveItsOwnIdentity(t *testing.T) {
 	call := func() *BubbleToolCall {
-		return &BubbleToolCall{Name: "run_terminal", RawArgs: `{"cmd":"make test"}`, Result: "ok", Status: "completed"}
+		return &BubbleToolCall{
+			Name:    "run_terminal",
+			RawArgs: `{"cmd":"make test"}`,
+			Result:  "ok",
+			Status:  "completed",
+		}
 	}
-	firstRun := withServerID(bubbleFixture("b-run-1", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", ""), "s-run-1")
+	firstRun := withServerID(
+		bubbleFixture("b-run-1", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", ""),
+		"s-run-1",
+	)
 	firstRun.ToolCall = call()
-	secondRun := withServerID(bubbleFixture("b-run-2", BubbleTypeAssistant, "2026-05-06T05:00:20.000Z", ""), "s-run-2")
+	secondRun := withServerID(
+		bubbleFixture("b-run-2", BubbleTypeAssistant, "2026-05-06T05:00:20.000Z", ""),
+		"s-run-2",
+	)
 	secondRun.ToolCall = call()
 
 	header := headerFixture("c", "b-user")
@@ -266,7 +360,11 @@ func TestAssembleKeepsTwoCallsCursorGaveDifferentCallIDs(t *testing.T) {
 	got := stored.assembledIDs(t, header)
 	want := []string{"b-user", "b-lint-1", "b-lint-2"}
 	if !equalIDs(got, want) {
-		t.Fatalf("assembled = %v, want both calls kept because their call ids differ: %v", got, want)
+		t.Fatalf(
+			"assembled = %v, want both calls kept because their call ids differ: %v",
+			got,
+			want,
+		)
 	}
 }
 
@@ -309,14 +407,23 @@ func TestAssembleKeepsTwoRunsOfOneCallThatEndedDifferently(t *testing.T) {
 func TestAssembleKeepsAUserBubbleRepeatingAssistantText(t *testing.T) {
 	header := headerFixture("c", "b-assistant")
 	stored := storedFixtureOf(
-		bubbleFixture("b-assistant", BubbleTypeAssistant, "2026-05-06T05:00:00.000Z", "run make check"),
+		bubbleFixture(
+			"b-assistant",
+			BubbleTypeAssistant,
+			"2026-05-06T05:00:00.000Z",
+			"run make check",
+		),
 		bubbleFixture("b-user-echo", BubbleTypeUser, "2026-05-06T05:00:10.000Z", "run make check"),
 	)
 
 	got := stored.assembledIDs(t, header)
 	want := []string{"b-assistant", "b-user-echo"}
 	if !equalIDs(got, want) {
-		t.Fatalf("assembled = %v, want the user bubble kept beside the assistant one: %v", got, want)
+		t.Fatalf(
+			"assembled = %v, want the user bubble kept beside the assistant one: %v",
+			got,
+			want,
+		)
 	}
 }
 
@@ -340,7 +447,11 @@ func TestAssembleKeepsBothRowsWhenCursorRecordedNoIdentity(t *testing.T) {
 	got := stored.assembledIDs(t, header)
 	want := []string{"b-user", "b-repeat", "b-reply"}
 	if !equalIDs(got, want) {
-		t.Fatalf("assembled = %v, want both rows kept because nothing says either is a copy: %v", got, want)
+		t.Fatalf(
+			"assembled = %v, want both rows kept because nothing says either is a copy: %v",
+			got,
+			want,
+		)
 	}
 }
 
@@ -351,7 +462,15 @@ func TestAssembleStillDropsACopyCursorStampedOnOneSide(t *testing.T) {
 	header := headerFixture("c", "b-user", "b-reply")
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
-		withServerID(bubbleFixture("b-superseded", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "the reply"), "s-reply"),
+		withServerID(
+			bubbleFixture(
+				"b-superseded",
+				BubbleTypeAssistant,
+				"2026-05-06T05:00:10.000Z",
+				"the reply",
+			),
+			"s-reply",
+		),
 		bubbleFixture("b-reply", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the reply"),
 	)
 
@@ -366,10 +485,17 @@ func TestAssembleStillDropsACopyCursorStampedOnOneSide(t *testing.T) {
 // and the indentation is what makes it a code block.
 func TestFingerprintKeepsLeadingWhitespace(t *testing.T) {
 	plain := bubbleFixture("b-plain", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "code")
-	indented := bubbleFixture("b-indented", BubbleTypeAssistant, "2026-05-06T05:00:20.000Z", "    code")
+	indented := bubbleFixture(
+		"b-indented",
+		BubbleTypeAssistant,
+		"2026-05-06T05:00:20.000Z",
+		"    code",
+	)
 
 	if fingerprintOf(plain) == fingerprintOf(indented) {
-		t.Fatal("a message and its indented form share a fingerprint, so one of them is dropped as a copy")
+		t.Fatal(
+			"a message and its indented form share a fingerprint, so one of them is dropped as a copy",
+		)
 	}
 
 	header := headerFixture("c", "b-user")
@@ -438,7 +564,10 @@ func TestAssemblePlacesAnAdditionPastAHeaderJump(t *testing.T) {
 
 	got := stored.assembledText(t, header)
 	if got != "first|second|third|addition|fourth" {
-		t.Fatalf("assembled = %q, want the addition placed at its own point rather than at the jump", got)
+		t.Fatalf(
+			"assembled = %q, want the addition placed at its own point rather than at the jump",
+			got,
+		)
 	}
 }
 
@@ -458,7 +587,10 @@ func TestAssembleDoesNotWidenAGapThroughAnUndatedHeaderBubble(t *testing.T) {
 
 	got := stored.assembledText(t, header)
 	if got != "opening|first|undated header bubble|third" {
-		t.Fatalf("assembled = %q, want the addition placed before the header rather than inside it", got)
+		t.Fatalf(
+			"assembled = %q, want the addition placed before the header rather than inside it",
+			got,
+		)
 	}
 }
 
@@ -488,8 +620,18 @@ func TestAssembleOrdersTiedAdditionsByWriteOrder(t *testing.T) {
 	header := headerFixture("c", "b-user")
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
-		bubbleFixture("zzz-written-first", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "written first"),
-		bubbleFixture("aaa-written-second", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "written second"),
+		bubbleFixture(
+			"zzz-written-first",
+			BubbleTypeAssistant,
+			"2026-05-06T05:00:10.000Z",
+			"written first",
+		),
+		bubbleFixture(
+			"aaa-written-second",
+			BubbleTypeAssistant,
+			"2026-05-06T05:00:10.000Z",
+			"written second",
+		),
 	)
 
 	got := stored.assembledText(t, header)
@@ -503,7 +645,12 @@ func TestAssemblePlacesATiedBubbleAfterTheReferencedOne(t *testing.T) {
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
 		bubbleFixture("b-reply", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the reply"),
-		bubbleFixture("b-tied", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the tied addition"),
+		bubbleFixture(
+			"b-tied",
+			BubbleTypeAssistant,
+			"2026-05-06T05:00:30.000Z",
+			"the tied addition",
+		),
 	)
 
 	got := stored.assembledText(t, header)
@@ -516,7 +663,12 @@ func TestAssembleAppendsBubblesWithNoTimestamp(t *testing.T) {
 	header := headerFixture("c", "b-user", "b-reply")
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
-		bubbleFixture("b-earliest", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", "dated addition"),
+		bubbleFixture(
+			"b-earliest",
+			BubbleTypeAssistant,
+			"2026-05-06T05:00:10.000Z",
+			"dated addition",
+		),
 		bubbleFixture("b-reply", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the reply"),
 		bubbleFixture("b-undated", BubbleTypeAssistant, "", "undated addition"),
 	)
@@ -549,19 +701,26 @@ func TestAssembleKeepsAReferencedBubbleWhoseRowIsMissing(t *testing.T) {
 
 	got := stored.assembledText(t, header)
 	if got != "the question|the reply" {
-		t.Fatalf("assembled = %q, want the absent reference skipped without disturbing the rest", got)
+		t.Fatalf(
+			"assembled = %q, want the absent reference skipped without disturbing the rest",
+			got,
+		)
 	}
 }
 
 func TestStreamComposerBubblesLogsAnAbsentHeaderReference(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-gone","type":2}]}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-gone","type":2}]}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	header, found, err := ReadComposerHeader(context.Background(), readonly, "c")
@@ -574,12 +733,19 @@ func TestStreamComposerBubblesLogsAnAbsentHeaderReference(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logOutput, nil)))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
-	err = StreamComposerBubbles(context.Background(), readonly, "c", header, func(Bubble) bool {
-		return true
-	})
+	err = StreamComposerBubbles(
+		context.Background(),
+		readonly,
+		"c",
+		header,
+		func(Bubble) bool {
+			return true
+		},
+	)
 	if err != nil {
 		t.Fatalf("StreamComposerBubbles returned error: %v", err)
 	}
+
 	if !strings.Contains(logOutput.String(), "providers.cursor.store.referenced_bubble_absent") {
 		t.Fatalf("log = %s, want the unresolved header reference reported", logOutput.String())
 	}
@@ -595,12 +761,17 @@ func TestAssembleFailsOnAReferencedBubbleTheStoreHoldsButCannotParse(t *testing.
 	stored := storedFixtureOf(
 		bubbleFixture("b-user", BubbleTypeUser, "2026-05-06T05:00:00.000Z", "the question"),
 		bubbleFixture("b-reply", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "the reply"),
-	).withUnreadableRow("b-broken")
+	).withUnreadableRow(
+		"b-broken",
+	)
 
 	_, err := assembleBubbleOrder(context.Background(), header.ComposerID, header, stored.stored)
 	if err == nil {
-		t.Fatal("assembleBubbleOrder returned no error for a referenced bubble the store holds and cannot parse")
+		t.Fatal(
+			"assembleBubbleOrder returned no error for a referenced bubble the store holds and cannot parse",
+		)
 	}
+
 	if !strings.Contains(err.Error(), "b-broken") {
 		t.Fatalf("error = %v, want it to name the bubble it could not read", err)
 	}
@@ -621,8 +792,11 @@ func TestAssembleFailsOnAReferenceWhenRowsWentUnaccountedFor(t *testing.T) {
 
 	_, err := assembleBubbleOrder(context.Background(), header.ComposerID, header, stored.stored)
 	if err == nil {
-		t.Fatal("assembleBubbleOrder returned no error for a missing reference while a row of the chat went unread")
+		t.Fatal(
+			"assembleBubbleOrder returned no error for a missing reference while a row of the chat went unread",
+		)
 	}
+
 	if !strings.Contains(err.Error(), "b-gone") {
 		t.Fatalf("error = %v, want it to name the reference it could not account for", err)
 	}
@@ -641,18 +815,22 @@ func TestAssembleFailsOnAReferenceWhenRowsWentUnaccountedFor(t *testing.T) {
 // rejects, so this failure mode is a disagreement to surface rather than a shape
 // Cursor writes.
 func TestStreamComposerBubblesFailsWhenAnOrderedRowCannotBeParsed(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-reply', '{"_v":3,"type":2,"bubbleId":"b-reply","text":"the reply","createdAt":"2026-05-06T05:00:30.000Z"}')`,
-		// Unreferenced, valid JSON so the ordering pass keeps it, and a member type
-		// the per-bubble decode rejects.
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-orphan', '{"_v":3,"type":2,"bubbleId":"b-orphan","text":17,"createdAt":"2026-05-06T05:00:10.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-reply","type":2}]}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-reply', '{"_v":3,"type":2,"bubbleId":"b-reply","text":"the reply","createdAt":"2026-05-06T05:00:30.000Z"}')`,
+			// Unreferenced, valid JSON so the ordering pass keeps it, and a member type
+			// the per-bubble decode rejects.
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-orphan', '{"_v":3,"type":2,"bubbleId":"b-orphan","text":17,"createdAt":"2026-05-06T05:00:10.000Z"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-reply","type":2}]}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	header, found, err := ReadComposerHeader(context.Background(), readonly, "c")
@@ -660,12 +838,19 @@ func TestStreamComposerBubblesFailsWhenAnOrderedRowCannotBeParsed(t *testing.T) 
 		t.Fatalf("ReadComposerHeader found = %v, err = %v", found, err)
 	}
 
-	err = StreamComposerBubbles(context.Background(), readonly, "c", header, func(bubble Bubble) bool {
-		return true
-	})
+	err = StreamComposerBubbles(
+		context.Background(),
+		readonly,
+		"c",
+		header,
+		func(bubble Bubble) bool {
+			return true
+		},
+	)
 	if err == nil {
 		t.Fatal("StreamComposerBubbles returned no error for an ordered row it could not parse")
 	}
+
 	if !strings.Contains(err.Error(), "b-orphan") {
 		t.Fatalf("error = %v, want it to name the row it could not read", err)
 	}
@@ -676,21 +861,26 @@ func TestStreamComposerBubblesFailsWhenAnOrderedRowCannotBeParsed(t *testing.T) 
 // row using its old timestamp, so emitting replacement content at that position
 // would combine two database revisions into one transcript.
 func TestStreamComposerBubblesFailsWhenAnOrderedRowIsRewritten(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-reply', '{"_v":3,"type":2,"bubbleId":"b-reply","text":"the old reply","createdAt":"2026-05-06T05:00:30.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-reply","type":2}]}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-reply', '{"_v":3,"type":2,"bubbleId":"b-reply","text":"the old reply","createdAt":"2026-05-06T05:00:30.000Z"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-reply","type":2}]}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	writable, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("sql.Open writable database returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = writable.Close() })
 
 	header, found, err := ReadComposerHeader(context.Background(), readonly, "c")
@@ -700,21 +890,33 @@ func TestStreamComposerBubblesFailsWhenAnOrderedRowIsRewritten(t *testing.T) {
 
 	served := make([]string, 0)
 	var rewriteErr error
-	err = StreamComposerBubbles(context.Background(), readonly, "c", header, func(bubble Bubble) bool {
-		served = append(served, bubble.Text)
-		if bubble.BubbleID == "b-user" {
-			_, rewriteErr = writable.Exec(
-				`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-reply', '{"_v":3,"type":2,"bubbleId":"b-reply","text":"the replacement","createdAt":"2026-05-06T04:59:00.000Z"}')`,
-			)
-		}
-		return true
-	})
+	err = StreamComposerBubbles(
+		context.Background(),
+		readonly,
+		"c",
+		header,
+		func(bubble Bubble) bool {
+			served = append(served, bubble.Text)
+			if bubble.BubbleID == "b-user" {
+				_, rewriteErr = writable.Exec(
+					`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-reply', '{"_v":3,"type":2,"bubbleId":"b-reply","text":"the replacement","createdAt":"2026-05-06T04:59:00.000Z"}')`,
+				)
+			}
+
+			return true
+		},
+	)
 	if rewriteErr != nil {
 		t.Fatalf("rewrite ordered row: %v", rewriteErr)
 	}
+
 	if err == nil {
-		t.Fatalf("StreamComposerBubbles returned no error after an ordered row was rewritten; served %v", served)
+		t.Fatalf(
+			"StreamComposerBubbles returned no error after an ordered row was rewritten; served %v",
+			served,
+		)
 	}
+
 	if !strings.Contains(err.Error(), "b-reply") {
 		t.Fatalf("error = %v, want it to name the rewritten row", err)
 	}
@@ -726,15 +928,19 @@ func TestStreamComposerBubblesFailsWhenAnOrderedRowIsRewritten(t *testing.T) {
 // count(*) still counts it. Cursor writes these: the operator's store holds 409
 // NULL-valued rows, 3 of them in the bubble range.
 func TestStreamComposerBubblesFailsOnANullValuedReferencedRow(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-null', NULL)`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-null","type":2}]}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-null', NULL)`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-null","type":2}]}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	header, found, err := ReadComposerHeader(context.Background(), readonly, "c")
@@ -742,12 +948,19 @@ func TestStreamComposerBubblesFailsOnANullValuedReferencedRow(t *testing.T) {
 		t.Fatalf("ReadComposerHeader found = %v, err = %v", found, err)
 	}
 
-	err = StreamComposerBubbles(context.Background(), readonly, "c", header, func(bubble Bubble) bool {
-		return true
-	})
+	err = StreamComposerBubbles(
+		context.Background(),
+		readonly,
+		"c",
+		header,
+		func(bubble Bubble) bool {
+			return true
+		},
+	)
 	if err == nil {
 		t.Fatal("StreamComposerBubbles returned no error for a header-referenced NULL-valued row")
 	}
+
 	if !strings.Contains(err.Error(), "b-null") {
 		t.Fatalf("error = %v, want it to name the row it could not read", err)
 	}
@@ -757,27 +970,37 @@ func TestStreamComposerBubblesFailsOnANullValuedReferencedRow(t *testing.T) {
 // fatal rule rests on: a NULL row is named as unreadable rather than leaving the
 // totals level.
 func TestReadComposerBubbleDigestsAccountsForANullValuedRow(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-null', NULL)`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-text', 'not json at all')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-null', NULL)`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-text', 'not json at all')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	stored, err := readComposerBubbleDigests(context.Background(), readonly, "c")
 	if err != nil {
 		t.Fatalf("readComposerBubbleDigests returned error: %v", err)
 	}
+
 	if len(stored.Digests) != 1 {
 		t.Fatalf("digests = %d, want the one row that parses", len(stored.Digests))
 	}
+
 	if !stored.Unreadable["b-null"] || !stored.Unreadable["b-text"] {
-		t.Fatalf("unreadable = %v, want both the NULL row and the non-JSON row named", stored.Unreadable)
+		t.Fatalf(
+			"unreadable = %v, want both the NULL row and the non-JSON row named",
+			stored.Unreadable,
+		)
 	}
+
 	if stored.Unaccounted != 0 {
 		t.Fatalf("Unaccounted = %d, want every row accounted for", stored.Unaccounted)
 	}
@@ -790,33 +1013,41 @@ func TestReadComposerBubbleDigestsAccountsForANullValuedRow(t *testing.T) {
 // form, and in one chat 5 of them were referenced by the composer header, so the
 // failure took the conversation with it.
 func TestDecodeBubbleAcceptsAnObjectValuedToolResult(t *testing.T) {
-	objectResult := []byte(`{"_v":3,"type":2,"bubbleId":"b","text":"",` +
-		`"toolFormerData":{"name":"todo_write","rawArgs":"{}","status":"completed",` +
-		`"result":{"success":true,"finalTodos":[]}}}`)
+	objectResult := []byte(
+		`{"_v":3,"type":2,"bubbleId":"b","text":"",` +
+			`"toolFormerData":{"name":"todo_write","rawArgs":"{}","status":"completed",` +
+			`"result":{"success":true,"finalTodos":[]}}}`,
+	)
 
 	bubble, err := DecodeBubbleJSON(objectResult)
 	if err != nil {
 		t.Fatalf("DecodeBubbleJSON returned error for an object-valued tool result: %v", err)
 	}
+
 	if bubble.ToolCall == nil {
 		t.Fatal("tool call missing")
 	}
+
 	if !strings.Contains(string(bubble.ToolCall.Result), `"success":true`) {
 		t.Fatalf("tool result = %q, want the object preserved as raw JSON", bubble.ToolCall.Result)
 	}
+
 	if !bubble.HasContent() {
 		t.Fatal("a bubble carrying only a tool call reported no content")
 	}
 }
 
 func TestDecodeBubbleStillAcceptsAStringToolResult(t *testing.T) {
-	stringResult := []byte(`{"_v":3,"type":2,"bubbleId":"b","text":"",` +
-		`"toolFormerData":{"name":"read_file","rawArgs":"{}","status":"completed","result":"file body"}}`)
+	stringResult := []byte(
+		`{"_v":3,"type":2,"bubbleId":"b","text":"",` +
+			`"toolFormerData":{"name":"read_file","rawArgs":"{}","status":"completed","result":"file body"}}`,
+	)
 
 	bubble, err := DecodeBubbleJSON(stringResult)
 	if err != nil {
 		t.Fatalf("DecodeBubbleJSON returned error: %v", err)
 	}
+
 	if string(bubble.ToolCall.Result) != "file body" {
 		t.Fatalf("tool result = %q, want the plain string", bubble.ToolCall.Result)
 	}
@@ -824,11 +1055,22 @@ func TestDecodeBubbleStillAcceptsAStringToolResult(t *testing.T) {
 
 func TestAssembleDropsASupersededCopyOfAToolCall(t *testing.T) {
 	call := func() *BubbleToolCall {
-		return &BubbleToolCall{Name: "read_file", RawArgs: `{"path":"main.go"}`, Result: "body", Status: "completed"}
+		return &BubbleToolCall{
+			Name:    "read_file",
+			RawArgs: `{"path":"main.go"}`,
+			Result:  "body",
+			Status:  "completed",
+		}
 	}
-	superseded := withServerID(bubbleFixture("b-tool-old", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", ""), "s-tool")
+	superseded := withServerID(
+		bubbleFixture("b-tool-old", BubbleTypeAssistant, "2026-05-06T05:00:10.000Z", ""),
+		"s-tool",
+	)
 	superseded.ToolCall = call()
-	referenced := withServerID(bubbleFixture("b-tool", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", ""), "s-tool")
+	referenced := withServerID(
+		bubbleFixture("b-tool", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", ""),
+		"s-tool",
+	)
 	referenced.ToolCall = call()
 
 	header := headerFixture("c", "b-user", "b-tool")
@@ -864,6 +1106,7 @@ func TestStreamComposerBubblesDoesNotReadWholeValuesToOrderAChat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	header, found, err := ReadComposerHeader(context.Background(), readonly, "composer-big")
@@ -876,14 +1119,22 @@ func TestStreamComposerBubblesDoesNotReadWholeValuesToOrderAChat(t *testing.T) {
 
 	served := 0
 	var afterFirst runtime.MemStats
-	err = StreamComposerBubbles(context.Background(), readonly, "composer-big", header, func(bubble Bubble) bool {
-		served++
-		runtime.ReadMemStats(&afterFirst)
-		return false
-	})
+	err = StreamComposerBubbles(
+		context.Background(),
+		readonly,
+		"composer-big",
+		header,
+		func(bubble Bubble) bool {
+			served++
+			runtime.ReadMemStats(&afterFirst)
+
+			return false
+		},
+	)
 	if err != nil {
 		t.Fatalf("StreamComposerBubbles returned error: %v", err)
 	}
+
 	if served != 1 {
 		t.Fatalf("served = %d bubbles, want the read to stop after the first", served)
 	}
@@ -897,8 +1148,12 @@ func TestStreamComposerBubblesDoesNotReadWholeValuesToOrderAChat(t *testing.T) {
 	budget := chatBytes / 4
 	t.Logf("allocated %d bytes ordering a %d byte chat", allocated, chatBytes)
 	if allocated > budget {
-		t.Fatalf("allocated %d bytes serving one bubble of a %d byte chat, want under %d",
-			allocated, chatBytes, budget)
+		t.Fatalf(
+			"allocated %d bytes serving one bubble of a %d byte chat, want under %d",
+			allocated,
+			chatBytes,
+			budget,
+		)
 	}
 }
 
@@ -913,35 +1168,57 @@ func TestStreamComposerBubblesFailsOnAnUnparsableReferencedRow(t *testing.T) {
 		value string
 	}{
 		{name: "value is not json", value: "this is not json"},
-		{name: "value is json with the wrong member types", value: `{"_v":3,"type":2,"bubbleId":"b-broken","text":17}`},
+		{
+			name:  "value is json with the wrong member types",
+			value: `{"_v":3,"type":2,"bubbleId":"b-broken","text":17}`,
+		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			dbPath := writeCursorTestDatabase(t, []string{
-				`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
-				fmt.Sprintf(`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-broken', %s)`, quoteSQLText(testCase.value)),
-				`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-broken","type":2}]}')`,
-			})
-			readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
-			if err != nil {
-				t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
-			}
-			t.Cleanup(func() { _ = readonly.Close() })
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				dbPath := writeCursorTestDatabase(
+					t,
+					[]string{
+						`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
+						fmt.Sprintf(
+							`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-broken', %s)`,
+							quoteSQLText(testCase.value),
+						),
+						`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-user","type":1},{"bubbleId":"b-broken","type":2}]}')`,
+					},
+				)
+				readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
+				if err != nil {
+					t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
+				}
 
-			header, found, err := ReadComposerHeader(context.Background(), readonly, "c")
-			if err != nil || !found {
-				t.Fatalf("ReadComposerHeader found = %v, err = %v", found, err)
-			}
+				t.Cleanup(func() { _ = readonly.Close() })
 
-			err = StreamComposerBubbles(context.Background(), readonly, "c", header, func(bubble Bubble) bool {
-				return true
-			})
-			if err == nil {
-				t.Fatal("StreamComposerBubbles returned no error for a header-referenced row it could not parse")
-			}
-			if !strings.Contains(err.Error(), "b-broken") {
-				t.Fatalf("error = %v, want it to name the bubble it could not read", err)
-			}
-		})
+				header, found, err := ReadComposerHeader(context.Background(), readonly, "c")
+				if err != nil || !found {
+					t.Fatalf("ReadComposerHeader found = %v, err = %v", found, err)
+				}
+
+				err = StreamComposerBubbles(
+					context.Background(),
+					readonly,
+					"c",
+					header,
+					func(bubble Bubble) bool {
+						return true
+					},
+				)
+				if err == nil {
+					t.Fatal(
+						"StreamComposerBubbles returned no error for a header-referenced row it could not parse",
+					)
+				}
+
+				if !strings.Contains(err.Error(), "b-broken") {
+					t.Fatalf("error = %v, want it to name the bubble it could not read", err)
+				}
+			},
+		)
 	}
 }
 
@@ -950,17 +1227,21 @@ func TestStreamComposerBubblesFailsOnAnUnparsableReferencedRow(t *testing.T) {
 // range holds a whole conversation, so the range is what says whether the chat
 // has anything to deliver.
 func TestReadComposerBubbleStockSeparatesADraftFromAStoredChat(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c-draft', '{"composerId":"c-draft","fullConversationHeadersOnly":[]}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c-stored', '{"composerId":"c-stored","fullConversationHeadersOnly":[]}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-stored:b-1', '{"_v":3,"type":1,"bubbleId":"b-1","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c-blank', '{"composerId":"c-blank","fullConversationHeadersOnly":[]}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-blank:b-1', '{"_v":3,"type":1,"bubbleId":"b-1","text":"  "}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c-draft', '{"composerId":"c-draft","fullConversationHeadersOnly":[]}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c-stored', '{"composerId":"c-stored","fullConversationHeadersOnly":[]}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-stored:b-1', '{"_v":3,"type":1,"bubbleId":"b-1","text":"the question","createdAt":"2026-05-06T05:00:00.000Z"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c-blank', '{"composerId":"c-blank","fullConversationHeadersOnly":[]}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-blank:b-1', '{"_v":3,"type":1,"bubbleId":"b-1","text":"  "}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	for _, testCase := range []struct {
@@ -977,21 +1258,31 @@ func TestReadComposerBubbleStockSeparatesADraftFromAStoredChat(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadComposerBubbleStock(%q) returned error: %v", testCase.composerID, err)
 		}
+
 		if stock.StoredRows != testCase.wantRows || stock.HasContent != testCase.wantContent {
-			t.Fatalf("stock(%q) = %+v, want rows %d and content %v",
-				testCase.composerID, stock, testCase.wantRows, testCase.wantContent)
+			t.Fatalf(
+				"stock(%q) = %+v, want rows %d and content %v",
+				testCase.composerID,
+				stock,
+				testCase.wantRows,
+				testCase.wantContent,
+			)
 		}
 	}
 }
 
 func TestReadSnapshotPinsBubbleCountAndProjectionToOneWALRevision(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-1', '{"_v":3,"type":1,"bubbleId":"b-1","text":"first"}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-1', '{"_v":3,"type":1,"bubbleId":"b-1","text":"first"}')`,
+		},
+	)
 	writable, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("sql.Open writable database returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = writable.Close() })
 	if _, err := writable.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		t.Fatalf("enable WAL: %v", err)
@@ -1001,12 +1292,14 @@ func TestReadSnapshotPinsBubbleCountAndProjectionToOneWALRevision(t *testing.T) 
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	snapshot, err := beginReadSnapshot(context.Background(), readonly)
 	if err != nil {
 		t.Fatalf("beginReadSnapshot returned error: %v", err)
 	}
+
 	t.Cleanup(snapshot.rollback)
 	bounds := keyRangeForPrefix("bubbleId:c:")
 	storedRows, err := snapshot.countRange(context.Background(), bounds)
@@ -1021,15 +1314,25 @@ func TestReadSnapshotPinsBubbleCountAndProjectionToOneWALRevision(t *testing.T) 
 	}
 
 	projected := 0
-	err = forEachComposerBubbleProjection(context.Background(), snapshot, bounds, func(bubbleProjection) error {
-		projected++
-		return nil
-	})
+	err = forEachComposerBubbleProjection(
+		context.Background(),
+		snapshot,
+		bounds,
+		func(bubbleProjection) error {
+			projected++
+			return nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("forEachComposerBubbleProjection returned error: %v", err)
 	}
+
 	if storedRows != 1 || projected != storedRows {
-		t.Fatalf("snapshot count = %d and projection = %d, want both to see the one-row revision", storedRows, projected)
+		t.Fatalf(
+			"snapshot count = %d and projection = %d, want both to see the one-row revision",
+			storedRows,
+			projected,
+		)
 	}
 
 	freshStocks, err := readComposerBubbleStocksForTest(context.Background(), readonly)
@@ -1037,8 +1340,12 @@ func TestReadSnapshotPinsBubbleCountAndProjectionToOneWALRevision(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ReadComposerBubbleStock returned error: %v", err)
 	}
+
 	if freshStock.StoredRows != 2 {
-		t.Fatalf("fresh stock rows = %d, want proof the concurrent row committed", freshStock.StoredRows)
+		t.Fatalf(
+			"fresh stock rows = %d, want proof the concurrent row committed",
+			freshStock.StoredRows,
+		)
 	}
 }
 
@@ -1048,10 +1355,12 @@ func TestReadComposerBubbleStockLogsCountFailureBeforeReturningIt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("sql.Open writable database returned error: %v", err)
 	}
+
 	if _, err := writable.Exec("CREATE TABLE cursorDiskKV(value BLOB)"); err != nil {
 		_ = writable.Close()
 		t.Fatalf("create malformed cursorDiskKV table: %v", err)
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable database: %v", err)
 	}
@@ -1060,6 +1369,7 @@ func TestReadComposerBubbleStockLogsCountFailureBeforeReturningIt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	var logOutput bytes.Buffer
@@ -1070,8 +1380,15 @@ func TestReadComposerBubbleStockLogsCountFailureBeforeReturningIt(t *testing.T) 
 	if _, err := readComposerBubbleStocksForTest(context.Background(), readonly); err == nil {
 		t.Fatal("ReadComposerBubbleStock returned no error for a table without its key column")
 	}
-	if !strings.Contains(logOutput.String(), "providers.cursor.store.composer_bubble_count_failed") {
-		t.Fatalf("log = %s, want the count failure reported before the wrapped error", logOutput.String())
+
+	if !strings.Contains(
+		logOutput.String(),
+		"providers.cursor.store.composer_bubble_count_failed",
+	) {
+		t.Fatalf(
+			"log = %s, want the count failure reported before the wrapped error",
+			logOutput.String(),
+		)
 	}
 }
 
@@ -1086,23 +1403,39 @@ func createLargeComposerTestDatabase(t *testing.T, laterBubbles int, bubbleBytes
 	refs := make([]string, 0, laterBubbles+1)
 	statements := make([]string, 0, laterBubbles+2)
 	refs = append(refs, `{"bubbleId":"b-000","type":1}`)
-	statements = append(statements, fmt.Sprintf(
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:composer-big:b-000', '{"_v":3,"type":1,"bubbleId":"b-000","text":"open","createdAt":"2026-05-06T05:00:00.000Z"}')`,
-	))
+	statements = append(
+		statements,
+		fmt.Sprintf(
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:composer-big:b-000', '{"_v":3,"type":1,"bubbleId":"b-000","text":"open","createdAt":"2026-05-06T05:00:00.000Z"}')`,
+		),
+	)
+
 	for index := range laterBubbles {
 		bubbleID := fmt.Sprintf("b-%03d", index+1)
 		refs = append(refs, fmt.Sprintf(`{"bubbleId":%q,"type":2}`, bubbleID))
-		statements = append(statements, fmt.Sprintf(
-			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:composer-big:%s', `+
-				`'{"_v":3,"type":2,"bubbleId":%q,"text":"reply %d","createdAt":"2026-05-06T05:%02d:00.000Z",`+
-				`"attachedCodeChunks":[{"content":%q}]}')`,
-			bubbleID, bubbleID, index+1, index+1, strings.Repeat("x", bubbleBytes),
-		))
+		statements = append(
+			statements,
+			fmt.Sprintf(
+				`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:composer-big:%s', `+
+					`'{"_v":3,"type":2,"bubbleId":%q,"text":"reply %d","createdAt":"2026-05-06T05:%02d:00.000Z",`+
+					`"attachedCodeChunks":[{"content":%q}]}')`,
+				bubbleID,
+				bubbleID,
+				index+1,
+				index+1,
+				strings.Repeat("x", bubbleBytes),
+			),
+		)
 	}
-	statements = append(statements, fmt.Sprintf(
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:composer-big', '{"composerId":"composer-big","fullConversationHeadersOnly":[%s]}')`,
-		strings.Join(refs, ","),
-	))
+
+	statements = append(
+		statements,
+		fmt.Sprintf(
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:composer-big', '{"composerId":"composer-big","fullConversationHeadersOnly":[%s]}')`,
+			strings.Join(refs, ","),
+		),
+	)
+
 	return writeCursorTestDatabase(t, statements)
 }
 
@@ -1120,6 +1453,7 @@ func writeCursorTestDatabase(t *testing.T, statements []string) string {
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
+
 	schema := []string{
 		"CREATE TABLE ItemTable(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
@@ -1130,9 +1464,11 @@ func writeCursorTestDatabase(t *testing.T, statements []string) string {
 			t.Fatalf("exec failed: %v", err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
+
 	return dbPath
 }
 
@@ -1140,11 +1476,13 @@ func equalIDs(got []string, want []string) bool {
 	if len(got) != len(want) {
 		return false
 	}
+
 	for index := range got {
 		if got[index] != want[index] {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -1153,25 +1491,33 @@ func equalIDs(got []string, want []string) bool {
 // hand-set field. A row that satisfies neither the projection's predicate nor its
 // negation is what an implementation always evaluating this to zero would hide.
 func TestReadComposerBubbleDigestsCountsAnUnaccountedRowFromARealDatabase(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question"}')`,
-		// A key that does not belong to this chat's bubble shape, so the projection
-		// reads it and cannot name it, which is a row the range counted and the
-		// digests do not hold.
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:', '{"_v":3,"type":2,"text":"unnameable"}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-user', '{"_v":3,"type":1,"bubbleId":"b-user","text":"the question"}')`,
+			// A key that does not belong to this chat's bubble shape, so the projection
+			// reads it and cannot name it, which is a row the range counted and the
+			// digests do not hold.
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:', '{"_v":3,"type":2,"text":"unnameable"}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	stored, err := readComposerBubbleDigests(context.Background(), readonly, "c")
 	if err != nil {
 		t.Fatalf("readComposerBubbleDigests returned error: %v", err)
 	}
+
 	if stored.Unaccounted != 1 {
-		t.Fatalf("Unaccounted = %d, want the row the read could neither name nor call unreadable", stored.Unaccounted)
+		t.Fatalf(
+			"Unaccounted = %d, want the row the read could neither name nor call unreadable",
+			stored.Unaccounted,
+		)
 	}
 
 	// And a reference with no digest is then fatal rather than skipped.
@@ -1183,7 +1529,9 @@ func TestReadComposerBubbleDigestsCountsAnUnaccountedRowFromARealDatabase(t *tes
 		},
 	}
 	if _, err := assembleBubbleOrder(context.Background(), "c", header, stored); err == nil {
-		t.Fatal("assembleBubbleOrder returned no error for a missing reference while a row of the chat went unaccounted for")
+		t.Fatal(
+			"assembleBubbleOrder returned no error for a missing reference while a row of the chat went unaccounted for",
+		)
 	}
 }
 
@@ -1193,15 +1541,19 @@ func TestReadComposerBubbleDigestsCountsAnUnaccountedRowFromARealDatabase(t *tes
 // read, and the scan rebuilds from discovery, so the difference is a conversation
 // staying in the index or leaving it.
 func TestReadComposerBubbleStockReportsInconclusiveForAnUnreadableChat(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-unreadable:u-1', NULL)`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-empty:e-1', '{"_v":3,"type":1,"bubbleId":"e-1","text":"   "}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-full:f-1', '{"_v":3,"type":1,"bubbleId":"f-1","text":"the question"}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-unreadable:u-1', NULL)`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-empty:e-1', '{"_v":3,"type":1,"bubbleId":"e-1","text":"   "}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-full:f-1', '{"_v":3,"type":1,"bubbleId":"f-1","text":"the question"}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	for _, testCase := range []struct {
@@ -1218,9 +1570,15 @@ func TestReadComposerBubbleStockReportsInconclusiveForAnUnreadableChat(t *testin
 		if err != nil {
 			t.Fatalf("ReadComposerBubbleStock(%q) returned error: %v", testCase.composerID, err)
 		}
+
 		if stock.HasContent != testCase.wantContent || stock.Conclusive != testCase.wantConclusive {
-			t.Fatalf("stock(%q) = %+v, want content %v and conclusive %v",
-				testCase.composerID, stock, testCase.wantContent, testCase.wantConclusive)
+			t.Fatalf(
+				"stock(%q) = %+v, want content %v and conclusive %v",
+				testCase.composerID,
+				stock,
+				testCase.wantContent,
+				testCase.wantConclusive,
+			)
 		}
 	}
 }
@@ -1230,13 +1588,17 @@ func TestReadComposerBubbleStockReportsInconclusiveForAnUnreadableChat(t *testin
 // tool call gives the digest content the decoder maps to nil, and the chat is
 // admitted for content it does not have and then streams nothing.
 func TestAssembleTreatsAJSONNullToolFieldAsNoToolCall(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-null-tool:b-1', '{"_v":3,"type":2,"bubbleId":"b-1","text":"","toolFormerData":null}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c-null-tool:b-1', '{"_v":3,"type":2,"bubbleId":"b-1","text":"","toolFormerData":null}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	stocks, err := readComposerBubbleStocksForTest(context.Background(), readonly)
@@ -1244,8 +1606,11 @@ func TestAssembleTreatsAJSONNullToolFieldAsNoToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadComposerBubbleStock returned error: %v", err)
 	}
+
 	if stock.HasContent {
-		t.Fatal("a chat whose only row has an empty text and a null tool field reported content, so it is admitted and then streams nothing")
+		t.Fatal(
+			"a chat whose only row has an empty text and a null tool field reported content, so it is admitted and then streams nothing",
+		)
 	}
 }
 
@@ -1275,24 +1640,36 @@ func TestAssembleTreatsAnUnparsableTimestampAsUndated(t *testing.T) {
 	stored := storedFixtureOf(
 		bubbleFixture("b-1", BubbleTypeUser, "2026-05-06T05:00:10.000Z", "first"),
 		bubbleFixture("b-2", BubbleTypeAssistant, "2026-05-06T05:00:30.000Z", "second"),
-		bubbleFixture("b-malformed", BubbleTypeAssistant, "2026-05-06T05:00:20.badZ", "malformed timestamp"),
+		bubbleFixture(
+			"b-malformed",
+			BubbleTypeAssistant,
+			"2026-05-06T05:00:20.badZ",
+			"malformed timestamp",
+		),
 	)
 
 	got := stored.assembledText(t, header)
 	if got != "first|second|malformed timestamp" {
-		t.Fatalf("assembled = %q, want the unparsable timestamp treated as undated and appended", got)
+		t.Fatalf(
+			"assembled = %q, want the unparsable timestamp treated as undated and appended",
+			got,
+		)
 	}
 }
 
 func TestStreamComposerBubblesLogsAnUnparsableStoredTimestamp(t *testing.T) {
-	dbPath := writeCursorTestDatabase(t, []string{
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-malformed', '{"_v":3,"type":2,"bubbleId":"b-malformed","text":"the answer","createdAt":"2026-05-06T05:00:20.badZ"}')`,
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-malformed","type":2}]}')`,
-	})
+	dbPath := writeCursorTestDatabase(
+		t,
+		[]string{
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:c:b-malformed', '{"_v":3,"type":2,"bubbleId":"b-malformed","text":"the answer","createdAt":"2026-05-06T05:00:20.badZ"}')`,
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:c', '{"composerId":"c","fullConversationHeadersOnly":[{"bubbleId":"b-malformed","type":2}]}')`,
+		},
+	)
 	readonly, err := OpenReadOnlyDatabase(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	header, found, err := ReadComposerHeader(context.Background(), readonly, "c")
@@ -1305,13 +1682,23 @@ func TestStreamComposerBubblesLogsAnUnparsableStoredTimestamp(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logOutput, nil)))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
-	err = StreamComposerBubbles(context.Background(), readonly, "c", header, func(Bubble) bool {
-		return true
-	})
+	err = StreamComposerBubbles(
+		context.Background(),
+		readonly,
+		"c",
+		header,
+		func(Bubble) bool {
+			return true
+		},
+	)
 	if err != nil {
 		t.Fatalf("StreamComposerBubbles returned error: %v", err)
 	}
+
 	if !strings.Contains(logOutput.String(), "providers.cursor.store.bubble_timestamp_unparsed") {
-		t.Fatalf("log = %s, want the authoritative unparsable timestamp reported", logOutput.String())
+		t.Fatalf(
+			"log = %s, want the authoritative unparsable timestamp reported",
+			logOutput.String(),
+		)
 	}
 }

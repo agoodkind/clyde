@@ -34,7 +34,9 @@ func TestRPCThreadTokenUsageUpdatedNotificationMatchesAppServerSchema(t *testing
 	if err != nil {
 		t.Fatalf("marshal token usage notification: %v", err)
 	}
+
 	out := string(raw)
+
 	for _, want := range []string{
 		`"threadId":"thread-1"`,
 		`"turnId":"turn-1"`,
@@ -52,13 +54,17 @@ func TestRPCThreadTokenUsageUpdatedNotificationMatchesAppServerSchema(t *testing
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal token usage notification: %v", err)
 	}
+
 	if decoded.TokenUsage.Total.CachedInputTokens != 64 {
 		t.Fatalf("total.cachedInputTokens=%d want 64", decoded.TokenUsage.Total.CachedInputTokens)
 	}
+
 	if decoded.TokenUsage.Last.CachedInputTokens != 0 {
 		t.Fatalf("last.cachedInputTokens=%d want 0", decoded.TokenUsage.Last.CachedInputTokens)
 	}
-	if decoded.TokenUsage.ModelContextWindow == nil || *decoded.TokenUsage.ModelContextWindow != window {
+
+	if decoded.TokenUsage.ModelContextWindow == nil ||
+		*decoded.TokenUsage.ModelContextWindow != window {
 		t.Fatalf("modelContextWindow=%v want %d", decoded.TokenUsage.ModelContextWindow, window)
 	}
 }

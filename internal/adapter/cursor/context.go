@@ -15,5 +15,6 @@ func (c Context) StrongConversationKey() string {
 	if strings.TrimSpace(c.ConversationID) == "" {
 		return ""
 	}
+
 	return "cursor:" + strings.TrimSpace(c.ConversationID)
 }

@@ -46,5 +46,6 @@ func (m *mcpStdoutWriter) Write(p []byte) (int, error) {
 	if err != nil {
 		return n, fmt.Errorf("mcpserver: write stdout frame: %w", err)
 	}
+
 	return n, nil
 }

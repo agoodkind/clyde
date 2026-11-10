@@ -15,6 +15,7 @@ func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("open zed sqlite database %s: nil context", path)
 	}
+
 	dsn := (&url.URL{
 		Scheme:   "file",
 		Path:     path,
@@ -22,14 +23,36 @@ func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	}).String()
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.store.sqlite_open_failed", "concern", "providers.zed.store", "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.store.sqlite_open_failed",
+			"concern",
+			"providers.zed.store",
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("open zed sqlite database %s: %w", path, err)
 	}
+
 	if pingErr := db.PingContext(ctx); pingErr != nil {
 		_ = db.Close()
-		slog.WarnContext(ctx, "providers.zed.store.sqlite_ping_failed", "concern", "providers.zed.store", "path", path, "err", pingErr)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.store.sqlite_ping_failed",
+			"concern",
+			"providers.zed.store",
+			"path",
+			path,
+			"err",
+			pingErr,
+		)
+
 		return nil, fmt.Errorf("ping zed sqlite database %s: %w", path, pingErr)
 	}
+
 	return db, nil
 }
 
@@ -40,10 +63,23 @@ func TableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 		ctx,
 		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
 		table,
-	).Scan(&count)
+	).Scan(
+		&count,
+	)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.store.sqlite_master_query_failed", "concern", "providers.zed.store", "table", table, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.store.sqlite_master_query_failed",
+			"concern",
+			"providers.zed.store",
+			"table",
+			table,
+			"err",
+			err,
+		)
+
 		return false, fmt.Errorf("query sqlite_master for %s: %w", table, err)
 	}
+
 	return count > 0, nil
 }

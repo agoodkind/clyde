@@ -19,22 +19,52 @@ func TestLoadRulesTagRoundTrip(t *testing.T) {
 		{
 			name:  "default",
 			kinds: NewContentKindSet(ContentKindChat, ContentKindToolCalls),
-			want:  LoadOptions{IncludeSystemPrompts: false, IncludeSystemMessages: false, IncludeToolOutputs: false, IncludeInjected: false, HarnessTally: nil},
+			want: LoadOptions{
+				IncludeSystemPrompts:  false,
+				IncludeSystemMessages: false,
+				IncludeToolOutputs:    false,
+				IncludeInjected:       false,
+				HarnessTally:          nil,
+			},
 		},
 		{
 			name:  "system messages",
 			kinds: NewContentKindSet(ContentKindChat, ContentKindSystemMessages),
-			want:  LoadOptions{IncludeSystemPrompts: false, IncludeSystemMessages: true, IncludeToolOutputs: false, IncludeInjected: false, HarnessTally: nil},
+			want: LoadOptions{
+				IncludeSystemPrompts:  false,
+				IncludeSystemMessages: true,
+				IncludeToolOutputs:    false,
+				IncludeInjected:       false,
+				HarnessTally:          nil,
+			},
 		},
 		{
 			name:  "injected",
 			kinds: NewContentKindSet(ContentKindChat, ContentKindInjected),
-			want:  LoadOptions{IncludeSystemPrompts: false, IncludeSystemMessages: false, IncludeToolOutputs: false, IncludeInjected: true, HarnessTally: nil},
+			want: LoadOptions{
+				IncludeSystemPrompts:  false,
+				IncludeSystemMessages: false,
+				IncludeToolOutputs:    false,
+				IncludeInjected:       true,
+				HarnessTally:          nil,
+			},
 		},
 		{
-			name:  "all gated kinds",
-			kinds: NewContentKindSet(ContentKindChat, ContentKindToolOutputs, ContentKindSystemPrompts, ContentKindSystemMessages, ContentKindInjected),
-			want:  LoadOptions{IncludeSystemPrompts: true, IncludeSystemMessages: true, IncludeToolOutputs: true, IncludeInjected: true, HarnessTally: nil},
+			name: "all gated kinds",
+			kinds: NewContentKindSet(
+				ContentKindChat,
+				ContentKindToolOutputs,
+				ContentKindSystemPrompts,
+				ContentKindSystemMessages,
+				ContentKindInjected,
+			),
+			want: LoadOptions{
+				IncludeSystemPrompts:  true,
+				IncludeSystemMessages: true,
+				IncludeToolOutputs:    true,
+				IncludeInjected:       true,
+				HarnessTally:          nil,
+			},
 		},
 	}
 	for _, testCase := range cases {
@@ -42,10 +72,12 @@ func TestLoadRulesTagRoundTrip(t *testing.T) {
 		if !strings.HasPrefix(tag, "v1;") {
 			t.Fatalf("%s: tag %q lacks the v1 version prefix", testCase.name, tag)
 		}
+
 		options, known := LoadOptionsForRules(tag)
 		if !known {
 			t.Fatalf("%s: tag %q reported unknown", testCase.name, tag)
 		}
+
 		if options != testCase.want {
 			t.Fatalf("%s: options = %+v, want %+v", testCase.name, options, testCase.want)
 		}
@@ -59,7 +91,13 @@ func TestLoadRulesTagRoundTrip(t *testing.T) {
 func TestLoadOptionsForRulesLegacyAndUnknown(t *testing.T) {
 	t.Parallel()
 
-	defaultOptions := LoadOptions{IncludeSystemPrompts: false, IncludeSystemMessages: false, IncludeToolOutputs: false, IncludeInjected: false, HarnessTally: nil}
+	defaultOptions := LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+		IncludeInjected:       false,
+		HarnessTally:          nil,
+	}
 
 	options, known := LoadOptionsForRules("")
 	if !known || options != defaultOptions {
@@ -70,6 +108,7 @@ func TestLoadOptionsForRulesLegacyAndUnknown(t *testing.T) {
 	if known {
 		t.Fatal("future version tag reported known, want unknown")
 	}
+
 	if options != defaultOptions {
 		t.Fatalf("future version tag options = %+v, want default", options)
 	}
@@ -89,6 +128,7 @@ func TestContextWindowHonorsHitLoadRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tagged read returned error: %v", err)
 	}
+
 	if !strings.Contains(tagged, "visible transcript message") {
 		t.Fatalf("tagged read = %q, want the user message index 1 refers to", tagged)
 	}
@@ -97,7 +137,11 @@ func TestContextWindowHonorsHitLoadRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("untagged read returned error: %v", err)
 	}
+
 	if strings.Contains(untagged, "visible transcript message") {
-		t.Fatalf("untagged read = %q: index 1 resolved under the default rules, so the fixture no longer reproduces the skew", untagged)
+		t.Fatalf(
+			"untagged read = %q: index 1 resolved under the default rules, so the fixture no longer reproduces the skew",
+			untagged,
+		)
 	}
 }

@@ -22,14 +22,25 @@ func TestManifestPreservesTheCursorCompatibilitySuffix(t *testing.T) {
 	conversationID := "cursor:generation"
 	stamp := semanticTestStamp(20, 200)
 	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{{Record: cursorTranscriptRecord(conversationID), Stamp: stamp}},
+		records: []conversation.StampedRecord{
+			{
+				Record: cursorTranscriptRecord(conversationID),
+				Stamp:  stamp,
+			},
+		},
 		messagesByID: map[string][]transcript.Message{
 			conversationID: {{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "first"}},
 		},
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -56,12 +67,23 @@ func TestZeroDocumentSuppressionUsesTheAdvertisedFingerprint(t *testing.T) {
 	conversationID := "cursor:empty"
 	stamp := semanticTestStamp(20, 200)
 	index := &fakeConversationSemanticIndex{
-		records:      []conversation.StampedRecord{{Record: cursorTranscriptRecord(conversationID), Stamp: stamp}},
+		records: []conversation.StampedRecord{
+			{
+				Record: cursorTranscriptRecord(conversationID),
+				Stamp:  stamp,
+			},
+		},
 		messagesByID: map[string][]transcript.Message{conversationID: {}},
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("first runPass returned error: %v", err)
@@ -81,9 +103,15 @@ func TestZeroDocumentSuppressionUsesTheAdvertisedFingerprint(t *testing.T) {
 	// manifest is whatever the last sync stated; what must not happen is the
 	// suppressed conversation being advertised again.
 	if len(client.syncCalls) != 2 {
-		t.Fatalf("sync calls = %d, want 2; the suppressing pass still states the empty manifest", len(client.syncCalls))
+		t.Fatalf(
+			"sync calls = %d, want 2; the suppressing pass still states the empty manifest",
+			len(client.syncCalls),
+		)
 	}
 	if len(client.syncCalls[1].Manifest) != 0 {
-		t.Fatalf("second manifest = %+v, want empty; the suppressed conversation must not be re-advertised", client.syncCalls[1].Manifest)
+		t.Fatalf(
+			"second manifest = %+v, want empty; the suppressed conversation must not be re-advertised",
+			client.syncCalls[1].Manifest,
+		)
 	}
 }

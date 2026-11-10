@@ -78,8 +78,12 @@ type composerWorkspaceURI struct {
 func decodeComposerHeadersValueJSON(data []byte) (composerHeadersValue, error) {
 	var value composerHeadersValue
 	if err := json.Unmarshal(data, &value); err != nil {
-		return composerHeadersValue{}, CursorJSONDecodeError{Description: "composer headers value", Err: err}
+		return composerHeadersValue{}, CursorJSONDecodeError{
+			Description: "composer headers value",
+			Err:         err,
+		}
 	}
+
 	return value, nil
 }
 
@@ -88,16 +92,21 @@ func decodeComposerHeadersValueJSON(data []byte) (composerHeadersValue, error) {
 // a Cursor build that predates the table presents; that build keeps composer
 // metadata only in each workspace database, which [BuildComposerMetadataIndex]
 // reads alongside this one.
-func ReadComposerMetadataIndex(ctx context.Context, db *sql.DB) (map[string]ComposerMetadata, error) {
+func ReadComposerMetadataIndex(
+	ctx context.Context,
+	db *sql.DB,
+) (map[string]ComposerMetadata, error) {
 	if db == nil {
 		return nil, fmt.Errorf("read cursor composer metadata: nil database")
 	}
+
 	index := make(map[string]ComposerMetadata)
 
 	exists, err := TableExists(ctx, db, composerHeadersTable)
 	if err != nil {
 		return nil, err
 	}
+
 	if !exists {
 		return index, nil
 	}
@@ -107,12 +116,26 @@ func ReadComposerMetadataIndex(ctx context.Context, db *sql.DB) (map[string]Comp
 	// as text would otherwise fail to scan and cost every composer in the table its
 	// metadata. A cast turns that row into a zero timestamp, which is what the row
 	// is worth, and leaves the rest readable.
-	rows, err := db.QueryContext(ctx, "SELECT composerId, CAST(createdAt AS INTEGER), CAST(lastUpdatedAt AS INTEGER), CAST(isArchived AS INTEGER), CAST(isSubagent AS INTEGER), value FROM composerHeaders")
+	rows, err := db.QueryContext(
+		ctx,
+		"SELECT composerId, CAST(createdAt AS INTEGER), CAST(lastUpdatedAt AS INTEGER), CAST(isArchived AS INTEGER), CAST(isSubagent AS INTEGER), value FROM composerHeaders",
+	)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.composer_headers_query_failed", "concern", concern, "table", composerHeadersTable, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_headers_query_failed",
+			"concern",
+			concern,
+			"table",
+			composerHeadersTable,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("query cursor %s rows: %w", composerHeadersTable, err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
@@ -120,16 +143,30 @@ func ReadComposerMetadataIndex(ctx context.Context, db *sql.DB) (map[string]Comp
 		if scanErr != nil {
 			return nil, scanErr
 		}
+
 		if !ok {
 			continue
 		}
+
 		index[metadata.ComposerID] = metadata
 	}
+
 	if err := rows.Err(); err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.composer_headers_iterate_failed", "concern", concern, "table", composerHeadersTable, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_headers_iterate_failed",
+			"concern",
+			concern,
+			"table",
+			composerHeadersTable,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("iterate cursor %s rows: %w", composerHeadersTable, err)
 	}
+
 	return index, nil
 }
 
@@ -148,11 +185,33 @@ func scanComposerMetadataRow(ctx context.Context, rows *sql.Rows) (ComposerMetad
 	var isSubagent sql.NullInt64
 	var value []byte
 
-	if err := rows.Scan(&composerIDColumn, &createdAt, &lastUpdatedAt, &isArchived, &isSubagent, &value); err != nil {
+	if err := rows.Scan(
+		&composerIDColumn,
+		&createdAt,
+		&lastUpdatedAt,
+		&isArchived,
+		&isSubagent,
+		&value,
+	); err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.composer_headers_scan_failed", "concern", concern, "table", composerHeadersTable, "err", err)
-		return emptyComposerMetadata(), false, fmt.Errorf("scan cursor %s row: %w", composerHeadersTable, err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_headers_scan_failed",
+			"concern",
+			concern,
+			"table",
+			composerHeadersTable,
+			"err",
+			err,
+		)
+
+		return emptyComposerMetadata(), false, fmt.Errorf(
+			"scan cursor %s row: %w",
+			composerHeadersTable,
+			err,
+		)
 	}
+
 	composerID := strings.TrimSpace(composerIDColumn.String)
 	if composerID == "" {
 		return emptyComposerMetadata(), false, nil
@@ -172,9 +231,20 @@ func scanComposerMetadataRow(ctx context.Context, rows *sql.Rows) (ComposerMetad
 	decoded, err := decodeComposerHeadersValueJSON(value)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.composer_headers_decode_failed", "concern", concern, "composer_id", composerID, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_headers_decode_failed",
+			"concern",
+			concern,
+			"composer_id",
+			composerID,
+			"err",
+			err,
+		)
+
 		return metadata, true, nil
 	}
+
 	metadata.Name = decoded.Name
 	metadata.Subtitle = decoded.Subtitle
 	metadata.WorkspaceRoot = workspaceRootFromIdentifier(decoded.WorkspaceIdentifier)
@@ -186,6 +256,7 @@ func scanComposerMetadataRow(ctx context.Context, rows *sql.Rows) (ComposerMetad
 	if decoded.IsArchived != nil {
 		metadata.Archived = *decoded.IsArchived
 	}
+
 	return metadata, true, nil
 }
 
@@ -207,6 +278,7 @@ func workspaceRootFromIdentifier(identifier composerWorkspaceIdentifier) string 
 	if folder != "" {
 		return folder
 	}
+
 	return workspaceRootFromURI(identifier.ConfigPath)
 }
 
@@ -218,9 +290,11 @@ func workspaceRootFromURI(uri composerWorkspaceURI) string {
 	if fsPath != "" {
 		return filepath.FromSlash(fsPath)
 	}
+
 	slashPath := strings.TrimSpace(uri.Path)
 	if slashPath == "" {
 		return ""
 	}
+
 	return filepath.FromSlash(slashPath)
 }

@@ -16,16 +16,19 @@ func mustWriteLines(t *testing.T, path string, records []map[string]any) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer f.Close()
+
 	for _, rec := range records {
 		raw, err := json.Marshal(rec)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
+
 		if _, err := f.Write(append(raw, '\n')); err != nil {
 			t.Fatalf("write: %v", err)
 		}

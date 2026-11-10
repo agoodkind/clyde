@@ -36,6 +36,7 @@ func normalizeNativePatchRepresentation(value NativePatchRepresentation) NativeP
 	if value == NativePatchRepresentationRaw {
 		return NativePatchRepresentationRaw
 	}
+
 	return NativePatchRepresentationJSON
 }
 

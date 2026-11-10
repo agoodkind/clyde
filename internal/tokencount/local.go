@@ -15,6 +15,7 @@ func (s scaledCounter) Estimate(text string) int {
 	if factor <= 0 {
 		factor = 1
 	}
+
 	return int(math.Ceil(float64(s.base.Estimate(text)) * factor))
 }
 
@@ -35,6 +36,7 @@ func LocalCounter(family Family, model string, s Settings) Counter {
 		if inferred == FamilyUnknown {
 			return heuristic
 		}
+
 		return LocalCounter(inferred, model, s)
 	default:
 		return heuristic

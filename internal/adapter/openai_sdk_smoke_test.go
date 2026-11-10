@@ -26,6 +26,7 @@ func TestOpenAISDKSmoke(t *testing.T) {
 	if python == "" {
 		t.Skip(openAISDKPythonEnv + " is not set")
 	}
+
 	upstream := &conformanceUpstream{
 		requests: make(chan adaptercodex.HTTPTransportRequest, 64),
 		reply: func(writer http.ResponseWriter) {
@@ -38,6 +39,7 @@ func TestOpenAISDKSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve smoke script: %v", err)
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), openAISDKSmokeTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, python, script, listeners.openAI+"/v1")
@@ -45,5 +47,6 @@ func TestOpenAISDKSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenAI SDK smoke failed: %v\n%s", err, output)
 	}
+
 	t.Logf("%s", output)
 }

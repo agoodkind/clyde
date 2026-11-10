@@ -9,6 +9,7 @@ import "testing"
 // owns the comparison vocabulary instead of a vendor enum.
 func TestPathKindConstantsStable(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name string
 		got  string

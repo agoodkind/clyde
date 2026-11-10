@@ -63,6 +63,7 @@ func NewSplitter(provider Provider, settings Settings) *Splitter {
 	if settings.DefaultBudget <= 0 {
 		settings.DefaultBudget = DefaultMaxTokens
 	}
+
 	return &Splitter{provider: provider, settings: settings}
 }
 
@@ -74,41 +75,60 @@ func (s *Splitter) Plan(body []byte) (Result, bool) {
 	if s == nil || s.provider == nil || s.settings.Counter == nil {
 		return noResult, false
 	}
+
 	parsed, ok := s.provider.ParseCompaction(body)
 	if !ok {
 		return noResult, false
 	}
+
 	budget, include := s.options(parsed.Arguments)
 	instructions := s.instructions()
 	maxBytes := s.settings.MaxRetainedBytes
 	if maxBytes > 0 {
 		maxBytes -= len(reorienttag.WrapInjection("", instructions))
 	}
+
 	plan, planned := planCut(parsed, budget, maxBytes, s.settings.Counter, include)
 	if !planned {
 		logFallback(fallbackNoCut, len(parsed.Messages))
 		return noResult, false
 	}
-	slog.Info("mitm.reorient_inject.split_planned",
-		"component", reorientInjectComponent,
-		"concern", reorientInjectConcern,
-		"message_count", len(parsed.Messages),
-		"message_index", plan.Cut.MessageIndex,
-		"segment_index", plan.Cut.SegmentIndex,
-		"head_runes", plan.Cut.HeadRunes,
-		"budget", budget,
-		"retained_tokens", plan.RetainedTokens,
+
+	slog.Info(
+		"mitm.reorient_inject.split_planned",
+		"component",
+		reorientInjectComponent,
+		"concern",
+		reorientInjectConcern,
+		"message_count",
+		len(parsed.Messages),
+		"message_index",
+		plan.Cut.MessageIndex,
+		"segment_index",
+		plan.Cut.SegmentIndex,
+		"head_runes",
+		plan.Cut.HeadRunes,
+		"budget",
+		budget,
+		"retained_tokens",
+		plan.RetainedTokens,
 	)
 	forwarded, err := s.provider.Truncate(body, plan.Cut, parsed.InstructionStart)
 	if err != nil {
-		slog.Warn("mitm.reorient_inject.request_truncate_failed",
-			"component", reorientInjectComponent,
-			"concern", reorientInjectConcern,
-			"err", err,
+		slog.Warn(
+			"mitm.reorient_inject.request_truncate_failed",
+			"component",
+			reorientInjectComponent,
+			"concern",
+			reorientInjectConcern,
+			"err",
+			err,
 		)
 		logFallback(fallbackTruncateFailed, len(parsed.Messages))
+
 		return noResult, false
 	}
+
 	return Result{
 		Forwarded: forwarded,
 		Injection: reorienttag.WrapInjection(plan.Retained, instructions),
@@ -123,16 +143,24 @@ func (s *Splitter) instructions() string {
 	if path == "" {
 		return ""
 	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
-		slog.Warn("mitm.reorient_inject.instructions_unreadable",
-			"component", reorientInjectComponent,
-			"concern", reorientInjectConcern,
-			"path", path,
-			"err", err,
+		slog.Warn(
+			"mitm.reorient_inject.instructions_unreadable",
+			"component",
+			reorientInjectComponent,
+			"concern",
+			reorientInjectConcern,
+			"path",
+			path,
+			"err",
+			err,
 		)
+
 		return ""
 	}
+
 	return strings.TrimSpace(string(content))
 }
 
@@ -141,13 +169,19 @@ func (s *Splitter) instructions() string {
 func (s *Splitter) Inject(body []byte, injection string) ([]byte, error) {
 	injected, err := s.provider.InjectSummary(body, injection)
 	if err != nil {
-		slog.Warn("mitm.reorient_inject.summary_inject_failed",
-			"component", reorientInjectComponent,
-			"concern", reorientInjectConcern,
-			"err", err,
+		slog.Warn(
+			"mitm.reorient_inject.summary_inject_failed",
+			"component",
+			reorientInjectComponent,
+			"concern",
+			reorientInjectConcern,
+			"err",
+			err,
 		)
+
 		return nil, fmt.Errorf("inject compaction summary: %w", err)
 	}
+
 	return injected, nil
 }
 
@@ -160,31 +194,45 @@ func (s *Splitter) options(args []string) (int, func(SegmentKind) bool) {
 	if len(args) == 0 {
 		return budget, includeFor(selected)
 	}
+
 	options, err := exportargs.Parse(args)
 	if err != nil {
-		slog.Warn("mitm.reorient_inject.arguments_invalid",
-			"component", reorientInjectComponent,
-			"concern", reorientInjectConcern,
-			"err", err,
+		slog.Warn(
+			"mitm.reorient_inject.arguments_invalid",
+			"component",
+			reorientInjectComponent,
+			"concern",
+			reorientInjectConcern,
+			"err",
+			err,
 		)
+
 		return budget, includeFor(selected)
 	}
+
 	if options.MaxTokens != "" {
 		parsed, parseErr := util.ParseHumanCount(options.MaxTokens)
 		if parseErr != nil {
-			slog.Warn("mitm.reorient_inject.max_tokens_invalid",
-				"component", reorientInjectComponent,
-				"concern", reorientInjectConcern,
-				"max_tokens", options.MaxTokens,
-				"err", parseErr,
+			slog.Warn(
+				"mitm.reorient_inject.max_tokens_invalid",
+				"component",
+				reorientInjectComponent,
+				"concern",
+				reorientInjectConcern,
+				"max_tokens",
+				options.MaxTokens,
+				"err",
+				parseErr,
 			)
 		} else if parsed > 0 {
 			budget = parsed
 		}
 	}
+
 	if !options.Content.Empty() {
 		selected = options.Content
 	}
+
 	return budget, includeFor(selected)
 }
 
@@ -199,6 +247,7 @@ func includeFor(selected conversation.ContentKindSet) func(SegmentKind) bool {
 	if selected.Empty() {
 		return func(SegmentKind) bool { return true }
 	}
+
 	return func(kind SegmentKind) bool {
 		switch kind {
 		case KindText, KindOther:
@@ -214,6 +263,7 @@ func includeFor(selected conversation.ContentKindSet) func(SegmentKind) bool {
 		case KindImage:
 			return false
 		}
+
 		return false
 	}
 }
@@ -228,10 +278,15 @@ const (
 )
 
 func logFallback(reason fallbackReason, messageCount int) {
-	slog.Warn("mitm.reorient_inject.split_fallback",
-		"component", reorientInjectComponent,
-		"concern", reorientInjectConcern,
-		"reason", string(reason),
-		"message_count", messageCount,
+	slog.Warn(
+		"mitm.reorient_inject.split_fallback",
+		"component",
+		reorientInjectComponent,
+		"concern",
+		reorientInjectConcern,
+		"reason",
+		string(reason),
+		"message_count",
+		messageCount,
 	)
 }

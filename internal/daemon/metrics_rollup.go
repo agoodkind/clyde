@@ -24,13 +24,20 @@ import (
 // and still lets the caller log again with its own concern logger.
 func rollupError(event string, path string, err error, message string) error {
 	wrapped := fmt.Errorf("%s %s: %w", message, path, err)
-	slog.Warn(event,
-		"concern", "daemon.workers",
-		"component", "daemon",
-		"subcomponent", "metrics_rollup",
-		"path", path,
-		"err", wrapped.Error(),
+	slog.Warn(
+		event,
+		"concern",
+		"daemon.workers",
+		"component",
+		"daemon",
+		"subcomponent",
+		"metrics_rollup",
+		"path",
+		path,
+		"err",
+		wrapped.Error(),
 	)
+
 	return wrapped
 }
 
@@ -143,8 +150,14 @@ func metricsRollupCheckpointPath() string {
 func acquireRollupWriteLock(path string) (*flock.Flock, error) {
 	lock := flock.New(path + ".lock")
 	if err := lock.Lock(); err != nil {
-		return nil, rollupError("daemon.metrics_rollup.lock_failed", path, err, "lock metrics rollup")
+		return nil, rollupError(
+			"daemon.metrics_rollup.lock_failed",
+			path,
+			err,
+			"lock metrics rollup",
+		)
 	}
+
 	return lock, nil
 }
 
@@ -156,10 +169,12 @@ func readMetricsRollupCheckpoint(path string) metricsRollupCheckpoint {
 	if err != nil {
 		return empty
 	}
+
 	var checkpoint metricsRollupCheckpoint
 	if err := json.Unmarshal(raw, &checkpoint); err != nil {
 		return empty
 	}
+
 	return checkpoint
 }
 
@@ -168,25 +183,56 @@ func readMetricsRollupCheckpoint(path string) metricsRollupCheckpoint {
 func writeMetricsRollupCheckpoint(path string, checkpoint metricsRollupCheckpoint) error {
 	encoded, err := json.Marshal(checkpoint)
 	if err != nil {
-		return rollupError("daemon.metrics_rollup.checkpoint_encode_failed", path, err, "encode metrics rollup checkpoint")
+		return rollupError(
+			"daemon.metrics_rollup.checkpoint_encode_failed",
+			path,
+			err,
+			"encode metrics rollup checkpoint",
+		)
 	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return rollupError("daemon.metrics_rollup.checkpoint_mkdir_failed", path, err, "create metrics rollup checkpoint directory")
+		return rollupError(
+			"daemon.metrics_rollup.checkpoint_mkdir_failed",
+			path,
+			err,
+			"create metrics rollup checkpoint directory",
+		)
 	}
+
 	temporary := path + ".tmp"
 	if err := os.WriteFile(temporary, encoded, 0o600); err != nil {
-		return rollupError("daemon.metrics_rollup.checkpoint_write_failed", temporary, err, "write metrics rollup checkpoint")
+		return rollupError(
+			"daemon.metrics_rollup.checkpoint_write_failed",
+			temporary,
+			err,
+			"write metrics rollup checkpoint",
+		)
 	}
+
 	if err := os.Rename(temporary, path); err != nil {
-		return rollupError("daemon.metrics_rollup.checkpoint_replace_failed", path, err, "replace metrics rollup checkpoint")
+		return rollupError(
+			"daemon.metrics_rollup.checkpoint_replace_failed",
+			path,
+			err,
+			"replace metrics rollup checkpoint",
+		)
 	}
-	slog.Debug("daemon.metrics_rollup.checkpoint_written",
-		"concern", "daemon.workers",
-		"component", "daemon",
-		"subcomponent", "metrics_rollup",
-		"path", path,
-		"last_record_at", checkpoint.LastRecordAt,
+
+	slog.Debug(
+		"daemon.metrics_rollup.checkpoint_written",
+		"concern",
+		"daemon.workers",
+		"component",
+		"daemon",
+		"subcomponent",
+		"metrics_rollup",
+		"path",
+		path,
+		"last_record_at",
+		checkpoint.LastRecordAt,
 	)
+
 	return nil
 }
 
@@ -195,33 +241,69 @@ func appendMetricsRollupRecords(path string, records []metricsRollupRecord) erro
 	if len(records) == 0 {
 		return nil
 	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return rollupError("daemon.metrics_rollup.mkdir_failed", path, err, "create metrics rollup directory")
+		return rollupError(
+			"daemon.metrics_rollup.mkdir_failed",
+			path,
+			err,
+			"create metrics rollup directory",
+		)
 	}
+
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return rollupError("daemon.metrics_rollup.open_failed", path, err, "open metrics rollup")
 	}
+
 	writer := bufio.NewWriter(file)
+
 	for _, record := range records {
 		encoded, encodeErr := json.Marshal(record)
 		if encodeErr != nil {
 			_ = file.Close()
-			return rollupError("daemon.metrics_rollup.record_encode_failed", path, encodeErr, "encode metrics rollup record")
+
+			return rollupError(
+				"daemon.metrics_rollup.record_encode_failed",
+				path,
+				encodeErr,
+				"encode metrics rollup record",
+			)
 		}
+
 		encoded = append(encoded, '\n')
 		if _, writeErr := writer.Write(encoded); writeErr != nil {
 			_ = file.Close()
-			return rollupError("daemon.metrics_rollup.record_write_failed", path, writeErr, "write metrics rollup record")
+
+			return rollupError(
+				"daemon.metrics_rollup.record_write_failed",
+				path,
+				writeErr,
+				"write metrics rollup record",
+			)
 		}
 	}
+
 	if flushErr := writer.Flush(); flushErr != nil {
 		_ = file.Close()
-		return rollupError("daemon.metrics_rollup.flush_failed", path, flushErr, "flush metrics rollup")
+
+		return rollupError(
+			"daemon.metrics_rollup.flush_failed",
+			path,
+			flushErr,
+			"flush metrics rollup",
+		)
 	}
+
 	if closeErr := file.Close(); closeErr != nil {
-		return rollupError("daemon.metrics_rollup.close_failed", path, closeErr, "close metrics rollup")
+		return rollupError(
+			"daemon.metrics_rollup.close_failed",
+			path,
+			closeErr,
+			"close metrics rollup",
+		)
 	}
+
 	return nil
 }
 
@@ -249,45 +331,74 @@ func loadMetricsRollup(path string, windows []MetricsWindow) ([]metricsRollupWin
 			Found:        false,
 		}
 	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return loaded, nil
 		}
-		return loaded, rollupError("daemon.metrics_rollup.open_failed", path, err, "open metrics rollup")
+
+		return loaded, rollupError(
+			"daemon.metrics_rollup.open_failed",
+			path,
+			err,
+			"open metrics rollup",
+		)
 	}
+
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxMetricsRollupLineBytes)
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
+
 		var record metricsRollupRecord
 		if err := json.Unmarshal(line, &record); err != nil {
 			continue
 		}
+
 		applyRollupRecord(record, windows, loaded)
 	}
+
 	scanErr := scanner.Err()
 	closeErr := file.Close()
 	if scanErr != nil {
-		return loaded, rollupError("daemon.metrics_rollup.read_failed", path, scanErr, "read metrics rollup")
+		return loaded, rollupError(
+			"daemon.metrics_rollup.read_failed",
+			path,
+			scanErr,
+			"read metrics rollup",
+		)
 	}
+
 	if closeErr != nil {
-		return loaded, rollupError("daemon.metrics_rollup.close_failed", path, closeErr, "close metrics rollup")
+		return loaded, rollupError(
+			"daemon.metrics_rollup.close_failed",
+			path,
+			closeErr,
+			"close metrics rollup",
+		)
 	}
+
 	return loaded, nil
 }
 
 // applyRollupRecord folds one record into every window it belongs to.
-func applyRollupRecord(record metricsRollupRecord, windows []MetricsWindow, loaded []metricsRollupWindow) {
+func applyRollupRecord(
+	record metricsRollupRecord,
+	windows []MetricsWindow,
+	loaded []metricsRollupWindow,
+) {
 	switch record.Kind {
 	case metricsRollupKindGeneration:
 		startedAt, ok := parseRollupTime(record.GenerationStartedAt)
 		if !ok {
 			return
 		}
+
 		for i, window := range windows {
 			markRollupEarliest(&loaded[i], startedAt)
 			if !startedAt.Before(window.Since) && !startedAt.After(window.Until) {
@@ -299,12 +410,15 @@ func applyRollupRecord(record metricsRollupRecord, windows []MetricsWindow, load
 		if !ok {
 			return
 		}
+
 		request := rollupRecordToRequest(record, terminalAt)
+
 		for i, window := range windows {
 			markRollupEarliest(&loaded[i], terminalAt)
 			if terminalAt.Before(window.Since) || terminalAt.After(window.Until) {
 				continue
 			}
+
 			loaded[i].Requests[record.RequestID] = request
 			loaded[i].Found = true
 		}
@@ -326,6 +440,7 @@ func markRollupEarliest(window *metricsRollupWindow, at time.Time) {
 func rollupRecordToRequest(record metricsRollupRecord, terminalAt time.Time) *metricsRequest {
 	startedAt, hasStarted := parseRollupTime(record.StartedAt)
 	streamedAt, _ := parseRollupTime(record.StreamedAt)
+
 	return &metricsRequest{
 		started:             hasStarted,
 		terminal:            true,
@@ -357,10 +472,12 @@ func parseRollupTime(value string) (time.Time, bool) {
 	if value == "" {
 		return time.Time{}, false
 	}
+
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
 		return time.Time{}, false
 	}
+
 	return parsed, true
 }
 
@@ -370,6 +487,7 @@ func formatRollupTime(at time.Time) string {
 	if at.IsZero() {
 		return ""
 	}
+
 	return at.UTC().Format(time.RFC3339Nano)
 }
 
@@ -435,14 +553,23 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
+
 		return 0, rollupError("daemon.metrics_rollup.open_failed", path, err, "open metrics rollup")
 	}
+
 	temporary := path + ".tmp"
 	temporaryFile, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = file.Close()
-		return 0, rollupError("daemon.metrics_rollup.prune_open_failed", temporary, err, "open pruned metrics rollup")
+
+		return 0, rollupError(
+			"daemon.metrics_rollup.prune_open_failed",
+			temporary,
+			err,
+			"open pruned metrics rollup",
+		)
 	}
+
 	writer := bufio.NewWriter(temporaryFile)
 
 	dropped := 0
@@ -450,15 +577,18 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxMetricsRollupLineBytes)
 	var writeErr error
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
+
 		if rollupLineBefore(line, cutoff) {
 			dropped++
 			continue
 		}
+
 		kept++
 		if writeErr == nil {
 			_, writeErr = writer.WriteString(line)
@@ -467,49 +597,106 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 			}
 		}
 	}
+
 	scanErr := scanner.Err()
 	closeErr := file.Close()
 	if scanErr != nil {
 		_ = temporaryFile.Close()
 		_ = os.Remove(temporary)
-		return 0, rollupError("daemon.metrics_rollup.read_failed", path, scanErr, "read metrics rollup")
+
+		return 0, rollupError(
+			"daemon.metrics_rollup.read_failed",
+			path,
+			scanErr,
+			"read metrics rollup",
+		)
 	}
+
 	if closeErr != nil {
 		_ = temporaryFile.Close()
 		_ = os.Remove(temporary)
-		return 0, rollupError("daemon.metrics_rollup.close_failed", path, closeErr, "close metrics rollup")
+
+		return 0, rollupError(
+			"daemon.metrics_rollup.close_failed",
+			path,
+			closeErr,
+			"close metrics rollup",
+		)
 	}
+
 	if writeErr != nil {
 		_ = temporaryFile.Close()
 		_ = os.Remove(temporary)
-		return 0, rollupError("daemon.metrics_rollup.prune_write_failed", temporary, writeErr, "write pruned metrics rollup")
+
+		return 0, rollupError(
+			"daemon.metrics_rollup.prune_write_failed",
+			temporary,
+			writeErr,
+			"write pruned metrics rollup",
+		)
 	}
+
 	if flushErr := writer.Flush(); flushErr != nil {
 		_ = temporaryFile.Close()
 		_ = os.Remove(temporary)
-		return 0, rollupError("daemon.metrics_rollup.prune_write_failed", temporary, flushErr, "write pruned metrics rollup")
+
+		return 0, rollupError(
+			"daemon.metrics_rollup.prune_write_failed",
+			temporary,
+			flushErr,
+			"write pruned metrics rollup",
+		)
 	}
+
 	if closeErr := temporaryFile.Close(); closeErr != nil {
 		_ = os.Remove(temporary)
-		return 0, rollupError("daemon.metrics_rollup.prune_close_failed", temporary, closeErr, "close pruned metrics rollup")
+
+		return 0, rollupError(
+			"daemon.metrics_rollup.prune_close_failed",
+			temporary,
+			closeErr,
+			"close pruned metrics rollup",
+		)
 	}
+
 	if dropped == 0 {
 		if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return 0, rollupError("daemon.metrics_rollup.prune_discard_failed", temporary, err, "discard pruned metrics rollup")
+			return 0, rollupError(
+				"daemon.metrics_rollup.prune_discard_failed",
+				temporary,
+				err,
+				"discard pruned metrics rollup",
+			)
 		}
+
 		return 0, nil
 	}
+
 	if err := os.Rename(temporary, path); err != nil {
-		return 0, rollupError("daemon.metrics_rollup.prune_replace_failed", path, err, "replace metrics rollup")
+		return 0, rollupError(
+			"daemon.metrics_rollup.prune_replace_failed",
+			path,
+			err,
+			"replace metrics rollup",
+		)
 	}
-	slog.Info("daemon.metrics_rollup.pruned",
-		"concern", "daemon.workers",
-		"component", "daemon",
-		"subcomponent", "metrics_rollup",
-		"path", path,
-		"count", dropped,
-		"kept", kept,
+
+	slog.Info(
+		"daemon.metrics_rollup.pruned",
+		"concern",
+		"daemon.workers",
+		"component",
+		"daemon",
+		"subcomponent",
+		"metrics_rollup",
+		"path",
+		path,
+		"count",
+		dropped,
+		"kept",
+		kept,
 	)
+
 	return dropped, nil
 }
 
@@ -521,21 +708,28 @@ func rollupLineBefore(line string, cutoff time.Time) bool {
 	if err := json.Unmarshal([]byte(line), &record); err != nil {
 		return false
 	}
+
 	at, ok := parseRollupTime(rollupRecordStamp(record))
 	if !ok {
 		return false
 	}
+
 	return at.Before(cutoff)
 }
 
 // sortedRollupRecords orders records by their stored instant, so the store
 // stays append-ordered even when a pass emits requests from a map.
 func sortedRollupRecords(records []metricsRollupRecord) []metricsRollupRecord {
-	slices.SortFunc(records, func(a, b metricsRollupRecord) int {
-		left, _ := parseRollupTime(rollupRecordStamp(a))
-		right, _ := parseRollupTime(rollupRecordStamp(b))
-		return left.Compare(right)
-	})
+	slices.SortFunc(
+		records,
+		func(a, b metricsRollupRecord) int {
+			left, _ := parseRollupTime(rollupRecordStamp(a))
+			right, _ := parseRollupTime(rollupRecordStamp(b))
+
+			return left.Compare(right)
+		},
+	)
+
 	return records
 }
 
@@ -544,5 +738,6 @@ func rollupRecordStamp(record metricsRollupRecord) string {
 	if record.Kind == metricsRollupKindGeneration {
 		return record.GenerationStartedAt
 	}
+
 	return record.TerminalAt
 }

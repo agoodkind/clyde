@@ -152,7 +152,11 @@ var syntheticContentSpecs = map[SyntheticContentKind]*syntheticContentSpec{
 
 // orderedSyntheticKinds lists the kinds in deterministic order so extraction
 // is reproducible across runs (Go map iteration is not).
-var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, SyntheticNotice, SyntheticRedactedThinking}
+var orderedSyntheticKinds = []SyntheticContentKind{
+	SyntheticReasoning,
+	SyntheticNotice,
+	SyntheticRedactedThinking,
+}
 
 // dataRefAttrPattern is the optional `data-ref="..."` attribute fragment that
 // may appear inside an open marker. The attribute name is fixed; the value
@@ -206,6 +210,7 @@ func specFor(kind SyntheticContentKind) *syntheticContentSpec {
 	if !ok {
 		return nil
 	}
+
 	return spec
 }
 
@@ -231,19 +236,27 @@ func SyntheticContentOpen(kind SyntheticContentKind) string {
 // Neither value may contain a literal double-quote. Callers pass opaque ids
 // (alphanumeric plus hyphen/underscore) and typed enum values, which are safe
 // by construction.
-func SyntheticContentOpenWithRef(kind SyntheticContentKind, ref string, origin SyntheticOrigin) string {
+func SyntheticContentOpenWithRef(
+	kind SyntheticContentKind,
+	ref string,
+	origin SyntheticOrigin,
+) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return ""
 	}
+
 	openTag := "<!--" + spec.Marker
 	if ref != "" {
 		openTag += ` data-ref="` + ref + `"`
 	}
+
 	if origin != OriginUnknown {
 		openTag += ` data-origin="` + string(origin) + `"`
 	}
+
 	openTag += "-->"
+
 	return openTag + "\n" + spec.Header
 }
 
@@ -276,14 +289,18 @@ func SyntheticContentCloseWithAttrs(kind SyntheticContentKind, encrypted, signat
 	if spec == nil {
 		return ""
 	}
+
 	closeTag := "<!--/" + spec.Marker
 	if encrypted != "" {
 		closeTag += ` data-encrypted="` + encrypted + `"`
 	}
+
 	if signature != "" {
 		closeTag += ` data-signature="` + signature + `"`
 	}
+
 	closeTag += "-->"
+
 	return "\n" + closeTag + "\n\n"
 }
 
@@ -296,11 +313,17 @@ func FormatSyntheticContent(kind SyntheticContentKind, body string) string {
 	if spec == nil {
 		return body
 	}
+
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
 		return ""
 	}
-	return SyntheticContentOpen(kind) + formatSyntheticBody(spec, body, true) + SyntheticContentClose(kind)
+
+	return SyntheticContentOpen(kind) + formatSyntheticBody(
+		spec,
+		body,
+		true,
+	) + SyntheticContentClose(kind)
 }
 
 // FormatSyntheticContentDeltaWithRef formats a streaming delta for the given
@@ -321,15 +344,24 @@ func FormatSyntheticContent(kind SyntheticContentKind, body string) string {
 // The ref and origin are only honored when open is true; mid-stream deltas
 // never carry attributes since the open marker is already on the wire.
 // Empty ref and [OriginUnknown] origin produce the attribute-less shape.
-func FormatSyntheticContentDeltaWithRef(kind SyntheticContentKind, open, leadingQuote bool, ref string, origin SyntheticOrigin, body string) string {
+func FormatSyntheticContentDeltaWithRef(
+	kind SyntheticContentKind,
+	open bool,
+	leadingQuote bool,
+	ref string,
+	origin SyntheticOrigin,
+	body string,
+) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return body
 	}
+
 	decorated := formatSyntheticBody(spec, body, leadingQuote)
 	if open {
 		return SyntheticContentOpenWithRef(kind, ref, origin) + decorated
 	}
+
 	return decorated
 }
 
@@ -337,10 +369,12 @@ func formatSyntheticBody(spec *syntheticContentSpec, body string, leadingPrefix 
 	if !spec.QuotePrefix {
 		return body
 	}
+
 	quoted := strings.ReplaceAll(body, "\n", "\n> ")
 	if leadingPrefix {
 		return "> " + quoted
 	}
+
 	return quoted
 }
 
@@ -360,6 +394,7 @@ func stripDecoration(spec *syntheticContentSpec, decorated string) string {
 	if spec.Header != "" {
 		body = strings.TrimPrefix(body, spec.Header)
 	}
+
 	if spec.QuotePrefix {
 		// SyntheticContentClose starts with "\n" before the close marker;
 		// drop trailing whitespace so blockquote-line reversal sees clean
@@ -372,6 +407,7 @@ func stripDecoration(spec *syntheticContentSpec, decorated string) string {
 		// prefix is removed; that is fine because it represents an empty
 		// line in the original body.
 	}
+
 	return body
 }
 
@@ -426,11 +462,23 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 	if text == "" {
 		return nil
 	}
+
 	matches := collectSyntheticMatches(text)
 	if len(matches) == 0 {
-		return []SyntheticPart{{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: "", Signature: "", Origin: OriginUnknown}}
+		return []SyntheticPart{
+			{
+				Kind:      SyntheticKindText,
+				Body:      text,
+				Ref:       "",
+				Encrypted: "",
+				Signature: "",
+				Origin:    OriginUnknown,
+			},
+		}
 	}
+
 	sortSyntheticMatches(matches)
+
 	return spliceSyntheticParts(text, matches)
 }
 
@@ -439,13 +487,16 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 // is per-kind grouped; the caller sorts before splicing.
 func collectSyntheticMatches(text string) []syntheticMatch {
 	var matches []syntheticMatch
+
 	for _, kind := range orderedSyntheticKinds {
 		spec := syntheticContentSpecs[kind]
 		if !strings.Contains(text, "<!--"+spec.Marker) {
 			continue
 		}
+
 		matches = append(matches, pairKindMatches(text, kind, spec)...)
 	}
+
 	return matches
 }
 
@@ -469,19 +520,26 @@ func collectSyntheticMatches(text string) []syntheticMatch {
 // complete it. A close event completes the pending open into a pair, if
 // there is one; a close with nothing pending is an orphan and is left in
 // place the same way.
-func pairKindMatches(text string, kind SyntheticContentKind, spec *syntheticContentSpec) []syntheticMatch {
+func pairKindMatches(
+	text string,
+	kind SyntheticContentKind,
+	spec *syntheticContentSpec,
+) []syntheticMatch {
 	occurrences := collectMarkerOccurrences(text, spec)
 	var matches []syntheticMatch
 	var pending *markerOccurrence
+
 	for i := range occurrences {
 		occ := &occurrences[i]
 		if occ.isOpen {
 			pending = occ
 			continue
 		}
+
 		if pending == nil {
 			continue
 		}
+
 		// An open marker's optional attribute values match any byte but a
 		// double quote, so a value holding a literal close marker makes the
 		// open match span that close. collectMarkerOccurrences orders on start
@@ -494,18 +552,23 @@ func pairKindMatches(text string, kind SyntheticContentKind, spec *syntheticCont
 		if bodyEnd < bodyStart {
 			bodyEnd = bodyStart
 		}
-		matches = append(matches, syntheticMatch{
-			kind:      kind,
-			start:     pending.start,
-			end:       consumeTrailingNewlines(text, occ.end),
-			bodyTrim:  stripDecoration(spec, text[bodyStart:bodyEnd]),
-			ref:       pending.ref,
-			origin:    pending.origin,
-			encrypted: occ.encrypted,
-			signature: occ.signature,
-		})
+
+		matches = append(
+			matches,
+			syntheticMatch{
+				kind:      kind,
+				start:     pending.start,
+				end:       consumeTrailingNewlines(text, occ.end),
+				bodyTrim:  stripDecoration(spec, text[bodyStart:bodyEnd]),
+				ref:       pending.ref,
+				origin:    pending.origin,
+				encrypted: occ.encrypted,
+				signature: occ.signature,
+			},
+		)
 		pending = nil
 	}
+
 	return matches
 }
 
@@ -530,6 +593,7 @@ func collectMarkerOccurrences(text string, spec *syntheticContentSpec) []markerO
 			signature: "",
 		}
 	}
+
 	closes := make([]markerOccurrence, len(closeIdxs))
 	for i, idx := range closeIdxs {
 		closes[i] = markerOccurrence{
@@ -544,6 +608,7 @@ func collectMarkerOccurrences(text string, spec *syntheticContentSpec) []markerO
 	}
 
 	merged := make([]markerOccurrence, 0, len(opens)+len(closes))
+
 	i, j := 0, 0
 	for i < len(opens) && j < len(closes) {
 		if opens[i].start <= closes[j].start {
@@ -554,8 +619,10 @@ func collectMarkerOccurrences(text string, spec *syntheticContentSpec) []markerO
 			j++
 		}
 	}
+
 	merged = append(merged, opens[i:]...)
 	merged = append(merged, closes[j:]...)
+
 	return merged
 }
 
@@ -573,6 +640,7 @@ func consumeTrailingNewlines(text string, from int) int {
 	for end < len(text) && text[end] == '\n' {
 		end++
 	}
+
 	return end
 }
 
@@ -582,6 +650,7 @@ func captureSubstring(text string, start, end int) string {
 	if start < 0 || end < 0 {
 		return ""
 	}
+
 	return text[start:end]
 }
 
@@ -603,19 +672,34 @@ func sortSyntheticMatches(matches []syntheticMatch) {
 func spliceSyntheticParts(text string, matches []syntheticMatch) []SyntheticPart {
 	var parts []SyntheticPart
 	cursor := 0
+
 	for _, m := range matches {
 		if m.start < cursor {
 			continue
 		}
+
 		if m.start > cursor {
 			parts = appendTextPart(parts, text[cursor:m.start])
 		}
-		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim, Ref: m.ref, Encrypted: m.encrypted, Signature: m.signature, Origin: m.origin})
+
+		parts = append(
+			parts,
+			SyntheticPart{
+				Kind:      m.kind,
+				Body:      m.bodyTrim,
+				Ref:       m.ref,
+				Encrypted: m.encrypted,
+				Signature: m.signature,
+				Origin:    m.origin,
+			},
+		)
 		cursor = m.end
 	}
+
 	if cursor < len(text) {
 		parts = appendTextPart(parts, text[cursor:])
 	}
+
 	return parts
 }
 
@@ -623,13 +707,25 @@ func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
 	if text == "" {
 		return parts
 	}
+
 	// Drop pure-whitespace gap segments introduced by SyntheticContentClose
 	// trailing "\n\n" + the next envelope's leading newline. Preserve
 	// non-whitespace text verbatim so user prose is untouched.
 	if strings.TrimSpace(text) == "" {
 		return parts
 	}
-	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: "", Signature: "", Origin: OriginUnknown})
+
+	return append(
+		parts,
+		SyntheticPart{
+			Kind:      SyntheticKindText,
+			Body:      text,
+			Ref:       "",
+			Encrypted: "",
+			Signature: "",
+			Origin:    OriginUnknown,
+		},
+	)
 }
 
 // MaterializationStrategy picks how round-tripped synthetic envelope content
@@ -725,10 +821,14 @@ type MaterializedPart struct {
 //
 // MaterializeSyntheticParts never returns nil for a non-empty input; an
 // input with only dropped parts returns an empty slice.
-func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationStrategy) []MaterializedPart {
+func MaterializeSyntheticParts(
+	parts []SyntheticPart,
+	strategy MaterializationStrategy,
+) []MaterializedPart {
 	if len(parts) == 0 {
 		return nil
 	}
+
 	out := make([]MaterializedPart, 0, len(parts))
 	for _, p := range parts {
 		switch p.Kind {
@@ -736,7 +836,16 @@ func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationSt
 			if strings.TrimSpace(p.Body) == "" {
 				continue
 			}
-			out = append(out, MaterializedPart{Kind: MaterializedKindText, Body: p.Body, Signature: "", Origin: OriginUnknown})
+
+			out = append(
+				out,
+				MaterializedPart{
+					Kind:      MaterializedKindText,
+					Body:      p.Body,
+					Signature: "",
+					Origin:    OriginUnknown,
+				},
+			)
 		case SyntheticReasoning:
 			out = append(out, materializeReasoningPart(p.Body, p.Signature, p.Origin, strategy)...)
 		case SyntheticRedactedThinking:
@@ -745,6 +854,7 @@ func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationSt
 			continue
 		}
 	}
+
 	return out
 }
 
@@ -754,25 +864,44 @@ func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationSt
 // it onto the emitted thinking content block; other strategies drop the
 // signature because the body is no longer rendered as a native thinking
 // block.
-func materializeReasoningPart(body, signature string, origin SyntheticOrigin, strategy MaterializationStrategy) []MaterializedPart {
+func materializeReasoningPart(
+	body string,
+	signature string,
+	origin SyntheticOrigin,
+	strategy MaterializationStrategy,
+) []MaterializedPart {
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
 		return nil
 	}
+
 	switch strategy {
 	case MaterializeNativeThinkingBlock:
-		return []MaterializedPart{{Kind: MaterializedKindNativeThinking, Body: trimmed, Signature: signature, Origin: origin}}
+		return []MaterializedPart{
+			{
+				Kind:      MaterializedKindNativeThinking,
+				Body:      trimmed,
+				Signature: signature,
+				Origin:    origin,
+			},
+		}
 	case MaterializePlainTextConcat:
-		return []MaterializedPart{{Kind: MaterializedKindText, Body: trimmed, Signature: "", Origin: origin}}
+		return []MaterializedPart{
+			{Kind: MaterializedKindText, Body: trimmed, Signature: "", Origin: origin},
+		}
 	case MaterializePassthrough:
 		envelope := FormatSyntheticContent(SyntheticReasoning, trimmed)
 		if envelope == "" {
 			return nil
 		}
-		return []MaterializedPart{{Kind: MaterializedKindText, Body: envelope, Signature: "", Origin: origin}}
+
+		return []MaterializedPart{
+			{Kind: MaterializedKindText, Body: envelope, Signature: "", Origin: origin},
+		}
 	case MaterializeDrop:
 		return nil
 	}
+
 	// Unknown strategy: behave like Drop so a future enum value never silently
 	// leaks raw thinking content upstream.
 	return nil
@@ -790,13 +919,26 @@ func materializeReasoningPart(body, signature string, origin SyntheticOrigin, st
 // while leaking opaque internal content into the visible context. Passthrough
 // is also a drop because the redacted envelope is not a stable text shape an
 // arbitrary upstream can replay.
-func materializeRedactedThinkingPart(encrypted string, origin SyntheticOrigin, strategy MaterializationStrategy) []MaterializedPart {
+func materializeRedactedThinkingPart(
+	encrypted string,
+	origin SyntheticOrigin,
+	strategy MaterializationStrategy,
+) []MaterializedPart {
 	trimmed := strings.TrimSpace(encrypted)
 	if trimmed == "" {
 		return nil
 	}
+
 	if strategy == MaterializeNativeThinkingBlock {
-		return []MaterializedPart{{Kind: MaterializedKindNativeRedactedThinking, Body: trimmed, Signature: "", Origin: origin}}
+		return []MaterializedPart{
+			{
+				Kind:      MaterializedKindNativeRedactedThinking,
+				Body:      trimmed,
+				Signature: "",
+				Origin:    origin,
+			},
+		}
 	}
+
 	return nil
 }

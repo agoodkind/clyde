@@ -46,6 +46,7 @@ func (routeProvider) ClassifyConnect(host string) mitm.ConnectClaim {
 			ProviderID: providerID,
 		}
 	}
+
 	return mitm.ConnectClaim{
 		Claimed:    false,
 		Host:       host,
@@ -59,6 +60,7 @@ func isClaudeConnectHost(host string) bool {
 	case anthropicAPIHost, anthropicConsoleHost, claudeAIHost:
 		return true
 	}
+
 	return strings.HasSuffix(normalizedHost, anthropicSuffix)
 }
 
@@ -74,6 +76,7 @@ func (routeProvider) ClassifyPlain(path string) mitm.PlainRouteClaim {
 			UpstreamURL: anthropicUpstream,
 		}
 	}
+
 	return mitm.PlainRouteClaim{
 		Claimed:     false,
 		Provider:    "",

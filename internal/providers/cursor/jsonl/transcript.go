@@ -115,6 +115,7 @@ func (o TurnOutcome) Failed() bool {
 		// transcript says nothing about how it ended either way.
 		return false
 	}
+
 	return o.Status != TurnStatusSuccess
 }
 
@@ -125,6 +126,7 @@ func (o TurnOutcome) Label() string {
 	if o.Status != TurnStatusUnspecified {
 		return string(o.Status)
 	}
+
 	return string(o.Boundary)
 }
 
@@ -181,9 +183,19 @@ func (e DecodeError) Unwrap() error {
 func ScanHeader(path string) (TranscriptHeader, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		slog.Warn("providers.cursor.jsonl.transcript_open_failed", "concern", concern, "path", path, "err", err)
+		slog.Warn(
+			"providers.cursor.jsonl.transcript_open_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return TranscriptHeader{}, fmt.Errorf("open cursor transcript %s: %w", path, err)
 	}
+
 	defer func() { _ = file.Close() }()
 
 	header := TranscriptHeader{
@@ -194,6 +206,7 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 	}
 	reader := bufio.NewReader(file)
 	lineNumber := 0
+
 	for {
 		rawLine, readErr := reader.ReadBytes('\n')
 		lineNumber++
@@ -206,6 +219,7 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 			header.FirstUserTextUncertain = true
 			kind = lineKindBlank
 		}
+
 		if kind == lineKindRecord && record.Type == LineTypeUnspecified {
 			header.HasMessages = true
 			if record.Message.Role == RoleUser {
@@ -216,12 +230,30 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 				}
 			}
 		}
+
 		if readErr == io.EOF {
 			return header, nil
 		}
+
 		if readErr != nil {
-			slog.Warn("providers.cursor.jsonl.transcript_read_failed", "concern", concern, "path", path, "line", lineNumber, "err", readErr)
-			return TranscriptHeader{}, fmt.Errorf("read cursor transcript %s line %d: %w", path, lineNumber, readErr)
+			slog.Warn(
+				"providers.cursor.jsonl.transcript_read_failed",
+				"concern",
+				concern,
+				"path",
+				path,
+				"line",
+				lineNumber,
+				"err",
+				readErr,
+			)
+
+			return TranscriptHeader{}, fmt.Errorf(
+				"read cursor transcript %s line %d: %w",
+				path,
+				lineNumber,
+				readErr,
+			)
 		}
 	}
 }
@@ -229,43 +261,94 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 // ScanAppend decodes complete records from offset and updates the display header.
 // The callback receives each decoded record once, before turn reconstruction.
 // An unterminated final record remains at the returned offset for the next pass.
-func ScanAppend(ctx context.Context, path string, source io.ReadSeeker, offset int64, header TranscriptHeader, visit func(TranscriptMessage)) (TranscriptHeader, int64, error) {
+func ScanAppend(
+	ctx context.Context,
+	path string,
+	source io.ReadSeeker,
+	offset int64,
+	header TranscriptHeader,
+	visit func(TranscriptMessage),
+) (TranscriptHeader, int64, error) {
 	if _, err := source.Seek(offset, io.SeekStart); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.jsonl.transcript_seek_failed", "concern", concern, "path", path, "offset", offset, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.jsonl.transcript_seek_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"offset",
+			offset,
+			"err",
+			err,
+		)
+
 		return header, offset, fmt.Errorf("seek cursor transcript %s: %w", path, err)
 	}
+
 	header.ConversationID = conversationIDFromPath(path)
 	reader := bufio.NewReader(source)
 	lineNumber := 0
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return header, offset, fmt.Errorf("scan cursor transcript %s: %w", path, err)
 		}
+
 		line, err := reader.ReadBytes('\n')
 		if err == io.EOF {
 			return header, offset, nil
 		}
+
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.jsonl.transcript_read_failed", "concern", concern, "path", path, "offset", offset, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.jsonl.transcript_read_failed",
+				"concern",
+				concern,
+				"path",
+				path,
+				"offset",
+				offset,
+				"err",
+				err,
+			)
+
 			return header, offset, fmt.Errorf("read cursor transcript %s: %w", path, err)
 		}
+
 		offset += int64(len(line))
 		lineNumber++
 		record, kind, decodeErr := decodeLine(path, lineNumber, line)
 		if decodeErr != nil {
-			slog.WarnContext(ctx, "providers.cursor.jsonl.transcript_line_undecodable", "concern", concern, "path", path, "offset", offset-int64(len(line)), "err", errors.Unwrap(decodeErr))
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.jsonl.transcript_line_undecodable",
+				"concern",
+				concern,
+				"path",
+				path,
+				"offset",
+				offset-int64(len(line)),
+				"err",
+				errors.Unwrap(decodeErr),
+			)
 			if header.FirstUserText == "" {
 				header.FirstUserTextUncertain = true
 			}
+
 			continue
 		}
+
 		if kind != lineKindRecord || record.Type != LineTypeUnspecified {
 			continue
 		}
+
 		header.HasMessages = true
 		if header.FirstUserText == "" && record.Message.Role == RoleUser {
 			header.FirstUserText = firstTextPart(record.Message.Parts)
 		}
+
 		visit(record.Message)
 	}
 }
@@ -285,9 +368,19 @@ func ScanAppend(ctx context.Context, path string, source io.ReadSeeker, offset i
 func StreamMessages(path string, fn func(TranscriptMessage) error) error {
 	file, err := os.Open(path)
 	if err != nil {
-		slog.Warn("providers.cursor.jsonl.transcript_open_failed", "concern", concern, "path", path, "err", err)
+		slog.Warn(
+			"providers.cursor.jsonl.transcript_open_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("open cursor transcript %s: %w", path, err)
 	}
+
 	defer func() { _ = file.Close() }()
 
 	return streamTurns(path, file, fn)
@@ -308,15 +401,29 @@ func streamTurns(path string, source io.Reader, fn func(TranscriptMessage) error
 			if errors.Is(err, ErrStopStreaming) {
 				return err
 			}
-			slog.Warn("providers.cursor.jsonl.transcript_stream_failed",
-				"concern", concern,
-				"path", path,
-				"line", completed.FirstLine,
-				"last_line", completed.LastLine,
-				"err", err,
+
+			slog.Warn(
+				"providers.cursor.jsonl.transcript_stream_failed",
+				"concern",
+				concern,
+				"path",
+				path,
+				"line",
+				completed.FirstLine,
+				"last_line",
+				completed.LastLine,
+				"err",
+				err,
 			)
-			return fmt.Errorf("stream cursor transcript %s line %d: %w", path, completed.FirstLine, err)
+
+			return fmt.Errorf(
+				"stream cursor transcript %s line %d: %w",
+				path,
+				completed.FirstLine,
+				err,
+			)
 		}
+
 		return nil
 	}
 
@@ -332,15 +439,28 @@ func streamTurns(path string, source io.Reader, fn func(TranscriptMessage) error
 		// folding that line in let a caller that stopped on it carry the stop
 		// sentinel out of the function with the failure recorded nowhere.
 		if readErr != nil && readErr != io.EOF {
-			slog.Warn("providers.cursor.jsonl.transcript_read_failed", "concern", concern, "path", path, "line", lineNumber, "err", readErr)
+			slog.Warn(
+				"providers.cursor.jsonl.transcript_read_failed",
+				"concern",
+				concern,
+				"path",
+				path,
+				"line",
+				lineNumber,
+				"err",
+				readErr,
+			)
 		}
+
 		if err := foldLine(path, lineNumber, rawLine, &turn, deliver); err != nil {
 			return err
 		}
+
 		if readErr == io.EOF {
 			// The last turn of the file has no following record to close it.
 			return flushOpenTurn(&turn, deliver)
 		}
+
 		if readErr != nil {
 			// Deliver what was already decoded, so a mid-file read error costs the
 			// unread remainder rather than also discarding the records of the turn
@@ -355,6 +475,7 @@ func streamTurns(path string, source io.Reader, fn func(TranscriptMessage) error
 				// is where this failure surfaces.
 				return err
 			}
+
 			return fmt.Errorf("read cursor transcript %s line %d: %w", path, lineNumber, readErr)
 		}
 	}
@@ -382,6 +503,7 @@ func foldLine(
 		logUndecodableLine(path, lineNumber, decodeErr)
 		return closeUncertainTurn(turn, deliver)
 	}
+
 	switch kind {
 	case lineKindBlank:
 		// A blank line carries nothing and separates nothing.
@@ -396,6 +518,7 @@ func foldLine(
 	case lineKindRecord:
 		// Fall through to fold the record into the open turn.
 	}
+
 	// The boundary is logged before delivery, because a caller that stops on this
 	// turn would otherwise lose the only record that it ended badly.
 	logAbnormalBoundary(path, lineNumber, record)
@@ -403,6 +526,7 @@ func foldLine(
 	if !hasCompleted {
 		return nil
 	}
+
 	return deliver(completed)
 }
 
@@ -418,6 +542,7 @@ func closeUncertainTurn(turn *turnBuilder, deliver turnDelivery) error {
 	if !hasCompleted {
 		return nil
 	}
+
 	return deliver(completed)
 }
 
@@ -427,6 +552,7 @@ func flushOpenTurn(turn *turnBuilder, deliver turnDelivery) error {
 	if !hasCompleted {
 		return nil
 	}
+
 	return deliver(completed)
 }
 
@@ -462,16 +588,20 @@ func (b *turnBuilder) accept(record transcriptRecord, lineNumber int) (completed
 			Uncertain: false,
 		})
 	}
+
 	completed, hasCompleted := emptyCompletedTurn(), false
 	if b.role != "" && b.role != record.Message.Role {
 		completed, hasCompleted = b.take()
 	}
+
 	if b.role == "" {
 		b.firstLine = lineNumber
 	}
+
 	b.role = record.Message.Role
 	b.parts = append(b.parts, record.Message.Parts...)
 	b.lastLine = lineNumber
+
 	return completed, hasCompleted
 }
 
@@ -488,6 +618,7 @@ func (b *turnBuilder) takeWithOutcome(outcome TurnOutcome) (completedTurn, bool)
 	if b.role == "" {
 		return emptyCompletedTurn(), false
 	}
+
 	completed := completedTurn{
 		Message: TranscriptMessage{
 			Role:    b.role,
@@ -501,6 +632,7 @@ func (b *turnBuilder) takeWithOutcome(outcome TurnOutcome) (completedTurn, bool)
 	b.parts = nil
 	b.firstLine = 0
 	b.lastLine = 0
+
 	return completed, true
 }
 
@@ -515,11 +647,16 @@ func emptyCompletedTurn() completedTurn {
 // logUndecodableLine records a line the decoder could not read. The line's
 // content is lost either way; this is the only trace that it existed.
 func logUndecodableLine(path string, lineNumber int, err error) {
-	slog.Warn("providers.cursor.jsonl.transcript_line_undecodable",
-		"concern", concern,
-		"path", path,
-		"line", lineNumber,
-		"err", err,
+	slog.Warn(
+		"providers.cursor.jsonl.transcript_line_undecodable",
+		"concern",
+		concern,
+		"path",
+		path,
+		"line",
+		lineNumber,
+		"err",
+		err,
 	)
 }
 
@@ -527,10 +664,14 @@ func logUndecodableLine(path string, lineNumber int, err error) {
 // nor an event Clyde models, which is how a boundary kind Cursor adds later
 // becomes visible instead of quietly changing how turns are grouped.
 func logUnmodeledLine(path string, lineNumber int) {
-	slog.Warn("providers.cursor.jsonl.transcript_line_unmodeled",
-		"concern", concern,
-		"path", path,
-		"line", lineNumber,
+	slog.Warn(
+		"providers.cursor.jsonl.transcript_line_unmodeled",
+		"concern",
+		concern,
+		"path",
+		path,
+		"line",
+		lineNumber,
 	)
 }
 
@@ -541,13 +682,21 @@ func logAbnormalBoundary(path string, lineNumber int, record transcriptRecord) {
 	if record.Type == LineTypeUnspecified || record.Status == TurnStatusSuccess {
 		return
 	}
-	slog.Debug("providers.cursor.jsonl.turn_ended_abnormally",
-		"concern", concern,
-		"path", path,
-		"line", lineNumber,
-		"line_type", string(record.Type),
-		"status", string(record.Status),
-		"err", record.Error,
+
+	slog.Debug(
+		"providers.cursor.jsonl.turn_ended_abnormally",
+		"concern",
+		concern,
+		"path",
+		path,
+		"line",
+		lineNumber,
+		"line_type",
+		string(record.Type),
+		"status",
+		string(record.Status),
+		"err",
+		record.Error,
 	)
 }
 
@@ -583,8 +732,13 @@ func decodeLine(path string, lineNumber int, rawBytes []byte) (transcriptRecord,
 
 	var envelope rawLine
 	if err := json.Unmarshal(line, &envelope); err != nil {
-		return emptyTranscriptRecord(), lineKindBlank, DecodeError{Path: path, Line: lineNumber, Err: err}
+		return emptyTranscriptRecord(), lineKindBlank, DecodeError{
+			Path: path,
+			Line: lineNumber,
+			Err:  err,
+		}
 	}
+
 	// A type Clyde models names a boundary event outright, so it is read as one
 	// whatever else the line carries. Cursor writes these with no role today, but
 	// keeping the type first means a boundary Cursor states is never lost to the
@@ -597,6 +751,7 @@ func decodeLine(path string, lineNumber int, rawBytes []byte) (transcriptRecord,
 			Message: emptyTranscriptMessage(),
 		}, lineKindRecord, nil
 	}
+
 	// Otherwise the role decides. Cursor writes conversation content with a role
 	// and no type, so a line that carries a role is conversation even under a type
 	// Clyde does not model, which keeps a type added to conversation records later
@@ -607,30 +762,41 @@ func decodeLine(path string, lineNumber int, rawBytes []byte) (transcriptRecord,
 
 	var message rawMessage
 	if err := json.Unmarshal(envelope.Message, &message); err != nil {
-		return emptyTranscriptRecord(), lineKindBlank, DecodeError{Path: path, Line: lineNumber, Err: err}
+		return emptyTranscriptRecord(), lineKindBlank, DecodeError{
+			Path: path,
+			Line: lineNumber,
+			Err:  err,
+		}
 	}
 
 	parts := make([]ContentPart, 0, len(message.Content))
 	for _, part := range message.Content {
 		switch part.Type {
 		case PartTypeText:
-			parts = append(parts, ContentPart{
-				Type:      PartTypeText,
-				Text:      part.Text,
-				ToolName:  "",
-				ToolInput: nil,
-			})
+			parts = append(
+				parts,
+				ContentPart{
+					Type:      PartTypeText,
+					Text:      part.Text,
+					ToolName:  "",
+					ToolInput: nil,
+				},
+			)
 		case PartTypeToolUse:
-			parts = append(parts, ContentPart{
-				Type:      PartTypeToolUse,
-				Text:      "",
-				ToolName:  part.Name,
-				ToolInput: cloneRawMessage(part.Input),
-			})
+			parts = append(
+				parts,
+				ContentPart{
+					Type:      PartTypeToolUse,
+					Text:      "",
+					ToolName:  part.Name,
+					ToolInput: cloneRawMessage(part.Input),
+				},
+			)
 		default:
 			continue
 		}
 	}
+
 	return transcriptRecord{
 		Type:   LineTypeUnspecified,
 		Status: TurnStatusUnspecified,
@@ -649,6 +815,7 @@ func conversationIDFromPath(path string) string {
 	if parentName == filenameStem {
 		return parentName
 	}
+
 	return filenameStem
 }
 
@@ -658,6 +825,7 @@ func firstTextPart(parts []ContentPart) string {
 			return strings.TrimSpace(part.Text)
 		}
 	}
+
 	return ""
 }
 
@@ -682,6 +850,7 @@ func cloneRawMessage(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
 	}
+
 	return append(json.RawMessage(nil), raw...)
 }
 

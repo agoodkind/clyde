@@ -70,43 +70,62 @@ func (h *Hook) MatchRequestResponse(
 	if h == nil || (h.sentinel == "" && h.actualUserSentinel == "") {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
+
 	if req.Method != http.MethodPost {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
+
 	if req.Provider != claudeProviderName {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
+
 	if req.Path != messagesPath {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
+
 	body, err := req.Body.Bytes()
 	if err != nil {
 		slog.Warn(
 			"mitm.sentinel_inject.request_body_read_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"method", req.Method,
-			"path", req.Path,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"method",
+			req.Method,
+			"path",
+			req.Path,
+			"err",
+			err,
 		)
+
 		return unmatchedRequestResponseHookMatch(), nil
 	}
+
 	var request anthropicMessagesRequest
 	if err := json.Unmarshal(body, &request); err != nil {
 		slog.Warn(
 			"mitm.sentinel_inject.request_body_decode_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"method", req.Method,
-			"path", req.Path,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"method",
+			req.Method,
+			"path",
+			req.Path,
+			"err",
+			err,
 		)
+
 		return unmatchedRequestResponseHookMatch(), nil
 	}
+
 	split := parseSentinels(lastUserMessageText(request), h.sentinel, h.actualUserSentinel)
 	if !split.matched() {
 		return unmatchedRequestResponseHookMatch(), nil
 	}
+
 	match := mitm.RequestResponseHookMatch{
 		Matched:            true,
 		Transformer:        nil,
@@ -119,11 +138,13 @@ func (h *Hook) MatchRequestResponse(
 		}
 		match.ContinueMatching = !split.hasUpstreamUser
 	}
+
 	if split.hasUpstreamUser {
 		match.RequestTransformer = requestReplaceTransformer{
 			upstreamUser: split.upstreamUser,
 		}
 	}
+
 	return match, nil
 }
 
@@ -174,6 +195,7 @@ func parseSentinels(userText, sentinel, actualUserSentinel string) sentinelSplit
 			}
 		}
 	}
+
 	var split sentinelSplit
 	if sentinel != "" {
 		_, after, found := strings.Cut(userText, sentinel)
@@ -182,6 +204,7 @@ func parseSentinels(userText, sentinel, actualUserSentinel string) sentinelSplit
 			split.hasResponse = true
 		}
 	}
+
 	if actualUserSentinel != "" {
 		_, after, found := strings.Cut(userText, actualUserSentinel)
 		if found {
@@ -189,6 +212,7 @@ func parseSentinels(userText, sentinel, actualUserSentinel string) sentinelSplit
 			split.hasUpstreamUser = true
 		}
 	}
+
 	return split
 }
 
@@ -198,6 +222,7 @@ func lastUserMessageText(request anthropicMessagesRequest) string {
 			return message.text()
 		}
 	}
+
 	return ""
 }
 
@@ -206,27 +231,35 @@ func (m anthropicMessage) text() string {
 	if trimmed == "" || trimmed == "null" {
 		return ""
 	}
+
 	if trimmed[0] == '"' {
 		var plain string
 		if err := json.Unmarshal(m.Content, &plain); err != nil {
 			return ""
 		}
+
 		return plain
 	}
+
 	var blocks []anthropicTextBlock
 	if err := json.Unmarshal(m.Content, &blocks); err != nil {
 		return ""
 	}
+
 	var builder strings.Builder
+
 	for _, block := range blocks {
 		if block.Text == "" {
 			continue
 		}
+
 		if builder.Len() > 0 {
 			builder.WriteByte('\n')
 		}
+
 		builder.WriteString(block.Text)
 	}
+
 	return builder.String()
 }
 
@@ -250,59 +283,82 @@ func (t requestReplaceTransformer) TransformRequest(
 		slog.WarnContext(
 			ctx,
 			"mitm.sentinel_inject.request_transform_decode_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"err",
+			err,
 		)
+
 		return body, false, fmt.Errorf("decode sentinel inject request: %w", err)
 	}
+
 	rawMessages, ok := top[messagesField]
 	if !ok {
 		return body, false, nil
 	}
+
 	var messages []json.RawMessage
 	if err := json.Unmarshal(rawMessages, &messages); err != nil {
 		slog.WarnContext(
 			ctx,
 			"mitm.sentinel_inject.request_transform_decode_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"err",
+			err,
 		)
+
 		return body, false, fmt.Errorf("decode sentinel inject messages: %w", err)
 	}
+
 	index, found := latestUserMessageIndex(messages)
 	if !found {
 		return body, false, nil
 	}
+
 	replaced, err := marshalMessageWithContent(ctx, messages[index], t.upstreamUser)
 	if err != nil {
 		return body, false, err
 	}
+
 	messages[index] = replaced
 	encodedMessages, err := json.Marshal(messages)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
 			"mitm.sentinel_inject.request_transform_encode_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"err",
+			err,
 		)
+
 		return body, false, fmt.Errorf("encode sentinel inject messages: %w", err)
 	}
+
 	top[messagesField] = encodedMessages
 	output, err := json.Marshal(top)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
 			"mitm.sentinel_inject.request_transform_encode_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"err",
+			err,
 		)
+
 		return body, false, fmt.Errorf("encode sentinel inject request: %w", err)
 	}
+
 	return output, true, nil
 }
 
@@ -312,9 +368,12 @@ func logSentinelRewriteFailure(ctx context.Context, err error) {
 	slog.WarnContext(
 		ctx,
 		"mitm.sentinel_inject.request_transform_encode_failed",
-		"component", sentinelInjectComponent,
-		"concern", sentinelInjectConcern,
-		"err", err,
+		"component",
+		sentinelInjectComponent,
+		"concern",
+		sentinelInjectConcern,
+		"err",
+		err,
 	)
 }
 
@@ -325,10 +384,12 @@ func latestUserMessageIndex(messages []json.RawMessage) (int, bool) {
 		if err := json.Unmarshal(messages[index], &message); err != nil {
 			continue
 		}
+
 		if message.Role == roleUser {
 			return index, true
 		}
 	}
+
 	return 0, false
 }
 
@@ -344,21 +405,27 @@ func marshalMessageWithContent(
 	if err := json.Unmarshal(message, &fields); err != nil {
 		wrapped := fmt.Errorf("decode sentinel inject message: %w", err)
 		logSentinelRewriteFailure(ctx, wrapped)
+
 		return nil, wrapped
 	}
+
 	encodedText, err := json.Marshal(text)
 	if err != nil {
 		wrapped := fmt.Errorf("encode sentinel inject message content: %w", err)
 		logSentinelRewriteFailure(ctx, wrapped)
+
 		return nil, wrapped
 	}
+
 	fields[contentField] = encodedText
 	out, err := json.Marshal(fields)
 	if err != nil {
 		wrapped := fmt.Errorf("encode sentinel inject message: %w", err)
 		logSentinelRewriteFailure(ctx, wrapped)
+
 		return nil, wrapped
 	}
+
 	return out, nil
 }
 
@@ -373,34 +440,47 @@ func (t responseReplaceTransformer) TransformResponse(
 	if !responseIsStreamingSuccess(resp) {
 		return resp, nil
 	}
+
 	slog.InfoContext(
 		ctx,
 		"mitm.sentinel_inject.matched",
-		"component", sentinelInjectComponent,
-		"concern", sentinelInjectConcern,
+		"component",
+		sentinelInjectComponent,
+		"concern",
+		sentinelInjectConcern,
 	)
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
 			"mitm.sentinel_inject.response_body_read_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"err",
+			err,
 		)
+
 		return responseWithBody(resp, body), nil
 	}
+
 	output, err := replaceSSEText(body, t.content)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
 			"mitm.sentinel_inject.sse_replace_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"err",
+			err,
 		)
+
 		return responseWithBody(resp, body), nil
 	}
+
 	return responseWithBody(resp, output), nil
 }
 
@@ -408,7 +488,9 @@ func responseIsStreamingSuccess(resp mitm.ResponseHookResponse) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
+
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+
 	return strings.Contains(contentType, eventStreamContentType)
 }
 
@@ -417,25 +499,31 @@ func replaceSSEText(body []byte, forced string) ([]byte, error) {
 	if len(events) == 0 {
 		return body, nil
 	}
+
 	output := make([]sseEvent, 0, len(events)+3)
 	blockInserted := false
+
 	for _, event := range events {
 		if isContentBlockEvent(event.Name) {
 			continue
 		}
+
 		output = append(output, event)
 		if event.Name == sseEventMessageStart && !blockInserted {
 			appendEvents, err := marshalTextBlockEvents(defaultTextContentIndex, forced)
 			if err != nil {
 				return nil, err
 			}
+
 			output = append(output, appendEvents...)
 			blockInserted = true
 		}
 	}
+
 	if !blockInserted {
 		return body, nil
 	}
+
 	return buildSSEBody(output), nil
 }
 
@@ -453,14 +541,17 @@ func marshalTextBlockEvents(blockIndex int, content string) ([]sseEvent, error) 
 	if err != nil {
 		return nil, err
 	}
+
 	delta, err := MarshalSSEData(newContentBlockDeltaPayload(blockIndex, content))
 	if err != nil {
 		return nil, err
 	}
+
 	stop, err := MarshalSSEData(newContentBlockStopPayload(blockIndex))
 	if err != nil {
 		return nil, err
 	}
+
 	return []sseEvent{
 		{Name: string(contentBlockEventStart), Data: start},
 		{Name: string(contentBlockEventDelta), Data: delta},
@@ -474,6 +565,7 @@ func responseWithBody(
 ) mitm.ResponseHookResponse {
 	header := resp.Header.Clone()
 	header.Del("Content-Length")
+
 	return mitm.ResponseHookResponse{
 		StatusCode:    resp.StatusCode,
 		Status:        resp.Status,
@@ -557,25 +649,33 @@ func MarshalSSEData[T ssePayload](payload T) (string, error) {
 	if err := encoder.Encode(payload); err != nil {
 		slog.Warn(
 			"mitm.sentinel_inject.sse_json_encode_failed",
-			"component", sentinelInjectComponent,
-			"concern", sentinelInjectConcern,
-			"err", err,
+			"component",
+			sentinelInjectComponent,
+			"concern",
+			sentinelInjectConcern,
+			"err",
+			err,
 		)
+
 		return "", fmt.Errorf("encode sentinel inject SSE JSON: %w", err)
 	}
+
 	return strings.TrimSuffix(buffer.String(), "\n"), nil
 }
 
 func parseSSEEvents(body string) []sseEvent {
 	records := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n\n")
+
 	events := make([]sseEvent, 0, len(records))
 	for _, record := range records {
 		event := parseSSERecord(record)
 		if event.Name == "" && event.Data == "" {
 			continue
 		}
+
 		events = append(events, event)
 	}
+
 	return events
 }
 
@@ -583,30 +683,37 @@ func parseSSERecord(record string) sseEvent {
 	lines := strings.Split(record, "\n")
 	dataLines := make([]string, 0, len(lines))
 	event := sseEvent{Name: "", Data: ""}
+
 	for _, line := range lines {
 		if value, ok := strings.CutPrefix(line, "event:"); ok {
 			event.Name = strings.TrimSpace(value)
 			continue
 		}
+
 		if value, ok := strings.CutPrefix(line, "data:"); ok {
 			dataLines = append(dataLines, strings.TrimPrefix(value, " "))
 		}
 	}
+
 	event.Data = strings.Join(dataLines, "\n")
+
 	return event
 }
 
 func buildSSEBody(events []sseEvent) []byte {
 	var builder strings.Builder
+
 	for _, event := range events {
 		if event.Name != "" {
 			builder.WriteString("event: ")
 			builder.WriteString(event.Name)
 			builder.WriteByte('\n')
 		}
+
 		writeSSEDataLines(&builder, event.Data)
 		builder.WriteByte('\n')
 	}
+
 	return []byte(builder.String())
 }
 
@@ -614,6 +721,7 @@ func writeSSEDataLines(builder *strings.Builder, data string) {
 	if data == "" {
 		return
 	}
+
 	for line := range strings.SplitSeq(data, "\n") {
 		builder.WriteString("data: ")
 		builder.WriteString(line)

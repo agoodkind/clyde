@@ -15,5 +15,6 @@ func (h heuristicCounter) Estimate(text string) int {
 	if ratio <= 0 {
 		ratio = DefaultCharsPerToken
 	}
+
 	return int(math.Ceil(float64(len(text)) / ratio))
 }

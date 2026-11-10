@@ -41,7 +41,12 @@ func daemonDisableOp() Operation[daemonControlInput, daemonControlPayload] {
 	)
 }
 
-func daemonControlOp(name Name, short string, long string, run daemonControlRun) Operation[daemonControlInput, daemonControlPayload] {
+func daemonControlOp(
+	name Name,
+	short string,
+	long string,
+	run daemonControlRun,
+) Operation[daemonControlInput, daemonControlPayload] {
 	return Operation[daemonControlInput, daemonControlPayload]{
 		Name:       name,
 		Group:      daemonGroup,
@@ -52,8 +57,12 @@ func daemonControlOp(name Name, short string, long string, run daemonControlRun)
 		Examples:   []string{"clyde daemon " + name.CLI() + " --apply"},
 		Args:       nil,
 		Params: []Param[daemonControlInput]{
-			BoolParam("apply", "Apply the daemon service change.", false,
-				func(input *daemonControlInput, value bool) { input.Apply = value }),
+			BoolParam(
+				"apply",
+				"Apply the daemon service change.",
+				false,
+				func(input *daemonControlInput, value bool) { input.Apply = value },
+			),
 		},
 		New: func() daemonControlInput {
 			return daemonControlInput{Apply: false}
@@ -66,13 +75,20 @@ func daemonControlOp(name Name, short string, long string, run daemonControlRun)
 			if !input.Apply {
 				return daemonControlPayload{}, fmt.Errorf("daemon %s requires --apply", name.CLI())
 			}
+
 			return daemonControlPayload{Apply: true}, nil
 		},
-		Run: func(ctx context.Context, _ daemonControlPayload, _ Surface, sink ResultSink) error {
+		Run: func(
+			ctx context.Context,
+			_ daemonControlPayload,
+			_ Surface,
+			sink ResultSink,
+		) error {
 			output, ok := sink.(*CLISink)
 			if !ok {
 				return fmt.Errorf("daemon %s requires terminal output", name.CLI())
 			}
+
 			return run(ctx, os.LookupEnv, output.out)
 		},
 		runResult: nil,

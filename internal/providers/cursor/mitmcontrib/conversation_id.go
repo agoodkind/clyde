@@ -46,17 +46,21 @@ func (routeProvider) ConversationIDFromBody(exchange mitm.ExchangeDiagnostic) (s
 	if path != agentRunPath && path != agentUpdateConversationMetadataPath {
 		return "", false
 	}
+
 	message, ok := connectFrameMessage(exchange.DecodedRequestBody)
 	if !ok {
 		return "", false
 	}
+
 	if path == agentUpdateConversationMetadataPath {
 		return conversationIDField(message, conversationIDTopLevelField)
 	}
+
 	request, ok := protoBytesField(message, agentRunRequestField)
 	if !ok {
 		return "", false
 	}
+
 	return conversationIDField(request, agentRunConversationField)
 }
 
@@ -81,6 +85,7 @@ func connectFrameMessage(body []byte) ([]byte, bool) {
 	if len(body) < messageOffset {
 		return body, len(body) > 0
 	}
+
 	declared := binary.BigEndian.Uint32(body[lengthOffset:messageOffset])
 	message := body[messageOffset:]
 	// A capture body is truncated at the store cap, so a declared length longer
@@ -88,13 +93,16 @@ func connectFrameMessage(body []byte) ([]byte, bool) {
 	if int(declared) < len(message) {
 		message = message[:declared]
 	}
+
 	if body[flagOffset]&compressedFlag == 0 {
 		return message, len(message) > 0
 	}
+
 	reader, err := gzip.NewReader(bytes.NewReader(message))
 	if err != nil {
 		return nil, false
 	}
+
 	defer func() { _ = reader.Close() }()
 	decompressed, err := io.ReadAll(io.LimitReader(reader, maxDecompressed))
 	// A truncated capture body yields an unexpected-EOF error after valid bytes.
@@ -103,6 +111,7 @@ func connectFrameMessage(body []byte) ([]byte, bool) {
 	if err != nil && len(decompressed) == 0 {
 		return nil, false
 	}
+
 	return decompressed, len(decompressed) > 0
 }
 
@@ -113,10 +122,12 @@ func conversationIDField(raw []byte, fieldNumber uint64) (string, bool) {
 	if !ok || len(value) > conversationIDMaxLen {
 		return "", false
 	}
+
 	id := strings.TrimSpace(string(value))
 	if !looksLikeConversationID(id) {
 		return "", false
 	}
+
 	return id, true
 }
 
@@ -129,36 +140,43 @@ func protoBytesField(raw []byte, fieldNumber uint64) ([]byte, bool) {
 		if !ok {
 			return nil, false
 		}
+
 		switch wireType {
 		case 0:
 			_, nextOffset, valid := readProtoVarint(raw, next)
 			if !valid {
 				return nil, false
 			}
+
 			offset = nextOffset
 		case 1:
 			if next+8 > len(raw) {
 				return nil, false
 			}
+
 			offset = next + 8
 		case 2:
 			value, nextOffset, valid := readProtoBytes(raw, next)
 			if !valid {
 				return nil, false
 			}
+
 			if number == fieldNumber {
 				return value, true
 			}
+
 			offset = nextOffset
 		case 5:
 			if next+4 > len(raw) {
 				return nil, false
 			}
+
 			offset = next + 4
 		default:
 			return nil, false
 		}
 	}
+
 	return nil, false
 }
 
@@ -170,14 +188,17 @@ func looksLikeConversationID(candidate string) bool {
 	if len(candidate) != uuidLen {
 		return false
 	}
+
 	for i := range uuidLen {
 		char := candidate[i]
 		if i == 8 || i == 13 || i == 18 || i == 23 {
 			if char != '-' {
 				return false
 			}
+
 			continue
 		}
+
 		isDigit := char >= '0' && char <= '9'
 		isLowerHex := char >= 'a' && char <= 'f'
 		isUpperHex := char >= 'A' && char <= 'F'
@@ -185,5 +206,6 @@ func looksLikeConversationID(candidate string) bool {
 			return false
 		}
 	}
+
 	return true
 }

@@ -19,14 +19,17 @@ func isReadAvailabilityError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
+
 	var pathError *os.PathError
 	if errors.As(err, &pathError) {
 		return true
 	}
+
 	var sqliteError sqlite3.Error
 	if !errors.As(err, &sqliteError) {
 		return false
 	}
+
 	switch sqliteError.Code {
 	case sqlite3.ErrBusy, sqlite3.ErrLocked, sqlite3.ErrPerm, sqlite3.ErrIoErr,
 		sqlite3.ErrCantOpen, sqlite3.ErrNomem, sqlite3.ErrFull, sqlite3.ErrProtocol, sqlite3.ErrInterrupt:
@@ -55,12 +58,25 @@ type cachedReadAttempt struct {
 
 type cachedReadLoggerKey uint8
 
-func (diagnostics *cachedReadDiagnostics) start(ctx context.Context, changed bool) (context.Context, *cachedReadAttempt) {
+func (diagnostics *cachedReadDiagnostics) start(
+	ctx context.Context,
+	changed bool,
+) (context.Context, *cachedReadAttempt) {
 	if changed {
 		diagnostics.previous = nil
 	}
-	attempt := &cachedReadAttempt{mu: sync.Mutex{}, previous: diagnostics.previous, current: make(map[cachedReadDiagnostic]bool)}
-	logger := slog.New(&cachedReadHandler{next: gklog.LoggerFromContext(ctx).Handler(), attempt: attempt, scope: ""})
+
+	attempt := &cachedReadAttempt{
+		mu:       sync.Mutex{},
+		previous: diagnostics.previous,
+		current:  make(map[cachedReadDiagnostic]bool),
+	}
+	logger := slog.New(&cachedReadHandler{
+		next:    gklog.LoggerFromContext(ctx).Handler(),
+		attempt: attempt,
+		scope:   "",
+	})
+
 	return context.WithValue(ctx, cachedReadLoggerKey(0), logger), attempt
 }
 
@@ -77,6 +93,7 @@ func discoveryReadLogger(ctx context.Context) *slog.Logger {
 			return logger
 		}
 	}
+
 	return gklog.LoggerFromContext(ctx)
 }
 
@@ -96,9 +113,15 @@ func (handler *cachedReadHandler) Handle(ctx context.Context, record slog.Record
 	if record.Level < slog.LevelWarn {
 		return handler.writeRecord(ctx, record)
 	}
+
 	var fields strings.Builder
 	record.Attrs(func(attr slog.Attr) bool { appendDiagnosticAttr(&fields, attr); return true })
-	key := cachedReadDiagnostic{message: record.Message, level: record.Level, fields: fields.String(), scope: handler.scope}
+	key := cachedReadDiagnostic{
+		message: record.Message,
+		level:   record.Level,
+		fields:  fields.String(),
+		scope:   handler.scope,
+	}
 	handler.attempt.mu.Lock()
 	duplicate := handler.attempt.previous[key] || handler.attempt.current[key]
 	handler.attempt.current[key] = true
@@ -106,31 +129,54 @@ func (handler *cachedReadHandler) Handle(ctx context.Context, record slog.Record
 	if duplicate {
 		return nil
 	}
+
 	return handler.writeRecord(ctx, record)
 }
 
 func (handler *cachedReadHandler) writeRecord(ctx context.Context, record slog.Record) error {
 	if err := handler.next.Handle(ctx, record); err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.diagnostic_write_failed", "concern", concern, "message", record.Message, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.diagnostic_write_failed",
+			"concern",
+			concern,
+			"message",
+			record.Message,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("write cursor cached-read diagnostic %q: %w", record.Message, err)
 	}
+
 	return nil
 }
 
 func (handler *cachedReadHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	var scope strings.Builder
 	scope.WriteString(handler.scope)
+
 	for _, attr := range attrs {
 		appendDiagnosticAttr(&scope, attr)
 	}
-	return &cachedReadHandler{next: handler.next.WithAttrs(attrs), attempt: handler.attempt, scope: scope.String()}
+
+	return &cachedReadHandler{
+		next:    handler.next.WithAttrs(attrs),
+		attempt: handler.attempt,
+		scope:   scope.String(),
+	}
 }
 
 func (handler *cachedReadHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return handler
 	}
-	return &cachedReadHandler{next: handler.next.WithGroup(name), attempt: handler.attempt, scope: handler.scope + "\x00group:" + name}
+
+	return &cachedReadHandler{
+		next:    handler.next.WithGroup(name),
+		attempt: handler.attempt,
+		scope:   handler.scope + "\x00group:" + name,
+	}
 }
 
 func appendDiagnosticAttr(builder *strings.Builder, attr slog.Attr) {

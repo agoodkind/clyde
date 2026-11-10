@@ -3,8 +3,10 @@ package mitm
 import "regexp"
 
 var (
-	hexPattern    = regexp.MustCompile(`(?i)^[0-9a-f-]{12,}$`)
-	uuidPattern   = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	hexPattern  = regexp.MustCompile(`(?i)^[0-9a-f-]{12,}$`)
+	uuidPattern = regexp.MustCompile(
+		`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`,
+	)
 	bearerPattern = regexp.MustCompile(`^Bearer\s+\S+`)
 )
 
@@ -42,8 +44,12 @@ func canonicalHeaderValue(lowerName, value string) string {
 		if bearerPattern.MatchString(value) {
 			return "<bearer-redacted>"
 		}
+
 		return "<redacted>"
-	case snapshotHeaderCookie, snapshotHeaderSetCookie, snapshotHeaderXAPIIdent, snapshotHeaderAnthropicAPIIdent:
+	case snapshotHeaderCookie,
+		snapshotHeaderSetCookie,
+		snapshotHeaderXAPIIdent,
+		snapshotHeaderAnthropicAPIIdent:
 		return "<redacted>"
 	case snapshotHeaderXClientRequestID, snapshotHeaderSessionID:
 		return "<conversation_id>"
@@ -56,11 +62,14 @@ func canonicalHeaderValue(lowerName, value string) string {
 	case snapshotHeaderCFRay, snapshotHeaderXAmznTraceID:
 		return "<trace>"
 	}
+
 	if uuidPattern.MatchString(value) {
 		return uuidPattern.ReplaceAllString(value, "<uuid>")
 	}
+
 	if hexPattern.MatchString(value) && len(value) > 16 {
 		return "<hex>"
 	}
+
 	return value
 }

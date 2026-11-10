@@ -44,7 +44,11 @@ func TestParentConversationID(t *testing.T) {
 		ParentMessageUUID: "",
 	}
 	if id, ok := ParentConversationID(emptyParent); ok || id != "" {
-		t.Fatalf("empty parent native id ParentConversationID = (%q, %v), want (\"\", false)", id, ok)
+		t.Fatalf(
+			"empty parent native id ParentConversationID = (%q, %v), want (\"\", false)",
+			id,
+			ok,
+		)
 	}
 
 	fork := testLineageRecord("codex:fork", ProviderCodex)
@@ -79,6 +83,7 @@ func TestResolveForkParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve present fork parent: %v", err)
 	}
+
 	if !ok || got.ID != parentID {
 		t.Fatalf("present fork parent = (%q, %v), want (%q, true)", got.ID, ok, parentID)
 	}
@@ -90,7 +95,8 @@ func TestResolveForkParent(t *testing.T) {
 		ParentNativeID:    "absent-native",
 		ParentMessageUUID: "",
 	}
-	if got, ok, err := ResolveForkParent(context.Background(), idx, forkAbsent); ok || err != nil || got.ID != "" {
+	if got, ok, err := ResolveForkParent(context.Background(), idx, forkAbsent); ok || err != nil ||
+		got.ID != "" {
 		t.Fatalf("absent fork parent = (%q, %v, %v), want (\"\", false, nil)", got.ID, ok, err)
 	}
 
@@ -101,16 +107,23 @@ func TestResolveForkParent(t *testing.T) {
 		ParentNativeID:    "parent-native",
 		ParentMessageUUID: "",
 	}
-	if got, ok, err := ResolveForkParent(context.Background(), idx, spawn); ok || err != nil || got.ID != "" {
+	if got, ok, err := ResolveForkParent(context.Background(), idx, spawn); ok || err != nil ||
+		got.ID != "" {
 		t.Fatalf("spawn parent = (%q, %v, %v), want (\"\", false, nil)", got.ID, ok, err)
 	}
 
 	noLineage := testLineageRecord("codex:no-lineage", ProviderCodex)
-	if got, ok, err := ResolveForkParent(context.Background(), idx, noLineage); ok || err != nil || got.ID != "" {
+	if got, ok, err := ResolveForkParent(context.Background(), idx, noLineage); ok || err != nil ||
+		got.ID != "" {
 		t.Fatalf("nil lineage parent = (%q, %v, %v), want (\"\", false, nil)", got.ID, ok, err)
 	}
 
-	if got, ok, err := ResolveForkParent(context.Background(), nil, forkPresent); ok || err != nil || got.ID != "" {
+	if got, ok, err := ResolveForkParent(
+		context.Background(),
+		nil,
+		forkPresent,
+	); ok || err != nil ||
+		got.ID != "" {
 		t.Fatalf("nil index parent = (%q, %v, %v), want (\"\", false, nil)", got.ID, ok, err)
 	}
 }
@@ -120,6 +133,7 @@ func TestResolveForkParent(t *testing.T) {
 // the test.
 func testLineageIndex(t *testing.T, records []Record) *Index {
 	t.Helper()
+
 	return &Index{
 		mu:           sync.Mutex{},
 		registry:     NewRegistry(),

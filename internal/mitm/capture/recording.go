@@ -8,8 +8,10 @@ func (s *Store) RecordingEnabled() bool {
 	if s == nil || s.closed.Load() || s.cfg.RecordingDisabled {
 		return false
 	}
+
 	if s.cfg.RecordingUntil.IsZero() {
 		return true
 	}
+
 	return clock.Now().Before(s.cfg.RecordingUntil)
 }

@@ -45,6 +45,7 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	defer func() { _ = client.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, daemonProbeTimeout)
 	defer cancel()
@@ -52,14 +53,20 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 	if err != nil {
 		return nil, daemonRPCError(rpcCtx, "get daemon status", err)
 	}
+
 	semantic := response.GetSemantic()
+
 	result := &RuntimeStatus{
 		Semantic: SemanticStatus{
-			IngestionEnabled: semantic.GetIngestionEnabled(), SearchEnabled: semantic.GetSearchEnabled(),
-			Backend:       SemanticBackend(semanticBackendName(semantic.GetBackend())),
-			Connection:    SemanticConnectionState(semanticConnectionName(semantic.GetConnection())),
-			NextRetryUnix: semantic.NextRetryUnix, Attempts: semantic.GetAttempts(),
-			Detail: statusMetricsFromProto(semantic.GetDetail()),
+			IngestionEnabled: semantic.GetIngestionEnabled(),
+			SearchEnabled:    semantic.GetSearchEnabled(),
+			Backend:          SemanticBackend(semanticBackendName(semantic.GetBackend())),
+			Connection: SemanticConnectionState(
+				semanticConnectionName(semantic.GetConnection()),
+			),
+			NextRetryUnix: semantic.NextRetryUnix,
+			Attempts:      semantic.GetAttempts(),
+			Detail:        statusMetricsFromProto(semantic.GetDetail()),
 		},
 		Listeners:                make([]BoundListenerStatus, 0, len(response.GetListeners())),
 		Profiling:                nil,
@@ -69,13 +76,19 @@ func currentRuntimeStatus(ctx context.Context) (*RuntimeStatus, error) {
 	for _, listener := range response.GetListeners() {
 		result.Listeners = append(result.Listeners, listenerStatusFromProto(listener))
 	}
+
 	if response.GetProfiling() != nil {
 		profiling := listenerStatusFromProto(response.GetProfiling())
 		result.Profiling = &profiling
 	}
+
 	return result, nil
 }
 
 func listenerStatusFromProto(listener *clydev1.BoundListenerStatus) BoundListenerStatus {
-	return BoundListenerStatus{Name: listener.GetName(), Network: listener.GetNetwork(), Address: listener.GetAddress()}
+	return BoundListenerStatus{
+		Name:    listener.GetName(),
+		Network: listener.GetNetwork(),
+		Address: listener.GetAddress(),
+	}
 }

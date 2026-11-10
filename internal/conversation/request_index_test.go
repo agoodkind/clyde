@@ -40,24 +40,27 @@ func TestRefreshWaitsForTheRefreshAlreadyInFlight(t *testing.T) {
 		scanProvider: func(context.Context, *Registry, scanCache) (scanResult, error) {
 			startOnce.Do(func() { close(started) })
 			<-release
+
 			return scanResult{
-				records: []Record{{
-					ID:              "cursor:scanned",
-					Provider:        ProviderCursor,
-					NativeID:        "scanned",
-					Lineage:         nil,
-					Origin:          OriginUnspecified,
-					Title:           "scanned",
-					WorkspaceRoot:   "",
-					ArtifactPath:    "/tmp/scanned",
-					ArtifactKind:    "composer",
-					Model:           "",
-					CreatedAt:       time.Time{},
-					UpdatedAt:       time.Time{},
-					SizeBytes:       0,
-					Archived:        false,
-					LatestRequestID: "",
-				}},
+				records: []Record{
+					{
+						ID:              "cursor:scanned",
+						Provider:        ProviderCursor,
+						NativeID:        "scanned",
+						Lineage:         nil,
+						Origin:          OriginUnspecified,
+						Title:           "scanned",
+						WorkspaceRoot:   "",
+						ArtifactPath:    "/tmp/scanned",
+						ArtifactKind:    "composer",
+						Model:           "",
+						CreatedAt:       time.Time{},
+						UpdatedAt:       time.Time{},
+						SizeBytes:       0,
+						Archived:        false,
+						LatestRequestID: "",
+					},
+				},
 				stamps: nil,
 			}, nil
 		},
@@ -67,6 +70,7 @@ func TestRefreshWaitsForTheRefreshAlreadyInFlight(t *testing.T) {
 	if _, err := idx.List(context.Background()); err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
+
 	idx.refreshAsync(t.Context())
 	<-started
 
@@ -86,8 +90,12 @@ func TestRefreshWaitsForTheRefreshAlreadyInFlight(t *testing.T) {
 	if got.err != nil {
 		t.Fatalf("Refresh returned error: %v", got.err)
 	}
+
 	if len(got.records) != 1 || got.records[0].ID != "cursor:scanned" {
-		t.Fatalf("snapshot after Refresh = %v, want the record the in-flight scan produced", got.records)
+		t.Fatalf(
+			"snapshot after Refresh = %v, want the record the in-flight scan produced",
+			got.records,
+		)
 	}
 }
 
@@ -102,9 +110,11 @@ func testIndex(
 	t.Helper()
 
 	registry := NewRegistry()
+
 	for _, parser := range parsers {
 		registry.Register(parser)
 	}
+
 	return &Index{
 		mu:               sync.Mutex{},
 		includeSubagents: false,
@@ -187,7 +197,12 @@ func (parser stubParser) ResolveRequestID(
 
 // resolverParser wraps one request-lookup outcome as a registered Cursor parser.
 func resolverParser(match RequestMatch, err error) stubParser {
-	return stubParser{provider: providerid.ProviderCursor, match: match, err: err, lookups: &atomic.Int64{}}
+	return stubParser{
+		provider: providerid.ProviderCursor,
+		match:    match,
+		err:      err,
+		lookups:  &atomic.Int64{},
+	}
 }
 
 // TestWaitForRefreshReportsAFailedInFlightRefresh is the difference between a
@@ -201,16 +216,21 @@ func TestWaitForRefreshReportsAFailedInFlightRefresh(t *testing.T) {
 	started := make(chan struct{})
 	var startOnce sync.Once
 	scanErr := errors.New("scan the corpus: permission denied")
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		startOnce.Do(func() { close(started) })
-		<-release
-		return scanResult{records: nil, stamps: nil}, scanErr
-	})
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			startOnce.Do(func() { close(started) })
+			<-release
+
+			return scanResult{records: nil, stamps: nil}, scanErr
+		},
+	)
 
 	// The periodic worker starts the background refresh independently of reads.
 	if _, err := idx.List(context.Background()); err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
+
 	idx.refreshAsync(t.Context())
 	<-started
 
@@ -222,6 +242,7 @@ func TestWaitForRefreshReportsAFailedInFlightRefresh(t *testing.T) {
 	if err == nil {
 		t.Fatal("Refresh returned nil after waiting on a rebuild that failed")
 	}
+
 	if !errors.Is(err, scanErr) {
 		t.Fatalf("Refresh error = %v, want it to carry the rebuild's own failure", err)
 	}
@@ -235,20 +256,30 @@ func TestResolveDoesNotFailOverAProviderStore(t *testing.T) {
 	t.Parallel()
 
 	storeErr := errors.New("read cursor workspace storage dir: operation not permitted")
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: nil, stamps: nil}, nil
-	}, resolverParser(RequestMatch{}, storeErr))
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: nil, stamps: nil}, nil
+		},
+		resolverParser(RequestMatch{}, storeErr),
+	)
 
 	_, err := idx.Resolve(context.Background(), "6f1c8a2e-0000-4000-8000-000000000000")
 	if err == nil {
 		t.Fatal("Resolve returned no error for a selector nothing holds")
 	}
+
 	if strings.Contains(err.Error(), "operation not permitted") {
-		t.Fatalf("Resolve error = %v, want a not-found answer rather than the provider's store error", err)
+		t.Fatalf(
+			"Resolve error = %v, want a not-found answer rather than the provider's store error",
+			err,
+		)
 	}
+
 	if !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("Resolve error = %v, want it to report the conversation as not found", err)
 	}
+
 	if !strings.Contains(err.Error(), RequestNotFoundReasonInconclusive.Describe()) {
 		t.Fatalf("Resolve error = %v, want the miss reported as inconclusive", err)
 	}
@@ -263,23 +294,39 @@ func TestResolveRequestDoesNotAnswerWithAnotherProvidersConversation(t *testing.
 
 	composerID := "6f1c8a2e-0000-4000-8000-000000000000"
 	claudeRecord := testRecord("claude:debug", ProviderClaude, "debug-session", composerID)
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{claudeRecord}, stamps: nil}, nil
-	}, resolverParser(RequestMatch{
-		Found:                true,
-		Provider:             ProviderCursor,
-		NativeConversationID: composerID,
-		Origin:               RequestOriginLive,
-		Reason:               RequestNotFoundReasonUnspecified,
-	}, nil))
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: []Record{claudeRecord}, stamps: nil}, nil
+		},
+		resolverParser(
+			RequestMatch{
+				Found:                true,
+				Provider:             ProviderCursor,
+				NativeConversationID: composerID,
+				Origin:               RequestOriginLive,
+				Reason:               RequestNotFoundReasonUnspecified,
+			},
+			nil,
+		),
+	)
 
-	resolution, err := idx.ResolveRequest(context.Background(), "0e3f0000-0000-4000-8000-000000000000", RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		context.Background(),
+		"0e3f0000-0000-4000-8000-000000000000",
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if resolution.Found {
-		t.Fatalf("ResolveRequest answered with %+v, want no answer rather than a record that merely carries the id as its title", resolution.Record)
+		t.Fatalf(
+			"ResolveRequest answered with %+v, want no answer rather than a record that merely carries the id as its title",
+			resolution.Record,
+		)
 	}
+
 	if resolution.Reason != RequestNotFoundReasonUnindexedConversation {
 		t.Fatalf("reason = %v, want unindexed_conversation", resolution.Reason)
 	}
@@ -293,20 +340,32 @@ func TestResolveRequestFindsTheProvidersOwnRecord(t *testing.T) {
 	composerID := "6f1c8a2e-0000-4000-8000-000000000000"
 	cursorRecord := testRecord("cursor:chat", ProviderCursor, composerID, "the chat")
 	claudeRecord := testRecord("claude:debug", ProviderClaude, "debug-session", composerID)
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{claudeRecord, cursorRecord}, stamps: nil}, nil
-	}, resolverParser(RequestMatch{
-		Found:                true,
-		Provider:             ProviderCursor,
-		NativeConversationID: composerID,
-		Origin:               RequestOriginLive,
-		Reason:               RequestNotFoundReasonUnspecified,
-	}, nil))
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: []Record{claudeRecord, cursorRecord}, stamps: nil}, nil
+		},
+		resolverParser(
+			RequestMatch{
+				Found:                true,
+				Provider:             ProviderCursor,
+				NativeConversationID: composerID,
+				Origin:               RequestOriginLive,
+				Reason:               RequestNotFoundReasonUnspecified,
+			},
+			nil,
+		),
+	)
 
-	resolution, err := idx.ResolveRequest(context.Background(), "0e3f0000-0000-4000-8000-000000000000", RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		context.Background(),
+		"0e3f0000-0000-4000-8000-000000000000",
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if !resolution.Found || resolution.Record.ID != "cursor:chat" {
 		t.Fatalf("resolution = %+v, want the Cursor chat that owns the composer id", resolution)
 	}
@@ -319,25 +378,41 @@ func TestResolveRequestFindsTheProvidersOwnRecord(t *testing.T) {
 func TestResolveRequestReportsAnInconclusiveMissWhenTheIndexIsStale(t *testing.T) {
 	t.Parallel()
 
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: nil, stamps: nil}, errors.New("scan the corpus: disk gone")
-	}, resolverParser(RequestMatch{
-		Found:                false,
-		Provider:             providerid.ProviderUnspecified,
-		NativeConversationID: "",
-		Origin:               RequestOriginUnspecified,
-		Reason:               RequestNotFoundReasonNotRetained,
-	}, nil))
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: nil, stamps: nil}, errors.New("scan the corpus: disk gone")
+		},
+		resolverParser(
+			RequestMatch{
+				Found:                false,
+				Provider:             providerid.ProviderUnspecified,
+				NativeConversationID: "",
+				Origin:               RequestOriginUnspecified,
+				Reason:               RequestNotFoundReasonNotRetained,
+			},
+			nil,
+		),
+	)
 
-	resolution, err := idx.ResolveRequest(context.Background(), "0e3f0000-0000-4000-8000-000000000000", RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		context.Background(),
+		"0e3f0000-0000-4000-8000-000000000000",
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if resolution.Found {
 		t.Fatalf("resolution = %+v, want a miss", resolution)
 	}
+
 	if resolution.Reason != RequestNotFoundReasonInconclusive {
-		t.Fatalf("reason = %v, want inconclusive because the refresh behind the miss did not finish", resolution.Reason)
+		t.Fatalf(
+			"reason = %v, want inconclusive because the refresh behind the miss did not finish",
+			resolution.Reason,
+		)
 	}
 }
 
@@ -346,15 +421,26 @@ func TestResolveRequestReportsAnInconclusiveMissWhenTheIndexIsStale(t *testing.T
 func TestMergeRequestNotFoundReasonLetsInconclusiveOutrankAConfirmedMiss(t *testing.T) {
 	t.Parallel()
 
-	confirmedThenUnread := MergeRequestNotFoundReason(RequestNotFoundReasonNotRetained, RequestNotFoundReasonInconclusive)
+	confirmedThenUnread := MergeRequestNotFoundReason(
+		RequestNotFoundReasonNotRetained,
+		RequestNotFoundReasonInconclusive,
+	)
 	if confirmedThenUnread != RequestNotFoundReasonInconclusive {
 		t.Fatalf("confirmed then unread = %v, want inconclusive", confirmedThenUnread)
 	}
-	unreadThenConfirmed := MergeRequestNotFoundReason(RequestNotFoundReasonInconclusive, RequestNotFoundReasonNotRetained)
+
+	unreadThenConfirmed := MergeRequestNotFoundReason(
+		RequestNotFoundReasonInconclusive,
+		RequestNotFoundReasonNotRetained,
+	)
 	if unreadThenConfirmed != RequestNotFoundReasonInconclusive {
 		t.Fatalf("unread then confirmed = %v, want inconclusive", unreadThenConfirmed)
 	}
-	firstKnowable := MergeRequestNotFoundReason(RequestNotFoundReasonNotRetained, RequestNotFoundReasonNoMatchingConversation)
+
+	firstKnowable := MergeRequestNotFoundReason(
+		RequestNotFoundReasonNotRetained,
+		RequestNotFoundReasonNoMatchingConversation,
+	)
 	if firstKnowable != RequestNotFoundReasonNotRetained {
 		t.Fatalf("two confirmed reasons = %v, want the first to stand", firstKnowable)
 	}
@@ -368,22 +454,31 @@ func TestResolveRequestAnswersUnderADeadlineTheRescanCannotMeet(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var startOnce sync.Once
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		startOnce.Do(func() { close(started) })
-		<-release
-		return scanResult{records: nil, stamps: nil}, nil
-	}, resolverParser(RequestMatch{
-		Found:                false,
-		Provider:             providerid.ProviderUnspecified,
-		NativeConversationID: "",
-		Origin:               RequestOriginUnspecified,
-		Reason:               RequestNotFoundReasonNotRetained,
-	}, nil))
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			startOnce.Do(func() { close(started) })
+			<-release
+
+			return scanResult{records: nil, stamps: nil}, nil
+		},
+		resolverParser(
+			RequestMatch{
+				Found:                false,
+				Provider:             providerid.ProviderUnspecified,
+				NativeConversationID: "",
+				Origin:               RequestOriginUnspecified,
+				Reason:               RequestNotFoundReasonNotRetained,
+			},
+			nil,
+		),
+	)
 
 	// The worker's refresh remains in flight when the request deadline expires.
 	if _, err := idx.List(context.Background()); err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
+
 	idx.refreshAsync(t.Context())
 	<-started
 	idx.mu.Lock()
@@ -397,15 +492,27 @@ func TestResolveRequestAnswersUnderADeadlineTheRescanCannotMeet(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	t.Cleanup(cancel)
 
-	resolution, err := idx.ResolveRequest(ctx, "0e3f0000-0000-4000-8000-000000000000", RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		ctx,
+		"0e3f0000-0000-4000-8000-000000000000",
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
-		t.Fatalf("ResolveRequest returned error under a deadline the rescan could not meet: %v", err)
+		t.Fatalf(
+			"ResolveRequest returned error under a deadline the rescan could not meet: %v",
+			err,
+		)
 	}
+
 	if resolution.Found {
 		t.Fatalf("resolution = %+v, want a miss", resolution)
 	}
+
 	if resolution.Reason != RequestNotFoundReasonInconclusive {
-		t.Fatalf("reason = %v, want inconclusive because the refresh behind the miss did not finish", resolution.Reason)
+		t.Fatalf(
+			"reason = %v, want inconclusive because the refresh behind the miss did not finish",
+			resolution.Reason,
+		)
 	}
 }
 
@@ -422,17 +529,29 @@ func TestResolveRequestReportsAmbiguityWhenSeveralRecordsCarryTheID(t *testing.T
 	duplicate := testRecord("cursor:duplicate", ProviderCursor, "duplicate", "(1) the chat")
 	duplicate.LatestRequestID = requestID
 
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{original, duplicate}, stamps: nil}, nil
-	})
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: []Record{original, duplicate}, stamps: nil}, nil
+		},
+	)
 
-	resolution, err := idx.ResolveRequest(context.Background(), requestID, RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		context.Background(),
+		requestID,
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if resolution.Found {
-		t.Fatalf("resolution = %+v, want no answer when two records carry the id", resolution.Record)
+		t.Fatalf(
+			"resolution = %+v, want no answer when two records carry the id",
+			resolution.Record,
+		)
 	}
+
 	if resolution.Reason != RequestNotFoundReasonAmbiguousConversation {
 		t.Fatalf("reason = %v, want ambiguous_conversation", resolution.Reason)
 	}
@@ -448,17 +567,26 @@ func TestResolveRequestStillAnswersFromTheIndexForASingleCarrier(t *testing.T) {
 	original.LatestRequestID = requestID
 	other := testRecord("cursor:other", ProviderCursor, "other", "another chat")
 
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{original, other}, stamps: nil}, nil
-	})
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: []Record{original, other}, stamps: nil}, nil
+		},
+	)
 
-	resolution, err := idx.ResolveRequest(context.Background(), requestID, RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		context.Background(),
+		requestID,
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if !resolution.Found || resolution.Record.ID != "cursor:original" {
 		t.Fatalf("resolution = %+v, want the one record carrying the id", resolution)
 	}
+
 	if resolution.Origin != RequestOriginIndex {
 		t.Fatalf("origin = %v, want index", resolution.Origin)
 	}
@@ -478,24 +606,36 @@ func TestResolveAgreesWithResolveRequestAboutAmbiguity(t *testing.T) {
 	duplicate := testRecord("cursor:bbb-duplicate", ProviderCursor, "bbb-duplicate", "(1) the chat")
 	duplicate.LatestRequestID = requestID
 
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{original, duplicate}, stamps: nil}, nil
-	})
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: []Record{original, duplicate}, stamps: nil}, nil
+		},
+	)
 
 	_, err := idx.Resolve(context.Background(), requestID)
 	if err == nil {
 		t.Fatal("Resolve answered with one of two conversations carrying the request id")
 	}
+
 	if !strings.Contains(err.Error(), RequestNotFoundReasonAmbiguousConversation.Describe()) {
 		t.Fatalf("Resolve error = %v, want the same ambiguity resolve-request reports", err)
 	}
 
-	resolution, err := idx.ResolveRequest(context.Background(), requestID, RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		context.Background(),
+		requestID,
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if resolution.Reason != RequestNotFoundReasonAmbiguousConversation {
-		t.Fatalf("resolve-request reason = %v while Resolve reported ambiguity: the two surfaces disagree", resolution.Reason)
+		t.Fatalf(
+			"resolve-request reason = %v while Resolve reported ambiguity: the two surfaces disagree",
+			resolution.Reason,
+		)
 	}
 }
 
@@ -508,14 +648,18 @@ func TestResolveStillAnswersARequestIDOnlyOneConversationCarries(t *testing.T) {
 	original := testRecord("cursor:original", ProviderCursor, "original", "the chat")
 	original.LatestRequestID = requestID
 
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{original}, stamps: nil}, nil
-	})
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: []Record{original}, stamps: nil}, nil
+		},
+	)
 
 	record, err := idx.Resolve(context.Background(), requestID)
 	if err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
+
 	if record.ID != "cursor:original" {
 		t.Fatalf("record = %q, want the one conversation carrying the id", record.ID)
 	}
@@ -527,23 +671,41 @@ func TestResolveStillAnswersARequestIDOnlyOneConversationCarries(t *testing.T) {
 func TestResolveRequestDoesNotClaimUnindexedOverAFailedRefresh(t *testing.T) {
 	t.Parallel()
 
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: nil, stamps: nil}, errors.New("scan the corpus: permission denied")
-	}, resolverParser(RequestMatch{
-		Found:                true,
-		Provider:             ProviderCursor,
-		NativeConversationID: "a-chat-the-index-has-not-seen",
-		Origin:               RequestOriginLive,
-		Reason:               RequestNotFoundReasonUnspecified,
-	}, nil))
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{
+				records: nil,
+				stamps:  nil,
+			}, errors.New("scan the corpus: permission denied")
+		},
+		resolverParser(
+			RequestMatch{
+				Found:                true,
+				Provider:             ProviderCursor,
+				NativeConversationID: "a-chat-the-index-has-not-seen",
+				Origin:               RequestOriginLive,
+				Reason:               RequestNotFoundReasonUnspecified,
+			},
+			nil,
+		),
+	)
 
-	resolution, err := idx.ResolveRequest(context.Background(), "0e3f0000-0000-4000-8000-000000000000", RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		context.Background(),
+		"0e3f0000-0000-4000-8000-000000000000",
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if resolution.Reason == RequestNotFoundReasonUnindexedConversation {
-		t.Fatal("reported the index does not hold the conversation, over an index the refresh never rebuilt")
+		t.Fatal(
+			"reported the index does not hold the conversation, over an index the refresh never rebuilt",
+		)
 	}
+
 	if resolution.Reason != RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %v, want inconclusive", resolution.Reason)
 	}
@@ -556,20 +718,29 @@ func TestResolveRequestAnswersSingleCachedCarrierWithoutRefresh(t *testing.T) {
 	record := testRecord("cursor:cached", ProviderCursor, "cached", "the chat")
 	record.LatestRequestID = requestID
 	refreshes := 0
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		refreshes++
-		return scanResult{}, nil
-	})
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			refreshes++
+			return scanResult{}, nil
+		},
+	)
 	idx.records = []Record{record}
 	idx.loaded = true
 
-	resolution, err := idx.ResolveRequest(context.Background(), requestID, RequestLookupOptions{AllowFullScan: false})
+	resolution, err := idx.ResolveRequest(
+		context.Background(),
+		requestID,
+		RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if !resolution.Found || resolution.Record.ID != record.ID {
 		t.Fatalf("resolution = %+v, want cached record %q", resolution, record.ID)
 	}
+
 	if refreshes != 0 {
 		t.Fatalf("refreshes = %d, want 0", refreshes)
 	}
@@ -585,34 +756,51 @@ func TestResolveNeverAnswersARequestIDWithATitleThatEqualsIt(t *testing.T) {
 
 	requestID := "0e3f0000-0000-4000-8000-000000000000"
 	titled := testRecord("cursor:titled", ProviderCursor, "titled-chat", requestID)
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{titled}, stamps: nil}, nil
-	}, resolverParser(RequestMatch{
-		Found:                false,
-		Provider:             providerid.ProviderUnspecified,
-		NativeConversationID: "",
-		Origin:               RequestOriginUnspecified,
-		Reason:               RequestNotFoundReasonNotRetained,
-	}, nil))
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: []Record{titled}, stamps: nil}, nil
+		},
+		resolverParser(
+			RequestMatch{
+				Found:                false,
+				Provider:             providerid.ProviderUnspecified,
+				NativeConversationID: "",
+				Origin:               RequestOriginUnspecified,
+				Reason:               RequestNotFoundReasonNotRetained,
+			},
+			nil,
+		),
+	)
 
 	record, err := idx.Resolve(context.Background(), requestID)
 	if err == nil {
-		t.Fatalf("Resolve returned %q for a request id no conversation issued, matched on its title", record.ID)
+		t.Fatalf(
+			"Resolve returned %q for a request id no conversation issued, matched on its title",
+			record.ID,
+		)
 	}
+
 	if !strings.Contains(err.Error(), RequestNotFoundReasonNotRetained.Describe()) {
 		t.Fatalf("Resolve error = %v, want the request lookup's own reason", err)
 	}
 
 	// The controls: the same conversation is still reachable by what it is, and a
 	// title that is not shaped like a request id still resolves exactly.
-	if found, err := idx.Resolve(context.Background(), "titled-chat"); err != nil || found.ID != "cursor:titled" {
+	if found, err := idx.Resolve(context.Background(), "titled-chat"); err != nil ||
+		found.ID != "cursor:titled" {
 		t.Fatalf("Resolve by native id = (%+v, %v), want the conversation", found, err)
 	}
+
 	plain := testRecord("cursor:plain", ProviderCursor, "plain-chat", "release notes")
-	plainIdx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: []Record{plain}, stamps: nil}, nil
-	})
-	if found, err := plainIdx.Resolve(context.Background(), "release notes"); err != nil || found.ID != "cursor:plain" {
+	plainIdx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: []Record{plain}, stamps: nil}, nil
+		},
+	)
+	if found, err := plainIdx.Resolve(context.Background(), "release notes"); err != nil ||
+		found.ID != "cursor:plain" {
 		t.Fatalf("Resolve by exact title = (%+v, %v), want the conversation", found, err)
 	}
 }
@@ -625,31 +813,49 @@ func TestResolveNeverAnswersARequestIDWithATitleThatEqualsIt(t *testing.T) {
 func TestResolveOnlyAsksTheProviderStoreForARequestShapedSelector(t *testing.T) {
 	t.Parallel()
 
-	parser := resolverParser(RequestMatch{
-		Found:                false,
-		Provider:             providerid.ProviderUnspecified,
-		NativeConversationID: "",
-		Origin:               RequestOriginUnspecified,
-		Reason:               RequestNotFoundReasonNotRetained,
-	}, nil)
-	idx := testIndex(t, func(context.Context, *Registry, scanCache) (scanResult, error) {
-		return scanResult{records: nil, stamps: nil}, nil
-	}, parser)
+	parser := resolverParser(
+		RequestMatch{
+			Found:                false,
+			Provider:             providerid.ProviderUnspecified,
+			NativeConversationID: "",
+			Origin:               RequestOriginUnspecified,
+			Reason:               RequestNotFoundReasonNotRetained,
+		},
+		nil,
+	)
+	idx := testIndex(
+		t,
+		func(context.Context, *Registry, scanCache) (scanResult, error) {
+			return scanResult{records: nil, stamps: nil}, nil
+		},
+		parser,
+	)
 
 	if _, err := idx.Resolve(context.Background(), "not-a-request-id"); err == nil {
 		t.Fatal("Resolve of an unknown selector returned no error")
 	}
+
 	if asked := parser.lookups.Load(); asked != 0 {
-		t.Fatalf("the provider store was asked %d times about a selector that is not shaped like a request id", asked)
+		t.Fatalf(
+			"the provider store was asked %d times about a selector that is not shaped like a request id",
+			asked,
+		)
 	}
 
 	// The positive control: the counter does move, so the assertion above is about
 	// the shape gate rather than about a resolver that is never reached at all.
-	if _, err := idx.Resolve(context.Background(), "0e3f0000-0000-4000-8000-000000000000"); err == nil {
+	if _, err := idx.Resolve(
+		context.Background(),
+		"0e3f0000-0000-4000-8000-000000000000",
+	); err == nil {
 		t.Fatal("Resolve of an unknown request id returned no error")
 	}
+
 	if asked := parser.lookups.Load(); asked != 1 {
-		t.Fatalf("lookups = %d, want the request-id-shaped selector to reach the store exactly once", asked)
+		t.Fatalf(
+			"lookups = %d, want the request-id-shaped selector to reach the store exactly once",
+			asked,
+		)
 	}
 }
 
@@ -665,10 +871,26 @@ func TestMergeRequestNotFoundReasonLetsAmbiguityOutrankAConfirmedMiss(t *testing
 		soFar RequestNotFoundReason
 		next  RequestNotFoundReason
 	}{
-		{name: "confirmed then ambiguous", soFar: RequestNotFoundReasonNotRetained, next: RequestNotFoundReasonAmbiguousConversation},
-		{name: "ambiguous then confirmed", soFar: RequestNotFoundReasonAmbiguousConversation, next: RequestNotFoundReasonNotRetained},
-		{name: "unread then ambiguous", soFar: RequestNotFoundReasonInconclusive, next: RequestNotFoundReasonAmbiguousConversation},
-		{name: "ambiguous then unread", soFar: RequestNotFoundReasonAmbiguousConversation, next: RequestNotFoundReasonInconclusive},
+		{
+			name:  "confirmed then ambiguous",
+			soFar: RequestNotFoundReasonNotRetained,
+			next:  RequestNotFoundReasonAmbiguousConversation,
+		},
+		{
+			name:  "ambiguous then confirmed",
+			soFar: RequestNotFoundReasonAmbiguousConversation,
+			next:  RequestNotFoundReasonNotRetained,
+		},
+		{
+			name:  "unread then ambiguous",
+			soFar: RequestNotFoundReasonInconclusive,
+			next:  RequestNotFoundReasonAmbiguousConversation,
+		},
+		{
+			name:  "ambiguous then unread",
+			soFar: RequestNotFoundReasonAmbiguousConversation,
+			next:  RequestNotFoundReasonInconclusive,
+		},
 	} {
 		merged := MergeRequestNotFoundReason(testCase.soFar, testCase.next)
 		if merged != RequestNotFoundReasonAmbiguousConversation {

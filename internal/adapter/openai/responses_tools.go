@@ -66,22 +66,27 @@ func SplitResponsesTools(raw json.RawMessage) (functionTools []Tool, droppedType
 	if trimmed == "" || trimmed == "null" {
 		return nil, nil
 	}
+
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, nil
 	}
+
 	for _, entry := range entries {
 		var env responsesToolEnvelope
 		if err := json.Unmarshal(entry, &env); err != nil {
 			droppedTypes = append(droppedTypes, responsesToolLabelMalformed)
 			continue
 		}
+
 		if envelopeIsFunctionTool(env) {
 			functionTools = append(functionTools, toolFromEnvelope(env))
 			continue
 		}
+
 		droppedTypes = append(droppedTypes, droppedToolLabel(env))
 	}
+
 	return functionTools, droppedTypes
 }
 
@@ -95,15 +100,19 @@ func envelopeIsFunctionTool(env responsesToolEnvelope) bool {
 	if env.Type == string(openAIToolWireTypeFunction) {
 		return true
 	}
+
 	if env.Function != nil {
 		return true
 	}
+
 	if env.Type != string(openAIToolWireTypeEmpty) {
 		return false
 	}
+
 	if env.Name == "" {
 		return false
 	}
+
 	return len(env.Parameters) > 0 || len(env.InputSchema) > 0
 }
 
@@ -114,10 +123,12 @@ func toolFromEnvelope(env responsesToolEnvelope) Tool {
 	if env.Function != nil {
 		return Tool{Type: string(openAIToolWireTypeFunction), Function: *env.Function, Format: nil}
 	}
+
 	parameters := env.Parameters
 	if len(parameters) == 0 {
 		parameters = env.InputSchema
 	}
+
 	return Tool{
 		Type: string(openAIToolWireTypeFunction),
 		Function: ToolFunctionSchema{
@@ -140,8 +151,10 @@ func droppedToolLabel(env responsesToolEnvelope) string {
 	if env.Type == string(openAIToolWireTypeEmpty) {
 		return responsesToolLabelUnnamed
 	}
+
 	if knownDroppableToolTypes[env.Type] {
 		return env.Type
 	}
+
 	return responsesToolLabelUnsupported
 }

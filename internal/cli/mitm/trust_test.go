@@ -44,10 +44,13 @@ func (f *fakeRegistry) Status(certPath string) (truststore.InstallStatus, error)
 	if out.Platform == "" {
 		out.Platform = f.platform
 	}
+
 	if out.CommonName == "" {
 		out.CommonName = f.commonName
 	}
+
 	_ = certPath
+
 	return out, f.statusErr
 }
 
@@ -55,6 +58,7 @@ func (f *fakeRegistry) Install(certPath string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.installCallArgs = append(f.installCallArgs, certPath)
+
 	return f.installErr
 }
 
@@ -62,12 +66,14 @@ func (f *fakeRegistry) Uninstall() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.uninstallCalls++
+
 	return f.uninstallErr
 }
 
 func newTrustTestFactory() (*cli.Factory, *bytes.Buffer, *bytes.Buffer) {
 	out := &bytes.Buffer{}
 	errBuf := &bytes.Buffer{}
+
 	return &cli.Factory{
 		IOStreams: &cli.IOStreams{
 			In:  &bytes.Buffer{},
@@ -96,15 +102,20 @@ func TestTrustCmdRegistersInstallUninstallStatus(t *testing.T) {
 	parent := newTrustCmdWithDeps(
 		factory,
 		func() truststore.Registry {
-			return &fakeRegistry{platform: truststore.PlatformDarwin, commonName: truststore.CACommonName}
+			return &fakeRegistry{
+				platform:   truststore.PlatformDarwin,
+				commonName: truststore.CACommonName,
+			}
 		},
 		func() (*config.Config, error) { return cfgWithCAPath("/tmp/ca.crt"), nil },
 	)
+
 	for _, sub := range []string{"install", "uninstall", "status"} {
 		c, _, err := parent.Find([]string{sub})
 		if err != nil {
 			t.Fatalf("find %q: %v", sub, err)
 		}
+
 		if c == nil || c.Name() != sub {
 			t.Fatalf("subcommand %q missing; got %v", sub, c)
 		}
@@ -138,7 +149,9 @@ func TestTrustStatusRendersTypedFields(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
+
 	got := out.String()
+
 	wants := []string{
 		"platform: darwin",
 		"common_name: Clyde Cursor MITM CA",
@@ -154,6 +167,7 @@ func TestTrustStatusRendersTypedFields(t *testing.T) {
 			t.Fatalf("status output missing %q in:\n%s", want, got)
 		}
 	}
+
 	if reg.statusCalls != 1 {
 		t.Fatalf("expected 1 Status call; got %d", reg.statusCalls)
 	}
@@ -184,6 +198,7 @@ func TestTrustStatusRendersStaleInstallWhenFingerprintsDiffer(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
+
 	if !strings.Contains(out.String(), "fingerprints_match: false") {
 		t.Fatalf("expected fingerprints_match=false; got %q", out.String())
 	}
@@ -228,6 +243,7 @@ func TestTrustInstallPassesCertPathFromConfig(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
+
 	if len(reg.installCallArgs) != 1 || reg.installCallArgs[0] != "/etc/clyde/ca.crt" {
 		t.Fatalf("expected Install called with /etc/clyde/ca.crt; got %v", reg.installCallArgs)
 	}
@@ -255,6 +271,7 @@ func TestTrustUninstallSurfacesRegistryError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "sudo prompt declined") {
 		t.Fatalf("expected wrapped registry error; got %v", err)
 	}
+
 	if reg.uninstallCalls != 1 {
 		t.Fatalf("expected 1 Uninstall call; got %d", reg.uninstallCalls)
 	}

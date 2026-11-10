@@ -124,5 +124,6 @@ func (r ResolvedRequest) ProviderEffort() Effort {
 	if r.WireEffort != EffortUnset {
 		return r.WireEffort
 	}
+
 	return r.Effort
 }

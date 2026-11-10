@@ -10,5 +10,6 @@ func streamReasoningRenderMode(ctx context.Context) adapterrender.ReasoningRende
 	if ingressLabelFromContext(ctx) == "cursor" {
 		return adapterrender.ReasoningRenderModeDualSurface
 	}
+
 	return adapterrender.ReasoningRenderModeReasoningContentOnly
 }

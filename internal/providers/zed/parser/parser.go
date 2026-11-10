@@ -65,24 +65,38 @@ func (*Parser) Provider() providerid.Provider {
 
 // Discover resolves local Zed data roots, reads thread rows plus sidebar
 // metadata, and returns native Zed thread candidates.
-func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
+func (p *Parser) Discover(
+	ctx context.Context,
+	_ map[string]conversation.Record,
+) ([]conversation.ScanCandidate, error) {
 	roots, err := zedstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.resolve_roots_failed", "concern", concern, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.resolve_roots_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("resolve zed data roots: %w", err)
 	}
 
 	candidates := make([]conversation.ScanCandidate, 0)
 	discovered := make(map[string]discoveredThread)
+
 	for _, root := range roots {
 		rows, err := readThreadRowsForRoot(ctx, root)
 		if err != nil {
 			return nil, err
 		}
+
 		terminalMetadata := readTerminalMetadataForRoot(ctx, root)
 		if len(rows) == 0 && len(terminalMetadata) == 0 {
 			continue
 		}
+
 		metadataByThread := readMetadataForRoot(ctx, root)
 		rootHash := RootHash(root.RootDir)
 
@@ -95,42 +109,87 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 			if !ok {
 				continue
 			}
+
 			thread, err := zedstore.ParseThreadDocument(row.DataType, row.Data)
 			if err != nil {
-				slog.WarnContext(ctx, "providers.zed.parser.discover_parse_thread_payload_failed", "concern", concern, "component", "zed", "path", root.ThreadsDBPath, "thread_id", row.ThreadID, "data_type", string(row.DataType), "err", err)
+				slog.WarnContext(
+					ctx,
+					"providers.zed.parser.discover_parse_thread_payload_failed",
+					"concern",
+					concern,
+					"component",
+					"zed",
+					"path",
+					root.ThreadsDBPath,
+					"thread_id",
+					row.ThreadID,
+					"data_type",
+					string(row.DataType),
+					"err",
+					err,
+				)
 				continue
 			}
+
 			path := buildVirtualPathFromRootHash(rootHash, metadata.Channel, row.ThreadID)
 			if path == "" {
 				continue
 			}
-			candidates = append(candidates, conversation.ScanCandidate{
-				MetadataChanged: false,
-				Path:            path,
-				Selector:        "",
-				Stamp:           conversation.FileStamp{Size: int64(len(row.Data)), Mtime: row.UpdatedAt},
-			})
-			discovered[path] = newNativeDiscoveredThread(row, thread, metadata.Metadata, root.RootDir, metadata.Channel)
+
+			candidates = append(
+				candidates,
+				conversation.ScanCandidate{
+					MetadataChanged: false,
+					Path:            path,
+					Selector:        "",
+					Stamp: conversation.FileStamp{
+						Size:  int64(len(row.Data)),
+						Mtime: row.UpdatedAt,
+					},
+				},
+			)
+			discovered[path] = newNativeDiscoveredThread(
+				row,
+				thread,
+				metadata.Metadata,
+				root.RootDir,
+				metadata.Channel,
+			)
 		}
 
 		for _, terminal := range terminalMetadata {
-			path := buildVirtualPathFromRootHash(rootHash, terminal.Channel, terminalSessionID(terminal.Metadata.TerminalID))
+			path := buildVirtualPathFromRootHash(
+				rootHash,
+				terminal.Channel,
+				terminalSessionID(terminal.Metadata.TerminalID),
+			)
 			if path == "" {
 				continue
 			}
-			candidates = append(candidates, conversation.ScanCandidate{
-				MetadataChanged: false,
-				Path:            path,
-				Selector:        "",
-				Stamp:           terminalMetadataStamp(terminal.Metadata),
-			})
-			discovered[path] = newTerminalDiscoveredThread(terminal.Metadata, root.RootDir, terminal.Channel)
+
+			candidates = append(
+				candidates,
+				conversation.ScanCandidate{
+					MetadataChanged: false,
+					Path:            path,
+					Selector:        "",
+					Stamp:           terminalMetadataStamp(terminal.Metadata),
+				},
+			)
+			discovered[path] = newTerminalDiscoveredThread(
+				terminal.Metadata,
+				root.RootDir,
+				terminal.Channel,
+			)
 		}
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].Path < candidates[j].Path
-	})
+	sort.SliceStable(
+		candidates,
+		func(i, j int) bool {
+			return candidates[i].Path < candidates[j].Path
+		},
+	)
 
 	p.mu.Lock()
 	p.discovered = discovered
@@ -148,25 +207,36 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	if err != nil {
 		return emptyRecord(), false
 	}
+
 	if discovered.Source == artifactKindZedTerm {
 		if discovered.Terminal == nil {
 			return emptyRecord(), false
 		}
+
 		terminal := discovered.Terminal
 		title := firstNonEmptyString(terminal.CustomTitle, terminal.Title)
 		if title == "" {
 			title = "Untitled Zed Terminal"
 		}
+
 		return conversation.Record{
-			ID:              conversation.DerivedID(providerid.ProviderZed, terminalSessionID(terminal.TerminalID), path),
-			Provider:        providerid.ProviderZed,
-			NativeID:        terminal.TerminalID,
-			Selector:        "",
-			Lineage:         nil,
-			Origin:          conversation.OriginUnspecified,
-			Title:           title,
-			TitleUncertain:  false,
-			WorkspaceRoot:   firstNonEmptyString(terminal.WorkingDirectory, firstPath(terminal.FolderPaths), firstPath(terminal.MainWorktreePaths)),
+			ID: conversation.DerivedID(
+				providerid.ProviderZed,
+				terminalSessionID(terminal.TerminalID),
+				path,
+			),
+			Provider:       providerid.ProviderZed,
+			NativeID:       terminal.TerminalID,
+			Selector:       "",
+			Lineage:        nil,
+			Origin:         conversation.OriginUnspecified,
+			Title:          title,
+			TitleUncertain: false,
+			WorkspaceRoot: firstNonEmptyString(
+				terminal.WorkingDirectory,
+				firstPath(terminal.FolderPaths),
+				firstPath(terminal.MainWorktreePaths),
+			),
 			ArtifactPath:    path,
 			ArtifactKind:    artifactKindZedTerm,
 			Model:           "",
@@ -179,8 +249,13 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	}
 
 	thread := discovered.Thread
+
 	return conversation.Record{
-		ID:             conversation.DerivedID(providerid.ProviderZed, discovered.Row.ThreadID, path),
+		ID: conversation.DerivedID(
+			providerid.ProviderZed,
+			discovered.Row.ThreadID,
+			path,
+		),
 		Provider:       providerid.ProviderZed,
 		NativeID:       discovered.Row.ThreadID,
 		Selector:       "",
@@ -188,14 +263,21 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		Origin:         zedThreadOrigin(discovered.Metadata.AgentID, thread.SubagentContext),
 		Title:          resolvedTitle(discovered.Metadata, thread),
 		TitleUncertain: false,
-		WorkspaceRoot:  firstNonEmptyString(firstPath(discovered.Metadata.FolderPaths), firstPath(discovered.Row.FolderPaths)),
-		ArtifactPath:   path,
-		ArtifactKind:   artifactKindZedThread,
-		Model:          resolvedModel(thread.Model),
-		CreatedAt:      firstNonZeroTime(discovered.Metadata.CreatedAt, discovered.Row.CreatedAt),
-		UpdatedAt:      latestNonZeroTime(discovered.Metadata.UpdatedAt, discovered.Row.UpdatedAt, thread.UpdatedAt),
-		SizeBytes:      stamp.Size,
-		Archived:       discovered.Metadata.Archived,
+		WorkspaceRoot: firstNonEmptyString(
+			firstPath(discovered.Metadata.FolderPaths),
+			firstPath(discovered.Row.FolderPaths),
+		),
+		ArtifactPath: path,
+		ArtifactKind: artifactKindZedThread,
+		Model:        resolvedModel(thread.Model),
+		CreatedAt:    firstNonZeroTime(discovered.Metadata.CreatedAt, discovered.Row.CreatedAt),
+		UpdatedAt: latestNonZeroTime(
+			discovered.Metadata.UpdatedAt,
+			discovered.Row.UpdatedAt,
+			thread.UpdatedAt,
+		),
+		SizeBytes: stamp.Size,
+		Archived:  discovered.Metadata.Archived,
 		// Zed thread headers carry no request id.
 		LatestRequestID: "",
 	}, true
@@ -203,45 +285,60 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 
 // Stream lazily yields transcript-shaped messages for one discovered Zed
 // thread.
-func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+func (p *Parser) Stream(
+	path string,
+	opts conversation.LoadOptions,
+) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
 		discovered, err := p.resolveDiscoveredThread(path)
 		if err != nil {
 			yield(emptyMessage(), err)
 			return
 		}
+
 		streamDiscoveredContext(discovered, opts, yield)
 	}
 }
 
-func streamDiscoveredContext(discovered discoveredThread, opts conversation.LoadOptions, yield func(transcript.Message, error) bool) {
+func streamDiscoveredContext(
+	discovered discoveredThread,
+	opts conversation.LoadOptions,
+	yield func(transcript.Message, error) bool,
+) {
 	if discovered.Source == artifactKindZedTerm {
 		if !opts.IncludeSystemMessages || discovered.Terminal == nil {
 			return
 		}
-		yield(transcript.Message{
-			UUID:              "",
-			ParentUUID:        "",
-			LogicalParentUUID: "",
-			Role:              "system",
-			Visibility:        transcript.MessageVisibilityMetaOnly,
-			Compaction:        nil,
-			Timestamp:         discovered.Terminal.CreatedAt,
-			Text:              terminalMetadataUnavailableText(*discovered.Terminal),
-			Thinking:          "",
-			HasTools:          false,
-			Tools:             nil,
-			Attachments:       nil,
-			TextParts:         nil,
-		}, nil)
+
+		yield(
+			transcript.Message{
+				UUID:              "",
+				ParentUUID:        "",
+				LogicalParentUUID: "",
+				Role:              "system",
+				Visibility:        transcript.MessageVisibilityMetaOnly,
+				Compaction:        nil,
+				Timestamp:         discovered.Terminal.CreatedAt,
+				Text:              terminalMetadataUnavailableText(*discovered.Terminal),
+				Thinking:          "",
+				HasTools:          false,
+				Tools:             nil,
+				Attachments:       nil,
+				TextParts:         nil,
+			},
+			nil,
+		)
+
 		return
 	}
+
 	thread := discovered.Thread
 	for _, message := range thread.Messages {
 		mapped, include := transcriptMessage(thread, message, opts)
 		if !include {
 			continue
 		}
+
 		if !yield(mapped, nil) {
 			return
 		}
@@ -266,66 +363,140 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil, TextParts: nil,
+		Attachments:       nil,
+		TextParts:         nil,
 	}
 }
 
-func readThreadRowsForRoot(ctx context.Context, root zedstore.DataRoot) ([]zedstore.ThreadRow, error) {
+func readThreadRowsForRoot(
+	ctx context.Context,
+	root zedstore.DataRoot,
+) ([]zedstore.ThreadRow, error) {
 	if _, err := os.Stat(root.ThreadsDBPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		slog.WarnContext(ctx, "providers.zed.parser.stat_threads_db_failed", "concern", concern, "path", root.ThreadsDBPath, "err", err)
+
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.stat_threads_db_failed",
+			"concern",
+			concern,
+			"path",
+			root.ThreadsDBPath,
+			"err",
+			err,
+		)
+
 		return nil, nil
 	}
 
 	db, err := zedstore.OpenReadOnlyDatabase(ctx, root.ThreadsDBPath)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.open_threads_db_failed", "concern", concern, "path", root.ThreadsDBPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.open_threads_db_failed",
+			"concern",
+			concern,
+			"path",
+			root.ThreadsDBPath,
+			"err",
+			err,
+		)
+
 		return nil, nil
 	}
+
 	defer func() { _ = db.Close() }()
 
 	rows, err := zedstore.ReadThreadRows(ctx, db)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.read_threads_failed", "concern", concern, "path", root.ThreadsDBPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.read_threads_failed",
+			"concern",
+			concern,
+			"path",
+			root.ThreadsDBPath,
+			"err",
+			err,
+		)
+
 		return nil, nil
 	}
+
 	return rows, nil
 }
 
-func readMetadataForRoot(ctx context.Context, root zedstore.DataRoot) map[string]metadataWithChannel {
+func readMetadataForRoot(
+	ctx context.Context,
+	root zedstore.DataRoot,
+) map[string]metadataWithChannel {
 	metadataByThread := make(map[string]metadataWithChannel)
+
 	for _, dbPath := range root.MetadataDBPaths {
 		if _, err := os.Stat(dbPath); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			slog.WarnContext(ctx, "providers.zed.parser.stat_metadata_db_failed", "concern", concern, "path", dbPath, "err", err)
+
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.stat_metadata_db_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"err",
+				err,
+			)
 			continue
 		}
 
 		db, err := zedstore.OpenReadOnlyDatabase(ctx, dbPath)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.open_metadata_db_failed", "concern", concern, "path", dbPath, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.open_metadata_db_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"err",
+				err,
+			)
 			continue
 		}
 
 		metadataRows, err := zedstore.ReadSidebarThreads(ctx, db)
 		_ = db.Close()
 		if err != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.read_metadata_failed", "concern", concern, "path", dbPath, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.read_metadata_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"err",
+				err,
+			)
 			continue
 		}
 
 		channel := filepath.Base(filepath.Dir(dbPath))
+
 		for _, row := range metadataRows {
 			current, ok := metadataByThread[row.SessionID]
 			if !ok || row.UpdatedAt.After(current.Metadata.UpdatedAt) {
-				metadataByThread[row.SessionID] = metadataWithChannel{Metadata: row, Channel: channel}
+				metadataByThread[row.SessionID] = metadataWithChannel{
+					Metadata: row,
+					Channel:  channel,
+				}
 			}
 		}
 	}
+
 	return metadataByThread
 }
 
@@ -344,82 +515,186 @@ func (p *Parser) resolveDiscoveredThread(path string) (discoveredThread, error) 
 
 	virtualPath, err := ParseVirtualPath(path)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.virtual_path_parse_failed", "concern", concern, "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.virtual_path_parse_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return emptyDiscovered, fmt.Errorf("parse zed virtual path: %w", err)
 	}
+
 	roots, err := zedstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.resolve_roots_failed", "concern", concern, "path", path, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.resolve_roots_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return emptyDiscovered, fmt.Errorf("resolve zed data roots: %w", err)
 	}
 
 	var firstLookupErr error
+
 	for _, root := range roots {
 		if RootHash(root.RootDir) != virtualPath.RootHash {
 			continue
 		}
+
 		terminalID, isTerminal := strings.CutPrefix(virtualPath.SessionID, terminalPathPrefix)
 		if isTerminal {
-			resolved, ok, err := resolveTerminalDiscoveredThread(ctx, root, virtualPath.Channel, terminalID)
+			resolved, ok, err := resolveTerminalDiscoveredThread(
+				ctx,
+				root,
+				virtualPath.Channel,
+				terminalID,
+			)
 			if err != nil {
 				if firstLookupErr == nil {
 					firstLookupErr = err
 				}
+
 				continue
 			}
+
 			if !ok {
 				continue
 			}
+
 			p.mu.Lock()
 			p.discovered[path] = resolved
 			p.mu.Unlock()
+
 			return resolved, nil
 		}
-		resolved, ok, err := resolveNativeDiscoveredThread(ctx, root, virtualPath.Channel, virtualPath.SessionID)
+
+		resolved, ok, err := resolveNativeDiscoveredThread(
+			ctx,
+			root,
+			virtualPath.Channel,
+			virtualPath.SessionID,
+		)
 		if err != nil {
 			if firstLookupErr == nil {
 				firstLookupErr = err
 			}
+
 			continue
 		}
+
 		if !ok {
 			continue
 		}
+
 		p.mu.Lock()
 		p.discovered[path] = resolved
 		p.mu.Unlock()
+
 		return resolved, nil
 	}
+
 	if firstLookupErr != nil {
 		return emptyDiscovered, firstLookupErr
 	}
-	slog.WarnContext(ctx, "providers.zed.parser.virtual_path_not_found", "concern", concern, "path", path, "session_id", virtualPath.SessionID, "channel", virtualPath.Channel)
+
+	slog.WarnContext(
+		ctx,
+		"providers.zed.parser.virtual_path_not_found",
+		"concern",
+		concern,
+		"path",
+		path,
+		"session_id",
+		virtualPath.SessionID,
+		"channel",
+		virtualPath.Channel,
+	)
+
 	return emptyDiscovered, fmt.Errorf("zed path not discovered: %s", path)
 }
 
-func readThreadRowByIDForRoot(ctx context.Context, root zedstore.DataRoot, threadID string) (zedstore.ThreadRow, bool, error) {
+func readThreadRowByIDForRoot(
+	ctx context.Context,
+	root zedstore.DataRoot,
+	threadID string,
+) (zedstore.ThreadRow, bool, error) {
 	var emptyRow zedstore.ThreadRow
 
 	if _, err := os.Stat(root.ThreadsDBPath); err != nil {
 		if os.IsNotExist(err) {
 			return emptyRow, false, nil
 		}
-		slog.WarnContext(ctx, "providers.zed.parser.stat_threads_db_failed", "concern", concern, "path", root.ThreadsDBPath, "thread_id", threadID, "err", err)
+
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.stat_threads_db_failed",
+			"concern",
+			concern,
+			"path",
+			root.ThreadsDBPath,
+			"thread_id",
+			threadID,
+			"err",
+			err,
+		)
+
 		return emptyRow, false, fmt.Errorf("stat zed threads db %s: %w", root.ThreadsDBPath, err)
 	}
 
 	db, err := zedstore.OpenReadOnlyDatabase(ctx, root.ThreadsDBPath)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.open_threads_db_failed", "concern", concern, "path", root.ThreadsDBPath, "thread_id", threadID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.open_threads_db_failed",
+			"concern",
+			concern,
+			"path",
+			root.ThreadsDBPath,
+			"thread_id",
+			threadID,
+			"err",
+			err,
+		)
+
 		return emptyRow, false, fmt.Errorf("open zed threads db %s: %w", root.ThreadsDBPath, err)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	row, ok, err := zedstore.ReadThreadRowByID(ctx, db, threadID)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.read_thread_row_by_id_failed", "concern", concern, "path", root.ThreadsDBPath, "thread_id", threadID, "err", err)
-		return emptyRow, false, fmt.Errorf("read zed thread row %q from %s: %w", threadID, root.ThreadsDBPath, err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.parser.read_thread_row_by_id_failed",
+			"concern",
+			concern,
+			"path",
+			root.ThreadsDBPath,
+			"thread_id",
+			threadID,
+			"err",
+			err,
+		)
+
+		return emptyRow, false, fmt.Errorf(
+			"read zed thread row %q from %s: %w",
+			threadID,
+			root.ThreadsDBPath,
+			err,
+		)
 	}
+
 	return row, ok, nil
 }
 
@@ -436,29 +711,75 @@ func readSidebarThreadMetadataForRoot(
 		if dbChannel != channel {
 			continue
 		}
+
 		if _, err := os.Stat(dbPath); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			slog.WarnContext(ctx, "providers.zed.parser.stat_metadata_db_failed", "concern", concern, "path", dbPath, "session_id", sessionID, "err", err)
+
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.stat_metadata_db_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"session_id",
+				sessionID,
+				"err",
+				err,
+			)
+
 			return emptyMetadata, false, fmt.Errorf("stat zed metadata db %s: %w", dbPath, err)
 		}
 
 		db, err := zedstore.OpenReadOnlyDatabase(ctx, dbPath)
 		if err != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.open_metadata_db_failed", "concern", concern, "path", dbPath, "session_id", sessionID, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.open_metadata_db_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"session_id",
+				sessionID,
+				"err",
+				err,
+			)
+
 			return emptyMetadata, false, fmt.Errorf("open zed metadata db %s: %w", dbPath, err)
 		}
+
 		row, ok, err := zedstore.ReadSidebarThreadBySession(ctx, db, sessionID)
 		_ = db.Close()
 		if err != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.read_sidebar_thread_by_session_failed", "concern", concern, "path", dbPath, "session_id", sessionID, "err", err)
-			return emptyMetadata, false, fmt.Errorf("read zed sidebar row %q from %s: %w", sessionID, dbPath, err)
+			slog.WarnContext(
+				ctx,
+				"providers.zed.parser.read_sidebar_thread_by_session_failed",
+				"concern",
+				concern,
+				"path",
+				dbPath,
+				"session_id",
+				sessionID,
+				"err",
+				err,
+			)
+
+			return emptyMetadata, false, fmt.Errorf(
+				"read zed sidebar row %q from %s: %w",
+				sessionID,
+				dbPath,
+				err,
+			)
 		}
+
 		if ok {
 			return metadataWithChannel{Metadata: row, Channel: dbChannel}, true, nil
 		}
 	}
+
 	return emptyMetadata, false, nil
 }
 
@@ -468,24 +789,34 @@ func readSidebarThreadMetadataForRoot(
 // itself dispatched. Before the conversation setting existed, a thread with an
 // agent id was dropped during discovery instead, which the setting could not
 // reach.
-func zedThreadOrigin(agentID string, subagentContext *zedstore.SubagentContext) conversation.Origin {
+func zedThreadOrigin(
+	agentID string,
+	subagentContext *zedstore.SubagentContext,
+) conversation.Origin {
 	if strings.TrimSpace(agentID) != "" {
 		return conversation.OriginSubagent
 	}
+
 	if subagentContext != nil {
 		return conversation.OriginSubagent
 	}
+
 	return conversation.OriginUser
 }
 
-func buildLineage(parentSessionID string, subagentContext *zedstore.SubagentContext) *conversation.Lineage {
+func buildLineage(
+	parentSessionID string,
+	subagentContext *zedstore.SubagentContext,
+) *conversation.Lineage {
 	parentNativeID := strings.TrimSpace(parentSessionID)
 	if subagentContext != nil && strings.TrimSpace(subagentContext.ParentThreadID) != "" {
 		parentNativeID = strings.TrimSpace(subagentContext.ParentThreadID)
 	}
+
 	if parentNativeID == "" {
 		return nil
 	}
+
 	return &conversation.Lineage{
 		Kind:              conversation.ConversationLineageKindSpawn,
 		ParentProvider:    providerid.ProviderZed,
@@ -499,6 +830,7 @@ func resolvedTitle(metadata zedstore.SidebarThreadMetadata, thread zedstore.Thre
 	if title == "" {
 		return "Untitled Zed Thread"
 	}
+
 	return title
 }
 
@@ -506,9 +838,11 @@ func resolvedModel(model *zedstore.ThreadModel) string {
 	if model == nil {
 		return ""
 	}
+
 	if model.Provider == "" || model.Model == "" {
 		return ""
 	}
+
 	return model.Provider + "/" + model.Model
 }
 
@@ -516,6 +850,7 @@ func firstPath(paths []string) string {
 	if len(paths) == 0 {
 		return ""
 	}
+
 	return paths[0]
 }
 
@@ -526,6 +861,7 @@ func firstNonEmptyString(values ...string) string {
 			return trimmed
 		}
 	}
+
 	return ""
 }
 
@@ -535,33 +871,43 @@ func firstNonZeroTime(values ...time.Time) time.Time {
 			return value
 		}
 	}
+
 	return time.Time{}
 }
 
 func latestNonZeroTime(values ...time.Time) time.Time {
 	latest := time.Time{}
+
 	for _, value := range values {
 		if value.IsZero() {
 			continue
 		}
+
 		if latest.IsZero() || value.After(latest) {
 			latest = value
 		}
 	}
+
 	return latest
 }
 
-func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMessage, opts conversation.LoadOptions) (transcript.Message, bool) {
+func transcriptMessage(
+	thread zedstore.ThreadDocument,
+	message zedstore.ThreadMessage,
+	opts conversation.LoadOptions,
+) (transcript.Message, bool) {
 	defer transcript.ContainMappingPanic()
 	switch message.Kind {
 	case zedstore.ThreadMessageKindUser:
 		if message.User == nil {
 			return emptyMessage(), false
 		}
+
 		text := userMessageText(message.User)
 		if strings.TrimSpace(text) == "" {
 			return emptyMessage(), false
 		}
+
 		return transcript.Message{
 			UUID:              message.User.ID,
 			ParentUUID:        "",
@@ -574,16 +920,19 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			Attachments:       nil, TextParts: nil,
+			Attachments:       nil,
+			TextParts:         nil,
 		}, true
 	case zedstore.ThreadMessageKindAgent:
 		if message.Agent == nil {
 			return emptyMessage(), false
 		}
+
 		text, thinking, tools := agentMessageParts(message.Agent, opts.IncludeToolOutputs)
 		if text == "" && thinking == "" && len(tools) == 0 {
 			return emptyMessage(), false
 		}
+
 		return transcript.Message{
 			UUID:              "",
 			ParentUUID:        "",
@@ -596,7 +945,8 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          thinking,
 			HasTools:          len(tools) > 0,
 			Tools:             tools,
-			Attachments:       nil, TextParts: nil,
+			Attachments:       nil,
+			TextParts:         nil,
 		}, true
 	case zedstore.ThreadMessageKindResume:
 		return transcript.Message{
@@ -611,16 +961,19 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			Attachments:       nil, TextParts: nil,
+			Attachments:       nil,
+			TextParts:         nil,
 		}, true
 	case zedstore.ThreadMessageKindCompaction:
 		if !opts.IncludeSystemMessages || message.Compaction == nil {
 			return emptyMessage(), false
 		}
+
 		compaction, text := compactionMetadata(message.Compaction)
 		if compaction == nil || strings.TrimSpace(text) == "" {
 			return emptyMessage(), false
 		}
+
 		return transcript.Message{
 			UUID:              "",
 			ParentUUID:        "",
@@ -633,7 +986,8 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 			Thinking:          "",
 			HasTools:          false,
 			Tools:             nil,
-			Attachments:       nil, TextParts: nil,
+			Attachments:       nil,
+			TextParts:         nil,
 		}, true
 	default:
 		return emptyMessage(), false
@@ -652,6 +1006,7 @@ func userMessageText(message *zedstore.UserMessage) string {
 			if part.Mention == nil {
 				continue
 			}
+
 			if strings.TrimSpace(part.Mention.Content) != "" {
 				parts = append(parts, part.Mention.Content)
 			} else if strings.TrimSpace(part.Mention.URI) != "" {
@@ -659,13 +1014,18 @@ func userMessageText(message *zedstore.UserMessage) string {
 			}
 		}
 	}
+
 	return strings.Join(parts, "\n")
 }
 
-func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) (string, string, []transcript.ToolCall) {
+func agentMessageParts(
+	message *zedstore.AgentMessage,
+	includeToolOutputs bool,
+) (string, string, []transcript.ToolCall) {
 	textParts := make([]string, 0, len(message.Content))
 	thinkingParts := make([]string, 0, len(message.Content))
 	tools := make([]transcript.ToolCall, 0)
+
 	for _, part := range message.Content {
 		switch part.Kind {
 		case zedstore.AgentContentKindText:
@@ -680,26 +1040,32 @@ func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) 
 			if part.ToolUse == nil {
 				continue
 			}
+
 			output, isError := "", false
 			if includeToolOutputs {
 				output, isError = zedToolResultOutput(message.ToolResults[part.ToolUse.ID])
 			}
+
 			input := transcript.ToolInputJSON{Raw: append([]byte(nil), part.ToolUse.Input...)}
 			display, displayLang := toolDisplayText(part.ToolUse.Name, input)
-			tools = append(tools, transcript.ToolCall{
-				ID:               part.ToolUse.ID,
-				Name:             part.ToolUse.Name,
-				Input:            input,
-				Display:          display,
-				DisplayLang:      displayLang,
-				Output:           output,
-				IsError:          isError,
-				Attachments:      nil,
-				Timestamp:        nil,
-				TimestampUnknown: false,
-			})
+			tools = append(
+				tools,
+				transcript.ToolCall{
+					ID:               part.ToolUse.ID,
+					Name:             part.ToolUse.Name,
+					Input:            input,
+					Display:          display,
+					DisplayLang:      displayLang,
+					Output:           output,
+					IsError:          isError,
+					Attachments:      nil,
+					Timestamp:        nil,
+					TimestampUnknown: false,
+				},
+			)
 		}
 	}
+
 	return strings.Join(textParts, "\n"), strings.Join(thinkingParts, "\n"), tools
 }
 
@@ -711,20 +1077,25 @@ func zedToolResultOutput(result zedstore.ToolResult) (string, bool) {
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
+
 			textParts = append(textParts, text)
 			continue
 		}
+
 		trimmedPart := strings.TrimSpace(string(part))
 		if trimmedPart != "" && trimmedPart != "null" {
 			textParts = append(textParts, trimmedPart)
 		}
 	}
+
 	if outputText := zedToolResultFallbackOutput(result.Output); outputText != "" {
 		textParts = append(textParts, outputText)
 	}
+
 	if len(textParts) > 0 {
 		return strings.Join(textParts, "\n"), result.IsError
 	}
+
 	return "", result.IsError
 }
 
@@ -733,23 +1104,29 @@ func zedToolResultFallbackOutput(raw json.RawMessage) string {
 	if trimmedOutput == "" || trimmedOutput == "null" {
 		return ""
 	}
+
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		if strings.TrimSpace(text) == "" {
 			return ""
 		}
+
 		return text
 	}
+
 	return trimmedOutput
 }
 
-func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.CompactionMetadata, string) {
+func compactionMetadata(
+	message *zedstore.CompactionMessage,
+) (*transcript.CompactionMetadata, string) {
 	switch message.Kind {
 	case zedstore.CompactionMessageKindSummary:
 		summary := strings.TrimSpace(message.Summary)
 		if summary == "" {
 			return nil, ""
 		}
+
 		return &transcript.CompactionMetadata{
 			Kind:                      transcript.CompactionKindSummary,
 			Trigger:                   transcript.CompactionTriggerUnknown,
@@ -776,10 +1153,12 @@ func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.Compac
 		if err != nil {
 			raw = nil
 		}
+
 		text := "Conversation compacted"
 		if provider := strings.TrimSpace(message.Provider); provider != "" {
 			text = provider + " compaction boundary"
 		}
+
 		return &transcript.CompactionMetadata{
 			Kind:                      transcript.CompactionKindBoundary,
 			Trigger:                   transcript.CompactionTriggerUnknown,

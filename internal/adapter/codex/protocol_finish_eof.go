@@ -15,6 +15,7 @@ func (p *sseEventParser) finalizePendingToolInputs(ctx context.Context) error {
 	if err := p.finalizePendingClientCustomInputs(ctx); err != nil {
 		return err
 	}
+
 	return p.finalizePendingRawPatchInputs(ctx)
 }
 
@@ -28,15 +29,25 @@ func (p *sseEventParser) finalizePendingClientCustomInputs(ctx context.Context) 
 		if state == nil || !state.ClientCustomTool || state.ArgumentsEmitted {
 			continue
 		}
+
 		input := state.Input.String()
 		if input == "" {
 			continue
 		}
-		result := p.emitNativeParsedArguments(ctx, "eof", "custom_tool_call", state, state.Name, input)
+
+		result := p.emitNativeParsedArguments(
+			ctx,
+			"eof",
+			"custom_tool_call",
+			state,
+			state.Name,
+			input,
+		)
 		if result.Action == ssePayloadReturn && result.Err != nil {
 			return result.Err
 		}
 	}
+
 	return nil
 }
 
@@ -44,20 +55,25 @@ func (p *sseEventParser) finalizePendingRawPatchInputs(ctx context.Context) erro
 	if p.nativePatchRepresentation != adapterrender.NativePatchRepresentationRaw {
 		return nil
 	}
+
 	for _, state := range p.toolCallsByItemID {
 		// A client-declared custom tool already flushed verbatim above and
 		// carries no patch semantics, so it never reaches the patch path.
-		if state == nil || state.ClientCustomTool || state.ArgumentsEmitted || state.Name != p.tools.patchToolName("") {
+		if state == nil || state.ClientCustomTool || state.ArgumentsEmitted ||
+			state.Name != p.tools.patchToolName("") {
 			continue
 		}
+
 		input := state.Input.String()
 		if input == "" {
 			continue
 		}
+
 		result := p.emitNativePatchInput(ctx, "eof", "custom_tool_call", state, input, true)
 		if result.Action == ssePayloadReturn && result.Err != nil {
 			return result.Err
 		}
 	}
+
 	return nil
 }

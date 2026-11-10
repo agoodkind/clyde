@@ -6,15 +6,28 @@ import (
 )
 
 // LogToolingEvent is part of Clyde's typed adapter surface.
-func LogToolingEvent(log *slog.Logger, ctx context.Context, requestID, event string, attrs ...slog.Attr) {
+func LogToolingEvent(
+	log *slog.Logger,
+	ctx context.Context,
+	requestID string,
+	event string,
+	attrs ...slog.Attr,
+) {
 	attrs = append([]slog.Attr{slog.String("event", event)}, attrs...)
 	logTransportEvent(log, ctx, requestID, "adapter.codex.tooling.event", attrs...)
 }
 
-func logTransportEvent(log *slog.Logger, ctx context.Context, requestID, msg string, attrs ...slog.Attr) {
+func logTransportEvent(
+	log *slog.Logger,
+	ctx context.Context,
+	requestID string,
+	msg string,
+	attrs ...slog.Attr,
+) {
 	if log == nil {
 		log = slog.Default()
 	}
+
 	base := []slog.Attr{
 		slog.String("concern", "adapter.providers.codex.request"),
 		slog.String("component", "adapter"),

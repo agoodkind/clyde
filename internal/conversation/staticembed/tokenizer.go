@@ -32,9 +32,11 @@ func parseWordPiece(raw []byte) (*wordPiece, error) {
 	if err := json.Unmarshal(raw, &file); err != nil {
 		return nil, parseFailed("parse tokenizer.json", err)
 	}
+
 	if file.Model.Type != "WordPiece" {
 		return nil, fmt.Errorf("tokenizer model type %q, want WordPiece", file.Model.Type)
 	}
+
 	return &wordPiece{
 		vocab:        file.Model.Vocab,
 		prefix:       file.Model.ContinuingSubwordPrefix,
@@ -52,6 +54,7 @@ func (tokenizer *wordPiece) appendIDs(ids []int32, text string) []int32 {
 			word = word[:0]
 		}
 	}
+
 	for _, character := range normalized {
 		switch {
 		case unicode.IsSpace(character):
@@ -63,7 +66,9 @@ func (tokenizer *wordPiece) appendIDs(ids []int32, text string) []int32 {
 			word = append(word, character)
 		}
 	}
+
 	flush()
+
 	return ids
 }
 
@@ -71,16 +76,20 @@ func (tokenizer *wordPiece) appendWord(ids []int32, word []rune) []int32 {
 	if len(word) > tokenizer.maxWordRunes {
 		return ids
 	}
+
 	start := len(ids)
 	var builder strings.Builder
+
 	for begin := 0; begin < len(word); {
 		matched := int32(-1)
+
 		matchEnd := begin
 		for end := len(word); end > begin; end-- {
 			builder.Reset()
 			if begin > 0 {
 				builder.WriteString(tokenizer.prefix)
 			}
+
 			builder.WriteString(string(word[begin:end]))
 			if id, found := tokenizer.vocab[builder.String()]; found {
 				matched = id
@@ -88,12 +97,15 @@ func (tokenizer *wordPiece) appendWord(ids []int32, word []rune) []int32 {
 				break
 			}
 		}
+
 		if matched < 0 {
 			return ids[:start]
 		}
+
 		ids = append(ids, matched)
 		begin = matchEnd
 	}
+
 	return ids
 }
 
@@ -102,6 +114,7 @@ func (tokenizer *wordPiece) appendWord(ids []int32, word []rune) []int32 {
 func normalize(text string) string {
 	var cleaned strings.Builder
 	cleaned.Grow(len(text))
+
 	for _, character := range text {
 		switch {
 		case character == 0 || character == utf8.RuneError || isControl(character):
@@ -116,15 +129,19 @@ func normalize(text string) string {
 			cleaned.WriteRune(character)
 		}
 	}
+
 	// BertNormalizer strips accents before it lowercases.
 	var stripped strings.Builder
 	stripped.Grow(cleaned.Len())
+
 	for _, character := range norm.NFD.String(cleaned.String()) {
 		if unicode.Is(unicode.Mn, character) {
 			continue
 		}
+
 		stripped.WriteRune(character)
 	}
+
 	return strings.ToLower(stripped.String())
 }
 
@@ -132,7 +149,18 @@ func isControl(character rune) bool {
 	if character == '\t' || character == '\n' || character == '\r' {
 		return false
 	}
-	return unicode.In(character, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs) || !unicode.In(character, unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Z, unicode.C)
+
+	return unicode.In(character, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs) ||
+		!unicode.In(
+			character,
+			unicode.L,
+			unicode.M,
+			unicode.N,
+			unicode.P,
+			unicode.S,
+			unicode.Z,
+			unicode.C,
+		)
 }
 
 func isBertPunctuation(character rune) bool {
@@ -140,6 +168,7 @@ func isBertPunctuation(character rune) bool {
 		return (character >= 33 && character <= 47) || (character >= 58 && character <= 64) ||
 			(character >= 91 && character <= 96) || (character >= 123 && character <= 126)
 	}
+
 	return unicode.IsPunct(character)
 }
 

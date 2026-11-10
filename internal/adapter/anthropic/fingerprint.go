@@ -15,9 +15,11 @@ func VersionFromUserAgent(ua string) string {
 	if !ok {
 		return ""
 	}
+
 	if space := strings.IndexAny(rest, " ;("); space >= 0 {
 		return rest[:space]
 	}
+
 	return rest
 }
 
@@ -34,6 +36,7 @@ func randomHex(nBytes int) string {
 	if _, err := rand.Read(raw); err != nil {
 		return strings.Repeat("0", nBytes)
 	}
+
 	return hex.EncodeToString(raw)[:nBytes]
 }
 
@@ -59,16 +62,20 @@ func SubstituteBillingAttestation(line, cch string) string {
 	if cch == "" {
 		return line
 	}
+
 	if !strings.HasPrefix(strings.TrimSpace(line), billingHeaderLinePrefix) {
 		return line
 	}
+
 	before, after, ok := strings.Cut(line, billingCCHMarker)
 	if !ok {
 		return line + " " + billingCCHMarker + cch + ";"
 	}
+
 	_, tail, hasTail := strings.Cut(after, ";")
 	if !hasTail {
 		return before + billingCCHMarker + cch
 	}
+
 	return before + billingCCHMarker + cch + ";" + tail
 }

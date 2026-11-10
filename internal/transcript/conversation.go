@@ -58,10 +58,13 @@ type ConversationTurn struct {
 // DefaultShapeOptions is part of Clyde's typed adapter surface.
 func DefaultShapeOptions() ShapeOptions {
 	return ShapeOptions{
-		ToolOnly: ToolOnlyCompactSummary, IncludeThinking:
+		ToolOnly: ToolOnlyCompactSummary,
+		IncludeThinking:
 
 		// ShapeConversation is part of Clyde's typed adapter surface.
-		false, ConversationOnly: false, MaxTextRunes: 0,
+		false,
+		ConversationOnly: false,
+		MaxTextRunes:     0,
 	}
 }
 
@@ -79,6 +82,7 @@ const ContextWindowMaxTextRunes = 2000
 func ContextWindowShapeOptions() ShapeOptions {
 	opts := DefaultShapeOptions()
 	opts.MaxTextRunes = ContextWindowMaxTextRunes
+
 	return opts
 }
 
@@ -87,13 +91,18 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 	if opts.ToolOnly == "" {
 		opts.ToolOnly = ToolOnlyCompactSummary
 	}
+
 	out := make([]ConversationTurn, 0, len(messages))
 	for _, msg := range messages {
 		turn := ConversationTurn{
-			UUID:      msg.UUID,
-			Role:      msg.Role,
-			Timestamp: msg.Timestamp,
-			HasTools:  msg.HasTools, Text: "", Thinking: "", ToolNames: nil, IsToolOnly: false,
+			UUID:        msg.UUID,
+			Role:        msg.Role,
+			Timestamp:   msg.Timestamp,
+			HasTools:    msg.HasTools,
+			Text:        "",
+			Thinking:    "",
+			ToolNames:   nil,
+			IsToolOnly:  false,
 			Attachments: append([]Attachment(nil), msg.Attachments...),
 		}
 		// The cap bounds the prose, which is the part that grows without limit now
@@ -107,21 +116,26 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 		if opts.IncludeThinking {
 			thinking = normalizeConversationText(msg.Thinking, opts.MaxTextRunes, false)
 		}
+
 		if len(msg.Tools) > 0 {
 			turn.ToolNames = msg.ToolNames()
 		}
+
 		turn.IsToolOnly = msg.HasTools && text == ""
 		text, keepTurn := textWithTools(text, turn.ToolNames, msg, opts)
 		if !keepTurn && len(turn.Attachments) == 0 {
 			continue
 		}
+
 		if text == "" && thinking == "" && len(turn.Attachments) == 0 {
 			continue
 		}
+
 		turn.Text = text
 		turn.Thinking = thinking
 		out = append(out, turn)
 	}
+
 	return out
 }
 
@@ -132,17 +146,23 @@ func RenderMessageIndexText(msg Message) string {
 	if text := normalizeConversationText(msg.Text, 0, false); text != "" {
 		parts = append(parts, text)
 	}
+
 	if thinking := normalizeConversationText(msg.Thinking, 0, false); thinking != "" {
 		parts = append(parts, thinking)
 	}
+
 	if len(msg.Tools) > 0 {
 		if tools := strings.TrimSpace(toolFullDetailText(msg.Tools)); tools != "" {
 			parts = append(parts, tools)
 		}
 	}
-	if attachments := strings.TrimSpace(attachmentPlaceholders(msg.Attachments)); attachments != "" {
+
+	if attachments := strings.TrimSpace(
+		attachmentPlaceholders(msg.Attachments),
+	); attachments != "" {
 		parts = append(parts, attachments)
 	}
+
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
@@ -158,26 +178,32 @@ func normalizeConversationText(text string, maxRunes int, conversationOnly bool)
 	lines := strings.Split(text, "\n")
 	out := make([]string, 0, len(lines))
 	lastBlank := false
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if conversationOnly && shouldDropConversationOnlyLine(line) {
 			continue
 		}
+
 		if line == "" {
 			if lastBlank {
 				continue
 			}
+
 			out = append(out, "")
 			lastBlank = true
 			continue
 		}
+
 		out = append(out, line)
 		lastBlank = false
 	}
+
 	text = strings.TrimSpace(strings.Join(out, "\n"))
 	if text == "" {
 		return ""
 	}
+
 	return capRunes(text, maxRunes)
 }
 
@@ -187,10 +213,12 @@ func capRunes(text string, maxRunes int) string {
 	if maxRunes <= 0 {
 		return text
 	}
+
 	runes := []rune(text)
 	if len(runes) <= maxRunes {
 		return text
 	}
+
 	return string(runes[:maxRunes]) + "..."
 }
 
@@ -198,9 +226,11 @@ func shouldDropConversationOnlyLine(line string) bool {
 	if line == "" {
 		return false
 	}
+
 	if _, ok := conversationOnlyExactDrops[line]; ok {
 		return true
 	}
+
 	return conversationOnlyImageLineRe.MatchString(line)
 }
 
@@ -212,21 +242,25 @@ func textWithTools(text string, names []string, msg Message, opts ShapeOptions) 
 	if !msg.HasTools {
 		return text, true
 	}
+
 	// The conversation-only view is prose, so it renders no tool lines and keeps
 	// a turn only for what it said.
 	if opts.ConversationOnly {
 		return text, text != ""
 	}
+
 	toolText := renderToolText(opts.ToolOnly, names, msg.Tools)
 	if toolText == "" {
 		// The omit mode renders no tools, so a tool-only turn has nothing to show
 		// while one that also carried prose keeps the prose.
 		return text, text != ""
 	}
+
 	// A tool-only turn is entirely its calls, so their position is unambiguous.
 	if text == "" {
 		return toolText, true
 	}
+
 	return text + "\n" + labeledToolBlock(opts.ToolOnly, names, toolText), true
 }
 
@@ -245,8 +279,10 @@ func labeledToolBlock(mode ToolOnlyMode, names []string, toolText string) string
 		if len(names) == 0 {
 			return mixedTurnToolHeading
 		}
+
 		return "[tool calls in this turn: " + strings.Join(names, ", ") + "]"
 	}
+
 	return mixedTurnToolHeading + "\n" + toolText
 }
 
@@ -272,6 +308,7 @@ func toolSummaryText(names []string) string {
 	if len(names) == 0 {
 		return "[used tools]"
 	}
+
 	return "[used: " + strings.Join(names, ", ") + "]"
 }
 
@@ -283,14 +320,17 @@ func toolInputSummaryText(tools []ToolCall) string {
 	if len(tools) == 0 {
 		return "[used tools]"
 	}
+
 	lines := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		line := "[tool: " + tool.Name + "]"
 		if description := toolInputDescription(tool.Input); description != "" {
 			line += " " + description
 		}
+
 		lines = append(lines, line)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -298,10 +338,12 @@ func toolInputDescription(input ToolInputJSON) string {
 	if input.Len() == 0 {
 		return ""
 	}
+
 	var parsed toolDescriptionInput
 	if err := json.Unmarshal(input.Raw, &parsed); err != nil {
 		return ""
 	}
+
 	return strings.TrimSpace(parsed.Description)
 }
 
@@ -309,6 +351,7 @@ func toolFullDetailText(tools []ToolCall) string {
 	if len(tools) == 0 {
 		return "[used tools]"
 	}
+
 	lines := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		// The call's display text and its output are separate pieces of what the
@@ -318,12 +361,15 @@ func toolFullDetailText(tools []ToolCall) string {
 		if display := strings.TrimSpace(tool.Display); display != "" {
 			line += " " + display
 		}
+
 		if strings.TrimSpace(tool.Output) != "" {
 			line += "\n[tool output]\n" + strings.TrimSpace(tool.Output)
 		}
+
 		line += attachmentPlaceholders(tool.Attachments)
 		lines = append(lines, line)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -331,76 +377,97 @@ func attachmentPlaceholders(attachments []Attachment) string {
 	if len(attachments) == 0 {
 		return ""
 	}
+
 	lines := make([]string, 0, len(attachments))
 	for _, attachment := range attachments {
 		parts := make([]string, 0, 10)
 		if attachment.Kind != "" {
 			parts = append(parts, attachment.Kind)
 		}
+
 		if attachment.DisplayName != "" {
 			parts = append(parts, attachment.DisplayName)
 		}
+
 		if attachment.Path != "" {
 			parts = append(parts, attachment.Path)
 		}
+
 		if attachment.URL != "" {
 			parts = append(parts, attachment.URL)
 		}
+
 		if attachment.MIMEType != "" {
 			parts = append(parts, attachment.MIMEType)
 		}
+
 		if attachment.SizeBytes > 0 {
 			parts = append(parts, fmt.Sprintf("%d bytes", attachment.SizeBytes))
 		}
+
 		if attachment.Description != "" {
 			parts = append(parts, attachment.Description)
 		}
+
 		if attachment.AssetReference != "" {
 			parts = append(parts, attachment.AssetReference)
 		}
+
 		if attachment.OmittedReason != "" {
 			parts = append(parts, attachment.OmittedReason)
 		}
+
 		if attachment.Text != "" {
 			parts = append(parts, attachment.Text)
 		}
+
 		if len(parts) == 0 {
 			parts = append(parts, "metadata unavailable")
 		}
+
 		lines = append(lines, "[attachment: "+strings.Join(parts, ", ")+"]")
 	}
+
 	return "\n" + strings.Join(lines, "\n")
 }
 
 // RenderMarkdownConversation is part of Clyde's typed adapter surface.
 func RenderMarkdownConversation(turns []ConversationTurn) string {
 	var b strings.Builder
+
 	for _, turn := range turns {
 		role := "User"
 		if turn.Role == "assistant" {
 			role = "Assistant"
 		}
+
 		if !turn.Timestamp.IsZero() {
 			fmt.Fprintf(&b, "### %s (%s)\n\n", role, turn.Timestamp.Format("2006-01-02 15:04"))
 		} else {
 			fmt.Fprintf(&b, "### %s\n\n", role)
 		}
+
 		if turn.Text != "" {
 			b.WriteString(turn.Text)
 			b.WriteString("\n\n")
 		}
+
 		if turn.Thinking != "" {
 			b.WriteString("> Thinking\n>\n")
+
 			for line := range strings.SplitSeq(turn.Thinking, "\n") {
 				b.WriteString("> " + line + "\n")
 			}
+
 			b.WriteString("\n")
 		}
+
 		if placeholders := attachmentPlaceholders(turn.Attachments); placeholders != "" {
 			b.WriteString(strings.TrimPrefix(placeholders, "\n"))
 			b.WriteString("\n\n")
 		}
 	}
+
 	return strings.TrimSpace(b.String())
 }
 
@@ -408,29 +475,51 @@ func RenderMarkdownConversation(turns []ConversationTurn) string {
 func RenderHTMLConversation(turns []ConversationTurn) string {
 	var b strings.Builder
 	b.WriteString("<div class=\"conversation\">\n")
+
 	for _, turn := range turns {
 		role := "User"
 		if turn.Role == "assistant" {
 			role = "Assistant"
 		}
+
 		b.WriteString("<section class=\"turn\">\n")
 		b.WriteString("<header><strong>" + html.EscapeString(role) + "</strong>")
 		if !turn.Timestamp.IsZero() {
-			b.WriteString(" <time>" + html.EscapeString(turn.Timestamp.Format("2006-01-02 15:04")) + "</time>")
+			b.WriteString(
+				" <time>" + html.EscapeString(
+					turn.Timestamp.Format("2006-01-02 15:04"),
+				) + "</time>",
+			)
 		}
+
 		b.WriteString("</header>\n")
 		if turn.Text != "" {
 			b.WriteString("<p>" + html.EscapeString(turn.Text) + "</p>\n")
 		}
+
 		if turn.Thinking != "" {
-			b.WriteString("<blockquote><strong>Thinking</strong><br>" + strings.ReplaceAll(html.EscapeString(turn.Thinking), "\n", "<br>") + "</blockquote>\n")
+			b.WriteString(
+				"<blockquote><strong>Thinking</strong><br>" + strings.ReplaceAll(
+					html.EscapeString(turn.Thinking),
+					"\n",
+					"<br>",
+				) + "</blockquote>\n",
+			)
 		}
+
 		for _, attachment := range turn.Attachments {
-			b.WriteString("<p>" + html.EscapeString(strings.TrimSpace(attachmentPlaceholders([]Attachment{attachment}))) + "</p>\n")
+			b.WriteString(
+				"<p>" + html.EscapeString(
+					strings.TrimSpace(attachmentPlaceholders([]Attachment{attachment})),
+				) + "</p>\n",
+			)
 		}
+
 		b.WriteString("</section>\n")
 	}
+
 	b.WriteString("</div>")
+
 	return b.String()
 }
 
@@ -441,5 +530,6 @@ func RenderJSONConversation(turns []ConversationTurn) ([]byte, error) {
 		slog.Warn("transcript.conversation.marshal_failed", "concern", "transcript", "err", err)
 		return nil, fmt.Errorf("marshal conversation JSON: %w", err)
 	}
+
 	return out, nil
 }

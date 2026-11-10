@@ -14,12 +14,15 @@ import (
 // canonical name, failing the test if it is absent.
 func exportParam(t *testing.T, canonical string) Param[exportInput] {
 	t.Helper()
+
 	for _, p := range exportTranscriptOp().Params {
 		if p.Canonical == canonical {
 			return p
 		}
 	}
+
 	t.Fatalf("export op has no parameter %q", canonical)
+
 	return Param[exportInput]{}
 }
 
@@ -32,9 +35,11 @@ func TestExportOnlyParamShape(t *testing.T) {
 	if only.Kind != KindEnumList {
 		t.Errorf("only kind = %d, want KindEnumList", only.Kind)
 	}
+
 	if !only.Required {
 		t.Errorf("only should be required")
 	}
+
 	if !slices.Equal(only.Values, conv.ContentKindSelectorValues()) {
 		t.Errorf("only values = %v, want %v", only.Values, conv.ContentKindSelectorValues())
 	}
@@ -43,19 +48,30 @@ func TestExportOnlyParamShape(t *testing.T) {
 	if stdout.Kind != KindBool {
 		t.Errorf("stdout kind = %d, want KindBool", stdout.Kind)
 	}
+
 	if stdout.CLIOnly {
 		t.Errorf("mcp does not make stdout available")
 	}
 
 	for _, canonical := range []string{
-		"chat", "thinking", "tool_calls", "tool_outputs",
-		"system_prompts", "system_messages", "raw_json_metadata", "tools", "all",
-		"preserve", "tidy", "dense",
+		"chat",
+		"thinking",
+		"tool_calls",
+		"tool_outputs",
+		"system_prompts",
+		"system_messages",
+		"raw_json_metadata",
+		"tools",
+		"all",
+		"preserve",
+		"tidy",
+		"dense",
 	} {
 		shortcut := exportParam(t, canonical)
 		if shortcut.Kind != KindBool {
 			t.Errorf("shortcut %q kind = %d, want KindBool", canonical, shortcut.Kind)
 		}
+
 		if !shortcut.CLIOnly {
 			t.Errorf("shortcut %q should be CLI-only", canonical)
 		}
@@ -76,12 +92,16 @@ func TestExportSelectorsAppendKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
+
 	want := []conv.ContentKind{
-		conv.ContentKindChat, conv.ContentKindThinking, conv.ContentKindToolSummaries,
+		conv.ContentKindChat,
+		conv.ContentKindThinking,
+		conv.ContentKindToolSummaries,
 	}
 	if got := set.Kinds(); !slices.Equal(got, want) {
 		t.Errorf("resolved kinds = %v, want %v", got, want)
 	}
+
 	if set.Has(conv.ContentKindSystemPrompts) {
 		t.Errorf("system_prompts should be absent")
 	}
@@ -108,24 +128,36 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 	if only == nil {
 		t.Fatal("missing --only flag")
 	}
+
 	if only.Value.Type() == "bool" {
 		t.Errorf("--only should be a list flag, got type %s", only.Value.Type())
 	}
 
 	for _, name := range []string{
-		"chat", "thinking", "tool-calls", "tool-outputs",
-		"system-prompts", "system-messages", "raw-json-metadata", "tools", "all",
-		"preserve", "tidy", "dense",
+		"chat",
+		"thinking",
+		"tool-calls",
+		"tool-outputs",
+		"system-prompts",
+		"system-messages",
+		"raw-json-metadata",
+		"tools",
+		"all",
+		"preserve",
+		"tidy",
+		"dense",
 	} {
 		flag := cmd.Flags().Lookup(name)
 		if flag == nil {
 			t.Errorf("missing shortcut flag --%s", name)
 			continue
 		}
+
 		if flag.Value.Type() != "bool" {
 			t.Errorf("--%s type = %s, want bool", name, flag.Value.Type())
 		}
 	}
+
 	if cmd.Flags().Lookup("compact") != nil {
 		t.Error("removed whitespace shortcut --compact should not exist")
 	}
@@ -134,6 +166,7 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 	if stdout == nil {
 		t.Fatal("missing --stdout flag")
 	}
+
 	if stdout.Value.Type() != "bool" {
 		t.Errorf("--stdout type = %s, want bool", stdout.Value.Type())
 	}
@@ -149,7 +182,15 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 		}
 	}
 
-	for _, gone := range []string{"compaction-scope", "compaction-detail", "compaction-checkpoint", "no-thinking", "no-chat", "with-tool-outputs", "include-chat"} {
+	for _, gone := range []string{
+		"compaction-scope",
+		"compaction-detail",
+		"compaction-checkpoint",
+		"no-thinking",
+		"no-chat",
+		"with-tool-outputs",
+		"include-chat",
+	} {
 		if cmd.Flags().Lookup(gone) != nil {
 			t.Errorf("old flag --%s should be removed", gone)
 		}
@@ -170,30 +211,45 @@ func TestExportMCPOnlyIsRequiredArray(t *testing.T) {
 	if !ok {
 		t.Fatal("mcp tool missing only property")
 	}
+
 	schema, ok := prop.(map[string]any)
 	if !ok {
 		t.Fatalf("only property is %T, want map", prop)
 	}
+
 	if schema["type"] != "array" {
 		t.Errorf("only type = %v, want array", schema["type"])
 	}
+
 	if !slices.Contains(tool.InputSchema.Required, "only") {
 		t.Errorf("only should be required, required = %v", tool.InputSchema.Required)
 	}
+
 	for _, name := range []string{"include_compactions", "full_history", "last_n"} {
 		if _, present := tool.InputSchema.Properties[name]; !present {
 			t.Errorf("mcp tool missing %s property", name)
 		}
 	}
+
 	for _, gone := range []string{"compaction_scope", "compaction_detail", "compaction_checkpoint"} {
 		if _, present := tool.InputSchema.Properties[gone]; present {
 			t.Errorf("old mcp property %q should be removed", gone)
 		}
 	}
+
 	if _, present := tool.InputSchema.Properties["stdout"]; !present {
 		t.Errorf("mcp export schema does not include stdout")
 	}
-	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "preserve", "tidy", "dense"} {
+
+	for _, cliOnly := range []string{
+		"chat",
+		"thinking",
+		"tools",
+		"all",
+		"preserve",
+		"tidy",
+		"dense",
+	} {
 		if _, present := tool.InputSchema.Properties[cliOnly]; present {
 			t.Errorf("cli-only property %q should not appear on the MCP surface", cliOnly)
 		}
@@ -213,6 +269,7 @@ func TestExportMCPDecodeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
+
 	for _, want := range []conv.ContentKind{conv.ContentKindChat, conv.ContentKindToolSummaries} {
 		if !set.Has(want) {
 			t.Errorf("decoded set missing %s", want)
@@ -229,6 +286,7 @@ func TestExportWhitespaceShortcutPrepare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
+
 	if payload.Options.Whitespace != conv.WhitespaceDense {
 		t.Fatalf("whitespace = %q, want %q", payload.Options.Whitespace, conv.WhitespaceDense)
 	}
@@ -236,26 +294,34 @@ func TestExportWhitespaceShortcutPrepare(t *testing.T) {
 
 func TestExportCLIRejectsMultipleWhitespaceSelectors(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name  string
 		flags []string
 	}{
 		{name: "two shortcuts", flags: []string{"--only", "chat", "--dense", "--tidy"}},
-		{name: "enum and shortcut", flags: []string{"--only", "chat", "--whitespace", "compact", "--dense"}},
+		{
+			name:  "enum and shortcut",
+			flags: []string{"--only", "chat", "--whitespace", "compact", "--dense"},
+		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			var out bytes.Buffer
-			cmd := exportTranscriptOp().cobraCommand(testFactory(&out))
-			if err := cmd.ParseFlags(tc.flags); err != nil {
-				t.Fatalf("ParseFlags: %v", err)
-			}
-			err := cmd.PreRunE(cmd, []string{"claude:probe"})
-			if err == nil {
-				t.Fatal("expected whitespace selector conflict")
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
+				var out bytes.Buffer
+				cmd := exportTranscriptOp().cobraCommand(testFactory(&out))
+				if err := cmd.ParseFlags(tc.flags); err != nil {
+					t.Fatalf("ParseFlags: %v", err)
+				}
+
+				err := cmd.PreRunE(cmd, []string{"claude:probe"})
+				if err == nil {
+					t.Fatal("expected whitespace selector conflict")
+				}
+			},
+		)
 	}
 }
 
@@ -270,31 +336,61 @@ func TestExportPrepareResolvesDestinations(t *testing.T) {
 		wantOutputPath string
 		wantStdout     bool
 	}{
-		{name: "default file", outputPath: "", stdout: false, wantOutputPath: "", wantStdout: false},
-		{name: "explicit file", outputPath: "transcript.md", stdout: false, wantOutputPath: "transcript.md", wantStdout: false},
+		{
+			name:           "default file",
+			outputPath:     "",
+			stdout:         false,
+			wantOutputPath: "",
+			wantStdout:     false,
+		},
+		{
+			name:           "explicit file",
+			outputPath:     "transcript.md",
+			stdout:         false,
+			wantOutputPath: "transcript.md",
+			wantStdout:     false,
+		},
 		{name: "stdout flag", outputPath: "", stdout: true, wantOutputPath: "", wantStdout: true},
-		{name: "dash output", outputPath: "-", stdout: false, wantOutputPath: "-", wantStdout: true},
-		{name: "both stdout spellings", outputPath: "-", stdout: true, wantOutputPath: "-", wantStdout: true},
+		{
+			name:           "dash output",
+			outputPath:     "-",
+			stdout:         false,
+			wantOutputPath: "-",
+			wantStdout:     true,
+		},
+		{
+			name:           "both stdout spellings",
+			outputPath:     "-",
+			stdout:         true,
+			wantOutputPath: "-",
+			wantStdout:     true,
+		},
 	}
 	op := exportTranscriptOp()
+
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			in := op.New()
-			in.Kinds = []string{"chat"}
-			in.OutputPath = tc.outputPath
-			in.Stdout = tc.stdout
-			payload, err := op.Prepare(in)
-			if err != nil {
-				t.Fatalf("Prepare: %v", err)
-			}
-			if payload.OutputPath != tc.wantOutputPath {
-				t.Errorf("OutputPath = %q, want %q", payload.OutputPath, tc.wantOutputPath)
-			}
-			if payload.Stdout != tc.wantStdout {
-				t.Errorf("Stdout = %t, want %t", payload.Stdout, tc.wantStdout)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				t.Parallel()
+				in := op.New()
+				in.Kinds = []string{"chat"}
+				in.OutputPath = tc.outputPath
+				in.Stdout = tc.stdout
+				payload, err := op.Prepare(in)
+				if err != nil {
+					t.Fatalf("Prepare: %v", err)
+				}
+
+				if payload.OutputPath != tc.wantOutputPath {
+					t.Errorf("OutputPath = %q, want %q", payload.OutputPath, tc.wantOutputPath)
+				}
+
+				if payload.Stdout != tc.wantStdout {
+					t.Errorf("Stdout = %t, want %t", payload.Stdout, tc.wantStdout)
+				}
+			},
+		)
 	}
 }
 
@@ -324,6 +420,7 @@ func TestExportPrepareCompactionControls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare rejected default selector: %v", err)
 	}
+
 	if payload.Options.Compaction.IncludeSelector != "0" {
 		t.Fatalf("selector = %q, want 0", payload.Options.Compaction.IncludeSelector)
 	}
@@ -335,6 +432,7 @@ func TestExportPrepareCompactionControls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare rejected full history: %v", err)
 	}
+
 	if payload.Options.Compaction.IncludeSelector != "all" {
 		t.Fatalf("selector = %q, want all", payload.Options.Compaction.IncludeSelector)
 	}
@@ -346,6 +444,7 @@ func TestExportPrepareCompactionControls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare rejected trimmed all selector: %v", err)
 	}
+
 	if payload.Options.Compaction.IncludeSelector != "all" {
 		t.Fatalf("selector = %q, want all", payload.Options.Compaction.IncludeSelector)
 	}
@@ -377,27 +476,35 @@ func TestExportTailPrepareUsesDenseMarkdownChatAndTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
+
 	if payload.ConversationID != "claude:probe" {
 		t.Fatalf("ConversationID = %q, want claude:probe", payload.ConversationID)
 	}
+
 	if payload.Options.Format != conv.ExportFormatMarkdown {
 		t.Fatalf("format = %q, want markdown", payload.Options.Format)
 	}
+
 	if payload.Options.Whitespace != conv.WhitespaceDense {
 		t.Fatalf("whitespace = %q, want dense", payload.Options.Whitespace)
 	}
+
 	if payload.Options.LastN != 12 {
 		t.Fatalf("last_n = %d, want 12", payload.Options.LastN)
 	}
+
 	if payload.Options.Compaction.IncludeSelector != "0" {
 		t.Fatalf("selector = %q, want 0", payload.Options.Compaction.IncludeSelector)
 	}
+
 	if !payload.Options.Content.Has(conv.ContentKindChat) {
 		t.Fatal("tail content missing chat")
 	}
+
 	if !payload.Options.Content.Has(conv.ContentKindToolSummaries) {
 		t.Fatal("tail content missing tool summaries")
 	}
+
 	if payload.Options.Content.Has(conv.ContentKindToolOutputs) {
 		t.Fatal("tail content should not include tool outputs")
 	}
@@ -410,7 +517,6 @@ func TestExportTailRequiresLastN(t *testing.T) {
 	in.ConversationID = "claude:probe"
 
 	_, err := op.Prepare(in)
-
 	if err == nil {
 		t.Fatal("expected missing last_n error")
 	}

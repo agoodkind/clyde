@@ -91,17 +91,21 @@ func NewTranscriptRouter(cfg TranscriptRouterConfig) *TranscriptRouter {
 	if cfg.PoolCap <= 0 {
 		cfg.PoolCap = transcriptDefaultPoolCap
 	}
+
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+
 	return &TranscriptRouter{
 		state: &transcriptRouterState{
 			cfg:   cfg,
-			cache: make(map[string]*transcriptHandle, cfg.PoolCap), mu: sync.
+			cache: make(map[string]*transcriptHandle, cfg.PoolCap),
+			mu: sync.
 				Mutex{},
 
 			order: nil,
-		}, attrs: nil,
+		},
+		attrs: nil,
 
 		// Enabled implements [slog.Handler]. The router is unconditionally enabled at
 		// the level the caller produced; the allowlist filters by msg name later.
@@ -125,10 +129,12 @@ func (r *TranscriptRouter) Handle(ctx context.Context, record slog.Record) error
 	if _, ok := transcriptAllowlist[record.Message]; !ok {
 		return nil
 	}
+
 	chatKey, _ := r.extractKeys(record)
 	if chatKey == "" {
 		return nil
 	}
+
 	sanitized := sanitizeChatKey(chatKey)
 	if sanitized == "" {
 		return nil
@@ -138,11 +144,17 @@ func (r *TranscriptRouter) Handle(ctx context.Context, record slog.Record) error
 
 	payload, err := r.encodeRecord(record)
 	if err != nil {
-		slog.WarnContext(ctx, "transcript.encode_failed",
-			"component", "transcript-router",
-			"err", err,
-			"msg_name", record.Message,
+		slog.WarnContext(
+			ctx,
+			"transcript.encode_failed",
+			"component",
+			"transcript-router",
+			"err",
+			err,
+			"msg_name",
+			record.Message,
 		)
+
 		return fmt.Errorf("transcript: encode record: %w", err)
 	}
 
@@ -152,15 +164,23 @@ func (r *TranscriptRouter) Handle(ctx context.Context, record slog.Record) error
 	if err != nil {
 		return err
 	}
+
 	_, err = handle.file.Write(payload)
 	if err != nil {
-		slog.WarnContext(ctx, "transcript.write_failed",
-			"component", "transcript-router",
-			"err", err,
-			"path", handle.path,
+		slog.WarnContext(
+			ctx,
+			"transcript.write_failed",
+			"component",
+			"transcript-router",
+			"err",
+			err,
+			"path",
+			handle.path,
 		)
+
 		return fmt.Errorf("transcript: write %s: %w", handle.path, err)
 	}
+
 	return nil
 }
 
@@ -189,19 +209,26 @@ func (r *TranscriptRouter) Close() error {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
 	var errs []error
+
 	for _, h := range r.state.cache {
 		err := h.file.Close()
 		if err != nil {
-			slog.Warn("transcript.close_failed",
-				"component", "transcript-router",
-				"path", h.path,
-				"err", err,
+			slog.Warn(
+				"transcript.close_failed",
+				"component",
+				"transcript-router",
+				"path",
+				h.path,
+				"err",
+				err,
 			)
 			errs = append(errs, err)
 		}
 	}
+
 	r.state.cache = map[string]*transcriptHandle{}
 	r.state.order = nil
+
 	return errors.Join(errs...)
 }
 
@@ -214,6 +241,7 @@ func (r *TranscriptRouter) extractKeys(record slog.Record) (chatKey, requestID s
 			requestID = attr.Value.String()
 		}
 	}
+
 	record.Attrs(func(attr slog.Attr) bool {
 		switch attr.Key {
 		case chatKeyAttr:
@@ -221,8 +249,10 @@ func (r *TranscriptRouter) extractKeys(record slog.Record) (chatKey, requestID s
 		case requestIDAttr:
 			requestID = attr.Value.String()
 		}
+
 		return true
 	})
+
 	return strings.TrimSpace(chatKey), strings.TrimSpace(requestID)
 }
 
@@ -232,66 +262,81 @@ func (r *TranscriptRouter) encodeRecord(record slog.Record) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transcript: marshal time: %w", err)
 	}
+
 	out["time"] = tsBytes
 	lvlBytes, err := json.Marshal(record.Level.String())
 	if err != nil {
 		return nil, fmt.Errorf("transcript: marshal level: %w", err)
 	}
+
 	out["level"] = lvlBytes
 	msgBytes, err := json.Marshal(record.Message)
 	if err != nil {
 		return nil, fmt.Errorf("transcript: marshal msg: %w", err)
 	}
+
 	out["msg"] = msgBytes
 
 	addAttr := func(attr slog.Attr) error {
 		if _, drop := transcriptStrippedBodyFields[attr.Key]; drop {
 			return nil
 		}
+
 		raw, err := json.Marshal(attr.Value.Any())
 		if err != nil {
-			slog.Warn("transcript.marshal_attr_failed",
-				"component", "transcript-router",
-				"attr_key", attr.Key,
-				"err", err,
+			slog.Warn(
+				"transcript.marshal_attr_failed",
+				"component",
+				"transcript-router",
+				"attr_key",
+				attr.Key,
+				"err",
+				err,
 			)
+
 			return fmt.Errorf("transcript: marshal attr %q: %w", attr.Key, err)
 		}
+
 		out[attr.Key] = raw
+
 		return nil
 	}
 	for _, attr := range r.attrs {
 		if attr.Key == "" {
 			continue
 		}
+
 		err = addAttr(attr)
 		if err != nil {
 			return nil, err
 		}
 	}
+
 	var attrErr error
 	record.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == "" {
 			return true
 		}
+
 		err := addAttr(attr)
 		if err != nil {
 			attrErr = err
 			return false
 		}
+
 		return true
 	})
 	if attrErr != nil {
 		return nil, attrErr
 	}
+
 	encoded, err := json.Marshal(out)
 	if err != nil {
-		slog.Warn("transcript.marshal_record_failed",
-			"component", "transcript-router",
-			"err", err,
-		)
+		slog.Warn("transcript.marshal_record_failed", "component", "transcript-router", "err", err)
+
 		return nil, fmt.Errorf("transcript: marshal record: %w", err)
 	}
+
 	return append(encoded, '\n'), nil
 }
 
@@ -300,39 +345,60 @@ func (s *transcriptRouterState) acquireLocked(relPath string) (*transcriptHandle
 		s.touchLocked(relPath)
 		return h, nil
 	}
+
 	if len(s.cache) >= s.cfg.PoolCap {
 		err := s.evictOldestLocked()
 		if err != nil {
 			return nil, err
 		}
 	}
+
 	full := filepath.Join(s.cfg.Root, relPath)
 	err := os.MkdirAll(filepath.Dir(full), transcriptDirPerm)
 	if err != nil {
-		slog.Warn("transcript.mkdir_failed",
-			"component", "transcript-router",
-			"path", filepath.Dir(full),
-			"err", err,
+		slog.Warn(
+			"transcript.mkdir_failed",
+			"component",
+			"transcript-router",
+			"path",
+			filepath.Dir(full),
+			"err",
+			err,
 		)
+
 		return nil, fmt.Errorf("transcript: mkdir %s: %w", filepath.Dir(full), err)
 	}
+
 	rotation := s.cfg.Rotation
 	if rotation.MaxSizeMB <= 0 {
-		rotation = RotationPolicy{Enabled: true, MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 7, Compress: nil}
+		rotation = RotationPolicy{
+			Enabled:    true,
+			MaxSizeMB:  1,
+			MaxBackups: 1,
+			MaxAgeDays: 7,
+			Compress:   nil,
+		}
 	}
+
 	var writer io.WriteCloser
 	if rotation.Enabled {
-		writer = gklog.NewLockedWriteCloser(full, gklog.NewLumberjackWriterWithConfig(full, rotationConfig(rotation)))
+		writer = gklog.NewLockedWriteCloser(
+			full,
+			gklog.NewLumberjackWriterWithConfig(full, rotationConfig(rotation)),
+		)
 	} else {
 		file, err := os.OpenFile(full, os.O_APPEND|os.O_CREATE|os.O_WRONLY, transcriptFilePerm)
 		if err != nil {
 			return nil, fmt.Errorf("transcript: open %s: %w", full, err)
 		}
+
 		writer = gklog.NewLockedWriteCloser(full, file)
 	}
+
 	h := &transcriptHandle{path: full, file: writer}
 	s.cache[relPath] = h
 	s.order = append(s.order, relPath)
+
 	return h, nil
 }
 
@@ -343,6 +409,7 @@ func (s *transcriptRouterState) touchLocked(relPath string) {
 			break
 		}
 	}
+
 	s.order = append(s.order, relPath)
 }
 
@@ -350,22 +417,30 @@ func (s *transcriptRouterState) evictOldestLocked() error {
 	if len(s.order) == 0 {
 		return nil
 	}
+
 	victim := s.order[0]
 	s.order = s.order[1:]
 	h, ok := s.cache[victim]
 	if !ok {
 		return nil
 	}
+
 	delete(s.cache, victim)
 	err := h.file.Close()
 	if err != nil {
-		slog.Warn("transcript.evict_close_failed",
-			"component", "transcript-router",
-			"path", h.path,
-			"err", err,
+		slog.Warn(
+			"transcript.evict_close_failed",
+			"component",
+			"transcript-router",
+			"path",
+			h.path,
+			"err",
+			err,
 		)
+
 		return fmt.Errorf("transcript: close evicted %s: %w", h.path, err)
 	}
+
 	return nil
 }
 
@@ -379,9 +454,11 @@ func sanitizeChatKey(s string) string {
 	if s == "" {
 		return ""
 	}
+
 	var b strings.Builder
 	b.Grow(len(s))
 	hasAccepted := false
+
 	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
@@ -391,8 +468,10 @@ func sanitizeChatKey(s string) string {
 			b.WriteRune('_')
 		}
 	}
+
 	if !hasAccepted {
 		return ""
 	}
+
 	return b.String()
 }

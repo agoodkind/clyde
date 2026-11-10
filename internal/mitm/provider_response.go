@@ -17,7 +17,11 @@ import (
 // store. It returns the total wire bytes written to the client and the
 // buffered body bytes. Capture is best-effort: the body buffer caps silently
 // and never affects what the client receives.
-func (p *Proxy) forwardAndCaptureProviderResponse(client *bufio.Writer, resp *http.Response, bodyCap int) (int64, []byte, error) {
+func (p *Proxy) forwardAndCaptureProviderResponse(
+	client *bufio.Writer,
+	resp *http.Response,
+	bodyCap int,
+) (int64, []byte, error) {
 	bodyBuffer := &limitedBuffer{limit: bodyCap, buf: bytes.Buffer{}}
 	chunked := resp.ContentLength < 0
 	header := providerResponseHeader(resp, chunked)
@@ -25,7 +29,9 @@ func (p *Proxy) forwardAndCaptureProviderResponse(client *bufio.Writer, resp *ht
 	if err != nil {
 		return 0, bodyBuffer.Bytes(), err
 	}
+
 	buf := make([]byte, 32*1024)
+
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
@@ -36,17 +42,30 @@ func (p *Proxy) forwardAndCaptureProviderResponse(client *bufio.Writer, resp *ht
 				return responseBytes, bodyBuffer.Bytes(), err
 			}
 		}
+
 		if errors.Is(readErr, io.EOF) {
 			written, err := writeProviderResponseEOF(client, chunked)
 			responseBytes += written
 			if err != nil {
 				return responseBytes, bodyBuffer.Bytes(), err
 			}
+
 			return responseBytes, bodyBuffer.Bytes(), nil
 		}
+
 		if readErr != nil {
-			p.log.Warn("mitm.provider.response.read_body_failed", "concern", "providers.mitm.wire", "err", readErr)
-			return responseBytes, bodyBuffer.Bytes(), fmt.Errorf("read provider response body: %w", readErr)
+			p.log.Warn(
+				"mitm.provider.response.read_body_failed",
+				"concern",
+				"providers.mitm.wire",
+				"err",
+				readErr,
+			)
+
+			return responseBytes, bodyBuffer.Bytes(), fmt.Errorf(
+				"read provider response body: %w",
+				readErr,
+			)
 		}
 	}
 }
@@ -57,13 +76,20 @@ func providerResponseHeader(resp *http.Response, chunked bool) []byte {
 	if chunked {
 		headers.Del("Content-Length")
 		header := headerBlock(resp.Proto+" "+resp.Status+"\r\n", headers)
+
 		return append(header[:len(header)-2], []byte("Transfer-Encoding: chunked\r\n\r\n")...)
 	}
+
 	headers.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+
 	return headerBlock(resp.Proto+" "+resp.Status+"\r\n", headers)
 }
 
-func writeProviderResponseBodyChunk(client *bufio.Writer, chunk []byte, chunked bool) (int64, error) {
+func writeProviderResponseBodyChunk(
+	client *bufio.Writer,
+	chunk []byte,
+	chunked bool,
+) (int64, error) {
 	var written int64
 	if chunked {
 		chunkHeader := fmt.Appendf(nil, "%x\r\n", len(chunk))
@@ -73,11 +99,13 @@ func writeProviderResponseBodyChunk(client *bufio.Writer, chunk []byte, chunked 
 			return written, err
 		}
 	}
+
 	count, err := writeProviderResponseBytes(client, chunk, "body")
 	written += count
 	if err != nil {
 		return written, err
 	}
+
 	if chunked {
 		count, err = writeProviderResponseString(client, "\r\n", "chunk terminator")
 		written += count
@@ -85,40 +113,90 @@ func writeProviderResponseBodyChunk(client *bufio.Writer, chunk []byte, chunked 
 			return written, err
 		}
 	}
+
 	return written, nil
 }
 
 func writeProviderResponseEOF(client *bufio.Writer, chunked bool) (int64, error) {
 	if !chunked {
 		if err := client.Flush(); err != nil {
-			slog.Warn("mitm.provider.response.flush_body_failed", "concern", "providers.mitm.wire", "err", err)
+			slog.Warn(
+				"mitm.provider.response.flush_body_failed",
+				"concern",
+				"providers.mitm.wire",
+				"err",
+				err,
+			)
+
 			return 0, fmt.Errorf("flush provider response body: %w", err)
 		}
+
 		return 0, nil
 	}
+
 	return writeProviderResponseString(client, "0\r\n\r\n", "chunk EOF")
 }
 
 func writeProviderResponseBytes(client *bufio.Writer, chunk []byte, label string) (int64, error) {
 	if _, err := client.Write(chunk); err != nil {
-		slog.Warn("mitm.provider.response.write_client_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
+		slog.Warn(
+			"mitm.provider.response.write_client_failed",
+			"concern",
+			"providers.mitm.wire",
+			"label",
+			label,
+			"err",
+			err,
+		)
+
 		return 0, fmt.Errorf("write provider response %s: %w", label, err)
 	}
+
 	if err := client.Flush(); err != nil {
-		slog.Warn("mitm.provider.response.flush_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
+		slog.Warn(
+			"mitm.provider.response.flush_failed",
+			"concern",
+			"providers.mitm.wire",
+			"label",
+			label,
+			"err",
+			err,
+		)
+
 		return 0, fmt.Errorf("flush provider response %s: %w", label, err)
 	}
+
 	return int64(len(chunk)), nil
 }
 
 func writeProviderResponseString(client *bufio.Writer, text string, label string) (int64, error) {
 	if _, err := client.WriteString(text); err != nil {
-		slog.Warn("mitm.provider.response.write_client_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
+		slog.Warn(
+			"mitm.provider.response.write_client_failed",
+			"concern",
+			"providers.mitm.wire",
+			"label",
+			label,
+			"err",
+			err,
+		)
+
 		return 0, fmt.Errorf("write provider response %s: %w", label, err)
 	}
+
 	if err := client.Flush(); err != nil {
-		slog.Warn("mitm.provider.response.flush_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
+		slog.Warn(
+			"mitm.provider.response.flush_failed",
+			"concern",
+			"providers.mitm.wire",
+			"label",
+			label,
+			"err",
+			err,
+		)
+
 		return 0, fmt.Errorf("flush provider response %s: %w", label, err)
 	}
+
 	return int64(len(text)), nil
 }

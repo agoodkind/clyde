@@ -177,22 +177,41 @@ func DecodeTranscriptEntry(line []byte) (TranscriptEntry, error) {
 	var entry TranscriptEntry
 	entry.Decode = emptyEntryDecode()
 	if !isJSONObject(line) {
-		slog.Warn("providers.claude.parser.entry_not_an_object", "concern", concern, "component", "claude")
+		slog.Warn(
+			"providers.claude.parser.entry_not_an_object",
+			"concern",
+			concern,
+			"component",
+			"claude",
+		)
+
 		return entry, errors.New("decode claude transcript entry: line is not a JSON object")
 	}
+
 	err := json.Unmarshal(line, &entry)
 	if err == nil {
 		entry.Decode = decodeReport(entry.partialFields())
 		return entry, nil
 	}
+
 	// encoding/json reports a field whose type does not match by saving the
 	// error and decoding the remaining keys, and it reports malformed JSON by
 	// stopping where it stands. Re-scanning the line separates the two without
 	// reading the error, and only runs on the failing line.
 	if !json.Valid(line) {
-		slog.Warn("providers.claude.parser.entry_decode_failed", "concern", concern, "component", "claude", "err", err)
+		slog.Warn(
+			"providers.claude.parser.entry_decode_failed",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"err",
+			err,
+		)
+
 		return entry, fmt.Errorf("decode claude transcript entry: %w", err)
 	}
+
 	fields := entry.partialFields()
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) {
@@ -201,10 +220,20 @@ func DecodeTranscriptEntry(line []byte) (TranscriptEntry, error) {
 			fields = append(fields, field)
 		}
 	}
+
 	entry.Decode = EntryDecode{Outcome: EntryDecodePartial, Fields: fields}
-	slog.Debug("providers.claude.parser.entry_field_type_mismatch",
-		"concern", concern, "component", "claude",
-		"fields", fields, "err", err)
+	slog.Debug(
+		"providers.claude.parser.entry_field_type_mismatch",
+		"concern",
+		concern,
+		"component",
+		"claude",
+		"fields",
+		fields,
+		"err",
+		err,
+	)
+
 	return entry, nil
 }
 
@@ -222,7 +251,16 @@ func decodeReport(fields []string) EntryDecode {
 	if len(fields) == 0 {
 		return emptyEntryDecode()
 	}
-	slog.Debug("providers.claude.parser.entry_field_type_mismatch",
-		"concern", concern, "component", "claude", "fields", fields)
+
+	slog.Debug(
+		"providers.claude.parser.entry_field_type_mismatch",
+		"concern",
+		concern,
+		"component",
+		"claude",
+		"fields",
+		fields,
+	)
+
 	return EntryDecode{Outcome: EntryDecodePartial, Fields: fields}
 }

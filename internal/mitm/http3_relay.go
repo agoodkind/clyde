@@ -19,7 +19,10 @@ import (
 
 type h3ParentSessionContextKey struct{}
 
-func h3ContextWithParent(ctx context.Context, parent *livetrack.Session[TunnelMeta]) context.Context {
+func h3ContextWithParent(
+	ctx context.Context,
+	parent *livetrack.Session[TunnelMeta],
+) context.Context {
 	return context.WithValue(ctx, h3ParentSessionContextKey{}, parent)
 }
 
@@ -34,15 +37,26 @@ func (p *Proxy) ServeQUIC(ctx context.Context) error {
 	if len(p.h3Conns) == 0 {
 		return nil
 	}
-	p.log.InfoContext(ctx,
-		"mitm.proxy.quic_started", "concern", "providers.mitm.lifecycle", "base_url", p.base,
-		"capture_dir", p.cfg.CaptureDir,
-		"providers", p.cfg.Providers,
-		"client", p.client,
-		"sockets", len(p.h3Conns),
+
+	p.log.InfoContext(
+		ctx,
+		"mitm.proxy.quic_started",
+		"concern",
+		"providers.mitm.lifecycle",
+		"base_url",
+		p.base,
+		"capture_dir",
+		p.cfg.CaptureDir,
+		"providers",
+		p.cfg.Providers,
+		"client",
+		p.client,
+		"sockets",
+		len(p.h3Conns),
 	)
 	errs := make(chan error, len(p.h3Conns))
 	var wg sync.WaitGroup
+
 	for _, conn := range p.h3Conns {
 		wg.Go(func() {
 			if err := p.serveProviderInterceptedHTTP3(ctx, conn); err != nil {
@@ -50,13 +64,16 @@ func (p *Proxy) ServeQUIC(ctx context.Context) error {
 			}
 		})
 	}
+
 	wg.Wait()
 	close(errs)
+
 	for err := range errs {
 		if err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -64,12 +81,24 @@ func (p *Proxy) serveProviderInterceptedHTTP3(ctx context.Context, pc net.Packet
 	if pc == nil {
 		return fmt.Errorf("mitm h3 packet conn is nil")
 	}
+
 	err := p.providerHTTP3Server(ctx).Serve(pc)
 	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 		return nil
 	}
+
 	wrapped := fmt.Errorf("mitm h3 serve %s: %w", pc.LocalAddr().String(), err)
-	p.log.ErrorContext(ctx, "mitm.proxy.quic_serve_failed", "concern", "providers.mitm.wire", "addr", pc.LocalAddr().String(), "err", wrapped)
+	p.log.ErrorContext(
+		ctx,
+		"mitm.proxy.quic_serve_failed",
+		"concern",
+		"providers.mitm.wire",
+		"addr",
+		pc.LocalAddr().String(),
+		"err",
+		wrapped,
+	)
+
 	return wrapped
 }
 
@@ -79,6 +108,7 @@ func (p *Proxy) providerHTTP3Server(ctx context.Context) *http3.Server {
 	if p.h3Server != nil {
 		return p.h3Server
 	}
+
 	tlsConfig := http3.ConfigureTLSConfig(&tls.Config{
 		MinVersion: tls.VersionTLS13,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -86,10 +116,12 @@ func (p *Proxy) providerHTTP3Server(ctx context.Context) *http3.Server {
 			if host == "" {
 				return nil, fmt.Errorf("http3 client hello missing server name")
 			}
+
 			ca, err := p.mitmCA()
 			if err != nil {
 				return nil, err
 			}
+
 			return ca.leafForHost(host)
 		},
 	})
@@ -101,39 +133,73 @@ func (p *Proxy) providerHTTP3Server(ctx context.Context) *http3.Server {
 		ConnContext: p.providerH3ConnContext(ctx),
 		Logger:      p.log,
 	}
+
 	return p.h3Server
 }
 
-func (p *Proxy) providerH3ConnContext(baseCtx context.Context) func(context.Context, *quic.Conn) context.Context {
+func (p *Proxy) providerH3ConnContext(
+	baseCtx context.Context,
+) func(context.Context, *quic.Conn) context.Context {
 	return func(ctx context.Context, conn *quic.Conn) context.Context {
 		host := normalizeConnectHost(conn.ConnectionState().TLS.ServerName)
 		if host == "" {
 			return ctx
 		}
+
 		provider := providerForHTTP3Host(host)
 		target := net.JoinHostPort(host, "443")
 		providerID := provider.ID().String()
 		parentKind := providerTunnelKind(provider.ID(), "h3.conn")
-		parent, err := p.Tunnels.Register(ctx, parentKind, TunnelMeta{
-			ConnectHost:   host,
-			UpstreamAddr:  target,
-			CaptureFile:   "",
-			KeepaliveSeen: false,
-		}, &quicConnCloser{conn: conn})
+		parent, err := p.Tunnels.Register(
+			ctx,
+			parentKind,
+			TunnelMeta{
+				ConnectHost:   host,
+				UpstreamAddr:  target,
+				CaptureFile:   "",
+				KeepaliveSeen: false,
+			},
+			&quicConnCloser{conn: conn},
+		)
 		if err != nil {
-			p.log.WarnContext(ctx, "mitm.provider.http3.register_rejected", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", err)
+			p.log.WarnContext(
+				ctx,
+				"mitm.provider.http3.register_rejected",
+				"concern",
+				"providers.mitm.wire",
+				"provider",
+				providerID,
+				"host",
+				host,
+				"err",
+				err,
+			)
 			_ = conn.CloseWithError(0, "service draining")
+
 			return ctx
 		}
+
 		go func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					p.log.WarnContext(ctx, "mitm.provider.http3.conn_release_panicked", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "panic", recovered)
+					p.log.WarnContext(
+						ctx,
+						"mitm.provider.http3.conn_release_panicked",
+						"concern",
+						"providers.mitm.wire",
+						"provider",
+						providerID,
+						"host",
+						host,
+						"panic",
+						recovered,
+					)
 				}
 			}()
 			<-conn.Context().Done()
 			p.Tunnels.Release(context.WithoutCancel(baseCtx), parent, parentKind+".closed")
 		}()
+
 		return h3ContextWithParent(ctx, parent)
 	}
 }
@@ -144,6 +210,7 @@ func (p *Proxy) handleProviderH3Stream(w http.ResponseWriter, req *http.Request)
 		http.Error(w, "missing HTTP/3 host", http.StatusBadRequest)
 		return
 	}
+
 	target := net.JoinHostPort(host, "443")
 	provider := providerForHTTP3Host(host)
 	providerID := provider.ID().String()
@@ -159,39 +226,98 @@ func (p *Proxy) handleProviderH3Stream(w http.ResponseWriter, req *http.Request)
 	lifecycleCtx := context.WithoutCancel(reqCtx)
 	closer := &h3StreamCloser{body: req.Body, cancel: cancelStream}
 	streamKind := providerTunnelKind(provider.ID(), "h3")
-	streamSession, registerErr := p.Tunnels.Register(lifecycleCtx, streamKind, TunnelMeta{
-		ConnectHost:   host,
-		UpstreamAddr:  target,
-		CaptureFile:   "",
-		KeepaliveSeen: false,
-	}, closer, livetrack.WithParent(parent))
+	streamSession, registerErr := p.Tunnels.Register(
+		lifecycleCtx,
+		streamKind,
+		TunnelMeta{
+			ConnectHost:   host,
+			UpstreamAddr:  target,
+			CaptureFile:   "",
+			KeepaliveSeen: false,
+		},
+		closer,
+		livetrack.WithParent(parent),
+	)
 	if registerErr != nil {
 		_ = req.Body.Close()
-		if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil || p.Tunnels.State() != livetrack.StateDraining {
-			p.log.WarnContext(lifecycleCtx, "mitm.provider.http3.stream_register_rejected", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
+		if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil ||
+			p.Tunnels.State() != livetrack.StateDraining {
+			p.log.WarnContext(
+				lifecycleCtx,
+				"mitm.provider.http3.stream_register_rejected",
+				"concern",
+				"providers.mitm.wire",
+				"provider",
+				providerID,
+				"host",
+				host,
+				"err",
+				registerErr,
+			)
 		} else {
-			p.log.DebugContext(lifecycleCtx, "mitm.provider.http3.stream_rejected_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
+			p.log.DebugContext(
+				lifecycleCtx,
+				"mitm.provider.http3.stream_rejected_reload_drain",
+				"concern",
+				"providers.mitm.wire",
+				"provider",
+				providerID,
+				"host",
+				host,
+				"err",
+				registerErr,
+			)
 		}
+
 		http.Error(w, "service draining", http.StatusServiceUnavailable)
+
 		return
 	}
+
 	releaseReason := streamKind + ".completed"
 	defer func() {
 		p.Tunnels.Release(lifecycleCtx, streamSession, releaseReason)
 	}()
 
 	sink := &h3ProviderResponseSink{rw: w, session: streamSession, wroteHeader: false}
-	if err := p.handleProviderInterceptedRequest(streamCtx, nil, nil, sink, req, target, host, provider, parent, streamSession); err != nil {
+	if err := p.handleProviderInterceptedRequest(
+		streamCtx,
+		nil,
+		nil,
+		sink,
+		req,
+		target,
+		host,
+		provider,
+		parent,
+		streamSession,
+	); err != nil {
 		releaseReason = streamKind + ".failed"
-		p.log.WarnContext(lifecycleCtx, "mitm.provider.http3.request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
+		p.log.WarnContext(
+			lifecycleCtx,
+			"mitm.provider.http3.request_failed",
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			providerID,
+			"host",
+			host,
+			"path",
+			req.URL.Path,
+			"err",
+			err,
+		)
 		if !sink.wroteHeader {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		}
+
 		return
 	}
+
 	if parent != nil {
 		parent.Touch()
 	}
+
 	streamSession.Touch()
 }
 
@@ -199,16 +325,19 @@ func providerH3RequestHost(req *http.Request) string {
 	if req == nil {
 		return ""
 	}
+
 	host := normalizeConnectHost(req.Host)
 	if host != "" {
 		return host
 	}
+
 	if req.TLS != nil {
 		host = normalizeConnectHost(req.TLS.ServerName)
 		if host != "" {
 			return host
 		}
 	}
+
 	return normalizeConnectHost(req.URL.Host)
 }
 
@@ -217,6 +346,7 @@ func providerForHTTP3Host(host string) Provider {
 	if ok {
 		return provider
 	}
+
 	return unknownProvider{}
 }
 
@@ -224,6 +354,7 @@ func providerTunnelKind(providerID ProviderID, suffix string) string {
 	if providerID == ProviderIDUnknown {
 		return "mitm." + suffix
 	}
+
 	return "mitm." + providerID.String() + "." + suffix
 }
 
@@ -264,9 +395,21 @@ type quicConnResource struct {
 func (q quicConnResource) Close() error {
 	if err := q.conn.CloseWithError(0, q.reason); err != nil {
 		wrapped := fmt.Errorf("close quic conn: %w", err)
-		slog.Warn("mitm.quic.conn_close_failed", "concern", "providers.mitm.wire", "component", "mitm", "reason", q.reason, "err", wrapped)
+		slog.Warn(
+			"mitm.quic.conn_close_failed",
+			"concern",
+			"providers.mitm.wire",
+			"component",
+			"mitm",
+			"reason",
+			q.reason,
+			"err",
+			wrapped,
+		)
+
 		return wrapped
 	}
+
 	return nil
 }
 
@@ -278,6 +421,7 @@ func (c *quicConnCloser) Close(reason string) error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
+
 	return quicConnResource{conn: c.conn, reason: reason}.Close()
 }
 
@@ -290,14 +434,26 @@ func (c *h3StreamCloser) Close(string) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
+
 	if c.body == nil {
 		return nil
 	}
+
 	if err := c.body.Close(); err != nil {
 		wrapped := fmt.Errorf("close h3 stream body: %w", err)
-		slog.Warn("mitm.provider.http3.stream_body_close_failed", "concern", "providers.mitm.wire", "component", "mitm", "err", wrapped)
+		slog.Warn(
+			"mitm.provider.http3.stream_body_close_failed",
+			"concern",
+			"providers.mitm.wire",
+			"component",
+			"mitm",
+			"err",
+			wrapped,
+		)
+
 		return wrapped
 	}
+
 	return nil
 }
 
@@ -307,7 +463,10 @@ type h3ProviderResponseSink struct {
 	wroteHeader bool
 }
 
-func (s *h3ProviderResponseSink) writeProviderResponse(resp *http.Response, bodyCap int) (int64, []byte, error) {
+func (s *h3ProviderResponseSink) writeProviderResponse(
+	resp *http.Response,
+	bodyCap int,
+) (int64, []byte, error) {
 	forwardResponseHeaders(s.rw.Header(), resp.Header)
 	declareResponseTrailers(s.rw.Header(), resp.Trailer)
 	s.wroteHeader = true
@@ -318,6 +477,7 @@ func (s *h3ProviderResponseSink) writeProviderResponse(resp *http.Response, body
 	flusher := &responseControllerFlusher{controller: http.NewResponseController(s.rw)}
 	err := streamWithFlush(counter, captureBuffer, resp.Body, flusher, s.session)
 	copyHeaders(s.rw.Header(), resp.Trailer)
+
 	return counter.bytesWritten, captureBuffer.Bytes(), err
 }
 
@@ -329,6 +489,7 @@ func (f *responseControllerFlusher) Flush() {
 	if f == nil || f.controller == nil {
 		return
 	}
+
 	_ = f.controller.Flush()
 }
 
@@ -338,18 +499,30 @@ func declareResponseTrailers(header http.Header, trailer http.Header) {
 	}
 }
 
-func (p *Proxy) providerHTTP3UpstreamRoundTrip(req *http.Request, target string, host string) (*http.Response, error) {
+func (p *Proxy) providerHTTP3UpstreamRoundTrip(
+	req *http.Request,
+	target string,
+	host string,
+) (*http.Response, error) {
 	resp, err := p.providerHTTP3Transport().RoundTrip(providerUpstreamRequest(req, target, host))
 	if err != nil {
-		p.log.Warn("mitm.provider.http3.upstream_round_trip_failed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-			"host", host,
-			"path", req.URL.Path,
-			"err", err,
+		p.log.Warn(
+			"mitm.provider.http3.upstream_round_trip_failed",
+			"component",
+			"mitm",
+			"concern",
+			"providers.mitm.wire",
+			"host",
+			host,
+			"path",
+			req.URL.Path,
+			"err",
+			err,
 		)
+
 		return nil, fmt.Errorf("provider http3 upstream round trip: %w", err)
 	}
+
 	return resp, nil
 }
 
@@ -359,44 +532,84 @@ func (p *Proxy) providerHTTP3Transport() *http3.Transport {
 	if p.h3Transport != nil {
 		return p.h3Transport
 	}
+
 	p.h3Transport = &http3.Transport{
 		TLSClientConfig:    p.tlsClientConfig,
 		Dial:               p.dialProviderHTTP3,
 		DisableCompression: true,
 	}
+
 	return p.h3Transport
 }
 
-func (p *Proxy) dialProviderHTTP3(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+func (p *Proxy) dialProviderHTTP3(
+	ctx context.Context,
+	addr string,
+	tlsCfg *tls.Config,
+	cfg *quic.Config,
+) (*quic.Conn, error) {
 	remoteAddr, err := p.resolveProviderHTTP3UDPAddr(ctx, addr)
 	if err != nil {
 		return nil, err
 	}
+
 	localConn, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		wrapped := fmt.Errorf("listen h3 upstream udp: %w", err)
-		p.log.WarnContext(ctx, "mitm.provider.http3.upstream_udp_listen_failed", "concern", "providers.mitm.wire", "addr", addr, "err", wrapped)
+		p.log.WarnContext(
+			ctx,
+			"mitm.provider.http3.upstream_udp_listen_failed",
+			"concern",
+			"providers.mitm.wire",
+			"addr",
+			addr,
+			"err",
+			wrapped,
+		)
+
 		return nil, wrapped
 	}
+
 	transport := &quic.Transport{Conn: localConn}
 	conn, err := transport.DialEarly(ctx, remoteAddr, tlsCfg, cfg)
 	if err != nil {
 		_ = transport.Close()
 		_ = localConn.Close()
 		wrapped := fmt.Errorf("dial h3 upstream %s: %w", addr, err)
-		p.log.WarnContext(ctx, "mitm.provider.http3.upstream_dial_failed", "concern", "providers.mitm.wire", "addr", addr, "err", wrapped)
+		p.log.WarnContext(
+			ctx,
+			"mitm.provider.http3.upstream_dial_failed",
+			"concern",
+			"providers.mitm.wire",
+			"addr",
+			addr,
+			"err",
+			wrapped,
+		)
+
 		return nil, wrapped
 	}
+
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				p.log.WarnContext(ctx, "mitm.provider.http3.upstream_conn_cleanup_panicked", "concern", "providers.mitm.wire", "addr", addr, "panic", recovered)
+				p.log.WarnContext(
+					ctx,
+					"mitm.provider.http3.upstream_conn_cleanup_panicked",
+					"concern",
+					"providers.mitm.wire",
+					"addr",
+					addr,
+					"panic",
+					recovered,
+				)
 			}
 		}()
 		<-conn.Context().Done()
 		_ = transport.Close()
 		_ = localConn.Close()
 	}()
+
 	return conn, nil
 }
 
@@ -404,30 +617,75 @@ func (p *Proxy) resolveProviderHTTP3UDPAddr(ctx context.Context, addr string) (n
 	if p.h3ResolveUDPAddr != nil {
 		return p.h3ResolveUDPAddr(ctx, addr)
 	}
+
 	host, portText, err := net.SplitHostPort(addr)
 	if err != nil {
 		wrapped := fmt.Errorf("split h3 upstream addr %q: %w", addr, err)
-		p.log.WarnContext(ctx, "mitm.provider.http3.upstream_addr_split_failed", "concern", "providers.mitm.wire", "addr", addr, "err", wrapped)
+		p.log.WarnContext(
+			ctx,
+			"mitm.provider.http3.upstream_addr_split_failed",
+			"concern",
+			"providers.mitm.wire",
+			"addr",
+			addr,
+			"err",
+			wrapped,
+		)
+
 		return nil, wrapped
 	}
+
 	port, err := net.DefaultResolver.LookupPort(ctx, "udp", portText)
 	if err != nil {
 		wrapped := fmt.Errorf("lookup h3 upstream port %q: %w", portText, err)
-		p.log.WarnContext(ctx, "mitm.provider.http3.upstream_port_lookup_failed", "concern", "providers.mitm.wire", "addr", addr, "err", wrapped)
+		p.log.WarnContext(
+			ctx,
+			"mitm.provider.http3.upstream_port_lookup_failed",
+			"concern",
+			"providers.mitm.wire",
+			"addr",
+			addr,
+			"err",
+			wrapped,
+		)
+
 		return nil, wrapped
 	}
+
 	ipAddrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		wrapped := fmt.Errorf("lookup h3 upstream host %q: %w", host, err)
-		p.log.WarnContext(ctx, "mitm.provider.http3.upstream_host_lookup_failed", "concern", "providers.mitm.wire", "host", host, "err", wrapped)
+		p.log.WarnContext(
+			ctx,
+			"mitm.provider.http3.upstream_host_lookup_failed",
+			"concern",
+			"providers.mitm.wire",
+			"host",
+			host,
+			"err",
+			wrapped,
+		)
+
 		return nil, wrapped
 	}
+
 	for _, ipAddr := range ipAddrs {
 		if ipAddr.IP != nil {
 			return &net.UDPAddr{IP: ipAddr.IP, Port: port, Zone: ipAddr.Zone}, nil
 		}
 	}
+
 	noAddr := fmt.Errorf("lookup h3 upstream host %q returned no addresses", host)
-	p.log.WarnContext(ctx, "mitm.provider.http3.upstream_host_no_addrs", "concern", "providers.mitm.wire", "host", host, "err", noAddr)
+	p.log.WarnContext(
+		ctx,
+		"mitm.provider.http3.upstream_host_no_addrs",
+		"concern",
+		"providers.mitm.wire",
+		"host",
+		host,
+		"err",
+		noAddr,
+	)
+
 	return nil, noAddr
 }

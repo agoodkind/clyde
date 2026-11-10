@@ -13,6 +13,7 @@ func TestSplitRolesDropsEmptyEntries(t *testing.T) {
 	if len(roles) != 2 || roles[0] != "user" || roles[1] != "assistant" {
 		t.Fatalf("roles = %v, want [user assistant]", roles)
 	}
+
 	if splitRoles("  ") != nil {
 		t.Fatal("blank roles input did not return nil")
 	}
@@ -33,9 +34,11 @@ func TestPrepareSearchUsesConversationIDPositional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare scoped search: %v", err)
 	}
+
 	if searchPayload.Mode != searchModeDiscover {
 		t.Fatalf("mode = %v, want discover", searchPayload.Mode)
 	}
+
 	if searchPayload.SearchOpts.ConversationID != "claude:abc" {
 		t.Fatalf("conversation id = %q, want claude:abc", searchPayload.SearchOpts.ConversationID)
 	}
@@ -49,6 +52,7 @@ func TestPrepareSearchUsesConversationIDPositional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare read: %v", err)
 	}
+
 	if readPayload.Mode != searchModeReadConversation {
 		t.Fatalf("mode = %v, want read conversation", readPayload.Mode)
 	}
@@ -69,6 +73,7 @@ func TestPrepareSearchCarriesOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare search: %v", err)
 	}
+
 	if searchPayload.SearchOpts.Offset != 40 {
 		t.Fatalf("search offset = %d, want 40", searchPayload.SearchOpts.Offset)
 	}
@@ -82,6 +87,7 @@ func TestPrepareSearchCarriesOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare browse: %v", err)
 	}
+
 	if browsePayload.ListOpts.Offset != 40 {
 		t.Fatalf("browse offset = %d, want 40", browsePayload.ListOpts.Offset)
 	}
@@ -103,6 +109,7 @@ func TestPrepareSearchCarriesCursorOnlyWithQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare search: %v", err)
 	}
+
 	if searchPayload.SearchOpts.Cursor != "page-two" {
 		t.Fatalf("search cursor = %q, want page-two", searchPayload.SearchOpts.Cursor)
 	}
@@ -116,6 +123,7 @@ func TestPrepareSearchCarriesCursorOnlyWithQuery(t *testing.T) {
 	}); err == nil {
 		t.Fatal("prepare read with a cursor succeeded, want an error")
 	}
+
 	if _, err := prepareSearch(searchInput{
 		Cursor: "page-two",
 		Limit:  20,

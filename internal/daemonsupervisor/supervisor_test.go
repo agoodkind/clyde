@@ -32,18 +32,23 @@ func TestWorkerCommandUsesHiddenWorkerRoleAndReadyFD(t *testing.T) {
 	if strings.Join(cmd.Args, " ") != "/tmp/clyde daemon worker" {
 		t.Fatalf("args = %q, want hidden daemon worker role", strings.Join(cmd.Args, " "))
 	}
+
 	if len(cmd.ExtraFiles) != 1 || cmd.ExtraFiles[0] != readyFile {
 		t.Fatalf("extra files = %v, want readiness writer", cmd.ExtraFiles)
 	}
+
 	if !slices.Contains(cmd.Env, EnvReadyFD+"=3") {
 		t.Fatalf("env does not include %s=3", EnvReadyFD)
 	}
+
 	if !slices.Contains(cmd.Env, EnvSupervisorSocket+"=/tmp/clyde-supervisor.sock") {
 		t.Fatalf("env does not include %s", EnvSupervisorSocket)
 	}
+
 	if slices.Contains(cmd.Env, EnvReloadChild+"=1") {
 		t.Fatalf("env still includes stale reload child marker")
 	}
+
 	if slices.Contains(cmd.Env, EnvInheritedListeners+"=stale-listeners") {
 		t.Fatalf("env still includes stale inherited listeners")
 	}
@@ -60,6 +65,7 @@ func TestWaitForWorkerReadyAcceptsReadyLine(t *testing.T) {
 	if _, err := readyWrite.WriteString("ready\n"); err != nil {
 		t.Fatalf("write readiness: %v", err)
 	}
+
 	if err := readyWrite.Close(); err != nil {
 		t.Fatalf("close readiness writer: %v", err)
 	}
@@ -92,6 +98,7 @@ func TestRequestReplacementSendsRequestAndFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mkdir socket dir: %v", err)
 	}
+
 	t.Cleanup(func() {
 		_ = os.RemoveAll(socketDir)
 	})
@@ -144,31 +151,40 @@ func TestRequestReplacementSendsRequestAndFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request supervisor replacement: %v", err)
 	}
+
 	if pid != 9876 {
 		t.Fatalf("pid = %d, want 9876", pid)
 	}
+
 	if err := <-serverErr; err != nil {
 		t.Fatalf("supervisor server: %v", err)
 	}
+
 	req := <-received
 	if req.ExecutablePath != "/bin/clyde" {
 		t.Fatalf("executable path = %q, want /bin/clyde", req.ExecutablePath)
 	}
+
 	if req.Operation != controlOperationReplace {
 		t.Fatalf("operation = %q, want %q", req.Operation, controlOperationReplace)
 	}
+
 	if !envContains(req.Environment, EnvReloadChild+"=1") {
 		t.Fatalf("environment does not include reload child marker")
 	}
+
 	if !envContains(req.Environment, EnvReadyFD+"=4") {
 		t.Fatalf("environment does not include ready fd")
 	}
+
 	if !envContainsPrefix(req.Environment, EnvInheritedListeners+"=") {
 		t.Fatalf("environment does not include inherited listener specs")
 	}
+
 	if envContains(req.Environment, EnvReadyFD+"=3") {
 		t.Fatalf("environment still includes stale ready fd")
 	}
+
 	if count := <-receivedFileCount; count != 2 {
 		t.Fatalf("received file count = %d, want 2", count)
 	}
@@ -181,9 +197,11 @@ func TestRequestReplacementSendsLargeEnvironment(t *testing.T) {
 	if err := os.RemoveAll(socketDir); err != nil {
 		t.Fatalf("clear stale socket dir: %v", err)
 	}
+
 	if err := os.MkdirAll(socketDir, 0o755); err != nil {
 		t.Fatalf("mkdir socket dir: %v", err)
 	}
+
 	t.Cleanup(func() {
 		_ = os.RemoveAll(socketDir)
 	})
@@ -235,12 +253,15 @@ func TestRequestReplacementSendsLargeEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request supervisor replacement with large environment: %v", err)
 	}
+
 	if pid != 9876 {
 		t.Fatalf("pid = %d, want 9876", pid)
 	}
+
 	if err := <-serverErr; err != nil {
 		t.Fatalf("supervisor server: %v", err)
 	}
+
 	req := <-received
 	if !envContains(req.Environment, "CLYDE_LARGE_ENV="+largeValue) {
 		t.Fatalf("large environment value did not survive the framed round-trip")
@@ -252,6 +273,7 @@ func TestRequestStatusReturnsFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mkdir socket dir: %v", err)
 	}
+
 	t.Cleanup(func() {
 		_ = os.RemoveAll(socketDir)
 	})
@@ -281,6 +303,7 @@ func TestRequestStatusReturnsFingerprint(t *testing.T) {
 			serverErr <- errors.New("wrong operation")
 			return
 		}
+
 		_, writeErr := conn.Write([]byte(`{"pid":4321,"fingerprint":"new-fingerprint"}` + "\n"))
 		serverErr <- writeErr
 	}()
@@ -289,12 +312,15 @@ func TestRequestStatusReturnsFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request status: %v", err)
 	}
+
 	if status.PID != 4321 {
 		t.Fatalf("pid = %d, want 4321", status.PID)
 	}
+
 	if status.Fingerprint != "new-fingerprint" {
 		t.Fatalf("fingerprint = %q, want new-fingerprint", status.Fingerprint)
 	}
+
 	if err := <-serverErr; err != nil {
 		t.Fatalf("supervisor server: %v", err)
 	}
@@ -318,21 +344,27 @@ func TestReplacementWorkerEnvironmentOverridesFDHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("supervisor reload worker environment: %v", err)
 	}
+
 	if !envContains(env, "KEEP=value") {
 		t.Fatalf("environment dropped unrelated variable")
 	}
+
 	if !envContains(env, EnvReadyFD+"=4") {
 		t.Fatalf("environment does not include new ready fd")
 	}
+
 	if !envContains(env, EnvSupervisorSocket+"=/tmp/new.sock") {
 		t.Fatalf("environment does not include new supervisor socket")
 	}
+
 	if envContains(env, EnvReadyFD+"=3") {
 		t.Fatalf("environment still includes stale ready fd")
 	}
+
 	if envContains(env, EnvInheritedListeners+"=stale") {
 		t.Fatalf("environment still includes stale listener specs")
 	}
+
 	if envContains(env, EnvSupervisorSocket+"=/tmp/old.sock") {
 		t.Fatalf("environment still includes stale supervisor socket")
 	}
@@ -359,9 +391,11 @@ func TestSupervisorStopsAbortedAndSupersededWorkers(t *testing.T) {
 	if err := os.RemoveAll(runtimeDir); err != nil {
 		t.Fatalf("clear stale runtime dir: %v", err)
 	}
+
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		t.Fatalf("mkdir runtime dir: %v", err)
 	}
+
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
 
 	pidFilePath := filepath.Join(runtimeDir, "worker-pids")
@@ -370,15 +404,19 @@ func TestSupervisorStopsAbortedAndSupersededWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
 	}
+
 	alive := func(pid int) bool { return syscall.Kill(pid, 0) == nil }
 	waitFor := func(condition func() bool, failure string) {
 		t.Helper()
+
 		for range supervisorTestPollAttempts {
 			if condition() {
 				return
 			}
+
 			time.Sleep(supervisorTestPollInterval)
 		}
+
 		t.Fatal(failure)
 	}
 	requestReplacement := func(ctx context.Context) int {
@@ -389,11 +427,21 @@ func TestSupervisorStopsAbortedAndSupersededWorkers(t *testing.T) {
 		}
 		defer readyRead.Close()
 		defer readyWrite.Close()
-		pid, requestErr := RequestReplacement(ctx, SocketPath(runtimeDir), workerPath, nil, 3, os.Environ(), []*os.File{readyWrite})
+		pid, requestErr := RequestReplacement(
+			ctx,
+			SocketPath(runtimeDir),
+			workerPath,
+			nil,
+			3,
+			os.Environ(),
+			[]*os.File{readyWrite},
+		)
 		if requestErr != nil {
 			t.Fatalf("request replacement: %v", requestErr)
 		}
+
 		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+
 		return pid
 	}
 
@@ -403,24 +451,30 @@ func TestSupervisorStopsAbortedAndSupersededWorkers(t *testing.T) {
 	go func() {
 		supervisorDone <- SuperviseContext(ctx, slog.Default(), runtimeDir)
 	}()
-	waitFor(func() bool {
-		_, statusErr := RequestStatus(ctx, SocketPath(runtimeDir))
-		return statusErr == nil
-	}, "supervisor did not answer a status request")
+	waitFor(
+		func() bool {
+			_, statusErr := RequestStatus(ctx, SocketPath(runtimeDir))
+			return statusErr == nil
+		},
+		"supervisor did not answer a status request",
+	)
 	pidFile, err := os.ReadFile(pidFilePath)
 	if err != nil {
 		t.Fatalf("read worker pid file: %v", err)
 	}
+
 	firstPID, err := strconv.Atoi(strings.Fields(string(pidFile))[0])
 	if err != nil {
 		t.Fatalf("parse first worker pid: %v", err)
 	}
+
 	t.Cleanup(func() { _ = syscall.Kill(firstPID, syscall.SIGKILL) })
 
 	abortedPID := requestReplacement(ctx)
 	if err := RequestAbort(ctx, SocketPath(runtimeDir), abortedPID); err != nil {
 		t.Fatalf("request abort: %v", err)
 	}
+
 	waitFor(func() bool { return !alive(abortedPID) }, "aborted replacement worker is still alive")
 	if !alive(firstPID) {
 		t.Fatal("first worker stopped after its replacement was aborted")
@@ -431,9 +485,11 @@ func TestSupervisorStopsAbortedAndSupersededWorkers(t *testing.T) {
 	if err := <-supervisorDone; err != nil {
 		t.Fatalf("supervisor: %v", err)
 	}
+
 	if alive(secondPID) {
 		t.Fatal("current worker is still alive after the supervisor stopped")
 	}
+
 	if alive(firstPID) {
 		t.Fatal("superseded worker is still alive after the supervisor stopped")
 	}
@@ -455,20 +511,27 @@ func TestMain(m *testing.M) {
 		runTestWorker()
 		return
 	}
+
 	os.Exit(m.Run())
 }
 
 func runTestWorker() {
-	pidFile, err := os.OpenFile(os.Getenv(testWorkerPIDFileEnv), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	pidFile, err := os.OpenFile(
+		os.Getenv(testWorkerPIDFileEnv),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+		0o600,
+	)
 	if err != nil {
 		os.Exit(1)
 	}
+
 	_, _ = fmt.Fprintln(pidFile, os.Getpid())
 	_ = pidFile.Close()
 	readyFD, err := strconv.Atoi(os.Getenv(EnvReadyFD))
 	if err != nil {
 		os.Exit(1)
 	}
+
 	ready := os.NewFile(uintptr(readyFD), "ready")
 	_, _ = ready.WriteString("ready\n")
 	_ = ready.Close()
@@ -481,6 +544,7 @@ func envContains(env []string, want string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -490,6 +554,7 @@ func envContainsPrefix(env []string, prefix string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -498,19 +563,24 @@ func countUnixRights(oob []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+
 	total := 0
+
 	for _, message := range messages {
 		fds, rightsErr := syscall.ParseUnixRights(&message)
 		if rightsErr != nil {
 			if errors.Is(rightsErr, syscall.EINVAL) {
 				continue
 			}
+
 			return 0, rightsErr
 		}
+
 		for _, fd := range fds {
 			total++
 			_ = syscall.Close(fd)
 		}
 	}
+
 	return total, nil
 }

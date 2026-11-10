@@ -23,11 +23,13 @@ func rawCompactionAssistantHasTranscript(item []byte, content []byte, transcript
 	if json.Unmarshal(content, &parts) != nil {
 		return false
 	}
+
 	for _, index := range codexstore.InjectedTranscriptIndexes(item) {
 		if index < len(parts) && parts[index].Text == transcriptText {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -39,22 +41,30 @@ func markRawCompactionTranscriptPart(item []byte, partIndex int) ([]byte, bool) 
 	if !rawCompactionJSONHasUniqueObjectKeys(item) {
 		return item, false
 	}
-	metadataStart, metadataEnd, hasMetadata := jsonObjectFieldValueRange(item, rawCompactionMetadataField)
+
+	metadataStart, metadataEnd, hasMetadata := jsonObjectFieldValueRange(
+		item,
+		rawCompactionMetadataField,
+	)
 	if !hasMetadata {
 		metadata, ok := rawCompactionMetadataWithKinds([]byte("{}"), partIndex)
 		if !ok {
 			return item, false
 		}
+
 		return appendRawCompactionObjectField(item, rawCompactionMetadataField, metadata)
 	}
+
 	existing := item[metadataStart:metadataEnd]
 	if bytes.Equal(existing, []byte("null")) {
 		existing = []byte("{}")
 	}
+
 	metadata, ok := rawCompactionMetadataWithKinds(existing, partIndex)
 	if !ok {
 		return item, false
 	}
+
 	return replaceByteRange(item, metadataStart, metadataEnd, metadata), true
 }
 
@@ -65,22 +75,30 @@ func rawCompactionMetadataWithKinds(metadata []byte, partIndex int) ([]byte, boo
 	if len(metadata) == 0 || metadata[0] != '{' {
 		return nil, false
 	}
-	kindsStart, kindsEnd, hasKinds := jsonObjectFieldValueRange(metadata, rawCompactionContentKindsField)
+
+	kindsStart, kindsEnd, hasKinds := jsonObjectFieldValueRange(
+		metadata,
+		rawCompactionContentKindsField,
+	)
 	if !hasKinds {
 		kinds, ok := rawCompactionContentKinds(nil, partIndex)
 		if !ok {
 			return nil, false
 		}
+
 		return appendRawCompactionObjectField(metadata, rawCompactionContentKindsField, kinds)
 	}
+
 	var existing []json.RawMessage
 	if json.Unmarshal(metadata[kindsStart:kindsEnd], &existing) != nil {
 		return nil, false
 	}
+
 	kinds, ok := rawCompactionContentKinds(existing, partIndex)
 	if !ok {
 		return nil, false
 	}
+
 	return replaceByteRange(metadata, kindsStart, kindsEnd, kinds), true
 }
 
@@ -92,15 +110,18 @@ func rawCompactionContentKinds(existing []json.RawMessage, partIndex int) ([]byt
 	if len(existing) > partIndex {
 		return nil, false
 	}
+
 	kinds := append([]json.RawMessage(nil), existing...)
 	for len(kinds) < partIndex {
 		kinds = append(kinds, json.RawMessage(strconv.Quote(rawCompactionUnknownContentKind)))
 	}
+
 	kinds = append(kinds, json.RawMessage(strconv.Quote(codexstore.InjectedTranscriptContentKind)))
 	encoded, err := marshalRawArray(kinds)
 	if err != nil {
 		return nil, false
 	}
+
 	return encoded, true
 }
 
@@ -112,17 +133,28 @@ func appendRawCompactionObjectField(object []byte, field string, value []byte) (
 	for closing >= 0 && (object[closing] == ' ' || object[closing] == '\t' || object[closing] == '\r' || object[closing] == '\n') {
 		closing--
 	}
+
 	if closing < 0 || object[closing] != '}' {
 		return object, false
 	}
+
 	separator := rawCompactionMemberSeparator(object[1:closing])
 	name := strconv.AppendQuote(nil, field)
-	return slices.Concat(object[:closing], separator, name, []byte{':'}, value, object[closing:]), true
+
+	return slices.Concat(
+		object[:closing],
+		separator,
+		name,
+		[]byte{':'},
+		value,
+		object[closing:],
+	), true
 }
 
 func rawCompactionMemberSeparator(members []byte) []byte {
 	if len(bytes.TrimSpace(members)) == 0 {
 		return nil
 	}
+
 	return []byte{','}
 }

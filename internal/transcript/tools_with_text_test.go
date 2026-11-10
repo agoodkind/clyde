@@ -39,12 +39,15 @@ func TestShapeConversationRendersToolsAlongsideText(t *testing.T) {
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(turns))
 	}
+
 	if !strings.Contains(turns[0].Text, "Checking the config now.") {
 		t.Fatalf("text = %q, want the prose preserved", turns[0].Text)
 	}
+
 	if !strings.Contains(turns[0].Text, "[tool calls in this turn: read_file, edit_file]") {
 		t.Fatalf("text = %q, want the turn's tool calls rendered and labeled", turns[0].Text)
 	}
+
 	if turns[0].IsToolOnly {
 		t.Fatal("IsToolOnly = true, want false; the turn carries prose")
 	}
@@ -61,20 +64,33 @@ func TestShapeConversationDoesNotClaimToolsFollowedTheProse(t *testing.T) {
 	if len(mixed) != 1 {
 		t.Fatalf("turns = %d, want 1", len(mixed))
 	}
+
 	if strings.Contains(mixed[0].Text, "[used: read_file, edit_file]") {
-		t.Fatalf("text = %q, want no bare trailing tool summary on a turn that also carries prose", mixed[0].Text)
+		t.Fatalf(
+			"text = %q, want no bare trailing tool summary on a turn that also carries prose",
+			mixed[0].Text,
+		)
 	}
 
-	toolOnly := ShapeConversation([]Message{{
-		Role:     "assistant",
-		HasTools: true,
-		Tools:    []ToolCall{{Name: "read_file"}},
-	}}, DefaultShapeOptions())
+	toolOnly := ShapeConversation(
+		[]Message{
+			{
+				Role:     "assistant",
+				HasTools: true,
+				Tools:    []ToolCall{{Name: "read_file"}},
+			},
+		},
+		DefaultShapeOptions(),
+	)
 	if len(toolOnly) != 1 {
 		t.Fatalf("tool-only turns = %d, want 1", len(toolOnly))
 	}
+
 	if toolOnly[0].Text != "[used: read_file]" {
-		t.Fatalf("tool-only text = %q, want the unlabeled summary, whose position is unambiguous", toolOnly[0].Text)
+		t.Fatalf(
+			"tool-only text = %q, want the unlabeled summary, whose position is unambiguous",
+			toolOnly[0].Text,
+		)
 	}
 }
 
@@ -91,10 +107,16 @@ func TestShapeConversationRendersFullToolDetailAlongsideText(t *testing.T) {
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(turns))
 	}
+
 	if !strings.Contains(turns[0].Text, "Checking the config now.") {
 		t.Fatalf("text = %q, want the prose preserved", turns[0].Text)
 	}
-	for _, want := range []string{"[tool calls in this turn]", "[tool: read_file] main.go", "[tool: edit_file] main.go"} {
+
+	for _, want := range []string{
+		"[tool calls in this turn]",
+		"[tool: read_file] main.go",
+		"[tool: edit_file] main.go",
+	} {
 		if !strings.Contains(turns[0].Text, want) {
 			t.Fatalf("text = %q, want it to contain %q", turns[0].Text, want)
 		}
@@ -119,6 +141,7 @@ func TestShapeConversationToolModesOnAMixedTurn(t *testing.T) {
 	if len(omitted) != 1 {
 		t.Fatalf("omit turns = %d, want 1; a turn with prose is not a tool-only turn", len(omitted))
 	}
+
 	if omitted[0].Text != "Checking the config now." {
 		t.Fatalf("omit text = %q, want only the prose", omitted[0].Text)
 	}
@@ -130,6 +153,7 @@ func TestShapeConversationToolModesOnAMixedTurn(t *testing.T) {
 	if len(conversationOnly) != 1 {
 		t.Fatalf("conversation-only turns = %d, want 1", len(conversationOnly))
 	}
+
 	if strings.Contains(conversationOnly[0].Text, "tool") {
 		t.Fatalf("conversation-only text = %q, want no tool rendering", conversationOnly[0].Text)
 	}
@@ -149,19 +173,25 @@ func TestShapeConversationCapsTheWholeRenderedTurn(t *testing.T) {
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(turns))
 	}
+
 	// The cap bounds the prose, which is what grows without limit.
 	prose, _, found := strings.Cut(turns[0].Text, "\n")
 	if !found {
 		t.Fatalf("rendered turn = %q, want prose and a tool block", turns[0].Text)
 	}
+
 	if runes := []rune(strings.TrimSuffix(prose, "...")); len(runes) > maxRunes {
 		t.Fatalf("prose is %d runes, want at most %d: %q", len(runes), maxRunes, turns[0].Text)
 	}
+
 	// The tool block survives the cap. Truncating the joined text cut it off a
 	// turn whose prose already filled the budget, losing the only record that the
 	// turn called anything, which is information the model cannot recover.
 	if !strings.Contains(turns[0].Text, "read_file") {
-		t.Fatalf("rendered turn = %q, want the tool block kept when the prose is capped", turns[0].Text)
+		t.Fatalf(
+			"rendered turn = %q, want the tool block kept when the prose is capped",
+			turns[0].Text,
+		)
 	}
 }
 
@@ -175,6 +205,7 @@ func TestRenderMarkdownShowsToolsForMixedTurn(t *testing.T) {
 	if !strings.Contains(rendered, "Checking the config now.") {
 		t.Fatalf("markdown = %q, want the prose", rendered)
 	}
+
 	if !strings.Contains(rendered, "[tool calls in this turn: read_file, edit_file]") {
 		t.Fatalf("markdown = %q, want the turn's tool calls to reach the rendered output", rendered)
 	}
@@ -187,7 +218,10 @@ func TestRenderMarkdownShowsToolsForMixedTurn(t *testing.T) {
 func TestContextWindowShapeOptionsBoundsOneMessage(t *testing.T) {
 	opts := ContextWindowShapeOptions()
 	if opts.MaxTextRunes <= 0 {
-		t.Fatalf("MaxTextRunes = %d, want a bound; a context window is a preview", opts.MaxTextRunes)
+		t.Fatalf(
+			"MaxTextRunes = %d, want a bound; a context window is a preview",
+			opts.MaxTextRunes,
+		)
 	}
 
 	huge := Message{Role: "assistant", Text: strings.Repeat("x", 300_000)}
@@ -195,6 +229,7 @@ func TestContextWindowShapeOptionsBoundsOneMessage(t *testing.T) {
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(turns))
 	}
+
 	body := strings.TrimSuffix(turns[0].Text, "...")
 	if runes := []rune(body); len(runes) > opts.MaxTextRunes {
 		t.Fatalf("rendered message is %d runes, want at most %d", len(runes), opts.MaxTextRunes)
@@ -202,7 +237,10 @@ func TestContextWindowShapeOptionsBoundsOneMessage(t *testing.T) {
 
 	// An export is the document, so it stays uncapped.
 	if DefaultShapeOptions().MaxTextRunes != 0 {
-		t.Fatalf("DefaultShapeOptions cap = %d, want 0 so export stays complete", DefaultShapeOptions().MaxTextRunes)
+		t.Fatalf(
+			"DefaultShapeOptions cap = %d, want 0 so export stays complete",
+			DefaultShapeOptions().MaxTextRunes,
+		)
 	}
 }
 
@@ -211,22 +249,31 @@ func TestContextWindowShapeOptionsBoundsOneMessage(t *testing.T) {
 // that call's output with it, so a shell call recorded only by what it returned
 // rendered as if it returned nothing.
 func TestFullDetailKeepsToolOutputWhenTheInputIsAbsent(t *testing.T) {
-	turns := ShapeConversation([]Message{{
-		Role:     "assistant",
-		Text:     "done",
-		HasTools: true,
-		Tools: []ToolCall{{
-			Name:   "Bash",
-			Output: "exit 1",
-		}},
-	}}, ShapeOptions{ToolOnly: ToolOnlyFullDetail})
+	turns := ShapeConversation(
+		[]Message{
+			{
+				Role:     "assistant",
+				Text:     "done",
+				HasTools: true,
+				Tools: []ToolCall{
+					{
+						Name:   "Bash",
+						Output: "exit 1",
+					},
+				},
+			},
+		},
+		ShapeOptions{ToolOnly: ToolOnlyFullDetail},
+	)
 
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(turns))
 	}
+
 	if !strings.Contains(turns[0].Text, "[tool: Bash]") {
 		t.Fatalf("text = %q, want the call named", turns[0].Text)
 	}
+
 	if !strings.Contains(turns[0].Text, "exit 1") {
 		t.Fatalf("text = %q, want the output kept even with no input", turns[0].Text)
 	}
@@ -236,20 +283,28 @@ func TestFullDetailKeepsToolOutputWhenTheInputIsAbsent(t *testing.T) {
 // branch that skipped, so neither way of failing to render an input can take the
 // output with it.
 func TestFullDetailKeepsToolOutputWhenTheInputIsUnmarshalable(t *testing.T) {
-	turns := ShapeConversation([]Message{{
-		Role:     "assistant",
-		Text:     "done",
-		HasTools: true,
-		Tools: []ToolCall{{
-			Name:   "Bash",
-			Input:  ToolInputJSON{Raw: json.RawMessage("{not json")},
-			Output: "exit 1",
-		}},
-	}}, ShapeOptions{ToolOnly: ToolOnlyFullDetail})
+	turns := ShapeConversation(
+		[]Message{
+			{
+				Role:     "assistant",
+				Text:     "done",
+				HasTools: true,
+				Tools: []ToolCall{
+					{
+						Name:   "Bash",
+						Input:  ToolInputJSON{Raw: json.RawMessage("{not json")},
+						Output: "exit 1",
+					},
+				},
+			},
+		},
+		ShapeOptions{ToolOnly: ToolOnlyFullDetail},
+	)
 
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(turns))
 	}
+
 	if !strings.Contains(turns[0].Text, "exit 1") {
 		t.Fatalf("text = %q, want the output kept when the input cannot render", turns[0].Text)
 	}

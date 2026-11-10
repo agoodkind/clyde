@@ -15,16 +15,31 @@ import (
 
 func childProcessIDs(ctx context.Context, parentPID int) ([]int, error) {
 	if parentPID <= 0 {
-		slog.DebugContext(ctx, "daemon.status.worker_children_skipped", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"parent_pid", parentPID,
+		slog.DebugContext(
+			ctx,
+			"daemon.status.worker_children_skipped",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"parent_pid",
+			parentPID,
 		)
 		return nil, nil
 	}
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.status.worker_children_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"parent_pid", parentPID,
-			"err", err,
+		slog.WarnContext(
+			ctx,
+			"daemon.status.worker_children_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"parent_pid",
+			parentPID,
+			"err",
+			err,
 		)
 		return nil, fmt.Errorf("read /proc: %w", err)
 	}
@@ -40,9 +55,17 @@ func childProcessIDs(ctx context.Context, parentPID int) ([]int, error) {
 		}
 	}
 	sort.Ints(pids)
-	slog.DebugContext(ctx, "daemon.status.worker_children_found", "concern", "process.daemon.lifecycle", "component", "daemon",
-		"parent_pid", parentPID,
-		"count", len(pids),
+	slog.DebugContext(
+		ctx,
+		"daemon.status.worker_children_found",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"parent_pid",
+		parentPID,
+		"count",
+		len(pids),
 	)
 	return pids, nil
 }

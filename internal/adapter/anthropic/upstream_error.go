@@ -69,6 +69,7 @@ func (e *UpstreamError) Error() string {
 	if e == nil {
 		return ""
 	}
+
 	switch {
 	case e.Status > 0 && e.Message != "":
 		return fmt.Sprintf("anthropic %d: %s", e.Status, e.Message)
@@ -86,6 +87,7 @@ func (e *UpstreamError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
+
 	return e.Cause
 }
 
@@ -95,6 +97,7 @@ func (e *UpstreamError) Class() ResponseClass {
 	if e == nil {
 		return ResponseClassUnknown
 	}
+
 	return e.Classification.Class
 }
 
@@ -103,6 +106,7 @@ func (e *UpstreamError) Retryable() bool {
 	if e == nil {
 		return false
 	}
+
 	return e.Classification.Retryable
 }
 
@@ -113,9 +117,11 @@ func AsUpstreamError(err error) (*UpstreamError, bool) {
 	if err == nil {
 		return nil, false
 	}
+
 	var target *UpstreamError
 	if errors.As(err, &target) {
 		return target, true
 	}
+
 	return nil, false
 }

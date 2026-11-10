@@ -14,6 +14,7 @@ func loadConversationSemanticTestConfig(t *testing.T, contents string) (*Config,
 	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(contents), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+
 	return loadConfig(dir)
 }
 
@@ -23,20 +24,29 @@ func loadConversationSemanticTestConfig(t *testing.T, contents string) (*Config,
 func TestConversationSemanticProductionConfigStillLoads(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := loadConversationSemanticTestConfig(t, `[conversation.semantic]
+	cfg, err := loadConversationSemanticTestConfig(
+		t,
+		`[conversation.semantic]
 ingestion_enabled = true
 search_enabled = true
 collection_id = "clyde-conversations"
-`)
+`,
+	)
 	if err != nil {
 		t.Fatalf("load production-shaped config: %v", err)
 	}
+
 	semantic := cfg.Conversation.Semantic
 	if semantic.Backend != "" {
 		t.Fatalf("backend = %q, want empty for the lm-semantic-search daemon", semantic.Backend)
 	}
+
 	if !semantic.FeedsEngine() || !semantic.AnswersSearch() {
-		t.Fatalf("semantic directions = feeds %v answers %v, want both true", semantic.FeedsEngine(), semantic.AnswersSearch())
+		t.Fatalf(
+			"semantic directions = feeds %v answers %v, want both true",
+			semantic.FeedsEngine(),
+			semantic.AnswersSearch(),
+		)
 	}
 }
 
@@ -50,45 +60,105 @@ func TestConversationSemanticRejectsInvalidSettings(t *testing.T) {
 		body    string
 		wantKey string
 	}{
-		{name: "unknown backend", body: "backend = \"remote\"\n", wantKey: "conversation.semantic.backend"},
-		{name: "unknown enabled backend", body: "backends = [\"remote\"]\n", wantKey: "conversation.semantic.backends"},
-		{name: "duplicate enabled backend", body: "backends = [\"milvus\", \"milvus\"]\n", wantKey: "conversation.semantic.backends"},
-		{name: "missing default backend", body: "backends = [\"local\"]\n", wantKey: "conversation.semantic.backends"},
-		{name: "empty enabled backends", body: "backends = []\n", wantKey: "conversation.semantic.backends"},
-		{name: "enabled legacy alias", body: "backends = [\"lms\"]\n", wantKey: "conversation.semantic.backends"},
-		{name: "two credential references", body: "embedding_api_key_env = \"OPENAI_API_KEY\"\nembedding_api_key_file = \"/tmp/key\"\n", wantKey: "conversation.semantic.embedding_api_key_env"},
-		{name: "sync_interval_below_minimum", body: "sync_interval = \"500ms\"\n", wantKey: "conversation.semantic.sync_interval"},
-		{name: "sync_interval_negative", body: "sync_interval = \"-1s\"\n", wantKey: "conversation.semantic.sync_interval"},
-		{name: "index_refresh_interval_below_minimum", body: "index_refresh_interval = \"999ms\"\n", wantKey: "conversation.semantic.index_refresh_interval"},
-		{name: "index_refresh_interval_negative", body: "index_refresh_interval = \"-1s\"\n", wantKey: "conversation.semantic.index_refresh_interval"},
+		{
+			name:    "unknown backend",
+			body:    "backend = \"remote\"\n",
+			wantKey: "conversation.semantic.backend",
+		},
+		{
+			name:    "unknown enabled backend",
+			body:    "backends = [\"remote\"]\n",
+			wantKey: "conversation.semantic.backends",
+		},
+		{
+			name:    "duplicate enabled backend",
+			body:    "backends = [\"milvus\", \"milvus\"]\n",
+			wantKey: "conversation.semantic.backends",
+		},
+		{
+			name:    "missing default backend",
+			body:    "backends = [\"local\"]\n",
+			wantKey: "conversation.semantic.backends",
+		},
+		{
+			name:    "empty enabled backends",
+			body:    "backends = []\n",
+			wantKey: "conversation.semantic.backends",
+		},
+		{
+			name:    "enabled legacy alias",
+			body:    "backends = [\"lms\"]\n",
+			wantKey: "conversation.semantic.backends",
+		},
+		{
+			name:    "two credential references",
+			body:    "embedding_api_key_env = \"OPENAI_API_KEY\"\nembedding_api_key_file = \"/tmp/key\"\n",
+			wantKey: "conversation.semantic.embedding_api_key_env",
+		},
+		{
+			name:    "sync_interval_below_minimum",
+			body:    "sync_interval = \"500ms\"\n",
+			wantKey: "conversation.semantic.sync_interval",
+		},
+		{
+			name:    "sync_interval_negative",
+			body:    "sync_interval = \"-1s\"\n",
+			wantKey: "conversation.semantic.sync_interval",
+		},
+		{
+			name:    "index_refresh_interval_below_minimum",
+			body:    "index_refresh_interval = \"999ms\"\n",
+			wantKey: "conversation.semantic.index_refresh_interval",
+		},
+		{
+			name:    "index_refresh_interval_negative",
+			body:    "index_refresh_interval = \"-1s\"\n",
+			wantKey: "conversation.semantic.index_refresh_interval",
+		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-			_, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\n"+testCase.body)
-			if err == nil {
-				t.Fatalf("load succeeded, want an error for %s", testCase.wantKey)
-			}
-			if !strings.Contains(err.Error(), testCase.wantKey) {
-				t.Fatalf("error = %q, want it to contain %s", err.Error(), testCase.wantKey)
-			}
-		})
+				_, err := loadConversationSemanticTestConfig(
+					t,
+					"[conversation.semantic]\n"+testCase.body,
+				)
+				if err == nil {
+					t.Fatalf("load succeeded, want an error for %s", testCase.wantKey)
+				}
+
+				if !strings.Contains(err.Error(), testCase.wantKey) {
+					t.Fatalf("error = %q, want it to contain %s", err.Error(), testCase.wantKey)
+				}
+			},
+		)
 	}
 }
 
 func TestConversationSemanticParallelBackendSettings(t *testing.T) {
 	t.Parallel()
+
 	for _, backend := range []string{"milvus", "local", "lms", ""} {
-		t.Run(backend, func(t *testing.T) {
-			cfg, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\nbackend = \""+backend+"\"\nbackends = [\"milvus\", \"local\"]\nmilvus_address = \"localhost:19530\"\n")
-			if err != nil {
-				t.Fatal(err)
-			}
-			semantic := cfg.Conversation.Semantic
-			if len(semantic.EnabledBackends()) != 2 || semantic.LocalRoot == "" || semantic.MilvusAddress != "localhost:19530" {
-				t.Fatalf("parallel settings = %+v", semantic)
-			}
-		})
+		t.Run(
+			backend,
+			func(t *testing.T) {
+				cfg, err := loadConversationSemanticTestConfig(
+					t,
+					"[conversation.semantic]\nbackend = \""+backend+"\"\nbackends = [\"milvus\", \"local\"]\nmilvus_address = \"localhost:19530\"\n",
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				semantic := cfg.Conversation.Semantic
+				if len(semantic.EnabledBackends()) != 2 || semantic.LocalRoot == "" ||
+					semantic.MilvusAddress != "localhost:19530" {
+					t.Fatalf("parallel settings = %+v", semantic)
+				}
+			},
+		)
 	}
 }
 
@@ -102,24 +172,46 @@ func TestConversationSemanticWorkerIntervals(t *testing.T) {
 		wantIndexRefresh time.Duration
 	}{
 		{name: "unset", body: "", wantSync: time.Minute, wantIndexRefresh: time.Minute},
-		{name: "explicit", body: "sync_interval = \"2s\"\nindex_refresh_interval = \"5s\"\n", wantSync: 2 * time.Second, wantIndexRefresh: 5 * time.Second},
-		{name: "minimum", body: "sync_interval = \"1s\"\nindex_refresh_interval = \"1s\"\n", wantSync: time.Second, wantIndexRefresh: time.Second},
+		{
+			name:             "explicit",
+			body:             "sync_interval = \"2s\"\nindex_refresh_interval = \"5s\"\n",
+			wantSync:         2 * time.Second,
+			wantIndexRefresh: 5 * time.Second,
+		},
+		{
+			name:             "minimum",
+			body:             "sync_interval = \"1s\"\nindex_refresh_interval = \"1s\"\n",
+			wantSync:         time.Second,
+			wantIndexRefresh: time.Second,
+		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-			cfg, err := loadConversationSemanticTestConfig(t, "[conversation.semantic]\n"+testCase.body)
-			if err != nil {
-				t.Fatalf("operation=load_config err=%v", err)
-			}
-			semantic := cfg.Conversation.Semantic
-			if got := semantic.SyncPassInterval(); got != testCase.wantSync {
-				t.Fatalf("key=sync_interval got=%s want=%s", got, testCase.wantSync)
-			}
-			if got := semantic.IndexRefreshPeriod(); got != testCase.wantIndexRefresh {
-				t.Fatalf("key=index_refresh_interval got=%s want=%s", got, testCase.wantIndexRefresh)
-			}
-		})
+				cfg, err := loadConversationSemanticTestConfig(
+					t,
+					"[conversation.semantic]\n"+testCase.body,
+				)
+				if err != nil {
+					t.Fatalf("operation=load_config err=%v", err)
+				}
+
+				semantic := cfg.Conversation.Semantic
+				if got := semantic.SyncPassInterval(); got != testCase.wantSync {
+					t.Fatalf("key=sync_interval got=%s want=%s", got, testCase.wantSync)
+				}
+
+				if got := semantic.IndexRefreshPeriod(); got != testCase.wantIndexRefresh {
+					t.Fatalf(
+						"key=index_refresh_interval got=%s want=%s",
+						got,
+						testCase.wantIndexRefresh,
+					)
+				}
+			},
+		)
 	}
 }
 

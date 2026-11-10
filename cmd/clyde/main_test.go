@@ -21,10 +21,12 @@ func TestRootNoArgsShowsHelp(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute root help: %v", err)
 	}
+
 	output := stdout.String()
 	if !strings.Contains(output, "Usage:") {
 		t.Fatalf("help output missing Usage: %q", output)
 	}
+
 	if !strings.Contains(output, "conversation") {
 		t.Fatalf("help output missing conversation parent: %q", output)
 	}
@@ -39,6 +41,7 @@ func TestRootUnknownCommandErrors(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected unknown command error")
 	}
+
 	if !strings.Contains(err.Error(), "unknown command") {
 		t.Fatalf("error = %q, want unknown command", err.Error())
 	}
@@ -47,6 +50,7 @@ func TestRootUnknownCommandErrors(t *testing.T) {
 func TestRootRegistersConversationCommands(t *testing.T) {
 	factory, _, _ := testFactory()
 	root := newRoot(factory)
+
 	expected := [][]string{
 		{"conversation", "search"},
 		{"conversation", "export"},
@@ -61,6 +65,7 @@ func TestRootRegistersConversationCommands(t *testing.T) {
 func TestRootRegistersOperationalPackages(t *testing.T) {
 	factory, _, _ := testFactory()
 	root := newRoot(factory)
+
 	expected := [][]string{
 		{"daemon", "run"},
 		{"daemon", "fingerprint"},
@@ -91,6 +96,7 @@ func TestRootHelpIncludesRegisteredConversationProviders(t *testing.T) {
 	factory, _, _ := testFactory()
 	root := newRoot(factory)
 	help := root.Short + "\n" + root.Long
+
 	for _, provider := range daemon.ConversationProviders() {
 		label := provider.String()
 		displayLabel := strings.ToUpper(label[:1]) + label[1:]
@@ -103,6 +109,7 @@ func TestRootHelpIncludesRegisteredConversationProviders(t *testing.T) {
 func testFactory() (*cli.Factory, *bytes.Buffer, *bytes.Buffer) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
+
 	return &cli.Factory{
 		IOStreams: &cli.IOStreams{
 			In:  strings.NewReader(""),

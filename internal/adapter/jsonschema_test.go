@@ -15,15 +15,22 @@ func TestParseResponseFormatPlain(t *testing.T) {
 		{"empty", ``, ""},
 		{"text", `{"type":"text"}`, ""},
 		{"json_object", `{"type":"json_object"}`, "json_object"},
-		{"json_schema", `{"type":"json_schema","json_schema":{"name":"rename","schema":{"type":"object"}}}`, "json_schema"},
+		{
+			"json_schema",
+			`{"type":"json_schema","json_schema":{"name":"rename","schema":{"type":"object"}}}`,
+			"json_schema",
+		},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := ParseResponseFormat(json.RawMessage(c.raw))
-			if got.Mode != c.want {
-				t.Fatalf("Mode = %q, want %q", got.Mode, c.want)
-			}
-		})
+		t.Run(
+			c.name,
+			func(t *testing.T) {
+				got := ParseResponseFormat(json.RawMessage(c.raw))
+				if got.Mode != c.want {
+					t.Fatalf("Mode = %q, want %q", got.Mode, c.want)
+				}
+			},
+		)
 	}
 }
 
@@ -37,12 +44,15 @@ func TestSystemPromptIncludesSchema(t *testing.T) {
 	if !strings.Contains(got, "ONLY raw JSON") {
 		t.Errorf("missing JSON-only directive: %q", got)
 	}
+
 	if !strings.Contains(got, `"newName"`) {
 		t.Errorf("missing schema body: %q", got)
 	}
+
 	if !strings.Contains(got, "schema name: rename") {
 		t.Errorf("missing schema name: %q", got)
 	}
+
 	retry := spec.SystemPrompt(true)
 	if !strings.Contains(retry, "JSON.parse") {
 		t.Errorf("retry hint missing: %q", retry)
@@ -70,9 +80,11 @@ func TestLooksLikeJSON(t *testing.T) {
 	if !LooksLikeJSON(`{"a":1}`) {
 		t.Error("expected valid object")
 	}
+
 	if LooksLikeJSON(`not json`) {
 		t.Error("expected invalid")
 	}
+
 	if LooksLikeJSON(``) {
 		t.Error("expected invalid for empty")
 	}

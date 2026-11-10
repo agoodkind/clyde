@@ -28,13 +28,18 @@ func DecodeComposerHeaderJSON(data []byte) (ComposerHeader, error) {
 	if err := json.Unmarshal(data, &header); err != nil {
 		return ComposerHeader{}, CursorJSONDecodeError{Description: "composer header", Err: err}
 	}
+
 	return header, nil
 }
 
 func decodeWorkspaceDescriptorJSON(data []byte) (workspaceDescriptor, error) {
 	var descriptor workspaceDescriptor
 	if err := json.Unmarshal(data, &descriptor); err != nil {
-		return workspaceDescriptor{}, CursorJSONDecodeError{Description: "workspace descriptor", Err: err}
+		return workspaceDescriptor{}, CursorJSONDecodeError{
+			Description: "workspace descriptor",
+			Err:         err,
+		}
 	}
+
 	return descriptor, nil
 }

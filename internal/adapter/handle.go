@@ -34,9 +34,11 @@ func (r *countingReadCloser) Read(body []byte) (int, error) {
 	if err == nil {
 		return n, nil
 	}
+
 	if errors.Is(err, io.EOF) {
 		return n, io.EOF
 	}
+
 	return n, fmt.Errorf("read adapter request body: %w", err)
 }
 
@@ -72,17 +74,29 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 		if reqID == "" {
 			reqID = newRequestID()
 		}
+
 		corr := clydeingress.FromHTTPHeader(r.Header, reqID)
 		if ingress := s.ingress; ingress != nil {
 			ingressCtx := ingress.TranslateHeaders(r.Header)
 			if ingressCtx.ConversationID != "" && clydeingress.ChatKey(corr) == "" {
-				corr = clydeingress.WithChatIdentity(corr, ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")
+				corr = clydeingress.WithChatIdentity(
+					corr,
+					ingressCtx.ConversationID,
+					"native",
+					ingressCtx.ConversationID,
+					"",
+				)
 			}
+
 			corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(ingressCtx)...)
 		}
+
 		clydeingress.SetHTTPHeaders(corr, r.Header)
 		clydeingress.SetHTTPHeaders(corr, w.Header())
-		ctx := adapterruntime.WithExecutionID(correlation.WithContext(r.Context(), corr), newExecutionID())
+		ctx := adapterruntime.WithExecutionID(
+			correlation.WithContext(r.Context(), corr),
+			newExecutionID(),
+		)
 		ctx, ingressCancel := context.WithCancel(ctx)
 		defer ingressCancel()
 		ctx = context.WithValue(ctx, ingressCancelKey{}, ingressCancel)
@@ -90,11 +104,16 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 
 		ingressSess, draining := s.acquireIngressSession(r, family, reqID)
 		if draining {
-			drainingErr := newAdapterError(adapterErrorUpstreamUnavailable, "service draining: reload in progress")
+			drainingErr := newAdapterError(
+				adapterErrorUpstreamUnavailable,
+				"service draining: reload in progress",
+			)
 			drainingErr.HTTPStatus = http.StatusServiceUnavailable
 			s.respondAdapterError(w, r, drainingErr)
+
 			return
 		}
+
 		defer s.releaseIngressSession(ctx, ingressSess)
 
 		rw := &adapterRecoveryWriter{ResponseWriter: w, wroteHeader: false, bytesOut: 0}
@@ -126,10 +145,15 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 // acquireIngressSession builds IngressMeta from the request and registers
 // a new session in the ingress registry. Returns (sess, false) on success,
 // (nil, true) when the registry is draining and the caller should 503.
-func (s *Server) acquireIngressSession(r *http.Request, family adapterRouteFamily, reqID string) (*livetrack.Session[IngressMeta], bool) {
+func (s *Server) acquireIngressSession(
+	r *http.Request,
+	family adapterRouteFamily,
+	reqID string,
+) (*livetrack.Session[IngressMeta], bool) {
 	if s.requests == nil {
 		return nil, false
 	}
+
 	meta := IngressMeta{
 		RouteFamily:     string(family),
 		RequestID:       reqID,
@@ -142,6 +166,7 @@ func (s *Server) acquireIngressSession(r *http.Request, family adapterRouteFamil
 	if !ok {
 		return nil, true
 	}
+
 	return sess, false
 }
 
@@ -151,6 +176,7 @@ func (s *Server) releaseIngressSession(ctx context.Context, sess *livetrack.Sess
 	if sess == nil || s.requests == nil {
 		return
 	}
+
 	s.requests.Release(ctx, sess, "adapter.ingress.completed")
 }
 
@@ -172,6 +198,7 @@ func (s *Server) dispatchHandler(
 		if recovered == nil {
 			return
 		}
+
 		attrs := []slog.Attr{
 			slog.Any("err", recovered),
 			slog.String("method", r.Method),
@@ -187,7 +214,15 @@ func (s *Server) dispatchHandler(
 		if rw.wroteHeader {
 			return
 		}
-		s.respondAdapterError(w, r, adapterErrInternal("adapter panic while handling request", fmt.Errorf("panic: %v", recovered)))
+
+		s.respondAdapterError(
+			w,
+			r,
+			adapterErrInternal(
+				"adapter panic while handling request",
+				fmt.Errorf("panic: %v", recovered),
+			),
+		)
 	}()
 
 	err := fn(ctx, hctx)
@@ -205,10 +240,18 @@ func (s *Server) dispatchHandler(
 				slog.Bool("response_started", true),
 			}
 			attrs = append(attrs, corr.Attrs()...)
-			s.adapterChatDispatchLog().LogAttrs(ctx, slog.LevelWarn, "adapter.request.error_after_headers", attrs...)
+			s.adapterChatDispatchLog().LogAttrs(
+				ctx,
+				slog.LevelWarn,
+				"adapter.request.error_after_headers",
+				attrs...,
+			)
+
 			return
 		}
+
 		s.respondAdapterError(w, r, err)
+
 		return
 	}
 
@@ -217,7 +260,10 @@ func (s *Server) dispatchHandler(
 	// 200. Synthesize a catch-all 502 envelope so the response
 	// shape is always parsable.
 	if !rw.wroteHeader {
-		synth := newAdapterError(adapterErrorUpstreamFailed, "adapter handler returned without writing a response")
+		synth := newAdapterError(
+			adapterErrorUpstreamFailed,
+			"adapter handler returned without writing a response",
+		)
 		synth.HTTPStatus = http.StatusBadGateway
 		attrs := []slog.Attr{
 			slog.String("method", r.Method),
@@ -225,7 +271,12 @@ func (s *Server) dispatchHandler(
 			slog.String("route_family", string(family)),
 		}
 		attrs = append(attrs, corr.Attrs()...)
-		s.adapterChatDispatchLog().LogAttrs(ctx, slog.LevelError, "adapter.request.body_not_written", attrs...)
+		s.adapterChatDispatchLog().LogAttrs(
+			ctx,
+			slog.LevelError,
+			"adapter.request.body_not_written",
+			attrs...,
+		)
 		s.respondAdapterError(w, r, synth)
 	}
 }

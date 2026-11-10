@@ -30,17 +30,21 @@ func decodeFirstRecord(t *testing.T, buf *bytes.Buffer) (recordFields, map[strin
 	if len(line) == 0 {
 		t.Fatalf("expected at least one log record")
 	}
+
 	if idx := bytes.IndexByte(line, '\n'); idx >= 0 {
 		line = line[:idx]
 	}
+
 	var typed recordFields
 	if err := json.Unmarshal(line, &typed); err != nil {
 		t.Fatalf("decode typed: %v", err)
 	}
+
 	raw := map[string]json.RawMessage{}
 	if err := json.Unmarshal(line, &raw); err != nil {
 		t.Fatalf("decode raw: %v", err)
 	}
+
 	return typed, raw
 }
 
@@ -90,36 +94,58 @@ func TestLogCompletedEmitsCanonicalTokenFields(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			buf := &bytes.Buffer{}
-			LogCompleted(captureLogger(buf), context.Background(), tc.attrs)
-			rec, raw := decodeFirstRecord(t, buf)
-			if rec.Msg != "adapter.chat.completed" {
-				t.Fatalf("expected adapter.chat.completed, got %q", rec.Msg)
-			}
-			if rec.PromptTokens != tc.wantPrompt {
-				t.Errorf("prompt_tokens=%d want %d", rec.PromptTokens, tc.wantPrompt)
-			}
-			if rec.CompletionTokens != tc.wantCompletion {
-				t.Errorf("completion_tokens=%d want %d", rec.CompletionTokens, tc.wantCompletion)
-			}
-			if rec.CacheReadTokens != tc.wantCacheRead {
-				t.Errorf("cache_read_tokens=%d want %d", rec.CacheReadTokens, tc.wantCacheRead)
-			}
-			if rec.CacheCreationTokens != tc.wantCacheCreate {
-				t.Errorf("cache_creation_tokens=%d want %d", rec.CacheCreationTokens, tc.wantCacheCreate)
-			}
-			if rec.CacheCreationReported != tc.wantCacheReported {
-				t.Errorf("cache_creation_reported=%v want %v", rec.CacheCreationReported, tc.wantCacheReported)
-			}
-			// Phase A2 forbids legacy field names.
-			if _, ok := raw["tokens_in"]; ok {
-				t.Errorf("legacy field tokens_in must not be emitted")
-			}
-			if _, ok := raw["tokens_out"]; ok {
-				t.Errorf("legacy field tokens_out must not be emitted")
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				buf := &bytes.Buffer{}
+				LogCompleted(captureLogger(buf), context.Background(), tc.attrs)
+				rec, raw := decodeFirstRecord(t, buf)
+				if rec.Msg != "adapter.chat.completed" {
+					t.Fatalf("expected adapter.chat.completed, got %q", rec.Msg)
+				}
+
+				if rec.PromptTokens != tc.wantPrompt {
+					t.Errorf("prompt_tokens=%d want %d", rec.PromptTokens, tc.wantPrompt)
+				}
+
+				if rec.CompletionTokens != tc.wantCompletion {
+					t.Errorf(
+						"completion_tokens=%d want %d",
+						rec.CompletionTokens,
+						tc.wantCompletion,
+					)
+				}
+
+				if rec.CacheReadTokens != tc.wantCacheRead {
+					t.Errorf("cache_read_tokens=%d want %d", rec.CacheReadTokens, tc.wantCacheRead)
+				}
+
+				if rec.CacheCreationTokens != tc.wantCacheCreate {
+					t.Errorf(
+						"cache_creation_tokens=%d want %d",
+						rec.CacheCreationTokens,
+						tc.wantCacheCreate,
+					)
+				}
+
+				if rec.CacheCreationReported != tc.wantCacheReported {
+					t.Errorf(
+						"cache_creation_reported=%v want %v",
+						rec.CacheCreationReported,
+						tc.wantCacheReported,
+					)
+				}
+
+				// Phase A2 forbids legacy field names.
+				if _, ok := raw["tokens_in"]; ok {
+					t.Errorf("legacy field tokens_in must not be emitted")
+				}
+
+				if _, ok := raw["tokens_out"]; ok {
+					t.Errorf("legacy field tokens_out must not be emitted")
+				}
+			},
+		)
 	}
 }
 
@@ -135,6 +161,7 @@ func TestLogCompletedCanonicalFieldsPresent(t *testing.T) {
 		"cache_creation_tokens",
 		"cache_creation_reported",
 	}
+
 	cases := []struct {
 		name  string
 		attrs CompletedAttrs
@@ -165,16 +192,20 @@ func TestLogCompletedCanonicalFieldsPresent(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			buf := &bytes.Buffer{}
-			LogCompleted(captureLogger(buf), context.Background(), tc.attrs)
-			_, raw := decodeFirstRecord(t, buf)
-			for _, k := range canonical {
-				if _, ok := raw[k]; !ok {
-					t.Errorf("missing canonical field %q in %v", k, sortedKeys(raw))
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				buf := &bytes.Buffer{}
+				LogCompleted(captureLogger(buf), context.Background(), tc.attrs)
+				_, raw := decodeFirstRecord(t, buf)
+
+				for _, k := range canonical {
+					if _, ok := raw[k]; !ok {
+						t.Errorf("missing canonical field %q in %v", k, sortedKeys(raw))
+					}
 				}
-			}
-		})
+			},
+		)
 	}
 }
 
@@ -195,24 +226,39 @@ func TestLogCompletedOmitsCostFields(t *testing.T) {
 		"cost_cache_savings_microcents",
 	}
 	buf := &bytes.Buffer{}
-	LogCompleted(captureLogger(buf), context.Background(), CompletedAttrs{
-		Backend:               "anthropic",
-		ModelID:               "claude-opus-4-8",
-		TokensIn:              100,
-		TokensOut:             50,
-		CacheReadTokens:       200,
-		CacheCreationTokens:   300,
-		CacheCreationReported: true,
-	})
+	LogCompleted(
+		captureLogger(buf),
+		context.Background(),
+		CompletedAttrs{
+			Backend:               "anthropic",
+			ModelID:               "claude-opus-4-8",
+			TokensIn:              100,
+			TokensOut:             50,
+			CacheReadTokens:       200,
+			CacheCreationTokens:   300,
+			CacheCreationReported: true,
+		},
+	)
 	_, raw := decodeFirstRecord(t, buf)
+
 	for _, k := range forbidden {
 		if _, ok := raw[k]; ok {
-			t.Errorf("write-time cost field %q must not be emitted; got keys %v", k, sortedKeys(raw))
+			t.Errorf(
+				"write-time cost field %q must not be emitted; got keys %v",
+				k,
+				sortedKeys(raw),
+			)
 		}
 	}
+
 	// The token fields must still be present so the read-time aggregator
 	// has something to price.
-	for _, k := range []string{"prompt_tokens", "completion_tokens", "cache_read_tokens", "cache_creation_tokens"} {
+	for _, k := range []string{
+		"prompt_tokens",
+		"completion_tokens",
+		"cache_read_tokens",
+		"cache_creation_tokens",
+	} {
 		if _, ok := raw[k]; !ok {
 			t.Errorf("token field %q must still be emitted", k)
 		}
@@ -224,6 +270,8 @@ func sortedKeys(m map[string]json.RawMessage) []string {
 	for k := range m {
 		out = append(out, k)
 	}
+
 	sort.Strings(out)
+
 	return out
 }

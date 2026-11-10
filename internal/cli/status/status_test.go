@@ -61,6 +61,7 @@ func TestRenderLinesEmitsOneRawFactPerLine(t *testing.T) {
 	t.Parallel()
 
 	body := lmstatus.Dump(buildSnapshot(testSnapshot(), "test"))
+
 	for _, want := range []string{
 		"daemon.responding true",
 		"supervisor.pid 321",
@@ -89,6 +90,7 @@ func TestRenderLinesShowsSectionErrorsWithoutHidingOthers(t *testing.T) {
 	if !strings.Contains(body, "semantic_freshness.error engine unavailable") {
 		t.Fatalf("rendered status lacks the freshness error line:\n%s", body)
 	}
+
 	if !strings.Contains(body, "daemon.responding true") {
 		t.Fatalf("a freshness error hid the daemon section:\n%s", body)
 	}

@@ -198,8 +198,10 @@ func requestPurposeFor(providerName string, headers http.Header) RequestPurpose 
 		if !ok || provider.ID().String() != providerName {
 			continue
 		}
+
 		return classifier.ClassifyRequestPurpose(headers)
 	}
+
 	return RequestPurposeUnspecified
 }
 
@@ -210,8 +212,10 @@ func ResponseAdapterFor(providerName string) (ProviderResponseAdapter, bool) {
 		if !ok || provider.ID().String() != providerName {
 			continue
 		}
+
 		return adapter, true
 	}
+
 	return nil, false
 }
 
@@ -221,8 +225,10 @@ func bodyConversationIdentifierFor(providerName string) (BodyConversationIdentif
 		if !ok || provider.ID().String() != providerName {
 			continue
 		}
+
 		return identifier, true
 	}
+
 	return nil, false
 }
 
@@ -232,15 +238,19 @@ func captureDecoderFor(providerName string, host string) (CaptureDecoder, bool) 
 		if !ok || provider.ID().String() != providerName {
 			continue
 		}
+
 		return decoder, true
 	}
+
 	for _, provider := range defaultRegistry.snapshot() {
 		decoder, ok := provider.(CaptureDecoder)
 		if !ok || !provider.ClassifyConnect(normalizeConnectHost(host)).Claimed {
 			continue
 		}
+
 		return decoder, true
 	}
+
 	return nil, false
 }
 
@@ -292,6 +302,7 @@ func RegisterProvider(p Provider) {
 	if p == nil {
 		return
 	}
+
 	defaultRegistry.register(p)
 }
 
@@ -299,12 +310,14 @@ func (r *registry) register(p Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	id := p.ID()
+
 	for i, existing := range r.providers {
 		if existing.ID() == id {
 			r.providers[i] = p
 			return
 		}
 	}
+
 	r.providers = append(r.providers, p)
 }
 
@@ -314,8 +327,10 @@ func (r *registry) snapshot() []Provider {
 	if len(r.providers) == 0 {
 		return nil
 	}
+
 	out := make([]Provider, len(r.providers))
 	copy(out, r.providers)
+
 	return out
 }
 
@@ -326,14 +341,17 @@ func (r *registry) snapshot() []Provider {
 // call.
 func providerForConnect(target string) (Provider, ConnectClaim, bool) {
 	host := normalizeConnectHost(target)
+
 	for _, p := range defaultRegistry.snapshot() {
 		claim := p.ClassifyConnect(host)
 		if claim.Claimed {
 			claim.Host = host
 			claim.ProviderID = p.ID()
+
 			return p, claim, true
 		}
 	}
+
 	return nil, ConnectClaim{Claimed: false, Host: "", ProviderID: ProviderIDUnknown}, false
 }
 
@@ -346,6 +364,7 @@ func providerForPlain(path string) (Provider, PlainRouteClaim, bool) {
 			return p, claim, true
 		}
 	}
+
 	return nil, PlainRouteClaim{Claimed: false, Provider: "", UpstreamURL: ""}, false
 }
 
@@ -357,6 +376,8 @@ func normalizeConnectHost(target string) string {
 			host = hostOnly
 		}
 	}
+
 	host = strings.Trim(strings.ToLower(host), "[].")
+
 	return host
 }

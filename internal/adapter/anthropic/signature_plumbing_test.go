@@ -20,9 +20,11 @@ func TestDispatchSSESignatureDeltaEmitsThinkingSignature(t *testing.T) {
 	if err := dispatchSSE("content_block_delta", data, sink, usage, &stop, blockTypes); err != nil {
 		t.Fatalf("dispatchSSE: %v", err)
 	}
+
 	if len(got) != 1 {
 		t.Fatalf("events=%d want 1: %#v", len(got), got)
 	}
+
 	want := StreamThinkingSignature{
 		BlockIndex: 7,
 		Signature:  "opaque-sig-bytes",

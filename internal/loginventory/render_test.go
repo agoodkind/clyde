@@ -41,7 +41,9 @@ func TestRenderInventoryPrintsMetadataTable(t *testing.T) {
 	if err := writeInventoryTable(&output, currentInventory); err != nil {
 		t.Fatalf("writeInventoryTable returned error: %v", err)
 	}
+
 	rendered := output.String()
+
 	for _, want := range []string{
 		"State root: /tmp/clyde-state",
 		"Mode: indexed",

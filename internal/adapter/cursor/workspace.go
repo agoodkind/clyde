@@ -16,17 +16,21 @@ func workspacePath(req adapteropenai.ChatRequest) string {
 			sources = append(sources, text)
 		}
 	}
+
 	if len(req.Input) > 0 {
 		sources = append(sources, string(req.Input))
 	}
+
 	for _, source := range sources {
 		match := workspacePathRE.FindStringSubmatch(source)
 		if len(match) < 2 {
 			continue
 		}
+
 		if path := strings.TrimSpace(match[1]); path != "" {
 			return path
 		}
 	}
+
 	return ""
 }

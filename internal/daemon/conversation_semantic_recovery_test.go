@@ -32,12 +32,14 @@ func (c *fakeSemanticConn) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closes++
+
 	return nil
 }
 
 func (c *fakeSemanticConn) closeCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.closes
 }
 
@@ -58,8 +60,14 @@ func (c *flakySemanticConnector) connect(context.Context) (semanticConnection, e
 	defer c.mu.Unlock()
 	c.attempts++
 	if c.attempts <= c.failuresBeforeSuccess {
-		return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}, errors.New("dial semantic search daemon: connection refused")
+		return semanticConnection{
+			search:     nil,
+			feeder:     nil,
+			connCloser: nil,
+			close:      nil,
+		}, errors.New("dial semantic search daemon: connection refused")
 	}
+
 	return semanticConnection{
 		search:     c.search,
 		feeder:     c.feeder,
@@ -71,6 +79,7 @@ func (c *flakySemanticConnector) connect(context.Context) (semanticConnection, e
 func (c *flakySemanticConnector) attemptCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.attempts
 }
 
@@ -87,6 +96,7 @@ func (c *semanticLogCapture) Handle(_ context.Context, record slog.Record) error
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.records = append(c.records, record.Clone())
+
 	return nil
 }
 
@@ -101,44 +111,60 @@ func (c *semanticLogCapture) WithGroup(string) slog.Handler {
 func (c *semanticLogCapture) warnings() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	messages := make([]string, 0, len(c.records))
 	for _, record := range c.records {
 		if record.Level >= slog.LevelWarn {
 			messages = append(messages, record.Message)
 		}
 	}
+
 	return messages
 }
 
 // newTestSemanticRuntime builds a semantic runtime over the given connector,
 // attached to its own lifecycle group exactly as the daemon attaches it, with a
 // retry cadence fast enough for a test.
-func newTestSemanticRuntime(t *testing.T, connector semanticConnector) (*conversationSemanticRuntime, *livetrack.Group) {
+func newTestSemanticRuntime(
+	t *testing.T,
+	connector semanticConnector,
+) (*conversationSemanticRuntime, *livetrack.Group) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	group := newLifecycleGroup(log)
-	registry := livetrack.Attach[conversationSemanticConnectionMeta](group, livetrack.MemberSpec{
-		Phase:         livetrack.PhaseWorkers,
-		QuietRelevant: false,
-		CancelNoWait:  false,
-	}, livetrack.Options[conversationSemanticConnectionMeta]{
-		Component:     "daemon",
-		Concern:       "conversation.semantic",
-		Log:           log,
-		PollEvery:     0,
-		CloserGrace:   0,
-		ParallelClose: false,
-		Now:           nil,
-	})
-	runtime := newConversationSemanticRuntime(log, connector, registry, conversationSemanticConnectionMeta{
-		CollectionID: "conversations",
-	})
+	registry := livetrack.Attach[conversationSemanticConnectionMeta](
+		group,
+		livetrack.MemberSpec{
+			Phase:         livetrack.PhaseWorkers,
+			QuietRelevant: false,
+			CancelNoWait:  false,
+		},
+		livetrack.Options[conversationSemanticConnectionMeta]{
+			Component:     "daemon",
+			Concern:       "conversation.semantic",
+			Log:           log,
+			PollEvery:     0,
+			CloserGrace:   0,
+			ParallelClose: false,
+			Now:           nil,
+		},
+	)
+	runtime := newConversationSemanticRuntime(
+		log,
+		connector,
+		registry,
+		conversationSemanticConnectionMeta{
+			CollectionID: "conversations",
+		},
+	)
 	runtime.retryDelay = func(uint32) time.Duration { return time.Millisecond }
+
 	return runtime, group
 }
 
 func TestSemanticRetryDelay(t *testing.T) {
 	t.Parallel()
+
 	testCases := []struct {
 		name     string
 		failures uint32
@@ -156,22 +182,40 @@ func TestSemanticRetryDelay(t *testing.T) {
 		{name: "jitter capped", failures: 4, jitter: time.Minute, want: 5 * time.Minute},
 	}
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			if got := semanticRetryDelay(testCase.failures, testCase.jitter); got != testCase.want {
-				t.Fatalf("semanticRetryDelay(%d, %s) = %s, want %s", testCase.failures, testCase.jitter, got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+				if got := semanticRetryDelay(
+					testCase.failures,
+					testCase.jitter,
+				); got != testCase.want {
+					t.Fatalf(
+						"semanticRetryDelay(%d, %s) = %s, want %s",
+						testCase.failures,
+						testCase.jitter,
+						got,
+						testCase.want,
+					)
+				}
+			},
+		)
 	}
 }
 
 func TestSemanticRetryDelayWithJitterStaysWithinOneFifth(t *testing.T) {
 	t.Parallel()
 	baseDelay := semanticRetryDelay(1, 0)
+
 	for i := 0; i < 100; i++ {
 		delay := semanticRetryDelayWithJitter(1)
 		if delay < baseDelay || delay > baseDelay+baseDelay/5 {
-			t.Fatalf("jittered delay = %s, want between %s and %s", delay, baseDelay, baseDelay+baseDelay/5)
+			t.Fatalf(
+				"jittered delay = %s, want between %s and %s",
+				delay,
+				baseDelay,
+				baseDelay+baseDelay/5,
+			)
 		}
 	}
 }
@@ -197,20 +241,28 @@ func TestConversationSemanticRetryUsesFailureProgression(t *testing.T) {
 	if err := runtime.attemptRegister(ctx); err == nil {
 		t.Fatal("expected initial registration to fail")
 	}
+
 	if !runtime.startRetryWorker(ctx, group) {
 		t.Fatal("retry worker did not start")
 	}
+
 	awaitSearchClient(t, runtime)
 	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute}
 	if len(delays) != len(want) {
 		t.Fatalf("retry delays = %v, want %v", delays, want)
 	}
+
 	for i := range want {
 		if delays[i] != want[i] {
 			t.Fatalf("retry delays = %v, want %v", delays, want)
 		}
 	}
-	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 250 * time.Millisecond, IdleGrace: 0})
+
+	group.Quiesce(
+		context.Background(),
+		"test",
+		livetrack.Budget{Cap: 250 * time.Millisecond, IdleGrace: 0},
+	)
 }
 
 func TestConversationSemanticRuntimeWarnsOnceWhileEngineUnavailable(t *testing.T) {
@@ -230,7 +282,12 @@ func TestConversationSemanticRuntimeWarnsOnceWhileEngineUnavailable(t *testing.T
 	if runtime == nil {
 		t.Fatal("opted-in semantic runtime was not constructed")
 	}
-	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+
+	group.Quiesce(
+		context.Background(),
+		"test",
+		livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0},
+	)
 	warnings := capture.warnings()
 	if len(warnings) != 1 || warnings[0] != "daemon.conversation_semantic.initial_register_failed" {
 		t.Fatalf("warnings = %v, want one unavailable-state warning", warnings)
@@ -239,31 +296,45 @@ func TestConversationSemanticRuntimeWarnsOnceWhileEngineUnavailable(t *testing.T
 
 // awaitSearchClient waits for background registration to publish a search
 // client, failing the test if it never does.
-func awaitSearchClient(t *testing.T, runtime *conversationSemanticRuntime) conversationSemanticSearchClient {
+func awaitSearchClient(
+	t *testing.T,
+	runtime *conversationSemanticRuntime,
+) conversationSemanticSearchClient {
 	t.Helper()
+
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if client := runtime.currentSearchClient(); client != nil {
 			return client
 		}
+
 		time.Sleep(time.Millisecond)
 	}
+
 	t.Fatal("background registration never published a search client")
+
 	return nil
 }
 
 // awaitSyncClient waits for background registration to publish the feeder
 // surface, failing the test if it never does.
-func awaitSyncClient(t *testing.T, runtime *conversationSemanticRuntime) conversationSemanticClient {
+func awaitSyncClient(
+	t *testing.T,
+	runtime *conversationSemanticRuntime,
+) conversationSemanticClient {
 	t.Helper()
+
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if client := runtime.syncClient(); client != nil {
 			return client
 		}
+
 		time.Sleep(time.Millisecond)
 	}
+
 	t.Fatal("background registration never published a feeder client")
+
 	return nil
 }
 
@@ -292,6 +363,7 @@ func (c *blockingSemanticConnector) connect(ctx context.Context) (semanticConnec
 	c.startOnce.Do(func() { close(c.attemptStarted) })
 	<-ctx.Done()
 	c.observeOnce.Do(func() { close(c.cancelObserved) })
+
 	return semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil},
 		fmt.Errorf("dial semantic search daemon: %w", ctx.Err())
 }
@@ -332,7 +404,13 @@ func TestControlServerSearchConversationsRecoversAfterFailedInitialRegister(t *t
 	t.Parallel()
 	engine := &fakeSemanticSearch{
 		hits: []semsearch.SemHit{
-			{ConversationID: "claude:one", MessageIndex: 2, Role: "assistant", TimestampUnix: 7, Content: "the auth timeout note"},
+			{
+				ConversationID: "claude:one",
+				MessageIndex:   2,
+				Role:           "assistant",
+				TimestampUnix:  7,
+				Content:        "the auth timeout note",
+			},
 		},
 		err: nil,
 	}
@@ -351,12 +429,15 @@ func TestControlServerSearchConversationsRecoversAfterFailedInitialRegister(t *t
 	if err := runtime.attemptRegister(ctx); err == nil {
 		t.Fatal("expected the boot registration attempt to fail while the engine is down")
 	}
+
 	if runtime.currentSearchClient() != nil {
 		t.Fatal("search client must stay nil until registration succeeds")
 	}
 
 	idx := &fakeSearchIndex{
-		records: map[string]conversation.Record{"claude:one": daemonTestRecord("claude:one", false)},
+		records: map[string]conversation.Record{
+			"claude:one": daemonTestRecord("claude:one", false),
+		},
 	}
 	// index stays nil: the source resolves records through its narrow index, and
 	// the response mapper only consults the full index for fork lineage.
@@ -373,8 +454,13 @@ func TestControlServerSearchConversationsRecoversAfterFailedInitialRegister(t *t
 
 	_, err := srv.SearchConversations(ctx, req)
 	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("status code before recovery = %v (err %v), want FailedPrecondition", status.Code(err), err)
+		t.Fatalf(
+			"status code before recovery = %v (err %v), want FailedPrecondition",
+			status.Code(err),
+			err,
+		)
 	}
+
 	runtime.startRetryWorker(ctx, group)
 	awaitSearchClient(t, runtime)
 
@@ -382,23 +468,34 @@ func TestControlServerSearchConversationsRecoversAfterFailedInitialRegister(t *t
 	if err != nil {
 		t.Fatalf("search after recovery: %v", err)
 	}
+
 	if resp.GetSource() != clydev1.SearchSource_SEARCH_SOURCE_SEMANTIC {
 		t.Fatalf("source after recovery = %v, want semantic", resp.GetSource())
 	}
+
 	if len(resp.GetMatches()) != 1 {
 		t.Fatalf("matches after recovery = %d, want 1", len(resp.GetMatches()))
 	}
+
 	if got := resp.GetMatches()[0].GetConversation().GetId(); got != "claude:one" {
 		t.Fatalf("match conversation = %q, want claude:one", got)
 	}
+
 	if connector.attemptCount() < 2 {
-		t.Fatalf("connector attempts = %d, want at least 2 (boot plus retry)", connector.attemptCount())
+		t.Fatalf(
+			"connector attempts = %d, want at least 2 (boot plus retry)",
+			connector.attemptCount(),
+		)
 	}
 
 	// The recovered connection is livetrack-owned, so a group drain closes it.
 	// The session is held for the daemon's life, so the drain force-closes it at
 	// the budget cap; the cap here is short only to keep the test quick.
-	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 250 * time.Millisecond, IdleGrace: 0})
+	group.Quiesce(
+		context.Background(),
+		"test",
+		livetrack.Budget{Cap: 250 * time.Millisecond, IdleGrace: 0},
+	)
 	if connector.conn.closeCount() == 0 {
 		t.Fatal("livetrack drain did not close the recovered engine connection")
 	}
@@ -426,18 +523,29 @@ func TestConversationSemanticRetryWorkerStopsAnInFlightAttemptBeforeRegistryDrai
 	if !runtime.startRetryWorker(ctx, group) {
 		t.Fatal("the retry worker must start when the lifecycle group owns its stop")
 	}
+
 	done := runtime.retryDone
 	if done == nil {
 		t.Fatal("starting the retry worker must publish a completion channel")
 	}
+
 	awaitSignal(t, connector.attemptStarted, "the retry worker never started a connection attempt")
 
-	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+	group.Quiesce(
+		context.Background(),
+		"test",
+		livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0},
+	)
 
 	if ctx.Err() != nil {
 		t.Fatal("daemon context must stay uncancelled so only the group stops the worker")
 	}
-	assertClosed(t, connector.cancelObserved, "the in-flight connection attempt never observed cancellation")
+
+	assertClosed(
+		t,
+		connector.cancelObserved,
+		"the in-flight connection attempt never observed cancellation",
+	)
 	assertClosed(t, done, "retry worker was still running after Quiesce returned")
 }
 
@@ -453,9 +561,11 @@ func TestConversationSemanticRetryWorkerRefusesToStartWithoutALifecycleOwner(t *
 	if runtime.startRetryWorker(context.Background(), nil) {
 		t.Fatal("the retry worker must not start without a lifecycle group to own its stop")
 	}
+
 	if runtime.retryDone != nil {
 		t.Fatal("a refused start must publish no completion channel")
 	}
+
 	select {
 	case <-connector.attemptStarted:
 		t.Fatal("a retry worker dialed the engine without an installed stop hook")
@@ -476,7 +586,9 @@ func TestConversationSemanticSyncFeederRecoversAfterFailedInitialRegister(t *tes
 	t.Parallel()
 	conversationID := "codex:sync-recovery"
 	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(20, 200)}},
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(20, 200)},
+		},
 		messagesByID: map[string][]transcript.Message{
 			conversationID: {
 				{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "the auth timeout note"},
@@ -507,20 +619,50 @@ func TestConversationSemanticSyncFeederRecoversAfterFailedInitialRegister(t *tes
 	// the deterministic passes below, without draining the engine connection this
 	// test still needs.
 	feederGroup := newLifecycleGroup(semanticTestLogger())
-	if !startConversationSemanticSync(ctx, semanticTestLogger(), index, runtime.syncClient, "collection-test", nil, feederGroup, semanticTestContentKinds(), conversationSemanticSyncInterval) {
+	if !startConversationSemanticSync(
+		ctx,
+		semanticTestLogger(),
+		index,
+		runtime.syncClient,
+		"collection-test",
+		nil,
+		feederGroup,
+		semanticTestContentKinds(),
+		conversationSemanticSyncInterval,
+	) {
 		t.Fatal("the sync worker must start while the engine is unavailable so it can recover")
 	}
-	feederGroup.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
 
-	worker := newConversationSemanticSyncWorker(index, runtime.syncClient, "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	feederGroup.Quiesce(
+		context.Background(),
+		"test",
+		livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0},
+	)
+
+	worker := newConversationSemanticSyncWorker(
+		index,
+		runtime.syncClient,
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 	if err := worker.runPass(ctx); err != nil {
 		t.Fatalf("pass while the engine is down: %v", err)
 	}
+
 	if len(engineFeeder.syncCalls) != 0 || len(engineFeeder.upsertCalls) != 0 {
-		t.Fatalf("feeder called the engine while it was unavailable: sync=%d upsert=%d", len(engineFeeder.syncCalls), len(engineFeeder.upsertCalls))
+		t.Fatalf(
+			"feeder called the engine while it was unavailable: sync=%d upsert=%d",
+			len(engineFeeder.syncCalls),
+			len(engineFeeder.upsertCalls),
+		)
 	}
+
 	if len(index.loadOptions) != 0 {
-		t.Fatalf("feeder read %d transcripts while the engine was unavailable, want 0", len(index.loadOptions))
+		t.Fatalf(
+			"feeder read %d transcripts while the engine was unavailable, want 0",
+			len(index.loadOptions),
+		)
 	}
 
 	runtime.startRetryWorker(ctx, group)
@@ -529,18 +671,25 @@ func TestConversationSemanticSyncFeederRecoversAfterFailedInitialRegister(t *tes
 	if err := worker.runPass(ctx); err != nil {
 		t.Fatalf("pass after recovery: %v", err)
 	}
+
 	if len(engineFeeder.syncCalls) != 1 {
 		t.Fatalf("manifest sync calls after recovery = %d, want 1", len(engineFeeder.syncCalls))
 	}
+
 	if len(engineFeeder.upsertCalls) != 1 {
 		t.Fatalf("upsert calls after recovery = %d, want 1", len(engineFeeder.upsertCalls))
 	}
+
 	upsert := engineFeeder.upsertCalls[0]
 	if len(upsert.Docs) != 1 || upsert.Docs[0].ConversationID != conversationID {
 		t.Fatalf("upserted docs = %+v, want one document for %s", upsert.Docs, conversationID)
 	}
 
-	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 250 * time.Millisecond, IdleGrace: 0})
+	group.Quiesce(
+		context.Background(),
+		"test",
+		livetrack.Budget{Cap: 250 * time.Millisecond, IdleGrace: 0},
+	)
 	if connector.conn.closeCount() == 0 {
 		t.Fatal("livetrack drain did not close the recovered engine connection")
 	}
@@ -571,14 +720,20 @@ func newBlockingConversationSemanticIndex() *blockingConversationSemanticIndex {
 	}
 }
 
-func (idx *blockingConversationSemanticIndex) ListWithStamps(ctx context.Context) ([]conversation.StampedRecord, error) {
+func (idx *blockingConversationSemanticIndex) ListWithStamps(
+	ctx context.Context,
+) ([]conversation.StampedRecord, error) {
 	idx.listOnce.Do(func() { close(idx.listing) })
 	<-ctx.Done()
 	idx.cancelOnce.Do(func() { close(idx.cancelled) })
+
 	return nil, fmt.Errorf("list conversation records with stamps: %w", ctx.Err())
 }
 
-func (idx *blockingConversationSemanticIndex) LoadMessagesWithOptions(record conversation.Record, _ conversation.LoadOptions) ([]transcript.Message, error) {
+func (idx *blockingConversationSemanticIndex) LoadMessagesWithOptions(
+	record conversation.Record,
+	_ conversation.LoadOptions,
+) ([]transcript.Message, error) {
 	return nil, fmt.Errorf("blocking index loads no messages for %s", record.ID)
 }
 
@@ -604,24 +759,44 @@ func TestConversationSemanticSyncFeederIsGroupOwnedFromTheMomentItStarts(t *test
 	defer cancel()
 
 	started := make(chan bool, 1)
-	group.AddHookBefore(livetrack.PhaseIngress, "test.start_feeder_mid_drain", func(hookCtx context.Context) error {
-		started <- startConversationSemanticSync(ctx, log, index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, group, semanticTestContentKinds(), conversationSemanticSyncInterval)
-		select {
-		case <-index.listing:
-			return nil
-		case <-hookCtx.Done():
-			return fmt.Errorf("feeder never entered its first pass: %w", hookCtx.Err())
-		}
-	})
+	group.AddHookBefore(
+		livetrack.PhaseIngress,
+		"test.start_feeder_mid_drain",
+		func(hookCtx context.Context) error {
+			started <- startConversationSemanticSync(
+				ctx,
+				log,
+				index,
+				staticSemanticSyncClient(engineFeeder),
+				"collection-test",
+				nil,
+				group,
+				semanticTestContentKinds(),
+				conversationSemanticSyncInterval,
+			)
+			select {
+			case <-index.listing:
+				return nil
+			case <-hookCtx.Done():
+				return fmt.Errorf("feeder never entered its first pass: %w", hookCtx.Err())
+			}
+		},
+	)
 
-	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+	group.Quiesce(
+		context.Background(),
+		"test",
+		livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0},
+	)
 
 	if !<-started {
 		t.Fatal("the feeder must start when the lifecycle group owns its stop")
 	}
+
 	if ctx.Err() != nil {
 		t.Fatal("daemon context must stay uncancelled so only the group stops the feeder")
 	}
+
 	assertClosed(t, index.cancelled, "the feeder was still running after the workers phase drained")
 }
 
@@ -633,9 +808,20 @@ func TestConversationSemanticSyncRefusesToStartWithoutALifecycleOwner(t *testing
 	index := newBlockingConversationSemanticIndex()
 	engineFeeder := &fakeConversationSemanticClient{needed: nil}
 
-	if startConversationSemanticSync(context.Background(), semanticTestLogger(), index, staticSemanticSyncClient(engineFeeder), "collection-test", nil, nil, semanticTestContentKinds(), conversationSemanticSyncInterval) {
+	if startConversationSemanticSync(
+		context.Background(),
+		semanticTestLogger(),
+		index,
+		staticSemanticSyncClient(engineFeeder),
+		"collection-test",
+		nil,
+		nil,
+		semanticTestContentKinds(),
+		conversationSemanticSyncInterval,
+	) {
 		t.Fatal("the feeder must not start without a lifecycle group to own its stop")
 	}
+
 	select {
 	case <-index.listing:
 		t.Fatal("a feeder goroutine ran without an installed stop hook")
@@ -662,9 +848,11 @@ func TestConversationSemanticRuntimeRegisterIsIdempotent(t *testing.T) {
 	if err := runtime.attemptRegister(ctx); err != nil {
 		t.Fatalf("first registration: %v", err)
 	}
+
 	if err := runtime.attemptRegister(ctx); err != nil {
 		t.Fatalf("second registration: %v", err)
 	}
+
 	if connector.attemptCount() != 1 {
 		t.Fatalf("connector attempts = %d, want 1", connector.attemptCount())
 	}
@@ -678,14 +866,20 @@ func TestControlServerSearchConversationsUnreachableEngineFailsPrecondition(t *t
 	t.Parallel()
 	srv := &controlServer{
 		searchSource: &semanticConversationSearchSource{
-			index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
+			index: conversation.NewIndex(
+				newConversationRegistry(),
+				config.ConversationConfig{},
+			),
 			searchClient: func() conversationSemanticSearchClient {
 				return nil
 			},
 			collectionID: "conversations",
 		},
 	}
-	_, err := srv.SearchConversations(context.Background(), &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10})
+	_, err := srv.SearchConversations(
+		context.Background(),
+		&clydev1.SearchConversationsRequest{Query: "auth", Limit: 10},
+	)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("status code = %v (err %v), want FailedPrecondition", status.Code(err), err)
 	}
@@ -696,7 +890,10 @@ func TestControlServerSearchConversationsDisabledFailsPrecondition(t *testing.T)
 	clientResolutions := 0
 	srv := &controlServer{
 		searchSource: &semanticConversationSearchSource{
-			index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
+			index: conversation.NewIndex(
+				newConversationRegistry(),
+				config.ConversationConfig{},
+			),
 			searchEnabled: func() bool {
 				return false
 			},
@@ -707,13 +904,18 @@ func TestControlServerSearchConversationsDisabledFailsPrecondition(t *testing.T)
 			collectionID: "conversations",
 		},
 	}
-	_, err := srv.SearchConversations(context.Background(), &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10})
+	_, err := srv.SearchConversations(
+		context.Background(),
+		&clydev1.SearchConversationsRequest{Query: "auth", Limit: 10},
+	)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("status code = %v (err %v), want FailedPrecondition", status.Code(err), err)
 	}
+
 	if !strings.Contains(err.Error(), string(conversationSearchDisabled)) {
 		t.Fatalf("error = %v, want disabled conversation search classification", err)
 	}
+
 	if clientResolutions != 0 {
 		t.Fatalf("client resolutions = %d, want 0 while search is disabled", clientResolutions)
 	}
@@ -736,12 +938,17 @@ func TestUnavailableQueriesDoNotTriggerSemanticRegistration(t *testing.T) {
 	if err := runtime.attemptRegister(ctx); err == nil {
 		t.Fatal("expected initial registration to fail")
 	}
+
 	if !runtime.startRetryWorker(ctx, group) {
 		t.Fatal("retry worker did not start")
 	}
+
 	srv := &controlServer{
 		searchSource: &semanticConversationSearchSource{
-			index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
+			index: conversation.NewIndex(
+				newConversationRegistry(),
+				config.ConversationConfig{},
+			),
 			searchClient: func() conversationSemanticSearchClient {
 				return runtime.currentSearchClient()
 			},
@@ -751,20 +958,37 @@ func TestUnavailableQueriesDoNotTriggerSemanticRegistration(t *testing.T) {
 
 	queryCtx, queryCancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer queryCancel()
+
 	for i := 0; i < 20; i++ {
-		_, err := srv.SearchConversations(queryCtx, &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10})
+		_, err := srv.SearchConversations(
+			queryCtx,
+			&clydev1.SearchConversationsRequest{Query: "auth", Limit: 10},
+		)
 		if status.Code(err) != codes.FailedPrecondition {
-			t.Fatalf("query %d status = %v (err %v), want FailedPrecondition", i, status.Code(err), err)
+			t.Fatalf(
+				"query %d status = %v (err %v), want FailedPrecondition",
+				i,
+				status.Code(err),
+				err,
+			)
 		}
+
 		if runtime.currentSearchClient() != nil {
 			t.Fatalf("status observation %d found an unexpected client", i)
 		}
 	}
+
 	if err := queryCtx.Err(); err != nil {
 		t.Fatalf("unavailable queries did not return promptly: %v", err)
 	}
+
 	if got := connector.attemptCount(); got != 1 {
 		t.Fatalf("connector attempts after queries and status observations = %d, want 1", got)
 	}
-	group.Quiesce(context.Background(), "test", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+
+	group.Quiesce(
+		context.Background(),
+		"test",
+		livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0},
+	)
 }

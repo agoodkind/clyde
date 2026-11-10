@@ -21,15 +21,22 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 		Backend:          protoSemanticBackend(cfg.Conversation.Semantic.Backend),
 	}
 	syncStatus := r.semanticSync.syncStatus()
-	semantic.Detail = statusMetricsProto(semanticDetailMetrics(cfg.Conversation.Semantic, syncStatus))
-	semantic.Detail = append(semantic.Detail, statusMetricsProto(r.semanticBackendMetrics(cfg.Conversation.Semantic))...)
+	semantic.Detail = statusMetricsProto(
+		semanticDetailMetrics(cfg.Conversation.Semantic, syncStatus),
+	)
+	semantic.Detail = append(
+		semantic.Detail,
+		statusMetricsProto(r.semanticBackendMetrics(cfg.Conversation.Semantic))...,
+	)
 	if cfg.Conversation.Semantic.UsesEngine() {
 		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_UNAVAILABLE
 		if r.semantic != nil {
 			r.semantic.readStatus(semantic)
 		}
 	}
+
 	listeners := make([]*clydev1.BoundListenerStatus, 0)
+
 	for name, listener := range map[string]net.Listener{
 		listenerNameDaemon:        r.listener,
 		listenerNameAdapter:       r.adapterListener,
@@ -39,30 +46,40 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 			listeners = append(listeners, boundListenerStatus(name, listener.Addr()))
 		}
 	}
+
 	for id, sockets := range r.mitmListeners {
 		for _, socket := range sockets {
 			listeners = append(listeners, boundListenerStatus("mitm."+id, socket.Addr()))
 		}
 	}
+
 	for id, sockets := range r.mitmPacketConns {
 		for _, socket := range sockets {
 			listeners = append(listeners, boundListenerStatus("mitm."+id, socket.LocalAddr()))
 		}
 	}
-	sort.Slice(listeners, func(i, j int) bool {
-		if listeners[i].GetName() != listeners[j].GetName() {
-			return listeners[i].GetName() < listeners[j].GetName()
-		}
-		if listeners[i].GetNetwork() != listeners[j].GetNetwork() {
-			return listeners[i].GetNetwork() < listeners[j].GetNetwork()
-		}
-		return listeners[i].GetAddress() < listeners[j].GetAddress()
-	})
+
+	sort.Slice(
+		listeners,
+		func(i, j int) bool {
+			if listeners[i].GetName() != listeners[j].GetName() {
+				return listeners[i].GetName() < listeners[j].GetName()
+			}
+
+			if listeners[i].GetNetwork() != listeners[j].GetNetwork() {
+				return listeners[i].GetNetwork() < listeners[j].GetNetwork()
+			}
+
+			return listeners[i].GetAddress() < listeners[j].GetAddress()
+		},
+	)
 	var profiling *clydev1.BoundListenerStatus
 	if r.pprofListener != nil {
 		profiling = boundListenerStatus(listenerNamePProf, r.pprofListener.Addr())
 	}
+
 	cursorRawIndexingEnabled := cfg.Conversation.Cursor.RawIndexingEnabled()
+
 	return &clydev1.GetDaemonStatusResponse{
 		Semantic:                 semantic,
 		Listeners:                listeners,
@@ -76,6 +93,7 @@ func protoSemanticBackend(backend config.ConversationSemanticBackend) clydev1.Se
 	if backend == config.ConversationSemanticBackendLocal {
 		return clydev1.SemanticBackend_SEMANTIC_BACKEND_LOCAL
 	}
+
 	return clydev1.SemanticBackend_SEMANTIC_BACKEND_MILVUS
 }
 
@@ -99,6 +117,7 @@ func (r *conversationSemanticRuntime) readStatus(snapshot *clydev1.SemanticStatu
 		nextRetry := r.nextRetry.Unix()
 		snapshot.NextRetryUnix = &nextRetry
 	}
+
 	if r.connecting {
 		snapshot.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_CONNECTING
 	} else if r.registered {
