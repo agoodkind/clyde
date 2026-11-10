@@ -181,6 +181,11 @@ func (semantic ConversationSemanticConfig) AnswersSearch() bool {
 	return semantic.SearchEnabled
 }
 
+// RawTextFallbackEnabled reports whether failed indexed searches scan transcripts.
+func (semantic ConversationSemanticConfig) RawTextFallbackEnabled() bool {
+	return semantic.RawTextFallback == nil || *semantic.RawTextFallback
+}
+
 // UsesEngine reports whether either direction needs a connection to the engine,
 // which is what decides whether the daemon builds one.
 func (semantic ConversationSemanticConfig) UsesEngine() bool {
